@@ -37,6 +37,10 @@ RUN expected="$(sed -n 's/^channel = "\(.*\)"$/\1/p' /tmp/rust-toolchain.toml)" 
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+# sqlx checks every query at compile time against this committed data, so the
+# build needs no database.
+COPY .sqlx ./.sqlx
+ENV SQLX_OFFLINE=true
 
 # Build outputs live in a cache mount, so the binary is copied out in the
 # same step.
@@ -59,9 +63,14 @@ COPY --from=builder /out/usr/local/bin/kage /usr/local/bin/kage
 # State directory owned by the runtime user; a named volume mounted here
 # inherits this ownership. Both sidecar images use the same numeric identity.
 COPY --from=builder --chown=65532:65532 /out/var/lib/kage /var/lib/kage
+# The policy files shipped with this version, read-only. Mount a directory
+# over /etc/kage/policies to change them; kage reloads them on change.
+COPY policies /etc/kage/policies
 
 USER 65532:65532
-ENV KAGE__SERVER__BIND=0.0.0.0:8080
+ENV KAGE__SERVER__BIND=0.0.0.0:8080 \
+    KAGE__POLICIES__DIR=/etc/kage/policies \
+    KAGE__ARTIFACTS__DIR=/var/lib/kage/artifacts
 EXPOSE 8080
 
 # The image has no shell and no curl: the binary probes its own /healthz.

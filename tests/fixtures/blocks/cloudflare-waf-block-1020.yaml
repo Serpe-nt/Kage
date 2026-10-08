@@ -1,0 +1,57 @@
+synthetic: true
+source: >-
+  Hand-written from the public markup of Cloudflare's WAF block page ("Sorry,
+  you have been blocked", error 1020). Host and ray id are invented.
+observation:
+  render: http
+  status: 403
+  url: https://forum.example/admin
+  headers:
+    - { name: content-type, value: "text/html; charset=UTF-8" }
+    - { name: server, value: cloudflare }
+    - { name: cf-ray, value: 6d55ee44ff33aa22-CDG }
+  body: |
+    <!DOCTYPE html>
+    <html class="no-js" lang="en-US">
+    <head>
+    <title>Attention Required! | Cloudflare</title>
+    <meta charset="UTF-8" />
+    <meta name="robots" content="noindex, nofollow" />
+    <link rel="stylesheet" id="cf_styles-css" href="/cdn-cgi/styles/cf.errors.css" />
+    </head>
+    <body>
+      <div id="cf-wrapper">
+        <div id="cf-error-details" class="cf-error-details-wrapper">
+          <div class="cf-wrapper cf-header cf-error-overview">
+            <h1 data-translate="block_headline">Sorry, you have been blocked</h1>
+            <h2 class="cf-subheadline"><span data-translate="unable_to_access">You are unable to access</span> forum.example</h2>
+          </div>
+          <div class="cf-section cf-wrapper">
+            <div class="cf-columns two">
+              <div class="cf-column">
+                <h2 data-translate="blocked_why_headline">Why have I been blocked?</h2>
+                <p data-translate="blocked_why_detail">This website is using a security service to protect itself from online attacks. The action you just performed triggered the security solution. There are several actions that could trigger this block including submitting a certain word or phrase, a SQL command or malformed data.</p>
+              </div>
+              <div class="cf-column">
+                <h2 data-translate="blocked_resolve_headline">What can I do to resolve this?</h2>
+                <p data-translate="blocked_resolve_detail">You can email the site owner to let them know you were blocked. Please include what you were doing when this page came up and the Cloudflare Ray ID found at the bottom of this page.</p>
+              </div>
+            </div>
+          </div>
+          <div class="cf-error-footer cf-wrapper">
+            <p>
+              <span class="cf-footer-item">Error code: 1020</span>
+              <span class="cf-footer-item">Cloudflare Ray ID: <strong>6d55ee44ff33aa22</strong></span>
+              <span class="cf-footer-item">Performance &amp; security by <a rel="noopener noreferrer" href="https://www.cloudflare.com/5xx-error-landing">Cloudflare</a></span>
+            </p>
+          </div>
+        </div>
+      </div>
+    </body>
+    </html>
+expect:
+  outcome: forbidden
+  vendor: cloudflare
+  type: waf_block
+  rule: cloudflare-waf-block
+  vendors: [cloudflare]

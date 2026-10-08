@@ -1,0 +1,37 @@
+synthetic: true
+source: >-
+  Hand-written negative case. An ordinary rendered page of a site behind
+  DataDome: the datadome cookie and the js.datadome.co tag are there on every
+  good response and must not read as a block.
+observation:
+  render: browser
+  status: 200
+  url: https://www.marketplace.example/listing/123456
+  headers:
+    - { name: content-type, value: "text/html;charset=utf-8" }
+    - { name: x-datadome, value: protected }
+  cookies:
+    - { name: datadome, value: fixture-not-a-real-token }
+  browser:
+    script_hosts: [www.marketplace.example, js.datadome.co]
+    iframe_hosts: []
+  body: |
+    <html lang="en"><head>
+    <meta charset="utf-8">
+    <title>Road bike, 56 cm frame - Marketplace Example</title>
+    <script>window.ddjskey = 'FIXTUREFIXTUREFIXTUREFIXTUREFI'; window.ddoptions = {};</script>
+    <script src="https://js.datadome.co/tags.js" async=""></script>
+    </head>
+    <body>
+    <main>
+    <h1>Road bike, 56 cm frame</h1>
+    <p class="price">450 EUR</p>
+    <p>Aluminium frame with a carbon fork, 2 x 11 gears, new tyres and brake pads this spring. Ridden about 3,000 km, always kept indoors. Small scratch on the top tube, shown in the last photo.</p>
+    <p>Pick-up in Leipzig, or I can ship it boxed for 40 EUR.</p>
+    <h2>Seller</h2>
+    <p>Member since 2019, 27 listings, usually replies within a few hours.</p>
+    </main>
+    </body></html>
+expect:
+  outcome: ok
+  vendors: [datadome]

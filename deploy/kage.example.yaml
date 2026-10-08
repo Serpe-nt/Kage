@@ -1,0 +1,81 @@
+# Example kage.yaml with every key at its default value (spec §17).
+#
+# kage reads the file named by --config or KAGE_CONFIG, else ./kage.yaml when
+# it exists. Every key can be overridden by an environment variable of the
+# form KAGE__SECTION__KEY, for example KAGE__ARTIFACTS__RETENTION_DAYS=7.
+#
+# Secrets are NOT set here; kage refuses to start if they are. They come from
+# the environment, or from a file named by the same variable with _FILE
+# appended (Docker secrets):
+#
+#   KAGE__DATABASE__URL               required  postgres://user:password@host:5432/db
+#   KAGE__SIDECAR__TOKEN              required  shared secret with the browser sidecars
+#   KAGE__SECRETS__MASTER_KEY         required  encrypts proxy credentials at rest
+#   KAGE__WEBSHARE__API_KEY           optional  Webshare API token
+#   KAGE__REPUTATION__ABUSEIPDB_KEY   optional  enables IP reputation lookups
+#
+# `kage config check` validates everything and prints the effective
+# configuration with the secrets redacted.
+
+server:
+  # Address `kage serve` listens on.
+  bind: 0.0.0.0:8080
+  # Address `kage healthcheck` probes.
+  healthcheck_addr: 127.0.0.1:8080
+
+database:
+  max_connections: 10
+  connect_timeout: 10s
+
+policies:
+  # Directory with domains.yaml, block-signatures.yaml, pacing-profiles.yaml.
+  dir: policies
+  # Reload the files when they change. An invalid file keeps the last good
+  # policy and raises an alert.
+  hot_reload: true
+
+artifacts:
+  # Directory for bodies, screenshots and PDFs, keyed by content hash.
+  dir: artifacts
+  retention_days: 14
+  # Text bodies at least this large are gzip-compressed on disk.
+  gzip_min_bytes: 1024
+  # How often the retention job runs.
+  sweep_interval: 1h
+
+security:
+  # Allow URLs whose host is a literal IP address. Private, loopback,
+  # link-local and cloud metadata ranges are denied either way.
+  allow_ip_targets: false
+
+urls:
+  # Query parameters ignored when two URLs are compared for dedupe and
+  # caching. A trailing * matches a prefix. The request itself always goes
+  # out with the URL as it was discovered.
+  tracking_params:
+    - utm_*
+    - gclid
+    - gclsrc
+    - dclid
+    - gbraid
+    - wbraid
+    - fbclid
+    - msclkid
+    - yclid
+    - twclid
+    - ttclid
+    - igshid
+    - mc_cid
+    - mc_eid
+    - _ga
+    - _gl
+    - _hsenc
+    - _hsmi
+    - mkt_tok
+    - li_fat_id
+    - vero_id
+    - oly_anon_id
+    - oly_enc_id
+    - s_kwcid
+  # keep | strip | add
+  trailing_slash: keep

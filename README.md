@@ -6,11 +6,12 @@ person on a household connection would present: a static residential IP, one
 long-lived persona per IP, a real browser (patched Chromium or Camoufox) in an
 anti-detect sidecar, and a wreq-based HTTP path for lenient sites.
 
-**Status: scaffold (milestone M0).** The repository builds, tests and ships
-images through every quality gate, but no fetching feature exists yet. `kage`
-serves `/healthz`, each sidecar serves `/v1/health`, and the engines are
-stubs. The contract is in [docs/01-spec.md](docs/01-spec.md) and the road to
-1.0 in [docs/02-plan.md](docs/02-plan.md).
+**Status: foundations (milestone M1).** The domain model, configuration,
+policy files, block classifier, SSRF guard and the Postgres store exist and
+pass every quality gate, but nothing fetches a page yet. `kage` serves
+`/healthz`, each sidecar serves `/v1/health`, and the engines are stubs. The
+contract is in [docs/01-spec.md](docs/01-spec.md) and the road to 1.0 in
+[docs/02-plan.md](docs/02-plan.md).
 
 ## Responsible use
 
@@ -61,8 +62,29 @@ curl http://127.0.0.1:8080/healthz
 
 `just setup` installs the pinned toolchains and tools, the sidecar
 dependencies and the git hooks, and creates `deploy/.env` with random local
-secrets. The stack publishes one port, on loopback only, because the API has
-no authentication until milestone M8.
+secrets. The stack applies the database migrations in a one-shot `migrate`
+service before `kage` starts, and publishes one port, on loopback only,
+because the API has no authentication until milestone M8.
+
+## Configuration
+
+`kage` reads `kage.yaml` (or the file named by `--config` / `KAGE_CONFIG`)
+and lets environment variables of the form `KAGE__SECTION__KEY` override it.
+[deploy/kage.example.yaml](deploy/kage.example.yaml) lists every key with its
+default. Secrets are never read from the file: they come from the environment
+or from a file named by the same variable with `_FILE` appended, and `kage`
+refuses to start when a required one is missing.
+
+```bash
+kage config check   # validate, then print the effective configuration, secrets redacted
+kage migrate        # apply the database schema; safe to run again
+kage serve
+```
+
+Per-domain behaviour is data in [policies/](policies/): `domains.yaml`
+(render mode, pacing, robots, retries, cooldowns), `pacing-profiles.yaml`
+and `block-signatures.yaml`. `kage` reloads them when they change; an
+invalid file keeps the last good policy in force and raises an alert.
 
 ## Development
 
@@ -74,13 +96,17 @@ them all.
 | `just setup` | Install toolchains, pnpm dependencies, git hooks, local secrets |
 | `just fmt` | rustfmt and prettier |
 | `just lint` | clippy with warnings denied, eslint, tsc |
-| `just test` | Rust tests and sidecar vitest |
+| `just test` | Rust tests (the store tests start Postgres in Docker) and sidecar vitest |
+| `just sqlx-check` | Migrations apply from empty and are idempotent; `.sqlx/` matches the queries |
+| `just sqlx-prepare` | Regenerate `.sqlx/` after a query or a migration changed |
 | `just cov` | Coverage reports with thresholds |
 | `just deny` | cargo-deny, cargo-audit, pnpm audit, license policy, openssl-sys check |
 | `just sbom` | CycloneDX SBOMs |
 | `just build-images` | Images for kage and both sidecar variants |
 | `just test-e2e` | Compose-based end-to-end suite |
 | `just dev` | Postgres and sidecars in compose, `kage serve` natively |
+| `just migrate` | Apply the migrations to the development database |
+| `just config-check` | Validate the development configuration and print it, secrets redacted |
 | `just ci` | Everything a pull request runs |
 
 House rules for contributors and coding agents are in
@@ -93,7 +119,8 @@ procedure are in [docs/runbooks/repo.md](docs/runbooks/repo.md).
 |---|---|
 | `crates/` | Rust workspace: the `kage` binary and its library crates |
 | `sidecar/` | pnpm workspace: contract, engine-core, both engines, server |
-| `deploy/` | Dockerfiles and compose files |
+| `deploy/` | Dockerfiles, compose files and the example configuration |
+| `policies/` | Domain policies, pacing profiles and block signatures (data, hot-reloaded) |
 | `docs/` | Decisions, specification, plan, ADRs, pinned versions, runbooks |
 | `scripts/` | Gate scripts used by `just` and CI |
 | `tests/` | End-to-end and live suites, fixtures |

@@ -1,0 +1,36 @@
+synthetic: true
+source: >-
+  Hand-written. A site's own verification wall built on hCaptcha, with the
+  widget markup hCaptcha documents (h-captcha, the 1/api.js script). Raw HTML
+  as the http path would receive it. Site key and host are invented.
+observation:
+  render: http
+  status: 200
+  url: https://www.prices.example/compare/phone-x
+  headers:
+    - { name: content-type, value: "text/html; charset=utf-8" }
+    - { name: server, value: nginx }
+  body: |
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+    <meta charset="utf-8">
+    <title>Security check</title>
+    <script src="https://js.hcaptcha.com/1/api.js" async defer></script>
+    </head>
+    <body>
+    <h1>One quick check</h1>
+    <p>Please complete the challenge to see this page.</p>
+    <form action="/security-check" method="POST">
+    <input type="hidden" name="return" value="/compare/phone-x">
+    <div class="h-captcha" data-sitekey="00000000-0000-0000-0000-000000000000"></div>
+    <button type="submit">Submit</button>
+    </form>
+    </body>
+    </html>
+expect:
+  outcome: captcha
+  vendor: hcaptcha
+  type: hcaptcha
+  rule: hcaptcha-wall
+  vendors: [hcaptcha]

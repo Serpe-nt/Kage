@@ -1,0 +1,26 @@
+synthetic: true
+source: >-
+  Hand-written from nginx's stock 403 page. No vendor marker: the status is
+  the only signal.
+observation:
+  render: http
+  status: 403
+  url: https://www.smallsite.example/members/
+  headers:
+    - { name: content-type, value: text/html }
+    - { name: server, value: nginx }
+  body: |
+    <html>
+    <head><title>403 Forbidden</title></head>
+    <body>
+    <center><h1>403 Forbidden</h1></center>
+    <hr><center>nginx</center>
+    </body>
+    </html>
+expect:
+  outcome: forbidden
+  vendor: generic
+  type: http_403
+  rule: generic-http-403
+  vendors: []
+  cooldown: short

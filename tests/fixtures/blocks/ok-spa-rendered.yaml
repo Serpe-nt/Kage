@@ -1,0 +1,38 @@
+synthetic: true
+source: >-
+  Hand-written negative case. The same single-page application as
+  soft-js-required, rendered by the browser: the noscript notice and the root
+  element are still in the DOM, and so is the content.
+observation:
+  render: browser
+  status: 200
+  url: https://app.jobs.example/search?q=nurse
+  headers:
+    - { name: content-type, value: "text/html; charset=utf-8" }
+    - { name: server, value: nginx }
+  browser:
+    script_hosts: [app.jobs.example]
+    iframe_hosts: []
+  body: |
+    <html lang="en"><head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Nurse jobs - Jobs Example</title>
+    <script defer="defer" src="/static/js/main.8f3a2b1c.js"></script>
+    <link href="/static/css/main.4d5e6f70.css" rel="stylesheet">
+    </head>
+    <body>
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"><div class="app">
+    <h1>214 nurse jobs</h1>
+    <ul class="results">
+    <li><h2>Registered nurse, intensive care</h2><p>University Hospital, Hamburg. Full time, permanent. Shift work with a night allowance, thirty days of leave, and a training budget.</p></li>
+    <li><h2>Paediatric nurse</h2><p>Children's Clinic, Bremen. Part time, 24 hours a week. Day shifts only, starting in January.</p></li>
+    <li><h2>Community nurse</h2><p>Home Care Service, Kiel. Full time. Company car, visits planned in one district, no weekend work.</p></li>
+    </ul>
+    <nav><button>Previous</button> Page 1 of 22 <button>Next</button></nav>
+    </div></div>
+    </body></html>
+expect:
+  outcome: ok
+  vendors: []

@@ -74,7 +74,7 @@ queue. Each job calls the same `just` targets a developer runs locally, and
 | Job | `just` targets | Gates |
 |---|---|---|
 | `commits` | `scripts/check-conventional-commits.sh` | PR title and commit subjects |
-| `rust` | `fmt-check-rust`, `lint-rust`, `test-rust`, `cov-rust` | rustfmt, clippy `-D warnings`, tests, 80 % line coverage on the gated crates |
+| `rust` | `fmt-check-rust`, `lint-rust`, `setup-sqlx`, `sqlx-check`, `test-rust`, `cov-rust` | rustfmt, clippy `-D warnings`, migrations and committed query data, tests, 80 % line coverage on the gated crates |
 | `node` | `fmt-check-node`, `lint-node`, `test-node`, `cov-node` | prettier, tsc, eslint, vitest, 80 % line coverage on `engine-core` |
 | `security` | `deny`, `secrets`, `sbom` | cargo-deny, cargo-audit, pnpm audit, sidecar license policy, `openssl-sys` check, gitleaks, CycloneDX SBOMs |
 | `images` | `build-images`, `scan-images`, `sbom-images`, `test-e2e` | image builds, Trivy (fixable HIGH and CRITICAL), SBOM per image, stack smoke test |
@@ -84,10 +84,21 @@ queue. Each job calls the same `just` targets a developer runs locally, and
 Coverage gates:
 
 - Rust: `scripts/check-rust-coverage.mjs` reads the llvm-cov summary and
-  fails when `kage-core`, `kage-proxy`, `kage-crawl` or `kage-extract` is
-  below 80 % line coverage. The list and the threshold are `cov_gated_crates`
-  and `cov_min_lines` in the `justfile`.
+  fails when `kage-core`, `kage-store`, `kage-proxy`, `kage-crawl` or
+  `kage-extract` is below 80 % line coverage. The list and the threshold are
+  `cov_gated_crates` and `cov_min_lines` in the `justfile`.
 - Sidecar: the threshold for `engine-core` is in `sidecar/vitest.config.ts`.
+
+Database gates (`just sqlx-check`, `scripts/check-migrations.sh`): against a
+throwaway Postgres in Docker, the migrations apply from an empty database,
+`sqlx migrate info` shows every one installed with the checksum of its file,
+applying them again changes nothing, and `.sqlx/` matches the queries in the
+code. After changing a query or a migration, run `just sqlx-prepare` and
+commit `.sqlx/`. Builds never need a database: the `justfile` and the image
+build set `SQLX_OFFLINE=true`.
+
+The `rust` job needs Docker: the store and CLI tests start Postgres
+containers through testcontainers.
 
 ## Where versions are pinned
 

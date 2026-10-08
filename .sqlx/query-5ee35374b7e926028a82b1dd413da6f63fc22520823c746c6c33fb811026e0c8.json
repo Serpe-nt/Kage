@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO persona_domain_state (persona_id, domain, cooldown_until, requests_today,\n                                               counter_day, last_request_at, last_outcome,\n                                               block_count_24h)\n             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)\n             ON CONFLICT (persona_id, domain) DO UPDATE\n             SET cooldown_until = EXCLUDED.cooldown_until,\n                 requests_today = EXCLUDED.requests_today,\n                 counter_day = EXCLUDED.counter_day,\n                 last_request_at = EXCLUDED.last_request_at,\n                 last_outcome = EXCLUDED.last_outcome,\n                 block_count_24h = EXCLUDED.block_count_24h",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Timestamptz",
+        "Int4",
+        "Date",
+        "Timestamptz",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5ee35374b7e926028a82b1dd413da6f63fc22520823c746c6c33fb811026e0c8"
+}

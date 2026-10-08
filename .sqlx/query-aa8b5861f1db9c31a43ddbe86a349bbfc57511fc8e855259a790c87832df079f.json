@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE proxies\n             SET host = $2, port = $3, username = $4, password = $5, country = $6, city = $7,\n                 asn = $8, state = $9, consecutive_failures = $10, backoff_until = $11,\n                 last_health = $12, retired_at = $13\n             WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int4",
+        "Text",
+        "Bytea",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int4",
+        "Timestamptz",
+        "Jsonb",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "aa8b5861f1db9c31a43ddbe86a349bbfc57511fc8e855259a790c87832df079f"
+}

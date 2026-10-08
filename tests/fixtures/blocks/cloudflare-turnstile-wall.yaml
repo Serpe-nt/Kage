@@ -1,0 +1,43 @@
+synthetic: true
+source: >-
+  Hand-written from Cloudflare's public Turnstile integration markup: a site
+  gate whose only content is the widget. Rendered DOM as the browser path
+  would capture it. Site key and host are invented.
+observation:
+  render: browser
+  status: 200
+  url: https://tickets.example/queue
+  headers:
+    - { name: content-type, value: "text/html; charset=utf-8" }
+    - { name: server, value: cloudflare }
+  browser:
+    script_hosts: [challenges.cloudflare.com]
+    iframe_hosts: [challenges.cloudflare.com]
+    interstitial_text: Verify you are human
+    interstitial_detected: true
+    interstitial_resolved: false
+  body: |
+    <html lang="en"><head>
+    <meta charset="utf-8">
+    <title>One more step</title>
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async="" defer=""></script>
+    </head>
+    <body>
+    <main class="gate">
+    <h1>Verify you are human</h1>
+    <p>Complete the check below to continue to tickets.example.</p>
+    <form action="/queue/verify" method="POST">
+    <div class="cf-turnstile" data-sitekey="0x4AAAAAAAfixtureSiteKey" data-theme="light">
+    <div><iframe src="https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile/if/ov2/av0/rcv0/0/fixture/0x4AAAAAAAfixtureSiteKey/light/normal" allow="cross-origin-isolated; fullscreen" sandbox="allow-same-origin allow-scripts allow-popups" id="cf-chl-widget-fixture" tabindex="0" title="Widget containing a Cloudflare security challenge" style="border: none; overflow: hidden; width: 300px; height: 65px;"></iframe>
+    <input type="hidden" name="cf-turnstile-response" id="cf-chl-widget-fixture_response" value=""></div>
+    </div>
+    <button type="submit" disabled="">Continue</button>
+    </form>
+    </main>
+    </body></html>
+expect:
+  outcome: captcha
+  vendor: cloudflare
+  type: turnstile
+  rule: cloudflare-turnstile-wall
+  vendors: [cloudflare]

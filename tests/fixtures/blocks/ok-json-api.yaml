@@ -1,0 +1,17 @@
+synthetic: true
+source: >-
+  Hand-written negative case. A JSON API that legitimately answers with a
+  short body and with an empty list. Short is not thin when the response is
+  not HTML.
+observation:
+  render: http
+  status: 200
+  url: https://api.catalog.example/v2/items?category=discontinued
+  headers:
+    - { name: content-type, value: application/json }
+    - { name: server, value: nginx }
+  body: |
+    {"items":[],"total":0}
+expect:
+  outcome: ok
+  vendors: []

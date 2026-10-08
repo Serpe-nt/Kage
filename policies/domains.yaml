@@ -1,0 +1,69 @@
+# Per-domain policies (spec §17). Reloaded when this file changes; an invalid
+# file keeps the last good policy and raises an alert.
+#
+# Resolution: a host inherits field by field along a chain. First its own
+# entry, then the entries of its parent domains from nearest to furthest
+# (www.shop.example.org looks at shop.example.org, then example.org), then
+# `defaults`. Each field takes the value of the first level that sets it, so
+# an entry for shop.example.org only needs to say what differs from
+# example.org, and a lock or a country list on a domain covers every
+# subdomain that does not override it.
+#
+# Fields:
+#   render             auto | http | browser. `http` marks a domain as known
+#                      lenient; with `auto` an unknown domain uses the browser.
+#   countries          only personas whose proxy is in one of these countries
+#   engines            only personas on these engines (chromium, firefox)
+#   pacing             a profile from pacing-profiles.yaml
+#   pacing_locked      true: requests cannot choose their own pacing
+#   robots             report | enforce | ignore
+#   referer_strategy   direct         arrive like a typed URL or a bookmark
+#                      search_engine  load a results page first, click through
+#                      none           send whatever Referer the caller gave
+#   retries            retries after the first attempt, each on another persona
+#   breaker_threshold  blocks per hour, over all personas, that pause the domain
+#   breaker_pause      how long the domain stays paused
+#   cooldowns          how long a blocked persona stays away, per outcome:
+#                      rate_limited, forbidden, captcha, challenge_failed,
+#                      soft_block; and `short`, used when the matching block
+#                      signature says the block is weakly attributed (a bare
+#                      403 or 429 with no vendor marker). Each key cascades on
+#                      its own.
+#
+# Durations are written as 500ms, 30s, 30m, 2h, 7d.
+
+defaults:
+  render: auto
+  pacing: human
+  pacing_locked: false
+  robots: report
+  referer_strategy: direct
+  engines: [chromium, firefox]
+  retries: 2
+  breaker_threshold: 5
+  breaker_pause: 30m
+  cooldowns:
+    rate_limited: 2h
+    forbidden: 24h
+    captcha: 24h
+    challenge_failed: 24h
+    soft_block: 6h
+    short: 30m
+
+# There is no fixed target list, so no domain is configured out of the box.
+# Examples:
+#
+#   domains:
+#     "example.org":
+#       render: browser
+#       countries: ["DE", "AT"]
+#       engines: ["chromium", "firefox"]
+#       pacing: human
+#       pacing_locked: false
+#       robots: enforce
+#       referer_strategy: search_engine
+#       cooldowns: { rate_limited: 2h, forbidden: 24h }
+#     "api.lenient.example":
+#       render: http
+#       pacing: fast
+domains: {}

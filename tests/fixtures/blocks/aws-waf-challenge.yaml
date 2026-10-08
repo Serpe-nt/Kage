@@ -1,0 +1,53 @@
+synthetic: true
+source: >-
+  Hand-written from AWS WAF's documented challenge action: status 202, the
+  x-amzn-waf-action header set to challenge, and a page that loads
+  challenge.js from a token.awswaf.com host. The integration host is invented.
+observation:
+  render: http
+  status: 202
+  url: https://www.travel.example/flights?from=BER&to=LIS
+  headers:
+    - { name: content-type, value: "text/html; charset=UTF-8" }
+    - { name: x-amzn-waf-action, value: challenge }
+    - { name: cache-control, value: "no-store, max-age=0" }
+    - { name: server, value: CloudFront }
+    - { name: x-cache, value: Error from cloudfront }
+  body: |
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title></title>
+        <style>body { font-family: "Arial"; }</style>
+        <script type="text/javascript">
+        window.awsWafCookieDomainList = [];
+        window.gokuProps = {"key":"fixtureNotARealKey","iv":"fixture","context":"fixture"};
+        </script>
+        <script src="https://0123456789ab.edge.sdk.awswaf.com/0123456789ab/fedcba987654/challenge.js"></script>
+        <script src="https://0123456789ab.fedcba987654.eu-central-1.token.awswaf.com/0123456789ab/fedcba987654/challenge.js"></script>
+    </head>
+    <body>
+        <div id="challenge-container"></div>
+        <script type="text/javascript">
+            AwsWafIntegration.saveReferrer();
+            AwsWafIntegration.checkForceRefresh().then((forceRefresh) => {
+                if (forceRefresh) {
+                    AwsWafIntegration.forceRefreshToken().then(() => { window.location.reload(true); });
+                } else {
+                    AwsWafIntegration.getToken().then(() => { window.location.reload(true); });
+                }
+            });
+        </script>
+        <noscript>
+            <h1>JavaScript is disabled</h1>
+            In order to continue, we need to verify that you're not a robot. This requires JavaScript. Enable JavaScript and then reload the page.
+        </noscript>
+    </body>
+    </html>
+expect:
+  outcome: challenge_failed
+  vendor: aws_waf
+  type: challenge
+  rule: aws-waf-challenge

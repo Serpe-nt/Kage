@@ -13,6 +13,24 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-# Unused until M1. Declared now so the pin and its TLS backend are locked,
-# compiled in CI and covered by scripts/check-no-openssl.sh.
+kage-core = { workspace = true }
+
+chrono = { workspace = true }
+flate2 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+# rustls only; the feature set is fixed in the workspace manifest.
 sqlx = { workspace = true }
+thiserror = { workspace = true }
+# `rt` for spawn_blocking: hashing, compression and file writes stay off the
+# async worker threads.
+tokio = { workspace = true, features = ["rt"] }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true, features = ["postgres"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }

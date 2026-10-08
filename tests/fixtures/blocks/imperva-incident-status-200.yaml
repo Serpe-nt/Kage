@@ -1,0 +1,24 @@
+synthetic: true
+source: >-
+  Hand-written. Imperva often serves its incident page with status 200, so
+  the status alone says nothing; here the iframe carries no fallback text and
+  only the incident_id in its address identifies the block. Ids are invented.
+observation:
+  render: http
+  status: 200
+  url: https://www.bank.example/branches?city=berlin
+  headers:
+    - { name: content-type, value: text/html }
+    - { name: cache-control, value: "no-cache, no-store" }
+    - { name: x-cdn, value: Incapsula }
+  cookies:
+    - { name: visid_incap_1234567, value: fixture-not-a-real-token }
+    - { name: nlbi_1234567, value: fixture-not-a-real-token }
+  body: |
+    <html style="height:100%"><head><META NAME="ROBOTS" CONTENT="NOINDEX, NOFOLLOW"><meta name="format-detection" content="telephone=no"><meta name="viewport" content="initial-scale=1.0"></head><body style="margin:0px;height:100%"><iframe id="main-iframe" src="/_Incapsula_Resource?CWUDNSAI=23&xinfo=4-87654321-0%200NNN%20RT%281760000000000%200%29&incident_id=5678000120098765432-987654321098765432&edet=12&cinfo=74000000&rpinfo=0" frameborder=0 width="100%" height="100%" marginheight="0px" marginwidth="0px"></iframe></body></html>
+expect:
+  outcome: forbidden
+  vendor: imperva
+  type: incident
+  rule: imperva-incident
+  vendors: [imperva]

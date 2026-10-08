@@ -1,0 +1,22 @@
+synthetic: true
+source: >-
+  Hand-written. A plain application-level rate limit: status 429, a
+  Retry-After header and a JSON error. No vendor marker.
+observation:
+  render: http
+  status: 429
+  url: https://api.catalog.example/v2/items?page=41
+  headers:
+    - { name: content-type, value: application/json }
+    - { name: retry-after, value: "30" }
+    - { name: x-ratelimit-limit, value: "60" }
+    - { name: x-ratelimit-remaining, value: "0" }
+  body: |
+    {"error":"too_many_requests","message":"Rate limit exceeded. Try again in 30 seconds."}
+expect:
+  outcome: rate_limited
+  vendor: generic
+  type: http_429
+  rule: generic-http-429
+  vendors: []
+  cooldown: short

@@ -1,0 +1,23 @@
+synthetic: true
+source: >-
+  Hand-written from the public shape of DataDome's answer to an XHR: a 403
+  with a JSON body whose "url" points at the captcha on
+  geo.captcha-delivery.com. Ids are invented.
+observation:
+  render: http
+  status: 403
+  url: https://www.marketplace.example/api/listings?page=3
+  headers:
+    - { name: content-type, value: "application/json;charset=utf-8" }
+    - { name: x-datadome, value: protected }
+    - { name: x-dd-b, value: "1" }
+  cookies:
+    - { name: datadome, value: fixture-not-a-real-token }
+  body: |
+    {"url":"https://geo.captcha-delivery.com/captcha/?initialCid=AHrlqAAAAAMAfixture&hash=FIXTURE0123456789ABCDEF&cid=fixture-not-a-real-token&t=fe&referer=https%3A%2F%2Fwww.marketplace.example%2Fapi%2Flistings%3Fpage%3D3&s=12345&e=fixture"}
+expect:
+  outcome: captcha
+  vendor: datadome
+  type: captcha
+  rule: datadome-captcha
+  vendors: [datadome]

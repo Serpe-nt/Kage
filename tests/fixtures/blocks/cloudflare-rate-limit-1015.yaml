@@ -1,0 +1,54 @@
+synthetic: true
+source: >-
+  Hand-written from the public markup of Cloudflare's error 1015 page ("You
+  are being rate limited"). Host and ray id are invented.
+observation:
+  render: http
+  status: 429
+  url: https://api.example/v1/search?q=shoes
+  headers:
+    - { name: content-type, value: "text/html; charset=UTF-8" }
+    - { name: server, value: cloudflare }
+    - { name: cf-ray, value: 5c44dd33ee22bb11-WAW }
+    - { name: retry-after, value: "60" }
+  body: |
+    <!DOCTYPE html>
+    <html class="no-js" lang="en-US">
+    <head>
+    <title>Access denied | api.example used Cloudflare to restrict access</title>
+    <meta charset="UTF-8" />
+    <meta name="robots" content="noindex, nofollow" />
+    </head>
+    <body>
+    <div id="cf-wrapper">
+      <div id="cf-error-details" class="cf-error-details-wrapper">
+        <div class="cf-wrapper cf-header cf-error-overview">
+          <h1>
+            <span class="cf-error-type" data-translate="error">Error</span>
+            <span class="cf-error-code">1015</span>
+            <small class="heading-ray-id">Ray ID: 5c44dd33ee22bb11 &bull; 2026-10-08 10:00:00 UTC</small>
+          </h1>
+          <h2 class="cf-subheadline" data-translate="error_desc">You are being rate limited</h2>
+        </div>
+        <section></section>
+        <div class="cf-section cf-wrapper">
+          <div class="cf-columns two">
+            <div class="cf-column">
+              <h2 data-translate="what_happened">What happened?</h2>
+              <p>The owner of this website (api.example) has banned you temporarily from accessing this website.</p>
+            </div>
+          </div>
+        </div>
+        <div class="cf-error-footer cf-wrapper">
+          <p><span class="cf-footer-item">Cloudflare Ray ID: <strong>5c44dd33ee22bb11</strong></span></p>
+        </div>
+      </div>
+    </div>
+    </body>
+    </html>
+expect:
+  outcome: rate_limited
+  vendor: cloudflare
+  type: rate_limit_1015
+  rule: cloudflare-rate-limit-1015
+  vendors: [cloudflare]

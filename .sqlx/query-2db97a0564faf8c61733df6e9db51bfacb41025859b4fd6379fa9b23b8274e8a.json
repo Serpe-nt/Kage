@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO selftest_runs (id, persona_id, engine, render, started_at, finished_at,\n                                        passed, score, findings)\n             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Bool",
+        "Float4",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2db97a0564faf8c61733df6e9db51bfacb41025859b4fd6379fa9b23b8274e8a"
+}

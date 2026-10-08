@@ -82,6 +82,9 @@ metrics-exporter-prometheus = { version = "=0.18.3", default-features = false }
 figment = { version = "=0.10.19", default-features = false }
 governor = { version = "=0.10.4" }
 notify = { version = "=8.2.0" }
+# Block signature matchers. Linear-time matching, so a signature file cannot
+# make the classifier hang on a hostile page.
+regex = { version = "=1.13.1" }
 
 # --- Networking helpers ---------------------------------------------------
 url = { version = "=2.5.8" }
@@ -91,10 +94,16 @@ hickory-resolver = { version = "=0.26.3", default-features = false }
 # --- Crypto, ids, time ----------------------------------------------------
 sha2 = { version = "=0.11.0" }
 hmac = { version = "=0.13.0" }
-rand = { version = "=0.10.3" }
+# Default features are off: crates opt in. Seeded, reproducible randomness
+# uses the `chacha` feature (the value-stable ChaCha8 generator).
+rand = { version = "=0.10.3", default-features = false }
 secrecy = { version = "=0.10.3" }
 uuid = { version = "=1.27.0", features = ["v7", "serde"] }
 chrono = { version = "=0.4.45", default-features = false, features = ["clock", "serde", "std"] }
+
+# --- Artifact store -------------------------------------------------------
+# gzip for text bodies on disk. Default (pure Rust) backend.
+flate2 = { version = "=1.1.10" }
 
 # --- Extraction, crawl ----------------------------------------------------
 scraper = { version = "=0.27.0" }
@@ -111,6 +120,7 @@ wiremock = { version = "=0.6.5" }
 # together: 0.28.0 exists but nothing in the modules crate supports it yet.
 testcontainers = { version = "=0.27.3", default-features = false }
 testcontainers-modules = { version = "=0.15.0", default-features = false }
+tempfile = { version = "=3.27.0" }
 
 [workspace.lints.rust]
 # CLAUDE.md: no unsafe anywhere in the workspace.

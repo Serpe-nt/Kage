@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (SELECT 1 FROM artifacts WHERE content_hash = $1 AND encoding = $2)\n                   AS \"in_use!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "in_use!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "e207e5281aadc6b82fd3eee622e856ae83cfcae51441b21c81567a10a8b16549"
+}

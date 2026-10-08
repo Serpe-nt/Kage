@@ -1,0 +1,35 @@
+synthetic: true
+source: >-
+  Hand-written from the public markup of Akamai's edge "Access Denied" page,
+  which writes its text as HTML entities and ends with a reference number and
+  an errors.edgesuite.net link. Host and reference are invented.
+observation:
+  render: http
+  status: 403
+  url: https://www.retailer.example/category/laptops
+  headers:
+    - { name: server, value: AkamaiGHost }
+    - { name: mime-version, value: "1.0" }
+    - { name: content-type, value: text/html }
+    - { name: content-length, value: "412" }
+    - { name: expires, value: "Thu, 08 Oct 2026 10:00:00 GMT" }
+  cookies:
+    - { name: _abck, value: "FIXTURE0000~-1~YAAQfixture~-1~-1~-1" }
+    - { name: bm_sz, value: fixture-not-a-real-token }
+  body: |
+    <HTML><HEAD>
+    <TITLE>Access Denied</TITLE>
+    </HEAD><BODY>
+    <H1>Access Denied</H1>
+
+    You don't have permission to access "http&#58;&#47;&#47;www&#46;retailer&#46;example&#47;category&#47;laptops" on this server.<P>
+    Reference&#32;&#35;18&#46;2d351ab8&#46;1760000000&#46;a4e16ab
+    <P>https&#58;&#47;&#47;errors&#46;edgesuite&#46;net&#47;18&#46;2d351ab8&#46;1760000000&#46;a4e16ab</P>
+    </BODY>
+    </HTML>
+expect:
+  outcome: forbidden
+  vendor: akamai
+  type: access_denied
+  rule: akamai-access-denied
+  vendors: [akamai]

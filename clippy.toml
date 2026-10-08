@@ -7,4 +7,15 @@ allow-print-in-tests = true
 
 # Project terms that are prose, not code, in doc comments. ".." keeps the
 # built-in list.
-doc-valid-idents = ["OpenAPI", "BoringSSL", ".."]
+doc-valid-idents = [
+    "OpenAPI",
+    "BoringSSL",
+    "UUIDv7",
+    "AbuseIPDB",
+    "SimHash",
+    "DataDome",
+    "PerimeterX",
+    "reCAPTCHA",
+    "hCaptcha",
+    "..",
+]

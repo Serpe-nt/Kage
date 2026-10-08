@@ -1,0 +1,30 @@
+synthetic: true
+source: >-
+  Hand-written. A page that renders nothing in a real browser: status 200,
+  valid HTML, an application bundle that ran, and no text at all. Rendered
+  DOM as the browser path would capture it.
+observation:
+  render: browser
+  status: 200
+  url: https://www.fares.example/results?from=MUC&to=OSL
+  headers:
+    - { name: content-type, value: "text/html; charset=utf-8" }
+  browser:
+    script_hosts: [www.fares.example]
+    iframe_hosts: []
+  body: |
+    <html lang="en"><head>
+    <meta charset="utf-8">
+    <title>Fares Example</title>
+    <script src="/assets/app.3c9d1e.js"></script>
+    <style>body{margin:0}</style>
+    </head>
+    <body>
+    <div id="app" data-state="error"><div class="results"></div></div>
+    </body></html>
+expect:
+  outcome: soft_block
+  vendor: generic
+  type: blank_page
+  rule: soft-blank-page
+  vendors: []

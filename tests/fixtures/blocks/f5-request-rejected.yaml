@@ -1,0 +1,26 @@
+synthetic: true
+source: >-
+  Hand-written from the public default block page of F5 BIG-IP ASM ("The
+  requested URL was rejected. Please consult with your administrator." with a
+  support id). It is commonly served with status 200. The support id is
+  invented.
+observation:
+  render: http
+  status: 200
+  url: https://portal.insurer.example/quote?plan=basic
+  headers:
+    - { name: content-type, value: "text/html; charset=utf-8" }
+    - { name: cache-control, value: no-cache }
+    - { name: pragma, value: no-cache }
+    - { name: connection, value: close }
+  cookies:
+    - { name: TS01a2b3c4, value: fixture-not-a-real-token }
+    - { name: BIGipServerpool_portal_443, value: "1234567890.47873.0000" }
+  body: |
+    <html><head><title>Request Rejected</title></head><body>The requested URL was rejected. Please consult with your administrator.<br><br>Your support ID is: 1234567890123456789<br><br><a href='javascript:history.back();'>[Go Back]</a></body></html>
+expect:
+  outcome: forbidden
+  vendor: f5_shape
+  type: request_rejected
+  rule: f5-request-rejected
+  vendors: [f5_shape]

@@ -1,0 +1,33 @@
+# Pacing profiles (spec §11): how one persona spaces its requests to one
+# domain. Reloaded when this file changes; an invalid file keeps the last
+# good profiles and raises an alert.
+#
+# Durations are in milliseconds.
+#
+#   gap_ms          wait between two consecutive pages
+#   burst_pages     how many pages make a burst
+#   burst_break_ms  extra pause after a burst, added to the normal gap
+#
+# dist: lognormal takes median and p95, and optionally min and max. With a
+# min the curve starts at min and still has exactly the configured median and
+# p95; no sample is clamped to a bound.
+# dist: uniform takes min and max.
+#
+# `human` is the global default and must exist. `custom` is reserved for
+# profiles sent inline with a request.
+
+human:
+  gap_ms: { dist: lognormal, median: 4500, p95: 15000, min: 1500 }
+  burst_pages: { min: 4, max: 14 }
+  burst_break_ms: { dist: lognormal, median: 60000, p95: 240000 }
+  daily_cap_per_persona_per_domain: 300
+  domain_concurrency: 3
+  domain_rpm: 20
+
+fast:
+  gap_ms: { dist: uniform, min: 300, max: 1200 }
+  burst_pages: { min: 50, max: 50 }
+  burst_break_ms: { dist: uniform, min: 0, max: 0 }
+  daily_cap_per_persona_per_domain: 5000
+  domain_concurrency: 10
+  domain_rpm: 300

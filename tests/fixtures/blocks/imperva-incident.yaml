@@ -1,0 +1,25 @@
+synthetic: true
+source: >-
+  Hand-written from the public markup of Imperva's (Incapsula's) incident
+  page: an iframe on /_Incapsula_Resource whose content reads "Request
+  unsuccessful. Incapsula incident ID". Incident id and host are invented.
+observation:
+  render: http
+  status: 403
+  url: https://www.bank.example/rates
+  headers:
+    - { name: content-type, value: text/html }
+    - { name: cache-control, value: "no-cache, no-store" }
+    - { name: x-iinfo, value: "9-12345678-0 0NNN RT(1760000000000 0) q(0 -1 -1 -1) r(0 -1) B15(4,200,0) U18" }
+    - { name: x-cdn, value: Imperva }
+  cookies:
+    - { name: visid_incap_1234567, value: fixture-not-a-real-token }
+    - { name: incap_ses_123_1234567, value: fixture-not-a-real-token }
+  body: |
+    <html style="height:100%"><head><META NAME="ROBOTS" CONTENT="NOINDEX, NOFOLLOW"><meta name="format-detection" content="telephone=no"><meta name="viewport" content="initial-scale=1.0"><meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1"></head><body style="margin:0px;height:100%"><iframe id="main-iframe" src="/_Incapsula_Resource?SWUDNSAI=31&xinfo=9-12345678-0%200NNN%20RT%281760000000000%200%29%20q%280%20-1%20-1%20-1%29%20r%280%20-1%29%20B15%284%2c200%2c0%29%20U18&incident_id=1234000560012345678-123456789012345678&edet=15&cinfo=04000000&rpinfo=0&mth=GET" frameborder=0 width="100%" height="100%" marginheight="0px" marginwidth="0px">Request unsuccessful. Incapsula incident ID: 1234000560012345678-123456789012345678</iframe></body></html>
+expect:
+  outcome: forbidden
+  vendor: imperva
+  type: incident
+  rule: imperva-incident
+  vendors: [imperva]

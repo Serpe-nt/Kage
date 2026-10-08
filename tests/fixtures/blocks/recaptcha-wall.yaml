@@ -1,0 +1,40 @@
+synthetic: true
+source: >-
+  Hand-written. A site's own verification wall built on reCAPTCHA v2, with
+  the widget markup Google documents (g-recaptcha, the api2/anchor iframe).
+  Rendered DOM as the browser path would capture it. Site key and host are
+  invented.
+observation:
+  render: browser
+  status: 200
+  url: https://www.directory.example/company/4711
+  headers:
+    - { name: content-type, value: "text/html; charset=utf-8" }
+    - { name: server, value: nginx }
+  browser:
+    script_hosts: [www.google.com, www.gstatic.com]
+    iframe_hosts: [www.google.com]
+    interstitial_detected: true
+    interstitial_resolved: false
+  body: |
+    <html lang="en"><head>
+    <meta charset="utf-8">
+    <title>Are you a robot?</title>
+    <script src="https://www.google.com/recaptcha/api.js" async="" defer=""></script>
+    </head>
+    <body>
+    <h1>Please confirm you are not a robot</h1>
+    <p>We have noticed unusual activity from your network. Tick the box to continue.</p>
+    <form action="/verify" method="POST">
+    <div class="g-recaptcha" data-sitekey="6LcFixtureAAAAAFixtureSiteKey0000000000">
+    <div style="width: 304px; height: 78px;"><div><iframe title="reCAPTCHA" width="304" height="78" role="presentation" name="a-fixture" frameborder="0" scrolling="no" sandbox="allow-forms allow-popups allow-same-origin allow-scripts allow-top-navigation allow-modals allow-popups-to-escape-sandbox allow-storage-access-by-user-activation" src="https://www.google.com/recaptcha/api2/anchor?ar=1&amp;k=6LcFixtureAAAAAFixtureSiteKey0000000000&amp;co=aHR0cHM6Ly93d3cuZGlyZWN0b3J5LmV4YW1wbGU6NDQz&amp;hl=en&amp;v=fixture&amp;size=normal&amp;cb=fixture"></iframe></div><textarea id="g-recaptcha-response" name="g-recaptcha-response" class="g-recaptcha-response" style="width: 250px; height: 40px; display: none;"></textarea></div>
+    </div>
+    <button type="submit">Continue</button>
+    </form>
+    </body></html>
+expect:
+  outcome: captcha
+  vendor: recaptcha
+  type: recaptcha
+  rule: recaptcha-wall
+  vendors: [recaptcha]

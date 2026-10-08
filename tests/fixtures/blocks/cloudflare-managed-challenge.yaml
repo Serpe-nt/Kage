@@ -1,0 +1,47 @@
+synthetic: true
+source: >-
+  Hand-written from Cloudflare's documented challenge response (the
+  cf-mitigated header) and the public markup of the "Just a moment..."
+  interstitial. Host, ray id and tokens are invented.
+observation:
+  render: http
+  status: 403
+  url: https://shop.example/products/42
+  headers:
+    - { name: content-type, value: "text/html; charset=UTF-8" }
+    - { name: cf-mitigated, value: challenge }
+    - { name: server, value: cloudflare }
+    - { name: cf-ray, value: 8f0a1b2c3d4e5f60-FRA }
+    - { name: cache-control, value: "private, max-age=0, no-store, no-cache, must-revalidate" }
+  cookies:
+    - { name: __cf_bm, value: fixture-not-a-real-token }
+  body: |
+    <!DOCTYPE html>
+    <html lang="en-US">
+    <head>
+    <title>Just a moment...</title>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge">
+    <meta name="robots" content="noindex,nofollow">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta http-equiv="refresh" content="390">
+    <style>*{box-sizing:border-box;margin:0;padding:0}html{line-height:1.15}body{color:#313131;font-family:system-ui,sans-serif}</style>
+    </head>
+    <body class="no-js">
+    <div class="main-wrapper" role="main">
+    <div class="main-content">
+    <noscript><div class="h2"><span id="challenge-error-text">Enable JavaScript and cookies to continue</span></div></noscript>
+    </div>
+    </div>
+    <script>(function(){window._cf_chl_opt={cvId:'3',cZone:"shop.example",cType:'managed',cRay:'8f0a1b2c3d4e5f60',cH:'fixture',cUPMDTk:"\/products\/42?__cf_chl_tk=fixture",cFPWv:'b',cITimeS:'1760000000',cTplB:'cf',cTplV:5,cK:"",fa:"\/products\/42?__cf_chl_f_tk=fixture",md:"fixture",mdrd:"fixture"};var cpo=document.createElement('script');cpo.src='/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1?ray=8f0a1b2c3d4e5f60';window._cf_chl_opt.cOgUHash=location.hash===''&&location.href.indexOf('#')!==-1?'#':location.hash;document.getElementsByTagName('head')[0].appendChild(cpo);}());</script>
+    </body>
+    </html>
+expect:
+  outcome: challenge_failed
+  vendor: cloudflare
+  type: managed_challenge
+  rule: cloudflare-challenge-header
+  vendors: [cloudflare]
+  retryable: true
+  escalate: true
+  cooldown: long

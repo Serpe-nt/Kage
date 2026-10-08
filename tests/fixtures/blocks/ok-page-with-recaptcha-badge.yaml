@@ -1,0 +1,42 @@
+synthetic: true
+source: >-
+  Hand-written negative case. A full article page that loads reCAPTCHA v3
+  for its comment form and has a login form in its header. The captcha is a
+  widget on a normal page, not the page, and must not read as a block.
+observation:
+  render: browser
+  status: 200
+  url: https://www.magazine.example/travel/lisbon-in-three-days
+  headers:
+    - { name: content-type, value: "text/html; charset=utf-8" }
+    - { name: server, value: nginx }
+  browser:
+    script_hosts: [www.magazine.example, www.google.com, www.gstatic.com]
+    iframe_hosts: [www.google.com]
+  body: |
+    <html lang="en"><head>
+    <meta charset="utf-8">
+    <title>Lisbon in three days - Magazine Example</title>
+    <script src="https://www.google.com/recaptcha/api.js?render=6LcFixtureAAAAAFixtureSiteKey0000000000"></script>
+    </head>
+    <body>
+    <header>
+    <a href="/">Magazine Example</a>
+    <form class="login" action="/account/login" method="POST"><input type="email" name="email" placeholder="Email"><input type="password" name="password" placeholder="Password"><button type="submit">Log in</button></form>
+    </header>
+    <article>
+    <h1>Lisbon in three days</h1>
+    <p>Lisbon rewards walking, as long as you do not mind hills. Start the first morning in Alfama, the oldest quarter, where the lanes are too narrow for cars and the washing hangs between the houses. Climb to the Miradouro da Senhora do Monte for a view over the whole city and the river, and come down past the cathedral to the Baixa for lunch.</p>
+    <p>On the second day take the tram or the train west to Belem. The monastery opens at half past nine and the queue grows quickly, so be early. The pastry shop next door has sold custard tarts since 1837; eat them warm, with cinnamon. Walk along the river to the tower afterwards, and spend the afternoon in the museum of contemporary art, which is free on the first Sunday of the month.</p>
+    <p>Keep the third day for the neighbourhoods that visitors skip. Campo de Ourique has a covered market with good, cheap food and a quiet garden beside it. From there it is a short walk to the Prazeres cemetery, which sounds like an odd suggestion and is one of the calmest places in the city. Finish the evening in a small fado house in Mouraria rather than one of the large ones in Bairro Alto.</p>
+    <p>Practical notes: buy a rechargeable transport card on arrival, since single tickets cost almost twice as much. Many restaurants close on Sunday evening and all day Monday. Tap water is fine to drink. In summer the afternoon heat is serious, so plan indoor visits between two and five.</p>
+    </article>
+    <section class="comments">
+    <h2>Comments</h2>
+    <p>Three comments so far. Log in to add yours.</p>
+    </section>
+    <div class="grecaptcha-badge" data-style="bottomright" style="width: 256px; height: 60px; position: fixed; visibility: hidden;"><div class="grecaptcha-logo"><iframe title="reCAPTCHA" width="256" height="60" role="presentation" name="a-fixture" frameborder="0" scrolling="no" src="https://www.google.com/recaptcha/api2/anchor?ar=1&amp;k=6LcFixtureAAAAAFixtureSiteKey0000000000&amp;size=invisible&amp;cb=fixture"></iframe></div></div>
+    </body></html>
+expect:
+  outcome: ok
+  vendors: [recaptcha]

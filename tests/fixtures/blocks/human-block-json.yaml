@@ -1,0 +1,21 @@
+synthetic: true
+source: >-
+  Hand-written from the public shape of the HUMAN (PerimeterX) answer to an
+  XHR: a 403 with a JSON body that names the app id and the block script.
+  Ids are invented.
+observation:
+  render: http
+  status: 403
+  url: https://www.sneakers.example/api/products/air-fixture-1/stock
+  headers:
+    - { name: content-type, value: application/json }
+  cookies:
+    - { name: _px3, value: fixture-not-a-real-token }
+  body: |
+    {"appId":"PXfixture01","jsClientSrc":"/fixture01/init.js","firstPartyEnabled":true,"vid":"00000000-0000-0000-0000-000000000000","uuid":"11111111-1111-1111-1111-111111111111","hostUrl":"/fixture01/xhr","blockScript":"/fixture01/captcha/captcha.js?a=c&u=11111111-1111-1111-1111-111111111111&v=00000000-0000-0000-0000-000000000000&m=0"}
+expect:
+  outcome: captcha
+  vendor: human
+  type: press_and_hold
+  rule: human-press-and-hold
+  vendors: [human]

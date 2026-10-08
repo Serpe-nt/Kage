@@ -1,0 +1,77 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT cache_key, url_key, result_id, cached_at, expires_at\n             FROM response_cache WHERE cache_key = $1 AND expires_at > $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "cache_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "response_cache",
+            "name": "cache_key"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "url_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "response_cache",
+            "name": "url_key"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "result_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "response_cache",
+            "name": "result_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "cached_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "response_cache",
+            "name": "cached_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "response_cache",
+            "name": "expires_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "03620caee884eed1d1e57eaa417c04ddecdedc310fdda071c2e0cc1db9e3f39f"
+}

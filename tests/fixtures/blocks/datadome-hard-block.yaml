@@ -1,0 +1,23 @@
+synthetic: true
+source: >-
+  Hand-written from the public shape of DataDome's hard block: the captcha
+  page with t 'bv', which shows a "blocked" message and offers no captcha to
+  solve. Ids are invented.
+observation:
+  render: http
+  status: 403
+  url: https://www.marketplace.example/listing/654321
+  headers:
+    - { name: content-type, value: "text/html;charset=utf-8" }
+    - { name: x-datadome, value: protected }
+    - { name: x-dd-b, value: "1" }
+  cookies:
+    - { name: datadome, value: fixture-not-a-real-token }
+  body: |
+    <html lang="en"><head><title>marketplace.example</title><style>#cmsg{animation: A 1.5s;}@keyframes A{0%{opacity:0;}99%{opacity:0;}100%{opacity:1;}}</style></head><body style="margin:0"><p id="cmsg">Please enable JS and disable any ad blocker</p><script data-cfasync="false">var dd={'rt':'c','cid':'AHrlqAAAAAMAfixture','hsh':'FIXTURE0123456789ABCDEF','t':'bv','s':12345,'e':'fixture','host':'geo.captcha-delivery.com','cookie':'fixture-not-a-real-token'}</script><script data-cfasync="false" src="https://ct.captcha-delivery.com/c.js"></script></body></html>
+expect:
+  outcome: forbidden
+  vendor: datadome
+  type: hard_block
+  rule: datadome-hard-block
+  vendors: [datadome]

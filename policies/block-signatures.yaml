@@ -1,0 +1,552 @@
+# Block signatures (spec §12). Reloaded when this file changes; an invalid
+# file keeps the last good signatures and raises an alert.
+#
+# Every rule is evaluated against what one attempt observed. Among the rules
+# that match, the highest `priority` decides (default 50); ties go to the
+# higher `confidence`, then to the rule listed first. When no rule matches,
+# the outcome is `ok`.
+#
+# Conditions: all, any, not, and the leaves
+#   status: 403 | [403, 503] | "500-599"
+#   header: name | { name, regex }        cookie: name-regex | { name, value }
+#   body: regex                           url: regex
+#   script_host / iframe_host / interstitial_text: regex   (browser path only)
+#   visible_text: { min_chars, max_chars }   text left after dropping markup
+#   body_bytes: { min, max }
+#   render: http | browser                interstitial: detected | resolved | unresolved
+# Patterns match anywhere in the value and are case-sensitive unless they
+# start with (?i). Only the first `settings.max_body_bytes` of a body are read.
+#
+# What a match means for the scheduler is part of the rule. Each of these
+# defaults to what the outcome implies (spec §6.3, §8.1, §8.3) and can be
+# overridden per rule:
+#   retryable: true | false       try again with another persona
+#   escalate: true | false        an http attempt is followed by a browser one
+#                                 under render auto
+#   cooldown: none | short | long how long the persona stays away from the
+#                                 domain; the domain policy turns the class
+#                                 into a duration (long = the outcome's own)
+#
+# `confidence` is used, not decorative: the scheduler scales the cooldown by
+# it. 0.95 and up: an explicit vendor header or a vendor's own block page.
+# 0.9: a vendor marker on a page with almost no other text. 0.6 to 0.7: soft
+# blocks and a bare 403 or 429 with no marker. 0.5: a bare 5xx.
+#
+# Ground rules for this file (a false positive costs a persona its cooldown
+# and another IP a retry):
+#   - A vendor's cookie or script alone never blocks: protected sites set
+#     them on good responses too. They go under `hints`, which only record
+#     which vendor fronts a site.
+#   - A hard block needs a blocking status or an explicit challenge marker.
+#   - A captcha widget blocks only when it is the page (almost no other text).
+#   - A soft block (status 200) needs an empty body, or little visible text
+#     together with a marker.
+#
+# Priorities: 90 explicit vendor header, 80-85 vendor page, 60 captcha wall,
+# 30 soft blocks, 10 status alone.
+#
+# Every rule has at least one fixture under tests/fixtures/blocks/, and the
+# test suite fails if one does not.
+
+version: 1
+
+settings:
+  max_body_bytes: 1048576
+
+rules:
+  # --- Cloudflare ----------------------------------------------------------
+  - id: cloudflare-challenge-header
+    vendor: cloudflare
+    type: managed_challenge
+    outcome: challenge_failed
+    confidence: 0.98
+    priority: 90
+    description: The cf-mitigated header marks a challenge response whatever the status or body.
+    when:
+      header: { name: cf-mitigated, regex: '(?i)^\s*challenge\s*$' }
+
+  - id: cloudflare-just-a-moment
+    vendor: cloudflare
+    type: managed_challenge
+    outcome: challenge_failed
+    confidence: 0.95
+    priority: 85
+    description: The "Just a moment..." interstitial served with 403 or 503.
+    when:
+      all:
+        - status: [403, 503]
+        - any:
+            - body: '<title>Just a moment\.\.\.</title>'
+            - body: '/cdn-cgi/challenge-platform/'
+            - body: '_cf_chl_opt'
+
+  - id: cloudflare-turnstile-wall
+    vendor: cloudflare
+    type: turnstile
+    outcome: captcha
+    confidence: 0.9
+    priority: 80
+    description: A Turnstile widget that is the whole page, not a form field on a normal page.
+    when:
+      all:
+        - any:
+            - body: 'challenges\.cloudflare\.com/turnstile/'
+            - body: 'class="[^"]*\bcf-turnstile\b'
+            - iframe_host: '^challenges\.cloudflare\.com$'
+        - visible_text: { max_chars: 300 }
+        - not: { header: cf-mitigated }
+
+  - id: cloudflare-waf-block
+    vendor: cloudflare
+    type: waf_block
+    outcome: forbidden
+    confidence: 0.95
+    priority: 85
+    description: The "Sorry, you have been blocked" page and error 1020.
+    when:
+      all:
+        - status: 403
+        - any:
+            - body: 'Sorry, you have been blocked'
+            - body: '(?i)error\s*(code:?\s*)?1020'
+        - body: '(?i)cloudflare'
+
+  - id: cloudflare-rate-limit-1015
+    vendor: cloudflare
+    type: rate_limit_1015
+    outcome: rate_limited
+    confidence: 0.95
+    priority: 85
+    description: Error 1015, "You are being rate limited".
+    when:
+      all:
+        - status: 429
+        - any:
+            - body: '(?i)error\s*(code:?\s*)?1015'
+            - body: 'You are being rate limited'
+        - body: '(?i)cloudflare'
+
+  # --- Akamai --------------------------------------------------------------
+  - id: akamai-access-denied
+    vendor: akamai
+    type: access_denied
+    outcome: forbidden
+    confidence: 0.95
+    priority: 85
+    description: The edge "Access Denied" reference page. The page writes its text as HTML entities.
+    when:
+      all:
+        - status: 403
+        - body: 'Access Denied'
+        - any:
+            - body: 'errors(&#46;|\.)edgesuite(&#46;|\.)net'
+            - body: 'Reference(&#32;|\s)(&#35;|#)\s*[0-9a-f]+(&#46;|\.)'
+
+  - id: akamai-bot-manager-challenge
+    vendor: akamai
+    type: bot_manager_challenge
+    outcome: challenge_failed
+    confidence: 0.9
+    priority: 85
+    description: Bot Manager's interstitial challenge page.
+    when:
+      any:
+        - body: 'id="sec-if-cpt-container"'
+        - body: '/_sec/cp_challenge/'
+
+  # --- DataDome ------------------------------------------------------------
+  - id: datadome-hard-block
+    vendor: datadome
+    type: hard_block
+    outcome: forbidden
+    confidence: 0.95
+    priority: 86
+    description: A DataDome response of type "bv" offers no captcha, only a block.
+    when:
+      all:
+        - body: 'captcha-delivery\.com'
+        - body: '[''"]t[''"]\s*:\s*[''"]bv[''"]'
+
+  - id: datadome-interstitial
+    vendor: datadome
+    type: interstitial
+    outcome: challenge_failed
+    confidence: 0.95
+    priority: 85
+    description: DataDome's device-check interstitial (response type "i").
+    when:
+      all:
+        - body: 'captcha-delivery\.com'
+        - body: '[''"]rt[''"]\s*:\s*[''"]i[''"]'
+
+  - id: datadome-captcha
+    vendor: datadome
+    type: captcha
+    outcome: captcha
+    confidence: 0.95
+    priority: 84
+    description: DataDome's captcha page, as HTML or as the JSON answer to an XHR.
+    when:
+      all:
+        - status: [403, 200]
+        - any:
+            - all:
+                - body: 'captcha-delivery\.com'
+                - body: '[''"]rt[''"]\s*:\s*[''"]c[''"]'
+            - body: '"url"\s*:\s*"https://geo\.captcha-delivery\.com/captcha/'
+            - iframe_host: '(^|\.)captcha-delivery\.com$'
+
+  # --- HUMAN (PerimeterX) --------------------------------------------------
+  - id: human-press-and-hold
+    vendor: human
+    type: press_and_hold
+    outcome: captcha
+    confidence: 0.95
+    priority: 85
+    description: The "Press & Hold" block page, as HTML or as the JSON answer to an XHR.
+    when:
+      any:
+        - all:
+            - body: '_pxAppId|px-captcha|"appId"\s*:\s*"PX[0-9A-Za-z]+"'
+            - any:
+                - body: 'Press (&amp;|&) Hold'
+                - body: 'id="px-captcha"'
+                - body: '"blockScript"\s*:'
+                - body: 'Access to this page has been denied'
+        - interstitial_text: '(?i)press (&amp;|&|and) hold'
+
+  # --- Kasada --------------------------------------------------------------
+  - id: kasada-challenge
+    vendor: kasada
+    type: kpsdk_challenge
+    outcome: challenge_failed
+    confidence: 0.95
+    priority: 85
+    description: Kasada answers the first request with 429 and a page that only loads its script.
+    when:
+      all:
+        - status: [429, 403]
+        - any:
+            - header: x-kpsdk-ct
+            - header: x-kpsdk-cr
+            - header: x-kpsdk-r
+            - all:
+                - body: 'KPSDK'
+                - body: '<script[^>]+src="[^"]*/(ips|p)\.js'
+
+  # --- Imperva (Incapsula) -------------------------------------------------
+  - id: imperva-incident
+    vendor: imperva
+    type: incident
+    outcome: forbidden
+    confidence: 0.95
+    priority: 85
+    description: The incident page. Imperva often serves it with status 200.
+    when:
+      all:
+        - any:
+            - body: 'Incapsula incident ID'
+            - body: '_Incapsula_Resource\?[^"''\s>]*incident_id='
+        - visible_text: { max_chars: 400 }
+
+  # --- AWS WAF -------------------------------------------------------------
+  - id: aws-waf-challenge
+    vendor: aws_waf
+    type: challenge
+    outcome: challenge_failed
+    confidence: 0.97
+    priority: 90
+    description: The silent challenge action.
+    when:
+      header: { name: x-amzn-waf-action, regex: '(?i)^\s*challenge\s*$' }
+
+  - id: aws-waf-captcha
+    vendor: aws_waf
+    type: captcha
+    outcome: captcha
+    confidence: 0.97
+    priority: 90
+    description: The captcha action.
+    when:
+      any:
+        - header: { name: x-amzn-waf-action, regex: '(?i)^\s*captcha\s*$' }
+        - all:
+            - status: 405
+            - body: 'captcha\.awswaf\.com|AwsWafCaptcha'
+
+  - id: aws-waf-challenge-page
+    vendor: aws_waf
+    type: challenge
+    outcome: challenge_failed
+    confidence: 0.9
+    priority: 85
+    description: The challenge page when the action header was stripped on the way.
+    when:
+      all:
+        - status: [202, 405]
+        - body: 'token\.awswaf\.com/[^"'']*challenge\.js|AwsWafIntegration'
+
+  # --- F5 (BIG-IP ASM, Shape). Heuristic. ----------------------------------
+  - id: f5-request-rejected
+    vendor: f5_shape
+    type: request_rejected
+    outcome: forbidden
+    confidence: 0.9
+    priority: 85
+    description: BIG-IP ASM's block page with a support id.
+    when:
+      all:
+        - body: 'The requested URL was rejected\. Please consult with your administrator'
+        - body: '(?i)support id'
+
+  - id: f5-tspd-challenge
+    vendor: f5_shape
+    type: js_challenge
+    outcome: challenge_failed
+    confidence: 0.9
+    priority: 80
+    description: Heuristic. The proactive bot defence page loads a /TSPD/ script and shows nothing else.
+    when:
+      all:
+        - body: '/TSPD/[0-9a-f]+\?type=\d+'
+        - visible_text: { max_chars: 200 }
+
+  # --- Captcha walls -------------------------------------------------------
+  - id: recaptcha-wall
+    vendor: recaptcha
+    type: recaptcha
+    outcome: captcha
+    confidence: 0.9
+    priority: 60
+    description: reCAPTCHA as the page. A widget or the v3 badge on a normal page has far more text.
+    when:
+      all:
+        - any:
+            - body: '(google\.com|recaptcha\.net)/recaptcha/(api2|enterprise)/(anchor|bframe)'
+            - body: '(google\.com|recaptcha\.net)/recaptcha/(api|enterprise)\.js'
+            - body: 'class="[^"]*\bg-recaptcha\b'
+        - visible_text: { max_chars: 300 }
+
+  - id: hcaptcha-wall
+    vendor: hcaptcha
+    type: hcaptcha
+    outcome: captcha
+    confidence: 0.9
+    priority: 60
+    description: hCaptcha as the page.
+    when:
+      all:
+        - any:
+            - body: 'hcaptcha\.com/1/api\.js'
+            - body: 'class="[^"]*\bh-captcha\b'
+            - iframe_host: '(^|\.)hcaptcha\.com$'
+        - visible_text: { max_chars: 300 }
+
+  # --- Soft blocks: a good status with no real content ----------------------
+  - id: soft-empty-body
+    vendor: generic
+    type: empty_body
+    outcome: soft_block
+    confidence: 0.7
+    priority: 30
+    description: A response with no body at all that is HTML or declares no type.
+    when:
+      all:
+        - status: 200
+        - body_bytes: { max: 0 }
+        - any:
+            - header: { name: content-type, regex: '(?i)text/html' }
+            - not: { header: content-type }
+
+  - id: soft-js-required
+    vendor: generic
+    type: js_required
+    outcome: soft_block
+    confidence: 0.7
+    priority: 31
+    # Another persona would get the same shell: do not retry, do not cool
+    # anyone down, let the browser render it.
+    retryable: false
+    escalate: true
+    cooldown: none
+    description: A script-only shell on the http path. With render auto the next attempt uses the browser.
+    when:
+      all:
+        - status: 200
+        - render: http
+        - header: { name: content-type, regex: '(?i)text/html' }
+        - visible_text: { max_chars: 200 }
+        - any:
+            - body: '(?i)(enable|requires?|need|turn on|without) javascript'
+            - body: '(?i)javascript (is|seems to be) (required|disabled|off)'
+            - body: '<div id="(root|app|__next|__nuxt|svelte)">\s*</div>'
+
+  - id: soft-blank-page
+    vendor: generic
+    type: blank_page
+    outcome: soft_block
+    confidence: 0.6
+    priority: 25
+    description: An HTML page that renders no text at all.
+    when:
+      all:
+        - status: 200
+        - header: { name: content-type, regex: '(?i)text/html' }
+        - body_bytes: { min: 1 }
+        - visible_text: { max_chars: 0 }
+
+  - id: soft-login-wall
+    vendor: generic
+    type: login_wall
+    outcome: soft_block
+    confidence: 0.6
+    priority: 30
+    # Another address gets the same wall; the browser path or a flow handles it.
+    retryable: false
+    escalate: true
+    cooldown: none
+    description: A password form instead of the content, reached at a login URL or announced as required.
+    when:
+      all:
+        - status: 200
+        - body: '(?i)<input[^>]+type=["'']?password'
+        - visible_text: { max_chars: 600 }
+        - any:
+            - url: '(?i)/(log-?in|sign-?in|signin|auth|sso|account/login)([/?#.]|$)'
+            - body: '(?i)(log in|sign in|login) (to|is) (continue|view|read|required|see)'
+
+  - id: soft-consent-wall
+    vendor: generic
+    type: consent_wall
+    outcome: soft_block
+    confidence: 0.6
+    priority: 30
+    # Another address gets the same wall; the browser path or a flow handles it.
+    retryable: false
+    escalate: true
+    cooldown: none
+    description: A consent page in place of the content. A banner over a normal page has far more text.
+    when:
+      all:
+        - status: 200
+        - visible_text: { max_chars: 1500 }
+        - any:
+            - url: '^https://consent\.(google|youtube|yahoo)\.'
+            - url: '^https://guce\.yahoo\.com/'
+            - all:
+                - body: '(?i)(before you continue|we value your privacy|ihre privatsph(ä|&auml;)re|bevor sie fortfahren)'
+                - body: '(?i)(accept all|reject all|alle akzeptieren|alle ablehnen)'
+                - visible_text: { max_chars: 900 }
+
+  # --- Status alone --------------------------------------------------------
+  - id: generic-http-403
+    vendor: generic
+    type: http_403
+    outcome: forbidden
+    confidence: 0.6
+    priority: 10
+    # Nothing says who refused or why: a real block, weakly attributed.
+    cooldown: short
+    when: { status: 403 }
+
+  - id: generic-http-429
+    vendor: generic
+    type: http_429
+    outcome: rate_limited
+    confidence: 0.6
+    priority: 10
+    cooldown: short
+    when: { status: 429 }
+
+  - id: generic-http-5xx
+    vendor: generic
+    type: server_error
+    outcome: provider_error
+    confidence: 0.5
+    priority: 10
+    # The site is failing, not refusing: no persona is cooled down and the
+    # breaker does not count it. The scheduler adds a politeness pause after
+    # consecutive server errors so a site that is down is not hammered.
+    retryable: true
+    escalate: false
+    cooldown: none
+    description: A server error with no vendor marker. Retried on another persona; no cooldown.
+    when: { status: "500-599" }
+
+# Hints never block. They record which vendor fronts a site.
+hints:
+  - id: cloudflare-presence
+    vendor: cloudflare
+    when:
+      any:
+        - cookie: '^(__cf_bm|cf_clearance|__cflb|_cfuvid)$'
+        - header: cf-ray
+        - header: { name: server, regex: '(?i)^cloudflare' }
+
+  - id: akamai-presence
+    vendor: akamai
+    when:
+      any:
+        - cookie: '^(_abck|bm_sz|ak_bmsc|bm_sv|bm_mi)$'
+        - header: { name: server, regex: '(?i)^AkamaiGHost' }
+
+  - id: datadome-presence
+    vendor: datadome
+    when:
+      any:
+        - cookie: '^datadome$'
+        - header: x-datadome
+        - header: x-datadome-cid
+        - script_host: '(^|\.)datadome\.co$'
+        - body: 'js\.datadome\.co/tags\.js'
+
+  - id: human-presence
+    vendor: human
+    when:
+      any:
+        - cookie: '^_px'
+        - script_host: '(^|\.)(px-cdn\.net|px-cloud\.net|perimeterx\.net)$'
+        - body: 'window\._pxAppId'
+
+  - id: kasada-presence
+    vendor: kasada
+    when:
+      any:
+        - cookie: '^KP_UIDz'
+        - header: x-kpsdk-ct
+
+  - id: imperva-presence
+    vendor: imperva
+    when:
+      any:
+        - cookie: '^(incap_ses_|visid_incap_|nlbi_)'
+        - header: x-iinfo
+        - header: { name: x-cdn, regex: '(?i)(imperva|incapsula)' }
+
+  - id: aws-waf-presence
+    vendor: aws_waf
+    when:
+      any:
+        - cookie: '^aws-waf-token$'
+        - script_host: '(^|\.)awswaf\.com$'
+
+  - id: f5-presence
+    vendor: f5_shape
+    when:
+      any:
+        - cookie: '^(TS[0-9a-f]{6,}|BIGipServer|f5avr|f5_cspm)'
+        - header: { name: server, regex: '(?i)^big-?ip' }
+
+  - id: recaptcha-presence
+    vendor: recaptcha
+    when:
+      any:
+        - body: '(google\.com|recaptcha\.net)/recaptcha/'
+        - script_host: '(^|\.)recaptcha\.net$'
+
+  - id: hcaptcha-presence
+    vendor: hcaptcha
+    when:
+      any:
+        - body: 'hcaptcha\.com/1/api\.js'
+        - script_host: '(^|\.)hcaptcha\.com$'

@@ -1,0 +1,29 @@
+synthetic: true
+source: >-
+  Hand-written from nginx's stock 503 page. A server error with no vendor
+  marker is a provider error, not a block: it is retried on another persona
+  and no persona is cooled down for it.
+observation:
+  render: http
+  status: 503
+  url: https://www.smallsite.example/catalog
+  headers:
+    - { name: content-type, value: text/html }
+    - { name: server, value: nginx }
+  body: |
+    <html>
+    <head><title>503 Service Temporarily Unavailable</title></head>
+    <body>
+    <center><h1>503 Service Temporarily Unavailable</h1></center>
+    <hr><center>nginx</center>
+    </body>
+    </html>
+expect:
+  outcome: provider_error
+  vendor: generic
+  type: server_error
+  rule: generic-http-5xx
+  vendors: []
+  retryable: true
+  escalate: false
+  cooldown: none

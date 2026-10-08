@@ -1,0 +1,47 @@
+synthetic: true
+source: >-
+  Hand-written. What the browser path reports after a Cloudflare interstitial
+  resolved by itself: the real page, a cf_clearance cookie, and the
+  interstitial signals set. Host and content are invented.
+observation:
+  render: browser
+  status: 200
+  url: https://shop.example/products/42
+  headers:
+    - { name: content-type, value: "text/html; charset=UTF-8" }
+    - { name: server, value: cloudflare }
+    - { name: cf-ray, value: 8f0a1b2c3d4e5f61-FRA }
+  cookies:
+    - { name: cf_clearance, value: fixture-not-a-real-token }
+    - { name: __cf_bm, value: fixture-not-a-real-token }
+  browser:
+    script_hosts: [shop.example, challenges.cloudflare.com]
+    iframe_hosts: []
+    interstitial_text: Verifying you are human. This may take a few seconds.
+    interstitial_detected: true
+    interstitial_resolved: true
+  body: |
+    <html lang="en"><head>
+    <meta charset="utf-8">
+    <title>Trail Runner 3 - Shop Example</title>
+    </head>
+    <body>
+    <header><a href="/">Shop Example</a> <nav><a href="/shoes">Shoes</a> <a href="/jackets">Jackets</a> <a href="/cart">Cart (0)</a></nav></header>
+    <main>
+    <h1>Trail Runner 3</h1>
+    <p class="price">89,00 EUR</p>
+    <p>A light trail shoe with a grippy outsole for wet rock and loose gravel. The upper is a breathable mesh that dries quickly, and the toe cap protects against roots and stones.</p>
+    <ul>
+    <li>Weight: 265 g (size 42)</li>
+    <li>Drop: 6 mm</li>
+    <li>Outsole: 4 mm lugs</li>
+    </ul>
+    <button type="button">Add to cart</button>
+    <h2>Reviews</h2>
+    <p>Comfortable from the first run, and the grip on wet trails is excellent.</p>
+    </main>
+    <footer>Shop Example GmbH, Musterstrasse 1, 10115 Berlin</footer>
+    </body></html>
+expect:
+  outcome: challenge_passed
+  vendors: [cloudflare]

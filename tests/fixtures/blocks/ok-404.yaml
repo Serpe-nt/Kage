@@ -1,0 +1,22 @@
+synthetic: true
+source: >-
+  Hand-written negative case. A 404 is an answer, not a block: 4xx statuses
+  other than 403 and 429 are returned as they are (spec §8.3).
+observation:
+  render: http
+  status: 404
+  url: https://www.smallsite.example/catalog/item-that-is-gone
+  headers:
+    - { name: content-type, value: text/html }
+    - { name: server, value: nginx }
+  body: |
+    <html>
+    <head><title>404 Not Found</title></head>
+    <body>
+    <center><h1>404 Not Found</h1></center>
+    <hr><center>nginx</center>
+    </body>
+    </html>
+expect:
+  outcome: ok
+  vendors: []

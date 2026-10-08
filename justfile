@@ -13,6 +13,10 @@ cargo_llvm_cov_version := "0.9.1"
 cargo_cyclonedx_version := "0.5.9"
 cargo_mutants_version := "27.1.0"
 
+# Installed by `setup-sqlx`, not through `rust_tools`: it is built with rustls
+# and Postgres only, which no prebuilt binary offers.
+sqlx_cli_version := "0.9.0"
+
 # `tool@version,...` for taiki-e/install-action in CI: `just --evaluate rust_tools`.
 rust_tools := "cargo-deny@" + cargo_deny_version + ",cargo-audit@" + cargo_audit_version + ",cargo-llvm-cov@" + cargo_llvm_cov_version + ",cargo-cyclonedx@" + cargo_cyclonedx_version + ",cargo-mutants@" + cargo_mutants_version
 
@@ -28,10 +32,15 @@ compose := "docker compose --file deploy/compose.yaml"
 # Image tags built by `build-images`; they match the defaults in deploy/compose.yaml.
 images := "kage:dev kage-browser-chromium:dev kage-browser-firefox:dev"
 
-# Spec §21: these crates must keep at least this line coverage. The sidecar
-# gate (engine-core) lives in sidecar/vitest.config.ts.
-cov_gated_crates := "kage-core,kage-proxy,kage-crawl,kage-extract"
+# Spec §21: these crates must keep at least this line coverage. kage-store
+# joined the list in M1 (docs/02-plan.md, M1 acceptance). The sidecar gate
+# (engine-core) lives in sidecar/vitest.config.ts.
+cov_gated_crates := "kage-core,kage-store,kage-proxy,kage-crawl,kage-extract"
 cov_min_lines := "80"
+
+# sqlx checks every query at compile time against the committed data in
+# .sqlx/, never against a live database. `sqlx-prepare` regenerates it.
+export SQLX_OFFLINE := "true"
 
 # Base of the commit range checked by `commits`.
 base_ref := env("KAGE_BASE_REF", "origin/main")
@@ -43,7 +52,7 @@ default:
 # --- Setup -------------------------------------------------------------------
 
 # Install toolchains, pnpm deps, git hooks and local dev secrets.
-setup: setup-rust setup-node setup-hooks setup-env
+setup: setup-rust setup-sqlx setup-node setup-hooks setup-env
 
 # Install the pinned Rust toolchain and cargo tools.
 setup-rust:
@@ -62,6 +71,17 @@ setup-rust:
             cargo install --locked "${name}@${version}"
         fi
     done
+
+# Install the pinned sqlx-cli, built with rustls and Postgres support only.
+setup-sqlx:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if cargo install --list | grep -q "^sqlx-cli v{{ sqlx_cli_version }}:"; then
+        echo "sqlx-cli {{ sqlx_cli_version }} is already installed"
+    else
+        cargo install --locked "sqlx-cli@{{ sqlx_cli_version }}" \
+            --no-default-features --features rustls,postgres
+    fi
 
 # Install the pinned pnpm and the sidecar dependencies.
 setup-node:
@@ -109,8 +129,18 @@ lint-node:
 # Rust unit + integration tests, sidecar vitest.
 test: test-rust test-node
 
+# The store and CLI tests start Postgres in Docker (testcontainers).
 test-rust:
     cargo test --workspace --all-features --locked
+
+# Migrations apply from empty, are idempotent, `sqlx migrate info` is clean,
+# and .sqlx/ matches the queries. Uses a throwaway Postgres in Docker.
+sqlx-check:
+    scripts/check-migrations.sh
+
+# Regenerate .sqlx/ after a query or a migration changed.
+sqlx-prepare:
+    scripts/check-migrations.sh --prepare
 
 test-node:
     cd sidecar && pnpm run build && pnpm run test
@@ -223,11 +253,16 @@ sbom-images:
 # Postgres + sidecars in compose, kage serve natively.
 dev: setup-env
     {{ compose }} --file deploy/compose.dev.yaml up --detach --build --wait postgres browser-chromium browser-firefox
-    KAGE__SERVER__BIND=127.0.0.1:8080 cargo run --package kage -- serve
+    source scripts/dev-env.sh && cargo run --package kage -- migrate
+    source scripts/dev-env.sh && KAGE__SERVER__BIND=127.0.0.1:8080 cargo run --package kage -- serve
 
-# Apply migrations.
-migrate:
-    @echo "No migrations yet: the schema and 'kage migrate' land in M1 (docs/02-plan.md). Nothing to apply."
+# Apply migrations to the development database (the Postgres of `just dev`).
+migrate: setup-env
+    source scripts/dev-env.sh && cargo run --package kage -- migrate
+
+# Validate the development configuration and print it with secrets redacted.
+config-check: setup-env
+    source scripts/dev-env.sh && cargo run --quiet --package kage -- config check
 
 # Regenerate the public and sidecar OpenAPI files.
 openapi:
@@ -246,5 +281,5 @@ commits:
     fi
 
 # Everything a PR runs.
-ci: commits fmt-check lint test cov deny secrets sbom build-images scan-images sbom-images test-e2e
+ci: commits fmt-check lint sqlx-check test cov deny secrets sbom build-images scan-images sbom-images test-e2e
     @echo "ci: all gates passed"

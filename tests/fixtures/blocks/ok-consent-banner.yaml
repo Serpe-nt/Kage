@@ -1,0 +1,40 @@
+synthetic: true
+source: >-
+  Hand-written negative case. A full article with a cookie banner over it.
+  The banner uses the same words as a consent wall ("We value your privacy",
+  "Accept all", "Reject all"), but the content is there, so this is not a
+  soft block.
+observation:
+  render: browser
+  status: 200
+  url: https://www.gardening.example/guides/pruning-apple-trees
+  headers:
+    - { name: content-type, value: "text/html; charset=utf-8" }
+  browser:
+    script_hosts: [www.gardening.example, cdn.consent.example]
+    iframe_hosts: []
+  body: |
+    <html lang="en"><head>
+    <meta charset="utf-8">
+    <title>Pruning apple trees - Gardening Example</title>
+    <script src="https://cdn.consent.example/banner.js"></script>
+    </head>
+    <body>
+    <div id="consent-banner" role="dialog" aria-label="Cookie consent">
+    <h2>We value your privacy</h2>
+    <p>We use cookies to remember your settings and to measure which guides are read. You can change your choice at any time.</p>
+    <button>Reject all</button> <button>Accept all</button> <a href="/cookies">Manage choices</a>
+    </div>
+    <article>
+    <h1>Pruning apple trees</h1>
+    <p>Prune apple trees in late winter, while the tree is dormant and before the buds begin to swell. The shape of the tree is easy to see without leaves, and cuts made now heal quickly when growth starts. Avoid pruning in a hard frost, when the wood is brittle and tears instead of cutting cleanly.</p>
+    <p>Begin with what has to go whatever the shape of the tree: dead wood, diseased wood and broken branches. Cut back to healthy wood just above a bud or flush with the collar where the branch meets a larger one. Then take out branches that cross and rub, keeping the one that grows outwards. A tree with an open centre lets light and air reach the fruit, which means fewer fungal problems and better colour.</p>
+    <p>Next, look at the strong upright shoots that grew last summer. These water shoots take energy and seldom fruit. Remove most of them at the base and shorten the few you keep by a third. On a young tree, choose four or five well spaced branches as the permanent frame and shorten each by about a third to an outward-facing bud; on an old tree, do less than you think you should.</p>
+    <p>As a rule, never remove more than a fifth of the canopy in one winter. A tree that is cut hard answers with a thicket of new upright growth the following year, and you will have made the work harder. A neglected tree is better brought back over three winters than in one. Use sharp, clean tools, and wipe the blades with alcohol after cutting out any canker.</p>
+    <p>Summer pruning is a different job with a different purpose. In late July or August, shorten the side shoots of trained trees, such as cordons and espaliers, to three leaves. This checks growth and encourages fruit buds for the following year. Free-standing trees usually need no summer pruning at all.</p>
+    </article>
+    <footer>Gardening Example, written by gardeners since 2011.</footer>
+    </body></html>
+expect:
+  outcome: ok
+  vendors: []

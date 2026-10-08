@@ -1,0 +1,43 @@
+synthetic: true
+source: >-
+  Hand-written. A request for a content page that was redirected to the
+  site's login form: status 200, a password field, and nothing of the page
+  that was asked for. Rendered DOM as the browser path would capture it.
+observation:
+  render: browser
+  status: 200
+  url: https://www.network.example/login?next=%2Fcompany%2Facme%2Fpeople
+  headers:
+    - { name: content-type, value: "text/html; charset=utf-8" }
+  browser:
+    script_hosts: [static.network.example]
+    iframe_hosts: []
+  body: |
+    <html lang="en"><head>
+    <meta charset="utf-8">
+    <title>Sign in - Network Example</title>
+    </head>
+    <body>
+    <main>
+    <h1>Sign in to continue</h1>
+    <p>Join Network Example or sign in to see who works at this company.</p>
+    <form action="/login/submit" method="POST">
+    <input type="hidden" name="next" value="/company/acme/people">
+    <label for="email">Email or phone</label>
+    <input id="email" type="text" name="email" autocomplete="username">
+    <label for="password">Password</label>
+    <input id="password" type="password" name="password" autocomplete="current-password">
+    <button type="submit">Sign in</button>
+    </form>
+    <p><a href="/password-reset">Forgot password?</a> <a href="/signup">New here? Join now</a></p>
+    </main>
+    </body></html>
+expect:
+  outcome: soft_block
+  vendor: generic
+  type: login_wall
+  rule: soft-login-wall
+  vendors: []
+  retryable: false
+  escalate: true
+  cooldown: none

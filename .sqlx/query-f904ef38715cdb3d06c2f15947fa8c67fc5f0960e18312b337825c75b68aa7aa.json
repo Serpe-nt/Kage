@@ -1,0 +1,220 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, provider, provider_ref, host, port, username, password, scheme, country,\n                    city, asn, state, consecutive_failures, backoff_until, last_health,\n                    created_at, retired_at\n             FROM proxies WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "proxies",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "provider",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "proxies",
+            "name": "provider"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "provider_ref",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "proxies",
+            "name": "provider_ref"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "host",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "proxies",
+            "name": "host"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "port",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "proxies",
+            "name": "port"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "username",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "proxies",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "password",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "proxies",
+            "name": "password"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "scheme",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "proxies",
+            "name": "scheme"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "country",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "proxies",
+            "name": "country"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "city",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "proxies",
+            "name": "city"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "asn",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "proxies",
+            "name": "asn"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "state",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "proxies",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "consecutive_failures",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "proxies",
+            "name": "consecutive_failures"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "backoff_until",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "proxies",
+            "name": "backoff_until"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "last_health",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "proxies",
+            "name": "last_health"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "proxies",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "retired_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "proxies",
+            "name": "retired_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "f904ef38715cdb3d06c2f15947fa8c67fc5f0960e18312b337825c75b68aa7aa"
+}

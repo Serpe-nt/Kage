@@ -1,0 +1,34 @@
+synthetic: true
+source: >-
+  Hand-written negative case. An ordinary page of a site behind HUMAN
+  (PerimeterX): the _px cookies and the sensor snippet that sets
+  window._pxAppId are there on every good response and must not read as a
+  block.
+observation:
+  render: http
+  status: 200
+  url: https://www.sneakers.example/release/air-fixture-1
+  headers:
+    - { name: content-type, value: "text/html; charset=utf-8" }
+  cookies:
+    - { name: _px3, value: fixture-not-a-real-token }
+    - { name: _pxvid, value: 00000000-0000-0000-0000-000000000000 }
+    - { name: pxcts, value: 22222222-2222-2222-2222-222222222222 }
+  body: |
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+    <meta charset="utf-8">
+    <title>Air Fixture 1 - Sneakers Example</title>
+    <script>(function(){window._pxAppId='PXfixture01';var p=document.getElementsByTagName('script')[0],s=document.createElement('script');s.async=1;s.src='/fixture01/init.js';p.parentNode.insertBefore(s,p);}());</script>
+    </head>
+    <body>
+    <h1>Air Fixture 1</h1>
+    <p>Release date: 12 October, 10:00 CEST. The Air Fixture 1 returns in its original white and grey colourway, with a leather upper and a visible air unit in the heel.</p>
+    <p>Sizes 38 to 47. One pair per customer. The draw opens on release day and stays open for thirty minutes.</p>
+    <a href="/release/air-fixture-1/draw">Enter the draw</a>
+    </body>
+    </html>
+expect:
+  outcome: ok
+  vendors: [human]

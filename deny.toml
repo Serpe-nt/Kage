@@ -34,6 +34,9 @@ allow = [
     "CDLA-Permissive-2.0",
     # Zlib: foldhash (hashbrown) and zlib-rs (flate2).
     "Zlib",
+    # CC0-1.0: notify (policy hot reload), added in M1 when it was first used.
+    # A public-domain dedication; no conditions on redistribution.
+    "CC0-1.0",
 ]
 
 [bans]

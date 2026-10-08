@@ -1,0 +1,40 @@
+synthetic: true
+source: >-
+  Hand-written negative case. An ordinary page of a site behind Imperva: the
+  visid_incap and incap_ses cookies and an injected /_Incapsula_Resource
+  script (without an incident id) are there on every good response and must
+  not read as a block.
+observation:
+  render: http
+  status: 200
+  url: https://www.bank.example/rates
+  headers:
+    - { name: content-type, value: "text/html; charset=utf-8" }
+    - { name: x-cdn, value: Imperva }
+    - { name: x-iinfo, value: "9-12345679-12345680 NNNN CT(12 13 0) RT(1760000000000 20) q(0 0 0 -1) r(1 1) U6" }
+  cookies:
+    - { name: visid_incap_1234567, value: fixture-not-a-real-token }
+    - { name: incap_ses_123_1234567, value: fixture-not-a-real-token }
+  body: |
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+    <meta charset="utf-8">
+    <title>Savings rates - Bank Example</title>
+    </head>
+    <body>
+    <h1>Savings rates</h1>
+    <p>Rates valid from 1 October. Interest is paid on the last day of each quarter.</p>
+    <table>
+    <tr><th>Account</th><th>Rate per year</th><th>Minimum deposit</th></tr>
+    <tr><td>Instant access</td><td>1.75 %</td><td>none</td></tr>
+    <tr><td>Fixed term, 12 months</td><td>2.60 %</td><td>1,000 EUR</td></tr>
+    <tr><td>Fixed term, 24 months</td><td>2.85 %</td><td>1,000 EUR</td></tr>
+    </table>
+    <p>Deposits are protected up to 100,000 EUR per customer by the statutory deposit guarantee scheme.</p>
+    <script type="text/javascript" src="/_Incapsula_Resource?SWJIYLWA=719d34d31c8e3a6e6fffd425f7e032f3&ns=2&cb=1234567890" async></script>
+    </body>
+    </html>
+expect:
+  outcome: ok
+  vendors: [imperva]

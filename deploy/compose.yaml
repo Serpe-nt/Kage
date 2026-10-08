@@ -33,7 +33,33 @@ x-sidecar: &sidecar
     retries: 3
     start_period: 10s
 
+# Secrets reach kage through the environment (spec §17), filled in from
+# deploy/.env, which `just setup` creates and git ignores. kage also accepts
+# KAGE__..._FILE variables that name a mounted secret file.
+x-kage-secrets: &kage-secrets
+  KAGE__DATABASE__URL: postgres://kage:${KAGE_POSTGRES_PASSWORD:?run 'just setup' to create deploy/.env}@postgres:5432/kage
+  KAGE__SIDECAR__TOKEN: ${KAGE_SIDECAR_TOKEN:?run 'just setup' to create deploy/.env}
+  KAGE__SECRETS__MASTER_KEY: ${KAGE_MASTER_KEY:?run 'just setup' to create deploy/.env}
+
 services:
+  # Applies the schema migrations, then exits. kage starts only after it
+  # succeeded, and refuses to start on a schema that is not up to date.
+  migrate:
+    <<: *hardening
+    image: ${KAGE_IMAGE:-kage:dev}
+    command: [migrate]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *kage-secrets
+    healthcheck:
+      disable: true
+    mem_limit: 256m
+    cpus: 1
+    pids_limit: 128
+
   kage:
     <<: *hardening
     image: ${KAGE_IMAGE:-kage:dev}
@@ -41,6 +67,8 @@ services:
       context: ..
       dockerfile: deploy/docker/kage.Dockerfile
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       browser-chromium:
@@ -48,9 +76,9 @@ services:
       browser-firefox:
         condition: service_healthy
     environment:
+      <<: *kage-secrets
       KAGE__SERVER__BIND: 0.0.0.0:8080
-      # KAGE__DATABASE__URL is wired here in M1 and KAGE__SIDECAR__TOKEN in M4,
-      # together with the code that reads them.
+      # The sidecars start checking KAGE__SIDECAR__TOKEN in M4.
     ports:
       # Loopback by default: the API has no authentication until M8.
       - "${KAGE_PUBLISH_ADDR:-127.0.0.1}:${KAGE_PUBLISH_PORT:-8080}:8080"

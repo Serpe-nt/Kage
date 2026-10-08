@@ -1,0 +1,37 @@
+synthetic: true
+source: >-
+  Hand-written negative case. An ordinary page of a site behind Cloudflare:
+  the __cf_bm cookie, the cf-ray header and the email-protection script are
+  there on every good response and must not read as a block.
+observation:
+  render: http
+  status: 200
+  url: https://blog.example/posts/sourdough
+  headers:
+    - { name: content-type, value: "text/html; charset=UTF-8" }
+    - { name: server, value: cloudflare }
+    - { name: cf-ray, value: 4b33cc22dd11aa00-FRA }
+    - { name: cf-cache-status, value: HIT }
+  cookies:
+    - { name: __cf_bm, value: fixture-not-a-real-token }
+    - { name: _cfuvid, value: fixture-not-a-real-token }
+  body: |
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+    <meta charset="utf-8">
+    <title>Sourdough for beginners - Blog Example</title>
+    </head>
+    <body>
+    <article>
+    <h1>Sourdough for beginners</h1>
+    <p>A starter is flour and water left to ferment. Feed it once a day for a week and it will be ready to raise a loaf. Keep it somewhere warm, and use it when it has doubled in size and smells pleasantly sour.</p>
+    <p>For the first loaf, mix 500 g of bread flour with 350 g of water and 100 g of starter. Rest the dough for half an hour, add 10 g of salt, and fold it every thirty minutes for two hours.</p>
+    <p>Shape the dough, let it rise in the fridge overnight, and bake it in a covered pot at 240 degrees for twenty minutes, then uncovered for another twenty.</p>
+    </article>
+    <script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script>
+    </body>
+    </html>
+expect:
+  outcome: ok
+  vendors: [cloudflare]

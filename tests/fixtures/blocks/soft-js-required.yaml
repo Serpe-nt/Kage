@@ -1,0 +1,38 @@
+synthetic: true
+source: >-
+  Hand-written. The shell of a single-page application as the http path
+  receives it: an empty root element, script tags and a noscript notice. The
+  content only exists after JavaScript runs, so with render auto the next
+  attempt uses the browser.
+observation:
+  render: http
+  status: 200
+  url: https://app.jobs.example/search?q=nurse
+  headers:
+    - { name: content-type, value: "text/html; charset=utf-8" }
+    - { name: server, value: nginx }
+    - { name: cache-control, value: no-cache }
+  body: |
+    <!doctype html>
+    <html lang="en">
+    <head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width,initial-scale=1"/>
+    <title>Jobs Example</title>
+    <script defer="defer" src="/static/js/main.8f3a2b1c.js"></script>
+    <link href="/static/css/main.4d5e6f70.css" rel="stylesheet">
+    </head>
+    <body>
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"></div>
+    </body>
+    </html>
+expect:
+  outcome: soft_block
+  vendor: generic
+  type: js_required
+  rule: soft-js-required
+  vendors: []
+  retryable: false
+  escalate: true
+  cooldown: none

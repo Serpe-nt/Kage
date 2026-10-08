@@ -53,6 +53,11 @@ jobs:
       - uses: ./.github/actions/setup-rust
       - run: just fmt-check-rust
       - run: just lint-rust
+      - name: Install sqlx-cli
+        run: just setup-sqlx
+      - name: Migrations apply from empty, are idempotent, and .sqlx matches the queries
+        run: just sqlx-check
+      # The store and CLI tests start Postgres containers (testcontainers).
       - run: just test-rust
       - name: Coverage with the per-crate gate
         run: just cov-rust

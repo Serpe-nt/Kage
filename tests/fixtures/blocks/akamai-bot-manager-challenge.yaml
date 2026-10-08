@@ -1,0 +1,43 @@
+synthetic: true
+source: >-
+  Hand-written from public descriptions of Akamai Bot Manager's interstitial
+  challenge: a page that holds only the sec-if-cpt-container element and a
+  script under /_sec/cp_challenge/. Exact script names vary by deployment;
+  host and tokens are invented.
+observation:
+  render: browser
+  status: 428
+  url: https://www.airline.example/booking/search
+  headers:
+    - { name: server, value: AkamaiGHost }
+    - { name: content-type, value: "text/html; charset=utf-8" }
+  cookies:
+    - { name: _abck, value: "FIXTURE0000~-1~YAAQfixture~-1~-1~-1" }
+    - { name: bm_sz, value: fixture-not-a-real-token }
+    - { name: sec_cpt, value: fixture-not-a-real-token }
+  browser:
+    script_hosts: [www.airline.example]
+    iframe_hosts: [www.airline.example]
+    interstitial_detected: true
+    interstitial_resolved: false
+  body: |
+    <html lang="en"><head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Challenge Validation</title>
+    <link rel="stylesheet" type="text/css" href="/_sec/cp_challenge/sec-4-9.css">
+    <script async="" src="/_sec/cp_challenge/sec-cpt-int-4-9.js" defer=""></script>
+    </head>
+    <body style="margin:0">
+    <div class="sec-container">
+    <div id="sec-if-cpt-container" class="crypto" style="display: block;">
+    <iframe id="sec-cpt-if" class="crypto" data-key="" data-duration="5" src="/_sec/cp_challenge/ak-challenge-4-9.htm" provider="crypto" style="width: 100%; height: 100%; border: 0;"></iframe>
+    </div>
+    </div>
+    </body></html>
+expect:
+  outcome: challenge_failed
+  vendor: akamai
+  type: bot_manager_challenge
+  rule: akamai-bot-manager-challenge
+  vendors: [akamai]

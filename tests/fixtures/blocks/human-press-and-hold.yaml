@@ -1,0 +1,54 @@
+synthetic: true
+source: >-
+  Hand-written from the public markup of the HUMAN (PerimeterX) block page:
+  "Access to this page has been denied", the px-captcha element and the
+  window._px* variables. Rendered DOM as the browser path would capture it.
+  App id and reference are invented.
+observation:
+  render: browser
+  status: 403
+  url: https://www.sneakers.example/release/air-fixture-1
+  headers:
+    - { name: content-type, value: "text/html; charset=utf-8" }
+    - { name: cache-control, value: "no-cache, no-store" }
+  cookies:
+    - { name: _pxhd, value: fixture-not-a-real-token }
+    - { name: _pxvid, value: 00000000-0000-0000-0000-000000000000 }
+  browser:
+    script_hosts: [captcha.px-cdn.net, www.sneakers.example]
+    iframe_hosts: []
+    interstitial_text: Press & Hold to confirm you are a human (and not a bot).
+    interstitial_detected: true
+    interstitial_resolved: false
+  body: |
+    <html lang="en"><head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="px-captcha">
+    <title>Access to this page has been denied</title>
+    </head>
+    <body>
+    <script>
+    window._pxVid = '00000000-0000-0000-0000-000000000000';
+    window._pxUuid = '11111111-1111-1111-1111-111111111111';
+    window._pxAppId = 'PXfixture01';
+    window._pxHostUrl = '/fixture01/xhr';
+    window._pxCustomLogo = '';
+    window._pxJsClientSrc = '/fixture01/init.js';
+    window._pxFirstPartyEnabled = true;
+    var pxCaptchaSrc = '/fixture01/captcha/captcha.js?a=c&u=11111111-1111-1111-1111-111111111111&v=00000000-0000-0000-0000-000000000000&m=0';
+    </script>
+    <div class="px-captcha-container">
+    <div class="px-captcha-header">Before we continue...</div>
+    <div class="px-captcha-message">Press &amp; Hold to confirm you are<br>a human (and not a bot).</div>
+    <div id="px-captcha" role="main" aria-label="Human verification challenge"></div>
+    <div class="px-captcha-refid">Reference ID 11111111-1111-1111-1111-111111111111</div>
+    </div>
+    <script src="https://captcha.px-cdn.net/PXfixture01/captcha.js?a=c&amp;m=0"></script>
+    </body></html>
+expect:
+  outcome: captcha
+  vendor: human
+  type: press_and_hold
+  rule: human-press-and-hold
+  vendors: [human]

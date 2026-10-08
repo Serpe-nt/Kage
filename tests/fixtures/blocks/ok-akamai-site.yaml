@@ -1,0 +1,39 @@
+synthetic: true
+source: >-
+  Hand-written negative case. An ordinary page of a site behind Akamai Bot
+  Manager: the _abck, bm_sz and ak_bmsc cookies are set on every response,
+  good ones included, and must not read as a block.
+observation:
+  render: http
+  status: 200
+  url: https://www.retailer.example/category/laptops
+  headers:
+    - { name: content-type, value: "text/html;charset=UTF-8" }
+    - { name: server, value: AkamaiGHost }
+    - { name: x-akamai-transformed, value: "9 5221 0 pmb=mRUM,1" }
+  cookies:
+    - { name: _abck, value: "FIXTURE0000~0~YAAQfixture~-1~-1~-1" }
+    - { name: bm_sz, value: fixture-not-a-real-token }
+    - { name: ak_bmsc, value: fixture-not-a-real-token }
+  body: |
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+    <meta charset="utf-8">
+    <title>Laptops - Retailer Example</title>
+    <script type="text/javascript" src="/static/9f2c1e7a4b0d"></script>
+    </head>
+    <body>
+    <h1>Laptops</h1>
+    <p>Showing 1 to 3 of 48 laptops. Free delivery on orders over 50 EUR, and thirty days to change your mind.</p>
+    <ul class="products">
+    <li><a href="/p/1001">Notebook 14, 16 GB memory, 512 GB storage</a> 749,00 EUR</li>
+    <li><a href="/p/1002">Notebook 15 Pro, 32 GB memory, 1 TB storage</a> 1.299,00 EUR</li>
+    <li><a href="/p/1003">Ultrabook 13, 16 GB memory, 256 GB storage</a> 899,00 EUR</li>
+    </ul>
+    <nav><a href="/category/laptops?page=2">Next page</a></nav>
+    </body>
+    </html>
+expect:
+  outcome: ok
+  vendors: [akamai]

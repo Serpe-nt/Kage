@@ -1,0 +1,19 @@
+synthetic: true
+source: >-
+  Hand-written from the public shape of Kasada's challenge page when it loads
+  p.js instead of ips.js and an intermediary has stripped the x-kpsdk-*
+  headers, so only the body identifies it. The UUIDs are invented.
+observation:
+  render: http
+  status: 429
+  url: https://www.tickets.example/api/events/987/availability
+  headers:
+    - { name: content-type, value: "text/html; charset=utf-8" }
+    - { name: cache-control, value: "no-cache, no-store" }
+  body: |
+    <!DOCTYPE html><html><head></head><body><script>window.KPSDK={};KPSDK.now=typeof performance!=='undefined'&&performance.now?performance.now.bind(performance):Date.now.bind(Date);KPSDK.start=KPSDK.now();</script><script src="/149e9513-01fa-4fb0-aad4-566afd725d1b/2d206a39-8ed7-437e-a3be-862e0f06eea3/p.js"></script></body></html>
+expect:
+  outcome: challenge_failed
+  vendor: kasada
+  type: kpsdk_challenge
+  rule: kasada-challenge

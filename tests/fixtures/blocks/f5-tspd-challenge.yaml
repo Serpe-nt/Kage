@@ -1,0 +1,41 @@
+synthetic: true
+source: >-
+  Hand-written from public descriptions of F5's proactive bot defence
+  JavaScript challenge: a 200 page with no content of its own that loads a
+  script under /TSPD/ and sets window["bobcmn"]. Heuristic by nature (spec
+  §12 calls the F5/Shape rule a heuristic). Ids are invented.
+observation:
+  render: http
+  status: 200
+  url: https://portal.insurer.example/login
+  headers:
+    - { name: content-type, value: text/html }
+    - { name: cache-control, value: "no-cache, no-store, must-revalidate" }
+    - { name: pragma, value: no-cache }
+    - { name: expires, value: "0" }
+  cookies:
+    - { name: TS01a2b3c4, value: fixture-not-a-real-token }
+  body: |
+    <html><head>
+    <meta http-equiv="Pragma" content="no-cache"/>
+    <meta http-equiv="Expires" content="-1"/>
+    <meta http-equiv="CacheControl" content="no-cache"/>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+    <link rel="shortcut icon" href="data:;base64,iVBORw0KGgo="/>
+    <script type="text/javascript">
+    (function(){
+    window["bobcmn"] = "101110111110102000000042000000052000000062000000002fixture";
+    window["failureConfig"] = "524f6f70732e2e2e2073fixture";
+    window.fixture0a = !!window.fixture0a;
+    })();
+    </script>
+    <script type="text/javascript" src="/TSPD/08e5c7a3f1ab20004d2c9b7e61f0a3d58c4b9e7f?type=9"></script>
+    <noscript>Please enable JavaScript to view the page content.<br/>Your support ID is: 9876543210987654321.</noscript>
+    </head><body>
+    </body></html>
+expect:
+  outcome: challenge_failed
+  vendor: f5_shape
+  type: js_challenge
+  rule: f5-tspd-challenge
+  vendors: [f5_shape]

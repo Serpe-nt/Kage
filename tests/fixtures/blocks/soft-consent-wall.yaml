@@ -1,0 +1,42 @@
+synthetic: true
+source: >-
+  Hand-written. A full-page consent wall in place of the content: the
+  request was redirected to a consent page that shows only the notice and its
+  buttons. Rendered DOM as the browser path would capture it.
+observation:
+  render: browser
+  status: 200
+  url: https://www.portal.example/consent?continue=https%3A%2F%2Fwww.portal.example%2Fnews%2F2026%2Fharvest
+  headers:
+    - { name: content-type, value: "text/html; charset=utf-8" }
+  browser:
+    script_hosts: [www.portal.example]
+    iframe_hosts: []
+  body: |
+    <html lang="en"><head>
+    <meta charset="utf-8">
+    <title>Before you continue</title>
+    </head>
+    <body>
+    <main class="consent">
+    <h1>Before you continue to Portal Example</h1>
+    <p>We and our partners use cookies and similar technologies to store and access information on your device, to measure how our services are used, and to show advertising that is more relevant to you.</p>
+    <p>If you choose "Accept all", we will also use cookies to develop new services and to personalise content and ads. If you choose "Reject all", we will not use cookies for these additional purposes.</p>
+    <form action="/consent/save" method="POST">
+    <input type="hidden" name="continue" value="https://www.portal.example/news/2026/harvest">
+    <button name="choice" value="reject">Reject all</button>
+    <button name="choice" value="accept">Accept all</button>
+    <a href="/consent/options">More options</a>
+    </form>
+    <p><a href="/privacy">Privacy policy</a> <a href="/terms">Terms of service</a></p>
+    </main>
+    </body></html>
+expect:
+  outcome: soft_block
+  vendor: generic
+  type: consent_wall
+  rule: soft-consent-wall
+  vendors: []
+  retryable: false
+  escalate: true
+  cooldown: none

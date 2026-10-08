@@ -1,0 +1,19 @@
+synthetic: true
+source: >-
+  Hand-written. A 200 response that declares HTML and carries no body at
+  all, which some sites send to clients they have decided not to serve.
+observation:
+  render: http
+  status: 200
+  url: https://www.listings.example/search?city=hamburg&page=9
+  headers:
+    - { name: content-type, value: "text/html; charset=utf-8" }
+    - { name: content-length, value: "0" }
+    - { name: server, value: nginx }
+  body: ""
+expect:
+  outcome: soft_block
+  vendor: generic
+  type: empty_body
+  rule: soft-empty-body
+  vendors: []

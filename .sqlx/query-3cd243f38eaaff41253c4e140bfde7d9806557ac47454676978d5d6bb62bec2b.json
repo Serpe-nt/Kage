@@ -1,0 +1,86 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT domain, state, block_count_1h, window_started_at, paused_until, updated_at\n             FROM domain_breakers WHERE state = 'open' ORDER BY domain",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "domain",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "domain_breakers",
+            "name": "domain"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "state",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "domain_breakers",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "block_count_1h",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "domain_breakers",
+            "name": "block_count_1h"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "window_started_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "domain_breakers",
+            "name": "window_started_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "paused_until",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "domain_breakers",
+            "name": "paused_until"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "domain_breakers",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "3cd243f38eaaff41253c4e140bfde7d9806557ac47454676978d5d6bb62bec2b"
+}

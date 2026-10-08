@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Stack smoke test: brings the compose project up and checks that kage serves
-# /healthz, both sidecars serve /v1/health, and Postgres accepts connections.
+# /healthz, both sidecars serve /v1/health, Postgres accepts connections, the
+# migrations are applied, and the configuration loads with secrets redacted.
 #
 # It uses its own compose project name and host port, so it never touches a
 # stack started with `just dev` or `docker compose up`.
@@ -53,6 +54,41 @@ echo "==> sidecars are reachable by service name on the compose network"
 
 echo "==> postgres accepts connections"
 "${compose[@]}" exec -T postgres pg_isready --username kage --dbname kage
+
+psql() {
+    "${compose[@]}" exec -T postgres psql --username kage --dbname kage \
+        --no-align --tuples-only --command "$1"
+}
+
+echo "==> the migrate service applied every migration before kage started"
+expected_migrations="$(find crates/kage-store/migrations -maxdepth 1 -name '*.sql' | wc -l)"
+applied_migrations="$(psql 'SELECT count(*) FROM _sqlx_migrations WHERE success')"
+[ "${applied_migrations}" -eq "${expected_migrations}" ] \
+    || fail "${applied_migrations} of ${expected_migrations} migrations are applied"
+tables="$(psql "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name <> '_sqlx_migrations'")"
+[ "${tables}" -eq 18 ] || fail "expected the 18 tables of spec §18, found ${tables}"
+echo "    ${applied_migrations} migrations, ${tables} tables"
+
+echo "==> kage migrate --check agrees, and applying again changes nothing"
+"${compose[@]}" exec -T kage /usr/local/bin/kage migrate --check > /dev/null
+"${compose[@]}" exec -T kage /usr/local/bin/kage migrate > /dev/null
+[ "$(psql 'SELECT count(*) FROM _sqlx_migrations')" -eq "${expected_migrations}" ] \
+    || fail "a second 'kage migrate' changed the migration table"
+
+echo "==> kage config check prints the effective configuration without secrets"
+config="$("${compose[@]}" exec -T kage /usr/local/bin/kage config check)"
+# shellcheck disable=SC1091
+. deploy/.env
+for secret in "${KAGE_POSTGRES_PASSWORD}" "${KAGE_SIDECAR_TOKEN}" "${KAGE_MASTER_KEY}"; do
+    case "${config}" in
+        *"${secret}"*) fail "kage config check printed a secret" ;;
+    esac
+done
+case "${config}" in
+    *'"url": "[redacted]"'*'"dir": "/etc/kage/policies"'*) ;;
+    *) fail "unexpected kage config check output: ${config}" ;;
+esac
+echo "    secrets redacted, policies loaded from /etc/kage/policies"
 
 echo "==> only kage publishes a host port"
 for service in kage browser-chromium browser-firefox postgres; do

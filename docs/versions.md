@@ -67,21 +67,24 @@ verifies it with the live self-test. `playwright-core` stays at 1.62.1.
 | tracing-opentelemetry | 0.34.0 | pinned | |
 | opentelemetry, opentelemetry_sdk, opentelemetry-otlp | 0.33.0 | pinned | Default features off: the OTLP transport is chosen in M12 and must use rustls, never OpenSSL. |
 | metrics, metrics-exporter-prometheus | 0.24.6, 0.18.3 | pinned | |
-| figment | 0.10.19 | pinned | YAML + env layering. |
+| figment | 0.10.19 | locked (`kage-core`) | Features `yaml` and `env`: `kage.yaml`, the policy files and `KAGE__SECTION__KEY` layering. Its YAML parser is `serde_yaml` 0.9.34+deprecated (no longer developed upstream, no advisory); it only reads operator-controlled files. |
 | clap | 4.6.7 | locked | `derive`, `env`. |
 | thiserror, anyhow | 2.0.21, 1.0.104 | locked | `anyhow` only in the binary crate. |
 | async-trait | 0.1.92 | pinned | |
 | governor | 0.10.4 | pinned | Token-bucket limits per key and per domain. |
-| notify | 8.2.0 | pinned | Policy hot reload. 9.0.0 is still a release candidate. License CC0-1.0: add it to `deny.toml` when first used. |
-| url, ipnet, hickory-resolver | 2.5.8, 2.12.2, 0.26.3 | url and ipnet locked (transitive), hickory-resolver pinned | SSRF guard needs rustls DNS-over-TCP/UDP only. |
-| sha2, hmac, rand, secrecy, uuid | 0.11.0, 0.13.0, 0.10.3, 0.10.3, 1.27.0 | pinned (sha2, hmac, rand, uuid also locked transitively) | |
+| notify | 8.2.0 | locked (`kage-core`) | Policy hot reload. 9.0.0 is still a release candidate. License CC0-1.0, allowed in `deny.toml` since M1. |
+| url, ipnet, hickory-resolver | 2.5.8, 2.12.2, 0.26.3 | url and ipnet locked (`kage-core`), hickory-resolver pinned | SSRF guard. The guard itself is pure functions over resolved addresses (M1); the resolver joins when M8 wires it to targets and needs rustls DNS-over-TCP/UDP only. |
+| sha2, hmac, rand, secrecy, uuid | 0.11.0, 0.13.0, 0.10.3, 0.10.3, 1.27.0 | sha2, rand, secrecy, uuid locked (`kage-core`, sha2 also `kage-store`); hmac pinned | `rand` has default features off; `kage-core` enables only `chacha` for the value-stable ChaCha8 generator behind recorded seeds. |
+| regex | 1.13.1 | locked (`kage-core`) | Added in M1. Block signature patterns. Linear-time matching, so a signature cannot hang the classifier on a hostile page. |
+| flate2 | 1.1.10 | locked (`kage-store`) | Added in M1. gzip for text bodies in the artifact store. Default pure-Rust backend. |
 | scraper, html5ever | 0.27.0, 0.39.0 | pinned | Extraction. html5ever is held at the version scraper 0.27.0 is built against so their types match; 0.40.1 exists. |
 | robotstxt | 0.3.0 | pinned | Google robots.txt matcher port. Last release 2021. |
 | quick-xml | 0.42.0 | pinned | Sitemaps. |
-| chrono | 0.4.45 | locked (transitive) | |
+| chrono | 0.4.45 | locked (`kage-core`, `kage-store`, `kage`) | |
 | http-body-util | 0.1.5 | locked | Test only. |
 | wiremock | 0.6.5 | pinned | Test only. |
-| testcontainers, testcontainers-modules | 0.27.3, 0.15.0 | pinned | Test only. testcontainers 0.28.0 exists, but testcontainers-modules 0.15.0 requires `^0.27`; the two move together. |
+| testcontainers, testcontainers-modules | 0.27.3, 0.15.0 | locked (`kage-store`, `kage`) | Test only. testcontainers 0.28.0 exists, but testcontainers-modules 0.15.0 requires `^0.27`; the two move together. Default features off: the Docker socket needs no TLS stack. |
+| tempfile | 3.27.0 | locked (`kage-core`, `kage-store`, `kage`) | Added in M1. Test only. |
 
 M0 resolved all 44 external pins together in a scratch workspace: 492
 packages, one version of every HTTP-stack crate, TLS through `ring`, `rustls`
@@ -124,6 +127,7 @@ nothing.
 | cargo-llvm-cov | 0.9.1 | `justfile` |
 | cargo-cyclonedx | 0.5.9 | `justfile` |
 | cargo-mutants | 27.1.0 | `justfile` |
+| sqlx-cli | 0.9.0 | `justfile` (`setup-sqlx`). Built from source with `--no-default-features --features rustls,postgres`, so the tool does not link OpenSSL either. Same version as the `sqlx` crate. |
 | cargo-auditable | 0.7.7 | `deploy/docker/kage.Dockerfile` |
 | Docker Engine / Compose | 27+ / v2 or newer | Verified with Engine 29.8.2 and Compose v5.6.0. |
 | PostgreSQL | 17.11 | `deploy/compose.yaml` |
@@ -170,3 +174,4 @@ Pinned by commit SHA in `.github/`.
 |---|---|---|
 | 2026-10-08 | spec author | Initial pins from registry lookups. |
 | 2026-10-08 | M0 session | Re-verified every pin. Confirmed wreq 0.16.1, wreq-util 0.2.0, patchright 1.63.0, camoufox-js 0.12.1, axum 0.8.9, sqlx 0.9.0, utoipa 6.0.0. Resolved the open ones: playwright-core 1.62.1, utoipa-axum 0.3.0, utoipa-swagger-ui 10.0.1, Rust 1.99.0, Node 24.21.0, pnpm 10.34.6, TypeScript 5.9.3 and every "latest at M0" entry. Two "latest" pins are held one release back because the full pin set does not resolve otherwise: testcontainers 0.27.3 and html5ever 0.39.0. Added the State column, tool, image and action pins. Newer majors left alone on purpose: TypeScript 6 and 7, pnpm 11 and 12, playwright-core 1.63 and 1.64 (camoufox-js peer range), Node 26 (not LTS). Two findings for the owner: the Camoufox browser pin does not fit playwright-core 1.62.1 (section above), and camoufox-js brings an AGPL-3.0-or-later dependency (ADR 0008). |
+| 2026-10-08 | M1 session | First use of figment, notify, url, ipnet, sha2, rand, secrecy, uuid, chrono, testcontainers and testcontainers-modules: moved from pinned to locked. Three new pins, each the version already in the lockfile or the newest on crates.io: regex 1.13.1, flate2 1.1.10, tempfile 3.27.0 (test only). `rand` now has default features off in the workspace manifest. New tool pin: sqlx-cli 0.9.0. `deny.toml` allows CC0-1.0 for notify. No fingerprint-critical pin changed. `cargo deny`, `cargo audit` and the `openssl-sys` check pass on the new graph. |

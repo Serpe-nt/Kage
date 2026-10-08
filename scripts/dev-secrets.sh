@@ -25,3 +25,7 @@ ensure() {
 }
 
 ensure KAGE_POSTGRES_PASSWORD 24
+# Shared secret between kage and the browser sidecars (X-Kage-Sidecar-Token).
+ensure KAGE_SIDECAR_TOKEN 32
+# Key that encrypts proxy credentials at rest: 32 random bytes, hex-encoded.
+ensure KAGE_MASTER_KEY 32

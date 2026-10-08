@@ -1,0 +1,23 @@
+synthetic: true
+source: >-
+  Hand-written negative case. A legitimate page with very little text and no
+  block marker. Short text alone is never a soft block; the extractor's
+  thin_content flag covers it (spec §9).
+observation:
+  render: http
+  status: 200
+  url: https://www.smallsite.example/status
+  headers:
+    - { name: content-type, value: "text/html; charset=utf-8" }
+    - { name: server, value: nginx }
+  body: |
+    <!DOCTYPE html>
+    <html lang="en">
+    <head><meta charset="utf-8"><title>Status</title></head>
+    <body>
+    <h1>All systems operational</h1>
+    </body>
+    </html>
+expect:
+  outcome: ok
+  vendors: []
