@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, provider, provider_ref, host, port, username, password, scheme, country,\n                    city, asn, state, consecutive_failures, backoff_until, last_health,\n                    created_at, retired_at\n             FROM proxies\n             WHERE $1::text IS NULL OR state = $1\n             ORDER BY id",
+  "query": "SELECT id, provider, provider_ref, host, port, username, password, scheme, country,\n                    city, asn, state, consecutive_failures, backoff_count, backoff_until,\n                    failing_since, replacement_requested_at, replacement_reason,\n                    replacement_ticket, last_health, created_at, retired_at\n             FROM proxies\n             WHERE state <> 'retired' AND ($1::text IS NULL OR provider = $1)\n             ORDER BY id",
   "describe": {
     "columns": [
       {
@@ -61,7 +61,7 @@
       {
         "ordinal": 5,
         "name": "username",
-        "type_info": "Text",
+        "type_info": "Bytea",
         "origin": {
           "Table": {
             "table": "proxies",
@@ -148,6 +148,17 @@
       },
       {
         "ordinal": 13,
+        "name": "backoff_count",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "proxies",
+            "name": "backoff_count"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
         "name": "backoff_until",
         "type_info": "Timestamptz",
         "origin": {
@@ -158,7 +169,51 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
+        "name": "failing_since",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "proxies",
+            "name": "failing_since"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "replacement_requested_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "proxies",
+            "name": "replacement_requested_at"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "replacement_reason",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "proxies",
+            "name": "replacement_reason"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "replacement_ticket",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "proxies",
+            "name": "replacement_ticket"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
         "name": "last_health",
         "type_info": "Jsonb",
         "origin": {
@@ -169,7 +224,7 @@
         }
       },
       {
-        "ordinal": 15,
+        "ordinal": 20,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -180,7 +235,7 @@
         }
       },
       {
-        "ordinal": 16,
+        "ordinal": 21,
         "name": "retired_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -210,11 +265,16 @@
       true,
       false,
       false,
+      false,
+      true,
+      true,
+      true,
+      true,
       true,
       true,
       false,
       true
     ]
   },
-  "hash": "53101485bff558925016e1180a325fb4ddaf7ffd8f32cc07e1c2c4dc03e2f808"
+  "hash": "eadbb44fce0328ff7dd28235464979c16689c93003aaf0593695f7fcc592410f"
 }

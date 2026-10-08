@@ -4,7 +4,8 @@ name: nightly-live
 # ever hits the echo and detection test pages listed in configuration, never
 # a real target site.
 #
-# Skeleton: the suite itself lands with M2 and M3 and is fully wired in M12.
+# The proxy health check landed with M2; the fingerprint self-test follows in
+# M3 and the workflow is fully wired in M12.
 
 on:
   schedule:
@@ -30,6 +31,8 @@ jobs:
     env:
       KAGE__WEBSHARE__API_KEY: ${{ secrets.KAGE_WEBSHARE_API_KEY }}
       KAGE__SECRETS__MASTER_KEY: ${{ secrets.KAGE_SECRETS_MASTER_KEY }}
+      # How many proxies the Webshare plan has.
+      KAGE_LIVE_EXPECT_PROXIES: ${{ vars.KAGE_LIVE_EXPECT_PROXIES || '20' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

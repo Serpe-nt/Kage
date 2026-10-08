@@ -23,8 +23,8 @@ The **State** column says how far a pin has got:
 
 | Package | Ecosystem | Version | State | Notes |
 |---|---|---|---|---|
-| wreq | crates.io | 0.16.1 (2026-08-27) | locked (`kage-http`) | Newest stable. The `6.0.0-rc.*` line is abandoned (last: rc.31, 2026-08-18); the project re-versioned to stable 0.16.x on 2026-08-22. Links BoringSSL through `btls` 0.5.6. No HTTP/3. Pulls the pre-release `wreq-rt` 0.2.2-rc.4 transitively. MSRV 1.98. |
-| wreq-util | crates.io | 0.2.0 (2026-08-22) | locked (`kage-http`) | Emulation profiles. Must contain a profile whose browser major matches each engine's bundled browser, else the http path is disabled for that persona. |
+| wreq | crates.io | 0.16.1 (2026-08-27) | locked (`kage-http`, `kage-proxy`) | Newest stable. The `6.0.0-rc.*` line is abandoned (last: rc.31, 2026-08-18); the project re-versioned to stable 0.16.x on 2026-08-22. Links BoringSSL through `btls` 0.5.6. No HTTP/3. Pulls the pre-release `wreq-rt` 0.2.2-rc.4 transitively. MSRV 1.98. Since M2 the features `gzip`, `brotli`, `deflate` and `zstd` are on (`kage-proxy`): a client that advertises an encoding like the browser it emulates must be able to decode it. They pull `tower-http` 0.6.11 and `async-compression` 0.4.50 in transitively. wreq reads `HTTP_PROXY`-style variables unless a client sets a proxy or calls `no_proxy()`; every client in the workspace does one or the other. |
+| wreq-util | crates.io | 0.2.0 (2026-08-22) | locked (`kage-http`, `kage-proxy`) | Emulation profiles. Must contain a profile whose browser major matches each engine's bundled browser, else the http path is disabled for that persona. Newest profiles in this release: `chrome_149`, `edge_148`, `firefox_151`, `safari_26.4`. Since M2 the features `emulation-compression` (the profile sends `Accept-Encoding` as the real browser does; without it the header is missing) and `emulation-serde` (profile names such as `chrome_149` parse from configuration) are on. The default of `proxies.health.profile` is the newest Chrome profile; a test fails when the pin moves and the default does not. |
 | patchright | npm | 1.63.0 | locked (`engine-chromium`) | Newest. Pins `patchright-core 1.63.0`. Chromium engine. Use `channel: "chrome"` and headful. |
 | camoufox-js | npm | 0.12.1 | locked (`engine-firefox`) | Newest. Experimental JS port of the Python launcher. Peer `playwright-core < 1.63.0`. Depends on `fingerprint-generator ^2.1.86` (resolved 2.1.88), `ua-parser-js ^2.0.10` (AGPL-3.0-or-later, see ADR 0008) and the native addon `better-sqlite3` 13.0.3, whose install script is not run until M5. |
 | playwright-core (firefox engine package only) | npm | 1.62.1 | locked (`engine-firefox`) | The highest below 1.63.0, as camoufox-js requires. npm latest is 1.64.0. Lives only in `sidecar/packages/engine-firefox`; a test fails if another package can resolve it. |
@@ -66,15 +66,17 @@ verifies it with the live self-test. `playwright-core` stays at 1.62.1.
 | tracing, tracing-subscriber | 0.1.44, 0.3.23 | locked | |
 | tracing-opentelemetry | 0.34.0 | pinned | |
 | opentelemetry, opentelemetry_sdk, opentelemetry-otlp | 0.33.0 | pinned | Default features off: the OTLP transport is chosen in M12 and must use rustls, never OpenSSL. |
-| metrics, metrics-exporter-prometheus | 0.24.6, 0.18.3 | pinned | |
+| metrics, metrics-exporter-prometheus | 0.24.6, 0.18.3 | metrics locked (`kage-proxy`), exporter pinned | `kage-proxy` records `kage_proxy_state{state}` and `kage_replacements_total{reason}` through the facade; nothing exports them until the exporter is wired (M8/M12). |
 | figment | 0.10.19 | locked (`kage-core`) | Features `yaml` and `env`: `kage.yaml`, the policy files and `KAGE__SECTION__KEY` layering. Its YAML parser is `serde_yaml` 0.9.34+deprecated (no longer developed upstream, no advisory); it only reads operator-controlled files. |
 | clap | 4.6.7 | locked | `derive`, `env`. |
 | thiserror, anyhow | 2.0.21, 1.0.104 | locked | `anyhow` only in the binary crate. |
-| async-trait | 0.1.92 | pinned | |
+| async-trait | 0.1.92 | locked (`kage-proxy`) | The provider, prober and reputation traits are used as trait objects. |
 | governor | 0.10.4 | pinned | Token-bucket limits per key and per domain. |
 | notify | 8.2.0 | locked (`kage-core`) | Policy hot reload. 9.0.0 is still a release candidate. License CC0-1.0, allowed in `deny.toml` since M1. |
-| url, ipnet, hickory-resolver | 2.5.8, 2.12.2, 0.26.3 | url and ipnet locked (`kage-core`), hickory-resolver pinned | SSRF guard. The guard itself is pure functions over resolved addresses (M1); the resolver joins when M8 wires it to targets and needs rustls DNS-over-TCP/UDP only. |
+| url, ipnet, hickory-resolver | 2.5.8, 2.12.2, 0.26.3 | url and ipnet locked (`kage-core`, url also `kage-proxy`), hickory-resolver pinned | SSRF guard. The guard itself is pure functions over resolved addresses (M1); the resolver joins when M8 wires it to targets and needs rustls DNS-over-TCP/UDP only. |
 | sha2, hmac, rand, secrecy, uuid | 0.11.0, 0.13.0, 0.10.3, 0.10.3, 1.27.0 | sha2, rand, secrecy, uuid locked (`kage-core`, sha2 also `kage-store`); hmac pinned | `rand` has default features off; `kage-core` enables only `chacha` for the value-stable ChaCha8 generator behind recorded seeds. |
+| chacha20poly1305 | 0.11.0 | locked (`kage-proxy`) | Added in M2. XChaCha20-Poly1305 for proxy credentials at rest (spec §19). RustCrypto, pure Rust, no OpenSSL. Features `alloc`, `getrandom` (nonces from the operating system) and `zeroize`. Brings `aead` 0.6.1, `cipher` 0.5.2, `poly1305` 0.9.1, `universal-hash` 0.6.1. |
+| zeroize | 1.9.1 | locked (`kage-proxy`) | Added in M2 as a direct dependency (it was already in the lockfile through `secrecy`). Wipes the master key bytes and decrypted credentials. |
 | regex | 1.13.1 | locked (`kage-core`) | Added in M1. Block signature patterns. Linear-time matching, so a signature cannot hang the classifier on a hostile page. |
 | flate2 | 1.1.10 | locked (`kage-store`) | Added in M1. gzip for text bodies in the artifact store. Default pure-Rust backend. |
 | scraper, html5ever | 0.27.0, 0.39.0 | pinned | Extraction. html5ever is held at the version scraper 0.27.0 is built against so their types match; 0.40.1 exists. |
@@ -82,9 +84,16 @@ verifies it with the live self-test. `playwright-core` stays at 1.62.1.
 | quick-xml | 0.42.0 | pinned | Sitemaps. |
 | chrono | 0.4.45 | locked (`kage-core`, `kage-store`, `kage`) | |
 | http-body-util | 0.1.5 | locked | Test only. |
-| wiremock | 0.6.5 | pinned | Test only. |
+| wiremock | 0.6.5 | locked (`kage-proxy`, `kage`) | Test only. The mock Webshare API and the mock AbuseIPDB. |
+| proptest | 1.11.0 | locked (`kage-proxy`) | Added in M2. Test only. Property tests of the pool state machine. Default features off (`std` only): no process forking. |
 | testcontainers, testcontainers-modules | 0.27.3, 0.15.0 | locked (`kage-store`, `kage`) | Test only. testcontainers 0.28.0 exists, but testcontainers-modules 0.15.0 requires `^0.27`; the two move together. Default features off: the Docker socket needs no TLS stack. |
 | tempfile | 3.27.0 | locked (`kage-core`, `kage-store`, `kage`) | Added in M1. Test only. |
+
+M2 added 27 packages to `Cargo.lock` (427 to 454): the cipher and its
+traits, the response decoders behind wreq, wiremock and proptest with their
+dependencies. `brotli` and `zstd` are now in the lockfile in two versions
+each (wreq-util's certificate compression and tower-http's decoders ask for
+different ones); `cargo deny` reports duplicates as warnings.
 
 M0 resolved all 44 external pins together in a scratch workspace: 492
 packages, one version of every HTTP-stack crate, TLS through `ring`, `rustls`
@@ -175,3 +184,4 @@ Pinned by commit SHA in `.github/`.
 | 2026-10-08 | spec author | Initial pins from registry lookups. |
 | 2026-10-08 | M0 session | Re-verified every pin. Confirmed wreq 0.16.1, wreq-util 0.2.0, patchright 1.63.0, camoufox-js 0.12.1, axum 0.8.9, sqlx 0.9.0, utoipa 6.0.0. Resolved the open ones: playwright-core 1.62.1, utoipa-axum 0.3.0, utoipa-swagger-ui 10.0.1, Rust 1.99.0, Node 24.21.0, pnpm 10.34.6, TypeScript 5.9.3 and every "latest at M0" entry. Two "latest" pins are held one release back because the full pin set does not resolve otherwise: testcontainers 0.27.3 and html5ever 0.39.0. Added the State column, tool, image and action pins. Newer majors left alone on purpose: TypeScript 6 and 7, pnpm 11 and 12, playwright-core 1.63 and 1.64 (camoufox-js peer range), Node 26 (not LTS). Two findings for the owner: the Camoufox browser pin does not fit playwright-core 1.62.1 (section above), and camoufox-js brings an AGPL-3.0-or-later dependency (ADR 0008). |
 | 2026-10-08 | M1 session | First use of figment, notify, url, ipnet, sha2, rand, secrecy, uuid, chrono, testcontainers and testcontainers-modules: moved from pinned to locked. Three new pins, each the version already in the lockfile or the newest on crates.io: regex 1.13.1, flate2 1.1.10, tempfile 3.27.0 (test only). `rand` now has default features off in the workspace manifest. New tool pin: sqlx-cli 0.9.0. `deny.toml` allows CC0-1.0 for notify. No fingerprint-critical pin changed. `cargo deny`, `cargo audit` and the `openssl-sys` check pass on the new graph. |
+| 2026-10-09 | M2 session | No pin moved and no fingerprint-critical version changed. First use of wreq and wreq-util outside the `kage-http` scaffold (`kage-proxy`), with new features on both: wreq `gzip`, `brotli`, `deflate`, `zstd`; wreq-util `emulation-compression`, `emulation-serde`. They change what an emulated client sends (`Accept-Encoding` is now present, as in the real browser), which M3 must keep in mind when it records fingerprint fixtures. First use of async-trait, metrics and wiremock: moved from pinned to locked. Three new pins, each the newest on crates.io: chacha20poly1305 0.11.0, zeroize 1.9.1 (already locked through secrecy), proptest 1.11.0 (test only). `Cargo.lock` grew from 427 to 454 packages. `cargo deny`, `cargo audit` and the `openssl-sys` check pass on the new graph. |

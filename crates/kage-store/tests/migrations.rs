@@ -243,7 +243,7 @@ async fn the_store_connects_from_configuration() {
                 "2s".to_owned(),
             ),
             ("KAGE__SIDECAR__TOKEN".to_owned(), "token".to_owned()),
-            ("KAGE__SECRETS__MASTER_KEY".to_owned(), "key".to_owned()),
+            ("KAGE__SECRETS__MASTER_KEY".to_owned(), "0f".repeat(32)),
         ]
     };
 

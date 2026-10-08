@@ -11,6 +11,10 @@ cd "$(dirname "$0")/../.."
 scripts/dev-secrets.sh
 
 export KAGE_PUBLISH_PORT="${KAGE_E2E_PORT:-18080}"
+# The smoke test never talks to a proxy provider or to proxies, whatever
+# deploy/.env holds: the shell wins over the env file.
+export KAGE_WEBSHARE_API_KEY=
+export KAGE_ABUSEIPDB_KEY=
 compose=(docker compose --file deploy/compose.yaml --project-name "${KAGE_E2E_PROJECT:-kage-e2e}")
 
 cleanup() {

@@ -10,9 +10,12 @@
 #
 #   KAGE__DATABASE__URL               required  postgres://user:password@host:5432/db
 #   KAGE__SIDECAR__TOKEN              required  shared secret with the browser sidecars
-#   KAGE__SECRETS__MASTER_KEY         required  encrypts proxy credentials at rest
-#   KAGE__WEBSHARE__API_KEY           optional  Webshare API token
+#   KAGE__SECRETS__MASTER_KEY         required  encrypts proxy credentials at rest:
+#                                               32 random bytes as 64 hex characters
+#   KAGE__WEBSHARE__API_KEY           optional  Webshare API token; selects the Webshare provider
 #   KAGE__REPUTATION__ABUSEIPDB_KEY   optional  enables IP reputation lookups
+#   KAGE__PROXIES__STATIC_LIST        optional  a fixed proxy list, one host:port:username:password[:country]
+#                                               per line or a YAML list; selects the static provider
 #
 # `kage config check` validates everything and prints the effective
 # configuration with the secrets redacted.
@@ -26,6 +29,84 @@ server:
 database:
   max_connections: 10
   connect_timeout: 10s
+
+# The Webshare account and its API client (spec §7.2).
+webshare:
+  # Root of the API; the versioned paths (v2/..., v3/...) are appended.
+  base_url: https://proxy.webshare.io/api/
+  # The plan to manage. null uses the plan of the active subscription.
+  plan_id: null
+  page_size: 100
+  # Kage's own ceilings, below Webshare's limits of 240 and 60 per minute.
+  requests_per_minute: 120
+  list_requests_per_minute: 30
+  timeout: 30s
+  # How long to stay away after a 429 without Retry-After.
+  rate_limit_backoff: 1m
+  # Extra tries after a 429 or a failed read. A request that changes
+  # something is never sent twice.
+  max_retries: 2
+
+# IP reputation lookups (AbuseIPDB). Disabled without the key.
+reputation:
+  base_url: https://api.abuseipdb.com/api/v2/
+  interval: 1d
+  # Abuse confidence score at or above which an address is bad. A proxy is
+  # replaced after bad_lookups lookups in a row say so.
+  bad_score: 75
+  bad_lookups: 2
+  max_age_days: 90
+
+# The proxy pool (spec §7.3).
+proxies:
+  # auto | webshare | static | none. auto: Webshare when its API key is set,
+  # else the static list when one is set, else no provider. Without a
+  # provider every fetch fails: kage never connects to a target directly.
+  provider: auto
+  # How often the pool is reconciled with the provider's list.
+  sync_interval: 10m
+  # Syncs in a row a proxy must be missing from the list before it is
+  # retired, unless the provider itself reports it replaced.
+  missing_syncs: 3
+  # Replacements kage may request per UTC calendar month.
+  replacements_per_month: 5
+  # Failed checks in a row before backoff.
+  failure_threshold: 3
+  # Backoff doubles from the base to the cap with every cycle in a row.
+  backoff_base: 1m
+  backoff_cap: 1h
+  # A proxy is replaced only after this many backoff cycles in a row AND
+  # after failing without a break for replace_after.
+  backoff_cycles: 3
+  replace_after: 6h
+  health:
+    # Time between two probes of one proxy. Each wait is multiplied by a
+    # factor from 1 - jitter to 1 + jitter, per proxy.
+    interval: 5m
+    jitter: 0.25
+    timeout: 20s
+    # Most probes in flight at once.
+    max_concurrent: 3
+    # The first probes after start are spread over this long.
+    startup_spread: 2m
+    # Echo read through every proxy: reachability, latency, exit address,
+    # leak check. The default is run by the proxy provider itself.
+    echo_url: https://ipv4.webshare.io/
+    # Second echo, tried once when the first fails. null disables it.
+    confirm_url: https://checkip.amazonaws.com/
+    # Geo lookup of the exit address: on the first check of a new proxy,
+    # when the exit address changes, and once per geo_interval. null
+    # disables the country check.
+    geo_url: https://ipinfo.io/json
+    geo_interval: 1d
+    # Lookups in a row that must disagree with the provider's country.
+    geo_mismatches: 2
+    # Echo read without a proxy to learn the host's own public address.
+    host_ip_url: https://ipv4.webshare.io/
+    host_ip_refresh: 1h
+    # Emulation profile of the probe client until personas bring their own.
+    profile: chrome_149
+    platform: windows
 
 policies:
   # Directory with domains.yaml, block-signatures.yaml, pacing-profiles.yaml.

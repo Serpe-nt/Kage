@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO proxies (id, provider, provider_ref, host, port, username, password,\n                                  scheme, country, city, asn, state, consecutive_failures,\n                                  backoff_count, backoff_until, failing_since,\n                                  replacement_requested_at, replacement_reason,\n                                  replacement_ticket, last_health, created_at, retired_at)\n             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,\n                     $18, $19, $20, $21, $22)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Int4",
+        "Bytea",
+        "Bytea",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int4",
+        "Int4",
+        "Timestamptz",
+        "Timestamptz",
+        "Timestamptz",
+        "Text",
+        "Text",
+        "Jsonb",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0a77d5b0687e80d32a95d55d4a4fc841e21611045bd2b0f27de26f929c8e4d9a"
+}

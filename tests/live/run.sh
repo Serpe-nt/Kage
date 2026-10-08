@@ -3,6 +3,7 @@
 # and only ever hit the echo and detection test pages listed in configuration,
 # never a real target site.
 set -euo pipefail
+cd "$(dirname "$0")/../.."
 
 if [ "${KAGE_LIVE:-}" != "1" ]; then
     echo "error: the live suite is gated. Set KAGE_LIVE=1 to run it." >&2
@@ -21,6 +22,14 @@ if [ "${#missing[@]}" -gt 0 ]; then
     exit 1
 fi
 
-echo "error: no live tests exist yet. The first ones land in M2 (proxy health) and M3 (HTTP fingerprint self-test)." >&2
-echo "       This run fails on purpose so that an empty suite is never reported as green." >&2
-exit 1
+# One script per check. M3 adds the HTTP fingerprint self-test.
+checks=(
+    tests/live/proxy-health.sh
+)
+
+for check in "${checks[@]}"; do
+    echo "==> ${check}"
+    "${check}"
+done
+
+echo "live suite passed (${#checks[@]} check(s))"

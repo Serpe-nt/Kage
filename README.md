@@ -78,8 +78,16 @@ refuses to start when a required one is missing.
 ```bash
 kage config check   # validate, then print the effective configuration, secrets redacted
 kage migrate        # apply the database schema; safe to run again
+kage proxy list     # the proxy pool; also `health`, `replace` and `egress`
 kage serve
 ```
+
+Kage fetches only through proxies. Give it a Webshare API key
+(`KAGE__WEBSHARE__API_KEY`, or `KAGE_WEBSHARE_API_KEY` in `deploy/.env`) or a
+static list, and it keeps the pool by itself: health checks, backoff, and
+replacement within a monthly budget. Without a provider the pool is empty and
+nothing is fetched. [docs/runbooks/proxies.md](docs/runbooks/proxies.md) is
+the operator's guide.
 
 Per-domain behaviour is data in [policies/](policies/): `domains.yaml`
 (render mode, pacing, robots, retries, cooldowns), `pacing-profiles.yaml`
@@ -104,6 +112,7 @@ them all.
 | `just sbom` | CycloneDX SBOMs |
 | `just build-images` | Images for kage and both sidecar variants |
 | `just test-e2e` | Compose-based end-to-end suite |
+| `just test-live` | Gated live suite against the real proxy list; needs `KAGE_LIVE=1` and secrets |
 | `just dev` | Postgres and sidecars in compose, `kage serve` natively |
 | `just migrate` | Apply the migrations to the development database |
 | `just config-check` | Validate the development configuration and print it, secrets redacted |
@@ -111,7 +120,8 @@ them all.
 
 House rules for contributors and coding agents are in
 [CLAUDE.md](CLAUDE.md). Repository settings, CI jobs and the release
-procedure are in [docs/runbooks/repo.md](docs/runbooks/repo.md).
+procedure are in [docs/runbooks/repo.md](docs/runbooks/repo.md); running the
+proxy pool is in [docs/runbooks/proxies.md](docs/runbooks/proxies.md).
 
 ## Layout
 

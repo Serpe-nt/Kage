@@ -10,10 +10,11 @@ use common::{TestDb, now};
 use kage_core::alert::{Alert, AlertKind, AlertSeverity};
 use kage_core::domain::{
     ArtifactKind, ArtifactRef, Attempt, AuditActor, AuditEvent, AuditOutcome, BreakerState,
-    ClaimedOs, DomainBreaker, Engine, FetchRecord, FrontierEntry, FrontierState, Header,
-    HealthEvent, Job, JobItem, JobItemState, JobKind, JobState, PersonaDomainState, PersonaState,
-    PersonaSummary, ProxyHealth, ProxyState, Render, RobotsVerdict, Scope, SelftestRun, Session,
-    SessionId, SessionLimits, SubjectKind, Timing,
+    ClaimedOs, DomainBreaker, Engine, FetchRecord, FrontierEntry, FrontierState, GeoRecord, Header,
+    HealthEvent, HealthFailure, Job, JobItem, JobItemState, JobKind, JobState, PersonaDomainState,
+    PersonaState, PersonaSummary, ProxyHealth, ProxyProviderKind, ProxyReplacement, ProxyState,
+    Render, ReplaceReason, RobotsVerdict, Scope, SelftestRun, Session, SessionId, SessionLimits,
+    SubjectKind, Timing,
 };
 use kage_core::ids::{
     ApiKeyId, ArtifactId, AttemptId, AuditEventId, FrontierId, HealthEventId, JobId, JobItemId,
@@ -24,6 +25,8 @@ use kage_core::secret::SealedSecret;
 use kage_store::StoreError;
 use kage_store::repo::{ResponseCacheEntry, RobotsCacheEntry};
 
+// One proxy followed through its whole life: each step needs the one before.
+#[allow(clippy::too_many_lines)]
 #[tokio::test]
 async fn proxies_round_trip_filter_and_update() {
     let db = TestDb::migrated().await;
@@ -46,38 +49,367 @@ async fn proxies_round_trip_filter_and_update() {
     );
     assert_eq!(proxies.list(Some(ProxyState::Healthy)).await.unwrap(), []);
 
-    // The provider's reference is unique per provider.
+    // The provider's reference is unique among the provider's live proxies.
     let mut duplicate = common::proxy("ref-1");
     duplicate.host = "198.51.100.99".to_owned();
     let conflict = proxies.insert(&duplicate).await.unwrap_err();
     assert!(conflict.is_conflict(), "{conflict}");
+    assert!(
+        conflict
+            .to_string()
+            .contains("proxies_provider_ref_live_idx"),
+        "{conflict}"
+    );
 
     // A health check moves the proxy through the pool states.
     let mut updated = first.clone();
     updated.state = ProxyState::Backoff;
     updated.consecutive_failures = 3;
+    updated.backoff_count = 2;
     updated.backoff_until = Some(now() + Duration::minutes(4));
+    updated.failing_since = Some(now() - Duration::minutes(20));
+    updated.username = SealedSecret::new(vec![9, 8]);
     updated.password = SealedSecret::new(vec![1, 2, 3]);
+    updated.asn = Some("AS3320".to_owned());
     updated.last_health = Some(ProxyHealth {
-        checked_at: now(),
-        reachable: false,
-        latency_ms: None,
+        failure: Some(HealthFailure::Unreachable),
         exit_ip: Some("203.0.113.5".parse().unwrap()),
         exit_country: Some("DE".parse().unwrap()),
         country_match: Some(true),
         leak_detected: Some(false),
+        geo: Some(GeoRecord {
+            country: "DE".parse().unwrap(),
+            city: Some("Berlin".to_owned()),
+            region: Some("Berlin".to_owned()),
+            asn: Some("AS3320".to_owned()),
+            org: Some("Deutsche Telekom AG".to_owned()),
+            timezone: Some("Europe/Berlin".to_owned()),
+            ip: "203.0.113.5".parse().unwrap(),
+            checked_at: now(),
+        }),
         reputation_score: Some(12),
+        usage_type: Some("Fixed Line ISP".to_owned()),
+        reputation_checked_at: Some(now()),
+        ..ProxyHealth::new(now(), false)
     });
     assert!(proxies.update(&updated).await.unwrap());
     assert_eq!(proxies.get(first.id).await.unwrap(), Some(updated.clone()));
     assert_eq!(
         proxies.list(Some(ProxyState::Backoff)).await.unwrap(),
-        [updated]
+        [updated.clone()]
     );
-    assert_eq!(proxies.list(Some(ProxyState::New)).await.unwrap(), [second]);
+    assert_eq!(
+        proxies.list(Some(ProxyState::New)).await.unwrap(),
+        [second.clone()]
+    );
+
+    // A requested replacement is stored with its reason and its ticket.
+    let mut replacing = updated.clone();
+    replacing.state = ProxyState::Replacing;
+    replacing.backoff_until = None;
+    replacing.replacement = Some(ProxyReplacement {
+        requested_at: now(),
+        reason: ReplaceReason::Unreachable,
+        ticket: None,
+    });
+    assert!(proxies.update(&replacing).await.unwrap());
+    assert_eq!(
+        proxies.get(first.id).await.unwrap(),
+        Some(replacing.clone())
+    );
+    replacing.replacement.as_mut().unwrap().ticket = Some("98315".to_owned());
+    assert!(proxies.update(&replacing).await.unwrap());
+    assert_eq!(
+        proxies.get(first.id).await.unwrap(),
+        Some(replacing.clone())
+    );
+
+    // Retired proxies leave the live list and free their reference.
+    let mut retired = replacing.clone();
+    retired.state = ProxyState::Retired;
+    retired.retired_at = Some(now());
+    assert!(proxies.update(&retired).await.unwrap());
+    assert_eq!(
+        proxies.list_live(None).await.unwrap(),
+        std::slice::from_ref(&second)
+    );
+    assert_eq!(
+        proxies
+            .list_live(Some(ProxyProviderKind::Webshare))
+            .await
+            .unwrap(),
+        std::slice::from_ref(&second)
+    );
+    assert_eq!(
+        proxies
+            .list_live(Some(ProxyProviderKind::Static))
+            .await
+            .unwrap(),
+        []
+    );
+    let successor = common::proxy("ref-1");
+    proxies.insert(&successor).await.unwrap();
+    assert_eq!(proxies.list(None).await.unwrap().len(), 3);
+    assert_eq!(proxies.list_live(None).await.unwrap().len(), 2);
 
     // Updating a proxy that does not exist reports it.
     assert!(!proxies.update(&common::proxy("ghost")).await.unwrap());
+}
+
+#[tokio::test]
+async fn a_proxy_is_modified_under_its_row_lock() {
+    let db = TestDb::migrated().await;
+    let proxies = db.store.proxies();
+    let proxy = common::proxy("ref-1");
+    proxies.insert(&proxy).await.unwrap();
+
+    // The closure sees what is stored, and what it returns comes back.
+    let before = proxies
+        .modify(proxy.id, |stored| {
+            let before = stored.state;
+            stored.state = ProxyState::Healthy;
+            stored.consecutive_failures = 0;
+            before
+        })
+        .await
+        .unwrap();
+    assert_eq!(before, Some(ProxyState::New));
+    assert_eq!(
+        proxies.get(proxy.id).await.unwrap().unwrap().state,
+        ProxyState::Healthy
+    );
+
+    // A proxy that does not exist: the closure is not called.
+    let missing = proxies
+        .modify(ProxyId::new(), |_| panic!("called for a missing proxy"))
+        .await
+        .unwrap();
+    assert_eq!(missing, None::<()>);
+
+    // Fifty increments from concurrent tasks all land: none reads a value
+    // that another is about to overwrite.
+    let mut tasks = tokio::task::JoinSet::new();
+    for _ in 0..50 {
+        let store = db.store.clone();
+        let id = proxy.id;
+        tasks.spawn(async move {
+            store
+                .proxies()
+                .modify(id, |stored| stored.consecutive_failures += 1)
+                .await
+                .unwrap();
+        });
+    }
+    while let Some(done) = tasks.join_next().await {
+        done.unwrap();
+    }
+    assert_eq!(
+        proxies
+            .get(proxy.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .consecutive_failures,
+        50
+    );
+
+    // A value that cannot be stored leaves the row as it was.
+    let error = proxies
+        .modify(proxy.id, |stored| {
+            stored.state = ProxyState::Backoff;
+            stored.consecutive_failures = u32::MAX;
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(error, StoreError::OutOfRange { .. }));
+    let stored = proxies.get(proxy.id).await.unwrap().unwrap();
+    assert_eq!(stored.state, ProxyState::Healthy);
+    assert_eq!(stored.consecutive_failures, 50);
+}
+
+#[tokio::test]
+async fn the_replacement_budget_is_counted_and_spent_atomically() {
+    let db = TestDb::migrated().await;
+    let proxies = db.store.proxies();
+    let month_start = now() - Duration::days(3);
+    let budget = 5;
+    let mut ids = Vec::new();
+    for index in 0..12 {
+        let proxy = common::proxy(&format!("ref-{index}"));
+        proxies.insert(&proxy).await.unwrap();
+        ids.push(proxy.id);
+    }
+    // One replacement from last month does not count against this one.
+    proxies
+        .modify(ids[11], |stored| {
+            stored.state = ProxyState::Retired;
+            stored.retired_at = Some(month_start - Duration::days(1));
+            stored.replacement = Some(ProxyReplacement {
+                requested_at: month_start - Duration::days(2),
+                reason: ReplaceReason::Operator,
+                ticket: Some("1".to_owned()),
+            });
+        })
+        .await
+        .unwrap();
+    assert_eq!(proxies.replacements_since(month_start).await.unwrap(), 0);
+    assert_eq!(
+        proxies
+            .replacements_since(month_start - Duration::days(5))
+            .await
+            .unwrap(),
+        1
+    );
+
+    // Eleven tasks race for five slots.
+    let mut tasks = tokio::task::JoinSet::new();
+    for id in ids.iter().copied().take(11) {
+        let store = db.store.clone();
+        tasks.spawn(async move {
+            store
+                .proxies()
+                .modify_counting_replacements(id, month_start, |stored, used| {
+                    if used >= budget {
+                        return false;
+                    }
+                    stored.state = ProxyState::Replacing;
+                    stored.replacement = Some(ProxyReplacement {
+                        requested_at: now(),
+                        reason: ReplaceReason::Unreachable,
+                        ticket: None,
+                    });
+                    true
+                })
+                .await
+                .unwrap()
+                .unwrap()
+        });
+    }
+    let mut granted = 0;
+    while let Some(done) = tasks.join_next().await {
+        if done.unwrap() {
+            granted += 1;
+        }
+    }
+
+    assert_eq!(granted, budget);
+    assert_eq!(
+        proxies.replacements_since(month_start).await.unwrap(),
+        budget
+    );
+    assert_eq!(
+        proxies
+            .list(Some(ProxyState::Replacing))
+            .await
+            .unwrap()
+            .len(),
+        5
+    );
+
+    // A request the provider failed is cleared and frees its slot; a
+    // completed one (a retired row) keeps counting.
+    let replacing = proxies.list(Some(ProxyState::Replacing)).await.unwrap();
+    proxies
+        .modify(replacing[0].id, |stored| {
+            stored.state = ProxyState::Backoff;
+            stored.replacement = None;
+        })
+        .await
+        .unwrap();
+    proxies
+        .modify(replacing[1].id, |stored| {
+            stored.state = ProxyState::Retired;
+            stored.retired_at = Some(now());
+        })
+        .await
+        .unwrap();
+    assert_eq!(proxies.replacements_since(month_start).await.unwrap(), 4);
+
+    // A missing proxy: nothing is counted for it and nothing is called.
+    let missing = proxies
+        .modify_counting_replacements(ProxyId::new(), month_start, |_, _| {
+            panic!("called for a missing proxy")
+        })
+        .await
+        .unwrap();
+    assert_eq!(missing, None::<()>);
+}
+
+#[tokio::test]
+async fn a_recorded_leak_sets_the_egress_flag_until_it_is_cleared() {
+    let db = TestDb::migrated().await;
+    let proxies = db.store.proxies();
+    let proxy = common::proxy("ref-1");
+    let other = common::proxy("ref-2");
+    proxies.insert(&proxy).await.unwrap();
+    proxies.insert(&other).await.unwrap();
+    assert!(!proxies.any_leak().await.unwrap());
+
+    let leak = |flag: Option<bool>| ProxyHealth {
+        leak_detected: flag,
+        ..ProxyHealth::new(now(), true)
+    };
+    proxies
+        .modify(other.id, |stored| {
+            stored.last_health = Some(leak(Some(false)));
+        })
+        .await
+        .unwrap();
+    assert!(!proxies.any_leak().await.unwrap());
+
+    proxies
+        .modify(proxy.id, |stored| {
+            stored.last_health = Some(leak(Some(true)));
+        })
+        .await
+        .unwrap();
+    assert!(proxies.any_leak().await.unwrap());
+
+    // Retiring the proxy does not clear the flag: only a clean probe or an
+    // operator does.
+    proxies
+        .modify(proxy.id, |stored| {
+            stored.state = ProxyState::Retired;
+            stored.retired_at = Some(now());
+        })
+        .await
+        .unwrap();
+    assert!(proxies.any_leak().await.unwrap());
+
+    proxies
+        .modify(proxy.id, |stored| stored.last_health = Some(leak(None)))
+        .await
+        .unwrap();
+    assert!(!proxies.any_leak().await.unwrap());
+}
+
+#[tokio::test]
+async fn the_schema_keeps_replacement_columns_consistent() {
+    let db = TestDb::migrated().await;
+    let proxy = common::proxy("ref-1");
+    db.store.proxies().insert(&proxy).await.unwrap();
+
+    for statement in [
+        // A reason without a time, a time without a reason, a ticket alone.
+        "UPDATE proxies SET replacement_reason = 'operator'",
+        "UPDATE proxies SET replacement_requested_at = now()",
+        "UPDATE proxies SET replacement_ticket = '7'",
+        // A reason outside the domain model, a negative counter.
+        "UPDATE proxies SET replacement_requested_at = now(), replacement_reason = 'bored'",
+        "UPDATE proxies SET backoff_count = -1",
+    ] {
+        let error = sqlx::query(statement)
+            .execute(db.store.pool())
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .as_database_error()
+                .is_some_and(sqlx::error::DatabaseError::is_check_violation),
+            "{statement}: {error}"
+        );
+    }
+    assert_eq!(db.store.proxies().get(proxy.id).await.unwrap(), Some(proxy));
 }
 
 #[tokio::test]
@@ -1094,6 +1426,7 @@ async fn health_events_store_alerts_and_filter_by_subject() {
     assert_eq!(stored.at, alert.at);
     assert_eq!(stored.details["message"], alert.message);
     assert_eq!(stored.details["details"]["file"], "policies/domains.yaml");
+    assert_eq!(stored.subject_id, None);
 
     assert_eq!(
         events.recent(None, 10).await.unwrap(),
@@ -1114,6 +1447,29 @@ async fn health_events_store_alerts_and_filter_by_subject() {
     assert_eq!(
         events.recent(Some(SubjectKind::Proxy), 10).await.unwrap(),
         []
+    );
+
+    // An alert that names its subject is stored about that subject.
+    let about_proxy = Alert::new(
+        AlertKind::ProxyLeak,
+        AlertSeverity::Critical,
+        "the exit address is the host address",
+        serde_json::json!({}),
+    )
+    .about(persona.proxy_id)
+    .at(now());
+    let stored_about_proxy = events
+        .record_alert(SubjectKind::Proxy, &about_proxy)
+        .await
+        .unwrap();
+    assert_eq!(
+        stored_about_proxy.subject_id,
+        Some(persona.proxy_id.as_uuid())
+    );
+    assert_eq!(stored_about_proxy.kind, "proxy_leak");
+    assert_eq!(
+        events.recent(Some(SubjectKind::Proxy), 10).await.unwrap(),
+        [stored_about_proxy]
     );
 }
 

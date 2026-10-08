@@ -121,7 +121,7 @@ is its own pull request and is never auto-merged.
 
 ## Nightly live suite
 
-`nightly-live.yaml` runs the live fingerprint regression suite. It needs real
+`nightly-live.yaml` runs the live suite (`just test-live`). It needs real
 proxies and only ever hits the echo and detection test pages listed in
 configuration, never a real target site.
 
@@ -131,10 +131,23 @@ configuration, never a real target site.
   error when a secret is missing.
 - Repository secrets it reads: `KAGE_WEBSHARE_API_KEY` and
   `KAGE_SECRETS_MASTER_KEY`.
+- The repository variable `KAGE_LIVE_EXPECT_PROXIES` says how many proxies
+  the Webshare plan has, when that is not 20.
 
-The workflow is a skeleton in M0: `just test-live` fails on purpose because
-no live test exists yet. The first tests land in M2 and M3; M12 wires the
-workflow completely.
+The suite is `tests/live/run.sh`, one script per check:
+
+| Check | Since | What it does |
+|---|---|---|
+| `tests/live/proxy-health.sh` | M2 | Reads the real proxy list into a throwaway Postgres and probes every proxy once with `kage proxy health`. Passes when the list has the expected number of proxies and each answers with a latency and a country. Contacts the Webshare API and the endpoints of `proxies.health` only ([proxies.md](proxies.md)). Its output names no proxy address. |
+
+The HTTP fingerprint self-test follows in M3; M12 wires the workflow
+completely.
+
+To run it locally:
+
+```bash
+KAGE_LIVE=1 KAGE__WEBSHARE__API_KEY=... KAGE__SECRETS__MASTER_KEY=... just test-live
+```
 
 ## Releases
 

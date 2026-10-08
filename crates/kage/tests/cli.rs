@@ -17,7 +17,8 @@ use testcontainers_modules::postgres::Postgres;
 
 const DB_URL: &str = "postgres://kage:db-pass-4f9a@db.internal:5432/kage";
 const TOKEN: &str = "sidecar-token-77c1";
-const MASTER: &str = "master-key-0b3e";
+// 32 bytes as 64 hexadecimal characters.
+const MASTER: &str = "0b3e0b3e0b3e0b3e0b3e0b3e0b3e0b3e0b3e0b3e0b3e0b3e0b3e0b3e0b3e0b3e";
 
 /// The policy files shipped in the repository.
 fn shipped_policies() -> PathBuf {

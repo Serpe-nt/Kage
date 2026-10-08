@@ -331,17 +331,44 @@ used in tests and for other vendors' static lists).
 
 ### 7.2 Webshare specifics
 
-- Base `https://proxy.webshare.io/api/v2/`, header `Authorization: Token …`.
-- Endpoints used: proxy list (`/proxy/list/` with `mode=direct`, paging),
-  proxy replacement create/get, replaced proxy list, proxy config and stats,
-  subscription/plan. M2 MUST verify exact paths and the `mode` and
-  `country_code` parameters against the live docs; the Go reference used a
-  `v3` replacement path that the public docs index does not show.
-- Rate limits: general 240/min, proxy list 60/min. The client enforces its
-  own token buckets below these and backs off on 429.
-- The Webshare client MUST be built on wreq (no second TLS stack).
-- Sync: pool reconciles with the list every `proxies.sync_interval` (default
-  10 min): new IPs → `new`, missing IPs → `retired`.
+Verified against <https://apidocs.webshare.io> on 2026-10-08 (M2). The API
+root is `https://proxy.webshare.io/api/`; endpoints live under `v2/` or
+`v3/`, and the root is configuration (`webshare.base_url`). Every request
+carries `Authorization: Token …`.
+
+| Purpose | Method and path | Notes |
+|---|---|---|
+| Proxy list | `GET v2/proxy/list/` | `mode=direct` is required (`backbone` is for rotating plans, whose proxies have no address); paging with `page` and `page_size`. The country filter is `country_code__in` (comma-separated); Kage does not use it, it reads the whole list. |
+| Request a replacement | `POST v3/proxy/replace/` | Body `{"to_replace": {"type": "ip_address", "ip_addresses": [ip]}, "replace_with": [{"type": "country", "country_code": cc, "count": 1}], "dry_run": false}`. Errors as HTTP 400 with a code: `not_enough_replacements_in_subscription`, `active_replacement` (one at a time), `invalid`. |
+| Replacement status | `GET v3/proxy/replace/{id}/` | `state` is `validating`, `validated`, `processing`, `completed` or `failed`. |
+| Replaced proxies | `GET v2/proxy/list/replaced/` | Old and new address, time, and `reason`: `proxy_replaced` for an API request, `auto_invalidated`, `auto_out_of_rotation`, `auto_low_country_confidence`, `auto_site_check`, `auto_deleted` or `list_updated` when Webshare did it. |
+| Subscription | `GET v2/subscription/` | Names the active plan; term end, paused, throttled. |
+| Plan | `GET v2/subscription/plan/{id}/` | Proxy count and countries, `proxy_replacements_total/used/available`. |
+| Proxy config | `GET v3/proxy/config?plan_id=` | The four `auto_replace_*` settings. |
+| List stats | `GET v3/proxy/list/stats?plan_id=` | `available_countries`: what a replacement can draw from. |
+| Hourly traffic | `GET v2/stats/?timestamp__gte=&timestamp__lte=` | Not paged; at most 90 days back. |
+
+`plan_id` is an optional query parameter on the `v2` endpoints and required
+on the `v3` config and stats endpoints; Kage uses `webshare.plan_id` when
+set, else the plan the subscription names.
+
+- Rate limits: general 240/min, proxy list endpoints 60/min; after a 429
+  Webshare asks to wait 60 s. The client keeps its own token buckets below
+  both (`webshare.requests_per_minute` 120, `webshare.list_requests_per_minute`
+  30), honors `Retry-After`, and never sends a request that changes
+  something twice after a failure that may have applied it.
+- The Webshare client MUST be built on wreq (no second TLS stack). It is
+  plain wreq without browser emulation and sends `User-Agent: kage/<version>`:
+  Webshare is a vendor, not a target.
+- Webshare replaces proxies by itself unless the four `auto_replace_*`
+  settings are off. Kage reports them and alerts when one is on; it never
+  changes account settings. The owner switches them off in the dashboard, so
+  that an address (and its persona) only changes when Kage decided it.
+- Sync: the pool reconciles with the list every `proxies.sync_interval`
+  (default 10 min): new IPs → `new`. A missing IP is `retired` at once only
+  when the replaced-proxy list confirms it, otherwise after
+  `proxies.missing_syncs` (default 3) syncs in a row without it, and never on
+  the word of a list that is empty or shorter than half the pool.
 
 ### 7.3 Pool state machine
 

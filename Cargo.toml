@@ -94,6 +94,11 @@ hickory-resolver = { version = "=0.26.3", default-features = false }
 # --- Crypto, ids, time ----------------------------------------------------
 sha2 = { version = "=0.11.0" }
 hmac = { version = "=0.13.0" }
+# Proxy credentials at rest (spec §19): XChaCha20-Poly1305. `getrandom`
+# supplies the nonces from the operating system.
+chacha20poly1305 = { version = "=0.11.0", default-features = false, features = ["alloc", "getrandom", "zeroize"] }
+# Wipes key material and decrypted credentials when they are dropped.
+zeroize = { version = "=1.9.1" }
 # Default features are off: crates opt in. Seeded, reproducible randomness
 # uses the `chacha` feature (the value-stable ChaCha8 generator).
 rand = { version = "=0.10.3", default-features = false }
@@ -116,6 +121,9 @@ quick-xml = { version = "=0.42.0" }
 # --- Test only ------------------------------------------------------------
 http-body-util = { version = "=0.1.5" }
 wiremock = { version = "=0.6.5" }
+# Property tests for the pool state machine. Without the default `fork` and
+# `timeout` features, which only add process isolation for crashing tests.
+proptest = { version = "=1.11.0", default-features = false, features = ["std"] }
 # testcontainers-modules 0.15.0 requires testcontainers ^0.27, so the two move
 # together: 0.28.0 exists but nothing in the modules crate supports it yet.
 testcontainers = { version = "=0.27.3", default-features = false }

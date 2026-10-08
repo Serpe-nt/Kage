@@ -40,6 +40,11 @@ x-kage-secrets: &kage-secrets
   KAGE__DATABASE__URL: postgres://kage:${KAGE_POSTGRES_PASSWORD:?run 'just setup' to create deploy/.env}@postgres:5432/kage
   KAGE__SIDECAR__TOKEN: ${KAGE_SIDECAR_TOKEN:?run 'just setup' to create deploy/.env}
   KAGE__SECRETS__MASTER_KEY: ${KAGE_MASTER_KEY:?run 'just setup' to create deploy/.env}
+  # Optional. Without a proxy provider the pool stays empty and nothing is
+  # fetched; without an AbuseIPDB key the reputation checks are off. An empty
+  # value counts as not set.
+  KAGE__WEBSHARE__API_KEY: ${KAGE_WEBSHARE_API_KEY:-}
+  KAGE__REPUTATION__ABUSEIPDB_KEY: ${KAGE_ABUSEIPDB_KEY:-}
 
 services:
   # Applies the schema migrations, then exits. kage starts only after it

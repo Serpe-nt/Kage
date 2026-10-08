@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n                   SELECT 1 FROM proxies WHERE last_health @> '{\"leak_detected\": true}'::jsonb\n               ) AS \"leaking!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "leaking!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "ed62dd0bab99d64a5fef3ec792b8d04524d2b5ddc01d5cac0460ba2e5d712db5"
+}

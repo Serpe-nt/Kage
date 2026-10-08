@@ -24,7 +24,10 @@ pub use fetch::{
 pub use health::{BreakerState, DomainBreaker, HealthEvent, SelftestRun, SubjectKind};
 pub use job::{FrontierEntry, FrontierState, Job, JobItem, JobItemState, JobKind, JobState};
 pub use persona::{Geolocation, Persona, PersonaDomainState, PersonaState, Screen};
-pub use proxy::{Proxy, ProxyHealth, ProxyProviderKind, ProxyScheme, ProxyState};
+pub use proxy::{
+    GeoRecord, HealthFailure, Proxy, ProxyHealth, ProxyProviderKind, ProxyReplacement, ProxyScheme,
+    ProxyState, ReplaceReason,
+};
 pub use session::{InvalidSessionId, Session, SessionId, SessionLimits};
 
 use crate::macros::string_enum;

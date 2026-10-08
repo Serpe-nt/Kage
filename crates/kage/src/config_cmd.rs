@@ -6,7 +6,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use kage_core::config::Config;
+use kage_core::config::{Config, StaticProxy};
 use kage_core::policy::PolicySet;
 
 /// File used when `--config` is not given and it exists in the working
@@ -31,9 +31,10 @@ pub(crate) fn load(
     Config::load(file, env).context("configuration is invalid")
 }
 
-/// Validates the configuration and the policy directory it names, then
-/// writes one JSON document to `out`: the effective configuration, secrets
-/// redacted, and a summary of the policies.
+/// Validates the configuration, the policy directory it names and the
+/// proxy pool's settings, then writes one JSON document to `out`: the
+/// effective configuration, secrets redacted, a summary of the policies,
+/// and which proxy provider is in force.
 pub(crate) fn check(
     file: Option<&Path>,
     env: impl IntoIterator<Item = (String, String)>,
@@ -41,6 +42,17 @@ pub(crate) fn check(
 ) -> anyhow::Result<()> {
     let config = load(file, env)?;
     let policies = PolicySet::load(&config.policies.dir).context("policies are invalid")?;
+    // What only the proxy crate can judge, such as whether the probe's
+    // emulation profile exists in this build.
+    kage_proxy::check_config(&config)
+        .map_err(|problem| anyhow::anyhow!(problem))
+        .context("configuration is invalid")?;
+    let static_proxies = match &config.proxies.static_list {
+        Some(list) => StaticProxy::parse_list(list.expose())
+            .context("configuration is invalid")?
+            .len(),
+        None => 0,
+    };
 
     let report = serde_json::json!({
         "config_file": file,
@@ -51,6 +63,12 @@ pub(crate) fn check(
             "pacing_profiles": policies.pacing.names().collect::<Vec<_>>(),
             "signature_rules": policies.signatures.rules().len(),
             "signature_hints": policies.signatures.hint_count(),
+        },
+        "proxies": {
+            // What `auto` resolved to.
+            "provider": config.proxy_provider(),
+            "static_proxies": static_proxies,
+            "reputation": config.reputation.abuseipdb_key.is_some(),
         },
     });
     serde_json::to_writer_pretty(&mut *out, &report).context("cannot write the report")?;
@@ -68,7 +86,8 @@ mod tests {
 
     const DB_URL: &str = "postgres://kage:db-pass-4f9a@db.internal:5432/kage";
     const TOKEN: &str = "sidecar-token-77c1";
-    const MASTER: &str = "master-key-0b3e";
+    // 32 bytes as 64 hexadecimal characters.
+    const MASTER: &str = "0b3e0b3e0b3e0b3e0b3e0b3e0b3e0b3e0b3e0b3e0b3e0b3e0b3e0b3e0b3e0b3e";
 
     /// The policy files shipped in the repository.
     fn shipped_policies() -> PathBuf {
@@ -156,6 +175,80 @@ mod tests {
         );
         assert!(policies["signature_rules"].as_u64().unwrap() >= 25);
         assert!(policies["signature_hints"].as_u64().unwrap() >= 10);
+    }
+
+    #[test]
+    fn the_proxy_provider_in_force_is_reported() {
+        let report = |extra: &[(&str, &str)]| -> serde_json::Value {
+            serde_json::from_str(&run(None, env(&shipped_policies(), extra)).unwrap()).unwrap()
+        };
+
+        // Nothing configured: no provider, and the pool's defaults are shown.
+        let none = report(&[]);
+        assert_eq!(none["proxies"]["provider"], "none");
+        assert_eq!(none["proxies"]["static_proxies"], 0);
+        assert_eq!(none["proxies"]["reputation"], false);
+        assert_eq!(none["config"]["proxies"]["provider"], "auto");
+        assert_eq!(none["config"]["proxies"]["replacements_per_month"], 5);
+        assert_eq!(none["config"]["proxies"]["health"]["profile"], "chrome_149");
+        assert_eq!(
+            none["config"]["webshare"]["base_url"],
+            "https://proxy.webshare.io/api/"
+        );
+
+        let webshare = report(&[
+            ("KAGE__WEBSHARE__API_KEY", "ws-key-51aa"),
+            ("KAGE__REPUTATION__ABUSEIPDB_KEY", "abuse-key-93bd"),
+        ]);
+        assert_eq!(webshare["proxies"]["provider"], "webshare");
+        assert_eq!(webshare["proxies"]["reputation"], true);
+
+        // A static list is counted, and never printed.
+        let output = run(
+            None,
+            env(
+                &shipped_policies(),
+                &[(
+                    "KAGE__PROXIES__STATIC_LIST",
+                    "198.51.100.10:8080:user-c41d:pass-77aa\n198.51.100.11:8080:user-c41d:pass-77aa",
+                )],
+            ),
+        )
+        .unwrap();
+        assert!(!output.contains("pass-77aa") && !output.contains("user-c41d"));
+        let fixed: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(fixed["proxies"]["provider"], "static");
+        assert_eq!(fixed["proxies"]["static_proxies"], 2);
+        assert_eq!(fixed["config"]["proxies"]["static_list"], "[redacted]");
+    }
+
+    #[test]
+    fn a_probe_profile_this_build_does_not_ship_fails_the_check() {
+        let error = run(
+            None,
+            env(
+                &shipped_policies(),
+                &[("KAGE__PROXIES__HEALTH__PROFILE", "chrome_1")],
+            ),
+        )
+        .unwrap_err();
+
+        let message = format!("{error:#}");
+        assert!(message.contains("configuration is invalid"), "{message}");
+        assert!(message.contains("proxies.health.profile"), "{message}");
+        assert!(message.contains("chrome_149"), "{message}");
+
+        // A master key that is not 32 bytes of hex fails earlier, and is
+        // not echoed.
+        let mut pairs = env(&shipped_policies(), &[]);
+        pairs.retain(|(name, _)| name != "KAGE__SECRETS__MASTER_KEY");
+        pairs.push((
+            "KAGE__SECRETS__MASTER_KEY".to_owned(),
+            "not-a-key-5a5a".to_owned(),
+        ));
+        let message = format!("{:#}", run(None, pairs).unwrap_err());
+        assert!(message.contains("64 hexadecimal characters"), "{message}");
+        assert!(!message.contains("not-a-key-5a5a"), "{message}");
     }
 
     #[test]

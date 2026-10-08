@@ -22,3 +22,11 @@ unset _kage_env_file
 export KAGE__DATABASE__URL="postgres://kage:${KAGE_POSTGRES_PASSWORD}@127.0.0.1:5432/kage"
 export KAGE__SIDECAR__TOKEN="${KAGE_SIDECAR_TOKEN}"
 export KAGE__SECRETS__MASTER_KEY="${KAGE_MASTER_KEY}"
+# Optional (docs/runbooks/proxies.md): set only when deploy/.env has them, so
+# a key exported in the shell stays in force.
+if [ -n "${KAGE_WEBSHARE_API_KEY:-}" ]; then
+    export KAGE__WEBSHARE__API_KEY="${KAGE_WEBSHARE_API_KEY}"
+fi
+if [ -n "${KAGE_ABUSEIPDB_KEY:-}" ]; then
+    export KAGE__REPUTATION__ABUSEIPDB_KEY="${KAGE_ABUSEIPDB_KEY}"
+fi

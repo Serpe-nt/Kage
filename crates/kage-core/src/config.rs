@@ -31,6 +31,18 @@ use crate::secret::Secret;
 use crate::ssrf::SsrfPolicy;
 use crate::urlnorm::NormalizeOptions;
 
+mod proxies;
+
+pub use proxies::{
+    ProviderChoice, ProxiesConfig, ProxyHealthConfig, ReputationConfig, ResolvedProvider,
+    StaticListError, StaticProxy, WEBSHARE_GENERAL_LIMIT_PER_MINUTE,
+    WEBSHARE_LIST_LIMIT_PER_MINUTE, WebshareConfig,
+};
+
+/// Length of the master key in bytes; it is written as twice as many
+/// hexadecimal characters.
+pub const MASTER_KEY_BYTES: usize = 32;
+
 /// Prefix of every configuration environment variable.
 pub const ENV_PREFIX: &str = "KAGE__";
 
@@ -52,7 +64,7 @@ pub struct SecretSpec {
 }
 
 /// Every secret (spec §17).
-pub const SECRETS: [SecretSpec; 5] = [
+pub const SECRETS: [SecretSpec; 6] = [
     SecretSpec {
         key: "database.url",
         env: "KAGE__DATABASE__URL",
@@ -68,7 +80,8 @@ pub const SECRETS: [SecretSpec; 5] = [
         env: "KAGE__SECRETS__MASTER_KEY",
         required: true,
     },
-    // Required once the Webshare provider is enabled (milestone M2).
+    // Required when `proxies.provider` is `webshare`; with `auto` its
+    // presence selects the Webshare provider.
     SecretSpec {
         key: "webshare.api_key",
         env: "KAGE__WEBSHARE__API_KEY",
@@ -78,6 +91,13 @@ pub const SECRETS: [SecretSpec; 5] = [
     SecretSpec {
         key: "reputation.abuseipdb_key",
         env: "KAGE__REPUTATION__ABUSEIPDB_KEY",
+        required: false,
+    },
+    // A fixed proxy list with credentials, for tests and other vendors.
+    // Required when `proxies.provider` is `static`.
+    SecretSpec {
+        key: "proxies.static_list",
+        env: "KAGE__PROXIES__STATIC_LIST",
         required: false,
     },
 ];
@@ -201,28 +221,31 @@ pub struct SidecarConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SecretsConfig {
-    /// Key that encrypts proxy credentials. Secret:
-    /// `KAGE__SECRETS__MASTER_KEY`.
+    /// Key that encrypts proxy credentials: 32 random bytes written as 64
+    /// hexadecimal characters. Secret: `KAGE__SECRETS__MASTER_KEY`.
     pub master_key: Secret,
 }
 
-/// The Webshare account.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct WebshareConfig {
-    /// API token. Secret: `KAGE__WEBSHARE__API_KEY`.
-    #[serde(default)]
-    pub api_key: Option<Secret>,
-}
-
-/// IP reputation lookups.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ReputationConfig {
-    /// AbuseIPDB key; lookups are disabled without it. Secret:
-    /// `KAGE__REPUTATION__ABUSEIPDB_KEY`.
-    #[serde(default)]
-    pub abuseipdb_key: Option<Secret>,
+impl SecretsConfig {
+    /// The master key as bytes, or `None` when the text is not exactly 64
+    /// hexadecimal characters. A loaded [`Config`] always has a valid key.
+    pub fn master_key_bytes(&self) -> Option<[u8; MASTER_KEY_BYTES]> {
+        let text = self.master_key.expose().as_bytes();
+        if text.len() != MASTER_KEY_BYTES * 2 {
+            return None;
+        }
+        let mut key = [0_u8; MASTER_KEY_BYTES];
+        let (pairs, _) = text.as_chunks::<2>();
+        for (byte, pair) in key.iter_mut().zip(pairs) {
+            let pair = std::str::from_utf8(pair).ok()?;
+            // `from_str_radix` would also accept a sign.
+            if !pair.bytes().all(|digit| digit.is_ascii_hexdigit()) {
+                return None;
+            }
+            *byte = u8::from_str_radix(pair, 16).ok()?;
+        }
+        Some(key)
+    }
 }
 
 /// The policy files.
@@ -329,6 +352,9 @@ pub struct Config {
     /// IP reputation lookups.
     #[serde(default)]
     pub reputation: ReputationConfig,
+    /// The proxy pool.
+    #[serde(default)]
+    pub proxies: ProxiesConfig,
     /// The policy files.
     #[serde(default)]
     pub policies: PoliciesConfig,
@@ -387,7 +413,10 @@ impl Config {
             });
             if let Some((spec, direct, from_file)) = slot {
                 if name == spec.env {
-                    *direct = Some(value);
+                    // An empty variable is how compose passes an optional
+                    // secret that is not set, so it must not clash with the
+                    // `_FILE` form.
+                    *direct = Some(value).filter(|value| !value.is_empty());
                 } else {
                     *from_file = Some(PathBuf::from(value));
                 }
@@ -451,7 +480,44 @@ impl Config {
         if self.artifacts.dir.as_os_str().is_empty() {
             return invalid("artifacts.dir must not be empty");
         }
+        if self.secrets.master_key_bytes().is_none() {
+            return invalid(
+                "secrets.master_key must be 32 random bytes written as 64 hexadecimal characters",
+            );
+        }
+        proxies::validate(&self.webshare, &self.reputation, &self.proxies)
+            .map_err(ConfigError::Invalid)?;
+        match self.proxies.provider {
+            ProviderChoice::Webshare if self.webshare.api_key.is_none() => {
+                return Err(ConfigError::MissingSecrets(vec!["KAGE__WEBSHARE__API_KEY"]));
+            }
+            ProviderChoice::Static if self.proxies.static_list.is_none() => {
+                return Err(ConfigError::MissingSecrets(vec![
+                    "KAGE__PROXIES__STATIC_LIST",
+                ]));
+            }
+            _ => {}
+        }
         Ok(())
+    }
+
+    /// The proxy provider in force. `auto` resolves to Webshare when its API
+    /// key is set, else to the static list when one is set, else to none.
+    pub const fn proxy_provider(&self) -> ResolvedProvider {
+        match self.proxies.provider {
+            ProviderChoice::Webshare => ResolvedProvider::Webshare,
+            ProviderChoice::Static => ResolvedProvider::Static,
+            ProviderChoice::None => ResolvedProvider::None,
+            ProviderChoice::Auto => {
+                if self.webshare.api_key.is_some() {
+                    ResolvedProvider::Webshare
+                } else if self.proxies.static_list.is_some() {
+                    ResolvedProvider::Static
+                } else {
+                    ResolvedProvider::None
+                }
+            }
+        }
     }
 
     /// The effective configuration as JSON with every secret redacted. This
@@ -502,13 +568,16 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use super::{Config, ConfigError, SECRETS, process_env};
+    use super::{
+        Config, ConfigError, ProviderChoice, ResolvedProvider, SECRETS, StaticProxy, process_env,
+    };
     use crate::secret::REDACTED;
     use crate::urlnorm::TrailingSlash;
 
     const DB_URL: &str = "postgres://kage:db-pass-4f9a@db.internal:5432/kage";
     const TOKEN: &str = "sidecar-token-77c1";
-    const MASTER: &str = "master-key-0b3e";
+    // 32 bytes as 64 hexadecimal characters.
+    const MASTER: &str = "0b3e0b3e0b3e0b3e0b3e0b3e0b3e0b3e0b3e0b3e0b3e0b3e0b3e0b3e0b3e0b3e";
 
     fn env(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         pairs
@@ -558,8 +627,15 @@ mod tests {
         );
         assert_eq!(config.sidecar.token.expose(), TOKEN);
         assert_eq!(config.secrets.master_key.expose(), MASTER);
+        assert_eq!(
+            config.secrets.master_key_bytes(),
+            Some([0x0b, 0x3e].repeat(16).try_into().unwrap())
+        );
         assert!(config.webshare.api_key.is_none());
         assert!(config.reputation.abuseipdb_key.is_none());
+        assert!(config.proxies.static_list.is_none());
+        assert_eq!(config.proxies.provider, ProviderChoice::Auto);
+        assert_eq!(config.proxy_provider(), ResolvedProvider::None);
         assert_eq!(config.policies.dir, Path::new("policies"));
         assert!(config.policies.hot_reload);
         assert_eq!(config.artifacts.dir, Path::new("artifacts"));
@@ -676,16 +752,192 @@ urls:
         ] {
             let config = Config::load(
                 None,
-                env(&[
-                    ("KAGE__DATABASE__URL", DB_URL),
+                with(&[
                     ("KAGE__SIDECAR__TOKEN", token),
-                    ("KAGE__SECRETS__MASTER_KEY", token),
+                    ("KAGE__WEBSHARE__API_KEY", token),
                 ]),
             )
             .unwrap();
             assert_eq!(config.sidecar.token.expose(), token);
-            assert_eq!(config.secrets.master_key.expose(), token);
+            assert_eq!(config.webshare.api_key.unwrap().expose(), token);
         }
+        // A master key of 64 digits is text too, not a number.
+        let digits = "12".repeat(32);
+        let config = Config::load(
+            None,
+            with(&[("KAGE__SECRETS__MASTER_KEY", digits.as_str())]),
+        )
+        .unwrap();
+        assert_eq!(config.secrets.master_key.expose(), digits);
+        assert_eq!(config.secrets.master_key_bytes(), Some([0x12; 32]));
+    }
+
+    #[test]
+    fn the_master_key_must_be_32_bytes_of_hex_and_is_never_echoed() {
+        let bad_keys = [
+            "master-key-0b3e".to_owned(),
+            // 63 and 65 characters.
+            "a".repeat(63),
+            "a".repeat(65),
+            // The right length with a character that is not hexadecimal.
+            format!("{}g", "a".repeat(63)),
+            format!("+{}", "a".repeat(63)),
+            format!("{}é", "a".repeat(62)),
+        ];
+        for bad in &bad_keys {
+            let message = invalid(Config::load(
+                None,
+                with(&[("KAGE__SECRETS__MASTER_KEY", bad.as_str())]),
+            ));
+
+            assert!(message.contains("secrets.master_key"), "{message}");
+            assert!(message.contains("64 hexadecimal"), "{message}");
+            assert!(!message.contains(bad.as_str()), "{message}");
+        }
+
+        let upper = "AB".repeat(32);
+        let config =
+            Config::load(None, with(&[("KAGE__SECRETS__MASTER_KEY", upper.as_str())])).unwrap();
+        assert_eq!(config.secrets.master_key_bytes(), Some([0xab; 32]));
+    }
+
+    #[test]
+    fn the_provider_follows_the_secrets_unless_it_is_named() {
+        let provider = |extra: &[(&str, &str)]| {
+            Config::load(None, with(extra)).map(|config| config.proxy_provider())
+        };
+        let key = ("KAGE__WEBSHARE__API_KEY", "ws-key-51aa");
+        let list = (
+            "KAGE__PROXIES__STATIC_LIST",
+            "198.51.100.10:8080:user:pass-77aa",
+        );
+
+        // auto
+        assert_eq!(provider(&[]).unwrap(), ResolvedProvider::None);
+        assert_eq!(provider(&[key]).unwrap(), ResolvedProvider::Webshare);
+        assert_eq!(provider(&[list]).unwrap(), ResolvedProvider::Static);
+        assert_eq!(provider(&[key, list]).unwrap(), ResolvedProvider::Webshare);
+        // named
+        let choose = |choice: &'static str| ("KAGE__PROXIES__PROVIDER", choice);
+        assert_eq!(
+            provider(&[choose("static"), key, list]).unwrap(),
+            ResolvedProvider::Static
+        );
+        assert_eq!(
+            provider(&[choose("none"), key, list]).unwrap(),
+            ResolvedProvider::None
+        );
+        assert_eq!(
+            provider(&[choose("webshare"), key]).unwrap(),
+            ResolvedProvider::Webshare
+        );
+        // A named provider without its secret is a missing secret.
+        assert!(matches!(
+            provider(&[choose("webshare"), list]),
+            Err(ConfigError::MissingSecrets(names)) if names == ["KAGE__WEBSHARE__API_KEY"]
+        ));
+        assert!(matches!(
+            provider(&[choose("static"), key]),
+            Err(ConfigError::MissingSecrets(names)) if names == ["KAGE__PROXIES__STATIC_LIST"]
+        ));
+        assert!(invalid(Config::load(None, with(&[choose("rotating")]))).contains("provider"));
+    }
+
+    #[test]
+    fn the_static_list_is_a_secret_from_the_environment_or_a_file() {
+        let dir = TempDir::new().unwrap();
+        let list = "198.51.100.10:8080:user-a:pass-77aa\n198.51.100.11:8080:user-a:pass-77aa:DE\n";
+        let file = write(&dir, "proxies.txt", list);
+
+        for extra in [
+            [("KAGE__PROXIES__STATIC_LIST", list)],
+            [("KAGE__PROXIES__STATIC_LIST_FILE", file.to_str().unwrap())],
+        ] {
+            let config = Config::load(None, with(&extra)).unwrap();
+
+            let parsed =
+                StaticProxy::parse_list(config.proxies.static_list.as_ref().unwrap().expose())
+                    .unwrap();
+            assert_eq!(parsed.len(), 2);
+            assert_eq!(parsed[1].country.unwrap().as_str(), "DE");
+            let printed = format!("{config:?}{}", config.redacted());
+            assert!(!printed.contains("pass-77aa"), "{printed}");
+            assert!(!printed.contains("user-a"), "{printed}");
+            assert_eq!(config.redacted()["proxies"]["static_list"], REDACTED);
+        }
+
+        // A malformed list fails the load without being quoted.
+        let message = invalid(Config::load(
+            None,
+            with(&[("KAGE__PROXIES__STATIC_LIST", "198.51.100.10:8080:pass-77aa")]),
+        ));
+        assert!(message.contains("static proxy list: line 1"), "{message}");
+        assert!(!message.contains("pass-77aa"), "{message}");
+    }
+
+    #[test]
+    fn nested_pool_keys_are_set_from_the_file_and_the_environment() {
+        let dir = TempDir::new().unwrap();
+        let file = write(
+            &dir,
+            "kage.yaml",
+            "
+webshare:
+  plan_id: 4242
+  requests_per_minute: 60
+proxies:
+  replacements_per_month: 2
+  replace_after: 12h
+  health:
+    interval: 10m
+    confirm_url: null
+    geo_url: https://geo.example.net/json
+reputation:
+  bad_score: 90
+",
+        );
+
+        let config = Config::load(
+            Some(&file),
+            with(&[
+                ("KAGE__PROXIES__HEALTH__INTERVAL", "7m"),
+                ("KAGE__PROXIES__HEALTH__MAX_CONCURRENT", "1"),
+                ("KAGE__PROXIES__BACKOFF_CYCLES", "4"),
+                ("KAGE__WEBSHARE__BASE_URL", "http://127.0.0.1:9/api/"),
+            ]),
+        )
+        .unwrap();
+
+        assert_eq!(config.webshare.plan_id, Some(4242));
+        assert_eq!(config.webshare.requests_per_minute, 60);
+        assert_eq!(config.webshare.base_url, "http://127.0.0.1:9/api/");
+        assert_eq!(config.proxies.replacements_per_month, 2);
+        assert_eq!(config.proxies.replace_after.get(), Duration::from_hours(12));
+        assert_eq!(config.proxies.backoff_cycles, 4);
+        // Environment over file, at the third level too.
+        assert_eq!(config.proxies.health.interval.get(), Duration::from_mins(7));
+        assert_eq!(config.proxies.health.max_concurrent, 1);
+        assert_eq!(config.proxies.health.confirm_url, None);
+        assert_eq!(
+            config.proxies.health.geo_url.as_deref(),
+            Some("https://geo.example.net/json")
+        );
+        assert_eq!(config.reputation.bad_score, 90);
+
+        assert!(
+            invalid(Config::load(
+                None,
+                with(&[("KAGE__PROXIES__HEALTH__INTERVALL", "7m")])
+            ))
+            .contains("intervall")
+        );
+        assert!(
+            invalid(Config::load(
+                None,
+                with(&[("KAGE__WEBSHARE__REQUESTS_PER_MINUTE", "240")])
+            ))
+            .contains("below Webshare's limit of 240")
+        );
     }
 
     #[test]
@@ -797,6 +1049,25 @@ urls:
             error,
             ConfigError::MissingSecrets(names) if names == ["KAGE__SIDECAR__TOKEN", "KAGE__SECRETS__MASTER_KEY"]
         ));
+    }
+
+    #[test]
+    fn an_empty_variable_does_not_clash_with_its_file() {
+        let dir = TempDir::new().unwrap();
+        let key_file = write(&dir, "webshare_key", "from-the-file\n");
+
+        let config = Config::load(
+            None,
+            with(&[
+                ("KAGE__WEBSHARE__API_KEY", ""),
+                ("KAGE__WEBSHARE__API_KEY_FILE", key_file.to_str().unwrap()),
+                ("KAGE__REPUTATION__ABUSEIPDB_KEY", ""),
+            ]),
+        )
+        .unwrap();
+
+        assert!(config.reputation.abuseipdb_key.is_none());
+        assert_eq!(config.webshare.api_key.unwrap().expose(), "from-the-file");
     }
 
     #[test]
@@ -937,6 +1208,10 @@ urls:
             with(&[
                 ("KAGE__WEBSHARE__API_KEY", "ws-key-51aa"),
                 ("KAGE__REPUTATION__ABUSEIPDB_KEY", "abuse-key-93bd"),
+                (
+                    "KAGE__PROXIES__STATIC_LIST",
+                    "198.51.100.10:8080:user-c41d:pass-77aa",
+                ),
             ]),
         )
         .unwrap();
@@ -947,6 +1222,8 @@ urls:
             MASTER,
             "ws-key-51aa",
             "abuse-key-93bd",
+            "user-c41d",
+            "pass-77aa",
         ];
 
         let redacted = config.redacted();
@@ -980,6 +1257,7 @@ urls:
 
         assert!(redacted["webshare"]["api_key"].is_null());
         assert!(redacted["reputation"]["abuseipdb_key"].is_null());
+        assert!(redacted["proxies"]["static_list"].is_null());
     }
 
     #[test]
@@ -993,6 +1271,8 @@ urls:
                 "KAGE__SECRETS__MASTER_KEY",
                 "KAGE__WEBSHARE__API_KEY",
                 "KAGE__REPUTATION__ABUSEIPDB_KEY",
+                // Added in M2 for the static provider.
+                "KAGE__PROXIES__STATIC_LIST",
             ]
         );
         for spec in SECRETS {

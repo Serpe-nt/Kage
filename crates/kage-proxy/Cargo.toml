@@ -12,3 +12,36 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[dependencies]
+kage-core = { workspace = true }
+kage-store = { workspace = true }
+
+async-trait = { workspace = true }
+chacha20poly1305 = { workspace = true }
+chrono = { workspace = true }
+metrics = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tracing = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+# Fingerprint-critical; the only HTTP client in the workspace. The decoders
+# are on because the probe client advertises them like the browser it
+# emulates, and a client must be able to read what it asks for.
+wreq = { workspace = true, features = ["brotli", "deflate", "gzip", "zstd"] }
+# `emulation-compression` makes the emulated profile send `Accept-Encoding`
+# as the real browser does; `emulation-serde` parses a profile name such as
+# `chrome_149` from configuration.
+wreq-util = { workspace = true, features = ["emulation-compression", "emulation-serde"] }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+axum = { workspace = true }
+proptest = { workspace = true }
+sqlx = { workspace = true }
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true, features = ["postgres"] }
+tokio = { workspace = true, features = ["io-util", "net", "rt-multi-thread", "test-util"] }
+wiremock = { workspace = true }

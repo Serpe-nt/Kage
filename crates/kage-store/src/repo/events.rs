@@ -82,8 +82,9 @@ impl HealthEventRepo<'_> {
         Ok(())
     }
 
-    /// Stores an operator alert as a health event about `subject_kind`. The
-    /// alert's message is kept inside the details.
+    /// Stores an operator alert as a health event about `subject_kind`, and
+    /// about the one subject the alert names, if it names one. The alert's
+    /// message is kept inside the details.
     ///
     /// # Errors
     ///
@@ -97,7 +98,7 @@ impl HealthEventRepo<'_> {
             id: HealthEventId::new(),
             at: alert.at,
             subject_kind,
-            subject_id: None,
+            subject_id: alert.subject,
             kind: alert.kind.as_str().to_owned(),
             severity: alert.severity,
             details: serde_json::json!({
