@@ -1,0 +1,15 @@
+# JetBrains IDEs
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Rust
+/target/
+*.rs.bk
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+
+bot-detection-landscape.md
