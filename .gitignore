@@ -27,5 +27,8 @@ coverage/
 .DS_Store
 Thumbs.db
 
+# Claude Code session worktrees and local state
+.claude/
+
 # Research notes kept out of git on purpose (see CLAUDE.md)
 bot-detection-landscape.md

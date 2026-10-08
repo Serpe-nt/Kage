@@ -43,6 +43,9 @@ excellently on any site it is pointed at; there is no fixed target list.
 | D25 | Process | One milestone per agent session, one PR per milestone through the CI gates, ADRs for architecture decisions, `CLAUDE.md` with house rules. |
 | D26 | License | Public repository, dual MIT / Apache-2.0, with a responsible-use section in the README. |
 | D27 | Go project | `CarPriceScanner` is reference only. Nothing from it is binding. |
+| D28 | AGPL dependency | ADR 0008 accepted with option B then C: M5 overrides `ua-parser-js` to the MIT 1.x line under the engine parity suite; if behavior differs, the Firefox image is not published and is built locally by operators. |
+| D29 | Camoufox pin | M5 moves the Camoufox browser build to `v152.0.4-beta.30`, the only build `camoufox-js` 0.12.1 accepts with `playwright-core` 1.62.1, as the fingerprint-critical bump inside the M5 PR. |
+| D30 | Merging | Until the repository is pushed, milestone branches are fast-forwarded into local `main` by the owner and deleted; the PR workflow in D25 starts once `main` is on origin. |
 
 ## Open items (owner to confirm when relevant)
 

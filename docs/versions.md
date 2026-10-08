@@ -44,9 +44,11 @@ rejected at launch. The newer `v156.0.1` line (beta.32 to beta.36, latest
 2026-10-06) is outside the range as well.
 
 M0 does not fetch the browser, so nothing is broken yet, and M0 did not
-change this pin: a fingerprint-critical bump is its own PR. M5 has to settle
-it, most likely by pinning `v152.0.4-beta.30`. Keeping beta.27 instead would
-mean pinning `playwright-core` below 1.61.
+change this pin: a fingerprint-critical bump is its own PR.
+
+Owner decision (2026-10-08, D29 in `00-decisions.md`): M5 moves the pin to
+**v152.0.4-beta.30** as the fingerprint-critical bump inside its PR and
+verifies it with the live self-test. `playwright-core` stays at 1.62.1.
 
 ## Rust core
 

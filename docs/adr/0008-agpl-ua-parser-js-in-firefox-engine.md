@@ -1,6 +1,11 @@
 # ADR 0008: AGPL-licensed ua-parser-js in the Firefox engine dependency tree
 
-Status: proposed, 2026-10-08. Needs an owner decision before M5.
+Status: accepted, 2026-10-08. Owner decision: option B, with C as the
+fallback. M5 overrides `ua-parser-js` to the MIT 1.0.x line and proves the
+launcher unchanged under the engine parity suite; if any behavioral
+difference appears, M5 keeps the upstream dependency and the release
+workflow stops publishing the Firefox image (option C). The exception in
+`sidecar/license-policy.json` is removed in the same PR that lands B or C.
 
 ## Context
 
