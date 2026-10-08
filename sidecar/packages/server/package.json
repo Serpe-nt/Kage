@@ -1,0 +1,31 @@
+{
+  "name": "@kage/server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Fastify server of the browser sidecar; the ENGINE variable selects the engine package.",
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "typecheck": "tsc -p tsconfig.json",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@kage/contract": "workspace:*",
+    "@kage/engine-chromium": "workspace:*",
+    "@kage/engine-core": "workspace:*",
+    "@kage/engine-firefox": "workspace:*",
+    "fastify": "5.12.5",
+    "zod": "4.6.5"
+  }
+}

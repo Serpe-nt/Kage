@@ -1,0 +1,9 @@
+name: Set up just
+description: Installs the pinned version of just. This is the only place the just version is pinned for CI; every other tool version lives in the justfile.
+
+runs:
+  using: composite
+  steps:
+    - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+      with:
+        tool: just@1.58.0

@@ -1,0 +1,55 @@
+# cargo-deny configuration: licenses, advisories, bans and sources (spec §19).
+# Run with `just deny`. The sidecar has its own license policy in
+# sidecar/license-policy.json, checked by scripts/check-npm-licenses.mjs.
+
+[graph]
+# Check every feature of every workspace member on every target.
+all-features = true
+
+[advisories]
+yanked = "deny"
+# Each ignored advisory needs a comment with the reason and a review date.
+ignore = []
+
+[licenses]
+confidence-threshold = 0.9
+# The list is policy, not an inventory: an allowed license that no crate
+# uses yet is fine.
+unused-allowed-license = "allow"
+allow = [
+    # Allowlist from docs/02-plan.md M0 (MIT, Apache-2.0, BSD, ISC, MPL-2.0),
+    # written as SPDX identifiers.
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MPL-2.0",
+    # Additions the dependency graph cannot do without. All three are
+    # permissive and were added when M0 first resolved the graph.
+    # Unicode-3.0: ICU data crates behind `url` (IDNA) and unicode-ident.
+    "Unicode-3.0",
+    # CDLA-Permissive-2.0: the Mozilla root certificates in webpki-roots,
+    # used by rustls (sqlx) and by wreq.
+    "CDLA-Permissive-2.0",
+    # Zlib: foldhash (hashbrown) and zlib-rs (flate2).
+    "Zlib",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Workspace crates depend on each other by path.
+allow-wildcard-paths = true
+deny = [
+    # wreq links BoringSSL; OpenSSL must never enter the graph (spec risk R6).
+    { crate = "openssl-sys", reason = "conflicts with BoringSSL; use rustls or wreq" },
+    { crate = "openssl", reason = "conflicts with BoringSSL; use rustls or wreq" },
+    { crate = "native-tls", reason = "links OpenSSL on Linux; use rustls" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

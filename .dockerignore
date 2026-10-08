@@ -1,0 +1,17 @@
+# Build contexts are the repository root. This is an allowlist: everything is
+# excluded unless it is listed below, so secrets and build outputs can never
+# end up in an image layer.
+*
+
+!Cargo.toml
+!Cargo.lock
+!rust-toolchain.toml
+!crates/
+!sidecar/
+
+**/target
+**/node_modules
+**/dist
+**/coverage
+**/*.cdx.json
+**/.env

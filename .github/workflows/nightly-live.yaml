@@ -1,0 +1,54 @@
+name: nightly-live
+
+# Live fingerprint regression suite (spec §21). It uses real proxies and only
+# ever hits the echo and detection test pages listed in configuration, never
+# a real target site.
+#
+# Skeleton: the suite itself lands with M2 and M3 and is fully wired in M12.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-live
+  cancel-in-progress: false
+
+jobs:
+  live:
+    name: live suite
+    # The schedule stays quiet until the owner opts in with the repository
+    # variable KAGE_LIVE_ENABLED=true. A manual run always executes, and fails
+    # clearly when the secrets are missing.
+    if: github.event_name == 'workflow_dispatch' || vars.KAGE_LIVE_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      KAGE__WEBSHARE__API_KEY: ${{ secrets.KAGE_WEBSHARE_API_KEY }}
+      KAGE__SECRETS__MASTER_KEY: ${{ secrets.KAGE_SECRETS_MASTER_KEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Fail clearly when secrets are missing
+        run: |
+          missing=()
+          [ -n "${KAGE__WEBSHARE__API_KEY}" ] || missing+=("KAGE_WEBSHARE_API_KEY")
+          [ -n "${KAGE__SECRETS__MASTER_KEY}" ] || missing+=("KAGE_SECRETS_MASTER_KEY")
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error title=nightly-live cannot run::Missing repository secrets: ${missing[*]}. See docs/runbooks/repo.md, section 'Nightly live suite'."
+            exit 1
+          fi
+
+      - uses: ./.github/actions/setup-rust
+      - uses: ./.github/actions/setup-node
+
+      - name: Run the live suite
+        env:
+          KAGE_LIVE: "1"
+        run: just test-live

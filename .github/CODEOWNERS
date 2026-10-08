@@ -1,0 +1,17 @@
+# Every change is reviewed by the owner.
+* @Serpe-nt
+
+# Fingerprint-critical pins (docs/versions.md): bumped only in a dedicated PR
+# that re-runs the fingerprint self-test suite, never auto-merged.
+/Cargo.toml @Serpe-nt
+/Cargo.lock @Serpe-nt
+/rust-toolchain.toml @Serpe-nt
+/sidecar/pnpm-lock.yaml @Serpe-nt
+/sidecar/packages/engine-chromium/package.json @Serpe-nt
+/sidecar/packages/engine-firefox/package.json @Serpe-nt
+/docs/versions.md @Serpe-nt
+
+# Settled decisions and the contract.
+/docs/00-decisions.md @Serpe-nt
+/docs/01-spec.md @Serpe-nt
+/docs/adr/ @Serpe-nt

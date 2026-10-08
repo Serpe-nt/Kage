@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Fast checks before a commit. The full gate is `just ci`.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+if ! command -v just > /dev/null; then
+    echo "pre-commit: just is not installed, skipping the format check" >&2
+    exit 0
+fi
+just fmt-check

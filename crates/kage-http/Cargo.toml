@@ -1,0 +1,19 @@
+[package]
+name = "kage-http"
+description = "wreq client factory, cookie jar persistence and the HTTP fingerprint self-test."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Fingerprint-critical. Unused until M3. Declared now so the pins are locked
+# and the BoringSSL toolchain (cmake, clang, perl, go) is exercised in CI.
+wreq = { workspace = true }
+wreq-util = { workspace = true }

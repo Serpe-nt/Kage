@@ -1,0 +1,32 @@
+[package]
+name = "kage"
+description = "Kage command-line entry point: API server and operator commands."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# The binary is the composition root: it links every library crate, so the
+# image build compiles the whole workspace (BoringSSL included) from M0 on.
+kage-api = { workspace = true }
+kage-browser = { workspace = true }
+kage-core = { workspace = true }
+kage-crawl = { workspace = true }
+kage-extract = { workspace = true }
+kage-http = { workspace = true }
+kage-proxy = { workspace = true }
+kage-store = { workspace = true }
+
+anyhow = { workspace = true }
+axum = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "time"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "json"] }

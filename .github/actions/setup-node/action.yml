@@ -1,0 +1,21 @@
+name: Set up Node
+description: Installs the Node version from sidecar/.nvmrc, the pnpm version from sidecar/package.json, just, and the sidecar dependencies.
+
+runs:
+  using: composite
+  steps:
+    - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      with:
+        package_json_file: sidecar/package.json
+
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version-file: sidecar/.nvmrc
+        cache: pnpm
+        cache-dependency-path: sidecar/pnpm-lock.yaml
+
+    - uses: ./.github/actions/setup-just
+
+    - name: Install the sidecar dependencies
+      shell: bash
+      run: just setup-node

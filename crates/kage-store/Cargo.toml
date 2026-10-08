@@ -1,0 +1,18 @@
+[package]
+name = "kage-store"
+description = "sqlx repositories, migrations and the content-addressed artifact store."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Unused until M1. Declared now so the pin and its TLS backend are locked,
+# compiled in CI and covered by scripts/check-no-openssl.sh.
+sqlx = { workspace = true }

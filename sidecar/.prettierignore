@@ -1,0 +1,6 @@
+node_modules/
+dist/
+coverage/
+pnpm-lock.yaml
+# Generated from the zod schemas (M4); formatted by its emitter.
+packages/contract/openapi.json

@@ -1,0 +1,15 @@
+# Development overlay for `just dev`: Postgres and both sidecars run in
+# compose while `kage serve` runs natively, so their ports are published on
+# loopback for the host process to reach.
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  browser-chromium:
+    ports:
+      - "127.0.0.1:8091:8090"
+
+  browser-firefox:
+    ports:
+      - "127.0.0.1:8092:8090"

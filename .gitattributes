@@ -1,0 +1,11 @@
+# Shell scripts, Dockerfiles and YAML run inside Linux containers: always LF,
+# whatever core.autocrlf says on the checkout machine.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.gz binary
+*.pdf binary
+
+Cargo.lock linguist-generated=true
+sidecar/pnpm-lock.yaml linguist-generated=true

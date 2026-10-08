@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Rejects commit messages that are not Conventional Commits.
+set -euo pipefail
+exec "$(git rev-parse --show-toplevel)/scripts/check-conventional-commits.sh" --file "$1"

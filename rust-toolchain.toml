@@ -1,0 +1,6 @@
+# Stable toolchain pinned exactly; bump in a dedicated PR together with
+# docs/versions.md, deploy/docker/kage.Dockerfile and Cargo.toml rust-version.
+[toolchain]
+channel = "1.99.0"
+profile = "minimal"
+components = ["rustfmt", "clippy", "llvm-tools-preview"]

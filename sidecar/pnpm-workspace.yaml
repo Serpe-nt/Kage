@@ -1,0 +1,27 @@
+packages:
+  - packages/*
+
+# engine-chromium (patchright) and engine-firefox (camoufox-js) pin different
+# playwright versions on purpose (spec risk R2). Nothing is hoisted, so a
+# package can only resolve what it declares itself.
+hoist: false
+shamefullyHoist: false
+
+# Exact pins everywhere: `pnpm add` writes the resolved version, no range.
+savePrefix: ''
+autoInstallPeers: false
+strictPeerDependencies: true
+
+# Refuse to resolve a version published less than a day ago.
+minimumReleaseAge: 1440
+
+# No dependency lifecycle script runs unless it is listed under
+# onlyBuiltDependencies. The packages below ship install scripts that the
+# scaffold does not need:
+#   better-sqlite3  native addon used by camoufox-js; allow it in M5 when the
+#                   Firefox engine starts launching the browser.
+#   esbuild         optional self-check; the platform binary comes from its
+#                   optionalDependencies.
+ignoredBuiltDependencies:
+  - better-sqlite3
+  - esbuild

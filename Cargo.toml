@@ -1,0 +1,149 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Serpe-nt/Kage"
+homepage = "https://github.com/Serpe-nt/Kage"
+authors = ["The Kage Authors"]
+publish = false
+
+# Every dependency is pinned to an exact version (`=x.y.z`); see
+# docs/versions.md for the policy and the verification log. Crates inherit
+# with `workspace = true` and choose their own features. Entries that no
+# crate uses yet are pinned here so later milestones do not re-resolve them;
+# they enter Cargo.lock when first used.
+[workspace.dependencies]
+# --- Internal crates ------------------------------------------------------
+kage-api = { path = "crates/kage-api", version = "0.1.0" }
+kage-browser = { path = "crates/kage-browser", version = "0.1.0" }
+kage-core = { path = "crates/kage-core", version = "0.1.0" }
+kage-crawl = { path = "crates/kage-crawl", version = "0.1.0" }
+kage-extract = { path = "crates/kage-extract", version = "0.1.0" }
+kage-http = { path = "crates/kage-http", version = "0.1.0" }
+kage-proxy = { path = "crates/kage-proxy", version = "0.1.0" }
+kage-store = { path = "crates/kage-store", version = "0.1.0" }
+
+# --- Fingerprint-critical: bump together, re-test, never auto-merge --------
+# BoringSSL-linked (btls). Never combine with anything that links OpenSSL.
+wreq = { version = "=0.16.1" }
+wreq-util = { version = "=0.2.0" }
+
+# --- Runtime, HTTP server, OpenAPI ----------------------------------------
+tokio = { version = "=1.53.2", default-features = false }
+axum = { version = "=0.8.9" }
+tower = { version = "=0.5.3", default-features = false }
+tower-http = { version = "=0.7.1", default-features = false }
+# utoipa, utoipa-axum and utoipa-swagger-ui are released together and are
+# pinned together. `vendored` keeps the Swagger UI build offline: without it
+# the build script downloads the UI bundle at compile time.
+utoipa = { version = "=6.0.0" }
+utoipa-axum = { version = "=0.3.0" }
+utoipa-swagger-ui = { version = "=10.0.1", default-features = false, features = ["axum", "vendored"] }
+
+# --- Storage --------------------------------------------------------------
+# rustls only. `tls-native-tls` would link OpenSSL and is banned in deny.toml.
+sqlx = { version = "=0.9.0", default-features = false, features = [
+    "postgres",
+    "runtime-tokio",
+    "tls-rustls-ring-webpki",
+    "chrono",
+    "uuid",
+    "json",
+    "migrate",
+    "macros",
+] }
+
+# --- Serialization, errors, CLI -------------------------------------------
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = { version = "=1.0.151" }
+thiserror = { version = "=2.0.21" }
+anyhow = { version = "=1.0.104" }
+clap = { version = "=4.6.7", features = ["derive", "env"] }
+async-trait = { version = "=0.1.92" }
+
+# --- Observability --------------------------------------------------------
+tracing = { version = "=0.1.44" }
+tracing-subscriber = { version = "=0.3.23", default-features = false }
+tracing-opentelemetry = { version = "=0.34.0", default-features = false }
+opentelemetry = { version = "=0.33.0", default-features = false }
+opentelemetry_sdk = { version = "=0.33.0", default-features = false }
+# Default features are off on purpose: the exporter transport is chosen in
+# M12 and must use rustls, never OpenSSL.
+opentelemetry-otlp = { version = "=0.33.0", default-features = false }
+metrics = { version = "=0.24.6" }
+metrics-exporter-prometheus = { version = "=0.18.3", default-features = false }
+
+# --- Configuration, policy, limits ----------------------------------------
+figment = { version = "=0.10.19", default-features = false }
+governor = { version = "=0.10.4" }
+notify = { version = "=8.2.0" }
+
+# --- Networking helpers ---------------------------------------------------
+url = { version = "=2.5.8" }
+ipnet = { version = "=2.12.2" }
+hickory-resolver = { version = "=0.26.3", default-features = false }
+
+# --- Crypto, ids, time ----------------------------------------------------
+sha2 = { version = "=0.11.0" }
+hmac = { version = "=0.13.0" }
+rand = { version = "=0.10.3" }
+secrecy = { version = "=0.10.3" }
+uuid = { version = "=1.27.0", features = ["v7", "serde"] }
+chrono = { version = "=0.4.45", default-features = false, features = ["clock", "serde", "std"] }
+
+# --- Extraction, crawl ----------------------------------------------------
+scraper = { version = "=0.27.0" }
+# The version scraper 0.27.0 is built against, so their types are the same.
+# 0.40.1 exists; move both together.
+html5ever = { version = "=0.39.0" }
+robotstxt = { version = "=0.3.0" }
+quick-xml = { version = "=0.42.0" }
+
+# --- Test only ------------------------------------------------------------
+http-body-util = { version = "=0.1.5" }
+wiremock = { version = "=0.6.5" }
+# testcontainers-modules 0.15.0 requires testcontainers ^0.27, so the two move
+# together: 0.28.0 exists but nothing in the modules crate supports it yet.
+testcontainers = { version = "=0.27.3", default-features = false }
+testcontainers-modules = { version = "=0.15.0", default-features = false }
+
+[workspace.lints.rust]
+# CLAUDE.md: no unsafe anywhere in the workspace.
+unsafe_code = "forbid"
+missing_docs = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unused_qualifications = "warn"
+unused_lifetimes = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+# Pedantic is on as a group; the opt-outs below are the lints that fight
+# ordinary naming and API style without catching defects.
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+# CLAUDE.md: no unwrap/expect/panic! outside tests. clippy.toml re-allows
+# them inside test code.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+# Logs go through `tracing`, never straight to stdout or stderr.
+print_stdout = "deny"
+print_stderr = "deny"
+
+[profile.release]
+lto = "thin"
+# Keep symbol names for backtraces; drop DWARF to keep images small.
+strip = "debuginfo"

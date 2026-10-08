@@ -1,0 +1,3 @@
+# Trivy findings accepted for the images built from deploy/docker/.
+# One finding per line, each with a comment: why it does not apply, who
+# accepted it and when it must be reviewed again. Empty on purpose.

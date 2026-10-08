@@ -1,0 +1,17 @@
+# gitleaks configuration (spec §19): default rules plus path exclusions for
+# generated files that are never authored by hand.
+title = "kage"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Build outputs and lockfiles"
+paths = [
+    '''(^|/)target/''',
+    '''(^|/)node_modules/''',
+    '''(^|/)dist/''',
+    '''(^|/)coverage/''',
+    '''(^|/)Cargo\.lock$''',
+    '''(^|/)pnpm-lock\.yaml$''',
+]

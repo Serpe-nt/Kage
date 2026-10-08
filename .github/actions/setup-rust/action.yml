@@ -1,0 +1,38 @@
+name: Set up Rust
+description: Installs the Rust toolchain pinned in rust-toolchain.toml, just, and the cargo tools pinned in the justfile.
+
+inputs:
+  build-deps:
+    description: Install the BoringSSL build dependencies. Needed by every job that compiles the whole workspace.
+    default: "true"
+  cache:
+    description: Cache cargo registry and build outputs.
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Install the pinned Rust toolchain
+      shell: bash
+      run: rustup toolchain install
+
+    - name: Install BoringSSL build dependencies
+      if: inputs.build-deps == 'true'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install --yes --no-install-recommends cmake clang libclang-dev nasm
+
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      if: inputs.cache == 'true'
+
+    - uses: ./.github/actions/setup-just
+
+    - name: Read the pinned cargo tools from the justfile
+      id: pins
+      shell: bash
+      run: echo "tools=$(just --evaluate rust_tools)" >> "$GITHUB_OUTPUT"
+
+    - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+      with:
+        tool: ${{ steps.pins.outputs.tools }}

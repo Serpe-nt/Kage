@@ -1,0 +1,14 @@
+[package]
+name = "kage-proxy"
+description = "Proxy provider trait, Webshare client, pool state machine, health and replacement."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+

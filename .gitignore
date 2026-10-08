@@ -7,9 +7,25 @@
 # Rust
 /target/
 *.rs.bk
+# cargo-cyclonedx writes next to each manifest; `just sbom` moves the files to target/sbom/
+*.cdx.json
+*.cdx.xml
+mutants.out*/
+
+# Node (sidecar)
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Local secrets: created by `just setup`, never committed
+.env
+.env.*
+!.env.example
 
 # OS-generated files
 .DS_Store
 Thumbs.db
 
+# Research notes kept out of git on purpose (see CLAUDE.md)
 bot-detection-landscape.md

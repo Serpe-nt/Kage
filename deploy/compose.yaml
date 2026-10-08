@@ -1,0 +1,130 @@
+# Kage stack (spec §3.3, §22): kage, one sidecar per engine, Postgres.
+#
+#   just setup                                   # creates deploy/.env
+#   docker compose --file deploy/compose.yaml up --build --wait
+#
+# Only kage publishes a port. Images built from this repository are tagged
+# :dev; a release records pushed image digests here.
+name: kage
+
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+
+x-sidecar: &sidecar
+  <<: *hardening
+  # Reaps browser child processes once the engines launch real browsers.
+  init: true
+  # Browsers keep shared memory in /dev/shm; the 64 MB default crashes tabs.
+  shm_size: 1gb
+  tmpfs: [/tmp]
+  volumes:
+    - personas:/var/lib/kage/personas
+    - artifacts:/var/lib/kage/artifacts
+  mem_limit: 4g
+  cpus: 2
+  pids_limit: 1024
+  healthcheck:
+    test: [CMD, node, dist/healthcheck.js]
+    interval: 10s
+    timeout: 5s
+    retries: 3
+    start_period: 10s
+
+services:
+  kage:
+    <<: *hardening
+    image: ${KAGE_IMAGE:-kage:dev}
+    build:
+      context: ..
+      dockerfile: deploy/docker/kage.Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      browser-chromium:
+        condition: service_healthy
+      browser-firefox:
+        condition: service_healthy
+    environment:
+      KAGE__SERVER__BIND: 0.0.0.0:8080
+      # KAGE__DATABASE__URL is wired here in M1 and KAGE__SIDECAR__TOKEN in M4,
+      # together with the code that reads them.
+    ports:
+      # Loopback by default: the API has no authentication until M8.
+      - "${KAGE_PUBLISH_ADDR:-127.0.0.1}:${KAGE_PUBLISH_PORT:-8080}:8080"
+    volumes:
+      - artifacts:/var/lib/kage/artifacts
+    mem_limit: 1g
+    cpus: 2
+    pids_limit: 512
+    healthcheck:
+      test: [CMD, /usr/local/bin/kage, healthcheck]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  browser-chromium:
+    <<: *sidecar
+    image: ${KAGE_BROWSER_CHROMIUM_IMAGE:-kage-browser-chromium:dev}
+    build:
+      context: ..
+      dockerfile: deploy/docker/sidecar.Dockerfile
+      args:
+        ENGINE: chromium
+    environment:
+      ENGINE: chromium
+
+  browser-firefox:
+    <<: *sidecar
+    image: ${KAGE_BROWSER_FIREFOX_IMAGE:-kage-browser-firefox:dev}
+    build:
+      context: ..
+      dockerfile: deploy/docker/sidecar.Dockerfile
+      args:
+        ENGINE: firefox
+    environment:
+      ENGINE: firefox
+
+  postgres:
+    image: postgres:17.11-trixie@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3
+    # No read-only root here: compose can only inject a secret taken from the
+    # environment into a writable container. The data lives on a volume.
+    # The entrypoint starts as root to fix ownership of the data directory,
+    # then drops to the postgres user; these are the capabilities that needs.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kage
+      POSTGRES_DB: kage
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    mem_limit: 1g
+    cpus: 2
+    pids_limit: 256
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready --username kage --dbname kage"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+secrets:
+  postgres_password:
+    # From deploy/.env, which `just setup` creates. Never committed.
+    environment: KAGE_POSTGRES_PASSWORD
+
+volumes:
+  personas:
+  artifacts:
+  pgdata:

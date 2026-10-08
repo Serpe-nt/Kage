@@ -1,0 +1,29 @@
+{
+  "description": "License policy for every package in the sidecar dependency tree. Checked by scripts/check-npm-licenses.mjs as part of `just deny`.",
+  "allow": [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "0BSD",
+    "ISC",
+    "MPL-2.0",
+    "BlueOak-1.0.0",
+    "CC0-1.0",
+    "CC-BY-4.0"
+  ],
+  "notes": {
+    "MIT, Apache-2.0, BSD-*, 0BSD, ISC, MPL-2.0": "Allowlist from docs/02-plan.md M0. MPL-2.0 covers camoufox-js.",
+    "BlueOak-1.0.0": "Permissive. glob, minimatch, lru-cache and friends, reached from camoufox-js.",
+    "CC0-1.0": "Public-domain dedication. language-subtag-registry (data), reached from camoufox-js.",
+    "CC-BY-4.0": "Attribution license on data only. caniuse-lite, reached from fingerprint-generator."
+  },
+  "exceptions": [
+    {
+      "package": "ua-parser-js",
+      "license": "AGPL-3.0-or-later",
+      "reason": "Required by camoufox-js 0.12.1. Not on the allowlist. Tolerated only until the owner decides ADR 0008; the decision is due before M5 ships the Firefox engine.",
+      "adr": "docs/adr/0008-agpl-ua-parser-js-in-firefox-engine.md"
+    }
+  ]
+}
