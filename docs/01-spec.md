@@ -129,7 +129,7 @@ kage/
     kage-proxy/              provider trait, Webshare client, pool, health, replacement
     kage-http/               wreq client factory, cookie jar persistence, fingerprint self-test (http)
     kage-browser/            sidecar contract types (generated from sidecar OpenAPI) and client
-    kage-crawl/              frontier, sitemap, url normalization, dedupe
+    kage-crawl/              frontier, sitemap, dedupe (url normalization lives in kage-core)
     kage-extract/            html → text/markdown/metadata/links/jsonld, robots parsing
     kage-api/                axum router, handlers, OpenAPI, auth, webhooks
   sidecar/
@@ -203,7 +203,7 @@ All ids are UUIDv7. Timestamps are UTC.
 |---|---|
 | persona_id, domain | PK |
 | cooldown_until | set on block |
-| requests_today, last_request_at | pacing counters |
+| requests_today, counter_day, last_request_at | pacing counters; `counter_day` is the calendar day in the persona's timezone that `requests_today` counts, so the cap resets at local midnight |
 | last_outcome | |
 | block_count_24h | feeds circuit breaker |
 
@@ -211,7 +211,7 @@ All ids are UUIDv7. Timestamps are UTC.
 
 | Field | Notes |
 |---|---|
-| id | caller-supplied (≤ 64 chars, `[A-Za-z0-9_.-]`) or server-minted |
+| id | caller-supplied (≤ 64 chars, `[A-Za-z0-9_.-]`) or server-minted; unique per API key, primary key is `(api_key_id, id)` |
 | api_key_id | owner |
 | persona_id | pinned persona |
 | created_at, last_used_at, expires_at | idle TTL default 10 min, max lifetime default 6 h |
@@ -296,7 +296,7 @@ A persona is generated when a proxy enters `healthy` for the first time.
 |---|---|
 | Proxy enters `backoff` | Persona `cooling`; no new sessions; existing sessions finish. |
 | Proxy `retired` (replaced) | Persona `retired`, profile dir archived then deleted after `personas.retention_days` (default 7). New persona generated for the replacement proxy. |
-| Block on domain D | `PersonaDomainState.cooldown_until = now + cooldown(D, block_type)`; defaults: `rate_limited` 2 h, `forbidden`/`captcha`/`challenge_failed` 24 h, `soft_block` 6 h. |
+| Block on domain D | `PersonaDomainState.cooldown_until = now + cooldown(D, block_type)`; defaults: `rate_limited` 2 h, `forbidden`/`captcha`/`challenge_failed` 24 h, `soft_block` 6 h. A rule may carry a cooldown class instead: `none`, `short` (policy key `short`, default 30 min, never longer than the outcome's own cooldown) or `long` (the outcome's cooldown). M7 scales the duration by the classification confidence. |
 | Daily cap reached on D | Persona ineligible for D until local midnight in the persona's timezone. |
 | Self-test failure | Persona `cooling` until an operator or the next self-test clears it. |
 
@@ -533,18 +533,27 @@ Pacing profiles live in `policies/pacing-profiles.yaml`:
 human:
   gap_ms:        { dist: lognormal, median: 4500, p95: 15000, min: 1500 }
   burst_pages:   { min: 4, max: 14 }
-  burst_break_ms:{ dist: lognormal, median: 60000, p95: 240000 }
+  burst_break_ms: { dist: lognormal, median: 60000, p95: 240000 }
   daily_cap_per_persona_per_domain: 300
   domain_concurrency: 3
   domain_rpm: 20
 fast:
   gap_ms:        { dist: uniform, min: 300, max: 1200 }
   burst_pages:   { min: 50, max: 50 }
-  burst_break_ms:{ dist: uniform, min: 0, max: 0 }
+  burst_break_ms: { dist: uniform, min: 0, max: 0 }
   daily_cap_per_persona_per_domain: 5000
   domain_concurrency: 10
   domain_rpm: 300
 ```
+
+A `lognormal` with `min` is a shifted log-normal: `min` plus a log-normal
+fitted so the configured median and p95 hold exactly, density zero at `min`
+and rising smoothly (no spike, no cliff). `max` is enforced by bounded
+resampling, never clamping; samples are whole milliseconds. The sampler takes
+its parameters as a value plus a seed, so M6/M7 can perturb median and p95
+per persona (a fixed factor from the persona seed, roughly 0.8 to 1.25) and
+twenty personas never share one identical gap distribution. A wait that ends
+a burst is `gap_ms` plus `burst_break_ms`, so the gap floor holds everywhere.
 
 Resolution order: request `pacing` → domain policy `pacing` → global default
 `human`. A domain policy may set `pacing_locked: true`, which makes the
@@ -574,8 +583,19 @@ Classifier output:
 
 ```json
 { "outcome": "challenge_failed", "vendor": "cloudflare", "type": "managed_challenge",
-  "confidence": 0.92, "evidence": ["header:cf-mitigated=challenge", "body:/Just a moment/"] }
+  "confidence": 0.95, "rule": "cloudflare-just-a-moment",
+  "retryable": true, "escalate": true, "cooldown": "long",
+  "vendors": ["cloudflare"],
+  "evidence": ["status:503", "body:/Just a moment/", "cookie:__cf_bm"] }
 ```
+
+Every verdict, including `ok`, carries `evidence` (the markers that fired)
+and `vendors` (vendor hints seen on the page). `retryable`, `escalate` and
+`cooldown` are scheduler hints: defaults follow the outcome, a rule may
+override them. Confidence bands are meaningful: a vendor marker yields 0.9 or
+higher, a bare 403 or 429 without a marker about 0.6 with cooldown `short`.
+Vendor cookies and scripts on an otherwise good page never make a block by
+themselves.
 
 On the browser path, a detected interstitial is given up to
 `browser.challenge_wait_ms` (default 15 s) to self-resolve with behavior
@@ -769,9 +789,13 @@ domains:
     pacing: fast
 ```
 
-Matching: exact host, then parent domains (`*.example.org` via suffix),
-then defaults. Reloaded on file change with schema validation; an invalid
-file keeps the last good policy and raises an alert.
+Resolution cascades per field: exact host, then each parent domain from
+nearest to furthest (suffix on label boundaries), then `defaults`, then the
+built-in defaults; each field takes the value from the first level that sets
+it, and `pacing_locked` and the per-outcome cooldowns cascade the same way.
+Reloaded on file change with typed validation (unknown keys rejected,
+semantic checks, every named pacing profile must exist); an invalid file
+keeps the last good policy and raises an alert.
 
 ---
 
@@ -849,7 +873,7 @@ are gzip-compressed on disk.
 | E2E | compose + fixture site + mock Webshare | fetch, job, crawl, webhook, admin flows |
 | Live (gated) | `KAGE_LIVE=1`, real proxies | fingerprint self-tests for every persona and engine, echo-service equality, detection page scores; nightly and pre-release |
 | Static | rustfmt, clippy `-D warnings`, eslint, tsc, cargo-deny, cargo-audit, pnpm audit, gitleaks, trivy, SBOM | every PR |
-| Coverage | cargo-llvm-cov, vitest coverage | ≥ 80 % lines on `kage-core`, `kage-proxy`, `kage-crawl`, `kage-extract`, `engine-core`; reported elsewhere |
+| Coverage | cargo-llvm-cov, vitest coverage | ≥ 80 % lines on `kage-core`, `kage-store`, `kage-proxy`, `kage-crawl`, `kage-extract`, `engine-core`; reported elsewhere |
 | Mutation | cargo-mutants on `kage-core` | score reported; ≥ 70 % required from M7 on |
 
 Branch protection on `main`: PRs only, required checks, linear history,
