@@ -32,8 +32,13 @@ serde_json = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "json"] }
+url = { workspace = true }
 
 [dev-dependencies]
+# The self-test CLI test runs the local proxy and the fingerprint echo of
+# kage-http's own tests (crates/kage-http/tests/common).
+async-trait = { workspace = true }
+rcgen = { workspace = true }
 sqlx = { workspace = true }
 tempfile = { workspace = true }
 testcontainers = { workspace = true }

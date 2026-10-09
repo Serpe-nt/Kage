@@ -10,6 +10,8 @@
 !.sqlx/
 !policies/
 !sidecar/
+# The fingerprint fixtures are compiled into the kage binary (kage-http).
+!tests/fixtures/fingerprints/
 
 **/target
 **/node_modules

@@ -198,7 +198,7 @@ async fn run_retention(artifacts: ArtifactStore, interval: Duration) {
 /// Resolves on the first SIGINT (Ctrl-C) or, on Unix, SIGTERM. A handler that
 /// cannot be installed is logged and then ignored, so it never triggers a
 /// shutdown by itself.
-async fn shutdown_signal() {
+pub(crate) async fn shutdown_signal() {
     let interrupt = async {
         if let Err(error) = tokio::signal::ctrl_c().await {
             tracing::warn!(%error, "cannot listen for SIGINT");

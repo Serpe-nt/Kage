@@ -79,6 +79,7 @@ refuses to start when a required one is missing.
 kage config check   # validate, then print the effective configuration, secrets redacted
 kage migrate        # apply the database schema; safe to run again
 kage proxy list     # the proxy pool; also `health`, `replace` and `egress`
+kage selftest http  # compare the http path's fingerprint with the recorded one
 kage serve
 ```
 
@@ -112,7 +113,7 @@ them all.
 | `just sbom` | CycloneDX SBOMs |
 | `just build-images` | Images for kage and both sidecar variants |
 | `just test-e2e` | Compose-based end-to-end suite |
-| `just test-live` | Gated live suite against the real proxy list; needs `KAGE_LIVE=1` and secrets |
+| `just test-live` | Gated live suite through the real proxies; needs `KAGE_LIVE=1` and secrets |
 | `just dev` | Postgres and sidecars in compose, `kage serve` natively |
 | `just migrate` | Apply the migrations to the development database |
 | `just config-check` | Validate the development configuration and print it, secrets redacted |
@@ -121,7 +122,9 @@ them all.
 House rules for contributors and coding agents are in
 [CLAUDE.md](CLAUDE.md). Repository settings, CI jobs and the release
 procedure are in [docs/runbooks/repo.md](docs/runbooks/repo.md); running the
-proxy pool is in [docs/runbooks/proxies.md](docs/runbooks/proxies.md).
+proxy pool is in [docs/runbooks/proxies.md](docs/runbooks/proxies.md), and
+the fingerprint echo and the http self-test are in
+[docs/runbooks/fingerprint-echo.md](docs/runbooks/fingerprint-echo.md).
 
 ## Layout
 

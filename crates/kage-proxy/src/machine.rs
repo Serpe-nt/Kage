@@ -142,6 +142,12 @@ pub struct ExitObservation {
     pub ip: IpAddr,
     /// Round-trip time of the probe, including the new tunnel.
     pub latency_ms: u32,
+    /// Of that, opening the tunnel through the proxy: TCP to the proxy and
+    /// the `CONNECT`. `None` when the probe did not measure it.
+    pub connect_ms: Option<u32>,
+    /// Of that, the TLS handshake with the echo. `None` for a plain echo
+    /// or when the probe did not measure it.
+    pub tls_ms: Option<u32>,
 }
 
 /// The outcome of one health probe of one proxy.
@@ -313,6 +319,8 @@ pub fn apply_probe(
         Ok(exit) => {
             health.reachable = true;
             health.latency_ms = Some(exit.latency_ms);
+            health.connect_ms = exit.connect_ms;
+            health.tls_ms = exit.tls_ms;
             health.exit_ip = Some(exit.ip);
             // A leak is cleared only by a probe that shows a distinct exit
             // address; one that could not compare leaves the flag standing.
@@ -326,6 +334,8 @@ pub fn apply_probe(
         Err(failure) => {
             health.reachable = false;
             health.latency_ms = None;
+            health.connect_ms = None;
+            health.tls_ms = None;
             health.failure = Some(*failure);
         }
     }

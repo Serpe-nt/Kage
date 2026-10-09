@@ -131,6 +131,8 @@ impl Harness {
             exit: Ok(ExitObservation {
                 ip: Self::exit(proxy),
                 latency_ms: 120,
+                connect_ms: None,
+                tls_ms: None,
             }),
             leak: Some(false),
             geo: None,
@@ -162,6 +164,8 @@ impl Harness {
             exit: Ok(ExitObservation {
                 ip: "192.0.2.77".parse().unwrap(),
                 latency_ms: 3,
+                connect_ms: None,
+                tls_ms: None,
             }),
             leak: Some(true),
             geo: None,
@@ -1340,6 +1344,8 @@ async fn geo_and_reputation_findings_are_stored_and_alerted() {
         exit: Ok(ExitObservation {
             ip: record.ip,
             latency_ms: 90,
+            connect_ms: None,
+            tls_ms: None,
         }),
         leak: Some(false),
         geo: Some(record),

@@ -37,7 +37,7 @@ use tokio::task::JoinSet;
 pub use host_ip::{HostIp, HostIpError};
 pub use probe::{
     EmulatedClientFactory, GeoLookup, GeoPolicy, HttpProber, ProbeClientError, ProbeClientFactory,
-    ProbeOutcome, Prober, parse_geo, parse_ip, profile_named, profile_names,
+    ProbeOutcome, Prober, parse_geo, parse_ip, profile_names,
 };
 pub use reputation::{AbuseIpDb, Reputation, ReputationError, ReputationProvider};
 

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM http_cookies\n             WHERE proxy_id = $1 AND (domain = $2 OR right(domain, length($2) + 1) = '.' || $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "07a3af0d71d5b2d2d8873771e5eb03509b79ebb9d7d7fa22910267719d3ee9d0"
+}

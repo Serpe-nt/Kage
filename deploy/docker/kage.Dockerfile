@@ -37,6 +37,9 @@ RUN expected="$(sed -n 's/^channel = "\(.*\)"$/\1/p' /tmp/rust-toolchain.toml)" 
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+# The recorded fingerprints of the http path; kage-http's build script embeds
+# them, so that `kage selftest http` has its expected values in the image.
+COPY tests/fixtures/fingerprints ./tests/fixtures/fingerprints
 # sqlx checks every query at compile time against this committed data, so the
 # build needs no database.
 COPY .sqlx ./.sqlx

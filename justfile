@@ -33,9 +33,9 @@ compose := "docker compose --file deploy/compose.yaml"
 images := "kage:dev kage-browser-chromium:dev kage-browser-firefox:dev"
 
 # Spec §21: these crates must keep at least this line coverage. kage-store
-# joined the list in M1 (docs/02-plan.md, M1 acceptance). The sidecar gate
-# (engine-core) lives in sidecar/vitest.config.ts.
-cov_gated_crates := "kage-core,kage-store,kage-proxy,kage-crawl,kage-extract"
+# joined the list in M1 and kage-http in M3 (docs/02-plan.md, acceptance of
+# each). The sidecar gate (engine-core) lives in sidecar/vitest.config.ts.
+cov_gated_crates := "kage-core,kage-store,kage-proxy,kage-http,kage-crawl,kage-extract"
 cov_min_lines := "80"
 
 # sqlx checks every query at compile time against the committed data in

@@ -31,8 +31,13 @@ use crate::secret::Secret;
 use crate::ssrf::SsrfPolicy;
 use crate::urlnorm::NormalizeOptions;
 
+mod http;
 mod proxies;
 
+pub use http::{
+    EngineConfig, EnginesConfig, HttpConfig, HttpSelftestConfig, MAX_REDIRECTS_LIMIT,
+    MAX_SUBRESOURCE_CONCURRENCY, SelftestConfig, SubresourceScope, SubresourcesConfig,
+};
 pub use proxies::{
     ProviderChoice, ProxiesConfig, ProxyHealthConfig, ReputationConfig, ResolvedProvider,
     StaticListError, StaticProxy, WEBSHARE_GENERAL_LIMIT_PER_MINUTE,
@@ -355,6 +360,15 @@ pub struct Config {
     /// The proxy pool.
     #[serde(default)]
     pub proxies: ProxiesConfig,
+    /// The http path.
+    #[serde(default)]
+    pub http: HttpConfig,
+    /// Self-tests.
+    #[serde(default)]
+    pub selftest: SelftestConfig,
+    /// The browser engines.
+    #[serde(default)]
+    pub engines: EnginesConfig,
     /// The policy files.
     #[serde(default)]
     pub policies: PoliciesConfig,
@@ -487,6 +501,7 @@ impl Config {
         }
         proxies::validate(&self.webshare, &self.reputation, &self.proxies)
             .map_err(ConfigError::Invalid)?;
+        http::validate(&self.http, &self.selftest, &self.engines).map_err(ConfigError::Invalid)?;
         match self.proxies.provider {
             ProviderChoice::Webshare if self.webshare.api_key.is_none() => {
                 return Err(ConfigError::MissingSecrets(vec!["KAGE__WEBSHARE__API_KEY"]));

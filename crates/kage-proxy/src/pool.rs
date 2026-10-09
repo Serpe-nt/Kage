@@ -43,12 +43,14 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use chrono::{DateTime, Utc};
 use kage_core::alert::{Alert, AlertKind, AlertSeverity, AlertSink};
 use kage_core::config::{Config, ResolvedProvider};
+// `ProxyEndpoint` lives in kage-core so that the http path can take one
+// without depending on this crate; it stays reachable under its old path.
+pub use kage_core::domain::ProxyEndpoint;
 use kage_core::domain::{
     CountryCode, HealthEvent, Proxy, ProxyProviderKind, ProxyScheme, ProxyState, ReplaceReason,
     SubjectKind,
 };
 use kage_core::ids::{HealthEventId, ProxyId};
-use kage_core::secret::Secret;
 use kage_core::seed::Seed;
 use kage_store::{Store, StoreError};
 use serde_json::json;
@@ -134,35 +136,6 @@ pub enum PoolEvent {
     },
     /// The `egress_unsafe` flag was set or cleared.
     EgressUnsafe(bool),
-}
-
-/// Where a proxy is and how to log in, with the credentials opened.
-#[derive(Debug, Clone)]
-pub struct ProxyEndpoint {
-    /// The proxy.
-    pub id: ProxyId,
-    /// Proxy host name or address.
-    pub host: String,
-    /// Proxy port.
-    pub port: u16,
-    /// Proxy user name.
-    pub username: Secret,
-    /// Proxy password.
-    pub password: Secret,
-    /// Proxy protocol.
-    pub scheme: ProxyScheme,
-}
-
-impl ProxyEndpoint {
-    /// The proxy as a URL without credentials, for example
-    /// `http://198.51.100.10:8080`. An IPv6 address is bracketed.
-    pub fn url(&self) -> String {
-        if self.host.contains(':') && !self.host.starts_with('[') {
-            format!("{}://[{}]:{}", self.scheme, self.host, self.port)
-        } else {
-            format!("{}://{}:{}", self.scheme, self.host, self.port)
-        }
-    }
 }
 
 /// What one sync with the provider did.

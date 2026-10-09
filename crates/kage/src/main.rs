@@ -2,15 +2,18 @@
 //!
 //! `serve` runs the API server and the proxy pool, `healthcheck` probes the
 //! server, `migrate` applies the database schema, `config check` validates
-//! the configuration, and `proxy` inspects and operates the proxy pool. The
-//! remaining commands (`selftest`, `persona`, `key`) land with the
-//! milestones that own them (see `docs/02-plan.md`).
+//! the configuration, `proxy` inspects and operates the proxy pool,
+//! `selftest http` checks the http path's fingerprint, and `echo serve`
+//! runs the fingerprint echo. The remaining commands (`persona`, `key`)
+//! land with the milestones that own them (see `docs/02-plan.md`).
 
 mod alerts;
 mod config_cmd;
+mod echo_cmd;
 mod healthcheck;
 mod migrate;
 mod proxy_cmd;
+mod selftest_cmd;
 mod serve;
 
 use std::net::SocketAddr;
@@ -85,6 +88,66 @@ enum Command {
     Proxy {
         #[command(subcommand)]
         command: ProxyCommand,
+    },
+    /// Check that Kage still looks like the browsers it presents as.
+    Selftest {
+        #[command(subcommand)]
+        command: SelftestCommand,
+    },
+    /// The fingerprint echo: a TLS server that tells a client what its
+    /// connection and request looked like on the wire.
+    Echo {
+        #[command(subcommand)]
+        command: EchoCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SelftestCommand {
+    /// Send one navigation through a proxy to a fingerprint echo and
+    /// compare JA4, the HTTP/2 fingerprint and the header order with the
+    /// values recorded for the profile. Exits non-zero when they differ.
+    ///
+    /// The echo is the operator's own when `selftest.http.echo_url` is set,
+    /// else the third-party one, which sees the proxy's exit address.
+    Http {
+        /// The proxy to leave through.
+        #[arg(long, value_name = "PROXY_ID")]
+        proxy: ProxyId,
+        /// The emulation profile to present as.
+        #[arg(
+            long,
+            value_name = "NAME",
+            help = "The emulation profile, for example chrome_149 or firefox_151"
+        )]
+        profile: String,
+        /// The operating system the profile claims: windows, macos or
+        /// linux.
+        #[arg(long, default_value = "windows", value_name = "OS")]
+        platform: String,
+        /// Ask this echo instead of the configured one.
+        #[arg(long, value_name = "URL")]
+        echo: Option<String>,
+        /// Print one JSON document instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum EchoCommand {
+    /// Serve the fingerprint echo until SIGINT or SIGTERM. Needs no
+    /// database and none of Kage's secrets.
+    Serve {
+        /// Socket address to listen on.
+        #[arg(long, env = "KAGE_ECHO_BIND", default_value = "0.0.0.0:8443")]
+        bind: SocketAddr,
+        /// PEM file with the certificate chain for the echo's host name.
+        #[arg(long, env = "KAGE_ECHO_CERT", value_name = "FILE")]
+        cert: PathBuf,
+        /// PEM file with the certificate's private key.
+        #[arg(long, env = "KAGE_ECHO_KEY", value_name = "FILE")]
+        key: PathBuf,
     },
 }
 
@@ -187,8 +250,45 @@ async fn main() -> anyhow::Result<()> {
         return config_cmd::check(config_file.as_deref(), process_env(), &mut stdout.lock());
     }
 
-    init_tracing(matches!(cli.command, Command::Proxy { .. }))?;
+    init_tracing(matches!(
+        cli.command,
+        Command::Proxy { .. } | Command::Selftest { .. }
+    ))?;
     match cli.command {
+        // The echo is a tool of its own: it reads no configuration.
+        Command::Echo {
+            command: EchoCommand::Serve { bind, cert, key },
+        } => {
+            let options = echo_cmd::EchoOptions { bind, cert, key };
+            echo_cmd::serve(&options, serve::shutdown_signal())
+                .await
+                .context("the fingerprint echo failed")
+        }
+        Command::Selftest {
+            command:
+                SelftestCommand::Http {
+                    proxy,
+                    profile,
+                    platform,
+                    echo,
+                    json,
+                },
+        } => {
+            let config = config_cmd::load(config_file.as_deref(), process_env())?;
+            let options = selftest_cmd::HttpSelftestOptions {
+                proxy,
+                profile,
+                platform,
+                echo,
+                json,
+            };
+            let mut out = Vec::new();
+            let result = selftest_cmd::http(&config, &options, &mut out).await;
+            // What was found is shown even when the self-test then fails.
+            std::io::Write::write_all(&mut std::io::stdout().lock(), &out)
+                .context("cannot write to stdout")?;
+            result
+        }
         Command::Serve { bind } => {
             let config = config_cmd::load(config_file.as_deref(), process_env())?;
             tracing::info!(
@@ -214,50 +314,57 @@ async fn main() -> anyhow::Result<()> {
             let config = config_cmd::load(config_file.as_deref(), process_env())?;
             // The result is written in one piece once the command is done.
             let mut out = Vec::new();
-            let result = match command {
-                ProxyCommand::List {
-                    state,
-                    all,
-                    sync,
-                    reveal_username,
-                    json,
-                } => {
-                    let options = proxy_cmd::ListOptions {
-                        state,
-                        // Asking for retired proxies implies seeing them.
-                        all: all || state == Some(ProxyState::Retired),
-                        sync,
-                        json,
-                        reveal_username,
-                    };
-                    proxy_cmd::list(&config, &options, &mut out).await
-                }
-                ProxyCommand::Health { ids, no_sync, json } => {
-                    let options = proxy_cmd::HealthOptions { ids, no_sync, json };
-                    proxy_cmd::health(&config, &options, &mut out).await
-                }
-                ProxyCommand::Replace {
-                    id,
-                    no_wait,
-                    wait_timeout,
-                    json,
-                } => {
-                    let options = proxy_cmd::ReplaceOptions {
-                        id,
-                        wait: (!no_wait).then(|| wait_timeout.get()),
-                        json,
-                    };
-                    proxy_cmd::replace(&config, &options, &mut out).await
-                }
-                ProxyCommand::Egress { clear, json } => {
-                    proxy_cmd::egress(&config, clear, json, &mut out).await
-                }
-            };
+            let result = proxy(&config, command, &mut out).await;
             // What was produced is shown even when the command then fails.
             std::io::Write::write_all(&mut std::io::stdout().lock(), &out)
                 .context("cannot write to stdout")?;
             result
         }
+    }
+}
+
+/// Runs one `kage proxy` command, writing its result to `out`.
+async fn proxy(
+    config: &kage_core::config::Config,
+    command: ProxyCommand,
+    out: &mut Vec<u8>,
+) -> anyhow::Result<()> {
+    match command {
+        ProxyCommand::List {
+            state,
+            all,
+            sync,
+            reveal_username,
+            json,
+        } => {
+            let options = proxy_cmd::ListOptions {
+                state,
+                // Asking for retired proxies implies seeing them.
+                all: all || state == Some(ProxyState::Retired),
+                sync,
+                json,
+                reveal_username,
+            };
+            proxy_cmd::list(config, &options, out).await
+        }
+        ProxyCommand::Health { ids, no_sync, json } => {
+            let options = proxy_cmd::HealthOptions { ids, no_sync, json };
+            proxy_cmd::health(config, &options, out).await
+        }
+        ProxyCommand::Replace {
+            id,
+            no_wait,
+            wait_timeout,
+            json,
+        } => {
+            let options = proxy_cmd::ReplaceOptions {
+                id,
+                wait: (!no_wait).then(|| wait_timeout.get()),
+                json,
+            };
+            proxy_cmd::replace(config, &options, out).await
+        }
+        ProxyCommand::Egress { clear, json } => proxy_cmd::egress(config, clear, json, out).await,
     }
 }
 
@@ -269,7 +376,9 @@ mod tests {
     use clap::{CommandFactory, Parser};
     use kage_core::domain::ProxyState;
 
-    use super::{COMPONENTS, Cli, Command, ConfigCommand, ProxyCommand};
+    use super::{
+        COMPONENTS, Cli, Command, ConfigCommand, EchoCommand, ProxyCommand, SelftestCommand,
+    };
 
     #[test]
     fn cli_definition_is_consistent() {
@@ -464,6 +573,137 @@ mod tests {
         ));
         assert!(Cli::try_parse_from(["kage", "proxy"]).is_err());
         assert!(Cli::try_parse_from(["kage", "proxy", "delete"]).is_err());
+    }
+
+    #[test]
+    fn selftest_http_needs_a_proxy_and_a_profile() {
+        let id = "0199c2f0-0000-7000-8000-000000000001";
+        let cli = Cli::try_parse_from([
+            "kage",
+            "selftest",
+            "http",
+            "--proxy",
+            id,
+            "--profile",
+            "chrome_149",
+        ])
+        .unwrap();
+        let Command::Selftest {
+            command:
+                SelftestCommand::Http {
+                    proxy,
+                    profile,
+                    platform,
+                    echo,
+                    json,
+                },
+        } = cli.command
+        else {
+            panic!("expected the selftest command, got {:?}", cli.command);
+        };
+        assert_eq!(proxy.to_string(), id);
+        assert_eq!(profile, "chrome_149");
+        assert_eq!(platform, "windows");
+        assert_eq!(echo, None);
+        assert!(!json);
+
+        let cli = Cli::try_parse_from([
+            "kage",
+            "selftest",
+            "http",
+            "--proxy",
+            id,
+            "--profile",
+            "firefox_151",
+            "--platform",
+            "macos",
+            "--echo",
+            "https://echo.example.org/",
+            "--json",
+        ])
+        .unwrap();
+        let Command::Selftest {
+            command:
+                SelftestCommand::Http {
+                    platform,
+                    echo,
+                    json,
+                    ..
+                },
+        } = cli.command
+        else {
+            panic!("expected the selftest command");
+        };
+        assert_eq!(platform, "macos");
+        assert_eq!(echo.as_deref(), Some("https://echo.example.org/"));
+        assert!(json);
+
+        for arguments in [
+            vec!["kage", "selftest"],
+            vec!["kage", "selftest", "http"],
+            vec!["kage", "selftest", "http", "--proxy", id],
+            vec!["kage", "selftest", "http", "--profile", "chrome_149"],
+            vec![
+                "kage",
+                "selftest",
+                "http",
+                "--proxy",
+                "seven",
+                "--profile",
+                "chrome_149",
+            ],
+            vec!["kage", "selftest", "browser"],
+        ] {
+            assert!(
+                Cli::try_parse_from(arguments.clone()).is_err(),
+                "{arguments:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn echo_serve_needs_a_certificate_and_a_key() {
+        let cli = Cli::try_parse_from([
+            "kage",
+            "echo",
+            "serve",
+            "--cert",
+            "/run/echo/cert.pem",
+            "--key",
+            "/run/echo/key.pem",
+        ])
+        .unwrap();
+        let Command::Echo {
+            command: EchoCommand::Serve { bind, cert, key },
+        } = cli.command
+        else {
+            panic!("expected the echo command, got {:?}", cli.command);
+        };
+        assert_eq!(bind.to_string(), "0.0.0.0:8443");
+        assert_eq!(cert, PathBuf::from("/run/echo/cert.pem"));
+        assert_eq!(key, PathBuf::from("/run/echo/key.pem"));
+
+        let cli = Cli::try_parse_from([
+            "kage",
+            "echo",
+            "serve",
+            "--bind",
+            "127.0.0.1:9443",
+            "--cert",
+            "c",
+            "--key",
+            "k",
+        ])
+        .unwrap();
+        let Command::Echo {
+            command: EchoCommand::Serve { bind, .. },
+        } = cli.command
+        else {
+            panic!("expected the echo command");
+        };
+        assert_eq!(bind.port(), 9443);
+        assert!(Cli::try_parse_from(["kage", "echo"]).is_err());
+        assert!(Cli::try_parse_from(["kage", "echo", "serve", "--bind", "nowhere"]).is_err());
     }
 
     #[test]

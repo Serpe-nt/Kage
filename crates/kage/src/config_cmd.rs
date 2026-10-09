@@ -47,6 +47,11 @@ pub(crate) fn check(
     kage_proxy::check_config(&config)
         .map_err(|problem| anyhow::anyhow!(problem))
         .context("configuration is invalid")?;
+    // And what only the http path can judge: that an engine's configured
+    // browser major has an emulation profile.
+    kage_http::check_config(&config)
+        .map_err(|problem| anyhow::anyhow!(problem))
+        .context("configuration is invalid")?;
     let static_proxies = match &config.proxies.static_list {
         Some(list) => StaticProxy::parse_list(list.expose())
             .context("configuration is invalid")?
@@ -70,6 +75,8 @@ pub(crate) fn check(
             "static_proxies": static_proxies,
             "reputation": config.reputation.abuseipdb_key.is_some(),
         },
+        // What the http path can present as in this build.
+        "http": kage_http::describe(&config),
     });
     serde_json::to_writer_pretty(&mut *out, &report).context("cannot write the report")?;
     writeln!(out).context("cannot write the report")?;
@@ -249,6 +256,76 @@ mod tests {
         let message = format!("{:#}", run(None, pairs).unwrap_err());
         assert!(message.contains("64 hexadecimal characters"), "{message}");
         assert!(!message.contains("not-a-key-5a5a"), "{message}");
+    }
+
+    #[test]
+    fn the_http_path_reports_its_profiles_and_refuses_an_engine_it_cannot_serve() {
+        let report: serde_json::Value =
+            serde_json::from_str(&run(None, env(&shipped_policies(), &[])).unwrap()).unwrap();
+        let http = &report["http"];
+        assert_eq!(http["exact_profiles"]["chromium"][7], 149);
+        assert_eq!(http["exact_profiles"]["firefox"][7], 151);
+        assert_eq!(http["verified_majors"], serde_json::json!([]));
+        assert!(http["engines"]["chromium"]["browser_major"].is_null());
+        assert_eq!(http["fingerprint_fixtures"], 48);
+        // The defaults of the new sections are part of the effective
+        // configuration.
+        assert_eq!(report["config"]["http"]["max_redirects"], 10);
+        assert_eq!(report["config"]["http"]["fetch_subresources"], false);
+        assert_eq!(
+            report["config"]["selftest"]["http"]["third_party_url"],
+            "https://tls.peet.ws/api/all"
+        );
+
+        // An engine whose browser has an exact profile.
+        let served: serde_json::Value = serde_json::from_str(
+            &run(
+                None,
+                env(
+                    &shipped_policies(),
+                    &[("KAGE__ENGINES__CHROMIUM__BROWSER_MAJOR", "149")],
+                ),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            served["http"]["engines"]["chromium"]["profile"],
+            "chrome_149"
+        );
+
+        // An engine upgrade past the profiles must not pass unnoticed.
+        let error = run(
+            None,
+            env(
+                &shipped_policies(),
+                &[("KAGE__ENGINES__FIREFOX__BROWSER_MAJOR", "152")],
+            ),
+        )
+        .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("configuration is invalid"), "{message}");
+        assert!(
+            message.contains("engines.firefox.browser_major"),
+            "{message}"
+        );
+        assert!(message.contains("firefox 152"), "{message}");
+
+        // Firefox on Linux cannot be the probe's profile.
+        let error = run(
+            None,
+            env(
+                &shipped_policies(),
+                &[
+                    ("KAGE__PROXIES__HEALTH__PROFILE", "firefox_151"),
+                    ("KAGE__PROXIES__HEALTH__PLATFORM", "linux"),
+                ],
+            ),
+        )
+        .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("proxies.health.profile"), "{message}");
+        assert!(message.contains("User-Agent"), "{message}");
     }
 
     #[test]

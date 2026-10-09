@@ -22,9 +22,10 @@ if [ "${#missing[@]}" -gt 0 ]; then
     exit 1
 fi
 
-# One script per check. M3 adds the HTTP fingerprint self-test.
+# One script per check.
 checks=(
     tests/live/proxy-health.sh
+    tests/live/http-selftest.sh
 )
 
 for check in "${checks[@]}"; do

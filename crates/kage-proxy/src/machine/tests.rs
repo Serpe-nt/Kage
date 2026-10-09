@@ -38,6 +38,8 @@ fn ok(at: DateTime<Utc>) -> ProbeReport {
         exit: Ok(ExitObservation {
             ip: ip(EXIT),
             latency_ms: 80,
+            connect_ms: None,
+            tls_ms: None,
         }),
         leak: Some(false),
         geo: None,
@@ -59,6 +61,8 @@ fn leaked(at: DateTime<Utc>) -> ProbeReport {
         exit: Ok(ExitObservation {
             ip: ip(HOST),
             latency_ms: 5,
+            connect_ms: None,
+            tls_ms: None,
         }),
         leak: Some(true),
         geo: None,

@@ -85,6 +85,12 @@ pub enum AlertKind {
     /// The host's own public address could not be learned, so the leak
     /// check cannot run.
     HostIpUnknown,
+    /// There is no emulation profile for an engine's browser major, so its
+    /// personas cannot use the http path (spec risk R7).
+    HttpProfileMissing,
+    /// The fingerprint self-test of the http path saw another JA4, HTTP/2
+    /// fingerprint or header order than the one recorded for the profile.
+    HttpSelftestFailed,
 }
 
 impl AlertKind {
@@ -106,6 +112,8 @@ impl AlertKind {
         Self::ProviderAccount,
         Self::ProviderSyncFailed,
         Self::HostIpUnknown,
+        Self::HttpProfileMissing,
+        Self::HttpSelftestFailed,
     ];
 
     /// The stable `snake_case` name used in logs and the store.
@@ -127,6 +135,8 @@ impl AlertKind {
             Self::ProviderAccount => "provider_account",
             Self::ProviderSyncFailed => "provider_sync_failed",
             Self::HostIpUnknown => "host_ip_unknown",
+            Self::HttpProfileMissing => "http_profile_missing",
+            Self::HttpSelftestFailed => "http_selftest_failed",
         }
     }
 }
@@ -299,6 +309,8 @@ mod tests {
                 "provider_account",
                 "provider_sync_failed",
                 "host_ip_unknown",
+                "http_profile_missing",
+                "http_selftest_failed",
             ]
         );
         // The serialized name is the stable name.

@@ -8,8 +8,8 @@ use sqlx::postgres::PgPoolOptions;
 use crate::StoreError;
 use crate::repo::{
     ApiKeyRepo, ArtifactRepo, AttemptRepo, AuditRepo, BreakerRepo, FrontierRepo, HealthEventRepo,
-    JobItemRepo, JobRepo, PersonaDomainStateRepo, PersonaRepo, ProxyRepo, RequestRepo,
-    ResponseCacheRepo, ResultRepo, RobotsCacheRepo, SelftestRepo, SessionRepo,
+    HttpCookieRepo, JobItemRepo, JobRepo, PersonaDomainStateRepo, PersonaRepo, ProxyRepo,
+    RequestRepo, ResponseCacheRepo, ResultRepo, RobotsCacheRepo, SelftestRepo, SessionRepo,
 };
 
 /// The migrations in `crates/kage-store/migrations`, embedded at compile time.
@@ -165,6 +165,11 @@ impl Store {
     /// Proxies.
     pub const fn proxies(&self) -> ProxyRepo<'_> {
         ProxyRepo::new(&self.pool)
+    }
+
+    /// Cookie jars of the http path.
+    pub const fn http_cookies(&self) -> HttpCookieRepo<'_> {
+        HttpCookieRepo::new(&self.pool)
     }
 
     /// Personas.

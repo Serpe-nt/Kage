@@ -108,6 +108,64 @@ proxies:
     profile: chrome_149
     platform: windows
 
+# The http path (spec §9): wreq with a browser's TLS, HTTP/2 and headers.
+http:
+  # Longest one attempt may take: every redirect hop and the body together.
+  timeout: 30s
+  # Longest the setup of one connection may take: tunnel and TLS handshake.
+  connect_timeout: 15s
+  # How long an unused connection is kept open for the next request.
+  idle_connection_timeout: 5m
+  # Redirect hops followed before the attempt fails. Every hop passes the
+  # SSRF guard again.
+  max_redirects: 10
+  # A body is read up to this many bytes; the rest is dropped and the
+  # result says so.
+  max_body_bytes: 10000000
+  # Session cookies are forgotten when a cookie jar was not used for this
+  # long: the user closed the browser.
+  session_cookie_idle: 12h
+  # After a page, fetch its own stylesheets, scripts and icon, as the first
+  # paint of a browser would. Costs bandwidth; helps only against checks
+  # that look for a client that never asks for an asset.
+  fetch_subresources: false
+  subresources:
+    # same_site | same_origin. Assets of other sites are never fetched.
+    scope: same_site
+    # Most assets per page, the icon included, and most in flight at once.
+    max: 12
+    max_concurrent: 6
+    max_bytes_each: 2000000
+    max_bytes_total: 8000000
+
+selftest:
+  # The fingerprint self-test of the http path (spec §7.4): JA4, the HTTP/2
+  # fingerprint and the header order, compared with the values recorded in
+  # tests/fixtures/fingerprints/.
+  http:
+    # The operator's own echo (`kage echo serve`), reached through a proxy.
+    # null: the service runs no scheduled self-test.
+    echo_url: null
+    # PEM file with the certificate authority of that echo, when it is not
+    # a public one.
+    echo_ca_file: null
+    # An echo run by someone else. Only `kage selftest http` and the gated
+    # live suite ask it, never the service on a timer.
+    third_party_url: https://tls.peet.ws/api/all
+    interval: 1d
+    timeout: 30s
+
+# The browser engines (spec §6.1).
+engines:
+  chromium:
+    # Major version of the Chrome the engine image bundles; null until M4
+    # pins it. A set major must resolve to an emulation profile.
+    browser_major: null
+  firefox:
+    # Major version of the Firefox that Camoufox is built from; null until
+    # M5 pins it.
+    browser_major: null
+
 policies:
   # Directory with domains.yaml, block-signatures.yaml, pacing-profiles.yaml.
   dir: policies

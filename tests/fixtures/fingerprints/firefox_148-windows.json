@@ -1,0 +1,19 @@
+{
+  "profile": "firefox_148",
+  "os": "windows",
+  "ja4": "t13d1717h2_5b57614c22b0_3cbfd9057e0d",
+  "akamai": "1:65536;2:0;4:131072;5:16384|12517377|0|m,p,a,s",
+  "headers": [
+    "user-agent",
+    "accept",
+    "accept-language",
+    "accept-encoding",
+    "upgrade-insecure-requests",
+    "sec-fetch-dest",
+    "sec-fetch-mode",
+    "sec-fetch-site",
+    "sec-fetch-user",
+    "priority",
+    "te"
+  ]
+}

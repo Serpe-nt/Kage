@@ -18,7 +18,10 @@ pub(crate) fn subject_of(kind: AlertKind) -> SubjectKind {
         | AlertKind::ReputationUsageTypeSuspicious
         | AlertKind::ReplacementBudgetExhausted
         | AlertKind::ReplacementFailed
-        | AlertKind::ProviderReplacedProxy => SubjectKind::Proxy,
+        | AlertKind::ProviderReplacedProxy
+        // Until personas exist the self-test is about the proxy it ran
+        // through.
+        | AlertKind::HttpSelftestFailed => SubjectKind::Proxy,
         // The pool as a whole, the provider account and the host. Kinds
         // added by later milestones land here too until they are mapped.
         _ => SubjectKind::System,
@@ -81,6 +84,7 @@ mod tests {
             AlertKind::ReplacementBudgetExhausted,
             AlertKind::ReplacementFailed,
             AlertKind::ProviderReplacedProxy,
+            AlertKind::HttpSelftestFailed,
         ];
         let about_the_system = [
             AlertKind::EgressUnsafe,
@@ -91,6 +95,7 @@ mod tests {
             AlertKind::ProviderAccount,
             AlertKind::ProviderSyncFailed,
             AlertKind::HostIpUnknown,
+            AlertKind::HttpProfileMissing,
         ];
         for kind in about_one_proxy {
             assert_eq!(subject_of(kind), SubjectKind::Proxy, "{kind:?}");

@@ -9,8 +9,8 @@ use common::TestDb;
 use kage_core::config::Config;
 use kage_store::{Store, StoreError};
 
-/// Every table spec §18 names.
-const SPEC_TABLES: [&str; 18] = [
+/// Every table spec §18 names, and `http_cookies` (milestone M3).
+const SPEC_TABLES: [&str; 19] = [
     "api_keys",
     "artifacts",
     "attempts",
@@ -18,6 +18,7 @@ const SPEC_TABLES: [&str; 18] = [
     "crawl_frontier",
     "domain_breakers",
     "health_events",
+    "http_cookies",
     "job_items",
     "jobs",
     "persona_domain_state",

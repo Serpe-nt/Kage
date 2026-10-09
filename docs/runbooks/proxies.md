@@ -105,6 +105,12 @@ probes every proxy once and prints the result, latency, exit address and
 country; healthy proxies become `healthy`. From then on `kage serve` keeps
 the pool by itself.
 
+Next to the total latency, `health` shows how long the proxy took to open
+the tunnel (`TUNNEL`: TCP to the proxy plus its CONNECT) and how long the
+TLS handshake through it took (`TLS`). Every new connection a persona opens
+pays the first two again, so a proxy with a slow tunnel is slow on every
+first request to a host, however quickly it answers afterwards.
+
 ## States
 
 ```

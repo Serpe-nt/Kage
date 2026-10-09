@@ -1,0 +1,148 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT domain, host_only, path, name, value, secure, http_only, same_site,\n                    expires_at, created_at, last_used_at\n             FROM http_cookies\n             WHERE proxy_id = $1\n             ORDER BY ordinal",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "domain",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "http_cookies",
+            "name": "domain"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "host_only",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "http_cookies",
+            "name": "host_only"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "path",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "http_cookies",
+            "name": "path"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "http_cookies",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "value",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "http_cookies",
+            "name": "value"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "secure",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "http_cookies",
+            "name": "secure"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "http_only",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "http_cookies",
+            "name": "http_only"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "same_site",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "http_cookies",
+            "name": "same_site"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "http_cookies",
+            "name": "expires_at"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "http_cookies",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "last_used_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "http_cookies",
+            "name": "last_used_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "04de34977359ee11d8f516bb6dcd2c5c98d6e2f2b4f9121925c42d7ec0b6b432"
+}

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use super::CountryCode;
 use crate::ids::ProxyId;
 use crate::macros::string_enum;
-use crate::secret::SealedSecret;
+use crate::secret::{SealedSecret, Secret};
 
 string_enum! {
     /// Where a proxy record comes from.
@@ -56,6 +56,39 @@ impl ProxyState {
     /// `retired`.
     pub const fn is_live(self) -> bool {
         !matches!(self, Self::Retired)
+    }
+}
+
+/// Where a proxy is and how to log in, with the credentials opened.
+///
+/// It is what the pool hands to anything that must send traffic through a
+/// proxy: the health probes and the http path. `Debug` prints the
+/// credentials redacted.
+#[derive(Debug, Clone)]
+pub struct ProxyEndpoint {
+    /// The proxy.
+    pub id: ProxyId,
+    /// Proxy host name or address.
+    pub host: String,
+    /// Proxy port.
+    pub port: u16,
+    /// Proxy user name.
+    pub username: Secret,
+    /// Proxy password.
+    pub password: Secret,
+    /// Proxy protocol.
+    pub scheme: ProxyScheme,
+}
+
+impl ProxyEndpoint {
+    /// The proxy as a URL without credentials, for example
+    /// `http://198.51.100.10:8080`. An IPv6 address is bracketed.
+    pub fn url(&self) -> String {
+        if self.host.contains(':') && !self.host.starts_with('[') {
+            format!("{}://[{}]:{}", self.scheme, self.host, self.port)
+        } else {
+            format!("{}://{}:{}", self.scheme, self.host, self.port)
+        }
     }
 }
 
@@ -141,6 +174,14 @@ pub struct ProxyHealth {
     /// Round-trip time of the probe, including the new tunnel.
     #[serde(default)]
     pub latency_ms: Option<u32>,
+    /// Of the round trip, opening the tunnel through the proxy: TCP to the
+    /// proxy and the `CONNECT`. A proxy that is slow here is slow on every
+    /// new connection, whatever the target.
+    #[serde(default)]
+    pub connect_ms: Option<u32>,
+    /// Of the round trip, the TLS handshake with the echo.
+    #[serde(default)]
+    pub tls_ms: Option<u32>,
     /// The address the echo service saw.
     #[serde(default)]
     pub exit_ip: Option<IpAddr>,
@@ -183,6 +224,8 @@ impl ProxyHealth {
             reachable,
             failure: None,
             latency_ms: None,
+            connect_ms: None,
+            tls_ms: None,
             exit_ip: None,
             exit_country: None,
             country_match: None,

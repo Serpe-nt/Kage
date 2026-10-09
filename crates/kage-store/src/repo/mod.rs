@@ -4,6 +4,7 @@
 mod access;
 mod artifacts;
 mod caches;
+mod cookies;
 mod events;
 mod fetch;
 mod jobs;
@@ -13,6 +14,7 @@ mod proxies;
 pub use access::{ApiKeyRepo, AuditRepo, SessionRepo};
 pub use artifacts::ArtifactRepo;
 pub use caches::{ResponseCacheEntry, ResponseCacheRepo, RobotsCacheEntry, RobotsCacheRepo};
+pub use cookies::HttpCookieRepo;
 pub use events::{BreakerRepo, HealthEventRepo, SelftestRepo};
 pub use fetch::{AttemptRepo, RequestRepo, ResultRepo};
 pub use jobs::{FrontierRepo, JobItemRepo, JobRepo};

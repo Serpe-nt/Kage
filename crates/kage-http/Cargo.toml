@@ -13,7 +13,48 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-# Fingerprint-critical. Unused until M3. Declared now so the pins are locked
-# and the BoringSSL toolchain (cmake, clang, perl, go) is exercised in CI.
-wreq = { workspace = true }
-wreq-util = { workspace = true }
+kage-core = { workspace = true }
+kage-store = { workspace = true }
+
+async-trait = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
+futures-util = { workspace = true }
+http = { workspace = true }
+# Reads a response body frame by frame, so the size cap can stop it.
+http-body-util = { workspace = true }
+psl = { workspace = true }
+# The fingerprint echo: TLS termination and the JA4 hash.
+rustls = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+tokio-rustls = { workspace = true }
+# `Layer` and `Service` for the connection timing layer.
+tower = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+webpki-root-certs = { workspace = true }
+# Fingerprint-critical; the only HTTP client in the workspace. The decoders
+# are on because a client advertises them like the browser it emulates and
+# must be able to read what it asks for. `cookies` is the per-request cookie
+# hook: wreq asks the jar once it knows whether the connection is HTTP/2.
+wreq = { workspace = true, features = ["brotli", "cookies", "deflate", "gzip", "zstd"] }
+# The hook that fixes the order and casing of request headers on the wire.
+wreq-proto = { workspace = true }
+# `emulation-compression` makes a profile carry the browser's
+# `Accept-Encoding`; `emulation-serde` parses a profile name such as
+# `chrome_149`.
+wreq-util = { workspace = true, features = ["emulation-compression", "emulation-serde"] }
+
+[dev-dependencies]
+flate2 = { workspace = true }
+rcgen = { workspace = true }
+# The store-backed cookie jar is tested against a real Postgres.
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true, features = ["postgres"] }
+tower = { workspace = true, features = ["util"] }
+tokio = { workspace = true, features = ["io-util", "net", "rt-multi-thread", "test-util"] }
+wiremock = { workspace = true }

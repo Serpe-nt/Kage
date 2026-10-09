@@ -32,3 +32,6 @@ Thumbs.db
 
 # Research notes kept out of git on purpose (see CLAUDE.md)
 bot-detection-landscape.md
+
+# The fingerprint echo's certificate and key (docs/runbooks/fingerprint-echo.md)
+deploy/echo-tls/

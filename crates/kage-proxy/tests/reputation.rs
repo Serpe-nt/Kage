@@ -275,6 +275,8 @@ impl Prober for EveryProxyAnswers {
             exit: Ok(ExitObservation {
                 ip: target.host.parse().unwrap(),
                 latency_ms: 40,
+                connect_ms: None,
+                tls_ms: None,
             }),
             geo_attempted: false,
             geo: None,

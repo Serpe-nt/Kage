@@ -103,7 +103,7 @@ mod tests {
         assert_eq!(
             check_config(&config(&[
                 ("KAGE__PROXIES__HEALTH__PROFILE", "firefox_151"),
-                ("KAGE__PROXIES__HEALTH__PLATFORM", "linux"),
+                ("KAGE__PROXIES__HEALTH__PLATFORM", "macos"),
                 ("KAGE__PROXIES__STATIC_LIST", "198.51.100.10:8080:user:pass"),
             ])),
             Ok(())

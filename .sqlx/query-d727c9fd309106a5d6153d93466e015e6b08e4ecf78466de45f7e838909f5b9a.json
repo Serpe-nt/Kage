@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO http_cookies (proxy_id, domain, host_only, path, name, value, secure,\n                                           http_only, same_site, expires_at, created_at,\n                                           last_used_at, ordinal)\n                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Bool",
+        "Text",
+        "Text",
+        "Text",
+        "Bool",
+        "Bool",
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Timestamptz",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d727c9fd309106a5d6153d93466e015e6b08e4ecf78466de45f7e838909f5b9a"
+}

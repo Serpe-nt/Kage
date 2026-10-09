@@ -14,6 +14,8 @@ workspace = true
 
 [dependencies]
 kage-core = { workspace = true }
+# The probe client is a client of the http path.
+kage-http = { workspace = true }
 kage-store = { workspace = true }
 
 async-trait = { workspace = true }
@@ -27,14 +29,10 @@ tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tracing = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
-# Fingerprint-critical; the only HTTP client in the workspace. The decoders
-# are on because the probe client advertises them like the browser it
-# emulates, and a client must be able to read what it asks for.
+# Fingerprint-critical; the only HTTP client in the workspace. Here it talks
+# to the provider's API, the host address echo and the reputation lookup,
+# plainly and without emulation. Probes go through kage-http.
 wreq = { workspace = true, features = ["brotli", "deflate", "gzip", "zstd"] }
-# `emulation-compression` makes the emulated profile send `Accept-Encoding`
-# as the real browser does; `emulation-serde` parses a profile name such as
-# `chrome_149` from configuration.
-wreq-util = { workspace = true, features = ["emulation-compression", "emulation-serde"] }
 zeroize = { workspace = true }
 
 [dev-dependencies]

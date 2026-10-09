@@ -139,9 +139,9 @@ The suite is `tests/live/run.sh`, one script per check:
 | Check | Since | What it does |
 |---|---|---|
 | `tests/live/proxy-health.sh` | M2 | Reads the real proxy list into a throwaway Postgres and probes every proxy once with `kage proxy health`. Passes when the list has the expected number of proxies and each answers with a latency and a country. Contacts the Webshare API and the endpoints of `proxies.health` only ([proxies.md](proxies.md)). Its output names no proxy address. |
+| `tests/live/http-selftest.sh` | M3 | Reads the real proxy list into a throwaway Postgres, picks two proxies by the date, and runs `kage selftest http` through each, one as the newest Chrome profile and one as the newest Firefox profile. Passes when both fingerprints equal the recorded ones. Contacts the Webshare API and one fingerprint echo: the operator's own when `KAGE__SELFTEST__HTTP__ECHO_URL` is set, else the third-party echo of `selftest.http.third_party_url`, which sees the two exit addresses ([fingerprint-echo.md](fingerprint-echo.md)). Requests no replacement. |
 
-The HTTP fingerprint self-test follows in M3; M12 wires the workflow
-completely.
+M12 wires the workflow completely.
 
 To run it locally:
 

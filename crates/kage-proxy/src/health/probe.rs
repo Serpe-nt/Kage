@@ -14,17 +14,28 @@
 //! # The client-factory seam
 //!
 //! A probe gets its HTTP client from a [`ProbeClientFactory`]. Until
-//! personas exist the factory is [`EmulatedClientFactory`]: a fresh wreq
-//! client per request, built from one wreq-util emulation profile named in
-//! the configuration, so the probe presents the TLS, HTTP/2 and header
-//! fingerprint of a current browser. A fresh client means a fresh tunnel
-//! every time, so the measured latency includes the `CONNECT`.
+//! personas exist the factory is [`EmulatedClientFactory`]: a fresh client
+//! of the http path (`kage-http`) per request, with one emulation profile
+//! named in the configuration, so the probe presents the TLS, HTTP/2 and
+//! header fingerprint of a current browser. A fresh client means a fresh
+//! tunnel every time, without cookies, so the measured latency includes the
+//! `CONNECT` and the handshake.
 //!
-//! Milestones M3 and M6 replace the factory with one that returns the
-//! client of the persona bound to the proxy, so that a probe is
-//! indistinguishable from that persona's other traffic. A factory must
-//! return a client whose every request goes through the given proxy and
-//! nowhere else: no environment proxy, no direct fallback.
+//! Milestone M6 replaces the factory with one that returns the client of
+//! the persona bound to the proxy, so that a probe is indistinguishable
+//! from that persona's other traffic. A factory must return a client whose
+//! every request goes through the given proxy and nowhere else: no
+//! environment proxy, no direct fallback. Every client of `kage-http` is
+//! built that way.
+//!
+//! # Where the time goes
+//!
+//! A probe reports its whole round trip and, separately, what opening the
+//! connection cost: the tunnel through the proxy (TCP to the proxy and the
+//! `CONNECT`, which includes the proxy dialling the echo) and the TLS
+//! handshake. A proxy that is slow to open tunnels is slow on every new
+//! connection a persona makes, whatever the target, so the two are kept
+//! apart (follow-up F2 of the M2 live check).
 
 use std::fmt;
 use std::net::IpAddr;
@@ -32,12 +43,15 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use kage_core::config::ProxyHealthConfig;
-use kage_core::domain::{CountryCode, HealthFailure};
-use tokio::time::Instant;
-use wreq_util::{Emulation, Platform, Profile};
+use kage_core::domain::{CountryCode, HealthFailure, ProxyEndpoint};
+use kage_http::headers::{DEFAULT_LANGUAGES, Identity, IdentityOverride};
+use kage_http::profile::{self, ProfileError};
+use kage_http::{
+    ClientFactory, ClientSpec, FetchSpec, HttpClient, HttpError, HttpSettings, ProfileChoice,
+};
+use url::Url;
 
 use crate::machine::ExitObservation;
-use crate::pool::ProxyEndpoint;
 
 /// Longest body an echo or geo endpoint may send. An address is a few
 /// dozen bytes and a geo record a few hundred.
@@ -114,7 +128,12 @@ pub enum ProbeClientError {
         /// The names this build knows.
         known: String,
     },
-    /// The configured platform is not one wreq-util knows.
+    /// The configured profile is not a desktop Chrome or Firefox profile.
+    #[error(
+        "emulation profile {0:?} is not a desktop Chrome or Firefox profile; the http path supports only those"
+    )]
+    UnsupportedProfile(String),
+    /// The configured platform is not one a persona can claim.
     #[error("unknown platform {0:?}; use windows, macos or linux")]
     UnknownPlatform(String),
     /// The HTTP client could not be built.
@@ -122,132 +141,95 @@ pub enum ProbeClientError {
     Build(String),
 }
 
+impl From<ProfileError> for ProbeClientError {
+    fn from(error: ProfileError) -> Self {
+        match error {
+            ProfileError::Unknown { name, known } => Self::UnknownProfile { name, known },
+            ProfileError::Unsupported(name) => Self::UnsupportedProfile(name),
+            ProfileError::UnknownPlatform(name) => Self::UnknownPlatform(name),
+            other @ ProfileError::MissingHeader { .. } => Self::Build(other.to_string()),
+        }
+    }
+}
+
 /// Builds the HTTP client a probe uses for one proxy. See the module
 /// documentation for the contract.
 pub trait ProbeClientFactory: Send + Sync + fmt::Debug {
-    /// A client whose every request goes through `target` and nowhere else.
+    /// A client of the http path whose every request goes through `target`
+    /// and nowhere else.
     ///
     /// # Errors
     ///
     /// Fails when the client cannot be built.
-    fn client(&self, target: &ProxyEndpoint) -> Result<wreq::Client, ProbeClientError>;
+    fn client(&self, target: &ProxyEndpoint) -> Result<HttpClient, ProbeClientError>;
 }
 
-/// The probe client until personas exist: one wreq-util emulation profile
-/// for every proxy, a fresh client per request.
-#[derive(Clone)]
+/// The probe client until personas exist: one emulation profile for every
+/// proxy, a fresh client of the http path per request.
+#[derive(Debug)]
 pub struct EmulatedClientFactory {
-    profile: Profile,
-    platform: Platform,
-    timeout: Duration,
-}
-
-impl fmt::Debug for EmulatedClientFactory {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("EmulatedClientFactory")
-            .field("profile", &self.profile)
-            .field("platform", &self.platform)
-            .field("timeout", &self.timeout)
-            .finish()
-    }
+    factory: ClientFactory,
+    spec: ClientSpec,
 }
 
 impl EmulatedClientFactory {
-    /// A factory for a profile and platform.
-    pub const fn new(profile: Profile, platform: Platform, timeout: Duration) -> Self {
-        Self {
-            profile,
-            platform,
-            timeout,
-        }
+    /// A factory for a profile, with `timeout` as the limit of one request
+    /// and of its connection setup.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the profile's own identity must not be used (wreq-util's
+    /// Firefox on Linux claims an Ubuntu build; only a persona can supply
+    /// the real one).
+    pub fn new(profile: ProfileChoice, timeout: Duration) -> Result<Self, ProbeClientError> {
+        Identity::new(&profile, &DEFAULT_LANGUAGES, &IdentityOverride::default())
+            .map_err(|error| ProbeClientError::Build(error.to_string()))?;
+        Ok(Self {
+            factory: ClientFactory::in_memory(HttpSettings {
+                timeout,
+                connect_timeout: timeout,
+                max_body_bytes: MAX_BODY_BYTES,
+                ..HttpSettings::default()
+            }),
+            spec: ClientSpec::new(profile),
+        })
     }
 
     /// The factory the configuration names.
     ///
     /// # Errors
     ///
-    /// Fails when the profile or the platform is not one wreq-util ships.
+    /// Fails when the profile or the platform is not one the http path
+    /// supports.
     pub fn from_config(config: &ProxyHealthConfig) -> Result<Self, ProbeClientError> {
-        Ok(Self::new(
-            profile_named(&config.profile)?,
-            platform_named(&config.platform)?,
+        let os = profile::os_named(&config.platform)?;
+        Self::new(
+            ProfileChoice::named(&config.profile, os)?,
             config.timeout.get(),
-        ))
+        )
     }
 
     /// The emulation profile.
-    pub const fn profile(&self) -> Profile {
-        self.profile
+    pub const fn profile(&self) -> &ProfileChoice {
+        &self.spec.profile
     }
-}
-
-/// The wreq-util profile with this name, for example `chrome_149`.
-///
-/// # Errors
-///
-/// Fails when this build of wreq-util has no such profile; the error lists
-/// the Chrome and Firefox profiles it has.
-pub fn profile_named(name: &str) -> Result<Profile, ProbeClientError> {
-    serde_json::from_value(serde_json::Value::String(name.to_owned())).map_err(|_| {
-        ProbeClientError::UnknownProfile {
-            name: name.to_owned(),
-            known: profile_names()
-                .into_iter()
-                .filter(|known| known.starts_with("chrome_") || known.starts_with("firefox_"))
-                .collect::<Vec<_>>()
-                .join(", "),
-        }
-    })
 }
 
 /// The name of every emulation profile this build of wreq-util ships.
 pub fn profile_names() -> Vec<String> {
-    Profile::VARIANTS
-        .iter()
-        .filter_map(|profile| match serde_json::to_value(profile) {
-            Ok(serde_json::Value::String(name)) => Some(name),
-            _ => None,
-        })
-        .collect()
-}
-
-fn platform_named(name: &str) -> Result<Platform, ProbeClientError> {
-    match name {
-        "windows" => Ok(Platform::Windows),
-        "macos" => Ok(Platform::MacOS),
-        "linux" => Ok(Platform::Linux),
-        other => Err(ProbeClientError::UnknownPlatform(other.to_owned())),
-    }
+    profile::profile_names()
 }
 
 impl ProbeClientFactory for EmulatedClientFactory {
-    fn client(&self, target: &ProxyEndpoint) -> Result<wreq::Client, ProbeClientError> {
-        // The error of a proxy URL can quote the URL; it holds no
-        // credentials here, they are added as a header below.
-        let proxy = wreq::Proxy::all(target.url())
-            .map_err(|error| ProbeClientError::Build(error.to_string()))?
-            .basic_auth(target.username.expose(), target.password.expose());
-        wreq::Client::builder()
-            .emulation(
-                Emulation::builder()
-                    .profile(self.profile)
-                    .platform(self.platform)
-                    .build(),
-            )
-            // Setting a proxy also switches off every proxy named in the
-            // environment; there is no direct fallback.
-            .proxy(proxy)
-            // An echo has no reason to redirect, and a probe must never be
-            // sent on to another site.
-            .redirect(wreq::redirect::Policy::none())
-            .timeout(self.timeout)
-            .connect_timeout(self.timeout)
-            .build()
-            .map_err(|_| ProbeClientError::Build("the HTTP client rejected its options".to_owned()))
+    fn client(&self, target: &ProxyEndpoint) -> Result<HttpClient, ProbeClientError> {
+        // No error of the http path quotes the proxy's credentials.
+        self.factory
+            .ephemeral(&self.spec, target)
+            .map_err(|error| ProbeClientError::Build(error.to_string()))
     }
 }
 
-/// Probes through wreq.
+/// Probes through the http path.
 #[derive(Debug)]
 pub struct HttpProber<F = EmulatedClientFactory> {
     factory: F,
@@ -270,6 +252,18 @@ impl HttpProber<EmulatedClientFactory> {
     }
 }
 
+/// What reading one endpoint through a proxy gave.
+struct Read {
+    body: String,
+    latency_ms: u32,
+    connect_ms: Option<u32>,
+    tls_ms: Option<u32>,
+}
+
+fn millis(value: u64) -> u32 {
+    u32::try_from(value).unwrap_or(u32::MAX)
+}
+
 impl<F: ProbeClientFactory> HttpProber<F> {
     /// A prober with its own client factory and the configured endpoints.
     pub fn new(factory: F, config: &ProxyHealthConfig) -> Self {
@@ -282,57 +276,50 @@ impl<F: ProbeClientFactory> HttpProber<F> {
     }
 
     /// Reads one endpoint through the proxy with a fresh client.
-    async fn read(
-        &self,
-        target: &ProxyEndpoint,
-        url: &str,
-    ) -> Result<(String, u32), HealthFailure> {
+    async fn read(&self, target: &ProxyEndpoint, url: &str) -> Result<Read, HealthFailure> {
         let client = self.factory.client(target).map_err(|error| {
             tracing::error!(proxy = %target.id, %error, "cannot build the probe client");
             HealthFailure::Unreachable
         })?;
-        let started = Instant::now();
-        let response = client.get(url).send().await.map_err(|error| {
-            let failure = if is_proxy_auth(&error) {
+        let url = Url::parse(url).map_err(|error| {
+            tracing::error!(proxy = %target.id, %error, "a probe endpoint is not a URL");
+            HealthFailure::Unreachable
+        })?;
+        // An endpoint the operator configured: it is not followed anywhere
+        // else, and it may be on this machine.
+        let mut spec = FetchSpec::operator_get(url);
+        spec.max_body_bytes = Some(MAX_BODY_BYTES);
+        let fetched = client.fetch(&spec).await.map_err(|error| {
+            let failure = if matches!(error, HttpError::ProxyAuth) {
                 HealthFailure::ProxyAuth
             } else {
                 HealthFailure::Unreachable
             };
-            // The error text can hold the proxy URL, so only its kind is
-            // logged.
             tracing::debug!(
                 proxy = %target.id,
                 timeout = error.is_timeout(),
-                connect = error.is_connect(),
-                proxy_connect = error.is_proxy_connect(),
+                proxy_side = error.is_proxy_failure(),
                 failure = failure.as_str(),
                 "probe request failed"
             );
             failure
         })?;
-        let status = response.status();
-        if status == wreq::StatusCode::PROXY_AUTHENTICATION_REQUIRED {
+        if fetched.status == 407 {
             return Err(HealthFailure::ProxyAuth);
         }
-        if !status.is_success() {
-            tracing::debug!(proxy = %target.id, status = status.as_u16(), "probe answered with an error status");
+        if !(200..300).contains(&fetched.status) {
+            tracing::debug!(proxy = %target.id, status = fetched.status, "probe answered with an error status");
             return Err(HealthFailure::Unreachable);
         }
-        if response
-            .content_length()
-            .is_some_and(|length| length > MAX_BODY_BYTES as u64)
-        {
+        if fetched.truncated {
             return Err(HealthFailure::Unreachable);
         }
-        let body = response
-            .bytes()
-            .await
-            .map_err(|_| HealthFailure::Unreachable)?;
-        let latency = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);
-        if body.len() > MAX_BODY_BYTES {
-            return Err(HealthFailure::Unreachable);
-        }
-        Ok((String::from_utf8_lossy(&body).into_owned(), latency))
+        Ok(Read {
+            body: fetched.text(),
+            latency_ms: millis(fetched.timing.total_ms),
+            connect_ms: fetched.timing.connect_ms.map(millis),
+            tls_ms: fetched.timing.tls_ms.map(millis),
+        })
     }
 
     async fn read_exit(
@@ -340,9 +327,14 @@ impl<F: ProbeClientFactory> HttpProber<F> {
         target: &ProxyEndpoint,
         url: &str,
     ) -> Result<ExitObservation, HealthFailure> {
-        let (body, latency_ms) = self.read(target, url).await?;
-        let ip = parse_ip(&body).ok_or(HealthFailure::Unreachable)?;
-        Ok(ExitObservation { ip, latency_ms })
+        let read = self.read(target, url).await?;
+        let ip = parse_ip(&read.body).ok_or(HealthFailure::Unreachable)?;
+        Ok(ExitObservation {
+            ip,
+            latency_ms: read.latency_ms,
+            connect_ms: read.connect_ms,
+            tls_ms: read.tls_ms,
+        })
     }
 }
 
@@ -373,7 +365,7 @@ impl<F: ProbeClientFactory> Prober for HttpProber<F> {
         {
             geo_attempted = true;
             lookup = match self.read(target, url).await {
-                Ok((body, _)) => parse_geo(&body),
+                Ok(read) => parse_geo(&read.body),
                 Err(_) => None,
             };
             if lookup.is_none() {
@@ -386,18 +378,6 @@ impl<F: ProbeClientFactory> Prober for HttpProber<F> {
             geo: lookup,
         }
     }
-}
-
-/// Whether the proxy refused the credentials while the tunnel was set up.
-fn is_proxy_auth(error: &wreq::Error) -> bool {
-    let mut source: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(error);
-    while let Some(cause) = source {
-        if cause.to_string().contains("proxy authorization required") {
-            return true;
-        }
-        source = cause.source();
-    }
-    false
 }
 
 /// Reads the caller's address from an echo's answer: a bare address, a JSON
@@ -509,14 +489,15 @@ mod tests {
     use std::time::Duration;
 
     use kage_core::config::ProxyHealthConfig;
+    use kage_core::domain::{ClaimedOs, ProxyEndpoint};
     use kage_core::ids::ProxyId;
     use kage_core::secret::Secret;
+    use kage_http::ProfileChoice;
 
     use super::{
         EmulatedClientFactory, GeoPolicy, ProbeClientError, ProbeClientFactory, parse_geo,
-        parse_ip, profile_named, profile_names, split_org,
+        parse_ip, profile_names, split_org,
     };
-    use crate::pool::ProxyEndpoint;
 
     fn ip(text: &str) -> IpAddr {
         text.parse().unwrap()
@@ -673,8 +654,9 @@ mod tests {
 
         let factory = EmulatedClientFactory::from_config(&config).unwrap();
 
-        assert_eq!(factory.profile(), profile_named("chrome_149").unwrap());
-        assert!(format!("{factory:?}").contains("Chrome149"));
+        assert_eq!(factory.profile().name(), "chrome_149");
+        assert_eq!(factory.profile().os(), ClaimedOs::Windows);
+        assert!(format!("{factory:?}").contains("chrome_149"));
         // The default is the newest Chrome this build of wreq-util ships:
         // when the pin moves, the default must move with it.
         let newest_chrome = profile_names()
@@ -693,10 +675,21 @@ mod tests {
         };
         let error = EmulatedClientFactory::from_config(&config).unwrap_err();
         let message = error.to_string();
+        assert!(matches!(error, ProbeClientError::UnknownProfile { .. }));
         assert!(message.contains("chrome_9000"), "{message}");
         assert!(message.contains("chrome_149"), "{message}");
         assert!(message.contains("firefox_"), "{message}");
         assert!(!message.contains("okhttp"), "{message}");
+
+        // A profile wreq-util ships but the http path has no headers for.
+        let config = ProxyHealthConfig {
+            profile: "edge_148".to_owned(),
+            ..ProxyHealthConfig::default()
+        };
+        assert_eq!(
+            EmulatedClientFactory::from_config(&config).unwrap_err(),
+            ProbeClientError::UnsupportedProfile("edge_148".to_owned())
+        );
 
         let mut config = ProxyHealthConfig {
             platform: "android".to_owned(),
@@ -713,13 +706,32 @@ mod tests {
         assert!(profile_names().len() > 50);
     }
 
+    /// wreq-util's Firefox on Linux claims an Ubuntu build, which only a
+    /// persona's own User-Agent can replace; a probe has none.
+    #[test]
+    fn firefox_on_linux_is_refused_as_a_probe_profile() {
+        let mut config = ProxyHealthConfig {
+            profile: "firefox_151".to_owned(),
+            platform: "linux".to_owned(),
+            ..ProxyHealthConfig::default()
+        };
+        let error = EmulatedClientFactory::from_config(&config).unwrap_err();
+        assert!(matches!(error, ProbeClientError::Build(_)), "{error:?}");
+        assert!(error.to_string().contains("User-Agent"), "{error}");
+
+        for platform in ["windows", "macos"] {
+            config.platform = platform.to_owned();
+            assert!(EmulatedClientFactory::from_config(&config).is_ok());
+        }
+    }
+
     #[test]
     fn a_client_is_built_for_ipv4_ipv6_and_named_proxies() {
         let factory = EmulatedClientFactory::new(
-            profile_named("chrome_149").unwrap(),
-            wreq_util::Platform::Windows,
+            ProfileChoice::named("chrome_149", ClaimedOs::Windows).unwrap(),
             Duration::from_secs(5),
-        );
+        )
+        .unwrap();
         for host in ["198.51.100.10", "2001:db8::10", "proxy.example.net"] {
             let target = ProxyEndpoint {
                 id: ProxyId::new(),
@@ -730,7 +742,10 @@ mod tests {
                 scheme: kage_core::domain::ProxyScheme::Http,
             };
 
-            assert!(factory.client(&target).is_ok(), "{host}");
+            let client = factory.client(&target).unwrap();
+            assert_eq!(client.proxy(), target.id, "{host}");
+            // A probe starts without cookies and keeps none.
+            assert!(client.jar().is_empty());
         }
         // A host that cannot be part of a URL is refused, not connected to.
         let broken = ProxyEndpoint {

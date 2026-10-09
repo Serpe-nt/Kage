@@ -8,6 +8,59 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- M3, the http path:
+  - `kage-http`: fetches a page through a proxy with wreq, looking like the
+    browser a profile names. A client factory keeps one client per proxy and
+    profile; wreq-util supplies TLS and the HTTP/2 settings, and Kage writes
+    the complete header list itself, in the browser's order and spelling,
+    for Chrome and Firefox, over HTTP/2 and HTTP/1.1, for a page and for its
+    stylesheets, scripts and images. `Sec-Fetch-Site` follows the referrer
+    over the whole redirect chain, and the `Referer` that goes out follows
+    the browsers' default policy.
+  - Caller headers are checked against a denylist. A header that belongs to
+    the browser's identity (`User-Agent`, `Accept-Language`,
+    `Accept-Encoding`, `Cookie`, every `Sec-*` and others) is refused with
+    an error that names it, never dropped silently.
+  - Redirects are followed by Kage, ten at most by default, and every hop
+    passes the SSRF guard again; the refused hop is named. The body is read
+    up to `http.max_body_bytes`, and the result says when it was cut.
+  - A cookie jar with the rules browsers apply (`SameSite`, `Secure`, the
+    `__Secure-` and `__Host-` prefixes, the Public Suffix List, limits and
+    eviction), stored in Postgres per proxy (migration 0009,
+    `http_cookies`). It survives a restart, is never handed to a
+    replacement proxy, and forgets session cookies after
+    `http.session_cookie_idle`.
+  - Timing per phase: tunnel (`connect_ms`), TLS handshake (`tls_ms`), first
+    byte and total. The health probe records the first two per proxy, and
+    `kage proxy health` shows them, so a proxy that is slow to set up a
+    connection can be told from one that is slow to answer.
+  - Subresource emulation (`http.fetch_subresources`, off by default): after
+    a page, its own site's stylesheets, scripts and icon are fetched the way
+    a first paint would, with seeded pauses and a freshness cache. Assets of
+    other sites are never fetched.
+  - The profile mapping of spec §6.1: (engine, browser major, OS) to a
+    wreq-util profile, for the newest eight majors of Chrome and Firefox. A
+    test enumerates wreq-util's profiles and fails when a configured engine
+    major has none. `engines.chromium.browser_major` and
+    `engines.firefox.browser_major` name the engines' majors.
+  - A fingerprint echo inside `kage-http`: a TLS server that reports the JA4
+    of the ClientHello, the HTTP/2 fingerprint and the request headers in
+    wire order. `kage echo serve` runs it; the compose profile `echo` adds
+    it to the stack.
+  - The fingerprint gate: the JA4, the HTTP/2 fingerprint and the header
+    order of all 48 mapped profiles are recorded in
+    `tests/fixtures/fingerprints/` and compared on every change in
+    `just ci`, over loopback. A dependency bump that moves one fails there.
+  - `kage selftest http --proxy <id> --profile <name>`: the same comparison
+    through a real proxy, against the operator's echo
+    (`selftest.http.echo_url`) or, on demand only, a third-party one. The
+    server never asks a third-party echo on a timer.
+  - New operator alerts: `http_selftest_failed`, `http_profile_missing`.
+  - Configuration: new sections `http`, `selftest` and `engines`.
+  - `docs/runbooks/fingerprint-echo.md`; a gated live check of the
+    fingerprint through two real proxies (`tests/live/http-selftest.sh`).
+  - The coverage gate now includes `kage-http`.
+
 - M2, proxy provider, pool, health and replacement:
   - `kage-proxy`: the `ProxyProvider` trait with two implementations. The
     Webshare client (on wreq, no second TLS stack) reads the proxy list page
@@ -133,6 +186,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The health probe is built by `kage-http`. `proxies.health.profile` must
+  name a desktop Chrome or Firefox profile (Edge, Safari, OkHttp and the
+  rest are refused), and Firefox on Linux is refused; `kage config check`
+  says so. The default (`chrome_149` on Windows) is unchanged.
+- `kage proxy health` shows the time each proxy took to open the tunnel and
+  to finish the TLS handshake, next to the total.
+- `kage config check` validates the http path too and reports the profiles
+  this build serves under `http`.
+- `ProxyEndpoint` moved from `kage-proxy` to `kage-core`; `kage-proxy`
+  still exports it.
 - `KAGE__SECRETS__MASTER_KEY` must be 32 random bytes written as 64
   hexadecimal characters; any other value now fails at startup. `just setup`
   has always generated it in this form.

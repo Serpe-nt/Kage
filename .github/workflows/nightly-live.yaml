@@ -4,8 +4,9 @@ name: nightly-live
 # ever hits the echo and detection test pages listed in configuration, never
 # a real target site.
 #
-# The proxy health check landed with M2; the fingerprint self-test follows in
-# M3 and the workflow is fully wired in M12.
+# The proxy health check landed with M2 and the fingerprint self-test of the
+# http path with M3 (two proxies per run, against the third-party echo of
+# `selftest.http.third_party_url`); the workflow is fully wired in M12.
 
 on:
   schedule:

@@ -4,6 +4,7 @@
 //! stable lowercase names shared by the API, the policy files and the store.
 
 mod access;
+mod cookie;
 mod fetch;
 mod health;
 mod job;
@@ -17,6 +18,7 @@ use std::str::FromStr;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub use access::{ApiKey, AuditActor, AuditEvent, AuditOutcome, KeyLimits, Scope};
+pub use cookie::{CookieSameSite, HttpCookie};
 pub use fetch::{
     Artifact, ArtifactEncoding, ArtifactKind, ArtifactRef, Attempt, ContentHash, FetchRecord,
     Header, InvalidContentHash, PersonaSummary, RequestRecord, RobotsVerdict, Timing,
@@ -25,8 +27,8 @@ pub use health::{BreakerState, DomainBreaker, HealthEvent, SelftestRun, SubjectK
 pub use job::{FrontierEntry, FrontierState, Job, JobItem, JobItemState, JobKind, JobState};
 pub use persona::{Geolocation, Persona, PersonaDomainState, PersonaState, Screen};
 pub use proxy::{
-    GeoRecord, HealthFailure, Proxy, ProxyHealth, ProxyProviderKind, ProxyReplacement, ProxyScheme,
-    ProxyState, ReplaceReason,
+    GeoRecord, HealthFailure, Proxy, ProxyEndpoint, ProxyHealth, ProxyProviderKind,
+    ProxyReplacement, ProxyScheme, ProxyState, ReplaceReason,
 };
 pub use session::{InvalidSessionId, Session, SessionId, SessionLimits};
 

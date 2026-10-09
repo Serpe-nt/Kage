@@ -68,14 +68,14 @@ pub(crate) struct ReplaceOptions {
 }
 
 /// The database, the pool and the alerts one command raised.
-struct Session {
-    store: Store,
-    pool: Arc<Pool>,
-    alerts: Arc<MemoryAlertSink>,
+pub(crate) struct Session {
+    pub(crate) store: Store,
+    pub(crate) pool: Arc<Pool>,
+    pub(crate) alerts: Arc<MemoryAlertSink>,
 }
 
 impl Session {
-    async fn open(config: &Config) -> anyhow::Result<Self> {
+    pub(crate) async fn open(config: &Config) -> anyhow::Result<Self> {
         let store = migrate::connect(config).await?;
         let status = store
             .migration_status()
@@ -93,7 +93,7 @@ impl Session {
     }
 
     /// Writes the audit event of a command that changed something.
-    async fn audit(
+    pub(crate) async fn audit(
         &self,
         action: &str,
         target: Option<String>,
@@ -116,7 +116,7 @@ impl Session {
 
     /// Logs and stores the alerts the command raised, then closes the
     /// database.
-    async fn close(self) {
+    pub(crate) async fn close(self) {
         for alert in self.alerts.alerts() {
             TracingAlertSink.raise(alert.clone());
             alerts::record(&self.store, &alert).await;
@@ -179,7 +179,11 @@ fn proxy_json(proxy: &Proxy, username: Option<&str>) -> Value {
 
 /// Writes rows as a table with a header, columns padded to their widest
 /// cell.
-fn table(out: &mut impl Write, header: &[&str], rows: &[Vec<String>]) -> std::io::Result<()> {
+pub(crate) fn table(
+    out: &mut impl Write,
+    header: &[&str],
+    rows: &[Vec<String>],
+) -> std::io::Result<()> {
     let mut widths: Vec<usize> = header.iter().map(|cell| cell.chars().count()).collect();
     for row in rows {
         for (width, cell) in widths.iter_mut().zip(row) {
@@ -471,6 +475,11 @@ async fn health_in(
                 format!("{}:{}", result.proxy.host, result.proxy.port),
                 verdict(result).to_owned(),
                 exit.map_or_else(|| "-".to_owned(), |exit| format!("{} ms", exit.latency_ms)),
+                // Of the latency: opening the tunnel, and the handshake.
+                exit.and_then(|exit| exit.connect_ms)
+                    .map_or_else(|| "-".to_owned(), |connect| format!("{connect} ms")),
+                exit.and_then(|exit| exit.tls_ms)
+                    .map_or_else(|| "-".to_owned(), |tls| format!("{tls} ms")),
                 exit.map_or_else(|| "-".to_owned(), |exit| exit.ip.to_string()),
                 country(&result.proxy),
                 result.proxy.state.to_string(),
@@ -484,6 +493,8 @@ async fn health_in(
             "HOST:PORT",
             "RESULT",
             "LATENCY",
+            "TUNNEL",
+            "TLS",
             "EXIT IP",
             "COUNTRY",
             "STATE",
@@ -911,6 +922,8 @@ mod tests {
         let seen = Ok(ExitObservation {
             ip: "203.0.113.20".parse().unwrap(),
             latency_ms: 143,
+            connect_ms: None,
+            tls_ms: None,
         });
 
         assert_eq!(verdict(&result(seen, Some(false))), "ok");

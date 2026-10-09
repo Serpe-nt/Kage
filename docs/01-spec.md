@@ -263,8 +263,19 @@ A persona is generated when a proxy enters `healthy` for the first time.
    sent back on every session open. The sidecar MUST apply it
    deterministically.
 4. **wreq profile.** Kage maps (engine, browser_major, claimed_os) to a
-   wreq-util profile. If none matches the major exactly, `wreq_profile` is
-   null and the persona is browser-only.
+   wreq-util profile (`kage_http::profile::resolve`). An exact match is the
+   profile of the same major, among the newest eight majors wreq-util ships
+   per browser family; older profiles are not offered. A major newer than
+   every profile may be served by the newest profile with `User-Agent` and
+   `sec-ch-ua` written for the real major, but only once that major is in
+   the verified-majors table: a capture of the real browser against the
+   fingerprint echo (§9) showed the same JA4, the same HTTP/2 fingerprint
+   and the same navigation header set and order. The table is empty at M3;
+   M4 and M5 fill it. Otherwise `wreq_profile` is null and the persona is
+   browser-only (alert `http_profile_missing`).
+   `engines.chromium.browser_major` and `engines.firefox.browser_major`
+   name each engine's bundled major (unset until M4 and M5); a major that
+   resolves to no profile fails `kage config check` and a test.
 5. **Profile directory.** Created empty. Cookies, storage and history accrue
    over the persona's life. A persona SHOULD warm up by visiting a small set
    of popular neutral sites during its first hours (configurable list), so
@@ -309,6 +320,11 @@ into that persona's wreq jar. The http path MAY reuse them only when
 `wreq_profile` is non-null and the persona's engine major equals the profile
 major. Cookies set by the http path are imported back into the browser
 context before the next browser attempt for that origin.
+
+Until M6 gives each persona its jar, the http path keeps one jar per proxy
+(table `http_cookies`, §9). It dies with the proxy: a replacement never
+inherits cookies, because a new address presenting the old cookies links the
+two.
 
 ---
 
@@ -496,20 +512,89 @@ request is converted into a job and `202` returned with the job id.
 
 ## 9. HTTP path (wreq)
 
-- One `wreq::Client` per persona, built from `wreq_profile` via wreq-util,
-  with the persona's proxy (`Proxy::all` with credentials), a persistent
-  cookie jar, `Accept-Language` from the persona, redirects limited to 10,
-  HTTP/2 preferred, HTTP/3 disabled, no custom headers except those the
-  caller passes (validated against a denylist: `User-Agent`, `Sec-CH-*`,
-  `Sec-Fetch-*`, `Accept-Encoding` cannot be overridden).
-- Navigation requests send browser-like `Sec-Fetch-*` for a top-level
-  navigation (`Dest: document`, `Mode: navigate`, `Site: none`, `User: ?1`);
-  requests with a `Referer` inside a session use `Site: same-origin` or
-  `cross-site` accordingly.
-- Timing is captured per phase. Raw body and headers are stored.
-- Subresource emulation (`http.fetch_subresources`, default off): after the
-  document, fetch up to K first-party stylesheets, scripts and the favicon
-  with correct `Sec-Fetch-Dest`, with human-like gaps. Bodies are discarded.
+- **Clients.** `kage-http` builds one `wreq::Client` per (proxy, profile,
+  claimed OS) from a wreq-util profile, with that proxy (`Proxy::all` with
+  credentials) as its only route, HTTP/2 preferred and HTTP/3 disabled.
+  wreq's redirect handling, cookie store and default-header merge are off:
+  kage-http does all three itself. Until M6 a client is asked for with a
+  profile name, an OS and a `ProxyEndpoint`; M6 asks with the persona and
+  passes its exact `User-Agent` and `sec-ch-ua` through the identity
+  override, which API callers cannot reach. A Firefox profile that claims
+  Linux is refused without that override, because wreq-util's own value
+  names a distribution.
+- **Headers.** wreq-util supplies TLS, the HTTP/2 settings and the base
+  values (`User-Agent`, client hints, `Accept`, `Accept-Encoding`);
+  kage-http owns the complete ordered header list. One table per browser
+  family (Chrome, Firefox) and request kind (document, style, script, image)
+  fixes the names and their order. On HTTP/2 they go out in lower case, on
+  HTTP/1.1 in the browser's spelling with `Connection: keep-alive`. A plain
+  `http://` origin is treated as the browser treats it: no client hints, no
+  fetch metadata, `Accept-Encoding: gzip, deflate`. `Accept-Language` is
+  written in the family's own format from the client's language list
+  (`en-US, en` until M6 supplies the persona's).
+- **Caller headers** are checked against a denylist, and a denied header is
+  a typed error that names it, never a silent drop. Denied: `User-Agent`,
+  `Accept-Language`, `Accept-Encoding`, `Cookie`, `Origin`, every `Sec-*`
+  (so `Sec-CH-*` and `Sec-Fetch-*`), every `Proxy-*` and
+  `Access-Control-Request-*`, `Upgrade-Insecure-Requests`, `Priority`,
+  `Host`, and the connection and framing headers. An allowed header takes
+  the slot the browser family gives it; a name the tables do not know goes
+  just before `cookie`. At most 64.
+- **Fetch metadata.** A typed navigation sends `Dest: document`, `Mode:
+  navigate`, `Site: none`, `User: ?1`. A request with a `Referer` sends
+  `Site: same-origin`, `same-site` or `cross-site`, schemeful and decided by
+  the Public Suffix List; over a redirect chain the furthest hop decides.
+  The `Referer` that goes out follows `strict-origin-when-cross-origin`. A
+  request is a navigation (GET, HEAD or POST) or one of the subresource
+  kinds below; fetch()/XHR as a kind waits for the browser captures of M4
+  and the API field of M8.
+- **Redirects** are followed by kage-http, at most `http.max_redirects`
+  (default 10), every hop through the redirect chain of the SSRF guard
+  (§19), which names the hop it refuses and records an `https` to `http`
+  downgrade. 301 and 302 turn a POST into a GET, 303 turns everything but a
+  HEAD into a GET, 307 and 308 repeat the request. Host names are resolved
+  by the proxy, never by Kage; resolved addresses are checked on every hop
+  only when a resolver is injected (`HopResolver`), and none is by default.
+- **Cookies.** One jar per proxy until M6 keys it by persona (§6.4), with
+  the rules browsers apply (RFC 6265bis): `SameSite` with `Lax` as the
+  default, `Secure`, the `__Secure-` and `__Host-` prefixes, no cookie for a
+  public suffix, no replacing a `Secure` cookie from an insecure origin, 400
+  days at most, 180 cookies per site and 3000 in all. The jar is stored in
+  Postgres (`http_cookies`, one row per cookie), loaded when the proxy's
+  first client is built and saved after every fetch that changed it. A
+  retired or unknown proxy has no jar. Session cookies are stored too and
+  dropped when the jar was idle for `http.session_cookie_idle` (default
+  12 h).
+- **Capture.** Status, final URL, HTTP version, response headers, the
+  decoded body up to `http.max_body_bytes` (default 10 MB; a flag says when
+  it was cut), every hop, and timing per phase: `connect_ms` (TCP to the
+  proxy plus the CONNECT tunnel), `tls_ms`, `ttfb_ms`, `total_ms`. `dns_ms`
+  is always null because the proxy resolves, and a request on a reused
+  connection has neither `connect_ms` nor `tls_ms`. The health probe (§7.4)
+  uses the same client and records both per proxy.
+- **Subresource emulation** (`http.fetch_subresources`, default off): after
+  a `200` HTML document fetched with GET, up to `http.subresources.max`
+  (default 12) stylesheets, scripts and preloads of the document's own site,
+  never another site's, in document order, at most 6 in flight, starting 5
+  to 40 ms after the body arrived, then the favicon 100 to 600 ms after the
+  last of them. The pauses come from a recorded seed. Each request carries
+  its kind's `Sec-Fetch-Dest` and header table. An asset the client already
+  holds fresh is not fetched again and a stale one is revalidated. Bodies
+  are read to the end and dropped (2 MB each, 8 MB per page); a failing
+  asset never fails the fetch; counts and bytes are reported.
+- **Fingerprint self-test.** kage-http contains its own echo (`kage echo
+  serve`; compose profile `echo`, off by default). It terminates TLS and
+  reports the JA4 of the ClientHello, the Akamai HTTP/2 string and the
+  request headers in wire order: the HEADERS frame on HTTP/2, the raw lines
+  on HTTP/1.1. The expected values per profile and OS are files in
+  `tests/fixtures/fingerprints/`. `just ci` compares every mapped profile
+  with them over loopback, so a pin bump that moves a fingerprint fails on
+  that change. `kage selftest http --proxy <id> --profile <name>` makes the
+  same comparison through a real proxy, against `selftest.http.echo_url`
+  when set and else, on demand only, against the third-party echo
+  `selftest.http.third_party_url`. Kage never contacts a third-party echo on
+  a timer; the scheduled check of §7.4 comes with M6 and uses the operator's
+  own echo. See `docs/runbooks/fingerprint-echo.md`.
 - The http path never executes JavaScript and never pretends to; a page that
   requires it will surface as a block or as `ok` with thin content, which
   the extractor flags (`extract.thin_content = true`) so policy can learn.

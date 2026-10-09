@@ -32,12 +32,25 @@ kage-store = { path = "crates/kage-store", version = "0.1.0" }
 # BoringSSL-linked (btls). Never combine with anything that links OpenSSL.
 wreq = { version = "=0.16.1" }
 wreq-util = { version = "=0.2.0" }
+# The protocol crate under wreq, at the version wreq 0.16.1 resolves. kage-http
+# names it only for the hook that decides the order and casing of request
+# headers at serialization time; it moves with wreq.
+wreq-proto = { version = "=0.2.6" }
 
 # --- Runtime, HTTP server, OpenAPI ----------------------------------------
 tokio = { version = "=1.53.2", default-features = false }
 axum = { version = "=0.8.9" }
 tower = { version = "=0.5.3", default-features = false }
 tower-http = { version = "=0.7.1", default-features = false }
+# The types wreq, axum and tower exchange. Pinned at the versions already in
+# the lockfile so that kage-http names the same `http::Request` wreq does.
+http = { version = "=1.5.0" }
+bytes = { version = "=1.12.1" }
+# Runs a bounded number of requests at once (subresource emulation).
+futures-util = { version = "=0.3.34", default-features = false, features = ["std"] }
+# The Mozilla root certificates wreq trusts by default, at the version wreq
+# resolves, so that a client can trust them plus one more authority.
+webpki-root-certs = { version = "=1.0.9" }
 # utoipa, utoipa-axum and utoipa-swagger-ui are released together and are
 # pinned together. `vendored` keeps the Swagger UI build offline: without it
 # the build script downloads the UI bundle at compile time.
@@ -90,6 +103,16 @@ regex = { version = "=1.13.1" }
 url = { version = "=2.5.8" }
 ipnet = { version = "=2.12.2" }
 hickory-resolver = { version = "=0.26.3", default-features = false }
+# The Public Suffix List, compiled in. It decides what a "site" is: the
+# `Sec-Fetch-Site` value of a request and which `Domain` a cookie may name.
+# A newer list is a deliberate bump like any other pin.
+psl = { version = "=2.1.239" }
+
+# The fingerprint echo (kage-http) terminates TLS with rustls on ring, the
+# stack sqlx already links. Never the aws-lc-rs provider: that is one more C
+# library next to BoringSSL.
+rustls = { version = "=0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "=0.26.6", default-features = false, features = ["ring", "tls12"] }
 
 # --- Crypto, ids, time ----------------------------------------------------
 sha2 = { version = "=0.11.0" }
@@ -129,6 +152,9 @@ proptest = { version = "=1.11.0", default-features = false, features = ["std"] }
 testcontainers = { version = "=0.27.3", default-features = false }
 testcontainers-modules = { version = "=0.15.0", default-features = false }
 tempfile = { version = "=3.27.0" }
+# Makes a throwaway certificate authority and server certificate for the
+# tests that run the fingerprint echo.
+rcgen = { version = "=0.14.10" }
 
 [workspace.lints.rust]
 # CLAUDE.md: no unsafe anywhere in the workspace.

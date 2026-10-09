@@ -10,11 +10,11 @@ use common::{TestDb, now};
 use kage_core::alert::{Alert, AlertKind, AlertSeverity};
 use kage_core::domain::{
     ArtifactKind, ArtifactRef, Attempt, AuditActor, AuditEvent, AuditOutcome, BreakerState,
-    ClaimedOs, DomainBreaker, Engine, FetchRecord, FrontierEntry, FrontierState, GeoRecord, Header,
-    HealthEvent, HealthFailure, Job, JobItem, JobItemState, JobKind, JobState, PersonaDomainState,
-    PersonaState, PersonaSummary, ProxyHealth, ProxyProviderKind, ProxyReplacement, ProxyState,
-    Render, ReplaceReason, RobotsVerdict, Scope, SelftestRun, Session, SessionId, SessionLimits,
-    SubjectKind, Timing,
+    ClaimedOs, CookieSameSite, DomainBreaker, Engine, FetchRecord, FrontierEntry, FrontierState,
+    GeoRecord, Header, HealthEvent, HealthFailure, HttpCookie, Job, JobItem, JobItemState, JobKind,
+    JobState, PersonaDomainState, PersonaState, PersonaSummary, ProxyHealth, ProxyProviderKind,
+    ProxyReplacement, ProxyState, Render, ReplaceReason, RobotsVerdict, Scope, SelftestRun,
+    Session, SessionId, SessionLimits, SubjectKind, Timing,
 };
 use kage_core::ids::{
     ApiKeyId, ArtifactId, AttemptId, AuditEventId, FrontierId, HealthEventId, JobId, JobItemId,
@@ -1578,4 +1578,184 @@ async fn values_too_large_for_their_column_are_refused_before_the_query() {
     ));
     // Nothing was written.
     assert_eq!(db.store.proxies().list(None).await.unwrap(), []);
+}
+
+fn http_cookie(domain: &str, name: &str) -> HttpCookie {
+    HttpCookie {
+        domain: domain.to_owned(),
+        host_only: true,
+        path: "/".to_owned(),
+        name: name.to_owned(),
+        value: "v".to_owned(),
+        secure: true,
+        http_only: false,
+        same_site: None,
+        expires_at: None,
+        created_at: now(),
+        last_used_at: now(),
+    }
+}
+
+// One jar followed through its whole life: each step needs the one before.
+#[allow(clippy::too_many_lines)]
+#[tokio::test]
+async fn cookie_jars_are_kept_per_proxy_in_order_and_die_with_it() {
+    let db = TestDb::migrated().await;
+    let cookies = db.store.http_cookies();
+    let first = common::proxy("ref-1");
+    let second = common::proxy("ref-2");
+    db.store.proxies().insert(&first).await.unwrap();
+    db.store.proxies().insert(&second).await.unwrap();
+    assert_eq!(cookies.list(first.id).await.unwrap(), []);
+    assert_eq!(cookies.count(first.id).await.unwrap(), 0);
+
+    let mut session = http_cookie("www.example.org", "sid");
+    session.http_only = true;
+    session.same_site = Some(CookieSameSite::Lax);
+    let mut lasting = http_cookie("example.org", "theme");
+    lasting.host_only = false;
+    lasting.path = "/shop".to_owned();
+    lasting.secure = false;
+    lasting.same_site = Some(CookieSameSite::None);
+    lasting.expires_at = Some(now() + Duration::days(30));
+    lasting.created_at = now() - Duration::days(2);
+    // The same name under another path and scope is another cookie.
+    let mut scoped = http_cookie("example.org", "theme");
+    scoped.same_site = Some(CookieSameSite::Strict);
+    let jar = vec![session.clone(), lasting.clone(), scoped.clone()];
+
+    cookies.replace(first.id, &jar).await.unwrap();
+
+    // Read back equal, in the order given, whatever the timestamps say.
+    assert_eq!(cookies.list(first.id).await.unwrap(), jar);
+    assert_eq!(cookies.count(first.id).await.unwrap(), 3);
+    assert_eq!(cookies.list(second.id).await.unwrap(), []);
+
+    // Replacing swaps the whole jar.
+    let other = http_cookie("api.example.net", "token");
+    cookies
+        .replace(first.id, &[scoped.clone(), other.clone()])
+        .await
+        .unwrap();
+    assert_eq!(
+        cookies.list(first.id).await.unwrap(),
+        [scoped.clone(), other.clone()]
+    );
+
+    // The same cookie twice is refused, and the jar stays as it was.
+    let conflict = cookies
+        .replace(first.id, &[session.clone(), session.clone()])
+        .await
+        .unwrap_err();
+    assert!(conflict.is_conflict(), "{conflict}");
+    assert_eq!(cookies.count(first.id).await.unwrap(), 2);
+    // A jar needs its proxy.
+    assert!(
+        cookies
+            .replace(ProxyId::new(), &[session.clone()])
+            .await
+            .is_err()
+    );
+
+    // One site's cookies can be purged, subdomains included, and only it.
+    cookies
+        .replace(
+            second.id,
+            &[
+                http_cookie("example.org", "a"),
+                http_cookie("shop.example.org", "b"),
+                http_cookie("notexample.org", "c"),
+                http_cookie("example.net", "d"),
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        cookies
+            .delete_for_domain(second.id, ".Example.org")
+            .await
+            .unwrap(),
+        2
+    );
+    let left: Vec<String> = cookies
+        .list(second.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|cookie| cookie.domain)
+        .collect();
+    assert_eq!(left, ["notexample.org", "example.net"]);
+    assert_eq!(
+        cookies
+            .delete_for_domain(second.id, "example.org")
+            .await
+            .unwrap(),
+        0
+    );
+
+    // A retired persona's jar is deleted outright.
+    assert_eq!(cookies.delete_for_proxy(first.id).await.unwrap(), 2);
+    assert_eq!(cookies.delete_for_proxy(first.id).await.unwrap(), 0);
+    assert_eq!(cookies.list(first.id).await.unwrap(), []);
+    assert_eq!(cookies.count(second.id).await.unwrap(), 2);
+
+    // The schema refuses what the jar never writes: a domain that is not
+    // lowercase or is empty, a relative path, an unknown SameSite value, a
+    // negative position.
+    for statement in [
+        "INSERT INTO http_cookies (proxy_id, domain, host_only, path, name, value, secure,
+                                   http_only, created_at, last_used_at, ordinal)
+         VALUES ($1, 'Example.ORG', true, '/', 'bad', 'v', false, false, now(), now(), 9)",
+        "INSERT INTO http_cookies (proxy_id, domain, host_only, path, name, value, secure,
+                                   http_only, created_at, last_used_at, ordinal)
+         VALUES ($1, '', true, '/', 'bad', 'v', false, false, now(), now(), 9)",
+        "INSERT INTO http_cookies (proxy_id, domain, host_only, path, name, value, secure,
+                                   http_only, created_at, last_used_at, ordinal)
+         VALUES ($1, 'example.org', true, 'relative', 'bad', 'v', false, false, now(), now(), 9)",
+        "INSERT INTO http_cookies (proxy_id, domain, host_only, path, name, value, secure,
+                                   http_only, same_site, created_at, last_used_at, ordinal)
+         VALUES ($1, 'example.org', true, '/', 'bad', 'v', false, false, 'sometimes', now(),
+                 now(), 9)",
+        "INSERT INTO http_cookies (proxy_id, domain, host_only, path, name, value, secure,
+                                   http_only, created_at, last_used_at, ordinal)
+         VALUES ($1, 'example.org', true, '/', 'bad', 'v', false, false, now(), now(), -1)",
+    ] {
+        let error = sqlx::query(statement)
+            .bind(second.id.as_uuid())
+            .execute(db.store.pool())
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .as_database_error()
+                .is_some_and(sqlx::error::DatabaseError::is_check_violation),
+            "{statement}: {error}"
+        );
+    }
+    // The rows go when the proxy row goes.
+    cookies.replace(first.id, &[session.clone()]).await.unwrap();
+    sqlx::query("DELETE FROM proxies WHERE id = $1")
+        .bind(first.id.as_uuid())
+        .execute(db.store.pool())
+        .await
+        .unwrap();
+    assert_eq!(cookies.count(first.id).await.unwrap(), 0);
+    // And a stored value that does not parse is reported, not guessed.
+    sqlx::query("ALTER TABLE http_cookies DROP CONSTRAINT http_cookies_same_site_check")
+        .execute(db.store.pool())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE http_cookies SET same_site = 'sometimes' WHERE proxy_id = $1")
+        .bind(second.id.as_uuid())
+        .execute(db.store.pool())
+        .await
+        .unwrap();
+    assert!(matches!(
+        cookies.list(second.id).await,
+        Err(StoreError::Corrupt {
+            table: "http_cookies",
+            column: "same_site",
+            ..
+        })
+    ));
 }

@@ -121,6 +121,36 @@ services:
     environment:
       ENGINE: firefox
 
+  # The fingerprint echo (spec §7.4): tells a client what its TLS handshake,
+  # its HTTP/2 connection and its headers looked like. Off unless the `echo`
+  # profile is on:
+  #
+  #   docker compose --file deploy/compose.yaml --profile echo up --detach echo
+  #
+  # It is the one service besides kage that publishes a port, because the
+  # proxies' exits must reach it. It needs a certificate for the name it is
+  # reached by; see docs/runbooks/fingerprint-echo.md.
+  echo:
+    <<: *hardening
+    profiles: [echo]
+    image: ${KAGE_IMAGE:-kage:dev}
+    command: [echo, serve]
+    environment:
+      KAGE_ECHO_BIND: 0.0.0.0:8443
+      KAGE_ECHO_CERT: /run/kage-echo/cert.pem
+      KAGE_ECHO_KEY: /run/kage-echo/key.pem
+    volumes:
+      # cert.pem and key.pem, readable by the image's user (65532).
+      - ${KAGE_ECHO_TLS_DIR:-./echo-tls}:/run/kage-echo:ro
+    ports:
+      - "${KAGE_ECHO_PUBLISH_ADDR:-0.0.0.0}:${KAGE_ECHO_PUBLISH_PORT:-8443}:8443"
+    healthcheck:
+      # The image's own check probes the API server, which this is not.
+      disable: true
+    mem_limit: 256m
+    cpus: 1
+    pids_limit: 128
+
   postgres:
     image: postgres:17.11-trixie@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3
     # No read-only root here: compose can only inject a secret taken from the

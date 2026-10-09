@@ -1,0 +1,21 @@
+{
+  "profile": "chrome_149",
+  "os": "linux",
+  "ja4": "t13d1516h2_8daaf6152771_d8a2da3f94cd",
+  "akamai": "1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p",
+  "headers": [
+    "sec-ch-ua",
+    "sec-ch-ua-mobile",
+    "sec-ch-ua-platform",
+    "upgrade-insecure-requests",
+    "user-agent",
+    "accept",
+    "sec-fetch-site",
+    "sec-fetch-mode",
+    "sec-fetch-user",
+    "sec-fetch-dest",
+    "accept-encoding",
+    "accept-language",
+    "priority"
+  ]
+}
