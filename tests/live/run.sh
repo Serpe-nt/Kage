@@ -26,6 +26,7 @@ fi
 checks=(
     tests/live/proxy-health.sh
     tests/live/http-selftest.sh
+    tests/live/browser-selftest.sh
 )
 
 for check in "${checks[@]}"; do

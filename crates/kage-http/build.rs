@@ -3,8 +3,9 @@
 //! `tests/fixtures/fingerprints/<profile>-<os>.json` holds what each mapped
 //! emulation profile must look like on the wire. The self-test compares
 //! against these values at run time (`kage selftest http`), in an image
-//! that has no repository, so they are compiled in. The fixtures of browser
-//! captures live in a subdirectory and are read by tests only.
+//! that has no repository, so they are compiled in. The captures of the
+//! real browsers (`browser/<engine>-<major>.json`) are compiled in as well:
+//! they are what a browser persona must show the echo.
 
 // A build script talks to cargo through stdout.
 #![allow(clippy::print_stdout)]
@@ -47,6 +48,34 @@ fn main() -> Result<(), Box<dyn Error>> {
             .and_then(|stem| stem.to_str())
             .ok_or("a fixture file name is not UTF-8")?;
         let path = path.to_str().ok_or("a fixture path is not UTF-8")?;
+        writeln!(code, "    ({stem:?}, include_str!({path:?})),")?;
+    }
+    code.push_str("];\n");
+
+    let mut captures: Vec<PathBuf> = Vec::new();
+    if let Ok(entries) = fs::read_dir(fixtures.join("browser")) {
+        for entry in entries {
+            let path = entry?.path();
+            if path.is_file()
+                && path
+                    .extension()
+                    .is_some_and(|extension| extension == "json")
+            {
+                captures.push(path.canonicalize()?);
+            }
+        }
+    }
+    captures.sort();
+    code.push_str(
+        "/// The browser captures: file stem and content.\n\
+         pub(crate) const BROWSER_CAPTURES: &[(&str, &str)] = &[\n",
+    );
+    for path in &captures {
+        let stem = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .ok_or("a capture file name is not UTF-8")?;
+        let path = path.to_str().ok_or("a capture path is not UTF-8")?;
         writeln!(code, "    ({stem:?}, include_str!({path:?})),")?;
     }
     code.push_str("];\n");

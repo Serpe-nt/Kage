@@ -61,8 +61,9 @@ curl http://127.0.0.1:8080/healthz
 ```
 
 `just setup` installs the pinned toolchains and tools, the sidecar
-dependencies and the git hooks, and creates `deploy/.env` with random local
-secrets. The stack applies the database migrations in a one-shot `migrate`
+dependencies, the pinned Chrome with Xvfb for the sidecar's browser tests
+(through apt, with sudo; Debian or Ubuntu) and the git hooks, and creates
+`deploy/.env` with random local secrets. The stack applies the database migrations in a one-shot `migrate`
 service before `kage` starts, and publishes one port, on loopback only,
 because the API has no authentication until milestone M8.
 
@@ -102,10 +103,13 @@ them all.
 
 | Command | What it does |
 |---|---|
-| `just setup` | Install toolchains, pnpm dependencies, git hooks, local secrets |
+| `just setup` | Install toolchains, pnpm dependencies, the pinned Chrome, git hooks, local secrets |
 | `just fmt` | rustfmt and prettier |
 | `just lint` | clippy with warnings denied, eslint, tsc |
-| `just test` | Rust tests (the store tests start Postgres in Docker) and sidecar vitest |
+| `just test` | Rust tests (the store tests start Postgres in Docker) and sidecar vitest (the Chromium engine's tests start the real browser; not as root) |
+| `just contract-check` | The committed sidecar OpenAPI document is current and breaks no client |
+| `just openapi` | Regenerate the sidecar OpenAPI document from its zod schemas |
+| `just capture-browser-fingerprint` | Record what the engine's real Chrome shows the fingerprint echo |
 | `just sqlx-check` | Migrations apply from empty and are idempotent; `.sqlx/` matches the queries |
 | `just sqlx-prepare` | Regenerate `.sqlx/` after a query or a migration changed |
 | `just cov` | Coverage reports with thresholds |
@@ -124,7 +128,9 @@ House rules for contributors and coding agents are in
 procedure are in [docs/runbooks/repo.md](docs/runbooks/repo.md); running the
 proxy pool is in [docs/runbooks/proxies.md](docs/runbooks/proxies.md), and
 the fingerprint echo and the http self-test are in
-[docs/runbooks/fingerprint-echo.md](docs/runbooks/fingerprint-echo.md).
+[docs/runbooks/fingerprint-echo.md](docs/runbooks/fingerprint-echo.md), and
+the Chromium engine, its container and the browser self-test are in
+[docs/runbooks/engine-chromium.md](docs/runbooks/engine-chromium.md).
 
 ## Layout
 

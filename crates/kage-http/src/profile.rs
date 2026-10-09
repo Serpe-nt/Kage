@@ -403,7 +403,32 @@ pub fn mapping_table() -> Vec<MappingRow> {
 /// Akamai string and on the header names of a navigation in order, and fails
 /// when a major is listed without an equal capture. If the real browser's
 /// headers differ, the header tables get an entry for that major first.
+///
+/// **Still empty after M4.** The capture of Chrome 155 differs from the
+/// newest profile in its TLS fingerprint; see [`BROWSER_ONLY_MAJORS`].
 pub const VERIFIED_MAJORS: &[(Engine, u32)] = &[];
+
+/// Browser majors whose capture proved the opposite: the newest profile
+/// does **not** look like that browser on the wire, so no profile is
+/// derived for it and its personas are browser-only (risk R7) until a
+/// wreq-util release carries a matching profile.
+///
+/// Listing a major here is a recorded decision, not an oversight:
+/// [`check_engine_majors`] accepts it as the engine's configured major
+/// (the http path is then off for that engine, knowingly), and a test
+/// compares the capture with the derived profile and fails when they have
+/// become equal, which is the moment to move the major to
+/// [`VERIFIED_MAJORS`].
+///
+/// - **Chrome 155** (M4, 2026-10-09). Real Chrome 155.0.8059.39 sends JA4
+///   `t13d1517h2_8daaf6152771_cb7bf5808d99`, the profile `chrome_149` sends
+///   `t13d1516h2_8daaf6152771_d8a2da3f94cd`: Chrome 155 has one more
+///   extension (`ca34`, trust anchor identifiers) and three more signature
+///   algorithms (`0904`, `0905`, `0906`, ML-DSA). The HTTP/2 fingerprint
+///   and the names and order of the navigation headers are equal. The
+///   value of `accept` differs too (`image/jxl` is new), which the header
+///   tables would have to learn before the major could be verified.
+pub const BROWSER_ONLY_MAJORS: &[(Engine, u32)] = &[(Engine::Chromium, 155)];
 
 /// Chrome's `sec-ch-ua` brand list for a major version.
 ///
@@ -537,6 +562,11 @@ pub fn check_engine_majors(chromium: Option<u32>, firefox: Option<u32>) -> Resul
             continue;
         };
         let family = Family::of_engine(engine);
+        if BROWSER_ONLY_MAJORS.contains(&(engine, major)) {
+            // A capture proved that no profile fits: the engine is
+            // browser-only on purpose.
+            continue;
+        }
         if CLAIMED_OSES
             .iter()
             .all(|os| resolve(engine, major, *os).is_some())
@@ -569,9 +599,9 @@ mod tests {
     use kage_core::domain::{ClaimedOs, Engine};
 
     use super::{
-        CLAIMED_OSES, Family, MAPPED_MAJORS, ProfileChoice, ProfileError, VERIFIED_MAJORS,
-        check_engine_majors, chrome_brands, derive, family_and_major, majors, mapped_majors,
-        mapping_table, newest_major, os_named, profile_names, resolve,
+        BROWSER_ONLY_MAJORS, CLAIMED_OSES, Family, MAPPED_MAJORS, ProfileChoice, ProfileError,
+        VERIFIED_MAJORS, check_engine_majors, chrome_brands, derive, family_and_major, majors,
+        mapped_majors, mapping_table, newest_major, os_named, profile_names, resolve,
     };
 
     /// The newest profiles of wreq-util 0.2.0, as `docs/versions.md` records
@@ -894,8 +924,21 @@ mod tests {
         assert_eq!(check_engine_majors(Some(149), Some(151)), Ok(()));
         assert_eq!(check_engine_majors(Some(142), None), Ok(()));
 
-        // Today's real engines: the gate that makes M4 and M5 record their
-        // captures before the http path is switched on for them.
+        // Chrome 155 was captured in M4 and does not equal the newest
+        // profile: it is accepted as the engine's major, and it resolves
+        // to nothing, so its personas are browser-only.
+        assert_eq!(BROWSER_ONLY_MAJORS, [(Engine::Chromium, 155)]);
+        assert_eq!(check_engine_majors(Some(155), None), Ok(()));
+        for os in CLAIMED_OSES {
+            assert_eq!(resolve(Engine::Chromium, 155, os), None);
+        }
+        // A major is never both verified and browser-only.
+        for entry in BROWSER_ONLY_MAJORS {
+            assert!(!VERIFIED_MAJORS.contains(entry));
+        }
+
+        // A major nobody captured yet still fails: the gate that makes a
+        // milestone record its capture before it sets the key.
         let chrome = check_engine_majors(Some(156), None).unwrap_err();
         assert!(
             chrome.starts_with("engines.chromium.browser_major:"),

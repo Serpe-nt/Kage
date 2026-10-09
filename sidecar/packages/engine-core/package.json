@@ -20,6 +20,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@kage/contract": "workspace:*"
+    "@kage/contract": "workspace:*",
+    "zod": "4.6.5"
   }
 }

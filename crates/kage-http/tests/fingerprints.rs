@@ -25,8 +25,8 @@ use std::time::Duration;
 use common::{TestEcho, TestProxy, factory, observation, spec};
 use kage_core::domain::{ClaimedOs, Engine};
 use kage_http::headers::IdentityOverride;
-use kage_http::profile::{self, Family, VERIFIED_MAJORS, mapping_table};
-use kage_http::selftest::{self, Expected, Observed};
+use kage_http::profile::{self, BROWSER_ONLY_MAJORS, Family, VERIFIED_MAJORS, mapping_table};
+use kage_http::selftest::{self, BrowserCapture, Expected, Observed};
 use kage_http::{ClientFactory, ClientSpec, FetchSpec, ProfileChoice};
 
 fn fixture_dir() -> PathBuf {
@@ -410,68 +410,149 @@ async fn a_derived_profile_keeps_the_transport_and_presents_the_engines_major() 
     }
 }
 
-/// Consult 4: a major is offered a derived profile only when a capture from
-/// the real browser proves that its TLS fingerprint, its HTTP/2 fingerprint
-/// and its navigation headers equal what the derived profile sends.
+/// What of a browser capture differs from what the derived profile sends:
+/// any of `ja4`, `akamai`, `header_order`.
+async fn differences(
+    bench: &Bench,
+    engine: Engine,
+    major: u32,
+    capture: &BrowserCapture,
+) -> Vec<&'static str> {
+    let family = Family::of_engine(engine);
+    // Whatever the capture's operating system, the transport and the header
+    // names are the family's.
+    let resolved = profile::derive(family, major, ClaimedOs::Windows)
+        .unwrap_or_else(|| panic!("{engine} {major} is not newer than the newest profile"));
+    let spec = ClientSpec::new(resolved.choice.clone()).with_identity(IdentityOverride {
+        user_agent: resolved.user_agent.clone(),
+        client_hint_brands: resolved.client_hint_brands.clone(),
+    });
+    let (observed, _) = bench.observe(&spec).await;
+    let mut differing = Vec::new();
+    if observed.ja4 != capture.ja4 {
+        differing.push("ja4");
+    }
+    if observed.akamai.as_deref() != Some(capture.akamai.as_str()) {
+        differing.push("akamai");
+    }
+    if observed.header_names() != capture.headers {
+        differing.push("header_order");
+    }
+    differing
+}
+
+/// Consult 4 of M3 and follow-up F5: a major is offered a derived profile
+/// only when a capture from the real browser proves that its TLS
+/// fingerprint, its HTTP/2 fingerprint and its navigation headers equal
+/// what the derived profile sends. A major whose capture proves the
+/// opposite is listed as browser-only, and this test notices the day the
+/// two become equal.
 #[tokio::test(flavor = "multi_thread")]
-async fn every_verified_major_has_a_browser_capture_that_equals_the_derived_profile() {
-    let captures = fixture_dir().join("browser");
+async fn every_browser_capture_is_accounted_for() {
     let bench = Bench::start().await;
     let mut listed = BTreeSet::new();
+    let load = |engine: Engine, major: u32| {
+        selftest::browser_capture(engine.as_str(), major).unwrap_or_else(|| {
+            panic!(
+                "{engine}-{major} is listed without tests/fixtures/fingerprints/browser/\
+                 {engine}-{major}.json: record the capture from the engine against the echo first \
+                 (`just capture-browser-fingerprint`)"
+            )
+        })
+    };
 
     for &(engine, major) in VERIFIED_MAJORS {
-        let name = format!("{engine}-{major}");
-        let text =
-            std::fs::read_to_string(captures.join(format!("{name}.json"))).unwrap_or_else(|_| {
-                panic!(
-                    "{name} is in VERIFIED_MAJORS without tests/fixtures/fingerprints/browser/\
-                     {name}.json: record the capture from the engine against the echo first"
-                )
-            });
-        let capture: Expected = serde_json::from_str(&text).unwrap();
-        listed.insert(name.clone());
-        let family = Family::of_engine(engine);
-        // Whatever the capture's operating system, the transport and the
-        // header names are the family's.
-        let resolved = profile::derive(family, major, ClaimedOs::Windows)
-            .unwrap_or_else(|| panic!("{name} is not newer than the newest profile"));
-        let spec = ClientSpec::new(resolved.choice.clone()).with_identity(IdentityOverride {
-            user_agent: resolved.user_agent.clone(),
-            client_hint_brands: resolved.client_hint_brands.clone(),
-        });
-        let (observed, _) = bench.observe(&spec).await;
-        assert_eq!(observed.ja4, capture.ja4, "{name}: JA4");
+        let capture = load(engine, major);
+        listed.insert(format!("{engine}-{major}"));
         assert_eq!(
-            observed.akamai.as_deref(),
-            Some(capture.akamai.as_str()),
-            "{name}: HTTP/2"
-        );
-        assert_eq!(
-            observed.header_names(),
-            capture.headers,
-            "{name}: header order"
+            differences(&bench, engine, major, &capture).await,
+            Vec::<&str>::new(),
+            "{engine}-{major} is in VERIFIED_MAJORS but its capture differs from the derived profile"
         );
     }
 
-    // A capture nobody lists verifies nothing and would mislead.
-    if let Ok(entries) = std::fs::read_dir(&captures) {
-        for entry in entries.filter_map(Result::ok) {
-            let path = entry.path();
-            if path
-                .extension()
-                .is_some_and(|extension| extension == "json")
-            {
-                let stem = path.file_stem().unwrap().to_str().unwrap().to_owned();
-                assert!(
-                    listed.contains(&stem),
-                    "{stem}.json is not in VERIFIED_MAJORS"
-                );
+    for &(engine, major) in BROWSER_ONLY_MAJORS {
+        let capture = load(engine, major);
+        listed.insert(format!("{engine}-{major}"));
+        let differing = differences(&bench, engine, major, &capture).await;
+        assert_ne!(
+            differing,
+            Vec::<&str>::new(),
+            "the capture of {engine}-{major} now equals the derived profile: move it from \
+             BROWSER_ONLY_MAJORS to VERIFIED_MAJORS (docs/runbooks/fingerprint-echo.md)"
+        );
+        if (engine, major) == (Engine::Chromium, 155) {
+            // The recorded reason: one more TLS extension and three more
+            // signature algorithms. HTTP/2 and the header order are equal.
+            assert_eq!(differing, ["ja4"], "{}", capture.ja4_r);
+        }
+    }
+
+    // A capture nobody lists verifies nothing and would mislead; one that
+    // does not parse is worse.
+    for (stem, capture) in selftest::browser_captures() {
+        assert!(
+            listed.contains(stem),
+            "{stem}.json is in neither VERIFIED_MAJORS nor BROWSER_ONLY_MAJORS"
+        );
+        let capture = capture.unwrap_or_else(|error| panic!("{stem}.json: {error}"));
+        let (engine, major) = stem.split_once('-').unwrap();
+        assert_eq!(capture.engine, engine, "{stem}");
+        assert!(
+            capture.browser_version.starts_with(&format!("{major}.")),
+            "{stem}: {}",
+            capture.browser_version
+        );
+        assert!(capture.ja4.starts_with("t13d"), "{stem}: {}", capture.ja4);
+
+        // The capture is consistent with itself: the navigation's header
+        // names are the list the comparison uses.
+        let navigation = capture
+            .requests
+            .get("navigation")
+            .unwrap_or_else(|| panic!("{stem}: no typed navigation was captured"));
+        assert_eq!(navigation.http_version, "h2", "{stem}");
+        let names: Vec<String> = navigation
+            .headers
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect();
+        assert_eq!(names, capture.headers, "{stem}");
+        let value = |name: &str| {
+            navigation
+                .headers
+                .iter()
+                .find(|(found, _)| found == name)
+                .map(|(_, value)| value.as_str())
+        };
+        if engine == "chromium" {
+            // The browser says what the brand computation says for its major.
+            assert_eq!(
+                value("sec-ch-ua"),
+                Some(profile::chrome_brands(major.parse().unwrap()).as_str()),
+                "{stem}"
+            );
+            assert!(
+                value("user-agent")
+                    .is_some_and(|agent| agent.contains(&format!("Chrome/{major}.0.0.0"))),
+                "{stem}"
+            );
+            // What a later milestone builds the fetch()/XHR request kind
+            // from (follow-up F6).
+            for kind in [
+                "fetch_get",
+                "fetch_post_json",
+                "xhr_get",
+                "navigation_http1",
+            ] {
+                assert!(capture.requests.contains_key(kind), "{stem}: no {kind}");
             }
         }
     }
     assert!(
         VERIFIED_MAJORS
             .iter()
+            .chain(BROWSER_ONLY_MAJORS)
             .all(|(engine, _)| matches!(engine, Engine::Chromium | Engine::Firefox))
     );
 }

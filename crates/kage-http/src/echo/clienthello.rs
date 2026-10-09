@@ -280,9 +280,18 @@ impl ClientHello {
     fn raw_lists(&self) -> (String, String) {
         let ciphers = hex_list(&self.sorted_ciphers());
         let mut extensions = hex_list(&self.sorted_extensions());
-        if !self.signature_algorithms.is_empty() {
+        // In the order sent, without GREASE. Chrome 155 sends a GREASE value
+        // here too (found with the M4 browser capture); it is random per
+        // connection, so keeping it would give one browser many fingerprints.
+        let algorithms: Vec<u16> = self
+            .signature_algorithms
+            .iter()
+            .copied()
+            .filter(|algorithm| !is_grease(*algorithm))
+            .collect();
+        if !algorithms.is_empty() {
             extensions.push('_');
-            extensions.push_str(&hex_list(&self.signature_algorithms));
+            extensions.push_str(&hex_list(&algorithms));
         }
         (ciphers, extensions)
     }
@@ -472,6 +481,80 @@ pub(crate) mod tests {
         );
         // The value published for Chrome with this cipher list.
         assert_eq!(hello.ja4(), "t13d1516h2_8daaf6152771_d8a2da3f94cd");
+    }
+
+    /// A hello shaped like Chrome 155's, as the M4 capture recorded it
+    /// (`tests/fixtures/fingerprints/browser/chromium-155.json`): the trust
+    /// anchor extension `ca34`, the three ML-DSA signature algorithms, and a
+    /// GREASE value at the head of the signature algorithms.
+    fn chrome_155_like(signature_grease: u16) -> Vec<u8> {
+        let ciphers = [
+            0xfafa, 0x1301, 0x1302, 0x1303, 0xc02b, 0xc02f, 0xc02c, 0xc030, 0xcca9, 0xcca8, 0xc013,
+            0xc014, 0x009c, 0x009d, 0x002f, 0x0035,
+        ];
+        let extensions = [
+            (0x0a0a, Vec::new()),
+            (
+                0x000d,
+                vec16(&u16s(&[
+                    signature_grease,
+                    0x0904,
+                    0x0905,
+                    0x0906,
+                    0x0403,
+                    0x0804,
+                    0x0401,
+                    0x0503,
+                    0x0805,
+                    0x0501,
+                    0x0806,
+                    0x0601,
+                ])),
+            ),
+            sni("echo.kage.test"),
+            (0xca34, vec![0, 0]),
+            alpn(&["h2", "http/1.1"]),
+            (0xff01, vec![0]),
+            (0x0012, Vec::new()),
+            (0x000b, vec![1, 0]),
+            (0x0023, Vec::new()),
+            (0x0033, vec![0, 1, 0]),
+            (0xfe0d, vec![0; 8]),
+            (0x001b, vec![2, 0, 2]),
+            (0x002b, vec8(&u16s(&[0x4a4a, 0x0304, 0x0303]))),
+            (0x002d, vec![1, 1]),
+            (
+                0x000a,
+                vec16(&u16s(&[0xaaaa, 0x11ec, 0x001d, 0x0017, 0x0018])),
+            ),
+            (0x44cd, vec![0, 3, 2, b'h', b'2']),
+            (0x0005, vec![1, 0, 0, 0, 0]),
+            (0x0017, Vec::new()),
+            (0x7a7a, vec![0]),
+        ];
+        hello_bytes(&ciphers, &extensions)
+    }
+
+    #[test]
+    fn grease_among_the_signature_algorithms_is_left_out() {
+        let hello = ClientHello::parse(&chrome_155_like(0x0a0a)).unwrap();
+        // The value is kept as sent; only the fingerprint ignores it.
+        assert_eq!(hello.signature_algorithms.len(), 12);
+        assert_eq!(hello.signature_algorithms[0], 0x0a0a);
+        assert_eq!(
+            hello.ja4_raw(),
+            "t13d1517h2_002f,0035,009c,009d,1301,1302,1303,c013,c014,c02b,c02c,c02f,c030,cca8,\
+             cca9_0005,000a,000b,000d,0012,0017,001b,0023,002b,002d,0033,44cd,ca34,fe0d,ff01_0904,\
+             0905,0906,0403,0804,0401,0503,0805,0501,0806,0601"
+        );
+        // The value the M4 capture of Chrome 155.0.8059.39 recorded.
+        assert_eq!(hello.ja4(), "t13d1517h2_8daaf6152771_cb7bf5808d99");
+
+        // The next connection draws another GREASE value: same fingerprint.
+        for grease in [0x1a1a, 0x7a7a, 0xfafa] {
+            let other = ClientHello::parse(&chrome_155_like(grease)).unwrap();
+            assert_eq!(other.ja4(), hello.ja4(), "{grease:04x}");
+        }
     }
 
     #[test]

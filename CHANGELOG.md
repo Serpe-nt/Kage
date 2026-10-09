@@ -8,6 +8,62 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- M4, the browser sidecar and its Chromium engine:
+  - `@kage/contract`: zod schemas for every endpoint of the sidecar
+    (health, metrics, persona generation, contexts, navigate, flow, state
+    export and import, self-test), the OpenAPI document emitted from them
+    and committed (`sidecar/packages/contract/openapi.json`), and a check
+    that fails a change which breaks clients without a new major of the
+    contract (`just contract-check`, part of `just ci`).
+  - The sidecar server: every route behind the shared secret, bodies
+    validated in and out, Prometheus metrics, a context manager with a hard
+    cap, idempotent opens, idle close and browser recycling, and artifacts
+    written to the shared volume with their checksum.
+  - The Chromium engine: real Chrome stable, pinned by version and package
+    checksum, headful on one X display per persona, with a persistent
+    profile and an authenticated proxy. Loopback goes through the proxy and
+    WebRTC sends nothing around it. Chrome's sandbox stays on.
+  - A chromium persona claims the system its Chrome runs on, Linux, and is
+    made by how the browser is launched, with no script in any page
+    (ADR 0009). `engines.chromium.allow_cross_os_claims` exists and is off.
+  - `navigate` with waits and captures that a page cannot notice: DOM, raw
+    body, headers, redirect chain, XHR and fetch bodies, the browser's log,
+    timing and challenge signals. Screenshots and PDFs are files on the
+    artifacts volume; a capture with a visible side effect is opt-in and
+    named in the result.
+  - `state/export` and `state/import` in the shape of an `http_cookies`
+    row, so a session moves between the http path and a browser.
+  - The self-test endpoint and its pages: a coherence probe (window,
+    frames, workers, request headers, cache), the fingerprint echo, and
+    readers for bot.sannysoft.com and CreepJS. Third-party pages are loaded
+    only on request.
+  - `kage-browser`: Rust types generated from the committed OpenAPI
+    document at build time, a client with timeouts and retries on
+    connection errors only, the post-hoc SSRF check of a navigation's
+    redirect chain, and a contract test that fails when the document and
+    the client drift apart.
+  - `kage selftest browser`: runs the self-test for one proxy through the
+    sidecar. `selftest.browser` in the configuration names the pages.
+  - The fingerprint echo serves `/browser`, a page that makes a real
+    browser show its navigation, `fetch()` and `XMLHttpRequest` requests;
+    `just capture-browser-fingerprint` records them. Chrome 155 is recorded
+    and is browser-only on the http path: its TLS fingerprint is newer than
+    any emulation profile (`BROWSER_ONLY_MAJORS`).
+  - The Chromium sidecar image and its hardening: non-root, read-only root
+    filesystem, no capabilities, and a seccomp profile derived from
+    Docker's default that lets Chrome's sandbox work. The stack smoke test
+    checks it with a context open.
+  - Runbook `docs/runbooks/engine-chromium.md`.
+
+### Changed
+
+- The sidecars need the shared secret on every route, the health endpoint
+  included; the container healthcheck sends it.
+- `sidecar` in the configuration gained each engine's URL, the timeouts
+  and the connection retries.
+- The JA4 the echo computes leaves GREASE out of the signature algorithms
+  as well, which Chrome 155 now sends there.
+
 - M3, the http path:
   - `kage-http`: fetches a page through a proxy with wreq, looking like the
     browser a profile names. A client factory keeps one client per proxy and

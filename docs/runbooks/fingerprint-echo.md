@@ -186,27 +186,74 @@ wreq-util ships), the majors verified beyond them (`verified_majors`), and
 the majors the engines bundle (`engines`).
 
 `engines.chromium.browser_major` and `engines.firefox.browser_major` name
-the browser each engine image bundles; M4 and M5 set them. A set major that
-no profile serves fails `kage config check` and the profile test. That is
-the gate working: a persona of that engine would otherwise present one
-browser version in the browser and another over http.
+the browser each engine image bundles. The Chromium image of this release
+bundles Chrome 155: set `engines.chromium.browser_major: 155`. A set major
+must be served by a profile, verified (`VERIFIED_MAJORS`), or recorded as
+browser-only (`BROWSER_ONLY_MAJORS`); anything else fails
+`kage config check` and the profile test. That is the gate working: a
+persona of that engine would otherwise present one browser version in the
+browser and another over http.
 
-To unlock a major that is newer than every wreq-util profile:
+### Capturing the real browser
 
-1. Point the real browser of that major at the echo, through a proxy, and
-   keep the answer (the capture tooling arrives with M4 and M5).
-2. Compare it with the fixture of the newest profile of that family: `ja4`,
-   `akamai`, and the navigation header names and their order. All three
-   must be equal. TLS and HTTP/2 alone are not enough: a newer
-   `User-Agent` on an older header order is the same kind of mismatch.
-3. When the headers differ, the header table in
-   `crates/kage-http/src/headers.rs` gets an entry for that major first.
-4. Add `(engine, major)` to `VERIFIED_MAJORS` in
-   `crates/kage-http/src/profile.rs`, with the capture in the pull request.
-   The http path then presents the newest profile's TLS and HTTP/2 with a
-   `User-Agent` and `sec-ch-ua` written for the real major.
+```bash
+just capture-browser-fingerprint
+```
 
-When the three values are not equal, the major stays unverified and
-personas of that engine are browser-only until a wreq-util release carries
-a matching profile. Bumping wreq-util is a fingerprint-critical change of
-its own (`docs/versions.md`).
+starts `kage echo serve` on loopback with a throwaway certificate
+authority, opens a Chromium context of the engine itself through a local
+proxy, and lets the real Chrome make five requests to the echo: a typed
+navigation to `/browser` (a small page of the echo that then makes the
+others), a `fetch()` GET, a `fetch()` POST with a JSON body, an
+`XMLHttpRequest`, and a navigation over HTTP/1.1. It writes
+`tests/fixtures/fingerprints/browser/<engine>-<major>.json`: the JA4 with
+its written-out lists, the HTTP/2 fingerprint, and every request with its
+headers in wire order. No network beyond loopback is involved. The capture
+is compiled into `kage` (`kage config check` counts the captures under
+`http.browser_captures` and names the browser-only majors) and is what an `echo` page of the browser
+self-test is compared with.
+
+### Deciding what the major may do
+
+1. Compare the capture with the fixture of the newest profile of that
+   family: `ja4`, `akamai`, and the navigation header names and their
+   order. All three must be equal. TLS and HTTP/2 alone are not enough: a
+   newer `User-Agent` on an older header order is the same kind of mismatch.
+   `crates/kage-http/tests/fingerprints.rs`
+   (`every_browser_capture_is_accounted_for`) makes this comparison for
+   every capture in the repository and fails for one that is in neither
+   list.
+2. All three equal: add `(engine, major)` to `VERIFIED_MAJORS` in
+   `crates/kage-http/src/profile.rs`. The http path then presents the
+   newest profile's TLS and HTTP/2 with a `User-Agent` and `sec-ch-ua`
+   written for the real major. When only header values differ, the header
+   table in `crates/kage-http/src/headers.rs` gets an entry for that major
+   first.
+3. Any of the three differs: add it to `BROWSER_ONLY_MAJORS` with the
+   reason, and to the test's list of what differs. Personas of that engine
+   are browser-only (`wreq_profile` null) until a wreq-util release carries
+   a matching profile. Bumping wreq-util is a fingerprint-critical change
+   of its own (`docs/versions.md`).
+
+### Chrome 155: browser-only
+
+Recorded 2026-10-09 from Chrome 155.0.8059.39 on Linux
+(`tests/fixtures/fingerprints/browser/chromium-155.json`), compared with
+`chrome_149`, the newest Chrome profile of wreq-util 0.2.0:
+
+| | Chrome 155 (real) | `chrome_149` (wreq-util) |
+|---|---|---|
+| JA4 | `t13d1517h2_8daaf6152771_cb7bf5808d99` | `t13d1516h2_8daaf6152771_d8a2da3f94cd` |
+| HTTP/2 | `1:65536;2:0;4:6291456;6:262144\|15663105\|0\|m,a,s,p` | the same |
+| navigation header names and order | 13 names | the same 13, same order |
+
+The ciphers are the same; the extensions and the signature algorithms are
+not. Chrome 155 sends one extension more (`ca34`) and three signature
+algorithms more, the ML-DSA ones (`0904`, `0905`, `0906`), ahead of the
+classical list. No header table can make an older TLS stack send those, so
+155 is in `BROWSER_ONLY_MAJORS` and a Chrome 155 persona has no http path
+until wreq-util ships a profile for it. One header value differs as well
+and is ready for that day: the navigation `Accept` now names `image/jxl`.
+
+The capture also holds what F6 (M8) needs: the header sets of `fetch()` and
+`XMLHttpRequest` as the real browser sends them.

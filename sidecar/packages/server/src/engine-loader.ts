@@ -1,5 +1,5 @@
 import type { EngineName } from '@kage/contract';
-import type { Engine, EngineModule } from '@kage/engine-core';
+import type { Engine, EngineModule, EngineOptions } from '@kage/engine-core';
 
 /**
  * The `ENGINE` switch. One lazy import per engine: only the selected engine
@@ -12,7 +12,7 @@ const loaders: Record<EngineName, () => Promise<EngineModule>> = {
 };
 
 /** Loads the engine package for `name` and creates its engine. */
-export async function loadEngine(name: EngineName): Promise<Engine> {
+export async function loadEngine(name: EngineName, options: EngineOptions): Promise<Engine> {
   const engineModule = await loaders[name]();
-  return engineModule.createEngine();
+  return engineModule.createEngine(options);
 }

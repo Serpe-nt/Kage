@@ -295,12 +295,27 @@ A persona is generated when a proxy enters `healthy` for the first time.
   of the real browser against the same echo equals the profile's JA4, HTTP/2
   string and navigation header set and order (`VERIFIED_MAJORS` in
   `kage-http`). Until then that persona is browser-only.
-- The platform claimed by a chromium persona on a Linux host is produced by
-  fingerprint injection. If the chromium self-test fails the Client Hints
-  coherence check on the current Chrome build, the chromium engine MUST be
-  restricted to `claimed_os = linux` personas until fixed (configuration
-  flag `engines.chromium.allow_cross_os_claims`, default true, flipped by
-  the operator or by the nightly suite opening an issue).
+- A chromium persona claims the operating system its Chrome runs on: Linux
+  in the shipped image (ADR 0009). M4 measured the alternative on Chrome
+  155: every way of claiming another system leaves dedicated and blob
+  workers, and the `Sec-CH-UA-Platform` of their requests, saying Linux, so
+  one page load shows both systems. The chromium engine is therefore
+  restricted to `claimed_os = linux` (`engines.chromium.allow_cross_os_claims`
+  and the sidecar's `SIDECAR_ALLOW_CROSS_OS_CLAIMS`, default false; a
+  persona that claims another system is refused with
+  `cross_os_claim_disabled`). The identity is made by how the browser is
+  launched (display, time zone, languages, CPU affinity, WebGL through
+  Mesa), with no script in any page (`inject: none`).
+- The coherence bar of a chromium persona, tested on the fixture site and
+  by the self-test probe: `User-Agent` and `Sec-CH-UA-Platform` on the
+  navigation, an iframe navigation, a window `fetch()`, the worker script
+  request and a worker `fetch()`; `navigator.userAgent`,
+  `navigator.platform`, `userAgentData.platform` and the high-entropy
+  values in the window, a same-origin, a `srcdoc` and an `about:blank`
+  iframe, a dedicated worker and a blob worker; native getters; navigation
+  header names and order equal to the recorded capture of the real browser;
+  no `Pragma` or `Cache-Control` on a plain navigation; a second visit
+  served from cache.
 - Never rotate any identity attribute inside a persona's lifetime. Browser
   major may advance only when the engine image is upgraded; then every
   persona of that engine gets its `browser_major` and `wreq_profile` updated
@@ -610,12 +625,23 @@ request is converted into a job and `202` returned with the job id.
 ### 10.1 Service shape
 
 Fastify server, `ENGINE=chromium|firefox`, listens on the compose network
-only, requires `X-Kage-Sidecar-Token` (shared secret). One browser process
-per engine container with up to `SIDECAR_MAX_CONTEXTS` concurrent persona
-contexts (default 3 per container; scale by running more containers). Each
-persona context uses its own persistent profile directory
-(`launchPersistentContext` or engine equivalent) and its own authenticated
-proxy.
+only, requires `X-Kage-Sidecar-Token` (shared secret, at least 24
+characters, compared in constant time) on every route, health and metrics
+included: the container healthcheck sends it too. Up to
+`SIDECAR_MAX_CONTEXTS` concurrent persona contexts per container (default
+3; scale by running more containers). Each persona context uses its own
+persistent profile directory (`launchPersistentContext` or engine
+equivalent) and its own authenticated proxy. On chromium a persistent
+profile is a browser process of its own, so a container runs one Chrome per
+open context, each on its own X display.
+
+Opening is idempotent per persona: the same request again answers with the
+open context (`reused: true`), a different request for a persona whose
+context is open answers `context_conflict`, one context more than the cap
+answers `context_limit`, and a second operation on a context that is busy
+answers `context_busy`. Requests and responses are validated against the
+contract in both directions; errors are `{code, message}` with the stable
+codes of the contract.
 
 ### 10.2 Contract (v1)
 
@@ -638,21 +664,72 @@ file and the Rust types drift.
 | `POST /v1/contexts/{id}/selftest` | run the detection page set, return findings and score |
 
 Page result: status and headers of the main navigation, final URL and
-redirect chain, DOM HTML after settle, raw main body, captured XHR/fetch
-responses (filtered by content-type and size), console errors, timing,
-challenge signals (vendor scripts seen, interstitial detected and whether it
-auto-resolved), screenshots and PDFs as artifact references (sidecar writes
-them to the shared artifacts volume and returns paths).
+redirect chain (every hop with its `Location`), DOM HTML after settle, raw
+main body, captured XHR/fetch responses (filtered by content-type and size),
+console entries, timing, challenge signals (vendor scripts seen,
+interstitial detected and whether it auto-resolved within
+`challenge_wait_ms`), screenshots and PDFs as artifact references (sidecar
+writes them to the shared artifacts volume and returns paths). A navigation
+that fails is a page result too, with a typed `error` (`timeout`,
+`navigation_failed`, `proxy_failed`, `aborted`) and whatever was captured
+until then.
+
+Captures must not change what the page experiences. Bodies come from
+network events, never from request interception; the DOM is read in an
+isolated world. A capture a page can notice is opt-in per request, off by
+default, and named in `side_effects`: a full-page screenshot (`resize`)
+and a PDF (`beforeprint`, `afterprint`). On chromium the console capture
+is the browser's log domain (network and security messages); `console.*`
+calls and uncaught errors are not captured, because reading them needs
+`Runtime.enable`, and the result says which source was used
+(`console_capture`).
+
+The post-hoc SSRF check of the redirect chain (§19) runs in
+`kage-browser` on the reported chain, with `kage-core`'s functions; a
+denied hop is reported as `ssrf_denied` and the captures are dropped.
+
+`state/export` and `state/import` speak the fields of an `http_cookies`
+row (§6.4), so a cookie moves between the http path and a browser without
+translation. `selftest` takes its page list from the request and defaults
+to the sidecar's own pages (the coherence probe and the fingerprint echo);
+third-party detection pages are loaded only when a request names them
+(§7.4). `flow` answers `not_implemented` until M5 delivers the behavior
+engine and the action DSL (§10.4, §10.5).
+
+A breaking change of the contract needs a new major of the contract
+version; `just contract-check` compares the committed document with the
+one on the base branch and fails otherwise.
 
 ### 10.3 Engines
 
-**chromium.** patchright, `channel: "chrome"` (real Chrome stable installed in
-the image), headful under Xvfb, no default viewport override (screen size
-comes from the Xvfb screen matching the persona), fingerprint via
-fingerprint-injector built from the persisted fingerprint, proxy via context
-options. Rules from patchright's guidance: no custom UA through Playwright
-options, no `addInitScript` from application code outside the injector, no
-`Runtime.enable`-dependent APIs.
+**chromium.** patchright driving real Chrome stable, installed in the image
+at a pinned version and started by its path (what `channel: "chrome"`
+resolves to) through a wrapper that sets the persona's CPU affinity.
+Headful, one Xvfb display per context sized from the persona's screen, no
+viewport override, Chrome's sandbox on. The persona is made by launch
+parameters: the display, `TZ`, `--lang` and `LANG`, and two preferences
+merged into the profile before launch (`intl.accept_languages`, and
+`webrtc.ip_handling_policy = disable_non_proxied_udp` so that no UDP
+leaves outside the proxy); WebGL comes from Mesa llvmpipe through ANGLE, or
+from a GPU of the host when one is mapped in (`SIDECAR_GL`). Proxy with
+credentials via context options and the bypass rule `<-loopback>`, so that
+loopback targets leave through the proxy as well (§19). No HTTP/3.
+
+The fingerprint is generated with fingerprint-generator from a 64-hex seed
+(its randomness replaced by a seeded generator for the duration of the
+call, so the same seed gives the same document) and persisted as a small
+versioned document: generator and seed, claimed OS, the screen and CPU
+count drawn, the list of values that belong to the host and not to the
+persona, and the injection payload when there is one. The browser version
+is always read from the installed Chrome, never from the generator. With
+the default `inject: none` nothing is injected. `inject: window`
+(cross-OS claims, off by default, §6.2) applies fingerprint-injector's
+script deterministically from the persisted document through a CDP
+`User-Agent` override and one script per document.
+
+Rules from patchright's guidance, kept by tests: no custom UA through
+Playwright options, no `addInitScript` and no request interception from
+application code, no `Runtime.enable`-dependent APIs.
 
 **firefox.** camoufox-js with the persisted fingerprint (`fingerprint` option),
 `geoip` disabled in favor of explicit `locale`, `timezone`, `geolocation`
@@ -689,10 +766,15 @@ Each step reports success, duration and a capture when requested.
 
 ### 10.6 Resource rules
 
-`shm_size` ≥ 1 GB for Chromium, memory limit per container, hard context
-cap, contexts are closed after `SIDECAR_CONTEXT_IDLE_MS` (default 2 min) and
-reopened on demand (profile persists). A browser process is recycled after
-`SIDECAR_MAX_PAGES_PER_BROWSER` (default 500) navigations.
+`shm_size` ≥ 1 GB for Chromium, memory and process limits per container
+(`pids_limit` 4096 for chromium: three browsers are a few hundred threads
+each), hard context cap, contexts are closed after
+`SIDECAR_CONTEXT_IDLE_MS` (default 2 min) and reopened on demand (profile
+persists). A browser process is recycled after
+`SIDECAR_MAX_PAGES_PER_BROWSER` (default 500) navigations: the context is
+reopened from the same request before the next operation, which the
+metrics count. A context whose browser died is closed and reported, never
+left in the table.
 
 ---
 
@@ -940,9 +1022,13 @@ optional. Startup fails on a missing required secret. `kage config check`
 validates and prints the effective config as JSON with secrets redacted.
 Sections at this point: `server`, `database`, `secrets`, `sidecar`,
 `policies`, `artifacts`, `proxies` (with `proxies.health`), `webshare`,
-`reputation`, `http` (with `http.subresources`), `selftest` (`selftest.http`),
-`engines` (`engines.<engine>.browser_major`, unset until M4 and M5 pin the
-browsers; a set major that no profile serves fails `kage config check`);
+`reputation`, `http` (with `http.subresources`), `selftest` (`selftest.http`,
+`selftest.browser` with its own pages and the third-party pages),
+`engines` (`engines.<engine>.browser_major`: 155 for the chromium image of
+M4, unset for firefox until M5; a set major must be served by a profile,
+verified or recorded as browser-only, or `kage config check` fails;
+`engines.chromium.allow_cross_os_claims`, default false). `sidecar` holds
+the token, each engine's URL, the timeouts and `connect_retries`;
 every section rejects unknown keys and every non-secret key is listed in
 `deploy/kage.example.yaml` (a test compares them).
 
@@ -1014,9 +1100,22 @@ are gzip-compressed on disk.
   sidecar token constant-time compared; never logged (tracing field
   redaction tested).
 - **Isolation.** Sidecars listen only on the compose network; browsers run
-  as non-root with seccomp default profile, `no-new-privileges`, read-only
-  root FS except profile and artifact mounts; Chrome sandbox stays enabled
-  (no `--no-sandbox`); the Kage container has no browser.
+  as non-root with every capability dropped, `no-new-privileges`, read-only
+  root FS except profile and artifact mounts and `/tmp`; Chrome sandbox
+  stays enabled (no `--no-sandbox`); the Kage container has no browser.
+  The chromium sidecar runs under `deploy/seccomp/chromium.json`: Docker's
+  default profile plus the four system calls Chrome's namespace sandbox
+  needs (`chroot`, `clone`, `setns`, `unshare`), which the default
+  refuses to a container without capabilities. The firefox sidecar keeps
+  the default profile. The stack smoke test checks all of it on a running
+  container with a context open.
+- **Browser path.** Loopback is sent through the proxy (`<-loopback>`), so
+  a page cannot reach the sidecar's own network. The redirect chain of a
+  navigation is checked after the fact with the same functions as the http
+  path; a denied hop is `ssrf_denied` and nothing read from it is returned.
+  The request to such a hop has left through the proxy by then; that is the
+  limit of a check that does not intercept requests. WebRTC sends no UDP
+  outside the proxy.
 - **Input limits.** Body size limits on all endpoints, header count and
   size limits, URL length, items per job (default 10 000), artifact size.
 - **Rate limiting.** Per key and global; `429` with `Retry-After`.
@@ -1077,8 +1176,13 @@ generated, images pushed with digests recorded in `deploy/compose.yaml`.
   nasm, perl, golang (BoringSSL build deps); runtime distroless or
   debian-slim non-root; `cargo auditable` build.
 - `deploy/docker/sidecar.Dockerfile`: Node LTS base, build arg `ENGINE`;
-  chromium variant installs Chrome stable and Xvfb; firefox variant fetches
-  the pinned Camoufox build; both record versions under `/etc/kage/`.
+  chromium variant installs Chrome stable at a pinned version, verified by
+  the checksum of Google's package (`CHROME_VERSION`, `CHROME_SHA256`),
+  Xvfb, Mesa and the font set of the distribution's desktop; firefox
+  variant fetches the pinned Camoufox build; both record versions under
+  `/etc/kage/` (chromium: `chrome-version`, `fonts`, `display`).
+  `scripts/setup-chrome.sh` installs the same Chrome on a CI runner or a
+  developer machine from the same two lines.
 - `deploy/compose.yaml`: services, healthchecks, resource limits,
   `shm_size`, read-only FS, secrets, volumes, digests.
 - Runbooks in `docs/runbooks/`: first start, adding proxies, replacing an

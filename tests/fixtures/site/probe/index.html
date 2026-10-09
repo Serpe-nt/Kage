@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Kage coherence probe</title>
+  </head>
+  <body>
+    <h1>Coherence probe</h1>
+    <p>
+      This page reads the same values in the window, in three kinds of frames and in two kinds of
+      workers, and publishes them as JSON below. It judges nothing: the sidecar compares the report
+      with what a persona claims (spec §6.2).
+    </p>
+    <iframe id="frame-same" src="frame.html" title="same-origin frame"></iframe>
+    <iframe id="frame-srcdoc" srcdoc="<!doctype html><title>srcdoc</title>" title="srcdoc frame"></iframe>
+    <script type="application/json" id="kage-probe-report">null</script>
+    <script>
+      (async () => {
+        // The server that hosts the probe writes the headers of the request
+        // for this document here; a static host leaves null.
+        const REQUEST_HEADERS = /*KAGE_REQUEST_HEADERS*/null;
+
+        // Reads one global scope. Self-contained: a blob worker runs its source.
+        const readScope = async (scope, makeCanvas) => {
+          const out = {
+            user_agent: null, platform: null, languages: null, hardware_concurrency: null,
+            device_memory: null, timezone: null, uad_platform: null, high_entropy: null,
+            webgl: null, error: null,
+          };
+          try {
+            const nav = scope.navigator;
+            out.user_agent = nav.userAgent;
+            out.platform = nav.platform;
+            out.languages = Array.from(nav.languages || []);
+            out.hardware_concurrency = nav.hardwareConcurrency ?? null;
+            out.device_memory = nav.deviceMemory ?? null;
+            out.timezone = new scope.Intl.DateTimeFormat().resolvedOptions().timeZone;
+            if (nav.userAgentData) {
+              out.uad_platform = nav.userAgentData.platform;
+              const high = await nav.userAgentData.getHighEntropyValues(
+                ['platform', 'platformVersion', 'architecture', 'bitness', 'uaFullVersion'],
+              );
+              out.high_entropy = {
+                platform: high.platform ?? null,
+                platform_version: high.platformVersion ?? null,
+                architecture: high.architecture ?? null,
+                bitness: high.bitness ?? null,
+                ua_full_version: high.uaFullVersion ?? null,
+              };
+            }
+            const gl = makeCanvas().getContext('webgl');
+            const info = gl && gl.getExtension('WEBGL_debug_renderer_info');
+            if (gl && info) {
+              out.webgl = {
+                vendor: gl.getParameter(info.UNMASKED_VENDOR_WEBGL),
+                renderer: gl.getParameter(info.UNMASKED_RENDERER_WEBGL),
+              };
+            }
+          } catch (error) {
+            out.error = String(error);
+          }
+          return out;
+        };
+
+        const frameScope = async (frame) => {
+          try {
+            const win = frame.contentWindow;
+            return await readScope(win, () => win.document.createElement('canvas'));
+          } catch (error) {
+            return null;
+          }
+        };
+        const fromWorker = (worker) =>
+          new Promise((resolve) => {
+            const timer = setTimeout(() => resolve(null), 4000);
+            worker.onmessage = (event) => { clearTimeout(timer); resolve(event.data); };
+            worker.onerror = () => { clearTimeout(timer); resolve(null); };
+          });
+        const fetchedHeaders = async () => {
+          try {
+            const response = await fetch('headers');
+            return response.ok ? (await response.json()).headers : null;
+          } catch (error) {
+            return null;
+          }
+        };
+        const loaded = (frame) =>
+          new Promise((resolve) => {
+            if (frame.contentDocument && frame.contentDocument.readyState === 'complete') resolve();
+            else frame.addEventListener('load', () => resolve(), { once: true });
+            setTimeout(resolve, 3000);
+          });
+
+        // What a detector does to find a debugger that serializes console
+        // arguments: an object whose getter counts how often it is read.
+        let stackReads = 0;
+        const bait = new Error('probe');
+        Object.defineProperty(bait, 'stack', { get() { stackReads += 1; return ''; } });
+        console.debug(bait);
+
+        const native = (object, name) => {
+          const descriptor = Object.getOwnPropertyDescriptor(object, name);
+          return Boolean(descriptor && descriptor.get) &&
+            /\{\s*\[native code\]\s*\}/.test(Function.prototype.toString.call(descriptor.get));
+        };
+        let illegalThrows = false;
+        try {
+          Object.getOwnPropertyDescriptor(Navigator.prototype, 'userAgent').get.call({});
+        } catch (error) {
+          illegalThrows = error instanceof TypeError;
+        }
+
+        const same = document.getElementById('frame-same');
+        const srcdoc = document.getElementById('frame-srcdoc');
+        await Promise.all([loaded(same), loaded(srcdoc)]);
+        const blank = document.createElement('iframe');
+        blank.title = 'blank frame';
+        document.body.appendChild(blank);
+
+        let worker = null;
+        try { worker = new Worker('worker.js'); } catch (error) { worker = null; }
+        let blobWorker = null;
+        try {
+          const source = `(${readScope.toString()})(self, () => new OffscreenCanvas(8, 8)).then((scope) => postMessage({ scope }))`;
+          blobWorker = new Worker(URL.createObjectURL(new Blob([source], { type: 'text/javascript' })));
+        } catch (error) { blobWorker = null; }
+
+        const [windowScope, sameScope, srcdocScope, blankScope, workerData, blobData, fetchHeaders] =
+          await Promise.all([
+            readScope(window, () => document.createElement('canvas')),
+            frameScope(same),
+            frameScope(srcdoc),
+            frameScope(blank),
+            worker ? fromWorker(worker) : null,
+            blobWorker ? fromWorker(blobWorker) : null,
+            fetchedHeaders(),
+          ]);
+        await new Promise((resolve) => setTimeout(resolve, 150));
+
+        let frameHeaders = null;
+        try { frameHeaders = same.contentWindow.__kageRequestHeaders ?? null; } catch (error) { frameHeaders = null; }
+
+        const report = {
+          kage_probe: 1,
+          scopes: {
+            window: windowScope,
+            iframe_same_origin: sameScope,
+            iframe_srcdoc: srcdocScope,
+            iframe_blank: blankScope,
+            worker: workerData ? workerData.scope : null,
+            blob_worker: blobData ? blobData.scope : null,
+          },
+          automation: {
+            webdriver: typeof navigator.webdriver === 'boolean' ? navigator.webdriver : null,
+            console_stack_reads: stackReads,
+            getters_native:
+              ['userAgent', 'platform', 'hardwareConcurrency', 'languages', 'webdriver'].every((name) =>
+                native(Navigator.prototype, name),
+              ) &&
+              native(Screen.prototype, 'width') &&
+              /\{\s*\[native code\]\s*\}/.test(Function.prototype.toString.toString()),
+            illegal_invocation_throws: illegalThrows,
+            navigator_own_properties: Object.getOwnPropertyNames(navigator),
+          },
+          requests: {
+            navigation: REQUEST_HEADERS,
+            iframe: frameHeaders,
+            fetch: fetchHeaders,
+            worker_script: workerData ? workerData.script_headers : null,
+            worker_fetch: workerData ? workerData.fetch_headers : null,
+          },
+        };
+        const element = document.getElementById('kage-probe-report');
+        element.textContent = JSON.stringify(report);
+        element.setAttribute('data-done', '1');
+      })();
+    </script>
+  </body>
+</html>

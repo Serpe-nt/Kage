@@ -25,7 +25,9 @@
     "@kage/engine-chromium": "workspace:*",
     "@kage/engine-core": "workspace:*",
     "@kage/engine-firefox": "workspace:*",
+    "@prometheus-io/client": "0.16.1",
     "fastify": "5.12.5",
+    "pino": "10.4.0",
     "zod": "4.6.5"
   }
 }

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Stack smoke test: brings the compose project up and checks that kage serves
-# /healthz, both sidecars serve /v1/health, Postgres accepts connections, the
-# migrations are applied, and the configuration loads with secrets redacted.
+# /healthz, both sidecars serve /v1/health behind the shared secret, the
+# Chromium sidecar runs a real browser hardened as spec §19 and §22 ask,
+# Postgres accepts connections, the migrations are applied, and the
+# configuration loads with secrets redacted.
 #
 # It uses its own compose project name and host port, so it never touches a
 # stack started with `just dev` or `docker compose up`.
@@ -51,10 +53,35 @@ for engine in chromium firefox; do
     esac
 done
 
-echo "==> sidecars are reachable by service name on the compose network"
-"${compose[@]}" exec -T browser-firefox node -e \
-    "fetch('http://browser-chromium:8090/v1/health').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))" \
-    || fail "browser-chromium is not reachable from browser-firefox"
+echo "==> sidecars are reachable by service name on the compose network, with the shared secret only"
+# Both sidecars hold the same secret, so one can stand in for kage here.
+reach() {
+    "${compose[@]}" exec -T browser-firefox node -e \
+        "fetch('http://browser-chromium:8090/v1/health', { headers: $1 }).then((r) => console.log(r.status), () => console.log('unreachable'))"
+}
+with_token="$(reach "{ 'x-kage-sidecar-token': process.env.SIDECAR_TOKEN }")"
+[ "${with_token}" = 200 ] || fail "browser-chromium answered ${with_token} to a call with the token"
+without_token="$(reach "{}")"
+[ "${without_token}" = 401 ] || fail "browser-chromium answered ${without_token} to a call without the token"
+echo "    with the token: ${with_token}, without: ${without_token}"
+
+echo "==> browser-chromium is hardened and runs Chrome inside Chrome's own sandbox"
+container="$("${compose[@]}" ps --quiet browser-chromium)"
+hardening="$(docker inspect --format \
+    '{{.Config.User}} {{.HostConfig.ReadonlyRootfs}} {{json .HostConfig.CapDrop}} {{json .HostConfig.CapAdd}} {{.HostConfig.Privileged}}' \
+    "${container}")"
+[ "${hardening}" = '65532:65532 true ["ALL"] null false' ] \
+    || fail "browser-chromium container settings: ${hardening}"
+# The seccomp entry holds the whole profile; only its presence is checked.
+security="$(docker inspect --format '{{range .HostConfig.SecurityOpt}}{{slice (printf "%-20s" .) 0 20}}|{{end}}' "${container}")"
+case "${security}" in
+    *no-new-privileges*seccomp=* | *seccomp=*no-new-privileges*) ;;
+    *) fail "browser-chromium security options: ${security}" ;;
+esac
+echo "    user 65532, read-only root, no capabilities, no-new-privileges, the derived seccomp profile"
+sandbox="$("${compose[@]}" exec -T browser-chromium node --input-type=module - < tests/e2e/chromium-hardening.mjs)" \
+    || fail "the Chromium hardening check failed"
+echo "    ${sandbox}"
 
 echo "==> postgres accepts connections"
 "${compose[@]}" exec -T postgres pg_isready --username kage --dbname kage
@@ -93,6 +120,13 @@ case "${config}" in
     *) fail "unexpected kage config check output: ${config}" ;;
 esac
 echo "    secrets redacted, policies loaded from /etc/kage/policies"
+
+echo "==> kage is configured for the Chrome its Chromium sidecar bundles"
+bundled="$("${compose[@]}" exec -T browser-chromium cat /etc/kage/chrome-version)"
+case "${config}" in
+    *"\"browser_major\": ${bundled%%.*}"*) echo "    Chrome ${bundled}, engines.chromium.browser_major ${bundled%%.*}" ;;
+    *) fail "the image bundles Chrome ${bundled}; engines.chromium.browser_major says otherwise" ;;
+esac
 
 echo "==> only kage publishes a host port"
 for service in kage browser-chromium browser-firefox postgres; do

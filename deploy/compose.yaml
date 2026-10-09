@@ -15,7 +15,7 @@ x-hardening: &hardening
 
 x-sidecar: &sidecar
   <<: *hardening
-  # Reaps browser child processes once the engines launch real browsers.
+  # Reaps the browsers' child processes.
   init: true
   # Browsers keep shared memory in /dev/shm; the 64 MB default crashes tabs.
   shm_size: 1gb
@@ -83,7 +83,10 @@ services:
     environment:
       <<: *kage-secrets
       KAGE__SERVER__BIND: 0.0.0.0:8080
-      # The sidecars start checking KAGE__SIDECAR__TOKEN in M4.
+      # The major of the Chrome that the browser-chromium image bundles
+      # (CHROME_VERSION in deploy/docker/sidecar.Dockerfile). The stack
+      # smoke test fails when the two disagree.
+      KAGE__ENGINES__CHROMIUM__BROWSER_MAJOR: ${KAGE_CHROMIUM_BROWSER_MAJOR:-155}
     ports:
       # Loopback by default: the API has no authentication until M8.
       - "${KAGE_PUBLISH_ADDR:-127.0.0.1}:${KAGE_PUBLISH_PORT:-8080}:8080"
@@ -109,6 +112,32 @@ services:
         ENGINE: chromium
     environment:
       ENGINE: chromium
+      # The shared secret of kage and its sidecars (X-Kage-Sidecar-Token):
+      # the same value kage gets as KAGE__SIDECAR__TOKEN.
+      SIDECAR_TOKEN: ${KAGE_SIDECAR_TOKEN:?run 'just setup' to create deploy/.env}
+      # Contexts at once, idle close and browser recycling (spec §10.1, §10.6).
+      SIDECAR_MAX_CONTEXTS: ${KAGE_SIDECAR_MAX_CONTEXTS:-3}
+      SIDECAR_CONTEXT_IDLE_MS: ${KAGE_SIDECAR_CONTEXT_IDLE_MS:-120000}
+      SIDECAR_MAX_PAGES_PER_BROWSER: ${KAGE_SIDECAR_MAX_PAGES_PER_BROWSER:-500}
+      # A chromium persona claims the system it runs on, Linux (docs/adr/0009).
+      SIDECAR_ALLOW_CROSS_OS_CLAIMS: ${KAGE_SIDECAR_ALLOW_CROSS_OS_CLAIMS:-false}
+      # Where WebGL comes from: llvmpipe (Mesa's software renderer), or host
+      # when a GPU of the host is mapped in (docs/runbooks/engine-chromium.md).
+      SIDECAR_GL: ${KAGE_SIDECAR_GL:-llvmpipe}
+      # The self-test's own pages; third-party pages are never a default.
+      SIDECAR_SELFTEST_PROBE_URL: ${KAGE_SIDECAR_SELFTEST_PROBE_URL:-}
+      SIDECAR_SELFTEST_ECHO_URL: ${KAGE_SIDECAR_SELFTEST_ECHO_URL:-}
+    # Chrome's sandbox stays on (no --no-sandbox). It puts every renderer
+    # into its own user, PID and network namespace, which Docker's default
+    # seccomp profile refuses to a container without capabilities. This
+    # profile is the default plus the four system calls the sandbox needs
+    # (scripts/derive-chromium-seccomp.mjs).
+    security_opt:
+      - "no-new-privileges:true"
+      - "seccomp=./seccomp/chromium.json"
+    # A browser is a few hundred threads; three of them need more than the
+    # sidecars' common limit.
+    pids_limit: 4096
 
   browser-firefox:
     <<: *sidecar
@@ -120,6 +149,7 @@ services:
         ENGINE: firefox
     environment:
       ENGINE: firefox
+      SIDECAR_TOKEN: ${KAGE_SIDECAR_TOKEN:?run 'just setup' to create deploy/.env}
 
   # The fingerprint echo (spec §7.4): tells a client what its TLS handshake,
   # its HTTP/2 connection and its headers looked like. Off unless the `echo`

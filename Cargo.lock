@@ -1971,6 +1971,19 @@ dependencies = [
 [[package]]
 name = "kage-browser"
 version = "0.1.0"
+dependencies = [
+ "chrono",
+ "kage-core",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+ "wiremock",
+ "wreq",
+]
 
 [[package]]
 name = "kage-core"

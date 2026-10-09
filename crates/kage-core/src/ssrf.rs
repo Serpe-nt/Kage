@@ -13,7 +13,7 @@
 //!
 //! [`RedirectChain`] carries the same checks across redirect hops.
 //!
-//! # The browser path (for milestones M4 and M8)
+//! # The browser path
 //!
 //! A browser follows redirects by itself, so the hops of a browser
 //! navigation cannot be checked one by one from here. Two things keep the
@@ -22,11 +22,25 @@
 //! - Chromium bypasses the configured proxy for loopback by default, so a
 //!   redirect to `localhost` or `127.0.0.1` inside the browser container
 //!   would reach the sidecar's own server instead of leaving through the
-//!   proxy. The engines must launch with a bypass list that sends loopback
-//!   through the proxy too: Chromium's `<-loopback>` bypass rule, and for
-//!   Firefox the equivalent of not excluding loopback from the proxy.
-//! - The sidecar must check the final redirect chain after the navigation
-//!   with these same functions and report a denied hop as `ssrf_denied`.
+//!   proxy. The Chromium engine launches every context with the bypass rule
+//!   `<-loopback>`, which takes that exception away: loopback names and
+//!   addresses go to the proxy like every other host (its integration tests
+//!   show a redirect to `127.0.0.1` arriving at the proxy). The Firefox
+//!   engine must do the equivalent (M5).
+//! - The chain is checked after the navigation with these same functions.
+//!   The check lives next to them, in `kage_browser::ssrf::check_chain`,
+//!   and not in the sidecar: the rules, the configured exceptions
+//!   (`security.allow_ip_targets`) and the resolver are here, and a second
+//!   implementation in TypeScript would drift. The sidecar reports the
+//!   whole chain (the requested URL, every redirect with its `Location`,
+//!   the final URL); `SidecarClient::navigate_checked` walks it and answers
+//!   `Navigation::SsrfDenied` with the denied hop, after dropping what the
+//!   page captured. The caller reports it as `ssrf_denied`.
+//!
+//! The check is post hoc: when it denies, the request to the denied host
+//! has already left, through the proxy. That is the limit of this design
+//! and the reason for the first point; what the check prevents is that
+//! anything read from such a host is returned or stored.
 //!
 //! Intercepting navigation requests to check each hop first is not the
 //! first choice: request interception adds an automation fingerprint.

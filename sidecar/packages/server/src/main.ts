@@ -8,23 +8,61 @@ import { loadEngine } from './engine-loader.js';
 
 try {
   const config = loadConfig(process.env);
-  const engine = await loadEngine(config.engine);
-  const app = buildApp({ engine, logLevel: config.logLevel });
+  // The engine logs through the server's logger once that exists; until
+  // then its start-up lines go to stderr as JSON, like pino's.
+  let sink: ((level: string, fields: Record<string, unknown>, message: string) => void) | null =
+    null;
+  const early = (level: string) => (fields: Record<string, unknown>, message: string) => {
+    if (sink === null) {
+      process.stderr.write(`${JSON.stringify({ level, msg: message, ...fields })}
+`);
+    } else {
+      sink(level, fields, message);
+    }
+  };
+  const engine = await loadEngine(config.engine, {
+    personasDir: config.personasDir,
+    allowCrossOsClaims: config.allowCrossOsClaims,
+    gl: config.gl,
+    selftestPages: config.selftestPages,
+    log: { info: early('info'), warn: early('warn'), error: early('error') },
+  });
+  const { server } = buildApp({
+    engine,
+    token: config.token,
+    artifactsDir: config.artifactsDir,
+    maxContexts: config.maxContexts,
+    contextIdleMs: config.contextIdleMs,
+    maxPagesPerBrowser: config.maxPagesPerBrowser,
+    bodyLimitBytes: config.bodyLimitBytes,
+    logLevel: config.logLevel,
+  });
+  sink = (level, fields, message) => {
+    if (level === 'error') {
+      server.log.error(fields, message);
+    } else if (level === 'warn') {
+      server.log.warn(fields, message);
+    } else {
+      server.log.info(fields, message);
+    }
+  };
 
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     process.once(signal, () => {
-      app.log.info({ signal }, 'shutting down');
-      // Closing drains requests and closes the engine; the process then exits by itself.
-      app.close().catch((error: unknown) => {
-        app.log.error({ err: error }, 'shutdown failed');
+      server.log.info({ signal }, 'shutting down');
+      // Closing drains requests, closes every context (which flushes its
+      // profile) and the engine; the process then exits by itself.
+      server.close().catch((error: unknown) => {
+        server.log.error({ err: error }, 'shutdown failed');
         process.exitCode = 1;
       });
     });
   }
 
-  await app.listen({ host: config.host, port: config.port });
+  await server.listen({ host: config.host, port: config.port });
 } catch (error) {
   const reason = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`sidecar failed to start: ${reason}\n`);
+  process.stderr.write(`sidecar failed to start: ${reason}
+`);
   process.exitCode = 1;
 }

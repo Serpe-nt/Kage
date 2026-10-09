@@ -88,6 +88,75 @@ impl Expected {
     }
 }
 
+/// One request of a browser capture.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CapturedRequest {
+    /// The request method.
+    pub method: String,
+    /// `h2` or `http/1.1`.
+    pub http_version: String,
+    /// The header lines in wire order, as the browser spelled them.
+    pub headers: Vec<(String, String)>,
+}
+
+/// What a real browser showed the fingerprint echo: the capture a
+/// milestone records for its engine (follow-up F5), kept in
+/// `tests/fixtures/fingerprints/browser/<engine>-<major>.json`.
+///
+/// `ja4`, `akamai` and `headers` are what the http path must equal before
+/// a profile is derived for the major ([`crate::profile::VERIFIED_MAJORS`]),
+/// and what the sidecar's self-test expects the browser to show an echo.
+/// `requests` keeps every kind of request that was captured, header by
+/// header: the typed navigation, `fetch()`, a JSON POST, `XMLHttpRequest`,
+/// and a navigation over HTTP/1.1.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserCapture {
+    /// The engine: `chromium` or `firefox`.
+    pub engine: String,
+    /// The browser's full version.
+    pub browser_version: String,
+    /// The operating system the browser ran on.
+    pub os: String,
+    /// The day of the capture, `YYYY-MM-DD`.
+    pub recorded: String,
+    /// The JA4 of the browser's `ClientHello`.
+    pub ja4: String,
+    /// The lists the JA4 is computed from, written out.
+    pub ja4_r: String,
+    /// The HTTP/2 fingerprint.
+    pub akamai: String,
+    /// The header names of a typed navigation over HTTP/2, in wire order.
+    pub headers: Vec<String>,
+    /// Every captured kind of request by name.
+    pub requests: std::collections::BTreeMap<String, CapturedRequest>,
+}
+
+/// The capture recorded for an engine's browser major; `None` when this
+/// build has none.
+pub fn browser_capture(engine: &str, major: u32) -> Option<BrowserCapture> {
+    let stem = format!("{engine}-{major}");
+    BROWSER_CAPTURES
+        .iter()
+        .find(|(name, _)| *name == stem)
+        .and_then(|(_, json)| serde_json::from_str(json).ok())
+}
+
+/// Every embedded browser capture by file stem, parsed, or the reason it
+/// does not parse.
+pub fn browser_captures() -> Vec<(&'static str, Result<BrowserCapture, String>)> {
+    BROWSER_CAPTURES
+        .iter()
+        .map(|(name, json)| {
+            (
+                *name,
+                serde_json::from_str(json).map_err(|error| error.to_string()),
+            )
+        })
+        .collect()
+}
+
 /// The recorded expectation for a profile on an operating system; `None`
 /// when there is no fixture for it.
 pub fn expected(choice: &ProfileChoice) -> Option<Expected> {

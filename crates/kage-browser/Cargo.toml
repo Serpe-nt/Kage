@@ -8,7 +8,31 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 publish.workspace = true
+build = "build.rs"
 
 [lints]
 workspace = true
 
+[dependencies]
+kage-core = { workspace = true }
+
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
+tracing = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+# Fingerprint-critical; the only HTTP client in the workspace. Here it talks
+# to the sidecars on the compose network, plainly and without emulation: a
+# sidecar is not a target.
+wreq = { workspace = true }
+
+[build-dependencies]
+# Reads the committed OpenAPI document of the sidecar contract.
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread"] }
+wiremock = { workspace = true }

@@ -3,7 +3,8 @@
 //! `serve` runs the API server and the proxy pool, `healthcheck` probes the
 //! server, `migrate` applies the database schema, `config check` validates
 //! the configuration, `proxy` inspects and operates the proxy pool,
-//! `selftest http` checks the http path's fingerprint, and `echo serve`
+//! `selftest http` checks the http path's fingerprint, `selftest browser` runs
+//! a browser context against the self-test pages, and `echo serve`
 //! runs the fingerprint echo. The remaining commands (`persona`, `key`)
 //! land with the milestones that own them (see `docs/02-plan.md`).
 
@@ -13,16 +14,17 @@ mod echo_cmd;
 mod healthcheck;
 mod migrate;
 mod proxy_cmd;
+mod selftest_browser;
 mod selftest_cmd;
 mod serve;
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use kage_core::config::process_env;
-use kage_core::domain::ProxyState;
+use kage_core::domain::{Engine, ProxyState};
 use kage_core::duration::HumanDuration;
 use kage_core::ids::ProxyId;
 use tracing_subscriber::EnvFilter;
@@ -132,6 +134,34 @@ enum SelftestCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Open a browser context through a proxy, load the self-test pages
+    /// and let the sidecar judge what they show: automation flags and the
+    /// coherence of the identity. Exits non-zero when the test fails.
+    ///
+    /// The pages are the operator's own (`selftest.browser.pages`).
+    /// `--third-party` adds the detection pages run by others, which see
+    /// the proxy's exit address.
+    Browser {
+        /// The proxy to leave through.
+        #[arg(long, value_name = "PROXY_ID")]
+        proxy: ProxyId,
+        /// The engine whose sidecar runs the test.
+        #[arg(long, default_value = "chromium", value_name = "ENGINE")]
+        engine: Engine,
+        /// The IANA time zone of the proxy's exit, for example
+        /// Europe/Berlin.
+        #[arg(long, value_name = "ZONE")]
+        timezone: String,
+        /// A language of the browser, most preferred first; repeat it.
+        #[arg(long = "language", value_name = "TAG", required = true)]
+        languages: Vec<String>,
+        /// Also load `selftest.browser.third_party_pages`.
+        #[arg(long)]
+        third_party: bool,
+        /// Print one JSON document instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -235,6 +265,52 @@ fn init_tracing(to_stderr: bool) -> anyhow::Result<()> {
     installed.map_err(|error| anyhow::anyhow!("failed to install the log subscriber: {error}"))
 }
 
+/// `kage selftest`. What was found is shown even when the self-test then
+/// fails.
+async fn selftest(command: SelftestCommand, config_file: Option<&Path>) -> anyhow::Result<()> {
+    let config = config_cmd::load(config_file, process_env())?;
+    let mut out = Vec::new();
+    let result = match command {
+        SelftestCommand::Http {
+            proxy,
+            profile,
+            platform,
+            echo,
+            json,
+        } => {
+            let options = selftest_cmd::HttpSelftestOptions {
+                proxy,
+                profile,
+                platform,
+                echo,
+                json,
+            };
+            selftest_cmd::http(&config, &options, &mut out).await
+        }
+        SelftestCommand::Browser {
+            proxy,
+            engine,
+            timezone,
+            languages,
+            third_party,
+            json,
+        } => {
+            let options = selftest_browser::BrowserSelftestOptions {
+                proxy,
+                engine,
+                timezone,
+                languages,
+                third_party,
+                json,
+            };
+            selftest_browser::browser(&config, &options, &mut out).await
+        }
+    };
+    std::io::Write::write_all(&mut std::io::stdout().lock(), &out)
+        .context("cannot write to stdout")?;
+    result
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -264,31 +340,7 @@ async fn main() -> anyhow::Result<()> {
                 .await
                 .context("the fingerprint echo failed")
         }
-        Command::Selftest {
-            command:
-                SelftestCommand::Http {
-                    proxy,
-                    profile,
-                    platform,
-                    echo,
-                    json,
-                },
-        } => {
-            let config = config_cmd::load(config_file.as_deref(), process_env())?;
-            let options = selftest_cmd::HttpSelftestOptions {
-                proxy,
-                profile,
-                platform,
-                echo,
-                json,
-            };
-            let mut out = Vec::new();
-            let result = selftest_cmd::http(&config, &options, &mut out).await;
-            // What was found is shown even when the self-test then fails.
-            std::io::Write::write_all(&mut std::io::stdout().lock(), &out)
-                .context("cannot write to stdout")?;
-            result
-        }
+        Command::Selftest { command } => selftest(command, config_file.as_deref()).await,
         Command::Serve { bind } => {
             let config = config_cmd::load(config_file.as_deref(), process_env())?;
             tracing::info!(
@@ -374,7 +426,7 @@ mod tests {
     use std::time::Duration;
 
     use clap::{CommandFactory, Parser};
-    use kage_core::domain::ProxyState;
+    use kage_core::domain::{Engine, ProxyState};
 
     use super::{
         COMPONENTS, Cli, Command, ConfigCommand, EchoCommand, ProxyCommand, SelftestCommand,
@@ -573,6 +625,67 @@ mod tests {
         ));
         assert!(Cli::try_parse_from(["kage", "proxy"]).is_err());
         assert!(Cli::try_parse_from(["kage", "proxy", "delete"]).is_err());
+    }
+
+    #[test]
+    fn selftest_browser_needs_a_proxy_a_time_zone_and_a_language() {
+        let id = "0199c2f0-0000-7000-8000-000000000001";
+        let base = ["kage", "selftest", "browser", "--proxy", id];
+        let full = [
+            "--timezone",
+            "Europe/Vienna",
+            "--language",
+            "de-AT",
+            "--language",
+            "de",
+        ];
+        let cli = Cli::try_parse_from(base.into_iter().chain(full)).unwrap();
+        let Command::Selftest {
+            command:
+                SelftestCommand::Browser {
+                    proxy,
+                    engine,
+                    timezone,
+                    languages,
+                    third_party,
+                    json,
+                },
+        } = cli.command
+        else {
+            panic!("expected the browser self-test, got {:?}", cli.command);
+        };
+        assert_eq!(proxy.to_string(), id);
+        assert_eq!(engine, Engine::Chromium);
+        assert_eq!(timezone, "Europe/Vienna");
+        assert_eq!(languages, ["de-AT", "de"]);
+        assert!(!third_party);
+        assert!(!json);
+
+        let flags = ["--engine", "firefox", "--third-party", "--json"];
+        let cli = Cli::try_parse_from(base.into_iter().chain(full).chain(flags)).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Selftest {
+                command: SelftestCommand::Browser {
+                    engine: Engine::Firefox,
+                    third_party: true,
+                    json: true,
+                    ..
+                }
+            }
+        ));
+
+        for arguments in [
+            base.to_vec(),
+            [&base[..], &["--timezone", "Europe/Vienna"]].concat(),
+            [&base[..], &["--language", "de"]].concat(),
+            [&base[..], &full[..], &["--engine", "safari"]].concat(),
+        ] {
+            assert!(
+                Cli::try_parse_from(arguments.clone()).is_err(),
+                "{arguments:?}"
+            );
+        }
     }
 
     #[test]

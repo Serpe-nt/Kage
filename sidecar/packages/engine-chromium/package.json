@@ -9,10 +9,15 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "default": "./dist/testing/index.js"
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "bin"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -20,7 +25,10 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@kage/contract": "workspace:*",
     "@kage/engine-core": "workspace:*",
+    "fingerprint-generator": "2.1.88",
+    "fingerprint-injector": "2.1.88",
     "patchright": "1.63.0"
   }
 }

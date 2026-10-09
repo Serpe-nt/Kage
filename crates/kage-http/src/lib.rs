@@ -107,6 +107,13 @@ pub fn describe(config: &kage_core::config::Config) -> serde_json::Value {
             .iter()
             .map(|(engine, major)| format!("{engine}-{major}"))
             .collect::<Vec<_>>(),
+        // Majors a capture proved the newest profile does not fit: their
+        // personas are browser-only on purpose.
+        "browser_only_majors": profile::BROWSER_ONLY_MAJORS
+            .iter()
+            .map(|(engine, major)| format!("{engine}-{major}"))
+            .collect::<Vec<_>>(),
+        "browser_captures": selftest::browser_captures().len(),
         "engines": {
             "chromium": engine(Engine::Chromium, config.engines.chromium.browser_major),
             "firefox": engine(Engine::Firefox, config.engines.firefox.browser_major),

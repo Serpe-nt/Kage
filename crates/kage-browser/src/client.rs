@@ -1,0 +1,474 @@
+//! The client for one sidecar.
+
+use std::time::Duration;
+
+use kage_core::config::Config;
+use kage_core::domain::Engine;
+use kage_core::secret::Secret;
+use kage_core::ssrf::SsrfPolicy;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use url::Url;
+use uuid::Uuid;
+
+use crate::contract::{
+    ErrorResponse, ExportStateRequest, ExportStateResponse, GeneratePersonaRequest,
+    GeneratePersonaResponse, HealthResponse, ImportStateRequest, ImportStateResponse,
+    NavigateRequest, OpenContextRequest, OpenContextResponse, PageResult, SelftestRequest,
+    SelftestResponse, TOKEN_HEADER,
+};
+use crate::error::BrowserError;
+use crate::ssrf::{self, DeniedHop};
+
+/// What the client sends as `User-Agent`: a sidecar is Kage's own service,
+/// not a target.
+const USER_AGENT: &str = concat!("kage/", env!("CARGO_PKG_VERSION"));
+
+/// Wait before the first connection retry; it doubles up to [`MAX_BACKOFF`].
+const FIRST_BACKOFF: Duration = Duration::from_millis(200);
+
+/// Longest wait between two connection attempts.
+const MAX_BACKOFF: Duration = Duration::from_secs(2);
+
+/// The operations of the contract this client calls. The contract test
+/// compares the list with the document, so an endpoint added to the
+/// contract is noticed here. `flow` joins with the flow executor in M5.
+pub const IMPLEMENTED_OPERATIONS: &[&str] = &[
+    "health",
+    "metrics",
+    "generate_persona",
+    "open_context",
+    "close_context",
+    "navigate",
+    "export_state",
+    "import_state",
+    "selftest",
+];
+
+/// How to reach one sidecar.
+#[derive(Debug, Clone)]
+pub struct SidecarSettings {
+    /// The sidecar's base URL on the compose network.
+    pub url: String,
+    /// The shared secret.
+    pub token: Secret,
+    /// How long a connection may take.
+    pub connect_timeout: Duration,
+    /// How long one call may take, the navigation it runs included.
+    pub timeout: Duration,
+    /// How often a call is tried again when no connection could be made.
+    pub connect_retries: u32,
+}
+
+impl SidecarSettings {
+    /// The settings of an engine's sidecar from the configuration.
+    pub fn from_config(config: &Config, engine: Engine) -> Self {
+        let sidecar = &config.sidecar;
+        Self {
+            url: match engine {
+                Engine::Chromium => sidecar.chromium_url.clone(),
+                Engine::Firefox => sidecar.firefox_url.clone(),
+            },
+            token: sidecar.token.clone(),
+            connect_timeout: sidecar.connect_timeout.get(),
+            timeout: sidecar.timeout.get(),
+            connect_retries: sidecar.connect_retries,
+        }
+    }
+}
+
+/// What closing a context found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Closed {
+    /// The context was open and is closed now.
+    Closed,
+    /// The sidecar did not know the context: it was closed before, or it
+    /// closed itself after being idle. The same result for the caller.
+    AlreadyGone,
+}
+
+/// A navigation after Kage's own check of its redirect chain.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Navigation {
+    /// Every hop passed the SSRF guard.
+    Page(Box<PageResult>),
+    /// A hop was refused. The attempt's outcome is `ssrf_denied`; the
+    /// result is kept for the record with everything it captured removed.
+    SsrfDenied {
+        /// The refused hop.
+        denied: DeniedHop,
+        /// The page result without its captures.
+        result: Box<PageResult>,
+    },
+}
+
+/// A client for one sidecar container.
+#[derive(Clone)]
+pub struct SidecarClient {
+    http: wreq::Client,
+    base: Url,
+    token: Secret,
+    connect_retries: u32,
+}
+
+impl std::fmt::Debug for SidecarClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SidecarClient")
+            .field("base", &self.base.as_str())
+            .field("token", &self.token)
+            .field("connect_retries", &self.connect_retries)
+            .finish_non_exhaustive()
+    }
+}
+
+impl SidecarClient {
+    /// Builds a client.
+    ///
+    /// # Errors
+    ///
+    /// [`BrowserError::Setup`] when the URL is not an `http` URL or the
+    /// HTTP client cannot be built.
+    pub fn new(settings: &SidecarSettings) -> Result<Self, BrowserError> {
+        let base = Url::parse(&settings.url)
+            .ok()
+            .filter(|url| url.scheme() == "http" && url.host_str().is_some())
+            .ok_or_else(|| {
+                BrowserError::Setup(format!("{:?} is not an http:// URL", settings.url))
+            })?;
+        let http = wreq::Client::builder()
+            // A sidecar is reached directly on the compose network, never
+            // through a proxy, and never through one named in the environment.
+            .no_proxy()
+            .user_agent(USER_AGENT)
+            .connect_timeout(settings.connect_timeout)
+            .timeout(settings.timeout)
+            .build()
+            .map_err(|error| {
+                BrowserError::Setup(format!("cannot build the HTTP client: {error}"))
+            })?;
+        Ok(Self {
+            http,
+            base,
+            token: settings.token.clone(),
+            connect_retries: settings.connect_retries,
+        })
+    }
+
+    /// The sidecar's base URL.
+    pub fn base_url(&self) -> &Url {
+        &self.base
+    }
+
+    fn url(&self, path: &str) -> Result<Url, BrowserError> {
+        self.base.join(path).map_err(|error| {
+            BrowserError::Setup(format!("cannot build the URL of {path}: {error}"))
+        })
+    }
+
+    /// Sends one request, trying again only while no connection could be
+    /// made. Returns the status and the body.
+    async fn send(
+        &self,
+        operation: &'static str,
+        method: wreq::Method,
+        path: &str,
+        body: Option<Vec<u8>>,
+    ) -> Result<(u16, Vec<u8>), BrowserError> {
+        let url = self.url(path)?;
+        let mut backoff = FIRST_BACKOFF;
+        let mut attempts = 0;
+        loop {
+            attempts += 1;
+            let mut request = self
+                .http
+                .request(method.clone(), url.as_str())
+                .header(TOKEN_HEADER, self.token.expose());
+            if let Some(body) = &body {
+                request = request
+                    .header("content-type", "application/json")
+                    .body(body.clone());
+            }
+            let failure = match request.send().await {
+                Ok(response) => {
+                    let status = response.status().as_u16();
+                    return match response.bytes().await {
+                        Ok(bytes) => Ok((status, bytes.to_vec())),
+                        Err(error) if error.is_timeout() => {
+                            Err(BrowserError::Timeout { operation })
+                        }
+                        Err(source) => Err(BrowserError::Transport { operation, source }),
+                    };
+                }
+                Err(error) => error,
+            };
+            if failure.is_connect() {
+                // Nothing was sent: the call may be made again.
+                if attempts > self.connect_retries {
+                    return Err(BrowserError::Connect {
+                        url: self.base.to_string(),
+                        attempts,
+                        source: failure,
+                    });
+                }
+                tracing::warn!(
+                    operation,
+                    attempt = attempts,
+                    error = %failure,
+                    "the sidecar could not be reached; trying again"
+                );
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(MAX_BACKOFF);
+                continue;
+            }
+            return Err(if failure.is_timeout() {
+                BrowserError::Timeout { operation }
+            } else {
+                BrowserError::Transport {
+                    operation,
+                    source: failure,
+                }
+            });
+        }
+    }
+
+    /// Turns an answer that is not a success into the error it carries.
+    fn refusal(operation: &'static str, status: u16, body: &[u8]) -> BrowserError {
+        match serde_json::from_slice::<ErrorResponse>(body) {
+            Ok(error) => BrowserError::Refused {
+                operation,
+                status,
+                code: error.code,
+                message: error.message,
+            },
+            Err(error) => BrowserError::Unexpected {
+                operation,
+                status,
+                detail: error.to_string(),
+            },
+        }
+    }
+
+    async fn call<Request: Serialize + Sync, Response: DeserializeOwned>(
+        &self,
+        operation: &'static str,
+        method: wreq::Method,
+        path: &str,
+        request: Option<&Request>,
+    ) -> Result<Response, BrowserError> {
+        let body = request
+            .map(serde_json::to_vec)
+            .transpose()
+            .map_err(|error| {
+                BrowserError::Setup(format!("cannot write the body of {operation}: {error}"))
+            })?;
+        let (status, bytes) = self.send(operation, method, path, body).await?;
+        if !(200..300).contains(&status) {
+            return Err(Self::refusal(operation, status, &bytes));
+        }
+        serde_json::from_slice(&bytes).map_err(|error| BrowserError::Unexpected {
+            operation,
+            status,
+            detail: error.to_string(),
+        })
+    }
+
+    async fn post<Request: Serialize + Sync, Response: DeserializeOwned>(
+        &self,
+        operation: &'static str,
+        path: &str,
+        request: &Request,
+    ) -> Result<Response, BrowserError> {
+        self.call(operation, wreq::Method::POST, path, Some(request))
+            .await
+    }
+
+    /// `GET /v1/health`: engine, browser version, contexts in use, uptime.
+    ///
+    /// # Errors
+    ///
+    /// See [`BrowserError`].
+    pub async fn health(&self) -> Result<HealthResponse, BrowserError> {
+        self.call::<(), _>("health", wreq::Method::GET, "/v1/health", None)
+            .await
+    }
+
+    /// `GET /v1/metrics`: the sidecar's Prometheus metrics as text.
+    ///
+    /// # Errors
+    ///
+    /// See [`BrowserError`].
+    pub async fn metrics(&self) -> Result<String, BrowserError> {
+        let (status, bytes) = self
+            .send("metrics", wreq::Method::GET, "/v1/metrics", None)
+            .await?;
+        if !(200..300).contains(&status) {
+            return Err(Self::refusal("metrics", status, &bytes));
+        }
+        String::from_utf8(bytes).map_err(|error| BrowserError::Unexpected {
+            operation: "metrics",
+            status,
+            detail: error.to_string(),
+        })
+    }
+
+    /// `POST /v1/personas/generate`: a fingerprint from a seed and
+    /// constraints. The same seed gives the same fingerprint.
+    ///
+    /// # Errors
+    ///
+    /// See [`BrowserError`]; `cross_os_claim_disabled` when the engine may
+    /// only claim the operating system it runs on.
+    pub async fn generate_persona(
+        &self,
+        request: &GeneratePersonaRequest,
+    ) -> Result<GeneratePersonaResponse, BrowserError> {
+        self.post("generate_persona", "/v1/personas/generate", request)
+            .await
+    }
+
+    /// `POST /v1/contexts`: opens the persona's context, or returns the one
+    /// that is open.
+    ///
+    /// # Errors
+    ///
+    /// See [`BrowserError`]; `context_limit` when the container is full.
+    pub async fn open_context(
+        &self,
+        request: &OpenContextRequest,
+    ) -> Result<OpenContextResponse, BrowserError> {
+        self.post("open_context", "/v1/contexts", request).await
+    }
+
+    /// `DELETE /v1/contexts/{id}`: closes a context and flushes its profile.
+    /// A context the sidecar no longer knows counts as closed.
+    ///
+    /// # Errors
+    ///
+    /// See [`BrowserError`]; `context_busy` while an operation runs on it.
+    pub async fn close_context(&self, context: Uuid) -> Result<Closed, BrowserError> {
+        let path = format!("/v1/contexts/{context}");
+        let (status, bytes) = self
+            .send("close_context", wreq::Method::DELETE, &path, None)
+            .await?;
+        if (200..300).contains(&status) {
+            return Ok(Closed::Closed);
+        }
+        match Self::refusal("close_context", status, &bytes) {
+            error if error.is_context_gone() => Ok(Closed::AlreadyGone),
+            error => Err(error),
+        }
+    }
+
+    /// `POST /v1/contexts/{id}/navigate`: loads a page and captures it.
+    ///
+    /// The result is what the browser did, unchecked. Use
+    /// [`Self::navigate_checked`] unless the redirect chain is checked
+    /// elsewhere.
+    ///
+    /// # Errors
+    ///
+    /// See [`BrowserError`]. A navigation that did not arrive is not an
+    /// error: the page result says why.
+    pub async fn navigate(
+        &self,
+        context: Uuid,
+        request: &NavigateRequest,
+    ) -> Result<PageResult, BrowserError> {
+        self.post(
+            "navigate",
+            &format!("/v1/contexts/{context}/navigate"),
+            request,
+        )
+        .await
+    }
+
+    /// Navigates, then checks every hop the browser followed against the
+    /// SSRF guard (spec §19). A browser follows redirects by itself, so the
+    /// check can only come afterwards; a refused hop turns the result into
+    /// [`Navigation::SsrfDenied`] and removes everything it captured.
+    ///
+    /// # Errors
+    ///
+    /// See [`BrowserError`].
+    pub async fn navigate_checked(
+        &self,
+        context: Uuid,
+        request: &NavigateRequest,
+        policy: SsrfPolicy,
+        max_redirects: usize,
+    ) -> Result<Navigation, BrowserError> {
+        let mut result = self.navigate(context, request).await?;
+        Ok(match ssrf::check_chain(&result, policy, max_redirects) {
+            Ok(()) => Navigation::Page(Box::new(result)),
+            Err(denied) => {
+                tracing::warn!(
+                    context = %context,
+                    hop = denied.hop,
+                    reason = %denied.reason,
+                    "a browser navigation followed a hop the SSRF guard refuses"
+                );
+                ssrf::drop_captures(&mut result);
+                Navigation::SsrfDenied {
+                    denied,
+                    result: Box::new(result),
+                }
+            }
+        })
+    }
+
+    /// `POST /v1/contexts/{id}/state/export`: cookies and storage of an origin.
+    ///
+    /// # Errors
+    ///
+    /// See [`BrowserError`].
+    pub async fn export_state(
+        &self,
+        context: Uuid,
+        request: &ExportStateRequest,
+    ) -> Result<ExportStateResponse, BrowserError> {
+        self.post(
+            "export_state",
+            &format!("/v1/contexts/{context}/state/export"),
+            request,
+        )
+        .await
+    }
+
+    /// `POST /v1/contexts/{id}/state/import`: puts cookies of an origin
+    /// into the context.
+    ///
+    /// # Errors
+    ///
+    /// See [`BrowserError`].
+    pub async fn import_state(
+        &self,
+        context: Uuid,
+        request: &ImportStateRequest,
+    ) -> Result<ImportStateResponse, BrowserError> {
+        self.post(
+            "import_state",
+            &format!("/v1/contexts/{context}/state/import"),
+            request,
+        )
+        .await
+    }
+
+    /// `POST /v1/contexts/{id}/selftest`: loads the detection page set and
+    /// returns findings and a score.
+    ///
+    /// # Errors
+    ///
+    /// See [`BrowserError`].
+    pub async fn selftest(
+        &self,
+        context: Uuid,
+        request: &SelftestRequest,
+    ) -> Result<SelftestResponse, BrowserError> {
+        self.post(
+            "selftest",
+            &format!("/v1/contexts/{context}/selftest"),
+            request,
+        )
+        .await
+    }
+}

@@ -203,6 +203,106 @@ impl Default for HttpSelftestConfig {
     }
 }
 
+/// How a page of the browser self-test is read: the page kinds of the
+/// sidecar contract that need no rules of their own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SelftestPageKind {
+    /// Kage's coherence probe (`tests/fixtures/site/probe/`).
+    Probe,
+    /// Kage's fingerprint echo, page `/browser` of `kage echo serve`.
+    Echo,
+    /// bot.sannysoft.com.
+    Sannysoft,
+    /// `CreepJS`.
+    Creepjs,
+}
+
+impl SelftestPageKind {
+    /// The kind as the sidecar contract writes it.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Probe => "probe",
+            Self::Echo => "echo",
+            Self::Sannysoft => "sannysoft",
+            Self::Creepjs => "creepjs",
+        }
+    }
+}
+
+/// One page the browser self-test loads.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelftestPageConfig {
+    /// Short name; findings and evidence files carry it.
+    pub id: String,
+    /// How the page is read.
+    pub kind: SelftestPageKind,
+    /// The page.
+    pub url: String,
+}
+
+/// Most pages one browser self-test may load (the sidecar contract's limit).
+pub const MAX_SELFTEST_PAGES: usize = 12;
+
+/// The self-test of the browser path (spec §7.4, §10.2): a context loads
+/// detection pages and the sidecar judges what they show.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserSelftestConfig {
+    /// The operator's own pages: the coherence probe and the fingerprint
+    /// echo, reached through the proxy. Empty: only `--third-party` runs
+    /// load anything.
+    #[serde(default)]
+    pub pages: Vec<SelftestPageConfig>,
+    /// Detection pages run by others. Only `kage selftest browser
+    /// --third-party` and the gated live suite load them, never the
+    /// service on a timer: they see the exit address of the proxy.
+    #[serde(default = "default_third_party_pages")]
+    pub third_party_pages: Vec<SelftestPageConfig>,
+    /// The lowest score that passes, 0 to 100.
+    #[serde(default = "default_min_score")]
+    pub min_score: u8,
+    /// Budget of one page.
+    #[serde(default = "default_page_timeout")]
+    pub page_timeout: HumanDuration,
+}
+
+fn default_third_party_pages() -> Vec<SelftestPageConfig> {
+    vec![
+        SelftestPageConfig {
+            id: "sannysoft".to_owned(),
+            kind: SelftestPageKind::Sannysoft,
+            url: "https://bot.sannysoft.com/".to_owned(),
+        },
+        SelftestPageConfig {
+            id: "creepjs".to_owned(),
+            kind: SelftestPageKind::Creepjs,
+            url: "https://abrahamjuliot.github.io/creepjs/".to_owned(),
+        },
+    ]
+}
+
+const fn default_min_score() -> u8 {
+    90
+}
+
+const fn default_page_timeout() -> HumanDuration {
+    HumanDuration::from_secs(45)
+}
+
+impl Default for BrowserSelftestConfig {
+    fn default() -> Self {
+        Self {
+            pages: Vec::new(),
+            third_party_pages: default_third_party_pages(),
+            min_score: default_min_score(),
+            page_timeout: default_page_timeout(),
+        }
+    }
+}
+
 /// Self-tests (spec §7.4).
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -210,6 +310,69 @@ pub struct SelftestConfig {
     /// The http path.
     #[serde(default)]
     pub http: HttpSelftestConfig,
+    /// The browser path.
+    #[serde(default)]
+    pub browser: BrowserSelftestConfig,
+}
+
+/// Checks `selftest.browser`.
+fn validate_browser_selftest(browser: &BrowserSelftestConfig) -> Result<(), String> {
+    if browser.min_score > 100 {
+        return Err("selftest.browser.min_score must be at most 100".to_owned());
+    }
+    let timeout = browser.page_timeout.get();
+    if timeout < std::time::Duration::from_secs(1) || timeout > std::time::Duration::from_mins(5) {
+        return Err("selftest.browser.page_timeout must be between 1s and 5m".to_owned());
+    }
+    if browser.pages.len() + browser.third_party_pages.len() > MAX_SELFTEST_PAGES {
+        return Err(format!(
+            "selftest.browser names more than {MAX_SELFTEST_PAGES} pages"
+        ));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for (key, pages) in [
+        ("selftest.browser.pages", &browser.pages),
+        (
+            "selftest.browser.third_party_pages",
+            &browser.third_party_pages,
+        ),
+    ] {
+        for page in pages {
+            let id = page.id.as_str();
+            let well_formed = !id.is_empty()
+                && id.len() <= 40
+                && id.starts_with(|first: char| {
+                    first.is_ascii_lowercase() || first.is_ascii_digit()
+                })
+                && id.chars().all(|character| {
+                    character.is_ascii_lowercase()
+                        || character.is_ascii_digit()
+                        || character == '_'
+                        || character == '-'
+                });
+            if !well_formed {
+                return Err(format!(
+                    "{key}: the id {id:?} must be 1 to 40 of a-z, 0-9, _ and -, starting with a letter or digit"
+                ));
+            }
+            if !seen.insert(id) {
+                return Err(format!("{key}: the id {id:?} is used twice"));
+            }
+            match url::Url::parse(&page.url) {
+                Ok(url) if matches!(url.scheme(), "http" | "https") && url.host_str().is_some() => {
+                }
+                _ => return Err(format!("{key}: {:?} is not an http(s) URL", page.url)),
+            }
+            // The echo reads the TLS handshake; a third party is only ever
+            // asked over TLS.
+            let needs_tls =
+                page.kind == SelftestPageKind::Echo || key == "selftest.browser.third_party_pages";
+            if needs_tls && !page.url.starts_with("https://") {
+                return Err(format!("{key}: {:?} must be an https URL", page.url));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// One browser engine.
@@ -225,13 +388,34 @@ pub struct EngineConfig {
     pub browser_major: Option<u32>,
 }
 
+/// The Chromium engine: patchright with real Chrome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChromiumEngineConfig {
+    /// The major version of the Chrome the engine image bundles; see
+    /// [`EngineConfig::browser_major`]. M4 pinned Chrome 155.
+    #[serde(default)]
+    pub browser_major: Option<u32>,
+    /// Whether a chromium persona may claim another operating system
+    /// than the engine host's (Linux). **Off by default** since M4: on
+    /// the pinned Chrome a Windows or macOS claim is contradicted by the
+    /// browser's own workers, its fonts and its rendering (spec §6.2,
+    /// ADR 0009). With it off, persona generation gives every chromium
+    /// persona `claimed_os = linux`, and the sidecar refuses any other
+    /// claim. The sidecar has its own switch of the same meaning
+    /// (`SIDECAR_ALLOW_CROSS_OS_CLAIMS`); both must be on for such a
+    /// persona to exist.
+    #[serde(default)]
+    pub allow_cross_os_claims: bool,
+}
+
 /// The browser engines (spec §6.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnginesConfig {
     /// patchright with real Chrome.
     #[serde(default)]
-    pub chromium: EngineConfig,
+    pub chromium: ChromiumEngineConfig,
     /// Camoufox.
     #[serde(default)]
     pub firefox: EngineConfig,
@@ -296,11 +480,18 @@ pub(super) fn validate(
     if selftest.http.interval.get() < std::time::Duration::from_secs(60) {
         return Err("selftest.http.interval must be at least 1m".to_owned());
     }
-    for (key, engine) in [
-        ("engines.chromium.browser_major", engines.chromium),
-        ("engines.firefox.browser_major", engines.firefox),
+    validate_browser_selftest(&selftest.browser)?;
+    for (key, browser_major) in [
+        (
+            "engines.chromium.browser_major",
+            engines.chromium.browser_major,
+        ),
+        (
+            "engines.firefox.browser_major",
+            engines.firefox.browser_major,
+        ),
     ] {
-        if engine.browser_major == Some(0) {
+        if browser_major == Some(0) {
             return Err(format!("{key} must be at least 1"));
         }
     }
@@ -312,10 +503,18 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        EngineConfig, EnginesConfig, HttpConfig, HttpSelftestConfig, SelftestConfig,
-        SubresourceScope, validate,
+        BrowserSelftestConfig, EngineConfig, EnginesConfig, HttpConfig, HttpSelftestConfig,
+        SelftestConfig, SelftestPageConfig, SelftestPageKind, SubresourceScope, validate,
     };
     use crate::duration::HumanDuration;
+
+    fn page(id: &str) -> SelftestPageConfig {
+        SelftestPageConfig {
+            id: id.to_owned(),
+            kind: SelftestPageKind::Probe,
+            url: "http://probe.example.org/".to_owned(),
+        }
+    }
 
     type Change = Box<dyn FnOnce(&mut HttpConfig, &mut SelftestConfig, &mut EnginesConfig)>;
 
@@ -346,13 +545,93 @@ mod tests {
         assert_eq!(selftest.echo_url, None);
         assert_eq!(selftest.third_party_url, "https://tls.peet.ws/api/all");
         assert_eq!(selftest.interval.get(), Duration::from_hours(24));
+        // The browser self-test loads nothing of its own accord: the two
+        // detection pages are third parties, asked on demand only.
+        let browser = BrowserSelftestConfig::default();
+        assert_eq!(browser.pages, Vec::new());
+        assert_eq!(
+            browser
+                .third_party_pages
+                .iter()
+                .map(|page| (page.kind.as_str(), page.url.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("sannysoft", "https://bot.sannysoft.com/"),
+                ("creepjs", "https://abrahamjuliot.github.io/creepjs/"),
+            ]
+        );
+        assert_eq!(browser.min_score, 90);
+        assert_eq!(browser.page_timeout.get(), Duration::from_secs(45));
+        assert_eq!(SelftestPageKind::Probe.as_str(), "probe");
+        assert_eq!(SelftestPageKind::Echo.as_str(), "echo");
         assert_eq!(EnginesConfig::default().chromium.browser_major, None);
+        // Spec §6.2 and ADR 0009: a chromium persona claims the system it
+        // runs on unless an operator says otherwise.
+        assert!(!EnginesConfig::default().chromium.allow_cross_os_claims);
         assert_eq!(check(|_, _, _| {}), Ok(()));
     }
 
     #[test]
+    fn browser_selftest_pages_that_cannot_work_are_named() {
+        let cases: [(&str, Change); 8] = [
+            (
+                "selftest.browser.min_score",
+                Box::new(|_, selftest, _| selftest.browser.min_score = 101),
+            ),
+            (
+                "selftest.browser.page_timeout",
+                Box::new(|_, selftest, _| {
+                    selftest.browser.page_timeout = HumanDuration::from_secs(0);
+                }),
+            ),
+            (
+                "selftest.browser names more than",
+                Box::new(|_, selftest, _| {
+                    selftest.browser.pages = (0..11).map(|n| page(&format!("p{n}"))).collect();
+                }),
+            ),
+            (
+                "selftest.browser.pages: the id \"Probe\" must be",
+                Box::new(|_, selftest, _| selftest.browser.pages = vec![page("Probe")]),
+            ),
+            (
+                "selftest.browser.third_party_pages: the id \"sannysoft\" is used twice",
+                Box::new(|_, selftest, _| selftest.browser.pages = vec![page("sannysoft")]),
+            ),
+            (
+                "selftest.browser.pages: \"file:///etc/passwd\" is not an http(s) URL",
+                Box::new(|_, selftest, _| {
+                    selftest.browser.pages = vec![SelftestPageConfig {
+                        url: "file:///etc/passwd".to_owned(),
+                        ..page("probe")
+                    }];
+                }),
+            ),
+            (
+                "selftest.browser.pages: \"http://probe.example.org/\" must be an https URL",
+                Box::new(|_, selftest, _| {
+                    selftest.browser.pages = vec![SelftestPageConfig {
+                        kind: SelftestPageKind::Echo,
+                        ..page("echo")
+                    }];
+                }),
+            ),
+            (
+                "selftest.browser.third_party_pages: \"http://probe.example.org/\" must be",
+                Box::new(|_, selftest, _| {
+                    selftest.browser.third_party_pages = vec![page("plain")];
+                }),
+            ),
+        ];
+        for (key, change) in cases {
+            let error = check(change).unwrap_err();
+            assert!(error.starts_with(key), "{key}: {error}");
+        }
+    }
+
+    #[test]
     fn values_out_of_range_are_named() {
-        let cases: [(&str, Change); 13] = [
+        let cases: [(&str, Change); 14] = [
             (
                 "http.timeout",
                 Box::new(|http, _, _| http.timeout = HumanDuration::from_secs(0)),
@@ -410,6 +689,10 @@ mod tests {
                         browser_major: Some(0),
                     };
                 }),
+            ),
+            (
+                "engines.chromium.browser_major",
+                Box::new(|_, _, engines| engines.chromium.browser_major = Some(0)),
             ),
         ];
         for (key, change) in cases {

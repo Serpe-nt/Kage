@@ -1,5 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
 
 import { createStubEngine } from '@kage/engine-core';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -8,6 +9,7 @@ import { buildApp } from './app.js';
 import { probeHealth } from './probe.js';
 
 const servers: Server[] = [];
+const TOKEN = 'probe-test-token-0123456789abcdef';
 
 /** Starts a plain HTTP server that answers every request the same way. */
 async function answerWith(status: number, body: string): Promise<string> {
@@ -36,13 +38,26 @@ afterEach(async () => {
 });
 
 describe('probeHealth', () => {
-  it('returns the health of a running sidecar', async () => {
-    const app = buildApp({ engine: createStubEngine('firefox') });
-    const origin = await app.listen({ host: '127.0.0.1', port: 0 });
+  it('returns the health of a running sidecar, given the shared secret', async () => {
+    const { server } = buildApp({
+      engine: createStubEngine('firefox'),
+      token: TOKEN,
+      artifactsDir: tmpdir(),
+      maxContexts: 3,
+      contextIdleMs: 120_000,
+      maxPagesPerBrowser: 500,
+      processMetrics: false,
+    });
+    const origin = await server.listen({ host: '127.0.0.1', port: 0 });
 
-    await expect(probeHealth(origin)).resolves.toMatchObject({ status: 'ok', engine: 'firefox' });
+    await expect(probeHealth(origin, TOKEN)).resolves.toMatchObject({
+      status: 'ok',
+      engine: 'firefox',
+    });
+    // Without the secret the server answers 401, which is not healthy.
+    await expect(probeHealth(origin, 'not-the-token')).rejects.toThrow(/401/);
 
-    await app.close();
+    await server.close();
   });
 
   it('fails when nothing listens', async () => {
@@ -53,18 +68,18 @@ describe('probeHealth', () => {
       });
     });
 
-    await expect(probeHealth(origin)).rejects.toThrow();
+    await expect(probeHealth(origin, TOKEN)).rejects.toThrow();
   });
 
   it('fails on a non-2xx answer', async () => {
     const origin = await answerWith(503, '{}');
 
-    await expect(probeHealth(origin)).rejects.toThrow(/503/);
+    await expect(probeHealth(origin, TOKEN)).rejects.toThrow(/503/);
   });
 
   it('fails on a body outside the contract', async () => {
     const origin = await answerWith(200, JSON.stringify({ status: 'ok' }));
 
-    await expect(probeHealth(origin)).rejects.toThrow();
+    await expect(probeHealth(origin, TOKEN)).rejects.toThrow();
   });
 });

@@ -33,9 +33,10 @@ compose := "docker compose --file deploy/compose.yaml"
 images := "kage:dev kage-browser-chromium:dev kage-browser-firefox:dev"
 
 # Spec §21: these crates must keep at least this line coverage. kage-store
-# joined the list in M1 and kage-http in M3 (docs/02-plan.md, acceptance of
-# each). The sidecar gate (engine-core) lives in sidecar/vitest.config.ts.
-cov_gated_crates := "kage-core,kage-store,kage-proxy,kage-http,kage-crawl,kage-extract"
+# joined the list in M1, kage-http in M3 and kage-browser in M4
+# (docs/02-plan.md, acceptance of each). The sidecar gates (contract,
+# engine-core, engine-chromium, server) live in sidecar/vitest.config.ts.
+cov_gated_crates := "kage-core,kage-store,kage-proxy,kage-http,kage-browser,kage-crawl,kage-extract"
 cov_min_lines := "80"
 
 # sqlx checks every query at compile time against the committed data in
@@ -51,8 +52,8 @@ default:
 
 # --- Setup -------------------------------------------------------------------
 
-# Install toolchains, pnpm deps, git hooks and local dev secrets.
-setup: setup-rust setup-sqlx setup-node setup-hooks setup-env
+# Install toolchains, pnpm deps, the pinned Chrome, git hooks and local dev secrets.
+setup: setup-rust setup-sqlx setup-node setup-chrome setup-hooks setup-env
 
 # Install the pinned Rust toolchain and cargo tools.
 setup-rust:
@@ -87,6 +88,12 @@ setup-sqlx:
 setup-node:
     command -v pnpm > /dev/null || corepack enable pnpm
     cd sidecar && pnpm install --frozen-lockfile
+
+# Install the pinned Chrome, Xvfb and Mesa: what the sidecar's browser tests
+# start. The version is the one the chromium image is built with. Uses sudo
+# when not root; does nothing when everything is there already.
+setup-chrome:
+    scripts/setup-chrome.sh
 
 # Point git at the hooks in .githooks/.
 setup-hooks:
@@ -124,6 +131,24 @@ lint-rust:
 lint-node:
     cd sidecar && pnpm run build && pnpm run typecheck && pnpm run lint
 
+# The sidecar contract: the committed OpenAPI document is what the zod
+# schemas emit, and it breaks no client of the document on the base branch
+# unless the contract's major version moved (spec §10.2, §21).
+contract-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    document="sidecar/packages/contract/openapi.json"
+    (cd sidecar && pnpm --filter @kage/contract run build && pnpm --filter @kage/contract run check:openapi)
+    previous="$(mktemp)"
+    trap 'rm -f "${previous}"' EXIT
+    if git cat-file -e "{{ base_ref }}:${document}" 2> /dev/null; then
+        git show "{{ base_ref }}:${document}" > "${previous}"
+    else
+        # No document on the base branch: the contract is new, nothing can break.
+        rm -f "${previous}"
+    fi
+    node sidecar/packages/contract/dist/bin.js breaking "${previous}" "${document}"
+
 # --- Test --------------------------------------------------------------------
 
 # Rust unit + integration tests, sidecar vitest.
@@ -142,10 +167,13 @@ sqlx-check:
 sqlx-prepare:
     scripts/check-migrations.sh --prepare
 
+# The Chromium engine's integration tests start the pinned Chrome on Xvfb
+# (`just setup-chrome`). Not as root: Chrome refuses to sandbox itself there.
 test-node:
     cd sidecar && pnpm run build && pnpm run test
 
-# Compose-based end-to-end suite. At M0: the stack smoke test.
+# Compose-based end-to-end suite: the stack smoke test, which since M4 also
+# opens a browser context and checks the Chromium container's hardening.
 test-e2e: setup-env
     tests/e2e/smoke.sh
 
@@ -264,9 +292,17 @@ migrate: setup-env
 config-check: setup-env
     source scripts/dev-env.sh && cargo run --quiet --package kage -- config check
 
-# Regenerate the public and sidecar OpenAPI files.
+# Regenerate the OpenAPI files. The sidecar contract is emitted from its zod
+# schemas; kage-browser generates its Rust types from the result at build
+# time. The public API's document joins in M8.
 openapi:
-    @echo "No OpenAPI documents are committed yet: the sidecar contract lands in M4 and the public API in M8 (docs/02-plan.md). Nothing to regenerate."
+    cd sidecar && pnpm --filter @kage/contract run build && pnpm --filter @kage/contract run emit
+
+# Record what the Chromium engine's real browser shows the in-repo fingerprint
+# echo (tests/fixtures/fingerprints/browser/). Run it when the pinned Chrome
+# moves; see docs/runbooks/fingerprint-echo.md.
+capture-browser-fingerprint:
+    scripts/capture-browser-fingerprint.sh
 
 # --- CI ----------------------------------------------------------------------
 
@@ -281,5 +317,5 @@ commits:
     fi
 
 # Everything a PR runs.
-ci: commits fmt-check lint sqlx-check test cov deny secrets sbom build-images scan-images sbom-images test-e2e
+ci: commits fmt-check lint contract-check sqlx-check test cov deny secrets sbom build-images scan-images sbom-images test-e2e
     @echo "ci: all gates passed"

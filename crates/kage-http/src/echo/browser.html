@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Kage echo: browser capture</title>
+  </head>
+  <body>
+    <h1>Kage echo: browser capture</h1>
+    <p>
+      This page shows a browser what its own requests look like on the wire. The echo wrote what it
+      saw of the navigation that fetched this page into the script below; the script then asks the
+      echo again with fetch() and XMLHttpRequest and publishes every answer as JSON in the element
+      <code>#kage-echo-capture</code>.
+    </p>
+    <script type="application/json" id="kage-echo-capture">null</script>
+    <script>
+      (async () => {
+        const capture = {
+          kage_echo_capture: 1,
+          navigation: /*KAGE_NAVIGATION*/null,
+          fetch_get: null,
+          fetch_post_json: null,
+          xhr_get: null,
+        };
+        try {
+          capture.fetch_get = await (await fetch('/capture/fetch')).json();
+        } catch (error) {
+          capture.fetch_get = null;
+        }
+        try {
+          capture.fetch_post_json = await (
+            await fetch('/capture/fetch', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: '{"probe":1}',
+            })
+          ).json();
+        } catch (error) {
+          capture.fetch_post_json = null;
+        }
+        try {
+          capture.xhr_get = await new Promise((resolve, reject) => {
+            const request = new XMLHttpRequest();
+            request.open('GET', '/capture/xhr');
+            request.onload = () => resolve(JSON.parse(request.responseText));
+            request.onerror = reject;
+            request.send();
+          });
+        } catch (error) {
+          capture.xhr_get = null;
+        }
+        const element = document.getElementById('kage-echo-capture');
+        element.textContent = JSON.stringify(capture);
+        element.setAttribute('data-done', '1');
+      })();
+    </script>
+  </body>
+</html>

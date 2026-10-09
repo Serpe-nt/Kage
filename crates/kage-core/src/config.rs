@@ -35,8 +35,9 @@ mod http;
 mod proxies;
 
 pub use http::{
-    EngineConfig, EnginesConfig, HttpConfig, HttpSelftestConfig, MAX_REDIRECTS_LIMIT,
-    MAX_SUBRESOURCE_CONCURRENCY, SelftestConfig, SubresourceScope, SubresourcesConfig,
+    BrowserSelftestConfig, ChromiumEngineConfig, EngineConfig, EnginesConfig, HttpConfig,
+    HttpSelftestConfig, MAX_REDIRECTS_LIMIT, MAX_SELFTEST_PAGES, MAX_SUBRESOURCE_CONCURRENCY,
+    SelftestConfig, SelftestPageConfig, SelftestPageKind, SubresourceScope, SubresourcesConfig,
 };
 pub use proxies::{
     ProviderChoice, ProxiesConfig, ProxyHealthConfig, ReputationConfig, ResolvedProvider,
@@ -213,13 +214,55 @@ const fn default_connect_timeout() -> HumanDuration {
     HumanDuration::from_secs(10)
 }
 
-/// The browser sidecars.
+/// The browser sidecars (spec §10.1).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SidecarConfig {
     /// Shared secret sent as `X-Kage-Sidecar-Token`. Secret:
     /// `KAGE__SIDECAR__TOKEN`.
     pub token: Secret,
+    /// Base URL of the Chromium sidecar on the compose network.
+    #[serde(default = "default_chromium_url")]
+    pub chromium_url: String,
+    /// Base URL of the Firefox sidecar on the compose network.
+    #[serde(default = "default_firefox_url")]
+    pub firefox_url: String,
+    /// How long a connection to a sidecar may take.
+    #[serde(default = "default_sidecar_connect_timeout")]
+    pub connect_timeout: HumanDuration,
+    /// How long one sidecar call may take, the navigation it runs
+    /// included. It must be longer than the longest attempt (spec §8.4:
+    /// 300 s), or Kage gives up on a page the browser is still loading.
+    #[serde(default = "default_sidecar_timeout")]
+    pub timeout: HumanDuration,
+    /// How often a call is tried again when the connection to the
+    /// sidecar could not be made at all. A request that reached the
+    /// sidecar is never repeated.
+    #[serde(default = "default_sidecar_connect_retries")]
+    pub connect_retries: u32,
+}
+
+/// Most connection retries a sidecar call may be given.
+pub const MAX_SIDECAR_CONNECT_RETRIES: u32 = 10;
+
+fn default_chromium_url() -> String {
+    "http://browser-chromium:8090".to_owned()
+}
+
+fn default_firefox_url() -> String {
+    "http://browser-firefox:8090".to_owned()
+}
+
+const fn default_sidecar_connect_timeout() -> HumanDuration {
+    HumanDuration::from_secs(5)
+}
+
+const fn default_sidecar_timeout() -> HumanDuration {
+    HumanDuration::from_secs(330)
+}
+
+const fn default_sidecar_connect_retries() -> u32 {
+    3
 }
 
 /// Keys for data encrypted at rest.
@@ -494,6 +537,31 @@ impl Config {
         if self.artifacts.dir.as_os_str().is_empty() {
             return invalid("artifacts.dir must not be empty");
         }
+        for (key, value) in [
+            ("sidecar.chromium_url", &self.sidecar.chromium_url),
+            ("sidecar.firefox_url", &self.sidecar.firefox_url),
+        ] {
+            let plain_http = url::Url::parse(value).is_ok_and(|url| {
+                url.scheme() == "http" && url.host_str().is_some() && url.path() == "/"
+            });
+            if !plain_http {
+                return Err(ConfigError::Invalid(format!(
+                    "{key} must be an http:// URL without a path: a sidecar listens on the \
+                     compose network only"
+                )));
+            }
+        }
+        if self.sidecar.connect_timeout.get().is_zero() {
+            return invalid("sidecar.connect_timeout must be longer than zero");
+        }
+        if self.sidecar.timeout.get() < Duration::from_secs(1) {
+            return invalid("sidecar.timeout must be at least 1s");
+        }
+        if self.sidecar.connect_retries > MAX_SIDECAR_CONNECT_RETRIES {
+            return Err(ConfigError::Invalid(format!(
+                "sidecar.connect_retries must be at most {MAX_SIDECAR_CONNECT_RETRIES}"
+            )));
+        }
         if self.secrets.master_key_bytes().is_none() {
             return invalid(
                 "secrets.master_key must be 32 random bytes written as 64 hexadecimal characters",
@@ -625,6 +693,69 @@ mod tests {
         match result {
             Err(ConfigError::Invalid(message)) => message,
             other => panic!("expected an invalid configuration, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_sidecars_are_found_on_the_compose_network_by_default() {
+        let sidecar = Config::load(None, required()).unwrap().sidecar;
+        assert_eq!(sidecar.chromium_url, "http://browser-chromium:8090");
+        assert_eq!(sidecar.firefox_url, "http://browser-firefox:8090");
+        assert_eq!(sidecar.connect_timeout.get(), Duration::from_secs(5));
+        // Longer than the longest attempt (spec §8.4: 300 s).
+        assert_eq!(sidecar.timeout.get(), Duration::from_secs(330));
+        assert_eq!(sidecar.connect_retries, 3);
+
+        let changed = Config::load(
+            None,
+            with(&[
+                ("KAGE__SIDECAR__CHROMIUM_URL", "http://10.0.0.7:9000"),
+                ("KAGE__SIDECAR__TIMEOUT", "6m"),
+                ("KAGE__SIDECAR__CONNECT_RETRIES", "0"),
+                ("KAGE__ENGINES__CHROMIUM__ALLOW_CROSS_OS_CLAIMS", "true"),
+                ("KAGE__ENGINES__CHROMIUM__BROWSER_MAJOR", "155"),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(changed.sidecar.chromium_url, "http://10.0.0.7:9000");
+        assert_eq!(changed.sidecar.timeout.get(), Duration::from_mins(6));
+        assert_eq!(changed.sidecar.connect_retries, 0);
+        assert!(changed.engines.chromium.allow_cross_os_claims);
+        assert_eq!(changed.engines.chromium.browser_major, Some(155));
+    }
+
+    #[test]
+    fn sidecar_settings_that_cannot_work_are_refused() {
+        for (name, value, key) in [
+            (
+                "KAGE__SIDECAR__CHROMIUM_URL",
+                "https://browser-chromium:8090",
+                "sidecar.chromium_url",
+            ),
+            (
+                "KAGE__SIDECAR__CHROMIUM_URL",
+                "browser-chromium:8090",
+                "sidecar.chromium_url",
+            ),
+            (
+                "KAGE__SIDECAR__FIREFOX_URL",
+                "http://browser-firefox:8090/v1",
+                "sidecar.firefox_url",
+            ),
+            (
+                "KAGE__SIDECAR__CONNECT_TIMEOUT",
+                "0s",
+                "sidecar.connect_timeout",
+            ),
+            ("KAGE__SIDECAR__TIMEOUT", "500ms", "sidecar.timeout"),
+            (
+                "KAGE__SIDECAR__CONNECT_RETRIES",
+                "11",
+                "sidecar.connect_retries",
+            ),
+        ] {
+            let message = invalid(Config::load(None, with(&[(name, value)])));
+            assert!(message.starts_with(key), "{name}={value}: {message}");
         }
     }
 

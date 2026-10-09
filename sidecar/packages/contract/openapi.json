@@ -1,0 +1,4406 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Kage browser sidecar",
+    "version": "1.0.0",
+    "description": "Internal contract between Kage and its browser sidecars (spec §10.2). Generated from the zod schemas in sidecar/packages/contract; do not edit by hand. Regenerate with `just openapi`.",
+    "license": {
+      "name": "MIT OR Apache-2.0",
+      "identifier": "MIT OR Apache-2.0"
+    }
+  },
+  "security": [
+    {
+      "sidecarToken": []
+    }
+  ],
+  "paths": {
+    "/v1/health": {
+      "get": {
+        "operationId": "health",
+        "summary": "Engine, browser version, contexts in use, uptime.",
+        "responses": {
+          "200": {
+            "description": "The server is up.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error codes: `invalid_request`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error codes: `unauthorized`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error codes: `internal`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/metrics": {
+      "get": {
+        "operationId": "metrics",
+        "summary": "Prometheus metrics in the text exposition format.",
+        "responses": {
+          "200": {
+            "description": "The metrics.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error codes: `invalid_request`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error codes: `unauthorized`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error codes: `internal`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/personas/generate": {
+      "post": {
+        "operationId": "generate_persona",
+        "summary": "Generate a persona fingerprint from a seed and constraints.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GeneratePersonaRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The fingerprint and its summary.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GeneratePersonaResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error codes: `invalid_request`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error codes: `unauthorized`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error codes: `browser_major_mismatch`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error codes: `cross_os_claim_disabled`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error codes: `internal`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Error codes: `not_implemented`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contexts": {
+      "post": {
+        "operationId": "open_context",
+        "summary": "Open a persona context: its own browser, profile directory, display and proxy.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenContextRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The context is open.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenContextResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error codes: `invalid_request`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error codes: `unauthorized`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error codes: `context_limit`, `context_conflict`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Error codes: `cross_os_claim_disabled`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error codes: `internal`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Error codes: `not_implemented`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Error codes: `browser_launch_failed`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contexts/{id}": {
+      "delete": {
+        "operationId": "close_context",
+        "summary": "Close a context and flush its profile to disk.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The context id returned by `POST /v1/contexts`.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The context is closed."
+          },
+          "400": {
+            "description": "Error codes: `invalid_request`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error codes: `unauthorized`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error codes: `context_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error codes: `internal`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contexts/{id}/navigate": {
+      "post": {
+        "operationId": "navigate",
+        "summary": "Load a page, wait, and capture it.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The context id returned by `POST /v1/contexts`.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NavigateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The page result. A navigation that did not arrive is a 200 too: `error` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PageResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error codes: `invalid_request`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error codes: `unauthorized`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error codes: `context_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error codes: `context_busy`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error codes: `internal`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Error codes: `not_implemented`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contexts/{id}/flow": {
+      "post": {
+        "operationId": "flow",
+        "summary": "Run a scripted flow; answers with one NDJSON line per step and a final line.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The context id returned by `POST /v1/contexts`.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FlowRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "One `FlowEvent` per line.",
+            "content": {
+              "application/x-ndjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowEvent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error codes: `invalid_request`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error codes: `unauthorized`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error codes: `context_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error codes: `context_busy`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error codes: `internal`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Error codes: `not_implemented`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contexts/{id}/state/export": {
+      "post": {
+        "operationId": "export_state",
+        "summary": "Cookies and storage of one origin.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The context id returned by `POST /v1/contexts`.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportStateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The state of the origin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportStateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error codes: `invalid_request`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error codes: `unauthorized`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error codes: `context_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error codes: `context_busy`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error codes: `internal`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Error codes: `not_implemented`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contexts/{id}/state/import": {
+      "post": {
+        "operationId": "import_state",
+        "summary": "Put cookies of one origin into the context.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The context id returned by `POST /v1/contexts`.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportStateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What was imported and what was refused.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportStateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error codes: `invalid_request`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error codes: `unauthorized`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error codes: `context_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error codes: `context_busy`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error codes: `internal`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Error codes: `not_implemented`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contexts/{id}/selftest": {
+      "post": {
+        "operationId": "selftest",
+        "summary": "Load the detection page set and return findings and a score.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The context id returned by `POST /v1/contexts`.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelftestRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Findings and score.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelftestResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error codes: `invalid_request`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error codes: `unauthorized`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error codes: `context_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error codes: `context_busy`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error codes: `internal`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Error codes: `not_implemented`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "sidecarToken": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-kage-sidecar-token",
+        "description": "The shared secret of Kage and its sidecars."
+      }
+    },
+    "schemas": {
+      "AppliedIdentity": {
+        "type": "object",
+        "properties": {
+          "claimed_os": {
+            "description": "The operating system the context presents.",
+            "$ref": "#/components/schemas/ClaimedOs"
+          },
+          "user_agent": {
+            "type": "string",
+            "description": "The `User-Agent` the context sends."
+          },
+          "screen": {
+            "description": "The screen of the context's own display.",
+            "$ref": "#/components/schemas/Screen"
+          },
+          "timezone": {
+            "type": "string",
+            "description": "The time zone the browser process runs in."
+          },
+          "languages": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The languages written into the profile."
+          },
+          "hardware_concurrency": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Logical processors the browser sees: the fingerprint's, at most the host's."
+          },
+          "gl": {
+            "description": "Where WebGL comes from in this context.",
+            "$ref": "#/components/schemas/GlMode"
+          },
+          "inject": {
+            "description": "How the fingerprint reaches pages in this context.",
+            "$ref": "#/components/schemas/InjectMode"
+          },
+          "script_sha256": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "SHA-256 of the injected script; null when nothing is injected. The same fingerprint always gives the same value."
+          }
+        },
+        "required": [
+          "claimed_os",
+          "user_agent",
+          "screen",
+          "timezone",
+          "languages",
+          "hardware_concurrency",
+          "gl",
+          "inject",
+          "script_sha256"
+        ],
+        "additionalProperties": false,
+        "description": "What the engine applied when it opened a context."
+      },
+      "ArtifactRef": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Path of the file relative to the artifacts volume, with forward slashes."
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Size of the file in bytes."
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "SHA-256 of the file, hexadecimal."
+          },
+          "content_type": {
+            "type": "string",
+            "description": "Media type of the file."
+          }
+        },
+        "required": [
+          "path",
+          "bytes",
+          "sha256",
+          "content_type"
+        ],
+        "additionalProperties": false,
+        "description": "A file the sidecar wrote to the artifacts volume it shares with Kage."
+      },
+      "AssertAction": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "const": "assert",
+            "description": "Always `assert`."
+          },
+          "selector": {
+            "description": "The CSS selector must match an element.",
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text_contains": {
+            "description": "The page text must contain this.",
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "human": {
+            "description": "Perform the step the way a person would (mouse path, key cadence); default true.",
+            "type": "boolean"
+          },
+          "timeout_ms": {
+            "description": "Budget for this step in milliseconds; default 30000.",
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 300000
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false,
+        "description": "Fail the flow unless a condition holds: exactly one of the two fields is set."
+      },
+      "BackAction": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "const": "back",
+            "description": "Always `back`."
+          },
+          "human": {
+            "description": "Perform the step the way a person would (mouse path, key cadence); default true.",
+            "type": "boolean"
+          },
+          "timeout_ms": {
+            "description": "Budget for this step in milliseconds; default 30000.",
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 300000
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false,
+        "description": "Go back one history entry."
+      },
+      "BodyEncoding": {
+        "type": "string",
+        "enum": [
+          "utf8",
+          "base64"
+        ],
+        "description": "How a captured body is written: as text, or base64 when it is not valid UTF-8."
+      },
+      "CaptureOptions": {
+        "type": "object",
+        "properties": {
+          "dom": {
+            "type": "boolean",
+            "description": "The document as HTML after the wait settled."
+          },
+          "raw": {
+            "type": "boolean",
+            "description": "The body of the main response as the server sent it, decoded."
+          },
+          "xhr": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/XhrCapture"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "XHR and fetch() responses to keep; null for none."
+          },
+          "console": {
+            "type": "boolean",
+            "description": "Browser-generated log entries (failed loads, security and deprecation messages). `console.*` calls and uncaught exceptions are not available on the chromium engine: reading them needs a debugger domain that pages can detect."
+          },
+          "screenshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScreenshotOptions"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A screenshot; null for none."
+          },
+          "pdf": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PdfOptions"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A PDF; null for none."
+          }
+        },
+        "required": [
+          "dom",
+          "raw",
+          "xhr",
+          "console",
+          "screenshot",
+          "pdf"
+        ],
+        "additionalProperties": false,
+        "description": "What a navigation captures."
+      },
+      "CapturedBody": {
+        "type": "object",
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Size of the whole decoded body in bytes."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "Whether `data` holds less than the whole body."
+          },
+          "encoding": {
+            "description": "How `data` is written.",
+            "$ref": "#/components/schemas/BodyEncoding"
+          },
+          "data": {
+            "type": "string",
+            "description": "The body, or its first part when truncated."
+          }
+        },
+        "required": [
+          "bytes",
+          "truncated",
+          "encoding",
+          "data"
+        ],
+        "additionalProperties": false,
+        "description": "A captured response body."
+      },
+      "ChallengeSignals": {
+        "type": "object",
+        "properties": {
+          "vendors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Vendors whose scripts, frames or markers were seen, for example `cloudflare`."
+          },
+          "script_hosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Hosts of every script the page requested, sorted."
+          },
+          "iframe_hosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Hosts of every frame the page embedded, sorted."
+          },
+          "interstitial": {
+            "type": "boolean",
+            "description": "Whether the first document looked like a challenge page and not like content."
+          },
+          "marker": {
+            "description": "The marker that identified the interstitial; null without one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resolved": {
+            "description": "Whether the interstitial went away by itself within the wait; null when there was none.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "waited_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "How long the interstitial was waited for."
+          }
+        },
+        "required": [
+          "vendors",
+          "script_hosts",
+          "iframe_hosts",
+          "interstitial",
+          "marker",
+          "resolved",
+          "waited_ms"
+        ],
+        "additionalProperties": false,
+        "description": "What a page shows of bot-protection vendors. Signals only; Kage classifies."
+      },
+      "ClaimedOs": {
+        "type": "string",
+        "enum": [
+          "windows",
+          "macos",
+          "linux"
+        ],
+        "description": "The operating system a persona claims to run."
+      },
+      "ClickAction": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "const": "click",
+            "description": "Always `click`."
+          },
+          "selector": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000,
+            "description": "CSS selector of the element."
+          },
+          "human": {
+            "description": "Perform the step the way a person would (mouse path, key cadence); default true.",
+            "type": "boolean"
+          },
+          "timeout_ms": {
+            "description": "Budget for this step in milliseconds; default 30000.",
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 300000
+          }
+        },
+        "required": [
+          "action",
+          "selector"
+        ],
+        "additionalProperties": false,
+        "description": "Click an element."
+      },
+      "ConsoleCapture": {
+        "type": "string",
+        "enum": [
+          "browser_log",
+          "unsupported",
+          "not_requested"
+        ],
+        "description": "What the console list holds. `browser_log`: entries the browser generated itself. `unsupported`: the engine cannot read any log without becoming detectable. `not_requested`: the request did not ask."
+      },
+      "ConsoleEntry": {
+        "type": "object",
+        "properties": {
+          "level": {
+            "description": "Severity.",
+            "$ref": "#/components/schemas/ConsoleLevel"
+          },
+          "source": {
+            "type": "string",
+            "description": "Where the browser says it came from: `network`, `security`, `deprecation`, ..."
+          },
+          "text": {
+            "type": "string",
+            "description": "The message."
+          },
+          "url": {
+            "description": "The resource it is about; null when unknown.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "level",
+          "source",
+          "text",
+          "url"
+        ],
+        "additionalProperties": false,
+        "description": "One entry the browser itself logged about a page."
+      },
+      "ConsoleLevel": {
+        "type": "string",
+        "enum": [
+          "error",
+          "warning",
+          "info",
+          "verbose"
+        ],
+        "description": "Severity of a browser log entry."
+      },
+      "Cookie": {
+        "type": "object",
+        "properties": {
+          "domain": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255,
+            "description": "The host that set the cookie, or its `Domain` attribute. Lower case, no leading dot."
+          },
+          "host_only": {
+            "type": "boolean",
+            "description": "True when the cookie had no `Domain` attribute and goes to exactly `domain`."
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "description": "The path the cookie is sent under."
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 4096,
+            "description": "The cookie's name."
+          },
+          "value": {
+            "type": "string",
+            "maxLength": 4096,
+            "description": "The cookie's value."
+          },
+          "secure": {
+            "type": "boolean",
+            "description": "Sent only to secure origins."
+          },
+          "http_only": {
+            "type": "boolean",
+            "description": "Hidden from scripts."
+          },
+          "same_site": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SameSite"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The `SameSite` attribute; null when the cookie carried none, which browsers treat as `lax`."
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "description": "When the cookie expires."
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the cookie expires; null for a session cookie."
+          }
+        },
+        "required": [
+          "domain",
+          "host_only",
+          "path",
+          "name",
+          "value",
+          "secure",
+          "http_only",
+          "same_site",
+          "expires_at"
+        ],
+        "additionalProperties": false,
+        "description": "One cookie, with the fields of a row of Kage's `http_cookies` table."
+      },
+      "CookieRejection": {
+        "type": "string",
+        "enum": [
+          "foreign_domain",
+          "expired",
+          "refused_by_browser"
+        ],
+        "description": "Why a cookie was not imported. `foreign_domain`: it does not belong to the origin. `expired`: its expiry is in the past. `refused_by_browser`: the browser's own cookie rules refused it."
+      },
+      "EchoExpectation": {
+        "type": "object",
+        "properties": {
+          "ja4": {
+            "type": "string",
+            "description": "The JA4 of the browser's TLS ClientHello."
+          },
+          "akamai": {
+            "type": "string",
+            "description": "The HTTP/2 fingerprint in Akamai's notation."
+          },
+          "headers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The header names of a typed navigation, in wire order."
+          }
+        },
+        "required": [
+          "ja4",
+          "akamai",
+          "headers"
+        ],
+        "additionalProperties": false,
+        "description": "What the fingerprint echo must report for this browser: the capture recorded in `tests/fixtures/fingerprints/browser/`."
+      },
+      "EngineName": {
+        "type": "string",
+        "enum": [
+          "chromium",
+          "firefox"
+        ],
+        "description": "A browser engine. One sidecar container runs exactly one."
+      },
+      "ErrorCode": {
+        "type": "string",
+        "enum": [
+          "unauthorized",
+          "invalid_request",
+          "not_found",
+          "context_not_found",
+          "context_limit",
+          "context_conflict",
+          "context_busy",
+          "cross_os_claim_disabled",
+          "browser_major_mismatch",
+          "browser_launch_failed",
+          "not_implemented",
+          "payload_too_large",
+          "internal"
+        ],
+        "description": "Stable error code of a refused or failed request. `unauthorized`: the shared secret is missing or wrong. `invalid_request`: the body, a parameter or the URL does not match the contract. `not_found`: no such route. `context_not_found`: no open context has this id. `context_limit`: the container already runs its maximum number of contexts. `context_conflict`: the persona has an open context that was opened with different parameters. `context_busy`: the context is running another operation. `cross_os_claim_disabled`: the engine may only claim the operating system it runs on. `browser_major_mismatch`: the request names a browser major the engine does not bundle. `browser_launch_failed`: the browser or its display did not start. `not_implemented`: the engine does not implement this endpoint yet. `payload_too_large`: the request body is over the limit. `internal`: an unexpected failure, see the logs."
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "description": "What went wrong, as a stable code.",
+            "$ref": "#/components/schemas/ErrorCode"
+          },
+          "message": {
+            "type": "string",
+            "description": "A sentence for the log. Never parse it."
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "additionalProperties": false,
+        "description": "Body of every answer that is not a success.",
+        "examples": [
+          {
+            "code": "context_limit",
+            "message": "this container already runs 3 contexts"
+          }
+        ]
+      },
+      "ExpectedIdentity": {
+        "type": "object",
+        "properties": {
+          "claimed_os": {
+            "description": "The operating system the persona claims.",
+            "$ref": "#/components/schemas/ClaimedOs"
+          },
+          "browser_major": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "description": "The browser major the persona presents."
+          },
+          "timezone": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "The persona's IANA time zone."
+          },
+          "languages": {
+            "minItems": 1,
+            "maxItems": 8,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$",
+              "description": "A BCP 47 language tag."
+            },
+            "description": "The persona's languages, most preferred first."
+          }
+        },
+        "required": [
+          "claimed_os",
+          "browser_major",
+          "timezone",
+          "languages"
+        ],
+        "additionalProperties": false,
+        "description": "The identity a self-test expects to see."
+      },
+      "ExportStateRequest": {
+        "type": "object",
+        "properties": {
+          "origin": {
+            "type": "string",
+            "maxLength": 300,
+            "pattern": "^https?:\\/\\/[A-Za-z0-9.-]+(:\\d{1,5})?$",
+            "description": "The origin whose state is exported, for example `https://example.org`."
+          },
+          "include_storage": {
+            "description": "Also export `localStorage` and `sessionStorage`; default false.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "origin"
+        ],
+        "additionalProperties": false,
+        "description": "Which state to export from a context.",
+        "examples": [
+          {
+            "origin": "https://example.org"
+          },
+          {
+            "origin": "https://example.org:8443",
+            "include_storage": true
+          }
+        ]
+      },
+      "ExportStateResponse": {
+        "type": "object",
+        "properties": {
+          "origin": {
+            "type": "string",
+            "description": "The origin that was asked for."
+          },
+          "cookies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Cookie"
+            },
+            "description": "Every cookie the browser would send to that origin, session cookies included."
+          },
+          "local_storage": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/StorageEntry"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The origin's `localStorage`; null when not requested, or when the context's page is on another origin and the storage cannot be read without loading something."
+          },
+          "session_storage": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/StorageEntry"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The origin's `sessionStorage`, under the same conditions."
+          }
+        },
+        "required": [
+          "origin",
+          "cookies",
+          "local_storage",
+          "session_storage"
+        ],
+        "additionalProperties": false,
+        "description": "Cookies and storage of one origin.",
+        "examples": [
+          {
+            "origin": "https://example.org",
+            "cookies": [
+              {
+                "domain": "example.org",
+                "host_only": false,
+                "path": "/",
+                "name": "sid",
+                "value": "abc",
+                "secure": true,
+                "http_only": true,
+                "same_site": "lax",
+                "expires_at": "2027-01-01T00:00:00Z"
+              },
+              {
+                "domain": "example.org",
+                "host_only": true,
+                "path": "/",
+                "name": "theme",
+                "value": "abc",
+                "secure": true,
+                "http_only": true,
+                "same_site": null,
+                "expires_at": null
+              }
+            ],
+            "local_storage": [
+              {
+                "name": "seen",
+                "value": "1"
+              }
+            ],
+            "session_storage": null
+          }
+        ]
+      },
+      "ExtractAction": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "const": "extract",
+            "description": "Always `extract`."
+          },
+          "capture": {
+            "description": "What to capture.",
+            "$ref": "#/components/schemas/CaptureOptions"
+          },
+          "human": {
+            "description": "Perform the step the way a person would (mouse path, key cadence); default true.",
+            "type": "boolean"
+          },
+          "timeout_ms": {
+            "description": "Budget for this step in milliseconds; default 30000.",
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 300000
+          }
+        },
+        "required": [
+          "action",
+          "capture"
+        ],
+        "additionalProperties": false,
+        "description": "Capture the page at this point of the flow."
+      },
+      "Finding": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "string",
+            "description": "The id of the page the check ran on."
+          },
+          "check": {
+            "type": "string",
+            "description": "Name of the check, stable per page kind."
+          },
+          "status": {
+            "description": "The verdict.",
+            "$ref": "#/components/schemas/FindingStatus"
+          },
+          "hard": {
+            "type": "boolean",
+            "description": "Whether a `fail` here fails the whole self-test: an automation flag, an identity mismatch or a transport mismatch."
+          },
+          "weight": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Weight of the check in the score."
+          },
+          "observed": {
+            "description": "What the page showed; null when nothing was read.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expected": {
+            "description": "What was expected; null when the check has no fixed expectation.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "page",
+          "check",
+          "status",
+          "hard",
+          "weight",
+          "observed",
+          "expected"
+        ],
+        "additionalProperties": false,
+        "description": "One check of a self-test and its verdict."
+      },
+      "FindingStatus": {
+        "type": "string",
+        "enum": [
+          "pass",
+          "warn",
+          "fail",
+          "unknown"
+        ],
+        "description": "Verdict of one check. `unknown`: the page could not be reached or read; it changes no score."
+      },
+      "FlowAction": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/GotoAction"
+          },
+          {
+            "$ref": "#/components/schemas/ClickAction"
+          },
+          {
+            "$ref": "#/components/schemas/TypeAction"
+          },
+          {
+            "$ref": "#/components/schemas/PressAction"
+          },
+          {
+            "$ref": "#/components/schemas/ScrollAction"
+          },
+          {
+            "$ref": "#/components/schemas/WaitForAction"
+          },
+          {
+            "$ref": "#/components/schemas/SelectAction"
+          },
+          {
+            "$ref": "#/components/schemas/HoverAction"
+          },
+          {
+            "$ref": "#/components/schemas/BackAction"
+          },
+          {
+            "$ref": "#/components/schemas/ExtractAction"
+          },
+          {
+            "$ref": "#/components/schemas/ScreenshotAction"
+          },
+          {
+            "$ref": "#/components/schemas/PdfAction"
+          },
+          {
+            "$ref": "#/components/schemas/AssertAction"
+          }
+        ],
+        "description": "One step of a flow, chosen by `action`."
+      },
+      "FlowEvent": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/FlowStepEvent"
+          },
+          {
+            "$ref": "#/components/schemas/FlowFinalEvent"
+          }
+        ],
+        "description": "One line of a flow's NDJSON stream, chosen by `type`.",
+        "examples": [
+          {
+            "type": "step",
+            "index": 0,
+            "action": "goto",
+            "ok": true,
+            "duration_ms": 1840,
+            "error": null,
+            "capture": null
+          },
+          {
+            "type": "step",
+            "index": 3,
+            "action": "wait_for",
+            "ok": false,
+            "duration_ms": 15000,
+            "error": "no element matched #results within 15000 ms",
+            "capture": null
+          },
+          {
+            "type": "final",
+            "ok": true,
+            "result": {
+              "url": "https://example.org/listing?page=2",
+              "final_url": "https://www.example.org/listing?page=2",
+              "status": 200,
+              "http_version": "h2",
+              "headers": [
+                {
+                  "name": "content-type",
+                  "value": "text/html; charset=utf-8"
+                },
+                {
+                  "name": "set-cookie",
+                  "value": "sid=abc; Path=/; Secure; HttpOnly"
+                }
+              ],
+              "redirects": [
+                {
+                  "url": "https://example.org/listing?page=2",
+                  "status": 301,
+                  "location": "https://www.example.org/listing?page=2"
+                }
+              ],
+              "title": "Listing, page 2",
+              "dom_html": "<!DOCTYPE html><html><head><title>Listing, page 2</title></head><body></body></html>",
+              "dom_truncated": false,
+              "raw_body": {
+                "bytes": 71,
+                "truncated": false,
+                "encoding": "utf8",
+                "data": "<!doctype html><title>Listing, page 2</title><script src=\"/app.js\"></script>"
+              },
+              "xhr": [
+                {
+                  "url": "https://www.example.org/api/items?page=2",
+                  "method": "GET",
+                  "kind": "fetch",
+                  "status": 200,
+                  "content_type": "application/json",
+                  "body": {
+                    "bytes": 17,
+                    "truncated": false,
+                    "encoding": "utf8",
+                    "data": "{\"items\":[1,2,3]}"
+                  }
+                }
+              ],
+              "xhr_dropped": 0,
+              "console": [
+                {
+                  "level": "error",
+                  "source": "network",
+                  "text": "Failed to load resource: the server responded with a status of 404 ()",
+                  "url": "https://www.example.org/missing.png"
+                }
+              ],
+              "console_capture": "browser_log",
+              "timing": {
+                "ttfb_ms": 410,
+                "dom_content_loaded_ms": 980,
+                "load_ms": 2210,
+                "total_ms": 3400
+              },
+              "challenge": {
+                "vendors": [],
+                "script_hosts": [
+                  "www.example.org"
+                ],
+                "iframe_hosts": [],
+                "interstitial": false,
+                "marker": null,
+                "resolved": null,
+                "waited_ms": 0
+              },
+              "screenshot": {
+                "path": "sidecar/0199c1f3-0a1b-7d2c-8e3f-4a5b6c7d8e9f/0199c1f4-screenshot.webp",
+                "bytes": 48211,
+                "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+                "content_type": "image/webp"
+              },
+              "pdf": null,
+              "side_effects": [],
+              "error": null
+            }
+          }
+        ]
+      },
+      "FlowFinalEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "final",
+            "description": "Always `final`."
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "Whether every step succeeded."
+          },
+          "result": {
+            "description": "The page as the flow left it.",
+            "$ref": "#/components/schemas/PageResult"
+          }
+        },
+        "required": [
+          "type",
+          "ok",
+          "result"
+        ],
+        "additionalProperties": false,
+        "description": "The end of a flow."
+      },
+      "FlowRequest": {
+        "type": "object",
+        "properties": {
+          "actions": {
+            "minItems": 1,
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FlowAction"
+            },
+            "description": "The steps, run in order."
+          },
+          "capture": {
+            "description": "What the final page result captures.",
+            "$ref": "#/components/schemas/CaptureOptions"
+          },
+          "timeout_ms": {
+            "description": "Budget for the whole flow; default 180000.",
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 300000
+          }
+        },
+        "required": [
+          "actions",
+          "capture"
+        ],
+        "additionalProperties": false,
+        "description": "A scripted navigation flow.",
+        "examples": [
+          {
+            "actions": [
+              {
+                "action": "goto",
+                "url": "https://example.org/"
+              },
+              {
+                "action": "type",
+                "selector": "input[name=q]",
+                "text": "used cars",
+                "human": true
+              },
+              {
+                "action": "press",
+                "key": "Enter"
+              },
+              {
+                "action": "wait_for",
+                "selector": "#results",
+                "timeout_ms": 15000
+              },
+              {
+                "action": "scroll",
+                "depth": 0.8
+              },
+              {
+                "action": "click",
+                "selector": "a.next"
+              },
+              {
+                "action": "select",
+                "selector": "select#sort",
+                "value": "price"
+              },
+              {
+                "action": "hover",
+                "selector": "#menu"
+              },
+              {
+                "action": "back"
+              },
+              {
+                "action": "extract",
+                "capture": {
+                  "dom": true,
+                  "raw": true,
+                  "xhr": {
+                    "content_types": [
+                      "application/json"
+                    ],
+                    "max_bytes": 2000000
+                  },
+                  "console": true,
+                  "screenshot": {
+                    "full_page": false,
+                    "format": "webp",
+                    "quality": 80
+                  },
+                  "pdf": null
+                }
+              },
+              {
+                "action": "screenshot",
+                "options": {
+                  "full_page": false,
+                  "format": "png"
+                }
+              },
+              {
+                "action": "pdf",
+                "options": {}
+              },
+              {
+                "action": "assert",
+                "text_contains": "results"
+              }
+            ],
+            "capture": {
+              "dom": true,
+              "raw": true,
+              "xhr": {
+                "content_types": [
+                  "application/json"
+                ],
+                "max_bytes": 2000000
+              },
+              "console": true,
+              "screenshot": {
+                "full_page": false,
+                "format": "webp",
+                "quality": 80
+              },
+              "pdf": null
+            },
+            "timeout_ms": 180000
+          }
+        ]
+      },
+      "FlowStepEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "step",
+            "description": "Always `step`."
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Position of the step in `actions`."
+          },
+          "action": {
+            "type": "string",
+            "description": "The step's action name."
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "Whether the step succeeded."
+          },
+          "duration_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "How long the step took."
+          },
+          "error": {
+            "description": "Why the step failed; null when it did not.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "capture": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PageResult"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The capture of an `extract` step; null otherwise."
+          }
+        },
+        "required": [
+          "type",
+          "index",
+          "action",
+          "ok",
+          "duration_ms",
+          "error",
+          "capture"
+        ],
+        "additionalProperties": false,
+        "description": "A finished step of a flow."
+      },
+      "GeneratePersonaRequest": {
+        "type": "object",
+        "properties": {
+          "seed": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "The persona's recorded seed. The same seed, constraints and sidecar build give the same fingerprint, byte for byte."
+          },
+          "claimed_os": {
+            "description": "The operating system the persona claims. An engine that may not claim another system than its host's answers `cross_os_claim_disabled`.",
+            "$ref": "#/components/schemas/ClaimedOs"
+          },
+          "languages": {
+            "minItems": 1,
+            "maxItems": 8,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$",
+              "description": "A BCP 47 language tag."
+            },
+            "description": "The persona's languages, most preferred first; the first is its locale."
+          },
+          "browser_major": {
+            "description": "The browser major Kage expects the engine to bundle. When given and different from the installed browser's, the answer is `browser_major_mismatch`.",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "screen": {
+            "description": "Bounds for the generated screen.",
+            "$ref": "#/components/schemas/ScreenConstraints"
+          }
+        },
+        "required": [
+          "seed",
+          "claimed_os",
+          "languages"
+        ],
+        "additionalProperties": false,
+        "description": "Constraints for a new persona fingerprint.",
+        "examples": [
+          {
+            "seed": "5f1c0e9a7b3d2468ace013579bdf02468ace13579bdf0246813579bdf02468ac",
+            "claimed_os": "linux",
+            "languages": [
+              "de-DE",
+              "de",
+              "en-US",
+              "en"
+            ]
+          },
+          {
+            "seed": "5f1c0e9a7b3d2468ace013579bdf02468ace13579bdf0246813579bdf02468ac",
+            "claimed_os": "linux",
+            "languages": [
+              "fr-FR",
+              "fr",
+              "en"
+            ],
+            "browser_major": 155,
+            "screen": {
+              "min_width": 1366,
+              "max_width": 2560
+            }
+          }
+        ]
+      },
+      "GeneratePersonaResponse": {
+        "type": "object",
+        "properties": {
+          "fingerprint": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {},
+            "description": "The fingerprint document. Kage stores it unchanged and sends it back on every context open; only the sidecar reads it."
+          },
+          "summary": {
+            "description": "The same fingerprint in a few fields.",
+            "$ref": "#/components/schemas/PersonaSummary"
+          }
+        },
+        "required": [
+          "fingerprint",
+          "summary"
+        ],
+        "additionalProperties": false,
+        "description": "A generated persona fingerprint.",
+        "examples": [
+          {
+            "fingerprint": {
+              "schema": 1,
+              "generator": "fingerprint-generator@2.1.88",
+              "seed": "5f1c0e9a7b3d2468ace013579bdf02468ace13579bdf0246813579bdf02468ac",
+              "claimed_os": "linux",
+              "browser_version": "155.0.8059.39",
+              "native": {
+                "screen": {
+                  "width": 1920,
+                  "height": 1080,
+                  "dpr": 1,
+                  "color_depth": 24
+                },
+                "hardware_concurrency": 8
+              },
+              "inject": "none"
+            },
+            "summary": {
+              "engine": "chromium",
+              "claimed_os": "linux",
+              "browser_version": "155.0.8059.39",
+              "browser_major": 155,
+              "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+              "platform": "Linux x86_64",
+              "screen": {
+                "width": 1920,
+                "height": 1080,
+                "dpr": 1,
+                "color_depth": 24
+              },
+              "hardware_concurrency": 8,
+              "languages": [
+                "de-DE",
+                "de",
+                "en-US",
+                "en"
+              ],
+              "generator": "fingerprint-generator@2.1.88",
+              "seed": "5f1c0e9a7b3d2468ace013579bdf02468ace13579bdf0246813579bdf02468ac",
+              "inject": "none"
+            }
+          }
+        ]
+      },
+      "Geolocation": {
+        "type": "object",
+        "properties": {
+          "latitude": {
+            "type": "number",
+            "minimum": -90,
+            "maximum": 90,
+            "description": "Degrees north."
+          },
+          "longitude": {
+            "type": "number",
+            "minimum": -180,
+            "maximum": 180,
+            "description": "Degrees east."
+          },
+          "accuracy_m": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100000,
+            "description": "Reported accuracy radius in metres."
+          }
+        },
+        "required": [
+          "latitude",
+          "longitude",
+          "accuracy_m"
+        ],
+        "additionalProperties": false,
+        "description": "A point the geolocation API reports once a site has been given permission."
+      },
+      "GlMode": {
+        "type": "string",
+        "enum": [
+          "none",
+          "swiftshader",
+          "llvmpipe",
+          "host"
+        ],
+        "description": "Where WebGL comes from. `none`: no WebGL. `swiftshader`: Chrome's bundled software renderer. `llvmpipe`: Mesa's software renderer through ANGLE. `host`: a GPU of the host mapped into the container."
+      },
+      "GotoAction": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "const": "goto",
+            "description": "Always `goto`."
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 8192,
+            "pattern": "^https?:\\/\\/[^\\s/?#]+[^\\s]*$",
+            "description": "The page to load."
+          },
+          "human": {
+            "description": "Perform the step the way a person would (mouse path, key cadence); default true.",
+            "type": "boolean"
+          },
+          "timeout_ms": {
+            "description": "Budget for this step in milliseconds; default 30000.",
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 300000
+          }
+        },
+        "required": [
+          "action",
+          "url"
+        ],
+        "additionalProperties": false,
+        "description": "Load a URL."
+      },
+      "Header": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Header name, lower case."
+          },
+          "value": {
+            "type": "string",
+            "description": "Header value."
+          }
+        },
+        "required": [
+          "name",
+          "value"
+        ],
+        "additionalProperties": false,
+        "description": "One response header."
+      },
+      "HealthResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok",
+            "description": "Always `ok`: an unhealthy server does not answer 200."
+          },
+          "engine": {
+            "description": "The engine this container runs.",
+            "$ref": "#/components/schemas/EngineName"
+          },
+          "browser_version": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Full version of the browser the engine drives, for example `155.0.8059.39`; null when the engine is a stub without a browser."
+          },
+          "contexts_in_use": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Persona contexts currently open."
+          },
+          "max_contexts": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "description": "The most contexts this container opens at once (`SIDECAR_MAX_CONTEXTS`)."
+          },
+          "uptime_seconds": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Seconds since the server started."
+          },
+          "contract_version": {
+            "type": "string",
+            "description": "Semantic version of the contract this server speaks."
+          }
+        },
+        "required": [
+          "status",
+          "engine",
+          "browser_version",
+          "contexts_in_use",
+          "max_contexts",
+          "uptime_seconds",
+          "contract_version"
+        ],
+        "additionalProperties": false,
+        "description": "What `GET /v1/health` answers.",
+        "examples": [
+          {
+            "status": "ok",
+            "engine": "chromium",
+            "browser_version": "155.0.8059.39",
+            "contexts_in_use": 1,
+            "max_contexts": 3,
+            "uptime_seconds": 86.4,
+            "contract_version": "1.0.0"
+          },
+          {
+            "status": "ok",
+            "engine": "firefox",
+            "browser_version": null,
+            "contexts_in_use": 0,
+            "max_contexts": 3,
+            "uptime_seconds": 0,
+            "contract_version": "1.0.0"
+          }
+        ]
+      },
+      "HoverAction": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "const": "hover",
+            "description": "Always `hover`."
+          },
+          "selector": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000,
+            "description": "CSS selector of the element."
+          },
+          "human": {
+            "description": "Perform the step the way a person would (mouse path, key cadence); default true.",
+            "type": "boolean"
+          },
+          "timeout_ms": {
+            "description": "Budget for this step in milliseconds; default 30000.",
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 300000
+          }
+        },
+        "required": [
+          "action",
+          "selector"
+        ],
+        "additionalProperties": false,
+        "description": "Move the pointer over an element."
+      },
+      "ImportStateRequest": {
+        "type": "object",
+        "properties": {
+          "origin": {
+            "type": "string",
+            "maxLength": 300,
+            "pattern": "^https?:\\/\\/[A-Za-z0-9.-]+(:\\d{1,5})?$",
+            "description": "The origin the cookies belong to. A cookie for another site is refused."
+          },
+          "cookies": {
+            "maxItems": 3000,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Cookie"
+            },
+            "description": "The cookies to set."
+          }
+        },
+        "required": [
+          "origin",
+          "cookies"
+        ],
+        "additionalProperties": false,
+        "description": "Cookies to put into a context.",
+        "examples": [
+          {
+            "origin": "https://example.org",
+            "cookies": [
+              {
+                "domain": "example.org",
+                "host_only": false,
+                "path": "/",
+                "name": "sid",
+                "value": "abc",
+                "secure": true,
+                "http_only": true,
+                "same_site": "lax",
+                "expires_at": "2027-01-01T00:00:00Z"
+              }
+            ]
+          }
+        ]
+      },
+      "ImportStateResponse": {
+        "type": "object",
+        "properties": {
+          "imported": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Cookies now in the browser."
+          },
+          "rejected": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RejectedCookie"
+            },
+            "description": "Cookies that were refused, with the reason."
+          }
+        },
+        "required": [
+          "imported",
+          "rejected"
+        ],
+        "additionalProperties": false,
+        "description": "What an import did.",
+        "examples": [
+          {
+            "imported": 1,
+            "rejected": [
+              {
+                "name": "other",
+                "domain": "example.com",
+                "reason": "foreign_domain"
+              }
+            ]
+          }
+        ]
+      },
+      "InjectMode": {
+        "type": "string",
+        "enum": [
+          "none",
+          "window"
+        ],
+        "description": "How a persisted fingerprint reaches a page. `none`: nothing is injected, launch parameters make the persona. `window`: one script built from the fingerprint runs in every document before the page (cross-OS claims only)."
+      },
+      "NavigateRequest": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "maxLength": 8192,
+            "pattern": "^https?:\\/\\/[^\\s/?#]+[^\\s]*$",
+            "description": "The page to load, as a typed navigation. `http` and `https` only. There is no referer option: a referer set by the driver leaves with `Sec-Fetch-Site: none`, a pair no real navigation has. Arriving from another page is done by clicking a link there (the behavior engine)."
+          },
+          "wait": {
+            "description": "What to wait for.",
+            "$ref": "#/components/schemas/Wait"
+          },
+          "capture": {
+            "description": "What to capture.",
+            "$ref": "#/components/schemas/CaptureOptions"
+          },
+          "timeout_ms": {
+            "description": "Budget for the navigation and its waits; default 60000.",
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 300000
+          },
+          "challenge_wait_ms": {
+            "description": "How long a detected interstitial is given to resolve by itself; default 15000.",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 120000
+          },
+          "dwell_ms": {
+            "description": "Time spent on the page after the wait and before the capture, with no synthetic input; default 0. The behavior engine of a later milestone fills this time.",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 120000
+          },
+          "max_body_bytes": {
+            "description": "Largest raw body and DOM kept; default 10000000. A longer one is cut and flagged.",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100000000
+          },
+          "artifact_prefix": {
+            "type": "string",
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*(\\/[A-Za-z0-9][A-Za-z0-9._-]*)*$",
+            "description": "Directory below the artifacts volume for the files of this navigation; default `sidecar/<context id>`."
+          }
+        },
+        "required": [
+          "url",
+          "wait",
+          "capture"
+        ],
+        "additionalProperties": false,
+        "description": "One page load in a persona context.",
+        "examples": [
+          {
+            "url": "https://example.org/listing?page=2",
+            "wait": {
+              "until": "network_idle"
+            },
+            "capture": {
+              "dom": true,
+              "raw": false,
+              "xhr": null,
+              "console": false,
+              "screenshot": null,
+              "pdf": null
+            }
+          },
+          {
+            "url": "https://example.org/listing?page=2",
+            "wait": {
+              "until": "load",
+              "selector": "#results",
+              "extra_ms": 250
+            },
+            "capture": {
+              "dom": true,
+              "raw": true,
+              "xhr": {
+                "content_types": [
+                  "application/json"
+                ],
+                "max_bytes": 2000000
+              },
+              "console": true,
+              "screenshot": {
+                "full_page": false,
+                "format": "webp",
+                "quality": 80
+              },
+              "pdf": {
+                "format": "a4",
+                "landscape": false,
+                "print_background": true
+              }
+            },
+            "timeout_ms": 60000,
+            "challenge_wait_ms": 15000,
+            "dwell_ms": 0,
+            "max_body_bytes": 10000000,
+            "artifact_prefix": "requests/0199c1f4-aaaa"
+          }
+        ]
+      },
+      "NavigationError": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "description": "What kind of failure.",
+            "$ref": "#/components/schemas/NavigationErrorCode"
+          },
+          "message": {
+            "type": "string",
+            "description": "A sentence for the log."
+          },
+          "net_error": {
+            "description": "The browser's own error name, for example `ERR_NAME_NOT_RESOLVED`; null without one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "net_error"
+        ],
+        "additionalProperties": false,
+        "description": "Why a navigation did not arrive."
+      },
+      "NavigationErrorCode": {
+        "type": "string",
+        "enum": [
+          "timeout",
+          "navigation_failed",
+          "proxy_failed",
+          "aborted"
+        ],
+        "description": "Why a navigation did not arrive. `timeout`: the budget ran out. `proxy_failed`: the proxy refused, failed or could not be reached. `navigation_failed`: the browser reported a network error for the target. `aborted`: the page turned into a download or was closed."
+      },
+      "OpenContextRequest": {
+        "type": "object",
+        "properties": {
+          "persona_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The persona. One persona has at most one open context."
+          },
+          "fingerprint": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {},
+            "description": "The fingerprint document exactly as `POST /v1/personas/generate` returned it."
+          },
+          "proxy": {
+            "description": "The persona's proxy. Every request of the context leaves through it.",
+            "$ref": "#/components/schemas/Proxy"
+          },
+          "locale": {
+            "type": "string",
+            "pattern": "^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$",
+            "description": "The language of the browser's own interface, for example `de-DE`."
+          },
+          "languages": {
+            "minItems": 1,
+            "maxItems": 8,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$",
+              "description": "A BCP 47 language tag."
+            },
+            "description": "`navigator.languages` and `Accept-Language`, most preferred first."
+          },
+          "timezone": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z][A-Za-z0-9_+-]*(\\/[A-Za-z0-9_+-]+){0,2}$",
+            "description": "The persona's IANA time zone."
+          },
+          "geolocation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Geolocation"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The point the geolocation API reports once a site has permission; null to report none. The permission itself is never granted automatically."
+          },
+          "screen": {
+            "description": "The persona's screen. It must equal the fingerprint's.",
+            "$ref": "#/components/schemas/Screen"
+          },
+          "profile_dir": {
+            "type": "string",
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*(\\/[A-Za-z0-9][A-Za-z0-9._-]*)*$",
+            "description": "The persona's browser profile directory, relative to the personas volume. Created when missing; cookies, storage and history accrue in it."
+          }
+        },
+        "required": [
+          "persona_id",
+          "fingerprint",
+          "proxy",
+          "locale",
+          "languages",
+          "timezone",
+          "geolocation",
+          "screen",
+          "profile_dir"
+        ],
+        "additionalProperties": false,
+        "description": "Everything a persona context is opened with.",
+        "examples": [
+          {
+            "persona_id": "0199c1f2-6b7a-7c3e-9d41-2f8a5b6c7d8e",
+            "fingerprint": {
+              "schema": 1,
+              "generator": "fingerprint-generator@2.1.88",
+              "seed": "5f1c0e9a7b3d2468ace013579bdf02468ace13579bdf0246813579bdf02468ac",
+              "claimed_os": "linux",
+              "browser_version": "155.0.8059.39",
+              "native": {
+                "screen": {
+                  "width": 1920,
+                  "height": 1080,
+                  "dpr": 1,
+                  "color_depth": 24
+                },
+                "hardware_concurrency": 8
+              },
+              "inject": "none"
+            },
+            "proxy": {
+              "server": "http://203.0.113.10:6540",
+              "username": "user-1",
+              "password": "not-a-real-password"
+            },
+            "locale": "de-DE",
+            "languages": [
+              "de-DE",
+              "de",
+              "en-US",
+              "en"
+            ],
+            "timezone": "Europe/Berlin",
+            "geolocation": {
+              "latitude": 52.52,
+              "longitude": 13.405,
+              "accuracy_m": 35
+            },
+            "screen": {
+              "width": 1920,
+              "height": 1080,
+              "dpr": 1,
+              "color_depth": 24
+            },
+            "profile_dir": "personas/0199c1f2-6b7a-7c3e-9d41-2f8a5b6c7d8e"
+          },
+          {
+            "persona_id": "0199c1f2-6b7a-7c3e-9d41-2f8a5b6c7d8e",
+            "fingerprint": {
+              "schema": 1,
+              "generator": "fingerprint-generator@2.1.88",
+              "seed": "5f1c0e9a7b3d2468ace013579bdf02468ace13579bdf0246813579bdf02468ac",
+              "claimed_os": "linux",
+              "browser_version": "155.0.8059.39",
+              "native": {
+                "screen": {
+                  "width": 1920,
+                  "height": 1080,
+                  "dpr": 1,
+                  "color_depth": 24
+                },
+                "hardware_concurrency": 8
+              },
+              "inject": "none"
+            },
+            "proxy": {
+              "server": "http://203.0.113.10:6540",
+              "username": "user-1",
+              "password": "not-a-real-password"
+            },
+            "locale": "en-GB",
+            "languages": [
+              "en-GB",
+              "en"
+            ],
+            "timezone": "Europe/London",
+            "geolocation": null,
+            "screen": {
+              "width": 1920,
+              "height": 1080,
+              "dpr": 1,
+              "color_depth": 24
+            },
+            "profile_dir": "personas/0199c1f2-6b7a-7c3e-9d41-2f8a5b6c7d8e"
+          }
+        ]
+      },
+      "OpenContextResponse": {
+        "type": "object",
+        "properties": {
+          "context_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The context. It names the context in every later call."
+          },
+          "persona_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The persona the context belongs to."
+          },
+          "reused": {
+            "type": "boolean",
+            "description": "True when the persona already had an open context with the same parameters and that one is returned."
+          },
+          "browser_version": {
+            "type": "string",
+            "description": "Full version of the browser that runs the context."
+          },
+          "applied": {
+            "description": "What the engine applied.",
+            "$ref": "#/components/schemas/AppliedIdentity"
+          },
+          "opened_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the context was opened."
+          }
+        },
+        "required": [
+          "context_id",
+          "persona_id",
+          "reused",
+          "browser_version",
+          "applied",
+          "opened_at"
+        ],
+        "additionalProperties": false,
+        "description": "An open persona context.",
+        "examples": [
+          {
+            "context_id": "0199c1f3-0a1b-7d2c-8e3f-4a5b6c7d8e9f",
+            "persona_id": "0199c1f2-6b7a-7c3e-9d41-2f8a5b6c7d8e",
+            "reused": false,
+            "browser_version": "155.0.8059.39",
+            "applied": {
+              "claimed_os": "linux",
+              "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+              "screen": {
+                "width": 1920,
+                "height": 1080,
+                "dpr": 1,
+                "color_depth": 24
+              },
+              "timezone": "Europe/Berlin",
+              "languages": [
+                "de-DE",
+                "de",
+                "en-US",
+                "en"
+              ],
+              "hardware_concurrency": 4,
+              "gl": "llvmpipe",
+              "inject": "none",
+              "script_sha256": null
+            },
+            "opened_at": "2026-10-09T15:04:05.123Z"
+          }
+        ]
+      },
+      "PageResult": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "The URL that was asked for."
+          },
+          "final_url": {
+            "type": "string",
+            "description": "The URL of the document when it was captured."
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Status of the main response; null when there was none."
+          },
+          "http_version": {
+            "description": "Protocol of the main response as the browser names it, for example `h2`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "headers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Header"
+            },
+            "description": "Headers of the main response, in order, names in lower case."
+          },
+          "redirects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RedirectHop"
+            },
+            "description": "The redirects that were answered before the main response, in order. Kage checks every hop against its SSRF rules afterwards."
+          },
+          "title": {
+            "description": "The document title; null when nothing was loaded.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dom_html": {
+            "description": "The document as HTML after the wait settled; null when not requested or not loaded.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dom_truncated": {
+            "type": "boolean",
+            "description": "Whether `dom_html` was cut at `max_body_bytes`."
+          },
+          "raw_body": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CapturedBody"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The body of the main response; null when not requested or not available."
+          },
+          "xhr": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/XhrResponse"
+            },
+            "description": "The XHR and fetch() responses that matched the request's filter."
+          },
+          "xhr_dropped": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Matching responses that were not kept because the page had more than `max_responses`."
+          },
+          "console": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConsoleEntry"
+            },
+            "description": "Browser log entries, when requested."
+          },
+          "console_capture": {
+            "description": "What `console` holds.",
+            "$ref": "#/components/schemas/ConsoleCapture"
+          },
+          "timing": {
+            "description": "Milestones of the navigation.",
+            "$ref": "#/components/schemas/Timing"
+          },
+          "challenge": {
+            "description": "Bot-protection signals.",
+            "$ref": "#/components/schemas/ChallengeSignals"
+          },
+          "screenshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ArtifactRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The screenshot file; null without one."
+          },
+          "pdf": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ArtifactRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The PDF file; null without one."
+          },
+          "side_effects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SideEffect"
+            },
+            "description": "Events the captures fired in the page, in order. Empty when the page could notice nothing."
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NavigationError"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why the navigation did not arrive; null when it did. Whatever was captured is still present."
+          }
+        },
+        "required": [
+          "url",
+          "final_url",
+          "status",
+          "http_version",
+          "headers",
+          "redirects",
+          "title",
+          "dom_html",
+          "dom_truncated",
+          "raw_body",
+          "xhr",
+          "xhr_dropped",
+          "console",
+          "console_capture",
+          "timing",
+          "challenge",
+          "screenshot",
+          "pdf",
+          "side_effects",
+          "error"
+        ],
+        "additionalProperties": false,
+        "description": "What one page load produced.",
+        "examples": [
+          {
+            "url": "https://example.org/listing?page=2",
+            "final_url": "https://www.example.org/listing?page=2",
+            "status": 200,
+            "http_version": "h2",
+            "headers": [
+              {
+                "name": "content-type",
+                "value": "text/html; charset=utf-8"
+              },
+              {
+                "name": "set-cookie",
+                "value": "sid=abc; Path=/; Secure; HttpOnly"
+              }
+            ],
+            "redirects": [
+              {
+                "url": "https://example.org/listing?page=2",
+                "status": 301,
+                "location": "https://www.example.org/listing?page=2"
+              }
+            ],
+            "title": "Listing, page 2",
+            "dom_html": "<!DOCTYPE html><html><head><title>Listing, page 2</title></head><body></body></html>",
+            "dom_truncated": false,
+            "raw_body": {
+              "bytes": 71,
+              "truncated": false,
+              "encoding": "utf8",
+              "data": "<!doctype html><title>Listing, page 2</title><script src=\"/app.js\"></script>"
+            },
+            "xhr": [
+              {
+                "url": "https://www.example.org/api/items?page=2",
+                "method": "GET",
+                "kind": "fetch",
+                "status": 200,
+                "content_type": "application/json",
+                "body": {
+                  "bytes": 17,
+                  "truncated": false,
+                  "encoding": "utf8",
+                  "data": "{\"items\":[1,2,3]}"
+                }
+              }
+            ],
+            "xhr_dropped": 0,
+            "console": [
+              {
+                "level": "error",
+                "source": "network",
+                "text": "Failed to load resource: the server responded with a status of 404 ()",
+                "url": "https://www.example.org/missing.png"
+              }
+            ],
+            "console_capture": "browser_log",
+            "timing": {
+              "ttfb_ms": 410,
+              "dom_content_loaded_ms": 980,
+              "load_ms": 2210,
+              "total_ms": 3400
+            },
+            "challenge": {
+              "vendors": [],
+              "script_hosts": [
+                "www.example.org"
+              ],
+              "iframe_hosts": [],
+              "interstitial": false,
+              "marker": null,
+              "resolved": null,
+              "waited_ms": 0
+            },
+            "screenshot": {
+              "path": "sidecar/0199c1f3-0a1b-7d2c-8e3f-4a5b6c7d8e9f/0199c1f4-screenshot.webp",
+              "bytes": 48211,
+              "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+              "content_type": "image/webp"
+            },
+            "pdf": null,
+            "side_effects": [],
+            "error": null
+          },
+          {
+            "url": "https://example.org/listing?page=2",
+            "final_url": "https://example.org/listing?page=2",
+            "status": null,
+            "http_version": null,
+            "headers": [],
+            "redirects": [],
+            "title": null,
+            "dom_html": null,
+            "dom_truncated": false,
+            "raw_body": null,
+            "xhr": [],
+            "xhr_dropped": 0,
+            "console": [],
+            "console_capture": "not_requested",
+            "timing": {
+              "ttfb_ms": null,
+              "dom_content_loaded_ms": null,
+              "load_ms": null,
+              "total_ms": 60012
+            },
+            "challenge": {
+              "vendors": [],
+              "script_hosts": [
+                "www.example.org"
+              ],
+              "iframe_hosts": [],
+              "interstitial": false,
+              "marker": null,
+              "resolved": null,
+              "waited_ms": 0
+            },
+            "screenshot": null,
+            "pdf": null,
+            "side_effects": [],
+            "error": {
+              "code": "timeout",
+              "message": "the navigation did not finish within 60000 ms",
+              "net_error": null
+            }
+          }
+        ]
+      },
+      "PaperFormat": {
+        "type": "string",
+        "enum": [
+          "a4",
+          "letter"
+        ],
+        "description": "Paper size of a PDF."
+      },
+      "PdfAction": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "const": "pdf",
+            "description": "Always `pdf`."
+          },
+          "options": {
+            "description": "How to print it.",
+            "$ref": "#/components/schemas/PdfOptions"
+          },
+          "human": {
+            "description": "Perform the step the way a person would (mouse path, key cadence); default true.",
+            "type": "boolean"
+          },
+          "timeout_ms": {
+            "description": "Budget for this step in milliseconds; default 30000.",
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 300000
+          }
+        },
+        "required": [
+          "action",
+          "options"
+        ],
+        "additionalProperties": false,
+        "description": "Print a PDF."
+      },
+      "PdfOptions": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "description": "Paper size; default `a4`.",
+            "$ref": "#/components/schemas/PaperFormat"
+          },
+          "landscape": {
+            "description": "Landscape orientation; default false.",
+            "type": "boolean"
+          },
+          "print_background": {
+            "description": "Print background graphics; default true.",
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false,
+        "description": "How a PDF is printed. Printing fires `beforeprint` and `afterprint` in the page, as printing by hand does; the result names both."
+      },
+      "PersonaSummary": {
+        "type": "object",
+        "properties": {
+          "engine": {
+            "description": "The engine that generated the fingerprint.",
+            "$ref": "#/components/schemas/EngineName"
+          },
+          "claimed_os": {
+            "description": "The operating system the persona claims.",
+            "$ref": "#/components/schemas/ClaimedOs"
+          },
+          "browser_version": {
+            "type": "string",
+            "description": "Full version of the installed browser."
+          },
+          "browser_major": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Major version of the installed browser."
+          },
+          "user_agent": {
+            "type": "string",
+            "description": "The `User-Agent` the persona presents."
+          },
+          "platform": {
+            "type": "string",
+            "description": "`navigator.platform` as the persona presents it."
+          },
+          "screen": {
+            "description": "The screen the persona reports.",
+            "$ref": "#/components/schemas/Screen"
+          },
+          "hardware_concurrency": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Logical processors the persona would report. A context reports at most the host's count."
+          },
+          "languages": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The persona's languages, most preferred first."
+          },
+          "generator": {
+            "type": "string",
+            "description": "Name and version of the generator, for example `fingerprint-generator@2.1.88`."
+          },
+          "seed": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "The seed the fingerprint was generated from."
+          },
+          "inject": {
+            "description": "How the fingerprint will reach pages.",
+            "$ref": "#/components/schemas/InjectMode"
+          }
+        },
+        "required": [
+          "engine",
+          "claimed_os",
+          "browser_version",
+          "browser_major",
+          "user_agent",
+          "platform",
+          "screen",
+          "hardware_concurrency",
+          "languages",
+          "generator",
+          "seed",
+          "inject"
+        ],
+        "additionalProperties": false,
+        "description": "What a fingerprint says, in a few fields."
+      },
+      "PressAction": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "const": "press",
+            "description": "Always `press`."
+          },
+          "key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40,
+            "description": "The key, as `KeyboardEvent.key` names it, for example `Enter`."
+          },
+          "human": {
+            "description": "Perform the step the way a person would (mouse path, key cadence); default true.",
+            "type": "boolean"
+          },
+          "timeout_ms": {
+            "description": "Budget for this step in milliseconds; default 30000.",
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 300000
+          }
+        },
+        "required": [
+          "action",
+          "key"
+        ],
+        "additionalProperties": false,
+        "description": "Press one key."
+      },
+      "Proxy": {
+        "type": "object",
+        "properties": {
+          "server": {
+            "type": "string",
+            "pattern": "^http:\\/\\/[A-Za-z0-9.-]+:\\d{1,5}$",
+            "description": "The proxy as `http://host:port`. HTTP CONNECT only."
+          },
+          "username": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Proxy user name. Never logged."
+          },
+          "password": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Proxy password. Never logged."
+          }
+        },
+        "required": [
+          "server",
+          "username",
+          "password"
+        ],
+        "additionalProperties": false,
+        "description": "The authenticated proxy every request of a context leaves through."
+      },
+      "RedirectHop": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "The URL that was requested."
+          },
+          "status": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "The redirect status it answered with."
+          },
+          "location": {
+            "description": "Its `Location` header; null when it had none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "url",
+          "status",
+          "location"
+        ],
+        "additionalProperties": false,
+        "description": "One answered redirect of the main navigation."
+      },
+      "RejectedCookie": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The cookie's name."
+          },
+          "domain": {
+            "type": "string",
+            "description": "The cookie's domain."
+          },
+          "reason": {
+            "description": "Why it was refused.",
+            "$ref": "#/components/schemas/CookieRejection"
+          }
+        },
+        "required": [
+          "name",
+          "domain",
+          "reason"
+        ],
+        "additionalProperties": false,
+        "description": "A cookie that was not imported."
+      },
+      "RuleExpectation": {
+        "type": "string",
+        "enum": [
+          "match",
+          "no_match"
+        ],
+        "description": "Whether a rule passes when its pattern is found in the page text or when it is not."
+      },
+      "SameSite": {
+        "type": "string",
+        "enum": [
+          "strict",
+          "lax",
+          "none"
+        ],
+        "description": "The `SameSite` attribute of a cookie."
+      },
+      "Screen": {
+        "type": "object",
+        "properties": {
+          "width": {
+            "type": "integer",
+            "minimum": 640,
+            "maximum": 7680,
+            "description": "Width in CSS pixels."
+          },
+          "height": {
+            "type": "integer",
+            "minimum": 480,
+            "maximum": 4320,
+            "description": "Height in CSS pixels."
+          },
+          "dpr": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 4,
+            "description": "Device pixel ratio."
+          },
+          "color_depth": {
+            "type": "integer",
+            "minimum": 24,
+            "maximum": 32,
+            "description": "Colour depth in bits."
+          }
+        },
+        "required": [
+          "width",
+          "height",
+          "dpr",
+          "color_depth"
+        ],
+        "additionalProperties": false,
+        "description": "The screen a persona reports."
+      },
+      "ScreenConstraints": {
+        "type": "object",
+        "properties": {
+          "min_width": {
+            "description": "Smallest width in CSS pixels.",
+            "type": "integer",
+            "minimum": 640,
+            "maximum": 7680
+          },
+          "max_width": {
+            "description": "Largest width in CSS pixels.",
+            "type": "integer",
+            "minimum": 640,
+            "maximum": 7680
+          },
+          "min_height": {
+            "description": "Smallest height in CSS pixels.",
+            "type": "integer",
+            "minimum": 480,
+            "maximum": 4320
+          },
+          "max_height": {
+            "description": "Largest height in CSS pixels.",
+            "type": "integer",
+            "minimum": 480,
+            "maximum": 4320
+          }
+        },
+        "additionalProperties": false,
+        "description": "Bounds for the screen of a generated persona. A missing bound is not applied."
+      },
+      "ScreenshotAction": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "const": "screenshot",
+            "description": "Always `screenshot`."
+          },
+          "options": {
+            "description": "How to take it.",
+            "$ref": "#/components/schemas/ScreenshotOptions"
+          },
+          "human": {
+            "description": "Perform the step the way a person would (mouse path, key cadence); default true.",
+            "type": "boolean"
+          },
+          "timeout_ms": {
+            "description": "Budget for this step in milliseconds; default 30000.",
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 300000
+          }
+        },
+        "required": [
+          "action",
+          "options"
+        ],
+        "additionalProperties": false,
+        "description": "Take a screenshot."
+      },
+      "ScreenshotFormat": {
+        "type": "string",
+        "enum": [
+          "png",
+          "jpeg",
+          "webp"
+        ],
+        "description": "Image format of a screenshot."
+      },
+      "ScreenshotOptions": {
+        "type": "object",
+        "properties": {
+          "full_page": {
+            "type": "boolean",
+            "description": "False: the visible viewport, which no page can observe. True: the whole document, which fires `resize` in the page (once or twice); the result names that side effect."
+          },
+          "format": {
+            "description": "Image format.",
+            "$ref": "#/components/schemas/ScreenshotFormat"
+          },
+          "quality": {
+            "description": "Quality for `jpeg` and `webp`; default 80. Ignored for `png`.",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "full_page",
+          "format"
+        ],
+        "additionalProperties": false,
+        "description": "How a screenshot is taken."
+      },
+      "ScrollAction": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "const": "scroll",
+            "description": "Always `scroll`."
+          },
+          "depth": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "How far down to end, as a share of the document height."
+          },
+          "human": {
+            "description": "Perform the step the way a person would (mouse path, key cadence); default true.",
+            "type": "boolean"
+          },
+          "timeout_ms": {
+            "description": "Budget for this step in milliseconds; default 30000.",
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 300000
+          }
+        },
+        "required": [
+          "action",
+          "depth"
+        ],
+        "additionalProperties": false,
+        "description": "Scroll the page."
+      },
+      "SelectAction": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "const": "select",
+            "description": "Always `select`."
+          },
+          "selector": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000,
+            "description": "CSS selector of the select element."
+          },
+          "value": {
+            "type": "string",
+            "maxLength": 1000,
+            "description": "The option value."
+          },
+          "human": {
+            "description": "Perform the step the way a person would (mouse path, key cadence); default true.",
+            "type": "boolean"
+          },
+          "timeout_ms": {
+            "description": "Budget for this step in milliseconds; default 30000.",
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 300000
+          }
+        },
+        "required": [
+          "action",
+          "selector",
+          "value"
+        ],
+        "additionalProperties": false,
+        "description": "Choose an option of a select element."
+      },
+      "SelftestPage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 40,
+            "pattern": "^[a-z0-9][a-z0-9_-]*$",
+            "description": "Short name of the page; findings and artifacts carry it."
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 8192,
+            "pattern": "^https?:\\/\\/[^\\s/?#]+[^\\s]*$",
+            "description": "The page to load."
+          },
+          "kind": {
+            "description": "How the page is read.",
+            "$ref": "#/components/schemas/SelftestPageKind"
+          },
+          "settle_ms": {
+            "description": "How long the page is given to finish its own tests after load; default depends on the kind.",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 120000
+          },
+          "weight": {
+            "description": "Weight of each finding of this page in the score; default 1.",
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "rules": {
+            "description": "The checks of a `generic` page. Ignored for the other kinds.",
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SelftestRule"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "url",
+          "kind"
+        ],
+        "additionalProperties": false,
+        "description": "One page a self-test loads."
+      },
+      "SelftestPageKind": {
+        "type": "string",
+        "enum": [
+          "probe",
+          "echo",
+          "sannysoft",
+          "creepjs",
+          "generic"
+        ],
+        "description": "How a self-test page is read. `probe`: Kage's coherence probe (it publishes its findings as JSON). `echo`: Kage's fingerprint echo (TLS, HTTP/2 and header order). `sannysoft`: bot.sannysoft.com. `creepjs`: CreepJS. `generic`: any page, read with the regular expressions of the request."
+      },
+      "SelftestPageReport": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The page id."
+          },
+          "url": {
+            "type": "string",
+            "description": "The page URL."
+          },
+          "kind": {
+            "description": "How the page was read.",
+            "$ref": "#/components/schemas/SelftestPageKind"
+          },
+          "status": {
+            "description": "Whether it could be used.",
+            "$ref": "#/components/schemas/SelftestPageStatus"
+          },
+          "http_status": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Status of the page's main response; null without one."
+          },
+          "duration_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "How long the page took."
+          },
+          "text": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ArtifactRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The visible text of the page as a file, as evidence."
+          },
+          "screenshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ArtifactRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A screenshot of the page, as evidence."
+          }
+        },
+        "required": [
+          "id",
+          "url",
+          "kind",
+          "status",
+          "http_status",
+          "duration_ms",
+          "text",
+          "screenshot"
+        ],
+        "additionalProperties": false,
+        "description": "What happened with one page of a self-test."
+      },
+      "SelftestPageStatus": {
+        "type": "string",
+        "enum": [
+          "ok",
+          "unreachable",
+          "unparsed"
+        ],
+        "description": "Whether a page could be used. `unreachable`: it did not load. `unparsed`: it loaded but did not look as its kind expects."
+      },
+      "SelftestRequest": {
+        "type": "object",
+        "properties": {
+          "pages": {
+            "description": "The pages to load; default: the sidecar's configured set, which holds Kage's own pages only. Third-party pages are only ever loaded because a request names them.",
+            "minItems": 1,
+            "maxItems": 12,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SelftestPage"
+            }
+          },
+          "expected": {
+            "description": "The identity the persona claims.",
+            "$ref": "#/components/schemas/ExpectedIdentity"
+          },
+          "echo": {
+            "description": "What an `echo` page must report; without it an echo page only reports what it saw.",
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EchoExpectation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "min_score": {
+            "description": "The lowest score that passes; default 90.",
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "timeout_ms": {
+            "description": "Budget per page; default 45000.",
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 300000
+          },
+          "artifact_prefix": {
+            "type": "string",
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*(\\/[A-Za-z0-9][A-Za-z0-9._-]*)*$",
+            "description": "Directory below the artifacts volume for the evidence files; default `sidecar/<context id>/selftest`."
+          }
+        },
+        "required": [
+          "expected"
+        ],
+        "additionalProperties": false,
+        "description": "A self-test of one persona context.",
+        "examples": [
+          {
+            "expected": {
+              "claimed_os": "linux",
+              "browser_major": 155,
+              "timezone": "Europe/Berlin",
+              "languages": [
+                "de-DE",
+                "de",
+                "en-US",
+                "en"
+              ]
+            }
+          },
+          {
+            "pages": [
+              {
+                "id": "probe",
+                "url": "https://echo.example.org/probe/",
+                "kind": "probe"
+              },
+              {
+                "id": "echo",
+                "url": "https://echo.example.org/",
+                "kind": "echo",
+                "weight": 2
+              },
+              {
+                "id": "sannysoft",
+                "url": "https://bot.sannysoft.com/",
+                "kind": "sannysoft",
+                "settle_ms": 4000
+              },
+              {
+                "id": "custom",
+                "url": "https://detector.example.org/",
+                "kind": "generic",
+                "rules": [
+                  {
+                    "check": "not_a_bot",
+                    "pattern": "you are (a )?bot",
+                    "expect": "no_match",
+                    "hard": true
+                  }
+                ]
+              }
+            ],
+            "expected": {
+              "claimed_os": "linux",
+              "browser_major": 155,
+              "timezone": "Europe/Berlin",
+              "languages": [
+                "de-DE",
+                "de",
+                "en-US",
+                "en"
+              ]
+            },
+            "echo": {
+              "ja4": "t13d1516h2_8daaf6152771_d8a2da3f94cd",
+              "akamai": "1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p",
+              "headers": [
+                "sec-ch-ua",
+                "sec-ch-ua-mobile",
+                "sec-ch-ua-platform",
+                "user-agent",
+                "accept"
+              ]
+            },
+            "min_score": 90,
+            "timeout_ms": 45000,
+            "artifact_prefix": "selftests/0199c1f5"
+          }
+        ]
+      },
+      "SelftestResponse": {
+        "type": "object",
+        "properties": {
+          "passed": {
+            "type": "boolean",
+            "description": "No hard failure, and the score is at least `min_score`."
+          },
+          "complete": {
+            "type": "boolean",
+            "description": "False when a page could not be reached or read: the verdict then rests on fewer checks."
+          },
+          "score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "100 × (1 − (weight of fails + half the weight of warns) / weight of all known checks); 100 when nothing is known."
+          },
+          "min_score": {
+            "type": "number",
+            "description": "The threshold that was applied."
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            },
+            "description": "Every check, in page order."
+          },
+          "pages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SelftestPageReport"
+            },
+            "description": "Every page, in request order."
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the self-test started."
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it finished."
+          }
+        },
+        "required": [
+          "passed",
+          "complete",
+          "score",
+          "min_score",
+          "findings",
+          "pages",
+          "started_at",
+          "finished_at"
+        ],
+        "additionalProperties": false,
+        "description": "Findings and score of a self-test.",
+        "examples": [
+          {
+            "passed": true,
+            "complete": false,
+            "score": 100,
+            "min_score": 90,
+            "findings": [
+              {
+                "page": "probe",
+                "check": "navigator.webdriver",
+                "status": "pass",
+                "hard": true,
+                "weight": 1,
+                "observed": "false",
+                "expected": "false"
+              },
+              {
+                "page": "sannysoft",
+                "check": "page",
+                "status": "unknown",
+                "hard": false,
+                "weight": 1,
+                "observed": null,
+                "expected": null
+              }
+            ],
+            "pages": [
+              {
+                "id": "probe",
+                "url": "https://echo.example.org/probe/",
+                "kind": "probe",
+                "status": "ok",
+                "http_status": 200,
+                "duration_ms": 2130,
+                "text": {
+                  "path": "selftests/0199c1f5/probe.txt",
+                  "bytes": 48211,
+                  "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+                  "content_type": "text/plain"
+                },
+                "screenshot": {
+                  "path": "selftests/0199c1f5/probe.png",
+                  "bytes": 48211,
+                  "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+                  "content_type": "image/png"
+                }
+              },
+              {
+                "id": "sannysoft",
+                "url": "https://bot.sannysoft.com/",
+                "kind": "sannysoft",
+                "status": "unreachable",
+                "http_status": null,
+                "duration_ms": 45000,
+                "text": null,
+                "screenshot": null
+              }
+            ],
+            "started_at": "2026-10-09T15:04:05Z",
+            "finished_at": "2026-10-09T15:04:52.500Z"
+          }
+        ]
+      },
+      "SelftestRule": {
+        "type": "object",
+        "properties": {
+          "check": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "Name of the finding this rule produces."
+          },
+          "pattern": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "description": "A regular expression, matched case-insensitively against the visible text of the page."
+          },
+          "expect": {
+            "description": "Whether the pattern must be found or must be absent.",
+            "$ref": "#/components/schemas/RuleExpectation"
+          },
+          "hard": {
+            "type": "boolean",
+            "description": "Whether a failure of this rule fails the whole self-test."
+          }
+        },
+        "required": [
+          "check",
+          "pattern",
+          "expect",
+          "hard"
+        ],
+        "additionalProperties": false,
+        "description": "One regular-expression check of a `generic` page."
+      },
+      "SideEffect": {
+        "type": "string",
+        "enum": [
+          "resize",
+          "beforeprint",
+          "afterprint"
+        ],
+        "description": "An event a capture fired in the page. `resize`: a full-page screenshot. `beforeprint` and `afterprint`: a PDF."
+      },
+      "StorageEntry": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The key."
+          },
+          "value": {
+            "type": "string",
+            "description": "The value."
+          }
+        },
+        "required": [
+          "name",
+          "value"
+        ],
+        "additionalProperties": false,
+        "description": "One key of a web storage area."
+      },
+      "Timing": {
+        "type": "object",
+        "properties": {
+          "ttfb_ms": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Until the first response byte."
+          },
+          "dom_content_loaded_ms": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Until the document was parsed."
+          },
+          "load_ms": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Until the load event."
+          },
+          "total_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Until every wait and capture was done."
+          }
+        },
+        "required": [
+          "ttfb_ms",
+          "dom_content_loaded_ms",
+          "load_ms",
+          "total_ms"
+        ],
+        "additionalProperties": false,
+        "description": "Milestones of a navigation in milliseconds; null for one that was not reached."
+      },
+      "TypeAction": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "const": "type",
+            "description": "Always `type`."
+          },
+          "selector": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000,
+            "description": "CSS selector of the input."
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 10000,
+            "description": "The text to type."
+          },
+          "human": {
+            "description": "Perform the step the way a person would (mouse path, key cadence); default true.",
+            "type": "boolean"
+          },
+          "timeout_ms": {
+            "description": "Budget for this step in milliseconds; default 30000.",
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 300000
+          }
+        },
+        "required": [
+          "action",
+          "selector",
+          "text"
+        ],
+        "additionalProperties": false,
+        "description": "Type text into an element."
+      },
+      "Wait": {
+        "type": "object",
+        "properties": {
+          "until": {
+            "description": "The lifecycle point to wait for.",
+            "$ref": "#/components/schemas/WaitUntil"
+          },
+          "selector": {
+            "description": "A CSS selector that must match an attached element afterwards; null or absent for none.",
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "extra_ms": {
+            "description": "Milliseconds to wait after everything else; default 0.",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 60000
+          }
+        },
+        "required": [
+          "until"
+        ],
+        "additionalProperties": false,
+        "description": "What a navigation waits for before the page is captured."
+      },
+      "WaitForAction": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "const": "wait_for",
+            "description": "Always `wait_for`."
+          },
+          "selector": {
+            "description": "Wait until this CSS selector matches.",
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "url": {
+            "description": "Wait until the URL matches this glob.",
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "network_idle": {
+            "description": "Wait until no request ran for 500 ms.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "ms": {
+            "description": "Wait this long.",
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 120000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "human": {
+            "description": "Perform the step the way a person would (mouse path, key cadence); default true.",
+            "type": "boolean"
+          },
+          "timeout_ms": {
+            "description": "Budget for this step in milliseconds; default 30000.",
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 300000
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false,
+        "description": "Wait for one condition: exactly one of the four fields is set."
+      },
+      "WaitUntil": {
+        "type": "string",
+        "enum": [
+          "commit",
+          "domcontentloaded",
+          "load",
+          "network_idle"
+        ],
+        "description": "When a navigation counts as arrived. `commit`: the response started. `domcontentloaded`: the document is parsed. `load`: the load event fired. `network_idle`: load, then no request for 500 ms."
+      },
+      "XhrCapture": {
+        "type": "object",
+        "properties": {
+          "content_types": {
+            "minItems": 1,
+            "maxItems": 16,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "description": "Media types to keep, compared without parameters and case; a value ending in `/*` or `+json` style suffixes is matched as a prefix or suffix. Example: `application/json`."
+          },
+          "max_bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50000000,
+            "description": "Largest body kept per response; a longer body is cut and flagged."
+          },
+          "max_responses": {
+            "description": "Most responses kept per page; default 100. Later ones are dropped.",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          }
+        },
+        "required": [
+          "content_types",
+          "max_bytes"
+        ],
+        "additionalProperties": false,
+        "description": "Which XHR and fetch() responses a navigation keeps."
+      },
+      "XhrKind": {
+        "type": "string",
+        "enum": [
+          "xhr",
+          "fetch"
+        ],
+        "description": "How a script asked: `XMLHttpRequest` or `fetch()`."
+      },
+      "XhrResponse": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "The request URL."
+          },
+          "method": {
+            "type": "string",
+            "description": "The request method."
+          },
+          "kind": {
+            "description": "How the page asked.",
+            "$ref": "#/components/schemas/XhrKind"
+          },
+          "status": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "The response status."
+          },
+          "content_type": {
+            "description": "The response media type, without parameters.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "body": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CapturedBody"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The response body; null when the browser no longer held it."
+          }
+        },
+        "required": [
+          "url",
+          "method",
+          "kind",
+          "status",
+          "content_type",
+          "body"
+        ],
+        "additionalProperties": false,
+        "description": "One XHR or fetch() response a page received."
+      }
+    }
+  }
+}

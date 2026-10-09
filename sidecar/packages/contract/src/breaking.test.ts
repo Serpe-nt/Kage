@@ -1,0 +1,421 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  buildOpenApiDocument,
+  checkBreaking,
+  findBreakingChanges,
+  majorVersion,
+  type JsonObject,
+  type OpenApiDocument,
+} from './index.js';
+
+/** A small document with one operation that uses its schemas in both directions. */
+function base(): OpenApiDocument {
+  const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
+  return {
+    openapi: '3.1.0',
+    info: { title: 't', version: '1.2.0' },
+    paths: {
+      '/v1/things': {
+        post: {
+          operationId: 'make_thing',
+          requestBody: { content: { 'application/json': { schema: ref('ThingRequest') } } },
+          responses: {
+            '200': { description: 'ok', content: { 'application/json': { schema: ref('Thing') } } },
+            '400': {
+              description: 'no',
+              content: { 'application/json': { schema: ref('Problem') } },
+            },
+          },
+        },
+        get: {
+          operationId: 'list_things',
+          responses: {
+            '200': { description: 'ok', content: { 'application/json': { schema: ref('Thing') } } },
+            '204': { description: 'nothing' },
+          },
+        },
+      },
+    },
+    components: {
+      schemas: {
+        Problem: { type: 'object', properties: { code: { type: 'string' } }, required: ['code'] },
+        Color: { type: 'string', enum: ['red', 'green'] },
+        Shape: {
+          oneOf: [ref('Circle'), ref('Square')],
+        },
+        Circle: {
+          type: 'object',
+          properties: { kind: { type: 'string', const: 'circle' }, radius: { type: 'number' } },
+          required: ['kind', 'radius'],
+        },
+        Square: {
+          type: 'object',
+          properties: { kind: { type: 'string', const: 'square' }, side: { type: 'number' } },
+          required: ['kind', 'side'],
+        },
+        ThingRequest: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', minLength: 1, maxLength: 50, pattern: '^[a-z]+$' },
+            color: ref('Color'),
+            count: { type: 'integer', minimum: 0, maximum: 10 },
+            note: { type: ['string', 'null'] },
+            tags: { type: 'array', items: { type: 'string' }, minItems: 0, maxItems: 5 },
+            shape: ref('Shape'),
+            parent: { anyOf: [ref('ThingRequest'), { type: 'null' }] },
+            free: { type: 'string' },
+          },
+          required: ['name', 'color'],
+        },
+        Thing: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            color: ref('Color'),
+            shape: ref('Shape'),
+            note: { type: 'string' },
+            status: { type: 'string', const: 'ok' },
+            extra: { type: 'object', additionalProperties: {} },
+            sizes: { type: 'array', items: { type: 'integer' } },
+          },
+          required: ['id', 'color', 'shape', 'note'],
+        },
+      },
+    },
+  };
+}
+
+type Edit = (schemas: Record<string, JsonObject>, document: OpenApiDocument) => void;
+
+function changed(edit: Edit): string[] {
+  const after = base();
+  edit(after.components['schemas'] as Record<string, JsonObject>, after);
+  return findBreakingChanges(base(), after).map((change) => `${change.where}: ${change.what}`);
+}
+
+function named(schemas: Record<string, JsonObject>, name: string): JsonObject {
+  const schema = schemas[name];
+  if (schema === undefined) {
+    throw new Error(`the test document has no schema ${name}`);
+  }
+  return schema;
+}
+
+const properties = (schema: JsonObject | undefined) =>
+  schema?.['properties'] as Record<string, JsonObject>;
+const REQUEST = 'POST /v1/things request';
+// GET is compared before POST, and a named schema is compared once.
+const RESPONSE = 'GET /v1/things response 200';
+
+describe('findBreakingChanges', () => {
+  it('finds nothing between a document and itself', () => {
+    expect(findBreakingChanges(base(), base())).toEqual([]);
+    const real = buildOpenApiDocument();
+    expect(findBreakingChanges(real, structuredClone(real))).toEqual([]);
+  });
+
+  it.each<[string, Edit, string[]]>([
+    [
+      'a removed operation',
+      (_schemas, document) => {
+        delete (document.paths['/v1/things'] as JsonObject)['get'];
+      },
+      ['GET /v1/things: the operation was removed'],
+    ],
+    [
+      'a removed path',
+      (_schemas, document) => {
+        document.paths = {};
+      },
+      ['POST /v1/things: the operation was removed', 'GET /v1/things: the operation was removed'],
+    ],
+    [
+      'a removed success status',
+      (_schemas, document) => {
+        delete (
+          ((document.paths['/v1/things'] as JsonObject)['get'] as JsonObject)[
+            'responses'
+          ] as JsonObject
+        )['204'];
+      },
+      ['GET /v1/things: no longer answers 204'],
+    ],
+    [
+      'a request body that is gone',
+      (_schemas, document) => {
+        delete ((document.paths['/v1/things'] as JsonObject)['post'] as JsonObject)['requestBody'];
+      },
+      ['POST /v1/things: no longer takes a request body'],
+    ],
+    [
+      'a new request body',
+      (_schemas, document) => {
+        ((document.paths['/v1/things'] as JsonObject)['get'] as JsonObject)['requestBody'] = {
+          content: { 'application/json': { schema: { type: 'string' } } },
+        };
+      },
+      ['GET /v1/things: now needs a request body'],
+    ],
+    [
+      'a request property that is gone',
+      (schemas) => {
+        delete properties(schemas['ThingRequest'])['free'];
+      },
+      [`${REQUEST}.free: is no longer accepted`],
+    ],
+    [
+      'a response property that is gone',
+      (schemas) => {
+        delete properties(schemas['Thing'])['sizes'];
+      },
+      [`${RESPONSE}.sizes: is no longer returned`],
+    ],
+    [
+      'an optional request property that became required',
+      (schemas) => {
+        named(schemas, 'ThingRequest')['required'] = ['name', 'color', 'count'];
+      },
+      [`${REQUEST}.count: became required`],
+    ],
+    [
+      'a new required request property',
+      (schemas) => {
+        properties(schemas['ThingRequest'])['must'] = { type: 'string' };
+        named(schemas, 'ThingRequest')['required'] = ['name', 'color', 'must'];
+      },
+      [`${REQUEST}.must: is new and required`],
+    ],
+    [
+      'a response property that may now be absent',
+      (schemas) => {
+        named(schemas, 'Thing')['required'] = ['id', 'color', 'shape'];
+      },
+      [`${RESPONSE}.note: may now be absent`],
+    ],
+    [
+      'a changed type',
+      (schemas) => {
+        properties(schemas['ThingRequest'])['count'] = { type: 'string' };
+      },
+      [`${REQUEST}.count: type changed from integer to string`],
+    ],
+    [
+      'a changed format',
+      (schemas) => {
+        properties(schemas['Thing'])['id'] = { type: 'string', format: 'date-time' };
+      },
+      [`${RESPONSE}.id: format changed from "uuid" to "date-time"`],
+    ],
+    [
+      'an enum value removed from a request and added to a response',
+      (schemas) => {
+        named(schemas, 'Color')['enum'] = ['red', 'blue'];
+      },
+      [`${REQUEST}.color: no longer accepts "green"`, `${RESPONSE}.color: may now be "blue"`],
+    ],
+    [
+      'a request value that is now limited',
+      (schemas) => {
+        properties(schemas['ThingRequest'])['free'] = { type: 'string', enum: ['a'] };
+      },
+      [`${REQUEST}.free: is now limited to a fixed set of values`],
+    ],
+    [
+      'a response value that is no longer limited',
+      (schemas) => {
+        properties(schemas['Thing'])['status'] = { type: 'string' };
+      },
+      [`${RESPONSE}.status: is no longer limited to a fixed set of values`],
+    ],
+    [
+      'a request field that no longer takes null',
+      (schemas) => {
+        properties(schemas['ThingRequest'])['note'] = { type: 'string' };
+        properties(schemas['ThingRequest'])['parent'] = {
+          $ref: '#/components/schemas/ThingRequest',
+        };
+      },
+      [
+        `${REQUEST}.note: null is no longer accepted`,
+        `${REQUEST}.parent: null is no longer accepted`,
+      ],
+    ],
+    [
+      'a response field that may now be null',
+      (schemas) => {
+        properties(schemas['Thing'])['note'] = { type: ['string', 'null'] };
+      },
+      [`${RESPONSE}.note: may now be null`],
+    ],
+    [
+      'tightened bounds and a changed pattern in a request',
+      (schemas) => {
+        properties(schemas['ThingRequest'])['name'] = {
+          type: 'string',
+          minLength: 2,
+          maxLength: 40,
+          pattern: '^[a-z0-9]+$',
+        };
+        properties(schemas['ThingRequest'])['count'] = { type: 'integer', minimum: 1, maximum: 9 };
+        properties(schemas['ThingRequest'])['tags'] = {
+          type: 'array',
+          items: { type: 'string' },
+          minItems: 1,
+          maxItems: 4,
+        };
+        properties(schemas['ThingRequest'])['free'] = { type: 'string', maxLength: 10 };
+      },
+      [
+        `${REQUEST}.name: minLength tightened from 1 to 2`,
+        `${REQUEST}.name: maxLength tightened from 50 to 40`,
+        `${REQUEST}.name: pattern changed`,
+        `${REQUEST}.count: minimum tightened from 0 to 1`,
+        `${REQUEST}.count: maximum tightened from 10 to 9`,
+        `${REQUEST}.tags: minItems tightened from 0 to 1`,
+        `${REQUEST}.tags: maxItems tightened from 5 to 4`,
+        `${REQUEST}.free: maxLength tightened from null to 10`,
+      ],
+    ],
+    [
+      'changed array items',
+      (schemas) => {
+        properties(schemas['Thing'])['sizes'] = { type: 'array', items: { type: 'string' } };
+      },
+      [`${RESPONSE}.sizes[]: type changed from integer to string`],
+    ],
+    [
+      'a union variant removed from a request and added to a response',
+      (schemas) => {
+        schemas['Triangle'] = {
+          type: 'object',
+          properties: { kind: { type: 'string', const: 'triangle' } },
+          required: ['kind'],
+        };
+        named(schemas, 'Shape')['oneOf'] = [
+          { $ref: '#/components/schemas/Circle' },
+          { $ref: '#/components/schemas/Triangle' },
+        ];
+      },
+      [
+        `${REQUEST}.shape: variant "square" is no longer accepted`,
+        `${RESPONSE}.shape: variant "triangle" may now be sent`,
+      ],
+    ],
+    [
+      'a change inside a union variant',
+      (schemas) => {
+        delete properties(schemas['Circle'])['radius'];
+      },
+      [
+        `${REQUEST}.shape<circle>.radius: is no longer accepted`,
+        `${RESPONSE}.shape<circle>.radius: is no longer returned`,
+      ],
+    ],
+  ])('reports %s', (_label, edit, expected) => {
+    const found = changed(edit);
+    for (const line of expected) {
+      expect(found).toContain(line);
+    }
+  });
+
+  it.each<[string, Edit]>([
+    [
+      'a new optional request property',
+      (schemas) => {
+        properties(schemas['ThingRequest'])['more'] = { type: 'string' };
+      },
+    ],
+    [
+      'a new response property',
+      (schemas) => {
+        properties(schemas['Thing'])['more'] = { type: 'string' };
+      },
+    ],
+    [
+      'a request property that is no longer required',
+      (schemas) => {
+        named(schemas, 'ThingRequest')['required'] = ['name'];
+      },
+    ],
+    [
+      'a response property that became required',
+      (schemas) => {
+        named(schemas, 'Thing')['required'] = ['id', 'color', 'shape', 'note', 'status'];
+      },
+    ],
+    [
+      'loosened bounds',
+      (schemas) => {
+        properties(schemas['ThingRequest'])['count'] = { type: 'integer' };
+        properties(schemas['ThingRequest'])['name'] = {
+          type: 'string',
+          minLength: 0,
+          maxLength: 99,
+        };
+      },
+    ],
+    [
+      'a request field that newly takes null',
+      (schemas) => {
+        properties(schemas['ThingRequest'])['free'] = { type: ['string', 'null'] };
+      },
+    ],
+    [
+      'a changed error body',
+      (schemas) => {
+        schemas['Problem'] = { type: 'string' };
+      },
+    ],
+    [
+      'a new operation',
+      (_schemas, document) => {
+        document.paths['/v1/other'] = { get: { operationId: 'other', responses: {} } };
+      },
+    ],
+  ])('accepts %s', (_label, edit) => {
+    expect(changed(edit)).toEqual([]);
+  });
+
+  it('compares a schema used twice only once per direction', () => {
+    const found = changed((schemas) => {
+      delete properties(schemas['Thing'])['sizes'];
+    });
+    expect(found.filter((line) => line.endsWith('.sizes: is no longer returned'))).toHaveLength(1);
+  });
+});
+
+describe('checkBreaking', () => {
+  it('passes without changes and fails on a breaking one', () => {
+    expect(checkBreaking(base(), base())).toEqual({ changes: [], majorBumped: false, ok: true });
+    const broken = base();
+    broken.paths = {};
+    expect(checkBreaking(base(), broken)).toMatchObject({ majorBumped: false, ok: false });
+  });
+
+  it('lets a new major version carry breaking changes', () => {
+    const next = base();
+    next.paths = {};
+    next.info['version'] = '2.0.0';
+    const report = checkBreaking(base(), next);
+    expect(report.ok).toBe(true);
+    expect(report.majorBumped).toBe(true);
+    expect(report.changes).toHaveLength(2);
+  });
+
+  it('does not accept a minor version as an excuse', () => {
+    const next = base();
+    next.paths = {};
+    next.info['version'] = '1.9.0';
+    expect(checkBreaking(base(), next).ok).toBe(false);
+  });
+
+  it('reads the major version and refuses a version that is none', () => {
+    expect(majorVersion(base())).toBe(1);
+    const odd = base();
+    odd.info['version'] = 'latest';
+    expect(() => majorVersion(odd)).toThrow(/not a semantic version/);
+    delete odd.info['version'];
+    expect(() => majorVersion(odd)).toThrow(/not a semantic version/);
+  });
+});

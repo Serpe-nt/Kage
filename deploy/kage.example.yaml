@@ -30,6 +30,21 @@ database:
   max_connections: 10
   connect_timeout: 10s
 
+# The browser sidecars (spec §10.1). Their shared secret is
+# KAGE__SIDECAR__TOKEN; the sidecars read the same value as SIDECAR_TOKEN.
+sidecar:
+  # Where the two sidecars listen on the compose network.
+  chromium_url: http://browser-chromium:8090
+  firefox_url: http://browser-firefox:8090
+  # How long a connection to a sidecar may take.
+  connect_timeout: 5s
+  # How long one call may take, the navigation it runs included. Keep it
+  # above the longest attempt (300 s).
+  timeout: 330s
+  # How often a call is tried again when the connection could not be made
+  # at all. A request that reached a sidecar is never repeated.
+  connect_retries: 3
+
 # The Webshare account and its API client (spec §7.2).
 webshare:
   # Root of the API; the versioned paths (v2/..., v3/...) are appended.
@@ -154,13 +169,44 @@ selftest:
     third_party_url: https://tls.peet.ws/api/all
     interval: 1d
     timeout: 30s
+  # The self-test of the browser path (spec §7.4, §10.2): a browser context
+  # loads detection pages and the sidecar judges what they show: automation
+  # flags and whether the identity is coherent.
+  browser:
+    # The operator's own pages, reached through the proxy. Each entry has
+    # an id, a kind (probe: the coherence probe of tests/fixtures/site;
+    # echo: page /browser of `kage echo serve`) and a url. Empty: nothing
+    # is loaded unless a run asks for the third parties.
+    pages: []
+    # Detection pages run by others. Only `kage selftest browser
+    # --third-party` and the gated live suite load them, never the service
+    # on a timer: they see the exit address of the proxy.
+    third_party_pages:
+      - id: sannysoft
+        kind: sannysoft
+        url: https://bot.sannysoft.com/
+      - id: creepjs
+        kind: creepjs
+        url: https://abrahamjuliot.github.io/creepjs/
+    # The lowest score that passes, 0 to 100.
+    min_score: 90
+    # Budget of one page.
+    page_timeout: 45s
 
 # The browser engines (spec §6.1).
 engines:
   chromium:
-    # Major version of the Chrome the engine image bundles; null until M4
-    # pins it. A set major must resolve to an emulation profile.
+    # Major version of the Chrome the engine image bundles. The image of
+    # this release bundles Chrome 155: set it to 155 in a deployment. A set
+    # major must resolve to an emulation profile, or be one a browser
+    # capture proved to be browser-only (`kage config check` lists both).
+    # Chrome 155 is browser-only: its personas never use the http path.
     browser_major: null
+    # May a chromium persona claim another operating system than the
+    # engine host's (Linux)? Off: on the pinned Chrome such a claim is
+    # contradicted by the browser's own workers (docs/adr/0009). The
+    # sidecar has the same switch (SIDECAR_ALLOW_CROSS_OS_CLAIMS).
+    allow_cross_os_claims: false
   firefox:
     # Major version of the Firefox that Camoufox is built from; null until
     # M5 pins it.

@@ -40,7 +40,7 @@ importers:
         version: 8.3.3(@types/node@24.19.1)
       vitest:
         specifier: 5.0.3
-        version: 5.0.3(@types/node@24.19.1)(@vitest/coverage-v8@5.0.3)(vite@8.3.3(@types/node@24.19.1))
+        version: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(@vitest/coverage-v8@5.0.3)(vite@8.3.3(@types/node@24.19.1))
 
   packages/contract:
     dependencies:
@@ -50,9 +50,18 @@ importers:
 
   packages/engine-chromium:
     dependencies:
+      '@kage/contract':
+        specifier: workspace:*
+        version: link:../contract
       '@kage/engine-core':
         specifier: workspace:*
         version: link:../engine-core
+      fingerprint-generator:
+        specifier: 2.1.88
+        version: 2.1.88
+      fingerprint-injector:
+        specifier: 2.1.88
+        version: 2.1.88
       patchright:
         specifier: 1.63.0
         version: 1.63.0
@@ -62,6 +71,9 @@ importers:
       '@kage/contract':
         specifier: workspace:*
         version: link:../contract
+      zod:
+        specifier: 4.6.5
+        version: 4.6.5
 
   packages/engine-firefox:
     dependencies:
@@ -89,9 +101,15 @@ importers:
       '@kage/engine-firefox':
         specifier: workspace:*
         version: link:../engine-firefox
+      '@prometheus-io/client':
+        specifier: 0.16.1
+        version: 0.16.1
       fastify:
         specifier: 5.12.5
         version: 5.12.5
+      pino:
+        specifier: 10.4.0
+        version: 10.4.0
       zod:
         specifier: 4.6.5
         version: 4.6.5
@@ -221,11 +239,19 @@ packages:
   '@keyv/serialize@1.1.1':
     resolution: {integrity: sha512-dXn3FZhPv0US+7dtJsIi2R+c7qWYiReoEh5zUntWCf4oSpMNib8FDhSoed6m3QyZdx5hK7iLFkYk3rNxwt8vTA==}
 
+  '@opentelemetry/api@1.9.1':
+    resolution: {integrity: sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q==}
+    engines: {node: '>=8.0.0'}
+
   '@oxc-project/types@0.153.0':
     resolution: {integrity: sha512-jSNrRIyvPVLL5E1z/tS5zLAprosGz/FuI1PWwEOz59j3E4TTTzSpqKb/RDGqJhhW0QHYISGXxq582wGx6T11Tw==}
 
   '@pinojs/redact@0.4.0':
     resolution: {integrity: sha512-k2ENnmBugE/rzQfEcdWHcCY+/FM3VLzH9cYEsbdsoqrvzAKRhUZeRNhAZvB8OitQJ1TBed3yqWtdjzS6wJKBwg==}
+
+  '@prometheus-io/client@0.16.1':
+    resolution: {integrity: sha512-XkFPsGFGoSs/UMg/vh0QLDpanl/tsrOV5PLHdpGe8Ho+ir/Llhytr15j6y8ZwLrpIGzK9gTVVpIalA6C4UjUZw==}
+    engines: {node: ^22 || ^24 || >=26}
 
   '@rolldown/binding-android-arm-eabi@1.2.13':
     resolution: {integrity: sha512-Vu/NICrgdRvUOeaJZIyB2FP63s6fO/4ud5l8dXmxDx9yDyn+mN0y+gsvsVviSli+T361Aqo0h46EuMoobrwawA==}
@@ -495,6 +521,9 @@ packages:
     resolution: {integrity: sha512-RbOBxmLBG8uvFUc15X9+9SFemKcQ0WBuISBVkpuiaUB2qblC8UWlHEjdWVoZ8AdhSwmoEgsiXKfopX0CQxaACQ==}
     engines: {node: '>=22'}
 
+  bintrees@1.0.2:
+    resolution: {integrity: sha512-VOMgTMwjAaUG580SXn3LacVgjurrbMme7ZZNYGSSV7mmtY6QQRh0Eg3pwIcntQ77DErK1L0NxkbetjcoXzVwKw==}
+
   brace-expansion@5.0.12:
     resolution: {integrity: sha512-YovQ3rzhaLMIrDjNDMkNS01tea93qhEhG5xy8f6+R0l+dw3Ki+5sCoIoI942iuLZTHWogWktgwVDhU09iNEimQ==}
     engines: {node: 20 || >=22}
@@ -693,6 +722,18 @@ packages:
   fingerprint-generator@2.1.88:
     resolution: {integrity: sha512-rwYKE/UZTAnfu3DoBgFH+otrRewvkscG8TkiDY8xw7QBga0evHoL7H70HrtP/CBqjspVrfqE7ZYt7qDM3dYk+g==}
     engines: {node: '>=16.0.0'}
+
+  fingerprint-injector@2.1.88:
+    resolution: {integrity: sha512-npQr/Nc00x3XfbT9TE6RqPLIaYbun63rCL8isGqZVp0mlWw2mAr0J81WsIW3ENZB2w/dkCA9QewA0ufoYMB0Qw==}
+    engines: {node: '>=16.0.0'}
+    peerDependencies:
+      playwright: ^1.22.2
+      puppeteer: '>= 9.x'
+    peerDependenciesMeta:
+      playwright:
+        optional: true
+      puppeteer:
+        optional: true
 
   flat-cache@6.1.23:
     resolution: {integrity: sha512-f++BY9pTk+983xK1FLzlLpmM0i0z+jHmx3QESGkURMXujQZz1k5wzwX6hjnQ8goaD0B+sYnDK1yZ6MTyZfUaqA==}
@@ -1165,6 +1206,9 @@ packages:
     resolution: {integrity: sha512-Y38VPSHcqkFrCpFnQ9vuSXmquuv5oXOKpGeT6aGrr3o3Gc9AlVa6JBfUSOCnbxGGZF+/0ooI7KrPuUSztUdU5A==}
     engines: {node: '>=8'}
 
+  tdigest@0.1.3:
+    resolution: {integrity: sha512-zbRt+lT+/H4fRItHshczHErVCQnitJk8MfMT24MqFJf3YL7SJJPqGIGeuOdvxXxM/AHFzKBl7WoyaYwqO9s3Kw==}
+
   thread-stream@4.2.0:
     resolution: {integrity: sha512-e2zZ96wSChazBsbENf/Pcm/4swHt2cEKQ92rhUjkL9GCKiTDJIaTBenjE/m9DXi0QBmTMDkFDdOomUy20A1tDQ==}
     engines: {node: '>=20'}
@@ -1473,9 +1517,16 @@ snapshots:
 
   '@keyv/serialize@1.1.1': {}
 
+  '@opentelemetry/api@1.9.1': {}
+
   '@oxc-project/types@0.153.0': {}
 
   '@pinojs/redact@0.4.0': {}
+
+  '@prometheus-io/client@0.16.1':
+    dependencies:
+      '@opentelemetry/api': 1.9.1
+      tdigest: 0.1.3
 
   '@rolldown/binding-android-arm-eabi@1.2.13':
     optional: true
@@ -1644,7 +1695,7 @@ snapshots:
       obug: 2.2.1
       std-env: 4.3.0
       tinyrainbow: 3.2.0
-      vitest: 5.0.3(@types/node@24.19.1)(@vitest/coverage-v8@5.0.3)(vite@8.3.3(@types/node@24.19.1))
+      vitest: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(@vitest/coverage-v8@5.0.3)(vite@8.3.3(@types/node@24.19.1))
 
   '@vitest/istanbul-lib-coverage@1.0.2': {}
 
@@ -1715,6 +1766,8 @@ snapshots:
   better-sqlite3@13.0.3:
     dependencies:
       node-addon-api: 8.9.2
+
+  bintrees@1.0.2: {}
 
   brace-expansion@5.0.12:
     dependencies:
@@ -1942,6 +1995,11 @@ snapshots:
     dependencies:
       generative-bayesian-network: 2.1.88
       header-generator: 2.1.88
+      tslib: 2.8.1
+
+  fingerprint-injector@2.1.88:
+    dependencies:
+      fingerprint-generator: 2.1.88
       tslib: 2.8.1
 
   flat-cache@6.1.23:
@@ -2332,6 +2390,10 @@ snapshots:
     dependencies:
       ansi-regex: 5.0.1
 
+  tdigest@0.1.3:
+    dependencies:
+      bintrees: 1.0.2
+
   thread-stream@4.2.0:
     dependencies:
       real-require: 1.0.0
@@ -2407,7 +2469,7 @@ snapshots:
       '@types/node': 24.19.1
       fsevents: 2.3.3
 
-  vitest@5.0.3(@types/node@24.19.1)(@vitest/coverage-v8@5.0.3)(vite@8.3.3(@types/node@24.19.1)):
+  vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(@vitest/coverage-v8@5.0.3)(vite@8.3.3(@types/node@24.19.1)):
     dependencies:
       '@types/chai': 5.2.3
       '@vitest/mocker': 5.0.3(vite@8.3.3(@types/node@24.19.1))
@@ -2424,6 +2486,7 @@ snapshots:
       vite: 8.3.3(@types/node@24.19.1)
       why-is-node-running: 3.2.1
     optionalDependencies:
+      '@opentelemetry/api': 1.9.1
       '@types/node': 24.19.1
       '@vitest/coverage-v8': 5.0.3(vitest@5.0.3)
     transitivePeerDependencies:

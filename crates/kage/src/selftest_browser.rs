@@ -1,0 +1,452 @@
+//! `kage selftest browser`: the self-test of the browser path (spec §7.4,
+//! §10.2) for one engine through one proxy.
+//!
+//! It asks the engine's sidecar for a persona, opens a context through the
+//! proxy, lets the sidecar load the self-test pages and judge them, and
+//! closes the context again. The pages are the operator's own
+//! (`selftest.browser.pages`); `--third-party` adds the detection pages run
+//! by others (`selftest.browser.third_party_pages`), which see the exit
+//! address of the proxy. Only this command and the gated live suite ever
+//! load those, and the server never does.
+//!
+//! Personas arrive with milestone M6. Until then the self-test stands in
+//! with one pseudo-persona per proxy: its id is the proxy's id and its seed
+//! is derived from it, so a proxy shows the same browser on every run and
+//! keeps one profile directory (`selftest/<proxy id>`).
+
+use std::io::Write;
+
+use anyhow::{Context, bail};
+use kage_browser::contract::{
+    ClaimedOs, EchoExpectation, ExpectedIdentity, FindingStatus, GeneratePersonaRequest,
+    OpenContextRequest, PersonaSummary, Proxy as ContextProxy, SelftestPage, SelftestPageKind,
+    SelftestRequest, SelftestResponse,
+};
+use kage_browser::{BrowserError, SidecarClient, SidecarSettings};
+use kage_core::config::{Config, SelftestPageConfig};
+use kage_core::domain::{AuditOutcome, Engine, ProxyEndpoint};
+use kage_core::ids::ProxyId;
+use serde_json::json;
+
+use crate::proxy_cmd::{Session, table};
+
+/// What `kage selftest browser` was asked to do.
+#[derive(Debug, Clone)]
+pub(crate) struct BrowserSelftestOptions {
+    /// The proxy to leave through.
+    pub(crate) proxy: ProxyId,
+    /// The engine whose sidecar runs the test.
+    pub(crate) engine: Engine,
+    /// The IANA time zone of the proxy's exit.
+    pub(crate) timezone: String,
+    /// The languages of the stand-in persona, most preferred first.
+    pub(crate) languages: Vec<String>,
+    /// Also load the detection pages run by others.
+    pub(crate) third_party: bool,
+    /// One JSON document instead of a table.
+    pub(crate) json: bool,
+}
+
+/// `kage selftest browser`.
+pub(crate) async fn browser(
+    config: &Config,
+    options: &BrowserSelftestOptions,
+    out: &mut impl Write,
+) -> anyhow::Result<()> {
+    let session = Session::open(config).await?;
+    let result = browser_in(&session, config, options, out).await;
+    session.close().await;
+    result
+}
+
+/// The pages of one run as the contract writes them.
+fn pages_of(config: &Config, third_party: bool) -> anyhow::Result<Vec<SelftestPage>> {
+    let selftest = &config.selftest.browser;
+    let mut chosen: Vec<&SelftestPageConfig> = selftest.pages.iter().collect();
+    if third_party {
+        chosen.extend(&selftest.third_party_pages);
+    }
+    if chosen.is_empty() {
+        bail!(
+            "there is no page to load: name the operator's own pages in selftest.browser.pages, or pass --third-party"
+        );
+    }
+    chosen
+        .into_iter()
+        .map(|page| {
+            let kind: SelftestPageKind = serde_json::from_value(json!(page.kind.as_str()))
+                .with_context(|| {
+                    format!("the sidecar contract has no page kind {:?}", page.kind)
+                })?;
+            Ok(SelftestPage {
+                id: page.id.clone(),
+                kind,
+                rules: None,
+                settle_ms: None,
+                url: page.url.clone(),
+                weight: None,
+            })
+        })
+        .collect()
+}
+
+/// The seed of the stand-in persona of a proxy: the proxy's id, twice.
+fn seed_of(proxy: ProxyId) -> String {
+    let id = proxy.as_uuid().as_u128();
+    format!("{id:032x}{id:032x}")
+}
+
+/// What an echo page must report: the capture recorded for this browser.
+fn echo_expectation(engine: Engine, major: u64) -> Option<EchoExpectation> {
+    let major = u32::try_from(major).ok()?;
+    let capture = kage_http::selftest::browser_capture(engine.as_str(), major)?;
+    Some(EchoExpectation {
+        akamai: capture.akamai,
+        headers: capture.headers,
+        ja4: capture.ja4,
+    })
+}
+
+/// The conversation with the sidecar: a persona, a context through the
+/// proxy, the self-test, and the context closed again whatever it found.
+async fn converse(
+    client: &SidecarClient,
+    config: &Config,
+    options: &BrowserSelftestOptions,
+    endpoint: &ProxyEndpoint,
+    seed: &str,
+    pages: Vec<SelftestPage>,
+) -> anyhow::Result<(PersonaSummary, Result<SelftestResponse, BrowserError>)> {
+    let Some(locale) = options.languages.first() else {
+        bail!("name at least one language");
+    };
+    let persona = client
+        .generate_persona(&GeneratePersonaRequest {
+            browser_major: None,
+            // A chromium persona claims the system its browser runs on
+            // (docs/adr/0009).
+            claimed_os: ClaimedOs::Linux,
+            languages: options.languages.clone(),
+            screen: None,
+            seed: seed.to_owned(),
+        })
+        .await
+        .context("the sidecar could not generate a persona")?;
+    let summary = persona.summary;
+    let context = client
+        .open_context(&OpenContextRequest {
+            fingerprint: persona.fingerprint,
+            geolocation: None,
+            languages: options.languages.clone(),
+            locale: locale.clone(),
+            persona_id: endpoint.id.as_uuid(),
+            profile_dir: format!("selftest/{}", endpoint.id),
+            proxy: ContextProxy {
+                password: endpoint.password.expose().to_owned(),
+                server: endpoint.url(),
+                username: endpoint.username.expose().to_owned(),
+            },
+            screen: summary.screen.clone(),
+            timezone: options.timezone.clone(),
+        })
+        .await
+        .context("the sidecar could not open a context")?;
+
+    let selftest = &config.selftest.browser;
+    let request = SelftestRequest {
+        artifact_prefix: None,
+        echo: echo_expectation(options.engine, summary.browser_major),
+        expected: ExpectedIdentity {
+            browser_major: summary.browser_major,
+            claimed_os: summary.claimed_os,
+            languages: options.languages.clone(),
+            timezone: options.timezone.clone(),
+        },
+        min_score: Some(f64::from(selftest.min_score)),
+        pages: Some(pages),
+        timeout_ms: u64::try_from(selftest.page_timeout.get().as_millis()).ok(),
+    };
+    let outcome = client.selftest(context.context_id, &request).await;
+    if let Err(error) = client.close_context(context.context_id).await {
+        tracing::warn!(error = %error, "the self-test's context could not be closed");
+    }
+    Ok((summary, outcome))
+}
+
+async fn browser_in(
+    session: &Session,
+    config: &Config,
+    options: &BrowserSelftestOptions,
+    out: &mut impl Write,
+) -> anyhow::Result<()> {
+    let Some(proxy) = session.pool.get(options.proxy).await? else {
+        bail!("there is no proxy {}", options.proxy);
+    };
+    if !proxy.state.is_live() {
+        bail!("proxy {} is retired", proxy.id);
+    }
+    let pages = pages_of(config, options.third_party)?;
+    let endpoint = session
+        .pool
+        .endpoint(&proxy)
+        .context("cannot open the proxy's credentials; was the master key changed?")?;
+    let client = SidecarClient::new(&SidecarSettings::from_config(config, options.engine))
+        .context("cannot build the sidecar client")?;
+
+    let seed = seed_of(proxy.id);
+    let (summary, outcome) = converse(&client, config, options, &endpoint, &seed, pages).await?;
+
+    let details = |passed: Option<bool>, score: Option<f64>| {
+        json!({
+            "engine": options.engine.as_str(),
+            "browser_version": summary.browser_version,
+            "third_party": options.third_party,
+            "seed": seed,
+            "passed": passed,
+            "score": score,
+        })
+    };
+    let report = match outcome {
+        Ok(report) => report,
+        Err(error) => {
+            session
+                .audit(
+                    "selftest.browser",
+                    Some(proxy.id.to_string()),
+                    AuditOutcome::Failure,
+                    details(None, None),
+                )
+                .await;
+            return Err(error).context("the self-test could not be run");
+        }
+    };
+    session
+        .audit(
+            "selftest.browser",
+            Some(proxy.id.to_string()),
+            if report.passed {
+                AuditOutcome::Success
+            } else {
+                AuditOutcome::Failure
+            },
+            details(Some(report.passed), Some(report.score)),
+        )
+        .await;
+
+    write_report(out, options, &seed, &summary, &report).context("cannot write the result")?;
+    if !report.passed {
+        bail!("the browser self-test failed");
+    }
+    Ok(())
+}
+
+fn write_report(
+    out: &mut impl Write,
+    options: &BrowserSelftestOptions,
+    seed: &str,
+    summary: &PersonaSummary,
+    report: &SelftestResponse,
+) -> anyhow::Result<()> {
+    if options.json {
+        let mut document = serde_json::to_value(report)?;
+        if let Some(object) = document.as_object_mut() {
+            object.insert("proxy".to_owned(), json!(options.proxy));
+            object.insert("engine".to_owned(), json!(options.engine.as_str()));
+            object.insert("seed".to_owned(), json!(seed));
+            object.insert("persona".to_owned(), serde_json::to_value(summary)?);
+        }
+        serde_json::to_writer_pretty(&mut *out, &document)?;
+        writeln!(out)?;
+        return Ok(());
+    }
+    writeln!(
+        out,
+        "{} {} on {} through proxy {}",
+        options.engine.as_str(),
+        summary.browser_version,
+        summary.claimed_os.as_str(),
+        options.proxy
+    )?;
+    let rows: Vec<Vec<String>> = report
+        .findings
+        .iter()
+        .map(|finding| {
+            let verdict = match finding.status {
+                FindingStatus::Pass => "ok",
+                FindingStatus::Warn => "warn",
+                FindingStatus::Fail if finding.hard => "FAIL",
+                FindingStatus::Fail => "fail",
+                FindingStatus::Unknown => "unknown",
+            };
+            vec![
+                finding.page.clone(),
+                finding.check.clone(),
+                verdict.to_owned(),
+                finding.observed.clone().unwrap_or_else(|| "-".to_owned()),
+            ]
+        })
+        .collect();
+    table(out, &["PAGE", "CHECK", "RESULT", "OBSERVED"], &rows)?;
+    for page in &report.pages {
+        if page.status.as_str() != "ok" {
+            writeln!(out, "page {}: {}", page.id, page.status.as_str())?;
+        }
+    }
+    writeln!(
+        out,
+        "score {:.1} of 100, threshold {:.0}{}",
+        report.score,
+        report.min_score,
+        if report.complete {
+            ""
+        } else {
+            "; incomplete: a page could not be read"
+        }
+    )?;
+    writeln!(
+        out,
+        "{}",
+        if report.passed {
+            "passed: no automation flag, the identity is coherent"
+        } else {
+            "FAILED: see the findings above"
+        }
+    )?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use kage_browser::contract::{
+        EXAMPLES_JSON, GeneratePersonaResponse, PersonaSummary, SelftestResponse,
+    };
+    use kage_core::config::{Config, SelftestPageConfig, SelftestPageKind};
+    use kage_core::domain::Engine;
+    use kage_core::ids::ProxyId;
+
+    use super::{BrowserSelftestOptions, echo_expectation, pages_of, seed_of, write_report};
+
+    fn config() -> Config {
+        Config::load(
+            None,
+            [
+                ("KAGE__DATABASE__URL", "postgres://kage@localhost/kage"),
+                ("KAGE__SIDECAR__TOKEN", "token"),
+                (
+                    "KAGE__SECRETS__MASTER_KEY",
+                    "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+                ),
+            ]
+            .map(|(key, value)| (key.to_owned(), value.to_owned())),
+        )
+        .expect("the configuration loads")
+    }
+
+    fn example(schema: &str) -> serde_json::Value {
+        let examples: serde_json::Value =
+            serde_json::from_str(EXAMPLES_JSON).expect("the examples are JSON");
+        examples[schema][0].clone()
+    }
+
+    fn examples() -> (PersonaSummary, SelftestResponse) {
+        let persona: GeneratePersonaResponse =
+            serde_json::from_value(example("GeneratePersonaResponse")).expect("a persona");
+        let report: SelftestResponse =
+            serde_json::from_value(example("SelftestResponse")).expect("a report");
+        (persona.summary, report)
+    }
+
+    fn options(json: bool) -> BrowserSelftestOptions {
+        BrowserSelftestOptions {
+            proxy: "0199c1f2-6b7a-7c3e-9d41-2f8a5b6c7d8e"
+                .parse::<ProxyId>()
+                .expect("a proxy id"),
+            engine: Engine::Chromium,
+            timezone: "Europe/Berlin".to_owned(),
+            languages: vec!["de-DE".to_owned(), "de".to_owned()],
+            third_party: true,
+            json,
+        }
+    }
+
+    #[test]
+    fn third_party_pages_are_only_loaded_when_asked_for() {
+        let mut config = config();
+        let error = pages_of(&config, false).unwrap_err().to_string();
+        assert!(error.contains("--third-party"), "{error}");
+
+        let ids = |pages: Vec<kage_browser::contract::SelftestPage>| {
+            pages
+                .into_iter()
+                .map(|page| format!("{}={}", page.id, page.kind.as_str()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ids(pages_of(&config, true).expect("pages")),
+            ["sannysoft=sannysoft", "creepjs=creepjs"]
+        );
+
+        config.selftest.browser.pages = vec![SelftestPageConfig {
+            id: "probe".to_owned(),
+            kind: SelftestPageKind::Probe,
+            url: "https://probe.example.org/probe/".to_owned(),
+        }];
+        assert_eq!(
+            ids(pages_of(&config, false).expect("pages")),
+            ["probe=probe"]
+        );
+        assert_eq!(
+            ids(pages_of(&config, true).expect("pages")),
+            ["probe=probe", "sannysoft=sannysoft", "creepjs=creepjs"]
+        );
+    }
+
+    #[test]
+    fn the_stand_in_persona_of_a_proxy_is_always_the_same() {
+        let proxy = options(false).proxy;
+        let seed = seed_of(proxy);
+        assert_eq!(seed.len(), 64);
+        assert!(seed.chars().all(|digit| digit.is_ascii_hexdigit()));
+        assert_eq!(seed, seed_of(proxy));
+        assert_eq!(
+            seed,
+            "0199c1f26b7a7c3e9d412f8a5b6c7d8e0199c1f26b7a7c3e9d412f8a5b6c7d8e"
+        );
+    }
+
+    #[test]
+    fn an_echo_page_is_judged_against_the_recorded_capture() {
+        let expectation = echo_expectation(Engine::Chromium, 155).expect("a capture of Chrome 155");
+        assert!(expectation.ja4.starts_with("t13d"));
+        assert!(expectation.headers.iter().any(|name| name == "user-agent"));
+        assert!(echo_expectation(Engine::Chromium, 1).is_none());
+        assert!(echo_expectation(Engine::Chromium, u64::MAX).is_none());
+    }
+
+    #[test]
+    fn the_report_is_a_table_or_one_json_document() {
+        let (summary, report) = examples();
+
+        let mut table = Vec::new();
+        write_report(&mut table, &options(false), "seed", &summary, &report).expect("a table");
+        let table = String::from_utf8(table).expect("text");
+        assert!(table.starts_with("chromium 155.0.8059.39 on linux through proxy"));
+        assert!(table.contains("PAGE"), "{table}");
+        assert!(table.contains("score "), "{table}");
+        for finding in &report.findings {
+            assert!(table.contains(&finding.check), "{table}");
+        }
+
+        let mut json = Vec::new();
+        write_report(&mut json, &options(true), "seed", &summary, &report).expect("json");
+        let document: serde_json::Value = serde_json::from_slice(&json).expect("json");
+        assert_eq!(document["engine"], "chromium");
+        assert_eq!(document["seed"], "seed");
+        assert_eq!(document["persona"]["browser_major"], 155);
+        assert_eq!(document["passed"], report.passed);
+        assert_eq!(
+            document["findings"].as_array().map(Vec::len),
+            Some(report.findings.len())
+        );
+    }
+}

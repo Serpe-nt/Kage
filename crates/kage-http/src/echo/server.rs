@@ -232,17 +232,49 @@ enum ConnectionError {
     Slow,
 }
 
-const RESPONSE_FIELDS: [(&str, &str); 3] = [
-    ("content-type", "application/json"),
+/// Response fields of every answer besides its length and media type.
+const RESPONSE_FIELDS: [(&str, &str); 2] = [
     ("cache-control", "no-store"),
     ("access-control-allow-origin", "*"),
 ];
+
+/// Path of the page with which a browser captures its own requests: a
+/// navigation to it is answered with a document that also asks the echo
+/// with `fetch()` and `XMLHttpRequest` and publishes every answer as JSON
+/// in the element `#kage-echo-capture` (spec §6.2, follow-up F5).
+pub const BROWSER_PAGE_PATH: &str = "/browser";
+
+/// Where the script of the browser page gets the observation of the
+/// navigation that fetched the page.
+const BROWSER_PAGE_SLOT: &str = "/*KAGE_NAVIGATION*/null";
+
+const BROWSER_PAGE: &str = include_str!("browser.html");
 
 fn body_of(observation: &Observation) -> Vec<u8> {
     // A struct of strings and numbers always serializes.
     let mut body = serde_json::to_vec_pretty(observation).unwrap_or_default();
     body.push(b'\n');
     body
+}
+
+/// The media type and the body of the answer to one request: the JSON
+/// observation, or, for a `GET` of [`BROWSER_PAGE_PATH`], the capture page
+/// with that observation written into its script.
+fn answer_of(observation: &Observation) -> (&'static str, Vec<u8>) {
+    let path = observation.path.split('?').next().unwrap_or_default();
+    if observation.method != "GET" || path != BROWSER_PAGE_PATH {
+        return ("application/json", body_of(observation));
+    }
+    // Inside a script element only `</` and `<!--` could end or confuse the
+    // script; JSON lets both be written with an escaped character.
+    let json = serde_json::to_string(observation)
+        .unwrap_or_else(|_| "null".to_owned())
+        .replace("</", "<\\/")
+        .replace("<!--", "<\\u0021--");
+    (
+        "text/html; charset=utf-8",
+        BROWSER_PAGE.replace(BROWSER_PAGE_SLOT, &json).into_bytes(),
+    )
 }
 
 async fn serve_http2<S: AsyncRead + AsyncWrite + Unpin>(
@@ -322,9 +354,13 @@ async fn serve_http2<S: AsyncRead + AsyncWrite + Unpin>(
                     akamai = %connection.akamai(&request),
                     "echoed an HTTP/2 request"
                 );
-                let body = body_of(&observation);
+                let (media_type, body) = answer_of(&observation);
                 let length = body.len().to_string();
-                let mut fields = vec![(":status", "200"), ("content-length", length.as_str())];
+                let mut fields = vec![
+                    (":status", "200"),
+                    ("content-length", length.as_str()),
+                    ("content-type", media_type),
+                ];
                 fields.extend(RESPONSE_FIELDS);
                 stream
                     .write_all(&h2::response(request.stream, &fields, &body))
@@ -425,8 +461,11 @@ async fn serve_http1<S: AsyncRead + AsyncWrite + Unpin>(
             "echoed an HTTP/1.1 request"
         );
         let close = header("connection").is_some_and(|value| value.eq_ignore_ascii_case("close"));
-        let body = body_of(&observation);
-        let mut response = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n", body.len());
+        let (media_type, body) = answer_of(&observation);
+        let mut response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\ncontent-type: {media_type}\r\n",
+            body.len()
+        );
         for (name, value) in RESPONSE_FIELDS {
             response.push_str(name);
             response.push_str(": ");

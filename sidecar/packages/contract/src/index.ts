@@ -1,24 +1,21 @@
-import { z } from 'zod';
-
-/** Version of the sidecar HTTP contract. It is also the path prefix. */
-export const CONTRACT_VERSION = 'v1';
-
-/** Path of the health endpoint (spec §10.2). */
-export const HEALTH_PATH = `/${CONTRACT_VERSION}/health`;
-
-/** Browser engines the sidecar can run. One container runs exactly one. */
-export const EngineNameSchema = z.enum(['chromium', 'firefox']);
-export type EngineName = z.infer<typeof EngineNameSchema>;
-
-/** Response of `GET /v1/health` (spec §10.2). */
-export const HealthResponseSchema = z.strictObject({
-  status: z.literal('ok'),
-  engine: EngineNameSchema,
-  /** Version of the browser the engine drives; `null` while no browser is running. */
-  browser_version: z.string().min(1).nullable(),
-  /** Persona contexts currently open. */
-  contexts_in_use: z.number().int().nonnegative(),
-  /** Seconds since the server started. */
-  uptime_seconds: z.number().nonnegative(),
-});
-export type HealthResponse = z.infer<typeof HealthResponseSchema>;
+/**
+ * The sidecar HTTP contract (spec §10.2): zod schemas, the endpoint table,
+ * the OpenAPI document built from both, and the breaking-change check.
+ *
+ * The schemas are the source of truth. `openapi.json` next to this package
+ * is emitted from them and committed; `kage-browser` generates its Rust
+ * types from that file.
+ */
+export * from './breaking.js';
+export * from './cli.js';
+export * from './common.js';
+export * from './contexts.js';
+export * from './endpoints.js';
+export * from './examples.js';
+export * from './flow.js';
+export * from './health.js';
+export * from './navigate.js';
+export * from './openapi.js';
+export * from './personas.js';
+export * from './selftest.js';
+export * from './state.js';

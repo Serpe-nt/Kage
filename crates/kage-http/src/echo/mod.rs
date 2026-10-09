@@ -37,7 +37,7 @@ pub mod server;
 use serde::{Deserialize, Serialize};
 
 pub use clienthello::ClientHello;
-pub use server::{EchoError, EchoServer, EchoTls};
+pub use server::{BROWSER_PAGE_PATH, EchoError, EchoServer, EchoTls};
 
 /// The value of [`Observation::echo`]: tells this echo's answers from
 /// another service's.

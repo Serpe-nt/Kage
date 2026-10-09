@@ -1,5 +1,6 @@
-//! `kage selftest http` and `kage echo serve`, as the real binary against a
-//! Postgres container, a local proxy and the fingerprint echo.
+//! `kage selftest http`, `kage selftest browser` and `kage echo serve`, as
+//! the real binary against a Postgres container, a local proxy, the
+//! fingerprint echo and a stand-in for the browser sidecar.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -20,8 +21,10 @@ use http_support::{
     ECHO_H1_HOST, ECHO_HOST, PROXY_PASS, PROXY_USER, TestCertificates, TestEcho, TestProxy,
 };
 use pool_support::{MASTER_KEY, TestDb};
-use serde_json::Value;
+use serde_json::{Value, json};
 use tempfile::TempDir;
+use wiremock::matchers::{body_partial_json, header, method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn shipped_policies() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../policies")
@@ -474,4 +477,165 @@ async fn the_echo_command_serves_what_the_self_test_command_asks() {
     .await;
     assert!(!output.status.success());
     assert!(text(&output.stderr).contains("cannot read the certificate"));
+}
+
+/// The contract's example of a schema, as the sidecar would send it.
+fn contract_example(schema: &str) -> Value {
+    let examples: Value = serde_json::from_str(kage_browser::contract::EXAMPLES_JSON).unwrap();
+    examples[schema][0].clone()
+}
+
+const CONTEXT: &str = "0199c1f3-0a1b-7d2c-8e3f-4a5b6c7d8e9f";
+
+/// A stand-in for the Chromium sidecar: it answers one self-test
+/// conversation with the contract's examples and `report`, and only to
+/// calls that carry the shared secret. `context` is what the request that
+/// opens the context must say.
+async fn sidecar(context: Value, report: Value) -> MockServer {
+    let server = MockServer::start().await;
+    let authorized = || header("x-kage-sidecar-token", "sidecar-token-77c1");
+    Mock::given(method("POST"))
+        .and(path("/v1/personas/generate"))
+        .and(authorized())
+        .and(body_partial_json(json!({ "claimed_os": "linux" })))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(contract_example("GeneratePersonaResponse")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/contexts"))
+        .and(authorized())
+        .and(body_partial_json(context))
+        .respond_with(
+            ResponseTemplate::new(201).set_body_json(contract_example("OpenContextResponse")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(format!("/v1/contexts/{CONTEXT}/selftest")))
+        .and(authorized())
+        // The third-party pages of the configuration, and the capture
+        // recorded for the browser the sidecar says it runs.
+        .and(body_partial_json(json!({
+            "pages": [
+                { "id": "sannysoft", "kind": "sannysoft", "url": "https://bot.sannysoft.com/" },
+                {
+                    "id": "creepjs",
+                    "kind": "creepjs",
+                    "url": "https://abrahamjuliot.github.io/creepjs/",
+                },
+            ],
+            "expected": {
+                "claimed_os": "linux",
+                "browser_major": 155,
+                "timezone": "Europe/Berlin",
+            },
+            "echo": { "ja4": "t13d1517h2_8daaf6152771_cb7bf5808d99" },
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(report))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path(format!("/v1/contexts/{CONTEXT}")))
+        .and(authorized())
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+    server
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_browser_self_test_opens_a_context_through_the_proxy_and_closes_it_again() {
+    let db = TestDb::migrated().await;
+    let proxy = TestProxy::start().await;
+    let dir = TempDir::new().unwrap();
+    let mut env = environment(&db, &proxy, &dir.path().join("unused.pem"));
+    env.retain(|(name, _)| !name.starts_with("KAGE__SELFTEST__HTTP__ECHO"));
+    let id = adopt_proxy(&env).await;
+    let arguments = [
+        "selftest",
+        "browser",
+        "--proxy",
+        id.as_str(),
+        "--timezone",
+        "Europe/Berlin",
+        "--language",
+        "de-DE",
+        "--language",
+        "de",
+    ];
+    // The proxy with its credentials, the proxy's own profile directory and
+    // the identity that was asked for.
+    let context = json!({
+        "persona_id": id,
+        "profile_dir": format!("selftest/{id}"),
+        "proxy": {
+            "server": format!("http://{}:{}", proxy.addr.ip(), proxy.addr.port()),
+            "username": PROXY_USER,
+            "password": PROXY_PASS,
+        },
+        "locale": "de-DE",
+        "languages": ["de-DE", "de"],
+        "timezone": "Europe/Berlin",
+    });
+
+    // Without --third-party there is nothing to load, and the sidecar is
+    // not asked at all: nothing listens at its default address here.
+    let output = run(&env, &arguments).await;
+    assert!(!output.status.success());
+    assert!(text(&output.stderr).contains("--third-party"));
+
+    // A passing report: one JSON document, and the context is closed.
+    let passing = sidecar(context.clone(), contract_example("SelftestResponse")).await;
+    env.push(("KAGE__SIDECAR__CHROMIUM_URL".to_owned(), passing.uri()));
+    let with_pages = [&arguments[..], &["--third-party"]].concat();
+    let report: Value =
+        serde_json::from_str(&ok(&env, &[&with_pages[..], &["--json"]].concat()).await).unwrap();
+    assert_eq!(report["engine"], "chromium");
+    assert_eq!(report["proxy"], id.as_str());
+    assert_eq!(report["persona"]["browser_major"], 155);
+    assert_eq!(report["passed"], true);
+    assert_eq!(report["findings"].as_array().unwrap().len(), 2);
+    // The stand-in persona of a proxy: its seed is the proxy's id, twice.
+    let seed = id.replace('-', "");
+    assert_eq!(report["seed"], format!("{seed}{seed}"));
+    passing.verify().await;
+    drop(passing);
+
+    // A failing report still prints what was found, as a table, and the
+    // command fails. The context is closed all the same.
+    let mut failed = contract_example("SelftestResponse");
+    failed["passed"] = Value::Bool(false);
+    failed["score"] = json!(40);
+    failed["findings"][0]["status"] = json!("fail");
+    failed["findings"][0]["observed"] = json!("true");
+    let failing = sidecar(context, failed).await;
+    env.pop();
+    env.push(("KAGE__SIDECAR__CHROMIUM_URL".to_owned(), failing.uri()));
+    let output = run(&env, &with_pages).await;
+    assert!(!output.status.success());
+    let table = text(&output.stdout);
+    assert!(table.contains("navigator.webdriver"), "{table}");
+    assert!(table.contains("FAIL"), "{table}");
+    assert!(table.contains("score 40.0 of 100"), "{table}");
+    assert!(text(&output.stderr).contains("the browser self-test failed"));
+    failing.verify().await;
+
+    // Both runs are in the audit log with their outcome, and the proxy's
+    // password is in none of the output.
+    for (outcome, expected) in [("success", 1), ("failure", 1)] {
+        let filter = format!("action = 'selftest.browser' AND outcome = '{outcome}'");
+        assert_eq!(
+            count(&db, "audit_events", &filter).await,
+            expected,
+            "{outcome}"
+        );
+    }
+    assert!(!table.contains(PROXY_PASS));
+    assert!(!report.to_string().contains(PROXY_PASS));
 }
