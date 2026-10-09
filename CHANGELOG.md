@@ -68,6 +68,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     the same as the Camoufox build).
   - `just setup-camoufox`, `kage selftest browser --engine firefox`,
     `engines.firefox.browser_major`.
+  - The live browser self-test covers the Firefox engine, with its
+    recorded baseline `tests/fixtures/selftest/firefox-152-live.json`. The
+    judge of bot.sannysoft.com reads that page's Chrome row by the browser
+    the page saw: a Firefox has no `window.chrome`.
 
 - M4, the browser sidecar and its Chromium engine:
   - `@kage/contract`: zod schemas for every endpoint of the sidecar

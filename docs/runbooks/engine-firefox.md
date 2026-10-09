@@ -259,6 +259,27 @@ the search engine's log, and Google answers automated-looking visits with
 its own wall. Which engine to use is a policy decision for field
 validation (M13).
 
+## The self-test on Firefox
+
+`kage selftest browser --engine firefox` and the live check work as on
+chromium (`engine-chromium.md`, "Checking a persona: the self-test"). What
+the two third-party pages show of a Firefox persona was recorded live on
+2026-10-09 through two proxies
+(`tests/fixtures/selftest/firefox-152-live.json`, 34 checks, all passed):
+
+- bot.sannysoft.com paints its row "Chrome (New)" red. The page was
+  written for Chrome, and a Firefox has no `window.chrome`: every real
+  Firefox user gets that red row. The judge reads the row by the browser
+  the page saw: on a Firefox, missing passes and present fails hard.
+  Every other row is green, the canvas row (`TRANSPARENT_PIXEL`) included.
+- CreepJS: `headless` 0 %, `stealth` 0 %, `like headless` 6 %. It names no
+  anti-fingerprinting mode (its "resistance" entries stay unknown), calls
+  the fonts "Like Windows 11", and reads the same language, time zone,
+  system and graphics card in a service worker as in the window.
+- CreepJS prints "blocked" for two things. WebRTC: no host and no STUN
+  candidate, which is the confinement of spec §10.3 at work. Speech
+  synthesis: no voices, the known tell above.
+
 ## Captures on Firefox
 
 | Capture | How | A page can notice |
