@@ -1,0 +1,328 @@
+{
+  "engine": "chromium",
+  "browser_version": "155.0.8059.39",
+  "claimed_os": "linux",
+  "recorded": "2026-10-09",
+  "score": 100,
+  "min_score": 90,
+  "pages": [
+    {
+      "id": "sannysoft",
+      "kind": "sannysoft",
+      "url": "https://bot.sannysoft.com/"
+    },
+    {
+      "id": "creepjs",
+      "kind": "creepjs",
+      "url": "https://abrahamjuliot.github.io/creepjs/"
+    }
+  ],
+  "findings": [
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.User Agent (Old)",
+      "status": "pass",
+      "hard": false,
+      "weight": 1,
+      "observed": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.WebDriver (New)",
+      "status": "pass",
+      "hard": true,
+      "weight": 1,
+      "observed": "missing (passed)",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.WebDriver Advanced",
+      "status": "pass",
+      "hard": true,
+      "weight": 1,
+      "observed": "passed",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.Chrome (New)",
+      "status": "pass",
+      "hard": true,
+      "weight": 1,
+      "observed": "present (passed)",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.Permissions (New)",
+      "status": "pass",
+      "hard": true,
+      "weight": 1,
+      "observed": "prompt",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.Plugins Length (Old)",
+      "status": "pass",
+      "hard": true,
+      "weight": 1,
+      "observed": "5",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.Plugins is of type PluginArray",
+      "status": "pass",
+      "hard": true,
+      "weight": 1,
+      "observed": "passed",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.Languages (Old)",
+      "status": "pass",
+      "hard": false,
+      "weight": 1,
+      "observed": "de-DE,de,en",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.WebGL Vendor",
+      "status": "pass",
+      "hard": false,
+      "weight": 1,
+      "observed": "Google Inc. (Mesa)",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.WebGL Renderer",
+      "status": "pass",
+      "hard": false,
+      "weight": 1,
+      "observed": "ANGLE (Mesa, llvmpipe (LLVM 19.1.7 256 bits), OpenGL 4.5)",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.Broken Image Dimensions",
+      "status": "pass",
+      "hard": false,
+      "weight": 1,
+      "observed": "16x16",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.PHANTOM_UA",
+      "status": "pass",
+      "hard": true,
+      "weight": 1,
+      "observed": "ok",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.PHANTOM_PROPERTIES",
+      "status": "pass",
+      "hard": true,
+      "weight": 1,
+      "observed": "ok",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.PHANTOM_ETSL",
+      "status": "pass",
+      "hard": true,
+      "weight": 1,
+      "observed": "ok",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.PHANTOM_LANGUAGE",
+      "status": "pass",
+      "hard": true,
+      "weight": 1,
+      "observed": "ok",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.PHANTOM_WEBSOCKET",
+      "status": "pass",
+      "hard": true,
+      "weight": 1,
+      "observed": "ok",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.MQ_SCREEN",
+      "status": "pass",
+      "hard": false,
+      "weight": 1,
+      "observed": "ok",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.PHANTOM_OVERFLOW",
+      "status": "pass",
+      "hard": true,
+      "weight": 1,
+      "observed": "ok",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.PHANTOM_WINDOW_HEIGHT",
+      "status": "pass",
+      "hard": true,
+      "weight": 1,
+      "observed": "ok",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.HEADCHR_UA",
+      "status": "pass",
+      "hard": true,
+      "weight": 1,
+      "observed": "ok",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.HEADCHR_CHROME_OBJ",
+      "status": "pass",
+      "hard": true,
+      "weight": 1,
+      "observed": "ok",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.HEADCHR_PERMISSIONS",
+      "status": "pass",
+      "hard": true,
+      "weight": 1,
+      "observed": "ok",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.HEADCHR_PLUGINS",
+      "status": "pass",
+      "hard": true,
+      "weight": 1,
+      "observed": "ok",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.HEADCHR_IFRAME",
+      "status": "pass",
+      "hard": true,
+      "weight": 1,
+      "observed": "ok",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.CHR_DEBUG_TOOLS",
+      "status": "pass",
+      "hard": true,
+      "weight": 1,
+      "observed": "ok",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.SELENIUM_DRIVER",
+      "status": "pass",
+      "hard": true,
+      "weight": 1,
+      "observed": "ok",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.CHR_BATTERY",
+      "status": "pass",
+      "hard": false,
+      "weight": 1,
+      "observed": "ok",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.CHR_MEMORY",
+      "status": "pass",
+      "hard": false,
+      "weight": 1,
+      "observed": "ok",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.TRANSPARENT_PIXEL",
+      "status": "pass",
+      "hard": false,
+      "weight": 1,
+      "observed": "ok",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.SEQUENTUM",
+      "status": "pass",
+      "hard": true,
+      "weight": 1,
+      "observed": "ok",
+      "expected": null
+    },
+    {
+      "page": "sannysoft",
+      "check": "sannysoft.VIDEO_CODECS",
+      "status": "pass",
+      "hard": false,
+      "weight": 1,
+      "observed": "ok",
+      "expected": null
+    },
+    {
+      "page": "creepjs",
+      "check": "creepjs.headless",
+      "status": "pass",
+      "hard": true,
+      "weight": 1,
+      "observed": "0%",
+      "expected": "0%"
+    },
+    {
+      "page": "creepjs",
+      "check": "creepjs.stealth",
+      "status": "pass",
+      "hard": true,
+      "weight": 1,
+      "observed": "0%",
+      "expected": "0%"
+    },
+    {
+      "page": "creepjs",
+      "check": "creepjs.like_headless",
+      "status": "pass",
+      "hard": false,
+      "weight": 1,
+      "observed": "44%",
+      "expected": "at most 50%"
+    }
+  ]
+}

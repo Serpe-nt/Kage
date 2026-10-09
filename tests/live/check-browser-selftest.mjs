@@ -28,11 +28,18 @@ try {
   process.exit(1);
 }
 
-const IPV4 = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
+const IPV4 = /(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])/g;
 const IPV6 = /\b(?:[0-9a-f]{1,4}:){3,7}[0-9a-f]{1,4}\b/gi;
+// Four dotted numbers are an address, with one exception: the version of a
+// reduced user agent, `Chrome/155.0.0.0`, is a name, a slash and a number
+// followed by three zeros. The user agent is a value the baseline should keep.
+const address = (found, offset, text) =>
+  /^\d{1,3}\.0\.0\.0$/.test(found) && /[A-Za-z]\/$/.test(text.slice(0, offset))
+    ? found
+    : "[address]";
 /** What a page showed, without anything that looks like an address. */
 export const scrub = (text) =>
-  typeof text === "string" ? text.replace(IPV4, "[address]").replace(IPV6, "[address]") : text;
+  typeof text === "string" ? text.replace(IPV4, address).replace(IPV6, "[address]") : text;
 
 const RANK = { pass: 0, warn: 1, fail: 2 };
 const problems = [];
