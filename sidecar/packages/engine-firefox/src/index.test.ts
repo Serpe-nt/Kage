@@ -463,6 +463,9 @@ describe('launchPlan', () => {
       'webgl.enable-webgl2': true,
     });
     expect(basePreferences('/x.pdf')['print_printer']).toBe('Mozilla Save to PDF');
+    // Sound waits for the user, as in a Firefox nobody configured: the
+    // build's own default (0) lets every page play at once.
+    expect(plan.preferences['media.autoplay.default']).toBe(1);
     // Nothing of the launcher's own input simulation is switched on.
     expect(plan.config).not.toHaveProperty(['humanize']);
   });

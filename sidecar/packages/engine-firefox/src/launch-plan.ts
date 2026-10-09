@@ -55,6 +55,13 @@ export interface LaunchPlan {
  *   changes it fails a test instead of leaking.
  * - Printing goes to a file without a dialog: that is how a PDF is made,
  *   by the keyboard shortcut a person would use.
+ * - Sound waits for the user, as in a Firefox nobody configured. The
+ *   build's own configuration lets every page play at once
+ *   (`media.autoplay.default` 0, where Firefox ships 1), and a page reads
+ *   that with one call: `navigator.getAutoplayPolicy()` says `allowed`
+ *   where a stock Firefox says `allowed-muted`, and an `AudioContext`
+ *   runs before anybody touched the page (measured in M5.1 against a
+ *   stock Firefox 152 that nothing drives).
  */
 export function basePreferences(pdfPath: string): Record<string, string | number | boolean> {
   const printer = 'print.printer_Mozilla_Save_to_PDF';
@@ -65,6 +72,7 @@ export function basePreferences(pdfPath: string): Record<string, string | number
     'media.peerconnection.ice.proxy_only_if_behind_proxy': true,
     'media.peerconnection.ice.default_address_only': true,
     'network.http.http3.enable': false,
+    'media.autoplay.default': 1,
     'print.always_print_silent': true,
     print_printer: 'Mozilla Save to PDF',
     [`${printer}.print_to_file`]: true,
