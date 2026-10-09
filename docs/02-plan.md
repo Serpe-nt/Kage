@@ -383,6 +383,32 @@ approval when merged. Follow-ups:
 - The parity suite and `just ci` green; 24 consecutive runs of the
   reputation test binary pass.
 
+**Status.** Merged as six commits ending `b56eb35` (`m5-1-handover.md`),
+followed by the three M5 live-check commits (Firefox baseline
+`tests/fixtures/selftest/firefox-152-live.json`, score 100 through two
+real proxies, and the sannysoft judge reading the Chrome row by the
+browser it saw). Both engines now leave an untouched page with no user
+activation and a suspended `AudioContext` at every sample, in the hardened
+images too; the probe fails hard on activation without input; the
+reputation tests passed 84 consecutive runs. Decisions D32 and D33 record
+the backport and the read path. Follow-ups:
+- **F21 (M8/M9):** patchright's `goBack` and `waitForURL` hang when a page
+  comes out of the back/forward cache; flows must not rely on `goBack`
+  until handled.
+- **F22 (Camoufox v156 milestone, or earlier if cheap):** audit every
+  `defaultPref` in `camoufox.cfg` against a stock Firefox with the
+  reference method (both browsers started with nothing driving them); the
+  autoplay line was found by accident and any page-readable difference is
+  a pool-wide tell.
+- **F23 (M6 or M12):** CreepJS `like headless` warning threshold per engine
+  (Chrome sits at 44 %, Firefox at 6 %).
+- **F24 (live suite):** measure a Firefox context's idle traffic as M4 did
+  for Chrome (`KAGE_LIVE_IDLE_SECONDS`).
+- **Camoufox v156 line (after M6, fingerprint-critical):** new browser
+  build, camoufox-js and playwright-core pins, removes the ADR 0010
+  backport, re-measures coherence, re-records the capture and the live
+  baseline, re-checks `camoufox.cfg`.
+
 ---
 
 ## M6 — Persona manager and session binding
