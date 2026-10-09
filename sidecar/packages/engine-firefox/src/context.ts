@@ -79,7 +79,7 @@ export function classifyNavigationError(error: unknown): NavigationError {
   }
   if (
     net === 'NS_BINDING_ABORTED' ||
-    /download is starting|page (was )?closed|target closed/i.test(message)
+    /download is starting|page (was )?closed|target closed|has been closed/i.test(message)
   ) {
     return { code: 'aborted', message, net_error: net };
   }
@@ -230,7 +230,12 @@ export class FirefoxContext implements EngineContext, SessionDriver {
   }
 
   async setCookie(cookie: Cookie): Promise<boolean> {
-    await this.parts.context.addCookies([toBrowserCookieParam(cookie)]);
+    // The driver takes a cookie by its domain: without a leading dot it is
+    // kept host-only, as a response without a Domain attribute sets it.
+    const { url: _url, ...param } = toBrowserCookieParam(cookie);
+    await this.parts.context.addCookies([
+      { ...param, domain: cookie.host_only ? cookie.domain : `.${cookie.domain}` },
+    ]);
     return true;
   }
 

@@ -236,6 +236,14 @@ const routes = {
   '/probe/scope.js': (_req, res) => send(res, 200, 'text/javascript', PROBE_SCOPE),
   '/probe/headers': (req, res) => json(res, { headers: headerPairs(req) }),
 
+  // A results page as a search engine shows one (spec §10.4, the search_engine
+  // entry): every `r` of the query is a result, in order, with a line of text.
+  '/search': (_req, res, url) => {
+    const results = url.searchParams.getAll('r').map((target, index) =>
+      `<li><h3><a class="result" href="${target.replaceAll('"', '&quot;')}">Result ${index + 1}</a></h3><p>A line of text about result ${index + 1}.</p></li>`);
+    html(res, page(`Search: ${(url.searchParams.get('q') ?? '').replaceAll('<', '')}`, `<h1>Results</h1><p><a id="own" href="/search?q=more">More like this</a></p><ol id="results">${results.join('')}</ol>`));
+  },
+
   // The input recorder (spec §10.4): what a page sees of the behavior engine.
   '/input/': (_req, res) => html(res, INPUT_PAGE),
 

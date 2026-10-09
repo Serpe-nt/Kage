@@ -69,7 +69,7 @@ export function classifyNavigationError(error: unknown): NavigationError {
   }
   if (
     net === 'ERR_ABORTED' ||
-    /download is starting|page (was )?closed|target closed/i.test(message)
+    /download is starting|page (was )?closed|target closed|has been closed/i.test(message)
   ) {
     return { code: 'aborted', message, net_error: net };
   }

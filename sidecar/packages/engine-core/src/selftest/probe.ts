@@ -2,11 +2,15 @@ import type { ExpectedIdentity, Finding } from '@kage/contract';
 import { z } from 'zod';
 
 import {
+  OS_FONTS,
   browserMajorOfUserAgent,
   majorOfVersion,
+  osOfAppVersion,
   osOfHintPlatform,
+  osOfOscpu,
   osOfPlatform,
   osOfUserAgent,
+  osOfWebglRenderer,
 } from '../identity.js';
 
 import { FindingList } from './findings.js';
@@ -31,16 +35,41 @@ const HighEntropySchema = z.object({
   ua_full_version: text,
 });
 
+const count = z.number().nullable().catch(null);
+
 const ScopeSchema = z.object({
   user_agent: text,
   platform: text,
+  /** Firefox only, and only in windows: workers have no such property. */
+  oscpu: text,
+  app_version: text,
+  language: text,
+  intl_locale: text,
   languages: z.array(z.string()).nullable().catch(null),
   hardware_concurrency: z.number().nullable().catch(null),
   device_memory: z.number().nullable().catch(null),
   timezone: text,
   uad_platform: text,
   high_entropy: HighEntropySchema.nullable().catch(null),
-  webgl: z.object({ vendor: text, renderer: text }).nullable().catch(null),
+  webgl: z
+    .object({
+      vendor: text,
+      renderer: text,
+      plain_renderer: text,
+      version: text,
+      shading_language: text,
+      max_texture_size: count,
+      extensions: count,
+    })
+    .nullable()
+    .catch(null),
+  /** The marker font families a line of text measured differently in. */
+  fonts: z.array(z.string()).nullable().catch(null),
+  /** Windows and frames only. */
+  screen: z
+    .object({ width: count, height: count, avail_width: count, avail_height: count, color_depth: count })
+    .nullable()
+    .catch(null),
   error: text,
 });
 export type ProbeScope = z.infer<typeof ScopeSchema>;
@@ -50,9 +79,33 @@ const RequestHeadersSchema = z
   .nullable()
   .catch(null);
 
+/** What only the top window can tell: the desktop around the browser. */
+const EnvironmentSchema = z.object({
+  window: z
+    .object({
+      inner_width: count,
+      inner_height: count,
+      outer_width: count,
+      outer_height: count,
+      avail_left: count,
+      avail_top: count,
+      device_pixel_ratio: count,
+    })
+    .nullable()
+    .catch(null),
+  media_devices: z
+    .object({ audioinput: z.number(), audiooutput: z.number(), videoinput: z.number() })
+    .nullable()
+    .catch(null),
+  audio: z.object({ sample_rate: count, max_channel_count: count }).nullable().catch(null),
+  voices: count,
+});
+
 /** What the probe page publishes. */
 export const ProbeReportSchema = z.object({
   kage_probe: z.literal(1),
+  /** Absent from a probe page of before M5. */
+  environment: EnvironmentSchema.nullable().catch(null).optional(),
   scopes: z.object({
     window: ScopeSchema,
     iframe_same_origin: ScopeSchema.nullable().catch(null),
@@ -187,6 +240,8 @@ export function judgeProbe(
     const marks = [
       osOfUserAgent(userAgent),
       scope.platform === null ? null : osOfPlatform(scope.platform),
+      scope.oscpu == null ? expected.claimed_os : osOfOscpu(scope.oscpu),
+      scope.app_version == null ? expected.claimed_os : osOfAppVersion(scope.app_version),
       scope.uad_platform === null ? expected.claimed_os : osOfHintPlatform(scope.uad_platform),
       scope.high_entropy?.platform == null
         ? expected.claimed_os
@@ -196,7 +251,7 @@ export function judgeProbe(
       `os.${name}`,
       marks.every((os) => os === expected.claimed_os),
       true,
-      `user_agent=${userAgent} | platform=${scope.platform ?? 'null'} | hint=${scope.uad_platform ?? 'null'} | high_entropy=${scope.high_entropy?.platform ?? 'null'}`,
+      `user_agent=${userAgent} | platform=${scope.platform ?? 'null'} | oscpu=${scope.oscpu ?? 'null'} | app_version=${scope.app_version ?? 'null'} | hint=${scope.uad_platform ?? 'null'} | high_entropy=${scope.high_entropy?.platform ?? 'null'}`,
       expected.claimed_os,
     );
     const majors = [
@@ -230,14 +285,118 @@ export function judgeProbe(
   agreement(list, 'coherence.device_memory', reporting, (scope) =>
     scope.device_memory === null ? null : String(scope.device_memory),
   );
+  agreement(list, 'coherence.app_version', reporting, (scope) => scope.app_version ?? null);
+  agreement(list, 'coherence.language', reporting, (scope) => scope.language ?? null);
+  agreement(list, 'coherence.intl_locale', reporting, (scope) => scope.intl_locale ?? null);
   agreement(list, 'coherence.webgl', reporting, (scope) =>
-    scope.webgl === null ? null : `${scope.webgl.vendor ?? ''} / ${scope.webgl.renderer ?? ''}`,
+    scope.webgl === null
+      ? null
+      : [
+          scope.webgl.vendor,
+          scope.webgl.renderer,
+          scope.webgl.plain_renderer,
+          scope.webgl.version,
+          scope.webgl.shading_language,
+          scope.webgl.max_texture_size,
+          scope.webgl.extensions,
+        ]
+          .map((value) => String(value ?? ''))
+          .join(' / '),
+  );
+  // Fonts and the screen are read by measuring and by asking: a worker's
+  // canvas must find the same families as the window's.
+  agreement(list, 'coherence.fonts', reporting, (scope) => scope.fonts?.join(',') ?? null);
+  agreement(list, 'coherence.screen', reporting, (scope) =>
+    scope.screen == null
+      ? null
+      : [
+          scope.screen.width,
+          scope.screen.height,
+          scope.screen.avail_width,
+          scope.screen.avail_height,
+          scope.screen.color_depth,
+        ].join('x'),
   );
 
   const window = report.scopes.window;
   list.add('webgl.available', window.webgl?.renderer == null ? 'warn' : 'pass', {
     observed: window.webgl?.renderer ?? 'no WebGL',
   });
+  const renderer = window.webgl?.renderer ?? null;
+  if (renderer !== null) {
+    const named = osOfWebglRenderer(renderer);
+    list.check(
+      'webgl.os',
+      named === null || named === expected.claimed_os,
+      true,
+      renderer,
+      `a renderer of ${expected.claimed_os}, or one that names no system`,
+    );
+  }
+  if (window.fonts != null) {
+    const found = new Set(window.fonts);
+    const own = OS_FONTS[expected.claimed_os].filter((family) => found.has(family));
+    const foreign = (Object.keys(OS_FONTS) as (keyof typeof OS_FONTS)[])
+      .filter((os) => os !== expected.claimed_os)
+      .flatMap((os) => OS_FONTS[os].filter((family) => found.has(family)));
+    list.check(
+      'fonts.foreign',
+      foreign.length === 0,
+      true,
+      foreign.length === 0 ? 'none' : foreign.join(', '),
+      `no font only another system than ${expected.claimed_os} ships`,
+    );
+    // A Linux machine may have next to no fonts; Windows and macOS always
+    // ship theirs.
+    const enough = own.length >= (expected.claimed_os === 'linux' ? 1 : 3);
+    if (enough || expected.claimed_os !== 'linux') {
+      list.check(
+        'fonts.own',
+        enough,
+        true,
+        own.length === 0 ? 'none' : own.join(', '),
+        `fonts ${expected.claimed_os} ships`,
+      );
+    } else {
+      list.add('fonts.own', 'warn', { observed: 'no font a Linux desktop ships' });
+    }
+  }
+  // What marks a browser without a desktop around it. None of these is an
+  // identity mismatch, so none is hard; each is a known tell worth seeing.
+  const environment = report.environment ?? null;
+  if (environment !== null) {
+    const screen = window.screen ?? null;
+    if (screen !== null) {
+      const full =
+        screen.avail_width === screen.width && screen.avail_height === screen.height;
+      list.add('environment.work_area', full ? 'warn' : 'pass', {
+        observed: `${screen.avail_width ?? 0}x${screen.avail_height ?? 0} of ${screen.width ?? 0}x${screen.height ?? 0}`,
+        expected: 'a work area smaller than the screen, as a desktop with a panel has',
+      });
+    }
+    const devices = environment.media_devices;
+    const total =
+      devices === null ? 0 : devices.audioinput + devices.audiooutput + devices.videoinput;
+    list.add('environment.media_devices', total === 0 ? 'warn' : 'pass', {
+      observed:
+        devices === null
+          ? 'not readable'
+          : `audioinput=${devices.audioinput} audiooutput=${devices.audiooutput} videoinput=${devices.videoinput}`,
+      expected: 'at least one device',
+    });
+    const audio = environment.audio;
+    list.add(
+      'environment.audio',
+      audio !== null && (audio.max_channel_count ?? 0) > 0 ? 'pass' : 'warn',
+      {
+        observed:
+          audio === null
+            ? 'no AudioContext'
+            : `sample_rate=${audio.sample_rate ?? 0} max_channel_count=${audio.max_channel_count ?? 0}`,
+        expected: 'an audio output with channels',
+      },
+    );
+  }
 
   for (const [name, headers] of Object.entries(requests)) {
     if (headers === null) {

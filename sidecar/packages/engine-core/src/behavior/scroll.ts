@@ -11,7 +11,7 @@ export interface Flick {
 
 /** Shortest and longest pause after a flick, whatever the text says. */
 const MIN_PAUSE_MS = 220;
-const MAX_PAUSE_MS = 9000;
+const MAX_PAUSE_MS = 6000;
 
 /** What a notch of the wheel scrolls before the first one was measured: browsers use 100 to 120. */
 export const ASSUMED_NOTCH_PX = 110;

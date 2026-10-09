@@ -79,6 +79,8 @@ export class Human {
     wanders: 0,
   };
   private pointer: Point | null = null;
+  /** Whether this persona has moved the mouse yet. */
+  private touched = false;
   private notchPx = ASSUMED_NOTCH_PX;
   private readonly clock: Clock;
 
@@ -101,6 +103,7 @@ export class Human {
       await this.parts.device.pointerMove(sample.x, sample.y);
     }
     this.pointer = path.to;
+    this.touched = true;
     this.counts.positions += path.samples.length;
     if (path.overshoot) {
       this.counts.overshoots += 1;
@@ -127,7 +130,12 @@ export class Human {
     return middle >= 12 && middle <= metrics.viewport.height - 12;
   }
 
-  /** Puts the pointer over the page when it is somewhere else: a wheel scrolls what it is over. */
+  /**
+   * Puts the pointer over the page: a wheel scrolls what it is over. A
+   * mouse that has not moved yet is moved first even when it rests over the
+   * page: a browser does not scroll for a pointer it has never seen move,
+   * and neither does a person scroll without touching the mouse.
+   */
   private async overPage(metrics: SurfaceMetrics): Promise<void> {
     const pointer = await this.position();
     const { origin, viewport } = metrics;
@@ -136,7 +144,7 @@ export class Human {
       pointer.x < origin.x + viewport.width &&
       pointer.y >= origin.y &&
       pointer.y < origin.y + viewport.height;
-    if (!inside) {
+    if (!inside || !this.touched) {
       const { random } = this.parts;
       await this.moveToScreen(
         {

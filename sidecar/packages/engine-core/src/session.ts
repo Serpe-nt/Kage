@@ -281,6 +281,8 @@ interface DocumentState {
   readonly scriptUrls: Set<string>;
   readonly xhr: RecordedXhr[];
   readonly bodies: Promise<void>[];
+  /** Whether the proxy asked for credentials on the way to this document. */
+  proxyChallenged: boolean;
 }
 
 const newDocument = (): DocumentState => ({
@@ -292,6 +294,7 @@ const newDocument = (): DocumentState => ({
   scriptUrls: new Set(),
   xhr: [],
   bodies: [],
+  proxyChallenged: false,
 });
 
 const emptyObservation: PageObservation = { title: null, text: null, scriptUrls: [], frameUrls: [] };
@@ -355,6 +358,12 @@ export class PageSession {
       navigation = asked.isNavigationRequest() && asked.frame() === this.page.mainFrame();
     } catch {
       navigation = false;
+    }
+    if (navigation && response.status() === 407) {
+      // The proxy asking for credentials is no document: the browser
+      // answers it and asks again, or the navigation fails.
+      this.document.proxyChallenged = true;
+      return;
     }
     if (navigation) {
       if (
@@ -730,10 +739,17 @@ export class PageSession {
       }
       if (typed) {
         this.begin(filters);
-        await page.goto(request.url, {
+        const arrived = await page.goto(request.url, {
           waitUntil: WAIT_UNTIL[request.wait.until],
           timeout: remaining(),
         });
+        if (arrived?.status() === 407) {
+          error = {
+            code: 'proxy_failed',
+            message: 'the proxy refused the credentials of the persona (407)',
+            net_error: null,
+          };
+        }
       }
       if (error === null) {
         if (request.wait.selector != null) {
@@ -751,6 +767,15 @@ export class PageSession {
         throw thrown;
       }
       error = driver.classifyError(thrown);
+      if (
+        this.document.response === null &&
+        this.document.proxyChallenged &&
+        error.code === 'navigation_failed'
+      ) {
+        // The proxy asked for credentials and no document followed: it
+        // refused the persona's, whatever name the browser gives the failure.
+        error = { ...error, code: 'proxy_failed' };
+      }
       await driver.settleAfterFailure(error);
     }
 
@@ -767,14 +792,15 @@ export class PageSession {
       if (error === null) {
         const budget = () => Math.max(0, remaining() - CAPTURE_RESERVE_MS);
         if (acting !== null && behavior !== null) {
-          if (behavior.scroll_depth !== undefined && behavior.scroll_depth > 0) {
-            await acting.human.scrollTo(
-              behavior.scroll_depth,
-              performance.now() + budget(),
-            );
-          }
           const wanted =
             behavior.dwell === 'human' ? acting.human.drawDwell() : (request.dwell_ms ?? 0);
+          if (behavior.scroll_depth !== undefined && behavior.scroll_depth > 0) {
+            // Scrolling leaves the dwell its time: at most what the budget has beyond it.
+            await acting.human.scrollTo(
+              behavior.scroll_depth,
+              performance.now() + Math.max(0, budget() - wanted),
+            );
+          }
           dwelled = Math.min(wanted, budget());
           await acting.human.dwell(dwelled, { wander: behavior.wander ?? true });
         } else if ((request.dwell_ms ?? 0) > 0) {
@@ -880,8 +906,21 @@ export class PageSession {
       waitForUrl: (glob, timeout) => page.waitForURL(glob, { timeout }),
       waitForNetworkIdle: (timeout) => page.waitForLoadState('networkidle', { timeout }),
       waitForNavigation: async (timeout) => {
+        // A click or a key may leave the page: by a request for a new
+        // document, or, going back, by a page the browser kept. Either
+        // shows as a new response or as another address.
         const previous = this.document.response;
-        await this.afterClick(previous, 'load', Date.now() + timeout).catch(() => false);
+        const address = page.url();
+        const limit = Date.now() + timeout;
+        while (this.document.response === previous && page.url() === address) {
+          if (Date.now() > limit) {
+            return;
+          }
+          await sleep(40);
+        }
+        await page
+          .waitForLoadState('load', { timeout: Math.max(1, limit + 4000 - Date.now()) })
+          .catch(() => undefined);
       },
       exists: (selector) =>
         this.read<boolean>(`document.querySelector(${JSON.stringify(selector)}) !== null`),

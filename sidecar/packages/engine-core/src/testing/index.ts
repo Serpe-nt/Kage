@@ -5,4 +5,5 @@
  */
 export * from './fixture-site.js';
 export * from './parity.js';
+export * from './recorder.js';
 export * from './test-proxy.js';
