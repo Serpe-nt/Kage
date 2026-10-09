@@ -28,6 +28,7 @@ const PROBE_FRAME = file('./probe/frame.html');
 const PROBE_WORKER = file('./probe/worker.js');
 const PROBE_SCOPE = file('./probe/scope.js');
 const INPUT_PAGE = file('./input/index.html');
+const ACTIVATION_PAGE = file('./activation/index.html');
 
 /** Every request, oldest first. */
 const requests = [];
@@ -246,6 +247,10 @@ const routes = {
 
   // The input recorder (spec §10.4): what a page sees of the behavior engine.
   '/input/': (_req, res) => html(res, INPUT_PAGE),
+
+  // The activation recorder (spec §10.2): what a page is told of user
+  // activation while an engine loads and reads it.
+  '/activation/': (_req, res) => html(res, ACTIVATION_PAGE),
 
   '/__kage/requests': (_req, res) => json(res, requests),
   '/__kage/reports': (_req, res) => json(res, reports),

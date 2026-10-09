@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Fixture activation recorder</title>
+    <style>
+      body { font: 16px/1.5 sans-serif; margin: 24px; }
+      #press { display: inline-block; padding: 10px 18px; margin: 12px 0; }
+      #far { position: absolute; left: 820px; top: 420px; padding: 10px 18px; }
+    </style>
+  </head>
+  <body>
+    <h1 id="title">Activation recorder</h1>
+    <p id="text">
+      This page records what its browser says of user activation, at fixed moments and four times a
+      second, next to the input events it received. It judges nothing. Nobody has to touch it.
+    </p>
+    <button id="press" type="button">A button</button>
+    <button id="far" type="button">A button far away</button>
+    <script type="application/json" id="kage-activation-report">null</script>
+    <script>
+      (() => {
+        // The events a browser grants user activation for, and every other
+        // trusted input event, counted apart: a mouse that only moves is
+        // input and grants nothing.
+        const ACTIVATING = ['keydown', 'mousedown', 'pointerdown', 'pointerup', 'touchend'];
+        const input = { trusted: 0, untrusted: 0, activating: 0, types: [] };
+        for (const type of [
+          'keydown', 'keyup', 'mousedown', 'mouseup', 'click', 'mousemove', 'wheel',
+          'pointerdown', 'pointerup', 'touchstart', 'touchend',
+        ]) {
+          addEventListener(type, (event) => {
+            if (!event.isTrusted) { input.untrusted += 1; return; }
+            input.trusted += 1;
+            if (ACTIVATING.includes(type)) input.activating += 1;
+            if (!input.types.includes(type)) input.types.push(type);
+          }, { capture: true, passive: true });
+        }
+
+        const newAudio = () => {
+          try { return new (window.AudioContext || window.webkitAudioContext)(); } catch (error) { return null; }
+        };
+        // Whether sound may start by itself. Chrome decides when a context is
+        // made, Firefox a moment after: a sample reads the context it makes
+        // and the one the sample before it made.
+        let earlier = null;
+        const sample = (at) => {
+          const fresh = newAudio();
+          const activation = navigator.userActivation;
+          const taken = {
+            at, ms: Math.round(performance.now()),
+            is_active: activation ? activation.isActive : null,
+            has_been_active: activation ? activation.hasBeenActive : null,
+            audio_new: fresh ? fresh.state : null,
+            audio_earlier: earlier ? earlier.state : null,
+            trusted_input_events: input.trusted,
+            activating_input_events: input.activating,
+          };
+          if (earlier) earlier.close();
+          earlier = fresh;
+          return taken;
+        };
+
+        // What the browser says of autoplay before anybody touched the page,
+        // where it has the call (Firefox).
+        let policy = null;
+        try {
+          if (navigator.getAutoplayPolicy) {
+            policy = {
+              mediaelement: navigator.getAutoplayPolicy('mediaelement'),
+              audiocontext: navigator.getAutoplayPolicy('audiocontext'),
+            };
+          }
+        } catch (error) { policy = null; }
+
+        const samples = [sample('start')];
+        const report = {
+          kage_activation: 1, samples, now: null, autoplay_policy: policy,
+          untrusted_input_events: 0, input_types: [],
+        };
+        const element = document.getElementById('kage-activation-report');
+        const publish = () => {
+          report.untrusted_input_events = input.untrusted;
+          report.input_types = input.types;
+          element.textContent = JSON.stringify(report);
+        };
+        const at = (label, ms, then) => setTimeout(() => {
+          samples.push(sample(label));
+          publish();
+          if (then) then();
+        }, ms);
+        addEventListener('load', () => {
+          samples.push(sample('load'));
+          publish();
+          at('load+300ms', 300);
+          at('load+4000ms', 4000, () => {
+            // The fixed samples are complete; from here on the page says
+            // how it is now, for a test that touches it afterwards.
+            element.setAttribute('data-done', '1');
+            setInterval(() => { report.now = sample('now'); publish(); }, 250);
+          });
+        });
+        publish();
+      })();
+    </script>
+  </body>
+</html>

@@ -78,6 +78,23 @@ const report = (change: (report: ProbeReport) => void = () => undefined): ProbeR
       audio: { sample_rate: 48_000, max_channel_count: 2 },
       voices: 0,
     },
+    // A page nobody touched: loaded by a typed navigation, no input, no activation.
+    activation: {
+      samples: [
+        { at: 'start', ms: 12, is_active: false, has_been_active: false, audio_state: 'suspended' },
+        {
+          at: 'load+500ms',
+          ms: 640,
+          is_active: false,
+          has_been_active: false,
+          audio_state: 'suspended',
+        },
+      ],
+      reached_from_own_origin: false,
+      trusted_input_events: 0,
+      activating_input_events: 0,
+      input_types: [],
+    },
     scopes: {
       window: scope(),
       iframe_same_origin: scope(),

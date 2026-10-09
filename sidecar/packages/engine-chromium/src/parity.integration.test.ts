@@ -15,5 +15,7 @@ defineParitySuite({
   // Capturing beyond the viewport lays the page out at its full height once.
   fullPageSideEffects: ['resize'],
   webpScreenshot: 'image/webp',
+  // Chrome has no navigator.getAutoplayPolicy().
+  autoplayPolicy: null,
   netErrors: { tunnel: 'ERR_TUNNEL_CONNECTION_FAILED', deadProxy: 'ERR_PROXY_CONNECTION_FAILED' },
 });

@@ -107,11 +107,50 @@ const EnvironmentSchema = z.object({
   voices: count,
 });
 
+const flag = z.boolean().nullable().catch(null);
+
+/**
+ * What the page says of user activation, against the input it received.
+ * Sampled when its script starts and again half a second after `load`.
+ */
+const ActivationSchema = z.object({
+  samples: z.array(
+    z.object({
+      at: z.string(),
+      ms: count,
+      /** `navigator.userActivation`; `null` in a browser without it. */
+      is_active: flag,
+      has_been_active: flag,
+      /** State of an `AudioContext` made for the sample; `null` without one. */
+      audio_state: text,
+    }),
+  ),
+  /** Whether the page before this one was of the same origin, by the referrer. */
+  reached_from_own_origin: z.boolean(),
+  /**
+   * `navigator.getAutoplayPolicy()` for media elements and for an
+   * `AudioContext`, where the browser has the call (Firefox); else `null`.
+   */
+  autoplay_policy: z
+    .object({ mediaelement: text, audiocontext: text })
+    .nullable()
+    .catch(null)
+    .optional(),
+  /** Trusted input events of any kind the page received. */
+  trusted_input_events: z.number(),
+  /** Of them, the ones a browser grants activation for (a key or a button going down). */
+  activating_input_events: z.number(),
+  input_types: z.array(z.string()),
+});
+export type ProbeActivation = z.infer<typeof ActivationSchema>;
+
 /** What the probe page publishes. */
 export const ProbeReportSchema = z.object({
   kage_probe: z.literal(1),
   /** Absent from a probe page of before M5. */
   environment: EnvironmentSchema.nullable().catch(null).optional(),
+  /** Absent from a probe page of before M5.1. */
+  activation: ActivationSchema.nullable().catch(null).optional(),
   scopes: z.object({
     window: ScopeSchema,
     iframe_same_origin: ScopeSchema.nullable().catch(null),
@@ -191,6 +230,88 @@ function agreement(
 }
 
 /**
+ * Judges what the page saw of user activation (spec §10.2).
+ *
+ * A browser grants activation for input, and a browser driver may grant it
+ * for reading the page: both engines' drivers mark an evaluation as a user
+ * gesture. A page that is active, or has been, without one input event
+ * that grants activation was therefore touched by something that is no
+ * person, which a detector can see by the same comparison. That is an
+ * automation flag and a hard failure.
+ *
+ * One case is the browser's own: Chrome carries a person's activation into
+ * a page reached by a link of the same origin. The self-test loads the
+ * probe by a typed navigation, where nothing is carried; a probe reached
+ * from its own origin is not judged.
+ *
+ * Sound that may start by itself is reported next to it, as a warning: an
+ * `AudioContext` that runs, or a browser that says `allowed` when asked
+ * (`navigator.getAutoplayPolicy()`, Firefox), on a page nobody touched. On
+ * Chrome it follows activation. A browser nobody configured blocks it
+ * (measured: a stock Firefox says `allowed-muted` and `disallowed`, the
+ * Camoufox build as it ships says `allowed`, which is why the engine sets
+ * Firefox's default). It is no failure: a user may have chosen it.
+ */
+function judgeActivation(list: FindingList, activation: ProbeActivation | null): void {
+  if (activation === null || activation.samples.length === 0) {
+    // A probe page of before M5.1, on a host nobody updated: the check
+    // that matters most for a driven browser did not run.
+    list.add('automation.user_activation', 'warn', {
+      observed: 'the probe page reported no user activation: it is older than this check',
+      expected: 'the probe page of this version',
+    });
+    return;
+  }
+  const { samples } = activation;
+  const explained = activation.activating_input_events > 0 || activation.reached_from_own_origin;
+  const input = `trusted input events: ${activation.trusted_input_events}, of them granting activation: ${activation.activating_input_events}${activation.reached_from_own_origin ? ', reached from its own origin' : ''}`;
+  const told = samples
+    .map(
+      (sample) =>
+        `${sample.at}: is_active=${String(sample.is_active)} has_been_active=${String(sample.has_been_active)}`,
+    )
+    .join(' | ');
+  if (samples.some((sample) => sample.is_active === null || sample.has_been_active === null)) {
+    list.add('automation.user_activation', 'warn', {
+      observed: `${told} | ${input}`,
+      expected: 'a browser with navigator.userActivation',
+    });
+  } else {
+    const active = samples.some(
+      (sample) => sample.is_active === true || sample.has_been_active === true,
+    );
+    list.check(
+      'automation.user_activation',
+      !active || explained,
+      true,
+      `${told} | ${input}`,
+      'no user activation before an input event that grants it',
+    );
+  }
+  const audio = samples.filter((sample) => sample.audio_state !== null);
+  const policy = activation.autoplay_policy ?? null;
+  if (audio.length > 0 || policy !== null) {
+    const allowed =
+      audio.some((sample) => sample.audio_state === 'running') ||
+      policy?.mediaelement === 'allowed' ||
+      policy?.audiocontext === 'allowed';
+    const heard = [
+      ...audio.map((sample) => `${sample.at}: ${sample.audio_state ?? ''}`),
+      ...(policy === null
+        ? []
+        : [
+            `autoplay policy: mediaelement=${policy.mediaelement ?? 'null'} audiocontext=${policy.audiocontext ?? 'null'}`,
+          ]),
+      input,
+    ];
+    list.add('automation.audio_autoplay', allowed && !explained ? 'warn' : 'pass', {
+      observed: heard.join(' | '),
+      expected: 'sound that waits for the user',
+    });
+  }
+}
+
+/**
  * Judges a probe report against the identity a persona claims.
  *
  * Hard failures are the ones spec §6.2 names: an automation flag, a scope
@@ -233,6 +354,8 @@ export function judgeProbe(
     `getters_native=${automation.getters_native} illegal_invocation_throws=${automation.illegal_invocation_throws} own=[${automation.navigator_own_properties.join(',')}]`,
     'native getters, no own properties on navigator',
   );
+
+  judgeActivation(list, report.activation ?? null);
 
   const reporting: (readonly [ProbeScopeName, ProbeScope])[] = [];
   for (const name of PROBE_SCOPES) {

@@ -25,6 +25,88 @@
         // dedicated worker and the blob worker all run the same function.
         const readScope = self.kageReadScope;
 
+        // What a browser takes for a person: user activation, against the
+        // input the page itself received. A browser grants activation for a
+        // key or a button going down, never for a mouse that only moves; a
+        // page that is active without such an event was touched by
+        // something that is no person. Listening starts before anything
+        // else runs here.
+        const ACTIVATING = ['keydown', 'mousedown', 'pointerdown', 'pointerup', 'touchend'];
+        const input = { trusted: 0, activating: 0, types: [] };
+        for (const type of [
+          'keydown', 'keyup', 'mousedown', 'mouseup', 'click', 'mousemove', 'wheel',
+          'pointerdown', 'pointerup', 'touchstart', 'touchend',
+        ]) {
+          addEventListener(type, (event) => {
+            if (!event.isTrusted) return;
+            input.trusted += 1;
+            if (ACTIVATING.includes(type)) input.activating += 1;
+            if (!input.types.includes(type)) input.types.push(type);
+          }, { capture: true, passive: true });
+        }
+        const newAudio = () => {
+          try { return new (window.AudioContext || window.webkitAudioContext)(); } catch (error) { return null; }
+        };
+        // `running` when one of the contexts runs: sound started by itself.
+        const audioState = (contexts) => {
+          const states = contexts.filter(Boolean).map((audio) => audio.state);
+          return states.length === 0 ? null : states.includes('running') ? 'running' : states[0];
+        };
+        const activationSample = (at, contexts) => {
+          const activation = navigator.userActivation;
+          return {
+            at, ms: Math.round(performance.now()),
+            is_active: activation ? activation.isActive : null,
+            has_been_active: activation ? activation.hasBeenActive : null,
+            audio_state: audioState(contexts),
+          };
+        };
+        // Sampled twice: now, and half a second after the page loaded. A
+        // driver that reads a page touches it right after `load`; the
+        // second sample is late enough to see that, and the report is
+        // published only after it. An AudioContext says whether sound may
+        // start by itself, and the two browsers decide that at different
+        // moments: Chrome when a context is made, Firefox a moment after.
+        // So the second sample reads one made at `load` and one made then.
+        const readActivation = async () => {
+          const early = newAudio();
+          const samples = [activationSample('start', [early])];
+          if (early) early.close();
+          await new Promise((resolve) => {
+            if (document.readyState === 'complete') resolve();
+            else addEventListener('load', () => resolve(), { once: true });
+          });
+          const atLoad = newAudio();
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          const late = newAudio();
+          samples.push(activationSample('load+500ms', [late, atLoad]));
+          if (atLoad) atLoad.close();
+          if (late) late.close();
+          // A browser may carry a person's activation into the next page of
+          // the same origin; then it is there without input on this page.
+          let fromOwnOrigin = false;
+          try {
+            fromOwnOrigin = document.referrer !== '' && new URL(document.referrer).origin === location.origin;
+          } catch (error) { fromOwnOrigin = false; }
+          // Firefox says outright whether sound may start by itself; a
+          // browser nobody configured says it may not.
+          let policy = null;
+          try {
+            if (navigator.getAutoplayPolicy) {
+              policy = {
+                mediaelement: navigator.getAutoplayPolicy('mediaelement'),
+                audiocontext: navigator.getAutoplayPolicy('audiocontext'),
+              };
+            }
+          } catch (error) { policy = null; }
+          return {
+            samples, reached_from_own_origin: fromOwnOrigin, autoplay_policy: policy,
+            trusted_input_events: input.trusted, activating_input_events: input.activating,
+            input_types: input.types,
+          };
+        };
+        const activationRead = readActivation();
+
         // What only a window can tell: its geometry, and the devices and
         // voices a desktop has. Read once, in the top window.
         const readEnvironment = async () => {
@@ -128,7 +210,7 @@
           blobWorker = new Worker(URL.createObjectURL(new Blob([source], { type: 'text/javascript' })));
         } catch (error) { blobWorker = null; }
 
-        const [windowScope, sameScope, srcdocScope, blankScope, workerData, blobData, fetchHeaders, environment] =
+        const [windowScope, sameScope, srcdocScope, blankScope, workerData, blobData, fetchHeaders, environment, activation] =
           await Promise.all([
             readScope(window, () => document.createElement('canvas')),
             frameScope(same),
@@ -138,6 +220,7 @@
             blobWorker ? fromWorker(blobWorker) : null,
             fetchedHeaders(),
             readEnvironment(),
+            activationRead.catch(() => null),
           ]);
         await new Promise((resolve) => setTimeout(resolve, 150));
 
@@ -155,6 +238,7 @@
             blob_worker: blobData ? blobData.scope : null,
           },
           environment,
+          activation,
           automation: {
             webdriver: typeof navigator.webdriver === 'boolean' ? navigator.webdriver : null,
             console_stack_reads: stackReads,

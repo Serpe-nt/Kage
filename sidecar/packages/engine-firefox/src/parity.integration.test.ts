@@ -19,6 +19,10 @@ defineParitySuite({
   fullPageSideEffects: [],
   // Firefox encodes PNG and JPEG only.
   webpScreenshot: 'image/png',
+  // What a stock Firefox 152 says, measured with no driver at all. The
+  // Camoufox build as it ships says allowed twice; the launch plan sets
+  // Firefox's own default.
+  autoplayPolicy: { mediaelement: 'allowed-muted', audiocontext: 'disallowed' },
   netErrors: {
     tunnel: 'NS_ERROR_PROXY_FORBIDDEN',
     deadProxy: 'NS_ERROR_PROXY_CONNECTION_REFUSED',

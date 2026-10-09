@@ -184,3 +184,60 @@ export function inputStatistics(report: InputReport): InputStatistics {
     scrollEvents: events.filter((event) => event.type === 'scroll').length,
   };
 }
+
+/** One reading of the fixture site's activation recorder (`tests/fixtures/site/activation/`). */
+export interface ActivationSample {
+  /** `start`, `load`, `load+300ms`, `load+4000ms`, or `now`. */
+  readonly at: string;
+  /** Milliseconds since the page started. */
+  readonly ms: number;
+  readonly is_active: boolean | null;
+  readonly has_been_active: boolean | null;
+  /** State of an `AudioContext` made for this sample: Chrome decides here whether it may run. */
+  readonly audio_new: string | null;
+  /** State of the one made for the sample before: Firefox lets it run a moment after it was made. */
+  readonly audio_earlier: string | null;
+  readonly trusted_input_events: number;
+  /** Of them, the ones a browser grants activation for. */
+  readonly activating_input_events: number;
+}
+
+/** What the activation recorder publishes. */
+export interface ActivationReport {
+  readonly kage_activation: 1;
+  /** The fixed samples, in order. */
+  readonly samples: readonly ActivationSample[];
+  /** The page as it is, renewed four times a second once the fixed samples are complete. */
+  readonly now: ActivationSample | null;
+  /** What `navigator.getAutoplayPolicy()` said when the page started; `null` in a browser without the call. */
+  readonly autoplay_policy: { readonly mediaelement: string; readonly audiocontext: string } | null;
+  readonly untrusted_input_events: number;
+  readonly input_types: readonly string[];
+}
+
+/** Reads the activation recorder's report out of a captured document. */
+export function activationReportOf(domHtml: string | null): ActivationReport {
+  const json =
+    /<script type="application\/json" id="kage-activation-report"[^>]*>([\s\S]*?)<\/script>/.exec(
+      domHtml ?? '',
+    )?.[1];
+  const text = (json ?? 'null')
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+    .replaceAll('&amp;', '&');
+  const report = JSON.parse(text) as ActivationReport | null;
+  if (report?.kage_activation !== 1) {
+    throw new Error('the activation recorder published no report');
+  }
+  return report;
+}
+
+/** Whether a sample shows anything a browser only gives a page its user has touched. */
+export function touched(sample: ActivationSample): boolean {
+  return (
+    sample.is_active !== false ||
+    sample.has_been_active !== false ||
+    sample.audio_new === 'running' ||
+    sample.audio_earlier === 'running'
+  );
+}

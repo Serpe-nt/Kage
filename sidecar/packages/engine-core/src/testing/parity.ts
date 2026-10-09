@@ -39,7 +39,7 @@ import type { FingerprintDocument } from '../fingerprint.js';
 import { judgeProbe, parseProbeReport, type ProbeReport } from '../selftest/probe.js';
 
 import { startFixtureSite, type FixtureRequest, type FixtureSite } from './fixture-site.js';
-import { inputReportOf, inputStatistics } from './recorder.js';
+import { activationReportOf, inputReportOf, inputStatistics, touched } from './recorder.js';
 import { startTestProxy, type TestProxy } from './test-proxy.js';
 
 /** An engine as the parity suite runs it, and what is meant to differ. */
@@ -54,6 +54,12 @@ export interface ParitySubject {
   readonly fullPageSideEffects: readonly SideEffect[];
   /** The media type of a screenshot that was asked for as WebP. */
   readonly webpScreenshot: 'image/webp' | 'image/png';
+  /**
+   * What the browser tells an untouched page when asked whether sound may
+   * start by itself (`navigator.getAutoplayPolicy()`): the answer of that
+   * browser as nobody configured it. `null` where the browser has no such call.
+   */
+  readonly autoplayPolicy: { readonly mediaelement: string; readonly audiocontext: string } | null;
   /** How the browser names a refused tunnel and a proxy that is not there; `null` when it gives no name. */
   readonly netErrors: { readonly tunnel: string | null; readonly deadProxy: string | null };
 }
@@ -366,6 +372,87 @@ export function defineParitySuite(subject: ParitySubject): void {
       });
     });
 
+    it('reads a page nobody touched without granting it user activation', async () => {
+      await withContext('untouched', async (context) => {
+        // Everything a navigation reads of a page: a wait for a selector,
+        // the title and the text right after `load`, the document at the
+        // end. Meanwhile the page asks its browser, at `load`, 300 ms
+        // later and 4 s later, whether a user has touched it.
+        const result = await go(context, named('/activation/'), {
+          wait: { until: 'load', selector: '#kage-activation-report[data-done]' },
+          capture: DOM,
+          timeout_ms: 30_000,
+        });
+        expect(result.error).toBeNull();
+        // The captures were taken all the same.
+        expect(result).toMatchObject({
+          status: 200,
+          title: 'Fixture activation recorder',
+          behavior: null,
+        });
+        expect(result.dom_html).toContain('<h1 id="title">Activation recorder</h1>');
+        const loaded = activationReportOf(result.dom_html);
+        expect(loaded.samples.map((sample) => sample.at)).toEqual([
+          'start',
+          'load',
+          'load+300ms',
+          'load+4000ms',
+        ]);
+        for (const sample of loaded.samples) {
+          expect(sample, sample.at).toMatchObject({
+            is_active: false,
+            has_been_active: false,
+            // Sound waits for the user: a context made at any of the moments.
+            audio_new: 'suspended',
+            activating_input_events: 0,
+          });
+          expect(touched(sample), sample.at).toBe(false);
+        }
+        expect(loaded.untrusted_input_events).toBe(0);
+        // Asked outright, the browser says what one nobody configured says.
+        expect(loaded.autoplay_policy).toEqual(subject.autoplayPolicy);
+
+        // The reads of a flow, then a mouse that only moves, then a click.
+        const run = await flow(context, {
+          behavior: { seed: SEEDS.first },
+          timeout_ms: 90_000,
+          actions: [
+            { action: 'wait_for', selector: '#press' },
+            { action: 'assert', text_contains: 'Nobody has to touch it' },
+            { action: 'assert', selector: '#kage-activation-report[data-done]' },
+            { action: 'wait_for', ms: 600 },
+            { action: 'extract', capture: DOM },
+            { action: 'hover', selector: '#far' },
+            { action: 'wait_for', ms: 600 },
+            { action: 'extract', capture: DOM },
+            { action: 'click', selector: '#press' },
+            { action: 'wait_for', ms: 600 },
+            { action: 'extract', capture: DOM },
+          ],
+        });
+        expect(run.steps.filter((step) => !step.ok)).toEqual([]);
+        const [read, moved, clicked] = run.steps
+          .filter((step) => step.action === 'extract')
+          .map((step) => activationReportOf(step.capture?.dom_html ?? null).now);
+        // Still nobody's: reading it again and again changed nothing.
+        expect(read).toMatchObject({ is_active: false, has_been_active: false });
+        expect(touched(read ?? never())).toBe(false);
+        // Moving the mouse is input, and no reason for a browser to
+        // believe that the user wants anything.
+        expect(moved?.trusted_input_events).toBeGreaterThan((read?.trusted_input_events ?? 0) + 5);
+        expect(moved).toMatchObject({
+          is_active: false,
+          has_been_active: false,
+          activating_input_events: 0,
+        });
+        expect(touched(moved ?? never())).toBe(false);
+        // A click is: activation comes from input, as it does for a person.
+        expect(clicked).toMatchObject({ is_active: true, has_been_active: true });
+        expect(clicked?.activating_input_events).toBeGreaterThanOrEqual(2);
+        expect(run.final.behavior?.clicks).toBe(1);
+      });
+    });
+
     it('keeps cookies across two opens of one persona and not across personas', async () => {
       const visits = (result: PageResult) =>
         /visits=(\d+)/.exec(
@@ -411,7 +498,15 @@ export function defineParitySuite(subject: ParitySubject): void {
       expect(findings.filter((finding) => finding.status === 'fail')).toEqual([]);
       // Every scope reported: none was skipped as a warning.
       expect(findings.filter((finding) => finding.check.startsWith('scope.'))).toEqual([]);
-      for (const check of ['coherence.fonts', 'coherence.webgl', 'fonts.foreign', 'webgl.os']) {
+      for (const check of [
+        'coherence.fonts',
+        'coherence.webgl',
+        'fonts.foreign',
+        'webgl.os',
+        // Loading and reading the probe granted it nothing (spec §10.2).
+        'automation.user_activation',
+        'automation.audio_autoplay',
+      ]) {
         expect(findings.find((finding) => finding.check === check)?.status, check).toBe('pass');
       }
       expect(report.automation).toMatchObject({
