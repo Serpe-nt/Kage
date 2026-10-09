@@ -125,9 +125,28 @@ const SANNYSOFT_AUTOMATION =
 
 const SANNYSOFT_CLASSES = { passed: 'pass', failed: 'fail', warn: 'warn' } as const;
 
+/** How the rows that look for the object only Chrome has (`window.chrome`) begin. */
+const SANNYSOFT_CHROME_OBJECT = 'Chrome (';
+
+/**
+ * Whether the page saw a Firefox, by the User-Agent its first row shows.
+ *
+ * The page was written for Chrome: it paints the missing `window.chrome` of
+ * a Firefox red, for every real Firefox user too. On a Firefox that row is
+ * read the other way round: missing is what it has to be, and present would
+ * mean that something put a Chrome object into a Firefox.
+ */
+function sawFirefox(rows: readonly TableRow[]): boolean {
+  const userAgent =
+    rows.find((row) => /^User Agent\b/i.test(row.cells[0]?.trim() ?? ''))?.cells[1] ?? '';
+  return /\bFirefox\/\d/.test(userAgent) && !/\bChrome\/\d/.test(userAgent);
+}
+
 /**
  * Judges bot.sannysoft.com from its result tables: each test is a row whose
- * result cell carries the class `passed`, `failed` or `warn`.
+ * result cell carries the class `passed`, `failed` or `warn`. The row
+ * that looks for Chrome's own object is judged by the browser the page saw
+ * ({@link sawFirefox}).
  *
  * @returns `null` when no such row exists: the page did not load its tests
  *   or changed its markup.
@@ -139,6 +158,7 @@ export function judgeSannysoft(
 ): Finding[] | null {
   const list = new FindingList(page, weight);
   const seen = new Set<string>();
+  const firefox = sawFirefox(rows);
   for (const row of rows) {
     const index = row.classes.findIndex((value) =>
       value.split(/\s+/).some((name) => name in SANNYSOFT_CLASSES),
@@ -151,10 +171,12 @@ export function judgeSannysoft(
     const className = (row.classes[index] ?? '')
       .split(/\s+/)
       .find((value): value is keyof typeof SANNYSOFT_CLASSES => value in SANNYSOFT_CLASSES);
-    const status = SANNYSOFT_CLASSES[className ?? 'warn'];
-    list.add(`sannysoft.${name}`, status, {
+    const painted = SANNYSOFT_CLASSES[className ?? 'warn'];
+    const reversed = firefox && name.startsWith(SANNYSOFT_CHROME_OBJECT) && painted !== 'warn';
+    list.add(`sannysoft.${name}`, reversed ? (painted === 'fail' ? 'pass' : 'fail') : painted, {
       hard: SANNYSOFT_AUTOMATION.test(name),
       observed: (row.cells[index] ?? row.cells.at(-1) ?? '').trim().slice(0, 200),
+      expected: reversed ? 'missing: a Firefox has no chrome object' : null,
     });
   }
   return list.findings.length === 0 ? null : list.findings;

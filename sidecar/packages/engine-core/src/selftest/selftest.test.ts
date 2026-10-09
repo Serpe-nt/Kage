@@ -731,6 +731,58 @@ describe('bot.sannysoft.com', () => {
     expect(failed(findings)).toHaveLength(2);
   });
 
+  it('reads the Chrome row by the browser the page saw: a Firefox has no Chrome object', () => {
+    const firefoxUa =
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0';
+    const page = (userAgent: string, cell: string, painted: string) =>
+      judgeSannysoft(
+        [
+          { cells: ['User Agent (Old)', userAgent], classes: ['', 'result passed'] },
+          { cells: ['WebDriver (New)', 'missing (passed)'], classes: ['', 'passed'] },
+          { cells: ['Chrome (New)', cell], classes: ['', painted] },
+          { cells: ['HEADCHR_CHROME_OBJ', 'ok'], classes: ['', 'passed'] },
+        ],
+        'sannysoft',
+        1,
+      ) ?? [];
+    const row = (findings: readonly Finding[]) =>
+      findings.find((finding) => finding.check === 'sannysoft.Chrome (New)');
+
+    // What every real Firefox shows: the page paints it red, and it is right.
+    const genuine = page(firefoxUa, 'missing (failed)', 'failed');
+    expect(row(genuine)).toEqual({
+      page: 'sannysoft',
+      check: 'sannysoft.Chrome (New)',
+      status: 'pass',
+      hard: true,
+      weight: 1,
+      observed: 'missing (failed)',
+      expected: 'missing: a Firefox has no chrome object',
+    });
+    expect(hardFailed(genuine)).toEqual([]);
+    // A Firefox with a Chrome object has been tampered with.
+    expect(hardFailed(page(firefoxUa, 'present (passed)', 'passed'))).toEqual([
+      'sannysoft.Chrome (New)',
+    ]);
+    // A Chrome is judged as the page paints it, and so is every other row.
+    expect(hardFailed(page(LINUX_UA, 'missing (failed)', 'failed'))).toEqual([
+      'sannysoft.Chrome (New)',
+    ]);
+    expect(row(page(LINUX_UA, 'present (passed)', 'passed'))).toMatchObject({
+      status: 'pass',
+      expected: null,
+    });
+    expect(genuine.filter((finding) => finding.check !== 'sannysoft.Chrome (New)')).toEqual(
+      page(LINUX_UA, 'present (passed)', 'passed')
+        .filter((finding) => finding.check !== 'sannysoft.Chrome (New)')
+        .map((finding) =>
+          finding.check === 'sannysoft.User Agent (Old)'
+            ? { ...finding, observed: firefoxUa }
+            : finding,
+        ),
+    );
+  });
+
   it('is unparsed without a single result row', () => {
     expect(judgeSannysoft([], 'sannysoft', 1)).toBeNull();
     expect(judgeSannysoft([{ cells: ['a', 'b'], classes: ['', ''] }], 'sannysoft', 1)).toBeNull();
