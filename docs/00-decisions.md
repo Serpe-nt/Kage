@@ -20,7 +20,7 @@ excellently on any site it is pointed at; there is no fixed target list.
 | D2 | Engines | Two engines behind one contract: patched Chromium (patchright, real Chrome channel, CDP leaks hidden) for Chrome personas and Camoufox (Firefox fork with C++-level fingerprint injection) for Firefox personas. Persona mix is Chrome-weighted to follow real market share. |
 | D3 | Display | Headful under a virtual display (Xvfb or Camoufox's built-in virtual display) in Linux containers. Never new-headless in production. |
 | D4 | Fetch path | Per-domain policy decides `http` (wreq) or `browser`. Unknown or protected domains default to browser. Automatic escalation http → browser on block. Cookies earned by the browser may be reused by wreq only with a matching fingerprint profile. |
-| D5 | Proxies | Webshare Static Residential (ISP) proxies: a fixed list of IPs, unlimited bandwidth, 20 IPs to start, EU countries. Managed through the Webshare list and replacement API. |
+| D5 | Proxies | Webshare Static Residential (ISP) proxies: a fixed list of IPs managed through the Webshare list and replacement API. Plan bought 2026-10-09: **Shared** exclusivity (the IPs are used by other Webshare customers too; Private and Dedicated were priced out), **250 GB/month** bandwidth, 20 IPs, **No Refreshes** (never a scheduled rotation), 10 manual replacements included, **High IP Reputation** add-on. Countries: DE 4, IT 3, FR 3, GB 2, AT 2, BE 2, RO 2, SE 2. Consequences: reputation lookups, per-domain cooldowns learned from outcomes and the replacement budget are the defence against shared-IP history; Kage must track bandwidth against the 250 GB cap and warn at 80 % (scheduled for M7 with the scheduler, alert routing in M12). |
 | D6 | Personas | One long-lived persona per proxy IP (1:1). A persona owns a generated real-device fingerprint, engine, OS, locale, timezone and geolocation coherent with the IP, a persistent browser profile (cookies, storage, history), and a matching wreq emulation profile for the http path. |
 | D7 | Fingerprints | Generated from a real-device fingerprint database (Apify fingerprint-suite for Chromium, Camoufox's generator for Firefox), pinned for the persona's lifetime, re-applied deterministically on every session. |
 | D8 | Behavior | Full human emulation: Bezier mouse paths with overshoot, scroll with reading pauses, dwell from a human-like distribution, per-key typing cadence, idle periods. |
@@ -51,7 +51,7 @@ excellently on any site it is pointed at; there is no fixed target list.
 
 | # | Item | Default until answered |
 |---|------|------------------------|
-| O1 | Exact Webshare countries purchased | Spec assumes a mix of EU countries; personas inherit country from their IP. |
+| O1 | Exact Webshare countries purchased | Answered, see D5. Personas inherit country from the observed geo of their IP. |
 | O2 | Host sizing (RAM, CPU) for the browser pool | Spec assumes 16 GB RAM, 4 vCPU, 6 concurrent browser sessions. |
 | O3 | IP reputation provider and API key | Spec defines a provider trait with AbuseIPDB first; disabled until a key exists. |
 | O4 | Webhook delivery targets | HMAC-signed webhooks are built; none configured by default. |
