@@ -140,7 +140,7 @@ The suite is `tests/live/run.sh`, one script per check:
 |---|---|---|
 | `tests/live/proxy-health.sh` | M2 | Reads the real proxy list into a throwaway Postgres and probes every proxy once with `kage proxy health`. Passes when the list has the expected number of proxies and each answers with a latency and a country. Contacts the Webshare API and the endpoints of `proxies.health` only ([proxies.md](proxies.md)). Its output names no proxy address. |
 | `tests/live/http-selftest.sh` | M3 | Reads the real proxy list into a throwaway Postgres, picks two proxies by the date, and runs `kage selftest http` through each, one as the newest Chrome profile and one as the newest Firefox profile. Passes when both fingerprints equal the recorded ones. Contacts the Webshare API and one fingerprint echo: the operator's own when `KAGE__SELFTEST__HTTP__ECHO_URL` is set, else the third-party echo of `selftest.http.third_party_url`, which sees the two exit addresses ([fingerprint-echo.md](fingerprint-echo.md)). Requests no replacement. |
-| `tests/live/browser-selftest.sh` | M4 | Starts the Chromium sidecar image, hardened as in production, and a throwaway Postgres; picks two proxies by the date, never the two of the http check; runs `kage selftest browser --third-party` through each. Passes when no check carries an automation flag or an identity mismatch, both pages could be read, the score is above the threshold, and no check is worse than in the baseline (`tests/fixtures/selftest/`). Contacts the Webshare API and the pages of `selftest.browser.third_party_pages` (bot.sannysoft.com and CreepJS), which see the two exit addresses ([engine-chromium.md](engine-chromium.md)). Requests no replacement. `KAGE_LIVE_RECORD=1` records a passing run as the baseline. `KAGE_LIVE_IDLE_SECONDS` adds a measurement of Chrome's own background traffic. |
+| `tests/live/browser-selftest.sh` | M4, M5 | For each engine of `KAGE_LIVE_ENGINES` (default `chromium firefox`), one after the other: starts that engine's sidecar image, hardened as in production, and a throwaway Postgres; picks two proxies by the date, never the two of the http check and the same two for every engine; runs `kage selftest browser --engine <engine> --third-party` through each. Passes when no check carries an automation flag or an identity mismatch, both pages could be read, the score is above the threshold, and no check is worse than in the baseline of that engine and major (`tests/fixtures/selftest/<engine>-<major>-live.json`); an engine without a baseline fails until one is recorded. Contacts the Webshare API and the pages of `selftest.browser.third_party_pages` (bot.sannysoft.com and CreepJS), which see the two exit addresses ([engine-chromium.md](engine-chromium.md), [engine-firefox.md](engine-firefox.md)). Requests no replacement. `KAGE_LIVE_RECORD=1` records a passing run as the baseline. `KAGE_LIVE_IDLE_SECONDS` adds a measurement of the browser's own background traffic. The repository variable `KAGE_LIVE_ENGINES` narrows the nightly run to one engine. |
 
 M12 wires the workflow completely.
 
@@ -157,13 +157,14 @@ KAGE_LIVE=1 KAGE__WEBSHARE__API_KEY=... KAGE__SECRETS__MASTER_KEY=... just test-
    that pull request.
 2. Tag the merge commit `vX.Y.Z` and push the tag.
 3. `release.yaml` checks that the tag is on `main` and matches the workspace
-   version, builds and pushes `ghcr.io/serpe-nt/kage`,
-   `ghcr.io/serpe-nt/kage-browser-chromium` and
-   `ghcr.io/serpe-nt/kage-browser-firefox`, and creates the GitHub release
+   version, builds and pushes `ghcr.io/serpe-nt/kage` and
+   `ghcr.io/serpe-nt/kage-browser-chromium`, and creates the GitHub release
    with each image digest and a CycloneDX SBOM per image.
 4. Open a follow-up pull request that records the digests in
    `deploy/compose.yaml`.
 
-Before the first release: ADR 0008 must be decided, because it determines
-whether the Firefox image may be published. Signed tags and signed images are
-part of M12.
+The Firefox sidecar image is not published (ADR 0008, outcome of M5): the
+Camoufox build it unpacks bundles Microsoft's and Apple's font files, and a
+public image would redistribute them. An operator builds it where it runs
+(`just build-images`); CI builds and scans it on every pull request.
+Signed tags and signed images are part of M12.

@@ -17,9 +17,13 @@
 #   pacing             a profile from pacing-profiles.yaml
 #   pacing_locked      true: requests cannot choose their own pacing
 #   robots             report | enforce | ignore
-#   referer_strategy   direct         arrive like a typed URL or a bookmark
-#                      search_engine  load a results page first, click through
-#                      none           send whatever Referer the caller gave
+#   referer_strategy   how a persona arrives at the first page of a visit
+#                      (spec §10.4). A Referer is never forged: it is what
+#                      the browser sends for a real click.
+#                      direct         a typed URL or a bookmark: no Referer
+#                      none           the same on the wire as direct
+#                      search_engine  load a results page first and click
+#                                     the result that leads to the domain
 #   retries            retries after the first attempt, each on another persona
 #   breaker_threshold  blocks per hour, over all personas, that pause the domain
 #   breaker_pause      how long the domain stays paused
@@ -31,6 +35,19 @@
 #                      its own.
 #
 # Durations are written as 500ms, 30s, 30m, 2h, 7d.
+#
+# The search_engine strategy needs a results URL for every visit. Kage will
+# build it from a template and a query when it schedules the visit (M7, M8);
+# the sidecar only ever gets the finished URL. No template is enabled, and
+# the key below does not exist yet. It is here to show what one looks like:
+#
+#   search_template: "https://duckduckgo.com/?q={query}"
+#
+# Before enabling one, know what a search visit costs: it is made from the
+# persona's own address, takes about 0.5 to 2 MB of the proxy plan, and
+# leaves the address next to the query in the search engine's log. Google
+# answers visits that look automated with a wall of its own. Which engine to
+# use is decided in field validation (M13).
 
 defaults:
   render: auto

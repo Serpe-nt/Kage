@@ -159,16 +159,19 @@ kage selftest browser --proxy <proxy id> --timezone Europe/Rome \
 | `--json` | One JSON document instead of a table. |
 
 Until personas exist (M6) the command stands in with one pseudo-persona per
-proxy: its seed is derived from the proxy's id and its profile directory is
-`selftest/<proxy id>`, so a proxy shows the same browser on every run. The
-command needs to reach the sidecar (`sidecar.chromium_url`); with `just dev`
-that is `KAGE__SIDECAR__CHROMIUM_URL=http://127.0.0.1:8091`. Every run is an
-audit event (`selftest.browser`).
+proxy and engine: its seed is derived from the proxy's id and its profile
+directory is `selftest/<engine>/<proxy id>` (`selftest/chromium/...`), so a
+proxy shows the same browser on every run and the two engines never share a
+profile. The command needs to reach the sidecar (`sidecar.chromium_url`);
+with `just dev` that is `KAGE__SIDECAR__CHROMIUM_URL=http://127.0.0.1:8091`.
+Every run is an audit event (`selftest.browser`).
 
 The gated live suite (`just test-live`, `tests/live/browser-selftest.sh`)
-runs it with `--third-party` through two proxies per run, in a container
-hardened as in production, and compares the findings with the recorded
-baseline in `tests/fixtures/selftest/`. `KAGE_LIVE_RECORD=1` records a
+runs it with `--third-party` through two proxies per run for each engine of
+`KAGE_LIVE_ENGINES` (default `chromium firefox`), in containers hardened as
+in production, and compares the findings with the recorded baseline of
+that engine and major in `tests/fixtures/selftest/`. A run without a
+baseline fails and says how to record one: `KAGE_LIVE_RECORD=1` records a
 passing run as the new baseline.
 
 ### What an idle browser costs
