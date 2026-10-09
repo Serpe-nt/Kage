@@ -8,7 +8,9 @@ name: nightly-live
 # http path with M3 (two proxies per run, against the third-party echo of
 # `selftest.http.third_party_url`) and the browser self-test with M4 (two
 # other proxies per run, against `selftest.browser.third_party_pages`, in
-# the Chromium sidecar image built here); the workflow is fully wired in M12.
+# the Chromium sidecar image built here). Since M5 the browser self-test
+# runs for the Firefox engine as well, through the same two proxies, in the
+# Firefox sidecar image built here. The workflow is fully wired in M12.
 
 on:
   schedule:
@@ -36,6 +38,9 @@ jobs:
       KAGE__SECRETS__MASTER_KEY: ${{ secrets.KAGE_SECRETS_MASTER_KEY }}
       # How many proxies the Webshare plan has.
       KAGE_LIVE_EXPECT_PROXIES: ${{ vars.KAGE_LIVE_EXPECT_PROXIES || '20' }}
+      # The engines of the browser self-test. Each needs its recorded
+      # baseline in tests/fixtures/selftest/ (KAGE_LIVE_RECORD=1 writes it).
+      KAGE_LIVE_ENGINES: ${{ vars.KAGE_LIVE_ENGINES || 'chromium firefox' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

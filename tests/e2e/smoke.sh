@@ -148,12 +148,20 @@ case "${config}" in
 esac
 echo "    secrets redacted, policies loaded from /etc/kage/policies"
 
-echo "==> kage is configured for the Chrome its Chromium sidecar bundles"
-bundled="$("${compose[@]}" exec -T browser-chromium cat /etc/kage/chrome-version)"
-case "${config}" in
-    *"\"browser_major\": ${bundled%%.*}"*) echo "    Chrome ${bundled}, engines.chromium.browser_major ${bundled%%.*}" ;;
-    *) fail "the image bundles Chrome ${bundled}; engines.chromium.browser_major says otherwise" ;;
-esac
+echo "==> kage is configured for the browsers its sidecars bundle"
+# engines.<engine>.browser_major of the configuration kage printed. A
+# sidecar's node reads the document, so the host needs no JSON tool.
+configured_major() {
+    printf '%s' "${config}" | "${compose[@]}" exec -T "browser-$1" node -e \
+        "let text = ''; process.stdin.on('data', (chunk) => (text += chunk)).on('end', () => console.log(JSON.parse(text).config.engines['$1'].browser_major));"
+}
+for engine in chromium firefox; do
+    bundled="$("${compose[@]}" exec -T "browser-${engine}" cat /etc/kage/browser-version)"
+    configured="$(configured_major "${engine}")"
+    [ "${configured}" = "${bundled%%.*}" ] \
+        || fail "the browser-${engine} image bundles ${bundled}; engines.${engine}.browser_major is ${configured}"
+    echo "    browser-${engine} bundles ${bundled}, engines.${engine}.browser_major is ${configured}"
+done
 
 echo "==> only kage publishes a host port"
 for service in kage browser-chromium browser-firefox postgres; do

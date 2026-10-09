@@ -118,7 +118,8 @@ LABEL org.opencontainers.image.title="kage-browser-${ENGINE}" \
 #
 # The Camoufox archive (663 MB) lives in a build cache, never in a layer: a
 # rebuild of this step does not download it again, and a copy from the
-# cache is checked against the pin like a fresh one.
+# cache is checked against the pin like a fresh one. The cache is locked
+# while a build uses it, so two builds never write the archive at once.
 RUN --mount=type=cache,id=kage-camoufox,target=/var/cache/kage,sharing=locked \
     install --directory /etc/kage \
     && printf '%s\n' "${ENGINE}" > /etc/kage/engine \

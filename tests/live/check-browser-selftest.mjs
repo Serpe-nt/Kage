@@ -6,7 +6,8 @@
 // passes when the sidecar passed the self-test, no check carries an
 // automation flag or an identity mismatch (a hard failure), every page
 // could be read, and no check is worse than in the recorded baseline
-// (`<baseline directory>/<engine>-<major>-live.json`).
+// (`<baseline directory>/<engine>-<major>-live.json`). An engine and major
+// without a baseline fail the check: record one first.
 //
 // `--record` writes the findings as the new baseline. What is written holds
 // no address: the report names none, and anything that looks like one in
@@ -90,8 +91,14 @@ if (existsSync(baselineFile)) {
     }
   }
   console.log(`    compared with the baseline of ${baseline.recorded} (${before.size} checks)`);
+} else if (flag === "--record") {
+  console.log(`    no baseline yet (${baselineFile}); this run records it when it passes`);
 } else {
-  console.log(`    no baseline yet (${baselineFile}); run once with KAGE_LIVE_RECORD=1`);
+  // Without a baseline nothing says what this browser showed when it was
+  // last looked at: a run that only got worse would pass.
+  problems.push(
+    `there is no baseline for ${report.engine} ${major} (${baselineFile}): look at the findings above, then run the live suite once with KAGE_LIVE_RECORD=1 (KAGE_LIVE_ENGINES=${report.engine} records this engine alone) and commit the file it writes`,
+  );
 }
 
 if (flag === "--record") {
