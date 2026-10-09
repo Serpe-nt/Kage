@@ -1,11 +1,28 @@
-import { createStubEngine, type Engine } from '@kage/engine-core';
+import type { Engine, EngineOptions } from '@kage/engine-core';
+
+import { FirefoxEngine } from './engine.js';
+import { DEFAULT_CAMOUFOX_DIR, detectHost } from './host.js';
+
+export { CAMOUFOX_WRAPPER, FirefoxEngine, profilePaths, type ProfilePaths } from './engine.js';
+export { FirefoxContext, classifyNavigationError } from './context.js';
+export * from './fingerprint.js';
+export * from './fontconfig.js';
+export * from './host.js';
+export * from './launch-plan.js';
 
 /**
- * Creates the Firefox engine.
+ * Creates the Firefox engine: Camoufox on one virtual display per persona.
  *
- * Scaffold: it launches no browser yet. M5 replaces the stub with camoufox-js
- * driving the pinned Camoufox build under its virtual display.
+ * `SIDECAR_CAMOUFOX_DIR` names another directory than the image's for the
+ * unpacked build. The build must be the pinned one.
+ *
+ * @throws {EngineError} `browser_launch_failed` when there is no such build.
  */
-export function createEngine(): Engine {
-  return createStubEngine('firefox');
+export async function createEngine(options: EngineOptions): Promise<Engine> {
+  const host = await detectHost(process.env['SIDECAR_CAMOUFOX_DIR'] ?? DEFAULT_CAMOUFOX_DIR);
+  options.log.info(
+    { camoufox: `${host.version}-${host.release}`, cpus: host.cpus.length },
+    'firefox engine ready',
+  );
+  return new FirefoxEngine(options, host);
 }

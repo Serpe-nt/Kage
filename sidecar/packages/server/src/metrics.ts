@@ -22,6 +22,7 @@ export class SidecarMetrics implements ContextEvents {
   private readonly closes: Counter<'engine' | 'reason'>;
   private readonly recycles: Counter<'engine'>;
   private readonly selftests: Counter<'engine' | 'result'>;
+  private readonly flows: Counter<'engine' | 'result'>;
 
   /**
    * @param contextsOpen reads how many contexts are open when a scrape asks.
@@ -73,6 +74,12 @@ export class SidecarMetrics implements ContextEvents {
       labelNames: ['engine', 'result'],
       registers,
     });
+    this.flows = new Counter({
+      name: 'sidecar_flows_total',
+      help: 'Flows by result.',
+      labelNames: ['engine', 'result'],
+      registers,
+    });
     if (processMetrics) {
       collectDefaultMetrics({ register: this.registry });
     }
@@ -93,6 +100,11 @@ export class SidecarMetrics implements ContextEvents {
   /** Records one navigate call. */
   navigated(outcome: NavigationOutcome, seconds: number): void {
     this.navigations.observe({ engine: this.engine, outcome }, seconds);
+  }
+
+  /** Records one flow: every step succeeded, a step failed, or the flow itself broke. */
+  flowed(result: 'ok' | 'failed' | 'error'): void {
+    this.flows.inc({ engine: this.engine, result });
   }
 
   /** Records one self-test. */

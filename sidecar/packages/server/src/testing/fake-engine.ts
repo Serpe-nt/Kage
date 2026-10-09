@@ -29,6 +29,8 @@ export interface FakeEngine extends Engine {
   beforeOpen: (request: OpenContextRequest) => Promise<void>;
   /** Replaced by a test to change what a navigation returns or throws. */
   onNavigate: (url: string) => Promise<PageResult>;
+  /** Replaced by a test to make a flow break after its first lines. */
+  onFlow: () => Promise<void>;
 }
 
 /** Builds a fake engine whose answers are the contract's own examples. */
@@ -40,6 +42,7 @@ export function createFakeEngine(): FakeEngine {
     closes: 0,
     beforeOpen: () => Promise.resolve(),
     onNavigate: (url) => Promise.resolve({ ...example<PageResult>('PageResult'), url }),
+    onFlow: () => Promise.resolve(),
     status: () => ({ browserVersion: '155.0.8059.39' }),
     generatePersona: () => Promise.resolve(example('GeneratePersonaResponse')),
     openContext: async (request) => {
@@ -53,6 +56,11 @@ export function createFakeEngine(): FakeEngine {
         navigate: (navigate, env) => {
           context.navigated.push({ url: navigate.url, env });
           return engine.onNavigate(navigate.url);
+        },
+        flow: (_request, _env, emit) => {
+          emit(example('FlowEvent', 0));
+          emit(example('FlowEvent', 2));
+          return engine.onFlow();
         },
         exportState: () => Promise.resolve(example('ExportStateResponse')),
         importState: () => Promise.resolve(example('ImportStateResponse')),

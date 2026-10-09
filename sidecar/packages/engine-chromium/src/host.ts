@@ -1,9 +1,9 @@
 import { execFile } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { availableParallelism } from 'node:os';
 import { promisify } from 'node:util';
 
-import { EngineError } from '@kage/engine-core';
+import { EngineError, allowedCpus } from '@kage/engine-core';
+
+export { allowedCpus, formatCpuList, parseCpuList } from '@kage/engine-core';
 
 const run = promisify(execFile);
 
@@ -18,70 +18,6 @@ export interface HostFacts {
   readonly chromeVersion: string;
   /** Ids of the CPUs this process may run on, ascending. */
   readonly cpus: readonly number[];
-}
-
-/**
- * Reads a CPU list as the kernel writes it (`0-3,8,10-11`).
- *
- * @throws {TypeError} when the text is not such a list.
- */
-export function parseCpuList(text: string): number[] {
-  const cpus = new Set<number>();
-  for (const part of text.trim().split(',')) {
-    const match = /^(\d+)(?:-(\d+))?$/.exec(part.trim());
-    if (match?.[1] === undefined) {
-      throw new TypeError(`not a CPU list: ${JSON.stringify(text)}`);
-    }
-    const first = Number(match[1]);
-    const last = match[2] === undefined ? first : Number(match[2]);
-    if (last < first) {
-      throw new TypeError(`not a CPU list: ${JSON.stringify(text)}`);
-    }
-    for (let cpu = first; cpu <= last; cpu += 1) {
-      cpus.add(cpu);
-    }
-  }
-  return [...cpus].sort((a, b) => a - b);
-}
-
-/** Writes CPU ids as a list `taskset --cpu-list` reads: `0-3,8`. */
-export function formatCpuList(cpus: readonly number[]): string {
-  const sorted = [...new Set(cpus)].sort((a, b) => a - b);
-  const ranges: string[] = [];
-  for (let index = 0; index < sorted.length;) {
-    const first = sorted[index] ?? 0;
-    let end = index;
-    while (sorted[end + 1] === (sorted[end] ?? 0) + 1) {
-      end += 1;
-    }
-    const last = sorted[end] ?? first;
-    ranges.push(first === last ? String(first) : `${first}-${last}`);
-    index = end + 1;
-  }
-  return ranges.join(',');
-}
-
-/**
- * The CPUs this process may run on: the affinity mask the container was
- * given (`/proc/self/status`), or, where that cannot be read, as many CPUs
- * as Node counts.
- */
-export function allowedCpus(statusText?: string): number[] {
-  const text =
-    statusText ??
-    (existsSync('/proc/self/status') ? readFileSync('/proc/self/status', 'utf8') : '');
-  const line = /^Cpus_allowed_list:\s*(\S+)/m.exec(text)?.[1];
-  if (line !== undefined) {
-    try {
-      const cpus = parseCpuList(line);
-      if (cpus.length > 0) {
-        return cpus;
-      }
-    } catch {
-      // Fall through to Node's own count.
-    }
-  }
-  return Array.from({ length: availableParallelism() }, (_unused, index) => index);
 }
 
 /** The version in the output of `chrome --version` (`Google Chrome 155.0.8059.39`). */

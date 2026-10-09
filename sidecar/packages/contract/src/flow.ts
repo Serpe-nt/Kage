@@ -1,6 +1,8 @@
 import { z } from 'zod';
 
+import { SeedSchema } from './personas.js';
 import {
+  BehaviorReportSchema,
   CaptureOptionsSchema,
   MAX_NAVIGATE_TIMEOUT_MS,
   PageResultSchema,
@@ -10,9 +12,11 @@ import {
 } from './navigate.js';
 
 /**
- * The v1 flow DSL (spec §10.5). The schemas are part of the contract from
- * M4 on; the executor that runs them arrives with the behavior engine in
- * M5, and until then the endpoint answers `not_implemented`.
+ * The v1 flow DSL (spec §10.5), run by the flow executor of engine-core on
+ * both engines. A step with `human` true (the default) is done through the
+ * mouse and keyboard of the context's display by the behavior engine; with
+ * `human` false it is done by the driver, which a page can tell from a
+ * person's input.
  */
 
 const selector = (description: string) => z.string().min(1).max(1000).describe(description);
@@ -161,6 +165,20 @@ export const FlowActionSchema = z
   .meta({ id: 'FlowAction', description: 'One step of a flow, chosen by `action`.' });
 export type FlowAction = z.infer<typeof FlowActionSchema>;
 
+/** How the human steps of a flow are performed. */
+export const FlowBehaviorSchema = z
+  .strictObject({
+    seed: SeedSchema.optional().describe(
+      'Seed of this flow. With the persona\'s own seed it decides every movement and key; absent: the sidecar draws one and returns it.',
+    ),
+    typos: z
+      .boolean()
+      .optional()
+      .describe('Now and then type a neighbouring key, notice, delete and retype; default false.'),
+  })
+  .meta({ id: 'FlowBehavior', description: 'How the human steps of a flow are performed.' });
+export type FlowBehavior = z.infer<typeof FlowBehaviorSchema>;
+
 /** Body of `POST /v1/contexts/{id}/flow`. */
 export const FlowRequestSchema = z
   .strictObject({
@@ -173,6 +191,7 @@ export const FlowRequestSchema = z
       .max(MAX_NAVIGATE_TIMEOUT_MS)
       .optional()
       .describe('Budget for the whole flow; default 180000.'),
+    behavior: FlowBehaviorSchema.optional().describe('How the human steps are performed.'),
   })
   .meta({ id: 'FlowRequest', description: 'A scripted navigation flow.' });
 export type FlowRequest = z.infer<typeof FlowRequestSchema>;
@@ -187,7 +206,7 @@ export const FlowStepEventSchema = z
     duration_ms: z.number().int().nonnegative().describe('How long the step took.'),
     error: z.string().nullable().describe('Why the step failed; null when it did not.'),
     capture: PageResultSchema.nullable().describe(
-      'The capture of an `extract` step; null otherwise.',
+      'What an `extract`, `screenshot` or `pdf` step captured; null otherwise.',
     ),
   })
   .meta({ id: 'FlowStepEvent', description: 'A finished step of a flow.' });
@@ -198,6 +217,9 @@ export const FlowFinalEventSchema = z
     type: z.literal('final').describe('Always `final`.'),
     ok: z.boolean().describe('Whether every step succeeded.'),
     result: PageResultSchema.describe('The page as the flow left it.'),
+    behavior: BehaviorReportSchema.nullable().describe(
+      'What the behavior engine did over the whole flow; null when no step was a human one.',
+    ),
   })
   .meta({ id: 'FlowFinalEvent', description: 'The end of a flow.' });
 

@@ -190,8 +190,7 @@ export class X11Input implements InputDevice {
   }
 
   levelsOf(key: string): KeyLevels {
-    const named = NAMED_KEYSYMS[key];
-    const position = named === undefined ? this.keymap.findCharacter(key) : this.keymap.find(named);
+    const position = this.position(key);
     return position === null
       ? { shift: false, altGr: false, onLayout: false }
       : { shift: position.shift, altGr: position.altGr, onLayout: true };
@@ -199,7 +198,13 @@ export class X11Input implements InputDevice {
 
   private position(key: string): KeyPosition | null {
     const named = NAMED_KEYSYMS[key];
-    return named === undefined ? this.keymap.findCharacter(key) : this.keymap.find(named);
+    if (named !== undefined) {
+      return this.keymap.find(named);
+    }
+    if ([...key].length !== 1) {
+      throw new X11Error(`not a key this keyboard knows: ${JSON.stringify(key)}`);
+    }
+    return this.keymap.findCharacter(key);
   }
 
   private modifier(keysym: number, name: string): number {

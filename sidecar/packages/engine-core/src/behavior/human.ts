@@ -277,10 +277,17 @@ export class Human {
   }
 
   /** Presses one key, with the modifiers the keyboard needs for it. */
-  async press(key: string): Promise<void> {
+  press(key: string): Promise<void> {
+    const levels = this.parts.device.levelsOf(key);
+    return this.chord(
+      [...(levels.shift ? ['Shift'] : []), ...(levels.altGr ? ['AltGraph'] : [])],
+      key,
+    );
+  }
+
+  /** Presses a key while holding others, as for a keyboard shortcut. */
+  async chord(modifiers: readonly string[], key: string): Promise<void> {
     const { device, profile, random } = this.parts;
-    const levels = device.levelsOf(key);
-    const modifiers = [...(levels.shift ? ['Shift'] : []), ...(levels.altGr ? ['AltGraph'] : [])];
     for (const modifier of modifiers) {
       await device.keyDown(modifier);
       await this.clock.sleep(random.uniform(35, 95));
@@ -288,7 +295,7 @@ export class Human {
     await device.keyDown(key);
     await this.clock.sleep(Math.max(35, random.normal(profile.typing.hold, 14)));
     await device.keyUp(key);
-    for (const modifier of modifiers.reverse()) {
+    for (const modifier of [...modifiers].reverse()) {
       await this.clock.sleep(random.uniform(10, 60));
       await device.keyUp(modifier);
     }

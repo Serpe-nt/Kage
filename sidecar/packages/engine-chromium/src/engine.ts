@@ -104,7 +104,10 @@ export class ChromiumEngine implements Engine {
       this.displays.release(displayNumber);
     };
     try {
-      display = await startXvfb(displayNumber, plan.display);
+      display = await startXvfb(displayNumber, plan.display, {
+        layout: plan.layout,
+        workArea: plan.workArea,
+      });
       browser = await chromium.launchPersistentContext(paths.userData, {
         // The real Chrome of the image (the driver's `chrome` channel),
         // started through a wrapper that only sets the CPU affinity mask.
@@ -165,6 +168,9 @@ export class ChromiumEngine implements Engine {
         browserSession,
         browserVersion: version.product.replace(/^[^/]*\//, ''),
         applied,
+        personaSeed: document.seed,
+        display: display.name,
+        windowOrigin: { x: plan.window.x, y: plan.window.y },
         selftestPages: this.options.selftestPages,
         log: this.options.log,
         release: async () => {

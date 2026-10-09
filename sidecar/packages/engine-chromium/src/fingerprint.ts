@@ -37,13 +37,7 @@ export const GENERATOR_ID = `fingerprint-generator@${suiteVersion('fingerprint-g
  * sound card) changes them. Recorded in the document so that nobody takes
  * them for per-persona values (ADR 0009).
  */
-export const HOST_BOUND = [
-  'device_memory',
-  'webgl',
-  'fonts',
-  'audio_devices',
-  'work_area',
-] as const;
+export const HOST_BOUND = ['device_memory', 'webgl', 'fonts', 'audio_devices'] as const;
 
 /** Screen bounds applied when the request names none: common desktop sizes. */
 const DEFAULT_SCREEN_BOUNDS = {

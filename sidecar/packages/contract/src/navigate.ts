@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { ArtifactRefSchema, HeaderSchema } from './common.js';
+import { SeedSchema } from './personas.js';
 
 /** Longest URL the sidecar accepts (spec §16.4). */
 export const MAX_URL_LENGTH = 8192;
@@ -145,7 +146,7 @@ export const CaptureOptionsSchema = z
     console: z
       .boolean()
       .describe(
-        'Browser-generated log entries (failed loads, security and deprecation messages). `console.*` calls and uncaught exceptions are not available on the chromium engine: reading them needs a debugger domain that pages can detect.',
+        'Log entries the engine can collect without a page noticing. On chromium: what the browser itself logs (failed loads, security and deprecation messages); `console.*` calls and uncaught exceptions are not available there, because reading them needs a debugger domain that pages can detect. On firefox: the page\'s `console.*` calls and uncaught errors.',
       ),
     screenshot: ScreenshotOptionsSchema.nullable().describe('A screenshot; null for none.'),
     pdf: PdfOptionsSchema.nullable().describe('A PDF; null for none.'),
@@ -153,11 +154,79 @@ export const CaptureOptionsSchema = z
   .meta({ id: 'CaptureOptions', description: 'What a navigation captures.' });
 export type CaptureOptions = z.infer<typeof CaptureOptionsSchema>;
 
+/** How a page is arrived at (spec §10.4). */
+export const EntryStrategySchema = z.enum(['none', 'direct', 'link', 'search_engine']).meta({
+  id: 'EntryStrategy',
+  description:
+    'How the target is arrived at. `none` and `direct`: a typed navigation, with no `Referer`, `Sec-Fetch-Site: none` and `Sec-Fetch-User: ?1`; the two names are equal on the wire. `link`: `from_url` is loaded as a typed navigation, the link to the target is found on it and clicked. `search_engine`: `from_url` is a results page; the first result that leads to the target\'s host is clicked. A referer is never forged: it is whatever the browser sends for the click.',
+});
+export type EntryStrategy = z.infer<typeof EntryStrategySchema>;
+
+/** What happens when the page to start from has no link to the target. */
+export const EntryFallbackSchema = z.enum(['stop', 'none']).meta({
+  id: 'EntryFallback',
+  description:
+    'What to do when the link or result is not there. `stop`: load nothing else and say so. `none`: load the target as a typed navigation.',
+});
+export type EntryFallback = z.infer<typeof EntryFallbackSchema>;
+
+/** The entry of a navigation. */
+export const EntrySchema = z
+  .strictObject({
+    strategy: EntryStrategySchema.describe('The strategy.'),
+    from_url: httpUrl(
+      'The page to start from: required for `link` and `search_engine`, ignored otherwise. For `search_engine` it is the results URL Kage built from its policy template.',
+    )
+      .nullable()
+      .optional(),
+    fallback: EntryFallbackSchema.optional().describe(
+      'What to do without a link to the target; default `stop`.',
+    ),
+  })
+  .meta({ id: 'Entry', description: 'How a navigation arrives at its target.' });
+export type Entry = z.infer<typeof EntrySchema>;
+
+/** Where the dwell time of a navigation comes from. */
+export const DwellModeSchema = z.enum(['fixed', 'human']).meta({
+  id: 'DwellMode',
+  description:
+    'Where the dwell time comes from. `fixed`: `dwell_ms` of the request. `human`: drawn from the persona\'s own distribution (log-normal, median about 6 s, at most 45 s), never longer than the budget allows.',
+});
+export type DwellMode = z.infer<typeof DwellModeSchema>;
+
+/** What the behavior engine does during a navigation (spec §10.4). */
+export const BehaviorOptionsSchema = z
+  .strictObject({
+    seed: SeedSchema.optional().describe(
+      'Seed of this request. With the persona\'s own seed it decides every movement; the same pair replays the same behavior. Absent: the sidecar draws one and returns it.',
+    ),
+    entry: EntrySchema.optional().describe('How the target is arrived at; default a typed navigation.'),
+    scroll_depth: z
+      .number()
+      .min(0)
+      .max(1)
+      .optional()
+      .describe(
+        'Scroll down to this share of the document with the wheel, a flick at a time, resting after each as long as the text in view takes the persona to skim. Absent: no scrolling.',
+      ),
+    dwell: DwellModeSchema.optional().describe('Where the dwell time comes from; default `fixed`.'),
+    wander: z
+      .boolean()
+      .optional()
+      .describe('Move the mouse a little now and then while dwelling, as an idle hand does; default true.'),
+  })
+  .meta({
+    id: 'BehaviorOptions',
+    description:
+      'What a persona does on a page besides loading it. All input is sent through the mouse and keyboard of the context\'s own display. Absent from a request: no input at all, a bare page load.',
+  });
+export type BehaviorOptions = z.infer<typeof BehaviorOptionsSchema>;
+
 /** Body of `POST /v1/contexts/{id}/navigate`. */
 export const NavigateRequestSchema = z
   .strictObject({
     url: httpUrl(
-      'The page to load, as a typed navigation. `http` and `https` only. There is no referer option: a referer set by the driver leaves with `Sec-Fetch-Site: none`, a pair no real navigation has. Arriving from another page is done by clicking a link there (the behavior engine).',
+      'The page to load. `http` and `https` only. There is no referer option: a referer set by the driver leaves with `Sec-Fetch-Site: none`, a pair no real navigation has. Arriving from another page is `behavior.entry`: a link there is clicked.',
     ),
     wait: WaitSchema.describe('What to wait for.'),
     capture: CaptureOptionsSchema.describe('What to capture.'),
@@ -182,7 +251,7 @@ export const NavigateRequestSchema = z
       .max(120_000)
       .optional()
       .describe(
-        'Time spent on the page after the wait and before the capture, with no synthetic input; default 0. The behavior engine of a later milestone fills this time.',
+        'Time spent on the page after the wait and before the capture; default 0. Ignored when `behavior.dwell` is `human`.',
       ),
     max_body_bytes: z
       .number()
@@ -196,6 +265,9 @@ export const NavigateRequestSchema = z
     artifact_prefix: artifactPrefix(
       'Directory below the artifacts volume for the files of this navigation; default `sidecar/<context id>`.',
     ).optional(),
+    behavior: BehaviorOptionsSchema.optional().describe(
+      'What the persona does on the page; absent for a bare page load.',
+    ),
   })
   .meta({ id: 'NavigateRequest', description: 'One page load in a persona context.' });
 export type NavigateRequest = z.infer<typeof NavigateRequestSchema>;
@@ -274,7 +346,7 @@ export type ConsoleEntry = z.infer<typeof ConsoleEntrySchema>;
 export const ConsoleCaptureSchema = z.enum(['browser_log', 'unsupported', 'not_requested']).meta({
   id: 'ConsoleCapture',
   description:
-    'What the console list holds. `browser_log`: entries the browser generated itself. `unsupported`: the engine cannot read any log without becoming detectable. `not_requested`: the request did not ask.',
+    'What the console list holds. `browser_log`: entries the engine collected without the page noticing (chromium: the browser\'s own log; firefox: console calls and uncaught errors of the page). `unsupported`: the engine cannot read any log without becoming detectable. `not_requested`: the request did not ask.',
 });
 export type ConsoleCapture = z.infer<typeof ConsoleCaptureSchema>;
 
@@ -332,7 +404,7 @@ export const NavigationErrorCodeSchema = z
   .meta({
     id: 'NavigationErrorCode',
     description:
-      'Why a navigation did not arrive. `timeout`: the budget ran out. `proxy_failed`: the proxy refused, failed or could not be reached. `navigation_failed`: the browser reported a network error for the target. `aborted`: the page turned into a download or was closed.',
+      'Why a navigation did not arrive. `timeout`: the budget ran out. `proxy_failed`: the proxy refused, failed or could not be reached. `navigation_failed`: the browser reported a network error for the target. `aborted`: the page turned into a download or was closed, or the entry did not find its link (`behavior.entry.outcome` says so).',
   });
 export type NavigationErrorCode = z.infer<typeof NavigationErrorCodeSchema>;
 
@@ -358,6 +430,58 @@ export const SideEffectSchema = z.enum(['resize', 'beforeprint', 'afterprint']).
     'An event a capture fired in the page. `resize`: a full-page screenshot. `beforeprint` and `afterprint`: a PDF.',
 });
 export type SideEffect = z.infer<typeof SideEffectSchema>;
+
+/** How an entry ended. */
+export const EntryOutcomeSchema = z
+  .enum(['arrived', 'fell_back', 'link_not_found', 'result_not_found', 'blocked'])
+  .meta({
+    id: 'EntryOutcome',
+    description:
+      'How an entry ended. `arrived`: the target was reached the way the strategy says. `fell_back`: no link was there and the target was loaded as a typed navigation instead. `link_not_found`, `result_not_found`: no link or result led to the target and nothing else was loaded. `blocked`: the page to start from did not load or showed a wall; nothing was typed into it.',
+  });
+export type EntryOutcome = z.infer<typeof EntryOutcomeSchema>;
+
+/** What the entry of a navigation did. */
+export const EntryReportSchema = z
+  .strictObject({
+    strategy: EntryStrategySchema.describe('The strategy that was asked for.'),
+    outcome: EntryOutcomeSchema.describe('How it ended.'),
+    from_url: z.string().nullable().describe('The page the entry started from; null for a typed navigation.'),
+    referer: z
+      .string()
+      .nullable()
+      .describe('The `Referer` the browser sent with the request for the target; null when it sent none.'),
+  })
+  .meta({ id: 'EntryReport', description: 'How a navigation arrived at its target.' });
+export type EntryReport = z.infer<typeof EntryReportSchema>;
+
+const count = (description: string) => z.number().int().nonnegative().describe(description);
+
+/** What the behavior engine did (spec §10.4). */
+export const BehaviorReportSchema = z
+  .strictObject({
+    seed: SeedSchema.describe('The seed of this request: the one given, or the one the sidecar drew.'),
+    profile_id: z
+      .string()
+      .regex(/^[0-9a-f]{16}$/)
+      .describe('Identifies the motor profile of the persona: the same for every request of one persona.'),
+    entry: EntryReportSchema.nullable().describe('What the entry did; null when the request named none.'),
+    dwell_ms: count('Time spent dwelling on the page.'),
+    moves: count('Movements of the pointer.'),
+    positions: count('Positions the mouse reported during them.'),
+    overshoots: count('Movements that went past their target and came back.'),
+    clicks: count('Clicks.'),
+    notches: count('Notches of the wheel.'),
+    keys: count('Keys pressed, modifiers and corrections included.'),
+    typos: count('Characters typed wrong and corrected.'),
+    wanders: count('Idle movements while dwelling.'),
+  })
+  .meta({
+    id: 'BehaviorReport',
+    description:
+      'What the behavior engine did during a request. With the persona and this seed the behavior can be replayed.',
+  });
+export type BehaviorReport = z.infer<typeof BehaviorReportSchema>;
 
 /** Result of one page load (spec §10.2). */
 export const PageResultSchema = z
@@ -415,6 +539,9 @@ export const PageResultSchema = z
       ),
     error: NavigationErrorSchema.nullable().describe(
       'Why the navigation did not arrive; null when it did. Whatever was captured is still present.',
+    ),
+    behavior: BehaviorReportSchema.nullable().describe(
+      'What the behavior engine did; null when the request asked for no behavior.',
     ),
   })
   .meta({ id: 'PageResult', description: 'What one page load produced.' });

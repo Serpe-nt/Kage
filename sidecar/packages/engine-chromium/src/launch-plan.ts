@@ -1,9 +1,14 @@
-import { createHash } from 'node:crypto';
-
 import type { GlMode, InjectMode, OpenContextRequest } from '@kage/contract';
-import { EngineError, type FingerprintDocument } from '@kage/engine-core';
+import {
+  EngineError,
+  formatCpuList,
+  keyboardLayoutOf,
+  personaCpus,
+  type FingerprintDocument,
+  type WorkArea,
+} from '@kage/engine-core';
 
-import { formatCpuList } from './host.js';
+export { personaCpus } from '@kage/engine-core';
 
 /**
  * Everything a persona context is launched with, as plain data.
@@ -17,8 +22,17 @@ import { formatCpuList } from './host.js';
 export interface LaunchPlan {
   /** The persona's own X display: its screen in physical pixels. */
   readonly display: { readonly width: number; readonly height: number; readonly depth: number };
-  /** The browser window: the whole screen, as a maximized window has it. */
-  readonly window: { readonly width: number; readonly height: number };
+  /** What the desktop's top bar leaves free of the screen; announced on the display. */
+  readonly workArea: WorkArea;
+  /** The keyboard layout of the display: the one people of the persona's locale type on. */
+  readonly layout: string;
+  /** The browser window: the whole work area, as a maximized window has it. */
+  readonly window: {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+  };
   /** Environment of the browser process, besides the display. */
   readonly env: Readonly<Record<string, string>>;
   /** Chrome arguments on top of the driver's own. */
@@ -51,6 +65,16 @@ export interface ProfilePreferences {
 }
 
 /**
+ * Height in pixels of the bar a desktop keeps at the top of the screen
+ * (GNOME's, on the distribution the image is built on). A browser on a
+ * bare X server reports a work area as large as the screen, which no
+ * desktop with a panel does; the display announces this bar and the
+ * window is placed below it, so `screen.availHeight` and `screen.availTop`
+ * are a desktop's.
+ */
+export const PANEL_HEIGHT = 32;
+
+/**
  * Chromium's rule that sends loopback through the proxy as well. Without it
  * a page that asks for `localhost` would reach the sidecar's own network
  * instead of leaving through the proxy (spec §19).
@@ -79,22 +103,6 @@ export interface PlanHost {
   /** Ids of the CPUs the sidecar may run on. */
   readonly cpus: readonly number[];
   readonly gl: GlMode;
-}
-
-/**
- * The CPUs of a persona: as many as its fingerprint says, at most as many
- * as the host has, starting at a position derived from the seed so that the
- * personas of one host do not all sit on the first CPUs.
- */
-export function personaCpus(seed: string, wanted: number, hostCpus: readonly number[]): number[] {
-  const count = Math.max(1, Math.min(wanted, hostCpus.length));
-  const start =
-    createHash('sha256').update('kage-cpus-v1').update(seed).digest().readUInt32LE(0) %
-    hostCpus.length;
-  return Array.from(
-    { length: count },
-    (_unused, index) => hostCpus[(start + index) % hostCpus.length] ?? 0,
-  ).sort((a, b) => a - b);
 }
 
 /**
@@ -131,9 +139,10 @@ export function launchPlan(
   const languages = request.languages.join(',');
   const locale = request.locale;
   const posixLocale = locale.replace('-', '_');
+  const window = { x: 0, y: PANEL_HEIGHT, width: screen.width, height: screen.height - PANEL_HEIGHT };
   const args = [
-    '--window-position=0,0',
-    `--window-size=${screen.width},${screen.height}`,
+    `--window-position=${window.x},${window.y}`,
+    `--window-size=${window.width},${window.height}`,
     `--lang=${locale}`,
     ...(screen.dpr === 1 ? [] : [`--force-device-scale-factor=${screen.dpr}`]),
     ...GL_ARGS[host.gl],
@@ -141,7 +150,14 @@ export function launchPlan(
   return {
     // 24 bits is what an X display has; the generator's Linux fingerprints say the same.
     display: { ...physical, depth: 24 },
-    window: { width: screen.width, height: screen.height },
+    workArea: {
+      x: 0,
+      y: Math.round(PANEL_HEIGHT * screen.dpr),
+      width: physical.width,
+      height: physical.height - Math.round(PANEL_HEIGHT * screen.dpr),
+    },
+    layout: keyboardLayoutOf(locale),
+    window,
     env: {
       TZ: request.timezone,
       LANG: `${posixLocale}.UTF-8`,

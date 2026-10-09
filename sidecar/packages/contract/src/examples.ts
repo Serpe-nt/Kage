@@ -97,6 +97,25 @@ const pageResult = {
   pdf: null,
   side_effects: [],
   error: null,
+  behavior: {
+    seed: SEED,
+    profile_id: '3451761c17e3a615',
+    entry: {
+      strategy: 'link',
+      outcome: 'arrived',
+      from_url: 'https://www.example.org/',
+      referer: 'https://www.example.org/',
+    },
+    dwell_ms: 6840,
+    moves: 3,
+    positions: 141,
+    overshoots: 1,
+    clicks: 1,
+    notches: 9,
+    keys: 0,
+    typos: 0,
+    wanders: 1,
+  },
 };
 
 const failedPageResult = {
@@ -114,6 +133,7 @@ const failedPageResult = {
   console_capture: 'not_requested',
   timing: { ttfb_ms: null, dom_content_loaded_ms: null, load_ms: null, total_ms: 60_012 },
   screenshot: null,
+  behavior: null,
   error: {
     code: 'timeout',
     message: 'the navigation did not finish within 60000 ms',
@@ -251,6 +271,13 @@ export const EXAMPLES: Readonly<Record<string, readonly unknown[]>> = {
       dwell_ms: 0,
       max_body_bytes: 10_000_000,
       artifact_prefix: 'requests/0199c1f4-aaaa',
+      behavior: {
+        seed: SEED,
+        entry: { strategy: 'link', from_url: 'https://www.example.org/', fallback: 'stop' },
+        scroll_depth: 0.8,
+        dwell: 'human',
+        wander: true,
+      },
     },
   ],
   PageResult: [pageResult, failedPageResult],
@@ -273,6 +300,7 @@ export const EXAMPLES: Readonly<Record<string, readonly unknown[]>> = {
       ],
       capture,
       timeout_ms: 180_000,
+      behavior: { seed: SEED, typos: true },
     },
   ],
   FlowEvent: [
@@ -294,7 +322,8 @@ export const EXAMPLES: Readonly<Record<string, readonly unknown[]>> = {
       error: 'no element matched #results within 15000 ms',
       capture: null,
     },
-    { type: 'final', ok: true, result: pageResult },
+    { type: 'final', ok: true, result: pageResult, behavior: pageResult.behavior },
+    { type: 'final', ok: false, result: failedPageResult, behavior: null },
   ],
   ExportStateRequest: [
     { origin: 'https://example.org' },

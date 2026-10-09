@@ -314,16 +314,37 @@ describe('operations on a context', () => {
     ).toBe(200);
   });
 
-  it('answers not_implemented for a flow, after validating it', async () => {
-    const { app } = await start();
+  it('streams a flow as one line of JSON per event, after validating it', async () => {
+    const { app, engine } = await start();
     const id = await open(app);
-    expectError(
-      await post(app, `/v1/contexts/${id}/flow`, exampleOf('FlowRequest')),
-      501,
-      'not_implemented',
+    const answer = await post(app, `/v1/contexts/${id}/flow`, exampleOf('FlowRequest'));
+    expect(answer.statusCode).toBe(200);
+    expect(answer.headers['content-type']).toBe('application/x-ndjson; charset=utf-8');
+    const lines = answer.body.trimEnd().split('\n');
+    expect(lines.map((line) => (JSON.parse(line) as { type: string }).type)).toEqual([
+      'step',
+      'final',
+    ]);
+    expect(await app.metrics.render()).toContain(
+      'sidecar_flows_total{engine="chromium",result="ok"} 1',
+    );
+    // A flow that breaks after its first lines ends without a final line;
+    // the context is closed like after any unexpected failure.
+    engine.onFlow = () => Promise.reject(new Error('the browser went away'));
+    const broken = await post(app, `/v1/contexts/${id}/flow`, exampleOf('FlowRequest'));
+    expect(broken.statusCode).toBe(200);
+    expect(broken.body.trimEnd().split('\n')).toHaveLength(2);
+    expect(await app.metrics.render()).toContain(
+      'sidecar_flows_total{engine="chromium",result="error"} 1',
     );
     expectError(
-      await post(app, `/v1/contexts/${id}/flow`, { actions: [] }),
+      await post(app, `/v1/contexts/${id}/flow`, exampleOf('FlowRequest')),
+      404,
+      'context_not_found',
+    );
+    const second = await open(app, { persona_id: '0199c1f2-6b7a-7c3e-9d41-2f8a5b6c7d8f' });
+    expectError(
+      await post(app, `/v1/contexts/${second}/flow`, { actions: [] }),
       400,
       'invalid_request',
     );

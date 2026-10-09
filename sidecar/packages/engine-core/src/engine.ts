@@ -4,6 +4,8 @@ import type {
   ErrorCode,
   ExportStateRequest,
   ExportStateResponse,
+  FlowEvent,
+  FlowRequest,
   GeneratePersonaRequest,
   GeneratePersonaResponse,
   ImportStateRequest,
@@ -55,6 +57,11 @@ export interface EngineContext {
   /** What the engine really applied. */
   readonly applied: AppliedIdentity;
   navigate(request: NavigateRequest, env: OperationEnv): Promise<PageResult>;
+  /**
+   * Runs a flow. Every finished step and the final result are handed to
+   * `emit` as they happen; the promise resolves after the final event.
+   */
+  flow(request: FlowRequest, env: OperationEnv, emit: (event: FlowEvent) => void): Promise<void>;
   exportState(request: ExportStateRequest): Promise<ExportStateResponse>;
   importState(request: ImportStateRequest): Promise<ImportStateResponse>;
   selftest(request: SelftestRequest, env: OperationEnv): Promise<SelftestResponse>;

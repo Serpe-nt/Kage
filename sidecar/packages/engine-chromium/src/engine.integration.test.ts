@@ -34,8 +34,13 @@ import {
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { ChromiumEngine, detectHost, profilePaths, type HostFacts } from './index.js';
-import { startFixtureSite, type FixtureRequest, type FixtureSite } from './testing/fixture-site.js';
-import { startTestProxy, type TestProxy } from './testing/test-proxy.js';
+import {
+  startFixtureSite,
+  startTestProxy,
+  type FixtureRequest,
+  type FixtureSite,
+  type TestProxy,
+} from '@kage/engine-core/testing';
 
 vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 

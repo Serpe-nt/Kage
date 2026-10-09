@@ -12,7 +12,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "bin"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -20,7 +21,9 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@kage/contract": "workspace:*",
     "@kage/engine-core": "workspace:*",
+    "better-sqlite3": "13.0.3",
     "camoufox-js": "0.12.1",
     "playwright-core": "1.62.1"
   }

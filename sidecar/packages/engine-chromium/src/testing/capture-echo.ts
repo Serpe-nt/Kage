@@ -11,7 +11,7 @@ import { ChromiumEngine } from '../engine.js';
 import { detectHost } from '../host.js';
 import { profilePaths } from '../profile.js';
 
-import { startTestProxy } from './test-proxy.js';
+import { startTestProxy } from '@kage/engine-core/testing';
 
 const run = promisify(execFile);
 

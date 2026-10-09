@@ -6,6 +6,7 @@ import {
   ENDPOINTS,
   ERROR_STATUS,
   ExportStateResponseSchema,
+  FlowEventSchema,
   GeneratePersonaResponseSchema,
   HealthResponseSchema,
   ImportStateResponseSchema,
@@ -17,6 +18,7 @@ import {
   type Endpoint,
   type ErrorCode,
   type ErrorResponse,
+  type FlowEvent,
   type HealthResponse,
   type OpenContextResponse,
 } from '@kage/contract';
@@ -297,12 +299,50 @@ export function buildApp(options: AppOptions): App {
     },
   );
 
-  server.post(routePath(ENDPOINTS.flow), (request) => {
-    parse(ENDPOINTS.flow.request, request.body);
-    contextId(request);
-    // The schemas are part of the contract; the executor arrives with the
-    // behavior engine (M5).
-    throw new EngineError('not_implemented', 'flows are not implemented yet');
+  // A flow answers with one line of JSON per finished step and a final
+  // line (spec §10.2), written as the steps finish. Whatever refuses the
+  // flow before its first step is an ordinary error answer; once lines are
+  // on the wire the status cannot change, so a flow that breaks afterwards
+  // ends without its final line, which is how a reader knows.
+  server.post(routePath(ENDPOINTS.flow), async (request, reply) => {
+    const body = parse(ENDPOINTS.flow.request, request.body);
+    const id = contextId(request);
+    let streaming = false;
+    let ok = false;
+    const emit = (event: FlowEvent) => {
+      const checked = FlowEventSchema.safeParse(event);
+      if (!checked.success) {
+        throw new Error(
+          `flow produced an event outside the contract: ${describeIssues(checked.error)}`,
+        );
+      }
+      if (!streaming) {
+        streaming = true;
+        reply.hijack();
+        reply.raw.writeHead(ENDPOINTS.flow.response.status, {
+          'content-type': `${ENDPOINTS.flow.response.media}; charset=utf-8`,
+          'cache-control': 'no-store',
+        });
+      }
+      if (checked.data.type === 'final') {
+        ok = checked.data.ok;
+      }
+      reply.raw.write(`${JSON.stringify(checked.data)}\n`);
+    };
+    try {
+      await manager.run(id, true, (context) => context.flow(body, operationEnv(id), emit));
+      metrics.flowed(ok ? 'ok' : 'failed');
+    } catch (error) {
+      metrics.flowed('error');
+      if (!streaming) {
+        throw error;
+      }
+      request.log.error({ err: error, context_id: id }, 'a flow broke after its stream began');
+    } finally {
+      if (streaming) {
+        reply.raw.end();
+      }
+    }
   });
 
   json<typeof ENDPOINTS.exportState.request, typeof ExportStateResponseSchema>(
