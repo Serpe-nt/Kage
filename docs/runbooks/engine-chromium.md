@@ -200,17 +200,36 @@ reach a page as one wheel event of twice the size.
 
 ## Captures and what they cost
 
-A plain navigation leaves the page as a visit would. A capture that a page
-can notice is opt-in per request and named in the result's `side_effects`:
+A capture that a page can notice by an event is opt-in per request and
+named in the result's `side_effects`:
 
 | Capture | How | A page can notice |
 |---|---|---|
-| DOM, title | read in an isolated world after settle | nothing |
+| DOM, title | read in an isolated world after settle | no event; user activation without input (below) |
 | raw body, headers, redirects, XHR and fetch bodies | network events; never request interception | nothing |
 | console | the browser's log domain: network and security messages | nothing; `console.*` calls and uncaught errors are not captured on chromium |
 | screenshot of the viewport | the compositor | nothing |
 | screenshot `full_page: true` | the page is laid out at its full height once | a `resize` |
 | PDF | the print pipeline | `beforeprint`, `afterprint` |
+
+### Known tell: user activation without input
+
+Measured in M5, on both engines. Every navigation reads the page through
+the driver at least once (title and text right after `load`, a wait for a
+selector, the DOM capture). The driver marks each of those evaluations as
+a user gesture: patchright-core 1.63.0 sends `Runtime.callFunctionOn` with
+`userGesture: true`. A page that nobody touched therefore reads
+`navigator.userActivation.hasBeenActive` and `isActive` as true from about
+the first read on, with no input event before it, and a new `AudioContext`
+starts `running` where an untouched Chrome's is `suspended`. Started by
+hand with a debugging port and evaluated without the flag, the same Chrome
+155 shows `false`, `false` and `suspended`.
+
+Kage's own probe does not look at it, so the self-test stays green; a
+detector that compares activation with the input events it saw can use
+it. Not solved in M5: the remedy is in the driver (a fingerprint-critical
+package, so a pull request of its own) or in reading pages over CDP
+without the flag, and the probe should report it from then on.
 
 ## Moving to a new Chrome
 

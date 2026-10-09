@@ -127,6 +127,16 @@ M6 decides whether a pool of twenty personas needs more variety than this
 
 ### Known tells (not solved here)
 
+- User activation without input, on both engines. Every navigation reads
+  the page through the driver at least once (title and text right after
+  `load`, a wait for a selector, the DOM capture), and the driver inside
+  the browser marks each evaluation as a user gesture
+  (`notifyUserGestureActivation()` in the build's
+  `chrome/juggler/content/content/Runtime.js`). A page nobody touched
+  reads `navigator.userActivation.hasBeenActive` and `isActive` as true
+  from about the first read on, with no input event before it. On Firefox
+  the remedy needs another browser build; `engine-chromium.md` has the
+  measurement and the Chrome side.
 - No speech synthesis voices (`speechSynthesis.getVoices()` is empty); a
   Windows or macOS Firefox has the system's.
 - Pixels come from Mesa and glyph shapes from FreeType under a Windows or
@@ -188,7 +198,7 @@ validation (M13).
 
 | Capture | How | A page can notice |
 |---|---|---|
-| DOM, title, storage | read in the driver's isolated world | nothing |
+| DOM, title, storage | read in the driver's isolated world | no event; user activation without input (known tells, above) |
 | raw body, headers, redirects, XHR and fetch bodies | network events | nothing |
 | console | the page's `console.*` calls and uncaught errors, reported by the browser to its driver | nothing (the probe's console check stays at zero) |
 | screenshot, viewport or full page | drawn from the browser side | nothing, also for a full page |
