@@ -86,6 +86,19 @@ ARG CAMOUFOX_VERSION=152.0.4
 ARG CAMOUFOX_RELEASE=beta.30
 ARG CAMOUFOX_SHA256=5720d45b894ce1770543de024c6f10d514b38be560fa2dc3226b3d8586caf672
 
+# The Juggler backport (ADR 0010). The driver inside this build runs every
+# evaluation of a page as user input, so a page nobody touched reads user
+# activation; upstream took that out in the builds from v156.0.1-beta.32 on.
+# `scripts/patch-camoufox-juggler.mjs` takes the same four statements out of
+# this one, inside its `omni.ja`: the first checksum is that archive as the
+# release ships it, the second what the patch must turn it into. The engine
+# refuses to start on any other archive
+# (packages/engine-firefox/src/host.ts names the second one too). Both lines
+# go when the build moves to one that has the fix;
+# `scripts/setup-camoufox.sh` reads them as well.
+ARG CAMOUFOX_OMNI_SHA256=269da6dadc2dd93b5b0baafecccc8de1849020d04889d4fdaaa5423bf7e8545e
+ARG CAMOUFOX_OMNI_PATCHED_SHA256=ad3799d8c96fa80ba26a58cb1aaa28f525801d9ecc727a3e2be9262318ccbf5c
+
 LABEL org.opencontainers.image.title="kage-browser-${ENGINE}" \
       org.opencontainers.image.description="Kage browser sidecar, ${ENGINE} engine" \
       org.opencontainers.image.source="https://github.com/Serpe-nt/Kage" \
@@ -119,8 +132,10 @@ LABEL org.opencontainers.image.title="kage-browser-${ENGINE}" \
 # The Camoufox archive (663 MB) lives in a build cache, never in a layer: a
 # rebuild of this step does not download it again, and a copy from the
 # cache is checked against the pin like a fresh one. The cache is locked
-# while a build uses it, so two builds never write the archive at once.
+# while a build uses it, so two builds never write the archive at once. The
+# patch tool is read from the build context and is not part of the image.
 RUN --mount=type=cache,id=kage-camoufox,target=/var/cache/kage,sharing=locked \
+    --mount=type=bind,source=scripts/patch-camoufox-juggler.mjs,target=/tmp/patch-camoufox-juggler.mjs \
     install --directory /etc/kage \
     && printf '%s\n' "${ENGINE}" > /etc/kage/engine \
     && node --version > /etc/kage/node-version \
@@ -167,6 +182,10 @@ RUN --mount=type=cache,id=kage-camoufox,target=/var/cache/kage,sharing=locked \
         fi \
         && echo "${CAMOUFOX_SHA256}  ${archive}" | sha256sum --check --strict \
         && unzip -q "${archive}" -d /opt/camoufox \
+        # The Juggler backport: fails the build unless the archive is the
+        # pinned one and the result the pinned result.
+        && node /tmp/patch-camoufox-juggler.mjs /opt/camoufox \
+            --from "${CAMOUFOX_OMNI_SHA256}" --to "${CAMOUFOX_OMNI_PATCHED_SHA256}" \
         && chmod -R a+rX,go-w /opt/camoufox \
         # The engine reads which build this is from this file and refuses
         # any other (packages/engine-firefox/src/host.ts).

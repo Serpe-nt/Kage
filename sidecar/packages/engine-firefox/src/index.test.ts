@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -14,6 +14,7 @@ import {
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
+  CAMOUFOX_OMNI_SHA256,
   CAMOUFOX_RELEASE,
   CAMOUFOX_VERSION,
   FirefoxEngine,
@@ -29,6 +30,7 @@ import {
   launchPlan,
   launcherVersion,
   localeConfig,
+  matchProfileToBuild,
   parseProperties,
   personaFontconfig,
   plausibleRenderer,
@@ -114,6 +116,39 @@ describe('engine-firefox pins (fingerprint-critical, see docs/versions.md)', () 
     expect((refused as EngineError).message).toContain('152.0.4-beta.31');
     await writeFile(path.join(empty, 'version.json'), 'not json');
     await expect(detectHost(empty)).rejects.toMatchObject({ code: 'browser_launch_failed' });
+  });
+  it('runs that build with the Juggler backport and with no other archive (ADR 0010)', async () => {
+    expect(host.omniSha256).toBe(CAMOUFOX_OMNI_SHA256);
+    // The image and the setup script patch to the checksum the engine asks for.
+    const dockerfile = await readFile(
+      new URL('../../../../deploy/docker/sidecar.Dockerfile', import.meta.url),
+      'utf8',
+    );
+    expect(/^ARG CAMOUFOX_OMNI_PATCHED_SHA256=(.+)$/m.exec(dockerfile)?.[1]).toBe(
+      CAMOUFOX_OMNI_SHA256,
+    );
+    expect(/^ARG CAMOUFOX_OMNI_SHA256=(.+)$/m.exec(dockerfile)?.[1]).toMatch(/^[0-9a-f]{64}$/);
+    expect(/^ARG CAMOUFOX_OMNI_SHA256=(.+)$/m.exec(dockerfile)?.[1]).not.toBe(CAMOUFOX_OMNI_SHA256);
+
+    // The pinned build as its release ships it, or with anything else in
+    // its archive: the driver inside would grant user activation again.
+    const unpatched = await mkdtemp(path.join(tmpdir(), 'kage-unpatched-'));
+    await writeFile(
+      path.join(unpatched, 'version.json'),
+      JSON.stringify({ version: CAMOUFOX_VERSION, release: CAMOUFOX_RELEASE }),
+    );
+    const missing: unknown = await detectHost(unpatched).catch((error: unknown) => error);
+    expect(missing).toMatchObject({ code: 'browser_launch_failed' });
+    expect((missing as EngineError).message).toContain('omni.ja cannot be read');
+    await writeFile(path.join(unpatched, 'omni.ja'), 'the archive of a release');
+    const refused: unknown = await detectHost(unpatched).catch((error: unknown) => error);
+    expect(refused).toMatchObject({ code: 'browser_launch_failed' });
+    expect((refused as EngineError).message).toContain('does not hold the Juggler backport');
+    // What the archive is, so that a log line says which one somebody installed.
+    expect((refused as EngineError).message).toContain(
+      '96d5c9f90ccaf996e7b1ccc75831cfdeca1e6cb11586709bbc3407387e467116',
+    );
+    expect((refused as EngineError).message).toContain('just setup-camoufox');
   });
 });
 
@@ -479,7 +514,44 @@ describe('the engine before it launches anything', () => {
       home: '/var/lib/kage/personas/p1/home',
       fontconfig: '/var/lib/kage/personas/p1/home/fontconfig',
       pdf: '/var/lib/kage/personas/p1/home/print/page.pdf',
+      build: '/var/lib/kage/personas/p1/omni.sha256',
     });
+  });
+  it('removes the startup cache of a profile that last started under another build', async () => {
+    const profile = await mkdtemp(path.join(tmpdir(), 'kage-firefox-profile-'));
+    const paths = profilePaths(profile);
+    const cache = path.join(paths.userData, 'startupCache');
+    const exists = (file: string) =>
+      stat(file).then(
+        () => true,
+        () => false,
+      );
+
+    // A new profile: nothing to remove, and it notes the build.
+    await mkdir(paths.userData, { recursive: true });
+    expect(await matchProfileToBuild(paths, 'a'.repeat(64))).toBe(false);
+    expect(await readFile(paths.build, 'utf8')).toBe(`${'a'.repeat(64)}\n`);
+
+    // The browser ran: it left compiled scripts and everything else.
+    await mkdir(cache);
+    await writeFile(path.join(cache, 'scriptCache-child.bin'), 'the script that was patched');
+    await writeFile(path.join(paths.userData, 'cookies.sqlite'), 'cookies');
+    // The same build again: the cache is the browser's to keep.
+    expect(await matchProfileToBuild(paths, 'a'.repeat(64))).toBe(false);
+    expect(await exists(path.join(cache, 'scriptCache-child.bin'))).toBe(true);
+
+    // Another archive at the same place: the cache goes, the rest stays.
+    expect(await matchProfileToBuild(paths, 'b'.repeat(64))).toBe(true);
+    expect(await exists(cache)).toBe(false);
+    expect(await readFile(path.join(paths.userData, 'cookies.sqlite'), 'utf8')).toBe('cookies');
+    expect(await readFile(paths.build, 'utf8')).toBe(`${'b'.repeat(64)}\n`);
+    expect(await matchProfileToBuild(paths, 'b'.repeat(64))).toBe(false);
+
+    // A profile from before the note existed has a cache and no note.
+    const old = profilePaths(await mkdtemp(path.join(tmpdir(), 'kage-firefox-old-')));
+    await mkdir(path.join(old.userData, 'startupCache'), { recursive: true });
+    expect(await matchProfileToBuild(old, 'b'.repeat(64))).toBe(true);
+    expect(await exists(path.join(old.userData, 'startupCache'))).toBe(false);
   });
 
   it('generates through the engine, and refuses to open what is not its own', async () => {
