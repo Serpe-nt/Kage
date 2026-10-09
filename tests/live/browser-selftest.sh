@@ -40,8 +40,8 @@ fi
 # The same image, by digest, as deploy/compose.yaml (docs/versions.md).
 postgres_image="postgres:17.11-trixie@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3"
 sidecar_image="${KAGE_BROWSER_CHROMIUM_IMAGE:-kage-browser-chromium:dev}"
-postgres="kage-live-browser-db-$"
-sidecar="kage-live-browser-$"
+postgres="kage-live-browser-db-$$"
+sidecar="kage-live-browser-$$"
 workdir="$(mktemp -d)"
 idle="${KAGE_LIVE_IDLE_SECONDS:-0}"
 sampler=""
