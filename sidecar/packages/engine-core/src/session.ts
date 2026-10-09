@@ -106,7 +106,16 @@ export interface DriverFrame {
 
 type LoadState = 'commit' | 'domcontentloaded' | 'load' | 'networkidle';
 
-/** A page as the driver exposes it. */
+/**
+ * A page as the driver exposes it.
+ *
+ * The four members that read the page (`title`, `content`,
+ * `waitForSelector`, `evaluate`) must leave it as it was: an isolated
+ * world, and nothing a browser takes for its user (spec §10.2). A driver
+ * that marks an evaluation as a user gesture does not qualify, so an
+ * engine with such a driver hands over a page that reads another way
+ * (engine-chromium's `pageWithReader`); the parity suite checks both.
+ */
 export interface DriverPage {
   url(): string;
   title(): Promise<string>;
@@ -127,7 +136,7 @@ export interface DriverPage {
     options: { timeout: number },
   ): Promise<void>;
   waitForURL(url: string, options: { timeout: number }): Promise<void>;
-  /** Runs an expression where the page cannot observe it (the driver's isolated world). */
+  /** Runs an expression where the page cannot observe it: an isolated world, no user gesture. */
   evaluate<T>(expression: string): Promise<T>;
   click(selector: string, options: { timeout: number }): Promise<void>;
   hover(selector: string, options: { timeout: number }): Promise<void>;

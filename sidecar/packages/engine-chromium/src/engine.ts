@@ -26,6 +26,7 @@ import { ChromiumContext } from './context.js';
 import { buildInjection, generateFingerprint, type Injection } from './fingerprint.js';
 import type { HostFacts } from './host.js';
 import { cpuListOf, launchPlan } from './launch-plan.js';
+import { PageReader } from './page-reader.js';
 import { prepareProfile } from './profile.js';
 
 /** The wrapper that starts Chrome under the persona's CPU affinity mask. */
@@ -41,8 +42,10 @@ const LAUNCH_TIMEOUT_MS = 60_000;
  * What it does on purpose, following patchright's guidance and ADR 0009:
  * no user agent through driver options, no init script through the driver
  * (it would switch the HTTP cache off), no route, nothing that needs the
- * `Runtime` or `Console` debugger domains, headful on the persona's own X
- * display, and Chrome's sandbox on.
+ * `Runtime` or `Console` debugger domains, no read of a page through the
+ * driver (it marks every evaluation as a user gesture; see
+ * `page-reader.ts`), headful on the persona's own X display, and Chrome's
+ * sandbox on.
  */
 export class ChromiumEngine implements Engine {
   readonly name = 'chromium' as const;
@@ -148,6 +151,8 @@ export class ChromiumEngine implements Engine {
       // browser process and invisible to pages.
       await session.send('Log.enable');
       await session.send('Network.enable');
+      // Before the first navigation: every document gets the reader's world.
+      const reader = await PageReader.attach(session);
       if (injection !== null) {
         await session.send('Emulation.setUserAgentOverride', injection.userAgentOverride);
         await session.send('Page.enable');
@@ -168,6 +173,7 @@ export class ChromiumEngine implements Engine {
         context: browser,
         page,
         session,
+        reader,
         browserSession,
         browserVersion: version.product.replace(/^[^/]*\//, ''),
         applied,

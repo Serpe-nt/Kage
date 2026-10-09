@@ -6,6 +6,14 @@ import { DEFAULT_CHROME_PATH, detectHost } from './host.js';
 export { CHROME_WRAPPER, ChromiumEngine } from './engine.js';
 export { ChromiumContext, classifyNavigationError } from './context.js';
 export {
+  DEFAULT_POLL_MS,
+  PageReadError,
+  PageReader,
+  ReadTimeoutError,
+  pageWithReader,
+  type PageReaderOptions,
+} from './page-reader.js';
+export {
   GENERATOR_ID,
   HOST_BOUND,
   buildInjection,

@@ -35,6 +35,8 @@ import {
 } from '@kage/engine-core';
 import type { BrowserContext, CDPSession, Page } from 'patchright';
 
+import { pageWithReader, type PageReader } from './page-reader.js';
+
 /** Paper sizes in inches, as the print command takes them. */
 const PAPER = { a4: { width: 8.27, height: 11.69 }, letter: { width: 8.5, height: 11 } } as const;
 
@@ -82,6 +84,8 @@ export interface ChromiumContextParts {
   readonly page: Page;
   /** A debugger session on the page: log entries, screenshots, PDFs, cookies. */
   readonly session: CDPSession;
+  /** Reads the page over that session, so that no read is the driver's. */
+  readonly reader: PageReader;
   /** A debugger session on the browser: the whole cookie jar. */
   readonly browserSession: CDPSession;
   readonly browserVersion: string;
@@ -103,7 +107,8 @@ export interface ChromiumContextParts {
  *
  * What a navigation, a flow or a self-test does is the shared session of
  * engine-core; this class supplies what only Chrome can: its error names,
- * its debugger commands for screenshots, PDFs and cookies, and its own log.
+ * its debugger commands for screenshots, PDFs and cookies, its own log, and
+ * a page whose reads never go through the driver (spec §10.2).
  */
 export class ChromiumContext implements EngineContext, SessionDriver {
   readonly browserVersion: string;
@@ -117,8 +122,9 @@ export class ChromiumContext implements EngineContext, SessionDriver {
   constructor(private readonly parts: ChromiumContextParts) {
     this.browserVersion = parts.browserVersion;
     this.applied = parts.applied;
-    // The driver's page offers everything the session asks for and more.
-    this.page = parts.page;
+    // The driver navigates and waits for load states; every read of the
+    // page is the reader's, because the driver's grants user activation.
+    this.page = pageWithReader(parts.page, parts.reader);
     // Entries the browser itself logs (failed loads, security and
     // deprecation messages). This is not the console API: reading that
     // needs a debugger domain pages can detect.
