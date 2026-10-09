@@ -170,13 +170,14 @@ All ids are UUIDv7. Timestamps are UTC.
 | provider | enum | `webshare`, `static` |
 | provider_ref | text | Webshare proxy id |
 | host, port | text, int | |
-| username, password | text (encrypted at rest, see §19) | |
+| username, password | bytea (both ciphertext, see §19) | |
 | scheme | enum | `http` (CONNECT). SOCKS5 unsupported in v1. |
-| country, city, asn | text | from provider, verified by health |
+| country, city, asn | text | from provider; the observed geo record in `last_health` is authoritative for personas, the provider country is the fallback |
 | state | enum | `new`, `healthy`, `degraded`, `backoff`, `replacing`, `retired` |
-| consecutive_failures, backoff_until | int, ts | |
-| last_health | jsonb | latency, exit ip, geo verdict, leak verdict, reputation |
-| created_at, retired_at | ts | |
+| consecutive_failures, backoff_until, backoff_count, failing_since | int, ts, int, ts | `backoff_count` is k; `failing_since` starts the unbroken failure run |
+| replacement_requested_at, replacement_reason, replacement_ticket | ts, enum (`unreachable`, `reputation`, `operator`), text | the replacement Kage requested; the monthly budget counts rows by request time |
+| last_health | jsonb | failure kind, latency_ms, exit_ip, leak_detected, geo (observed record: country, city, asn, timezone), geo_mismatches, reputation_score, usage_type, reputation_checked_at, reputation_bad_lookups |
+| created_at, retired_at | ts | `(provider, provider_ref)` is unique among non-retired rows only |
 
 ### Persona
 
@@ -318,16 +319,24 @@ context before the next browser attempt for that origin.
 ```rust
 #[async_trait]
 pub trait ProxyProvider: Send + Sync {
+    fn kind(&self) -> ProviderKind;                    // the `provider` column
     async fn list(&self) -> Result<Vec<ProviderProxy>>;
-    async fn replace(&self, proxy: &Proxy, want: ReplaceSpec) -> Result<ReplaceTicket>;
+    async fn replace(&self, want: ReplaceSpec) -> Result<ReplaceTicket>;   // address + country
     async fn replace_status(&self, ticket: &ReplaceTicket) -> Result<ReplaceState>;
-    async fn account(&self) -> Result<AccountInfo>;   // plan, proxy count, replacement quota
+    async fn replaced(&self, since: DateTime<Utc>) -> Result<Vec<ProxyReplacement>>; // the replaced-proxy log
+    async fn account(&self) -> Result<AccountInfo>;   // subscription + plan + config flags + stock
     async fn stats(&self, since: DateTime<Utc>) -> Result<Vec<ProxyActivity>>;
 }
 ```
 
-Implementations: `WebshareProvider` and `StaticListProvider` (YAML or env,
-used in tests and for other vendors' static lists).
+Implementations: `WebshareProvider` and `StaticListProvider`. The static
+list is a secret (`KAGE__PROXIES__STATIC_LIST`, env or `_FILE`, never the
+config file) because it holds passwords; it accepts `host:port:user:pass[:country]`
+lines or a YAML document with a `proxies:` list. `proxies.provider` is
+`auto | webshare | static | none`; `auto` picks Webshare when its key is
+set, else the static list, else none. Without a provider `kage serve` still
+starts, warns, and keeps health-checking stored proxies (a leak must not go
+unseen because a key went missing) but never syncs or replaces.
 
 ### 7.2 Webshare specifics
 
@@ -376,24 +385,58 @@ set, else the plan the subscription names.
 new ──health ok──▶ healthy ──failure──▶ degraded ──N failures──▶ backoff ──expiry──▶ degraded
                      ▲                                              │
                      └──────────── health ok ───────────────────────┘
-backoff ──M consecutive backoffs or reputation bad──▶ replacing ──provider done──▶ retired
+backoff ──M cycles AND replace_after of unbroken failure, or bad reputation──▶ replacing ──provider done──▶ retired
+new | healthy ──leak, or N failures before a first success──▶ backoff
+new | healthy | degraded ──bad reputation, or operator──▶ replacing
+replacing ──provider failed or refused──▶ backoff
+new | healthy | degraded | backoff ──gone from the provider's list──▶ retired
 ```
 
-Defaults: N = 3 failures, backoff = 1 min × 2^k capped at 1 h with jitter,
-M = 3 consecutive backoff cycles. Replacement budget: `proxies.replacements_per_month`
-(default 5); when exhausted the proxy stays in `backoff` and an alert fires.
+The complete list is `ALLOWED_TRANSITIONS` in `kage-proxy/src/machine.rs`
+(17 edges); property tests prove no event sequence leaves it. Defaults:
+N = 3 failures (a failure counts only when the primary echo and the
+confirmation echo both fail), backoff = 1 min × 2^k capped at 1 h and
+jittered into `[0.5 d, d]`, M = 3 consecutive backoff cycles AND
+`proxies.replace_after` (default 6 h) of unbroken failure. A proxy leaving
+backoff is probed at once; success resets everything, failure returns it
+with k + 1.
+
+Leak (exit IP equals host IP): `backoff` from any state, critical alert,
+never counts toward replacement, and sets the pool-wide `egress_unsafe`
+flag. While the flag is set the scheduler (M7) MUST refuse every dispatch;
+it clears when a probe through the same proxy shows a distinct exit IP, or
+when an operator runs `kage proxy egress --clear`.
+
+Pool-wide outage guard: while more than half of a live pool of 4 or more
+fails its latest probe, failures are recorded but advance no counter, and
+`pool_outage_suspected` fires. `pool_capacity_low` fires when a quarter or
+more of such a pool is in `backoff` or `replacing`.
+
+Replacement: budget `proxies.replacements_per_month` (default 5) counts
+requests in the current UTC month, automatic and operator alike, enforced
+atomically in Postgres; Kage never requests when the plan's own quota shows
+0 available; the longest-failing proxy goes first; one replacement at a time
+(the provider allows one); same country as the proxy replaced, else no
+request and an alert. When the budget is exhausted the proxy stays in
+`backoff`, keeps probing at the cap, recovers by itself if the IP returns,
+and `replacement_budget_exhausted` fires once. Bad reputation with no
+budget leaves the proxy usable as `degraded` with an alert.
+
+Retirement from the provider list: at once only when the replaced-proxy log
+confirms it; otherwise after `proxies.missing_syncs` (default 3) syncs in a
+row without it; never when the list is empty or shorter than half the pool.
 
 ### 7.4 Health checks
 
 | Check | Default interval | Method |
 |---|---|---|
-| Reachability and latency | 5 min, jittered | Through-proxy GET of a configurable neutral endpoint via wreq with the persona's profile. |
-| Leak | with reachability | Exit IP (from echo) ≠ host public IP; host IP learned once at boot without proxy, refreshed hourly. |
-| Country match | with reachability | Echo geo country = provider country; mismatch → `degraded` and alert. |
+| Reachability, latency, exit IP | 5 min × U(0.75, 1.25) per proxy from its seed; first probes spread over 2 min after boot; at most 3 in flight; real traffic through a proxy postpones its next probe (`Pool::report_traffic_ok`) | Through-proxy GET of the provider's own echo (`https://ipv4.webshare.io/`), so no third party sees the pool; a failed probe is retried once against the confirmation echo (`https://checkip.amazonaws.com/`) before it counts. Client from the `ProbeClientFactory` seam: one wreq-util profile (`proxies.health.profile`, default `chrome_149` on Windows) until M6 substitutes the persona's own client. |
+| Leak | with reachability | Exit IP (from echo) ≠ host public IP; host IP learned at boot by a direct GET of the same echo, refreshed hourly. Leak → `backoff` + `egress_unsafe` (§7.3). |
+| Geo (country, city, ASN, timezone) | first check of a `new` proxy, on exit IP change, and every 24 h jittered | `https://ipinfo.io/json` through the proxy (not Cloudflare-fronted). The observed record is persisted as authoritative; a change is a health event. Mismatch with the provider country on two consecutive lookups → `degraded` and alert, proxy stays usable. Lookup failures are not health failures (retry after an hour). |
 | Fingerprint self-test (http) | 24 h | JA4, HTTP/2, header order from an echo service equal the expected values for `wreq_profile`. |
 | Fingerprint self-test (browser) | 24 h, staggered | Sidecar loads the detection test page set (configurable list, default: CreepJS, BrowserScan, pixelscan, bot.sannysoft, a JA4/H2 echo) and asserts: no automation flags, OS/browser/timezone/locale as claimed, JA4 as expected. Produces a per-persona score. |
-| IP reputation | 24 h | Provider trait with AbuseIPDB first; disabled without a key. Bad score → `replacing`. |
-| Account sync | 10 min | Webshare plan, counts, replacement quota. |
+| IP reputation | 24 h, one proxy at a time spread over the day, asked from the host directly | Provider trait with AbuseIPDB first; disabled without a key. Bad = `abuseConfidenceScore` ≥ `reputation.bad_score` (default 75) on two consecutive lookups → `replacing` when the budget allows, else `degraded` + alert. `usageType` recorded; Data Center or Hosting on a residential IP raises `reputation_usage_type_suspicious`, never an automatic replacement. A 429 pauses lookups for as long as it says, or 24 h. |
+| Account sync | 10 min | Subscription, plan, counts, replacement quota, the four `auto_replace_*` flags (alert while any is on, never changed by Kage), available countries. |
 
 All health traffic obeys pacing and never targets real target sites.
 
@@ -786,10 +829,18 @@ guard as targets.
 `kage.yaml` layered with env `KAGE__SECTION__KEY=value` (figment). Secrets
 MUST come only from env or files mounted via Docker secrets:
 `KAGE__WEBSHARE__API_KEY`, `KAGE__DATABASE__URL`, `KAGE__SIDECAR__TOKEN`,
-`KAGE__SECRETS__MASTER_KEY` (for encrypting proxy credentials at rest),
-`KAGE__REPUTATION__ABUSEIPDB_KEY`. Startup fails on a missing required
-secret. `kage config check` validates and prints the effective config with
-secrets redacted.
+`KAGE__SECRETS__MASTER_KEY` (for encrypting proxy credentials at rest;
+exactly 32 bytes as 64 hex characters, validated at load),
+`KAGE__REPUTATION__ABUSEIPDB_KEY`, `KAGE__PROXIES__STATIC_LIST`. Every
+secret may also be given as `<NAME>_FILE`; an empty variable does not
+conflict with its `_FILE` form. Required for every command except
+`healthcheck`: database URL, sidecar token, master key; the others are
+optional. Startup fails on a missing required secret. `kage config check`
+validates and prints the effective config as JSON with secrets redacted.
+Sections at this point: `server`, `database`, `secrets`, `sidecar`,
+`policies`, `artifacts`, `proxies` (with `proxies.health`), `webshare`,
+`reputation`; every section rejects unknown keys and every non-secret key
+is listed in `deploy/kage.example.yaml` (a test compares them).
 
 Domain policy (`policies/domains.yaml`):
 
@@ -848,9 +899,14 @@ are gzip-compressed on disk.
   schemes and literal IP targets unless `security.allow_ip_targets`. The
   proxy performs the connection, but the guard still runs on the resolved
   name because the proxy could reach the operator's own networks.
-- **Secrets.** Proxy passwords encrypted at rest with XChaCha20-Poly1305
-  under `KAGE__SECRETS__MASTER_KEY`; API key secrets hashed; sidecar token
-  constant-time compared; never logged (tracing field redaction tested).
+- **Secrets.** Proxy usernames and passwords both encrypted at rest with
+  XChaCha20-Poly1305 under `KAGE__SECRETS__MASTER_KEY` (random 24-byte nonce
+  per value; version byte, nonce, ciphertext and tag; associated data binds
+  each value to its proxy id and field name so a value copied into another
+  row or column fails to open); `kage proxy list --reveal-username`
+  decrypts on demand and writes an audit event. API key secrets hashed;
+  sidecar token constant-time compared; never logged (tracing field
+  redaction tested).
 - **Isolation.** Sidecars listen only on the compose network; browsers run
   as non-root with seccomp default profile, `no-new-privileges`, read-only
   root FS except profile and artifact mounts; Chrome sandbox stays enabled
