@@ -295,6 +295,20 @@ struct Rig {
 
 const ADDRESSES: [&str; 3] = ["198.51.100.10", "198.51.100.11", "198.51.100.12"];
 
+/// Minutes between two passes of the rig.
+const PASS_MINUTES: i64 = 5;
+
+/// Minutes after the start by which every proxy has had its first lookup,
+/// whatever ids the pool gave the proxies. The first pass only probes: a
+/// proxy is `new` until then, and nothing is looked up for a new proxy. The
+/// second pass, five minutes in, draws each proxy's first lookup from the
+/// hour that follows it, by a hash of the proxy's random id. A pass sends
+/// one lookup at most, so the other two proxies may each wait a pass longer.
+///
+/// The tests below used to stop at 65 minutes, which a proxy with an offset
+/// above 55 minutes, or two proxies due in one pass, did not make.
+const FIRST_LOOKUPS_WITHIN: i64 = PASS_MINUTES + 60 + 2 * PASS_MINUTES;
+
 async fn rig(reputation: Option<Arc<dyn ReputationProvider>>) -> Rig {
     let db = TestDb::migrated().await;
     let clock = Arc::new(ManualClock::new(start()));
@@ -351,6 +365,28 @@ impl Rig {
         }
     }
 
+    /// Runs passes like [`Rig::run_for`] and notes, in minutes since the
+    /// start, when which address was looked up.
+    async fn watch_for(
+        &self,
+        mock: &MockAbuse,
+        time: chrono::Duration,
+        seen: &mut Vec<(i64, String)>,
+    ) {
+        let until = self.pool.clock().now() + time;
+        while self.pool.clock().now() < until {
+            let before = mock.asked().len();
+            self.checker.tick().await.unwrap();
+            let asked = mock.asked();
+            assert!(asked.len() <= before + 1, "a pass sent {asked:?}");
+            if let Some(address) = asked.get(before) {
+                let minute = (self.pool.clock().now() - start()).num_minutes();
+                seen.push((minute, address.clone()));
+            }
+            self.clock.advance(chrono::Duration::minutes(PASS_MINUTES));
+        }
+    }
+
     async fn state_of(&self, address: &str) -> ProxyState {
         self.pool
             .live()
@@ -378,12 +414,13 @@ async fn every_proxy_is_looked_up_once_a_day_and_never_all_at_once() {
     mock.set(ADDRESSES[1], 10, "Fixed Line ISP");
     let rig = rig(Some(Arc::new(mock.client()))).await;
 
-    // The first pass probes; the first lookups are spread over an hour.
+    // The first pass probes; the first lookups are spread over the hour
+    // after the second, one per pass.
     rig.checker.tick().await.unwrap();
     assert_eq!(rig.state_of(ADDRESSES[0]).await, ProxyState::Healthy);
     let mut seen_after = Vec::new();
-    for _ in 0..13 {
-        rig.clock.advance(chrono::Duration::minutes(5));
+    for _ in 0..FIRST_LOOKUPS_WITHIN / PASS_MINUTES {
+        rig.clock.advance(chrono::Duration::minutes(PASS_MINUTES));
         rig.checker.tick().await.unwrap();
         seen_after.push(mock.asked().len());
     }
@@ -415,11 +452,14 @@ async fn every_proxy_is_looked_up_once_a_day_and_never_all_at_once() {
     );
     assert!(health.reputation_checked_at.is_some());
 
-    // Nothing more for the rest of the day.
+    // Nothing more for the rest of the day: the next lookup of a proxy is
+    // 18 to 30 hours after its first (a day, give or take the jitter).
     rig.run_for(chrono::Duration::hours(16)).await;
     assert_eq!(mock.asked().len(), 3);
 
     // The next day each one is looked up again: the bad one is confirmed.
+    // By now 32 hours and a quarter have passed: more than the 30 hours
+    // after the last first lookup, less than 18 hours after a second one.
     rig.run_for(chrono::Duration::hours(15)).await;
     assert_eq!(mock.asked().len(), 6);
     assert_eq!(rig.alerts_of(AlertKind::ProxyReputationBad), 1);
@@ -443,8 +483,9 @@ async fn a_provider_that_says_stop_is_left_alone_for_as_long_as_it_says() {
     let rig = rig(Some(Arc::new(mock.client()))).await;
     mock.fail(Some((429, Some(7200))));
 
-    // The first lookup that is due is refused.
-    rig.run_for(chrono::Duration::minutes(65)).await;
+    // The first lookup that is due is refused. The earliest of the three is
+    // due 65 minutes in at the latest; one pass more than that is run.
+    rig.run_for(chrono::Duration::minutes(70)).await;
     assert_eq!(mock.asked().len(), 1);
 
     // Nothing is asked for the two hours it named, though all three are due.
@@ -476,21 +517,45 @@ async fn a_lookup_that_fails_is_tried_again_an_hour_later() {
     let mock = MockAbuse::start().await;
     let rig = rig(Some(Arc::new(mock.client()))).await;
     mock.fail(Some((503, None)));
+    let mut seen = Vec::new();
 
-    rig.run_for(chrono::Duration::minutes(65)).await;
-    // A failure for one proxy does not stop the lookups for the others,
-    // and nobody is asked again within the hour.
-    let asked = mock.asked();
-    assert_eq!(asked.iter().collect::<BTreeSet<_>>().len(), 3);
-    assert!(asked.len() <= 4, "{asked:?}");
+    // Long enough for every first lookup, and one pass more.
+    let first = chrono::Duration::minutes(FIRST_LOOKUPS_WITHIN + PASS_MINUTES);
+    rig.watch_for(&mock, first, &mut seen).await;
+    // A failure for one proxy does not stop the lookups for the others.
+    let failed: BTreeSet<&str> = seen.iter().map(|(_, address)| address.as_str()).collect();
+    assert_eq!(failed, ADDRESSES.into_iter().collect(), "{seen:?}");
 
+    // The provider answers again. A lookup that failed in the last pass
+    // above is tried again an hour after it, and the other two may be due
+    // in the same pass: an hour and two passes cover every retry.
     mock.fail(None);
-    rig.run_for(chrono::Duration::minutes(70)).await;
-    let asked = mock.asked();
-    assert!((6..=7).contains(&asked.len()), "{asked:?}");
+    let retries = chrono::Duration::minutes(60 + 2 * PASS_MINUTES);
+    rig.watch_for(&mock, retries, &mut seen).await;
+
+    for address in ADDRESSES {
+        let at: Vec<i64> = seen
+            .iter()
+            .filter(|(_, asked)| asked == address)
+            .map(|(minute, _)| *minute)
+            .collect();
+        // It failed at least once and was asked again.
+        assert!(at.len() >= 2, "{address}: {seen:?}");
+        // Nobody is asked again within the hour, and everybody an hour
+        // later: in the pass that is due then, or behind the other two.
+        for pair in at.windows(2) {
+            let waited = pair[1] - pair[0];
+            assert!(
+                (60..=60 + 2 * PASS_MINUTES).contains(&waited),
+                "{address} was asked again after {waited} minutes: {seen:?}"
+            );
+        }
+    }
+    // The last lookup of each succeeded, and nothing follows it that day.
     for proxy in rig.pool.live().await.unwrap() {
         assert_eq!(proxy.last_health.unwrap().reputation_score, Some(0));
     }
+    assert!(seen.len() <= 3 * ADDRESSES.len(), "{seen:?}");
 }
 
 #[tokio::test]
