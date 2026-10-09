@@ -177,7 +177,8 @@ fingerprint test endpoints listed in configuration.
 - Fingerprint self-test (http): fetch an echo endpoint and compare JA4,
   HTTP/2 Akamai string, header order with expected values stored per
   profile in `tests/fixtures/fingerprints/`.
-- CLI: `kage selftest http --persona <id>`.
+- CLI: `kage selftest http --proxy <id> --profile <name>` (the `--persona`
+  form arrives with M6).
 
 **Acceptance**
 - Integration tests through a local CONNECT proxy to wiremock verify
@@ -185,6 +186,26 @@ fingerprint test endpoints listed in configuration.
 - Live (gated): self-test passes for at least one Chrome and one Firefox
   profile through a real proxy; expected values recorded as fixtures.
 - `cargo tree -i openssl-sys` still empty.
+
+**Status.** Merged as `b330822`. Beyond the list above it shipped the
+in-repo fingerprint echo (`kage echo serve`, compose profile `echo`) that
+makes the per-PR fingerprint gate possible, kage-http-owned header tables
+per browser family and request kind, the gated profile derivation
+(`VERIFIED_MAJORS`, empty until M4 and M5 record captures), the cookie jar
+with browser rules, subresource emulation, and `connect_ms`/`tls_ms` timing
+(F2). The live self-test through a real proxy was still pending the owner's
+in-session approval when merged; its result lands in `m3-live-handover.md`.
+Follow-ups:
+- **F5 (M4, M5):** capture the real browsers' navigation and fetch()
+  requests against the echo; set `engines.<engine>.browser_major`; add the
+  verified majors or leave the engine browser-only and say why.
+- **F6 (M8):** the fetch()/XHR request kind and its API field, from the
+  M4 captures; `security.resolve_on_host` as an opt-in host-side resolver.
+- **F7 (M6):** `--persona` on the self-test, the scheduled 24 h run against
+  the operator's echo only, the persona-keyed jar, persisting the asset
+  freshness cache per persona.
+- **F8 (any):** a `kage cookies` operator command (list, clear per proxy or
+  domain).
 
 ---
 

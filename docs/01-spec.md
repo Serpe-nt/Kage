@@ -289,8 +289,12 @@ A persona is generated when a proxy enters `healthy` for the first time.
 - `Accept-Language`, `navigator.languages`, `Intl` locale and timezone MUST
   agree with the proxy's country.
 - TLS JA4, HTTP/2 fingerprint and header order on the http path MUST match
-  the persona's claimed browser; the self-test compares against the echo
-  service and against a browser-path capture.
+  the persona's claimed browser. The in-repo echo compares every mapped
+  profile against its recorded fixture on every PR; a derived profile for a
+  browser major that wreq-util does not ship is enabled only after a capture
+  of the real browser against the same echo equals the profile's JA4, HTTP/2
+  string and navigation header set and order (`VERIFIED_MAJORS` in
+  `kage-http`). Until then that persona is browser-only.
 - The platform claimed by a chromium persona on a Linux host is produced by
   fingerprint injection. If the chromium self-test fails the Client Hints
   coherence check on the current Chrome build, the chromium engine MUST be
@@ -461,7 +465,7 @@ row without it; never when the list is empty or shorter than half the pool.
 | Reachability, latency, exit IP | 5 min × U(0.75, 1.25) per proxy from its seed; first probes spread over 2 min after boot; at most 3 in flight; real traffic through a proxy postpones its next probe (`Pool::report_traffic_ok`) | Through-proxy GET of the provider's own echo (`https://ipv4.webshare.io/`), so no third party sees the pool; a failed probe is retried once against the confirmation echo (`https://checkip.amazonaws.com/`) before it counts. Client from the `ProbeClientFactory` seam: one wreq-util profile (`proxies.health.profile`, default `chrome_149` on Windows) until M6 substitutes the persona's own client. |
 | Leak | with reachability | Exit IP (from echo) ≠ host public IP; host IP learned at boot by a direct GET of the same echo, refreshed hourly. Leak → `backoff` + `egress_unsafe` (§7.3). |
 | Geo (country, city, ASN, timezone) | first check of a `new` proxy, on exit IP change, and every 24 h jittered | `https://ipinfo.io/json` through the proxy (not Cloudflare-fronted). The observed record is persisted as authoritative; a change is a health event. Mismatch with the provider country on two consecutive lookups → `degraded` and alert, proxy stays usable. Lookup failures are not health failures (retry after an hour). |
-| Fingerprint self-test (http) | 24 h | JA4, HTTP/2, header order from an echo service equal the expected values for `wreq_profile`. |
+| Fingerprint self-test (http) | per PR in CI over loopback for every mapped profile; on demand (`kage selftest http --proxy --profile`) and two proxies per nightly live run against `selftest.http.third_party_url`; from M6 every 24 h jittered per persona, only against the operator's own echo (`selftest.http.echo_url`) and never against a third party on a timer | JA4, HTTP/2 Akamai string, header order, HTTP version and `User-Agent` equal the fixture recorded for the profile. The fingerprint is a function of the pins and the header code, not of the proxy, so the live runs only confirm that a real tunnel changes nothing. |
 | Fingerprint self-test (browser) | 24 h, staggered | Sidecar loads the detection test page set (configurable list, default: CreepJS, BrowserScan, pixelscan, bot.sannysoft, a JA4/H2 echo) and asserts: no automation flags, OS/browser/timezone/locale as claimed, JA4 as expected. Produces a per-persona score. |
 | IP reputation | 24 h, one proxy at a time spread over the day, asked from the host directly | Provider trait with AbuseIPDB first; disabled without a key. Bad = `abuseConfidenceScore` ≥ `reputation.bad_score` (default 75) on two consecutive lookups → `replacing` when the budget allows, else `degraded` + alert. `usageType` recorded; Data Center or Hosting on a residential IP raises `reputation_usage_type_suspicious`, never an automatic replacement. A 429 pauses lookups for as long as it says, or 24 h. |
 | Account sync | 10 min | Subscription, plan, counts, replacement quota, the four `auto_replace_*` flags (alert while any is on, never changed by Kage), available countries. |
@@ -936,8 +940,11 @@ optional. Startup fails on a missing required secret. `kage config check`
 validates and prints the effective config as JSON with secrets redacted.
 Sections at this point: `server`, `database`, `secrets`, `sidecar`,
 `policies`, `artifacts`, `proxies` (with `proxies.health`), `webshare`,
-`reputation`; every section rejects unknown keys and every non-secret key
-is listed in `deploy/kage.example.yaml` (a test compares them).
+`reputation`, `http` (with `http.subresources`), `selftest` (`selftest.http`),
+`engines` (`engines.<engine>.browser_major`, unset until M4 and M5 pin the
+browsers; a set major that no profile serves fails `kage config check`);
+every section rejects unknown keys and every non-secret key is listed in
+`deploy/kage.example.yaml` (a test compares them).
 
 Domain policy (`policies/domains.yaml`):
 
@@ -979,7 +986,9 @@ keeps the last good policy and raises an alert.
 Tables: `proxies`, `personas`, `persona_domain_state`, `sessions`,
 `requests`, `attempts`, `results`, `artifacts`, `jobs`, `job_items`,
 `crawl_frontier`, `robots_cache`, `response_cache`, `api_keys`,
-`audit_events`, `health_events`, `selftest_runs`, `domain_breakers`.
+`audit_events`, `health_events`, `selftest_runs`, `domain_breakers`,
+`http_cookies` (one row per cookie, keyed by proxy until M6 adds the
+persona; rows die with the proxy).
 Migrations in `crates/kage-store/migrations`, applied by `kage migrate` and
 checked in CI (`sqlx migrate info`, offline query data committed). Bodies and
 artifacts live on disk under `artifacts/` keyed by content hash with a
