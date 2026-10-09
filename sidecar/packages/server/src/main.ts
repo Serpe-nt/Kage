@@ -2,6 +2,11 @@
  * Process entry point of the sidecar: `ENGINE=chromium|firefox node dist/main.js`.
  * Everything testable lives in the modules it wires together.
  */
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
+import { startAudioServer } from '@kage/engine-core';
+
 import { buildApp } from './app.js';
 import { loadConfig } from './config.js';
 import { loadEngine } from './engine-loader.js';
@@ -20,12 +25,20 @@ try {
       sink(level, fields, message);
     }
   };
+  const log = { info: early('info'), warn: early('warn'), error: early('error') };
+  // A container has no sound card: the browsers get a server with one
+  // output and one input, so that a page finds devices as on a desktop.
+  const audio =
+    config.audio === 'pulse'
+      ? await startAudioServer(path.join(tmpdir(), `kage-audio-${process.pid}`), log)
+      : null;
   const engine = await loadEngine(config.engine, {
+    ...(audio === null ? {} : { audioServer: audio.address }),
     personasDir: config.personasDir,
     allowCrossOsClaims: config.allowCrossOsClaims,
     gl: config.gl,
     selftestPages: config.selftestPages,
-    log: { info: early('info'), warn: early('warn'), error: early('error') },
+    log,
   });
   const { server } = buildApp({
     engine,
@@ -52,10 +65,15 @@ try {
       server.log.info({ signal }, 'shutting down');
       // Closing drains requests, closes every context (which flushes its
       // profile) and the engine; the process then exits by itself.
-      server.close().catch((error: unknown) => {
-        server.log.error({ err: error }, 'shutdown failed');
-        process.exitCode = 1;
-      });
+      server
+        .close()
+        .catch((error: unknown) => {
+          server.log.error({ err: error }, 'shutdown failed');
+          process.exitCode = 1;
+        })
+        .finally(() => {
+          void audio?.stop();
+        });
     });
   }
 

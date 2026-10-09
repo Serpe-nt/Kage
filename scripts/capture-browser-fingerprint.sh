@@ -1,19 +1,29 @@
 #!/usr/bin/env bash
-# Records what the Chromium engine's real browser shows the in-repo
-# fingerprint echo, and writes it to
-# tests/fixtures/fingerprints/browser/chromium-<major>.json (spec §6.1 step 4,
-# follow-up F5 in docs/02-plan.md).
+# Records what an engine's real browser shows the in-repo fingerprint echo,
+# and writes it to tests/fixtures/fingerprints/browser/<engine>-<major>.json
+# (spec §6.1 step 4, follow-up F5 in docs/02-plan.md).
 #
-# Run it when the pinned Chrome moves: the capture decides whether the http
+#   scripts/capture-browser-fingerprint.sh [chromium|firefox]
+#
+# Run it when the pinned browser of an engine moves: the capture decides whether the http
 # path may present as that major (VERIFIED_MAJORS in kage-http) or the
 # engine stays browser-only (BROWSER_ONLY_MAJORS). Everything stays on this
 # machine: the echo listens on loopback and the browser reaches it through
 # a local proxy that relays nothing else.
 #
-# Needs the pinned Chrome and Xvfb (`just setup-chrome`), `certutil`
+# Needs the pinned browser and Xvfb (`just setup-chrome`, `just setup-camoufox`), `certutil`
 # (libnss3-tools), `openssl`, and a user that is not root.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+engine="${1:-chromium}"
+case "${engine}" in
+    chromium | firefox) ;;
+    *)
+        echo "usage: $0 [chromium|firefox]" >&2
+        exit 2
+        ;;
+esac
 
 host="echo.kage.test"
 out_dir="tests/fixtures/fingerprints/browser"
@@ -59,7 +69,7 @@ done
 
 echo "==> the engine's browser against the echo"
 mkdir -p "${out_dir}"
-node sidecar/packages/engine-chromium/dist/testing/capture-echo-bin.js \
+node "sidecar/packages/engine-${engine}/dist/testing/capture-echo-bin.js" \
     --host "${host}" --port "${port}" --ca "${work}/ca.pem" --out-dir "${out_dir}"
 
 echo "==> done. Review the diff of ${out_dir}/, then run:"

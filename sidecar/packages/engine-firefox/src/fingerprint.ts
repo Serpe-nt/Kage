@@ -258,6 +258,11 @@ export function generateFingerprint(
     'canvas:seed': seed(),
     'canvas:aaOffset': random.integer(-50, 50),
     'canvas:aaCapOffset': true,
+    // The build's own look of the browser window is not Firefox's: its
+    // toolbar is 51 pixels high where a stock Firefox has 85, which a page
+    // reads as outerHeight minus innerHeight. Without it the window is
+    // the stock one.
+    disableTheming: true,
     // What a Firefox lists before a site has permission: one microphone,
     // and a camera on two machines in three; names and ids stay empty.
     'mediaDevices:enabled': true,

@@ -93,6 +93,11 @@ export interface EngineOptions {
   readonly gl: 'none' | 'swiftshader' | 'llvmpipe' | 'host';
   /** Default page set of a self-test: Kage's own pages only. */
   readonly selftestPages: readonly SelftestPage[];
+  /**
+   * The sound server the browsers use, as `PULSE_SERVER` takes it. Absent:
+   * a browser finds whatever the machine has, in a container nothing.
+   */
+  readonly audioServer?: string;
   /** Receives log lines; the server passes its pino logger. */
   readonly log: EngineLog;
 }

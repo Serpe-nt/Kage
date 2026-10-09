@@ -143,6 +143,9 @@ export class FirefoxEngine implements Engine {
           FONTCONFIG_PATH: paths.fontconfig,
           KAGE_CAMOUFOX: this.host.binary,
           KAGE_CPU_LIST: cpuListOf(plan),
+          ...(this.options.audioServer === undefined
+            ? {}
+            : { PULSE_SERVER: this.options.audioServer }),
           ...plan.configEnv,
         },
       });

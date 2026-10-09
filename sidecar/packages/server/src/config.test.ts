@@ -22,6 +22,7 @@ describe('loadConfig', () => {
         artifactsDir: '/var/lib/kage/artifacts',
         allowCrossOsClaims: false,
         gl: 'llvmpipe',
+        audio: 'none',
         selftestPages: [],
         bodyLimitBytes: 16_777_216,
       });
@@ -42,6 +43,7 @@ describe('loadConfig', () => {
       SIDECAR_ARTIFACTS_DIR: '/data/artifacts',
       SIDECAR_ALLOW_CROSS_OS_CLAIMS: 'true',
       SIDECAR_GL: 'host',
+      SIDECAR_AUDIO: 'pulse',
       SIDECAR_SELFTEST_PROBE_URL: 'https://echo.example.org/probe/',
       SIDECAR_SELFTEST_ECHO_URL: 'https://echo.example.org/',
       SIDECAR_BODY_LIMIT_BYTES: '1048576',
@@ -58,6 +60,7 @@ describe('loadConfig', () => {
       artifactsDir: '/data/artifacts',
       allowCrossOsClaims: true,
       gl: 'host',
+      audio: 'pulse',
       bodyLimitBytes: 1_048_576,
     });
     // The default self-test pages are Kage's own, never a third party's.

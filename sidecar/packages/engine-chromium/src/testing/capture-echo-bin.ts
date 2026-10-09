@@ -1,40 +1,44 @@
 /**
- * Process entry point of the browser capture (follow-up F5):
- *
- *   node dist/testing/capture-echo-bin.js --host echo.kage.test --port 8443 \
- *     --ca ca.pem --out-dir tests/fixtures/fingerprints/browser
- *
- * `scripts/capture-browser-fingerprint.sh` starts the echo and calls this.
+ * Process entry point of the browser capture for the Chromium engine
+ * (follow-up F5 of docs/02-plan.md). `scripts/capture-browser-fingerprint.sh`
+ * starts the echo and calls this.
  */
-import { writeFileSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
+import { promisify } from 'node:util';
 
-import { captureEcho, captureFileName, serializeCapture } from './capture-echo.js';
+import { captureMain } from '@kage/engine-core/testing';
 
-const args = process.argv.slice(2);
-const option = (name: string): string => {
-  const index = args.indexOf(`--${name}`);
-  const value = index >= 0 ? args[index + 1] : undefined;
-  if (value === undefined) {
-    throw new Error(`missing --${name}`);
-  }
-  return value;
-};
+import { createEngine } from '../index.js';
+import { profilePaths } from '../profile.js';
 
-try {
-  const capture = await captureEcho({
-    echoHost: option('host'),
-    echoPort: Number(option('port')),
-    caFile: option('ca'),
-  });
-  const file = path.join(option('out-dir'), captureFileName(capture));
-  writeFileSync(file, serializeCapture(capture));
-  process.stdout.write(
-    `${file}\n  Chrome ${capture.browser_version}\n  ja4    ${capture.ja4}\n  akamai ${capture.akamai}\n  header order of a typed navigation:\n    ${capture.headers.join(', ')}\n`,
-  );
-} catch (error) {
-  process.stderr.write(
-    `capture failed: ${error instanceof Error ? error.message : String(error)}\n`,
-  );
-  process.exitCode = 1;
-}
+const run = promisify(execFile);
+
+await captureMain(
+  {
+    engine: 'chromium',
+    claimedOs: 'linux',
+    screen: { min_width: 1920, max_width: 1920, min_height: 1080, max_height: 1080 },
+    createEngine,
+    // Chrome on Linux reads user-trusted authorities from the NSS database
+    // in its home directory.
+    trust: async (profileDir, caFile) => {
+      const database = path.join(profilePaths(profileDir).home, '.pki', 'nssdb');
+      await mkdir(database, { recursive: true, mode: 0o700 });
+      await run('certutil', ['-d', `sql:${database}`, '-N', '--empty-password']);
+      await run('certutil', [
+        '-d',
+        `sql:${database}`,
+        '-A',
+        '-t',
+        'C,,',
+        '-n',
+        'kage-fingerprint-echo',
+        '-i',
+        caFile,
+      ]);
+    },
+  },
+  process.argv.slice(2),
+);

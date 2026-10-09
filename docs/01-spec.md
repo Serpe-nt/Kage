@@ -254,9 +254,12 @@ A persona is generated when a proxy enters `healthy` for the first time.
    persona if the city is unknown.
 2. **Engine and OS.** Weighted draw from `personas.mix`. A chromium
    persona claims the system its Chrome runs on, Linux in the shipped image
-   (ADR 0009), so the default mix is: chromium on linux 40%, firefox on
-   windows 40%, firefox on macos 15%, firefox on linux 5%, pending M5's
-   measurement of Camoufox under the same worker-inclusive coherence bar.
+   (ADR 0009). A firefox persona claims Windows or macOS: M5 measured
+   Camoufox under the same worker-inclusive coherence bar and both pass
+   (§6.2). The default mix is: chromium on linux 40%, firefox on windows
+   45%, firefox on macos 15%. Firefox on linux stays possible by
+   configuration but is not in the default: its fonts are Tor Browser's
+   bundle, not a Linux desktop's (`docs/runbooks/engine-firefox.md`).
    The mix is configuration, and the health subsystem reports the actual
    pool distribution. A common and coherent Chrome-on-Windows persona needs
    a real Windows engine host (risk R3), a candidate milestone after M5.
@@ -320,6 +323,24 @@ A persona is generated when a proxy enters `healthy` for the first time.
   header names and order equal to the recorded capture of the real browser;
   no `Pragma` or `Cache-Control` on a plain navigation; a second visit
   served from cache.
+- A firefox persona claims Windows or macOS and is made inside the
+  browser (Camoufox), from a configuration that is generated once from the
+  persona's seed, persisted whole in the fingerprint document and applied
+  unchanged on every open. M5 measured it on Camoufox 152.0.4-beta.30
+  under the same bar, extended by what only measuring shows: the font
+  families a line of text measures differently in, and the WebGL strings
+  and parameters, read in the window, every kind of iframe and an
+  `OffscreenCanvas` of a dedicated and of a blob worker. Every value is
+  the claimed system's and equal in every scope; `oscpu` and `buildID`
+  exist in windows only, as in every Firefox. The probe judges fonts
+  (`fonts.own`, `fonts.foreign`, `coherence.fonts`), WebGL (`webgl.os`,
+  `coherence.webgl`) and the screen for both engines since.
+- What surrounds the browser is part of the claim: a work area smaller
+  than the screen (chromium: a desktop's top bar announced on the display
+  and the window placed below it; firefox: the fingerprint's), media
+  devices and an `AudioContext` with channels (a sound server in both
+  images). The probe reports their absence as warnings
+  (`environment.*`), never as failures.
 - Never rotate any identity attribute inside a persona's lifetime. Browser
   major may advance only when the engine image is upgraded; then every
   persona of that engine gets its `browser_major` and `wreq_profile` updated
@@ -697,8 +718,21 @@ row (§6.4), so a cookie moves between the http path and a browser without
 translation. `selftest` takes its page list from the request and defaults
 to the sidecar's own pages (the coherence probe and the fingerprint echo);
 third-party detection pages are loaded only when a request names them
-(§7.4). `flow` answers `not_implemented` until M5 delivers the behavior
-engine and the action DSL (§10.4, §10.5).
+(§7.4).
+
+`navigate` takes an optional `behavior` object (§10.4): a seed, an entry
+strategy, a scroll depth, where the dwell time comes from, and whether an
+idle hand wanders. Without it a navigation sends no input at all. The
+page result then carries `behavior`: the seed that was used (the
+request's, or one the sidecar drew), the id of the persona's motor
+profile, what the entry did, and counts of what was sent. `flow` answers
+with NDJSON: one `step` line per finished step as it finishes, then one
+`final` line with the page as the flow left it. What refuses a flow
+before its first step is an ordinary error answer; a flow that breaks
+after lines were sent ends without its final line.
+
+The contract is at 1.1.0: everything M5 added is optional in requests and
+additional in responses.
 
 A breaking change of the contract needs a new major of the contract
 version; `just contract-check` compares the committed document with the
@@ -735,17 +769,50 @@ Rules from patchright's guidance, kept by tests: no custom UA through
 Playwright options, no `addInitScript` and no request interception from
 application code, no `Runtime.enable`-dependent APIs.
 
-**firefox.** camoufox-js with the persisted fingerprint (`fingerprint` option),
-`geoip` disabled in favor of explicit `locale`, `timezone`, `geolocation`
-from Kage (deterministic), `virtualDisplay` or Xvfb, `humanize` off
-(the shared behavior engine drives input instead so both engines behave the
-same), proxy via options.
+**firefox.** Camoufox at a pinned build (`v152.0.4-beta.30`, fetched by
+URL and checksum, never by the launcher's own download; the engine refuses
+any other build), driven through its own playwright-core, one browser per
+context on its own Xvfb display, started through a wrapper that sets the
+persona's CPU affinity. The fingerprint is generated from a 64-hex seed
+with the parts of camoufox-js (the real-device generator under the seeded
+swap, the mapping to the browser's configuration, the font list and a
+graphics card of the claimed system drawn from the launcher's table) and
+persisted as the complete browser configuration; opening is a pure launch
+plan from that document. The launcher's `launchOptions` is not called: it
+is not reproducible, points fontconfig at a directory the pinned build
+does not have, and depends on ua-parser-js (ADR 0008). Language, time
+zone and position come from the open request (`geoip` is never used),
+`humanize` stays off (the shared behavior engine drives input), no addon
+is loaded and the build's window theming is off. The persona's fontconfig
+file is the build's own for the claimed system with an absolute font
+directory and, for Windows and macOS claims, hinting off. The proxy with
+credentials goes through the driver's option; loopback is sent through it
+(`network.proxy.allow_hijacking_localhost`), and WebRTC gathers nothing
+that would leave around it (`media.peerconnection.ice.proxy_only_if_behind_proxy`).
+The same captures as chromium, with three differences that the contract
+names or the runbook explains: the console holds the page's own calls, a
+full-page screenshot has no side effect, and a PDF is printed with the
+keyboard shortcut into a file, always A4 portrait.
 
 **Fallback (risk R1).** If camoufox-js proves unstable, `engine-firefox` is
 replaced by a Python package implementing the same contract with the
 upstream `camoufox` launcher. The contract does not change.
 
 ### 10.4 Behavior engine (engine-core)
+
+Input is sent through the mouse and keyboard of the context's own X
+display (the XTEST extension), by one implementation for both engines, and
+never through a driver: a driver's synthetic input is distinguishable (an
+empty `pointerType` on Firefox, wheel jumps without the browser's own
+delta and smooth scrolling, capitals without `Shift`, key holds equal to
+the key interval). The display's keyboard layout is the persona's
+(`setxkbmap` by locale), so `KeyboardEvent.code` relates to `key` as on
+that country's keyboard.
+
+A persona has a motor profile, drawn once from its seed
+(`motor-profile-v1`, sixteen traits inside human bounds), so twenty
+personas have twenty hands; a request has its own stream, from the
+persona's seed and the request's seed, which the result records.
 
 - Mouse: Bezier curves with overshoot and correction, variable velocity,
   micro-jitter, occasional idle wander; click after a short hover.
@@ -757,8 +824,20 @@ upstream `camoufox` launcher. The contract does not change.
   `behavior.typos` is on.
 - Entry: the first navigation in a context for a new origin SHOULD arrive
   with a plausible `Referer` strategy from policy: `direct`, `search_engine`
-  (visit the engine results page first, then click), or `none`.
+  (visit the engine results page first, then click), or `none`. `none`
+  and `direct` are equal on the wire: a typed navigation without a
+  `Referer`. `link` loads a page to start from and clicks its link to the
+  target; `search_engine` clicks the first result that leads to the
+  target's host on a results URL that Kage builds from a policy template.
+  A `Referer` is never forged: it is what the browser sends for the click.
+  Without a link or result the outcome says so and nothing else is loaded,
+  unless the request asks for the fallback to a typed navigation. No
+  search template is enabled by default.
 - All randomness seeded per persona and request for reproducibility in tests.
+- The sidecar does nothing unless asked: a navigation without `behavior`
+  is a bare page load. Kage's domain policy for a browser render MUST ask
+  for human behavior (a human dwell, a scroll depth around 0.6 to 0.9,
+  wander on); the scheduler and the API apply it (M7, M8).
 
 ### 10.5 Flow actions (v1 DSL)
 
@@ -766,7 +845,13 @@ upstream `camoufox` launcher. The contract does not change.
 network_idle | ms), `select`, `hover`, `back`, `extract` (capture point),
 `screenshot`, `pdf`, `assert` (selector exists | text contains). Every
 action has an optional `human: true|false` (default true) and `timeout_ms`.
-Each step reports success, duration and a capture when requested.
+Each step reports success, duration and a capture when requested. A human
+step is done by the behavior engine through the display: a `select` is
+opened with a click and chosen with the arrow keys and `Enter`, `back` is
+`Alt` and the left arrow. A step with `human: false` is done by the
+driver and is visible to a page as such. The first step that fails ends
+the flow; a flow's `behavior` gives the seed and whether typing makes
+typos.
 
 ### 10.6 Resource rules
 
@@ -1029,7 +1114,7 @@ Sections at this point: `server`, `database`, `secrets`, `sidecar`,
 `reputation`, `http` (with `http.subresources`), `selftest` (`selftest.http`,
 `selftest.browser` with its own pages and the third-party pages),
 `engines` (`engines.<engine>.browser_major`: 155 for the chromium image of
-M4, unset for firefox until M5; a set major must be served by a profile,
+M4, 152 for the firefox image of M5; a set major must be served by a profile,
 verified or recorded as browser-only, or `kage config check` fails;
 `engines.chromium.allow_cross_os_claims`, default false). `sidecar` holds
 the token, each engine's URL, the timeouts and `connect_retries`;
@@ -1112,7 +1197,7 @@ are gzip-compressed on disk.
   needs (`chroot`, `clone`, `setns`, `unshare`), which the default
   refuses to a container without capabilities. The firefox sidecar keeps
   the default profile. The stack smoke test checks all of it on a running
-  container with a context open.
+  container of each engine with a context open.
 - **Browser path.** Loopback is sent through the proxy (`<-loopback>`), so
   a page cannot reach the sidecar's own network. The redirect chain of a
   navigation is checked after the fact with the same functions as the http
@@ -1183,10 +1268,15 @@ generated, images pushed with digests recorded in `deploy/compose.yaml`.
   chromium variant installs Chrome stable at a pinned version, verified by
   the checksum of Google's package (`CHROME_VERSION`, `CHROME_SHA256`),
   Xvfb, Mesa and the font set of the distribution's desktop; firefox
-  variant fetches the pinned Camoufox build; both record versions under
-  `/etc/kage/` (chromium: `chrome-version`, `fonts`, `display`).
-  `scripts/setup-chrome.sh` installs the same Chrome on a CI runner or a
-  developer machine from the same two lines.
+  variant fetches the pinned Camoufox build by URL and checksum
+  (`CAMOUFOX_VERSION`, `CAMOUFOX_RELEASE`, `CAMOUFOX_SHA256`); both install
+  PulseAudio, which the sidecar starts with one output and one input that
+  go nowhere (`SIDECAR_AUDIO=pulse`), and record versions under
+  `/etc/kage/` (chromium: `chrome-version`, `fonts`, `display`; firefox:
+  `camoufox-version`, `display`). The Firefox image is built locally and
+  not published (ADR 0008).
+  `scripts/setup-chrome.sh` and `scripts/setup-camoufox.sh` install the
+  same browsers on a CI runner or a developer machine from the same lines.
 - `deploy/compose.yaml`: services, healthchecks, resource limits,
   `shm_size`, read-only FS, secrets, volumes, digests.
 - Runbooks in `docs/runbooks/`: first start, adding proxies, replacing an

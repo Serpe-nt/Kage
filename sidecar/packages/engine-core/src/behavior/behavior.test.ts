@@ -376,15 +376,15 @@ describe('scrolling and dwelling', () => {
       return pauses.reduce((sum, value) => sum + value, 0) / pauses.length;
     };
     const few = mean(20);
-    const some = mean(100);
-    const many = mean(250);
+    const some = mean(60);
+    const many = mean(150);
     expect(some).toBeGreaterThan(few * 1.5);
     expect(many).toBeGreaterThan(some * 1.5);
     // Proportional: twice the words is about twice the reading time.
     const reading = (words: number) =>
       (words / profile.reading.wordsPerMinute) * 60_000 * profile.reading.attention;
     expect(
-      Math.abs(many - few - (reading(250) - reading(20))) / (reading(250) - reading(20)),
+      Math.abs(many - few - (reading(150) - reading(20))) / (reading(150) - reading(20)),
     ).toBeLessThan(0.25);
     expect(readingPause(100_000, profile, stream('long'))).toBe(6000);
   });

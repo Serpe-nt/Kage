@@ -298,11 +298,12 @@ config-check: setup-env
 openapi:
     cd sidecar && pnpm --filter @kage/contract run build && pnpm --filter @kage/contract run emit
 
-# Record what the Chromium engine's real browser shows the in-repo fingerprint
-# echo (tests/fixtures/fingerprints/browser/). Run it when the pinned Chrome
-# moves; see docs/runbooks/fingerprint-echo.md.
-capture-browser-fingerprint:
-    scripts/capture-browser-fingerprint.sh
+# Record what an engine's real browser shows the in-repo fingerprint echo
+# (tests/fixtures/fingerprints/browser/): `just capture-browser-fingerprint
+# firefox`. Run it when the pinned browser of that engine moves; see
+# docs/runbooks/fingerprint-echo.md.
+capture-browser-fingerprint engine="chromium":
+    scripts/capture-browser-fingerprint.sh {{ engine }}
 
 # --- CI ----------------------------------------------------------------------
 

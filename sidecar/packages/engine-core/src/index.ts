@@ -9,6 +9,7 @@
  * display, the flow executor and the navigation both engines share.
  */
 export * from './artifacts.js';
+export * from './audio.js';
 export * from './behavior/index.js';
 export * from './capture.js';
 export * from './challenge.js';

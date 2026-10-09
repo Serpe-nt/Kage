@@ -16,13 +16,16 @@ the same in the window, in every iframe and in every worker.
 |---|---|
 | operating system, `User-Agent`, Client Hints | the Chrome in the image: Linux x86_64 (ADR 0009) |
 | screen and window size | the persona's own Xvfb display, sized from its fingerprint |
+| work area (`screen.avail*`) | the display announces a desktop's top bar of 32 px (the `_NET_WORKAREA` hint) and the window sits below it, as a maximized window on GNOME does |
+| keyboard (`KeyboardEvent.code` against `key`) | the display's layout, set from the persona's locale with `setxkbmap` |
 | time zone | `TZ` of the browser process, the persona's zone |
 | languages, `Accept-Language` | `--lang`, `LANG`, and `intl.accept_languages` in the profile |
 | `hardwareConcurrency` | a CPU affinity mask: the persona's count, at most the host's |
 | WebGL vendor and renderer | Mesa llvmpipe through ANGLE, or the host's GPU (below) |
 | cookies, storage, history | the persona's profile directory, kept between contexts |
 | WebRTC addresses | none: `disable_non_proxied_udp`, no UDP leaves outside the proxy |
-| device memory, fonts, audio and media devices | the host and the image; the fingerprint lists them as `host_bound` |
+| media devices, `AudioContext` | a PulseAudio in the container with one output and one input that go nowhere (`SIDECAR_AUDIO=pulse`, the image's default) |
+| device memory, fonts | the host and the image; the fingerprint lists them as `host_bound` |
 
 One browser process per persona context: a persistent profile is a browser
 process of its own in Chrome. `SIDECAR_MAX_CONTEXTS` (default 3) is
@@ -39,6 +42,7 @@ Set in `deploy/.env` (`deploy/.env.example` lists them) or on the container.
 | `KAGE_SIDECAR_CONTEXT_IDLE_MS` | `SIDECAR_CONTEXT_IDLE_MS` | 120000 | An unused context is closed after this; the profile stays. |
 | `KAGE_SIDECAR_MAX_PAGES_PER_BROWSER` | `SIDECAR_MAX_PAGES_PER_BROWSER` | 500 | A browser is restarted after this many navigations. |
 | `KAGE_SIDECAR_GL` | `SIDECAR_GL` | `llvmpipe` | `llvmpipe`, `swiftshader`, `none` or `host`. |
+| `KAGE_SIDECAR_AUDIO` | `SIDECAR_AUDIO` | `pulse` in the images, `none` elsewhere | The sidecar runs a sound server for its browsers; without one a browser lists no media device. |
 | `KAGE_SIDECAR_ALLOW_CROSS_OS_CLAIMS` | `SIDECAR_ALLOW_CROSS_OS_CLAIMS` | false | See "Claiming another system". |
 | `KAGE_SIDECAR_SELFTEST_PROBE_URL`, `…_ECHO_URL` | `SIDECAR_SELFTEST_PROBE_URL`, `…_ECHO_URL` | unset | The self-test's own pages when a request names none. |
 
@@ -148,7 +152,7 @@ kage selftest browser --proxy <proxy id> --timezone Europe/Rome \
 | Flag | Meaning |
 |---|---|
 | `--proxy` | The proxy to leave through. A retired proxy is refused. |
-| `--engine` | `chromium` (default) or `firefox` (from M5). |
+| `--engine` | `chromium` (default) or `firefox`. A Firefox stand-in persona claims Windows; see `engine-firefox.md`. |
 | `--timezone`, `--language` | The identity of the stand-in persona; use the proxy's country. |
 | `--third-party` | Also load `selftest.browser.third_party_pages`. |
 | `--idle-before` | Keep the context open and untouched for this long (for example `10m`) before the pages load. For measuring what the browser sends by itself; the sidecar's `SIDECAR_CONTEXT_IDLE_MS` must be longer, or it closes the context meanwhile. |
@@ -180,6 +184,16 @@ seconds, and `tests/live/background-traffic.mjs` reports the bytes of the
 first two minutes (a browser that has just started fetches the most), the
 rate after that, and what one persona-hour costs. The interface counts
 packet headers too, so a provider bills slightly less than the figure.
+
+## Input and flows
+
+Human input (the behavior engine of spec §10.4, the human steps of a flow,
+the click of a `link` or `search_engine` entry) goes through the mouse and
+keyboard of the context's own X display, not through the driver; the
+measurements behind that, the motor profile of a persona and the entry
+strategies are described in `engine-firefox.md` and hold for both engines.
+On chromium a wheel notch scrolls 120 px, and two notches within one frame
+reach a page as one wheel event of twice the size.
 
 ## Captures and what they cost
 

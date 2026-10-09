@@ -351,8 +351,8 @@ describe('launchPlan', () => {
       inject: 'none',
     });
     expect(plan.args).toEqual([
-      '--window-position=0,0',
-      '--window-size=1920,1080',
+      '--window-position=0,32',
+      '--window-size=1920,1048',
       '--lang=de-DE',
       '--use-gl=angle',
       '--use-angle=gl',

@@ -109,7 +109,7 @@ them all.
 | `just test` | Rust tests (the store tests start Postgres in Docker) and sidecar vitest (the Chromium engine's tests start the real browser; not as root) |
 | `just contract-check` | The committed sidecar OpenAPI document is current and breaks no client |
 | `just openapi` | Regenerate the sidecar OpenAPI document from its zod schemas |
-| `just capture-browser-fingerprint` | Record what the engine's real Chrome shows the fingerprint echo |
+| `just capture-browser-fingerprint [engine]` | Record what an engine's real browser shows the fingerprint echo (`chromium`, `firefox`) |
 | `just sqlx-check` | Migrations apply from empty and are idempotent; `.sqlx/` matches the queries |
 | `just sqlx-prepare` | Regenerate `.sqlx/` after a query or a migration changed |
 | `just cov` | Coverage reports with thresholds |
@@ -162,8 +162,16 @@ intentionally submit for inclusion in this work, as defined in the Apache-2.0
 license, shall be dual licensed as above, without any additional terms or
 conditions.
 
-Third-party components keep their own licenses. One of them needs attention:
-the Firefox sidecar image contains `ua-parser-js` 2.x, a dependency of
-`camoufox-js` that is licensed AGPL-3.0-or-later. How the project deals with
-it is an open decision, recorded in
-[docs/adr/0008-agpl-ua-parser-js-in-firefox-engine.md](docs/adr/0008-agpl-ua-parser-js-in-firefox-engine.md).
+Third-party components keep their own licenses. Two things about the Firefox
+sidecar need saying, both recorded in
+[docs/adr/0008-agpl-ua-parser-js-in-firefox-engine.md](docs/adr/0008-agpl-ua-parser-js-in-firefox-engine.md):
+
+- `camoufox-js` asks for `ua-parser-js` 2.x, which is AGPL-3.0-or-later. The
+  workspace uses the MIT-licensed 1.0.x line instead; the dependency tree has
+  no AGPL package.
+- **The Firefox sidecar image is not published.** It is built from Camoufox,
+  whose build bundles Microsoft's and Apple's font files (they are what makes
+  a Windows or macOS persona's fonts right), and a public image of this
+  project would redistribute them. Build it where it runs:
+  `just build-images`. This is the project's cautious default, not legal
+  advice.

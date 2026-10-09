@@ -130,6 +130,9 @@ export class ChromiumEngine implements Engine {
           DISPLAY: display.name,
           KAGE_CHROME: this.host.chromePath,
           KAGE_CPU_LIST: cpuListOf(plan),
+          ...(this.options.audioServer === undefined
+            ? {}
+            : { PULSE_SERVER: this.options.audioServer }),
           ...plan.env,
         },
       });

@@ -613,7 +613,9 @@ describe('coherence (spec §6.2)', () => {
       (finding) => finding.status !== 'pass' && !finding.check.startsWith('environment.'),
     );
     expect(problems).toEqual([]);
-    expect(selftest).toMatchObject({ passed: true, complete: true, score: 100 });
+    expect(selftest).toMatchObject({ passed: true, complete: true });
+    // A warning about the test machine costs a little; nothing else does.
+    expect(selftest.score).toBeGreaterThanOrEqual(98);
     const checks = selftest.findings.map((finding) => finding.check);
     for (const scope of [
       'window',

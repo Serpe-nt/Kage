@@ -8,6 +8,46 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- M5, the Firefox engine and the behavior engine:
+  - The Firefox engine: Camoufox `v152.0.4-beta.30`, fetched by URL and
+    checksum, one browser per persona on its own X display with a
+    persistent profile and an authenticated proxy. A Firefox persona claims
+    Windows or macOS; the claim was measured coherent in the window, every
+    kind of iframe and both kinds of worker, fonts and WebGL included
+    (`docs/runbooks/engine-firefox.md`). The fingerprint is generated once
+    from the persona's seed and persisted as the browser's whole
+    configuration; an open generates nothing.
+  - The behavior engine, shared by both engines: mouse paths (curved, timed
+    by Fitts' law, with tremor, overshoot and correction), wheel scrolling
+    in flicks with reading pauses proportional to the text in view, dwell
+    from a log-normal, typing with per-key timing, modifier keys and
+    optional typos, and an idle hand that wanders. Each persona has its own
+    motor profile from its seed; each request its own recorded seed.
+  - Input goes through the mouse and keyboard of the context's own X
+    display (XTEST), not through a browser driver, on both engines, with
+    the keyboard layout of the persona's locale.
+  - `navigate` takes `behavior`: scroll depth, human dwell, wander, and the
+    entry strategies `none`, `direct`, `link` and `search_engine`, which
+    arrive by a real click with the browser's own `Referer`.
+  - The flow endpoint: the v1 actions (`goto`, `click`, `type`, `press`,
+    `scroll`, `wait_for`, `select`, `hover`, `back`, `extract`,
+    `screenshot`, `pdf`, `assert`) streamed as NDJSON; `SidecarClient::flow`
+    in `kage-browser`.
+  - An engine parity suite: the same contract, capture and behavior tests
+    run against both engines.
+  - Both images announce a desktop to their browsers: a work area smaller
+    than the screen and a sound server with an output and an input
+    (follow-ups F9 and F12 of M4).
+  - The coherence probe measures fonts and WebGL in every scope and
+    reports what surrounds the browser (work area, media devices, audio).
+  - `just capture-browser-fingerprint firefox`, the capture
+    `tests/fixtures/fingerprints/browser/firefox-152.json`, and Firefox 152
+    recorded as browser-only on the http path (its TLS offers one cipher
+    suite fewer than the newest profile; a stock Firefox 152.0.4 measures
+    the same as the Camoufox build).
+  - `just setup-camoufox`, `kage selftest browser --engine firefox`,
+    `engines.firefox.browser_major`.
+
 - M4, the browser sidecar and its Chromium engine:
   - `@kage/contract`: zod schemas for every endpoint of the sidecar
     (health, metrics, persona generation, contexts, navigate, flow, state
@@ -60,6 +100,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The sidecar contract is 1.1.0: `behavior` on navigate and flow requests
+  and on their results. Nothing was removed.
+- `ua-parser-js` is overridden to its MIT 1.0.x line and the license
+  exception is gone (ADR 0008). The release workflow does not publish the
+  Firefox image: the Camoufox build bundles Microsoft's and Apple's fonts.
+- The default persona mix is chromium on linux 40 %, firefox on windows
+  45 %, firefox on macos 15 % (spec §6.1).
+- A chromium persona's window sits below a 32 px top bar that its display
+  announces, so `screen.availHeight` is smaller than `screen.height`.
 - The sidecars need the shared secret on every route, the health endpoint
   included; the container healthcheck sends it.
 - `sidecar` in the configuration gained each engine's URL, the timeouts

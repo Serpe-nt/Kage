@@ -1,6 +1,6 @@
 //! Why a call to a sidecar failed.
 
-use crate::contract::ErrorCode;
+use crate::contract::{ErrorCode, FlowEvent};
 
 /// A failed call to a sidecar.
 ///
@@ -64,6 +64,17 @@ pub enum BrowserError {
         status: u16,
         /// What was wrong with the body.
         detail: String,
+    },
+    /// The answer of a flow ended without its final event: the flow broke
+    /// after the sidecar had begun to answer. The steps listed here did
+    /// happen; what came after them is not known.
+    #[error(
+        "the flow was interrupted: the sidecar's answer ended after {} step(s) without a final event",
+        .steps.len()
+    )]
+    FlowInterrupted {
+        /// The events received before the answer ended, in order.
+        steps: Vec<FlowEvent>,
     },
 }
 

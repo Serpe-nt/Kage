@@ -12,10 +12,10 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::contract::{
-    ErrorResponse, ExportStateRequest, ExportStateResponse, GeneratePersonaRequest,
-    GeneratePersonaResponse, HealthResponse, ImportStateRequest, ImportStateResponse,
-    NavigateRequest, OpenContextRequest, OpenContextResponse, PageResult, SelftestRequest,
-    SelftestResponse, TOKEN_HEADER,
+    ErrorResponse, ExportStateRequest, ExportStateResponse, FlowEvent, FlowRequest,
+    GeneratePersonaRequest, GeneratePersonaResponse, HealthResponse, ImportStateRequest,
+    ImportStateResponse, NavigateRequest, OpenContextRequest, OpenContextResponse, PageResult,
+    SelftestRequest, SelftestResponse, TOKEN_HEADER,
 };
 use crate::error::BrowserError;
 use crate::ssrf::{self, DeniedHop};
@@ -30,9 +30,9 @@ const FIRST_BACKOFF: Duration = Duration::from_millis(200);
 /// Longest wait between two connection attempts.
 const MAX_BACKOFF: Duration = Duration::from_secs(2);
 
-/// The operations of the contract this client calls. The contract test
-/// compares the list with the document, so an endpoint added to the
-/// contract is noticed here. `flow` joins with the flow executor in M5.
+/// The operations of the contract this client calls: all of them. The
+/// contract test compares the list with the document, so an endpoint added
+/// to the contract is noticed here.
 pub const IMPLEMENTED_OPERATIONS: &[&str] = &[
     "health",
     "metrics",
@@ -40,6 +40,7 @@ pub const IMPLEMENTED_OPERATIONS: &[&str] = &[
     "open_context",
     "close_context",
     "navigate",
+    "flow",
     "export_state",
     "import_state",
     "selftest",
@@ -248,6 +249,16 @@ impl SidecarClient {
         }
     }
 
+    /// The JSON body of a request.
+    fn body<Request: Serialize>(
+        operation: &'static str,
+        request: &Request,
+    ) -> Result<Vec<u8>, BrowserError> {
+        serde_json::to_vec(request).map_err(|error| {
+            BrowserError::Setup(format!("cannot write the body of {operation}: {error}"))
+        })
+    }
+
     async fn call<Request: Serialize + Sync, Response: DeserializeOwned>(
         &self,
         operation: &'static str,
@@ -256,11 +267,8 @@ impl SidecarClient {
         request: Option<&Request>,
     ) -> Result<Response, BrowserError> {
         let body = request
-            .map(serde_json::to_vec)
-            .transpose()
-            .map_err(|error| {
-                BrowserError::Setup(format!("cannot write the body of {operation}: {error}"))
-            })?;
+            .map(|request| Self::body(operation, request))
+            .transpose()?;
         let (status, bytes) = self.send(operation, method, path, body).await?;
         if !(200..300).contains(&status) {
             return Err(Self::refusal(operation, status, &bytes));
@@ -416,6 +424,45 @@ impl SidecarClient {
         })
     }
 
+    /// `POST /v1/contexts/{id}/flow`: runs a scripted flow and returns its
+    /// events in order, one [`FlowEvent::Step`] per finished step and then
+    /// exactly one [`FlowEvent::Final`].
+    ///
+    /// The sidecar answers with one line of JSON per event, written as the
+    /// steps finish; the whole answer is read before anything is returned.
+    /// Like [`Self::navigate`], the page results in the events are what the
+    /// browser did, unchecked: [`ssrf::check_chain`] reads each of them as
+    /// it reads a navigation's.
+    ///
+    /// # Errors
+    ///
+    /// See [`BrowserError`]. A flow refused before its first step is
+    /// [`BrowserError::Refused`] like any other call, for example with
+    /// `context_busy`. [`BrowserError::FlowInterrupted`] when the answer
+    /// ends without its final event: the flow broke after the sidecar had
+    /// begun to answer, and the error carries the steps that did finish.
+    /// A step that failed is not an error: its event and the final one say
+    /// so.
+    pub async fn flow(
+        &self,
+        context: Uuid,
+        request: &FlowRequest,
+    ) -> Result<Vec<FlowEvent>, BrowserError> {
+        let body = Self::body("flow", request)?;
+        let (status, bytes) = self
+            .send(
+                "flow",
+                wreq::Method::POST,
+                &format!("/v1/contexts/{context}/flow"),
+                Some(body),
+            )
+            .await?;
+        if !(200..300).contains(&status) {
+            return Err(Self::refusal("flow", status, &bytes));
+        }
+        flow_events(status, &bytes)
+    }
+
     /// `POST /v1/contexts/{id}/state/export`: cookies and storage of an origin.
     ///
     /// # Errors
@@ -470,5 +517,40 @@ impl SidecarClient {
             request,
         )
         .await
+    }
+}
+
+/// Reads the answer of a flow: one event per line, the steps first and one
+/// final event last.
+fn flow_events(status: u16, body: &[u8]) -> Result<Vec<FlowEvent>, BrowserError> {
+    let unexpected = |detail: String| BrowserError::Unexpected {
+        operation: "flow",
+        status,
+        detail,
+    };
+    let mut events = Vec::new();
+    let mut finished = false;
+    for (index, line) in body.split(|byte| *byte == b'\n').enumerate() {
+        // A line may end in `\r\n`, and the body may end with a newline or
+        // without one.
+        let line = line.trim_ascii();
+        if line.is_empty() {
+            continue;
+        }
+        let number = index + 1;
+        if finished {
+            return Err(unexpected(format!(
+                "line {number} follows the final event"
+            )));
+        }
+        let event: FlowEvent = serde_json::from_slice(line)
+            .map_err(|error| unexpected(format!("line {number} is not a flow event: {error}")))?;
+        finished = matches!(event, FlowEvent::Final { .. });
+        events.push(event);
+    }
+    if finished {
+        Ok(events)
+    } else {
+        Err(BrowserError::FlowInterrupted { steps: events })
     }
 }

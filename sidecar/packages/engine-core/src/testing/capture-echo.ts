@@ -1,19 +1,21 @@
-import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp } from 'node:fs/promises';
+import { writeFileSync } from 'node:fs';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { promisify } from 'node:util';
 
-import type { NavigateRequest, PageResult } from '@kage/contract';
-import { ArtifactWriter, silentLog, type FingerprintDocument } from '@kage/engine-core';
+import type {
+  ClaimedOs,
+  EngineName,
+  NavigateRequest,
+  PageResult,
+  ScreenConstraints,
+} from '@kage/contract';
 
-import { ChromiumEngine } from '../engine.js';
-import { detectHost } from '../host.js';
-import { profilePaths } from '../profile.js';
+import { ArtifactWriter } from '../artifacts.js';
+import { silentLog, type Engine, type EngineOptions } from '../engine.js';
+import type { FingerprintDocument } from '../fingerprint.js';
 
-import { startTestProxy } from '@kage/engine-core/testing';
-
-const run = promisify(execFile);
+import { startTestProxy } from './test-proxy.js';
 
 /** One request as the fingerprint echo saw it. */
 export interface CapturedRequest {
@@ -24,14 +26,15 @@ export interface CapturedRequest {
 }
 
 /**
- * What the engine's real browser showed the fingerprint echo: the file
- * `tests/fixtures/fingerprints/browser/chromium-<major>.json`
+ * What an engine's real browser showed the fingerprint echo: the file
+ * `tests/fixtures/fingerprints/browser/<engine>-<major>.json`
  * (`kage_http::selftest::BrowserCapture`).
  */
 export interface EchoCapture {
-  readonly engine: 'chromium';
+  readonly engine: EngineName;
   readonly browser_version: string;
-  readonly os: 'linux';
+  /** The system the capturing persona claimed. */
+  readonly os: ClaimedOs;
   /** The day of the capture, `YYYY-MM-DD`. */
   readonly recorded: string;
   readonly ja4: string;
@@ -40,6 +43,24 @@ export interface EchoCapture {
   /** Header names of a typed navigation over HTTP/2, in wire order. */
   readonly headers: readonly string[];
   readonly requests: Readonly<Record<string, CapturedRequest>>;
+}
+
+/** The engine whose browser is captured. */
+export interface CaptureSubject {
+  readonly engine: EngineName;
+  /** The system the capturing persona claims: what the engine's personas claim in production. */
+  readonly claimedOs: ClaimedOs;
+  /** Bounds of the persona's screen; the capture does not depend on it. */
+  readonly screen: ScreenConstraints;
+  createEngine(options: EngineOptions): Promise<Engine>;
+  /**
+   * Makes the persona's browser trust one more certificate authority, the
+   * way a person adds one, before the browser first starts. No flag that
+   * weakens certificate checks is involved.
+   *
+   * @param profileDir the persona's profile directory on disk.
+   */
+  trust(profileDir: string, caFile: string): Promise<void>;
 }
 
 /** Where the echo runs and how the browser comes to trust it. */
@@ -86,40 +107,19 @@ function published(result: PageResult): Record<string, Observation | null> {
 }
 
 /**
- * Gives a persona's browser a certificate database that trusts one more
- * authority, the way a person adds one: Chrome on Linux reads user-trusted
- * authorities from the NSS database in its home directory. No flag that
- * weakens certificate checks is involved.
- */
-async function trustAuthority(home: string, caFile: string): Promise<void> {
-  const database = path.join(home, '.pki', 'nssdb');
-  await mkdir(database, { recursive: true, mode: 0o700 });
-  await run('certutil', ['-d', `sql:${database}`, '-N', '--empty-password']);
-  await run('certutil', [
-    '-d',
-    `sql:${database}`,
-    '-A',
-    '-t',
-    'C,,',
-    '-n',
-    'kage-fingerprint-echo',
-    '-i',
-    caFile,
-  ]);
-}
-
-/**
- * Points the engine's real browser at the in-repo fingerprint echo, the way
- * a persona context runs in production (same launch plan, through an
+ * Points an engine's real browser at the in-repo fingerprint echo, the way
+ * a persona context runs in production (same launch, through an
  * authenticated proxy), and records what the echo saw: the TLS and HTTP/2
  * fingerprints and the headers of a typed navigation, `fetch()`, a JSON
- * POST, `XMLHttpRequest` and a navigation over HTTP/1.1 (follow-up F5). A
- * followed link is not captured yet: following one takes a click, which
- * arrives with the behavior engine.
+ * POST, `XMLHttpRequest` and a navigation over HTTP/1.1 (follow-up F5 of
+ * docs/02-plan.md).
  *
  * @throws when the browser cannot reach or trust the echo.
  */
-export async function captureEcho(options: CaptureOptions): Promise<EchoCapture> {
+export async function captureEcho(
+  subject: CaptureSubject,
+  options: CaptureOptions,
+): Promise<EchoCapture> {
   const origin = `https://${options.echoHost}:${options.echoPort}`;
   const http1 = `https://h1.${options.echoHost}:${options.echoPort}`;
   // The only thing the test proxy relays is the echo, by its names.
@@ -131,26 +131,22 @@ export async function captureEcho(options: CaptureOptions): Promise<EchoCapture>
     },
   });
   const root = await mkdtemp(path.join(tmpdir(), 'kage-capture-'));
-  const host = await detectHost();
-  const engine = new ChromiumEngine(
-    {
-      personasDir: path.join(root, 'personas'),
-      allowCrossOsClaims: false,
-      gl: 'llvmpipe',
-      selftestPages: [],
-      log: silentLog,
-    },
-    host,
-  );
+  const engine = await subject.createEngine({
+    personasDir: path.join(root, 'personas'),
+    allowCrossOsClaims: false,
+    gl: 'llvmpipe',
+    selftestPages: [],
+    log: silentLog,
+  });
   try {
     const { fingerprint } = await engine.generatePersona({
       seed: SEED,
-      claimed_os: 'linux',
+      claimed_os: subject.claimedOs,
       languages: ['en-US', 'en'],
-      screen: { min_width: 1920, max_width: 1920, min_height: 1080, max_height: 1080 },
+      screen: subject.screen,
     });
     const document = fingerprint as FingerprintDocument;
-    await trustAuthority(profilePaths(path.join(root, 'personas', 'capture')).home, options.caFile);
+    await subject.trust(path.join(root, 'personas', 'capture'), options.caFile);
     const context = await engine.openContext({
       persona_id: '0199c1f2-6b7a-7c3e-9d41-00000000cafe',
       fingerprint: document,
@@ -208,9 +204,9 @@ export async function captureEcho(options: CaptureOptions): Promise<EchoCapture>
         requests[name] = request(observation);
       }
       return {
-        engine: 'chromium',
+        engine: subject.engine,
         browser_version: context.browserVersion,
-        os: 'linux',
+        os: subject.claimedOs,
         recorded: options.recorded ?? new Date().toISOString().slice(0, 10),
         ja4: navigation.tls.ja4,
         ja4_r: navigation.tls.ja4_r,
@@ -235,4 +231,40 @@ export function serializeCapture(capture: EchoCapture): string {
 /** The fixture file name of a capture: `chromium-155.json`. */
 export function captureFileName(capture: EchoCapture): string {
   return `${capture.engine}-${capture.browser_version.split('.')[0] ?? 'unknown'}.json`;
+}
+
+/**
+ * The command line of a capture, shared by both engines' entry points:
+ *
+ *   node dist/testing/capture-echo-bin.js --host echo.kage.test --port 8443 \
+ *     --ca ca.pem --out-dir tests/fixtures/fingerprints/browser
+ *
+ * `scripts/capture-browser-fingerprint.sh` starts the echo and calls it.
+ */
+export async function captureMain(subject: CaptureSubject, args: readonly string[]): Promise<void> {
+  const option = (name: string): string => {
+    const index = args.indexOf(`--${name}`);
+    const value = index >= 0 ? args[index + 1] : undefined;
+    if (value === undefined) {
+      throw new Error(`missing --${name}`);
+    }
+    return value;
+  };
+  try {
+    const capture = await captureEcho(subject, {
+      echoHost: option('host'),
+      echoPort: Number(option('port')),
+      caFile: option('ca'),
+    });
+    const file = path.join(option('out-dir'), captureFileName(capture));
+    writeFileSync(file, serializeCapture(capture));
+    process.stdout.write(
+      `${file}\n  ${capture.engine} ${capture.browser_version} claiming ${capture.os}\n  ja4    ${capture.ja4}\n  akamai ${capture.akamai}\n  header order of a typed navigation:\n    ${capture.headers.join(', ')}\n`,
+    );
+  } catch (error) {
+    process.stderr.write(
+      `capture failed: ${error instanceof Error ? error.message : String(error)}\n`,
+    );
+    process.exitCode = 1;
+  }
 }

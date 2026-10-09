@@ -27,8 +27,8 @@ COPY sidecar/packages ./packages
 RUN --mount=type=cache,id=kage-pnpm-store,target=/pnpm/store \
     pnpm install --frozen-lockfile --store-dir /pnpm/store
 RUN pnpm run build
-# What an engine ships besides its compiled code (the Chromium engine: the
-# wrapper that starts Chrome under a CPU affinity mask). Test support is
+# What an engine ships besides its compiled code (both engines: the wrapper
+# that starts the browser under a CPU affinity mask). Test support is
 # compiled next to the code and does not belong in the image.
 RUN mkdir -p /stage/bin \
     && if [ -d "packages/engine-${ENGINE}/bin" ]; then cp -a "packages/engine-${ENGINE}/bin/." /stage/bin/; fi \
@@ -71,6 +71,20 @@ ARG ENGINE
 # developer machines, so tests and image run the same build.
 ARG CHROME_VERSION=155.0.8059.39
 ARG CHROME_SHA256=c58aa0f2cd66179c9f050e062c882d27aa9b9f8c2b7c73fee3498560b5ed0b38
+
+# Camoufox, pinned by version, by release and by the checksum of the release
+# archive (docs/versions.md, fingerprint-critical). The Firefox engine
+# refuses to start on any other build. The archive is fetched by its exact
+# address, never through the launcher's own download, which installs
+# whatever build it resolves. A bump is a dedicated change: it moves the
+# build the engine names (packages/engine-firefox/src/host.ts) and
+# engines.firefox.browser_major, and re-runs the parity suite and the
+# self-tests (docs/runbooks/engine-firefox.md).
+# `scripts/setup-camoufox.sh` reads the same three lines for CI runners and
+# developer machines, so tests and image run the same build.
+ARG CAMOUFOX_VERSION=152.0.4
+ARG CAMOUFOX_RELEASE=beta.30
+ARG CAMOUFOX_SHA256=5720d45b894ce1770543de024c6f10d514b38be560fa2dc3226b3d8586caf672
 
 LABEL org.opencontainers.image.title="kage-browser-${ENGINE}" \
       org.opencontainers.image.description="Kage browser sidecar, ${ENGINE} engine" \

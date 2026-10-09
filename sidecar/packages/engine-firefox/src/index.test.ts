@@ -188,6 +188,7 @@ describe('generateFingerprint', () => {
       'canvas:seed': 104_999_401,
       'canvas:aaOffset': 6,
       'canvas:aaCapOffset': true,
+      disableTheming: true,
       'window.outerWidth': 1616,
       'window.outerHeight': 916,
       'mediaDevices:enabled': true,

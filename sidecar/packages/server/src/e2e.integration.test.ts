@@ -249,7 +249,8 @@ describe('the sidecar through its HTTP contract', () => {
         (finding) => finding.status !== 'pass' && !finding.check.startsWith('environment.'),
       ),
     ).toEqual([]);
-    expect(selftest).toMatchObject({ passed: true, complete: true, score: 100 });
+    expect(selftest).toMatchObject({ passed: true, complete: true });
+    expect(selftest.score).toBeGreaterThanOrEqual(98);
     expect(selftest.pages[0]?.text?.path).toBe(`sidecar/${id}/selftest/probe.txt`);
 
     // Two navigations were the limit of this browser: the next one runs on

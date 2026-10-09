@@ -46,6 +46,7 @@ const EnvironmentSchema = z.object({
   SIDECAR_ARTIFACTS_DIR: z.string().min(1).default('/var/lib/kage/artifacts'),
   SIDECAR_ALLOW_CROSS_OS_CLAIMS: flag,
   SIDECAR_GL: GlModeSchema.default('llvmpipe'),
+  SIDECAR_AUDIO: z.enum(['none', 'pulse']).default('none'),
   SIDECAR_SELFTEST_PROBE_URL: url,
   SIDECAR_SELFTEST_ECHO_URL: url,
   SIDECAR_BODY_LIMIT_BYTES: z.coerce.number().int().min(1024).max(268_435_456).default(16_777_216),
@@ -77,6 +78,12 @@ export interface ServerConfig {
   readonly allowCrossOsClaims: boolean;
   /** Where WebGL comes from. */
   readonly gl: GlMode;
+  /**
+   * Whether the sidecar runs a sound server for its browsers: `pulse` on
+   * the image, where there is no sound card; `none` where the machine has
+   * its own or the tests do not need one.
+   */
+  readonly audio: 'none' | 'pulse';
   /** The self-test's default pages: Kage's own, never a third party's. */
   readonly selftestPages: readonly SelftestPage[];
   /** Largest request body. */
@@ -158,6 +165,7 @@ export function loadConfig(
     artifactsDir: data.SIDECAR_ARTIFACTS_DIR,
     allowCrossOsClaims: data.SIDECAR_ALLOW_CROSS_OS_CLAIMS,
     gl: data.SIDECAR_GL,
+    audio: data.SIDECAR_AUDIO,
     selftestPages,
     bodyLimitBytes: data.SIDECAR_BODY_LIMIT_BYTES,
   };
