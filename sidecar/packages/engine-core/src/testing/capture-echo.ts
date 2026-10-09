@@ -111,8 +111,8 @@ function published(result: PageResult): Record<string, Observation | null> {
  * a persona context runs in production (same launch, through an
  * authenticated proxy), and records what the echo saw: the TLS and HTTP/2
  * fingerprints and the headers of a typed navigation, `fetch()`, a JSON
- * POST, `XMLHttpRequest` and a navigation over HTTP/1.1 (follow-up F5 of
- * docs/02-plan.md).
+ * POST, `XMLHttpRequest`, a navigation over HTTP/1.1 and a navigation that
+ * followed a link (follow-ups F5 and F12 of docs/02-plan.md).
  *
  * @throws when the browser cannot reach or trust the echo.
  */
@@ -186,6 +186,17 @@ export async function captureEcho(
         );
       }
       const overHttp1 = JSON.parse(plain.raw_body.data) as Observation;
+      // A navigation that follows a link: the capture page has one, and the
+      // behavior engine clicks it. What the echo answers is what it saw.
+      const followed = await navigate(`${origin}/followed`, {
+        behavior: { seed: SEED, entry: { strategy: 'link', from_url: `${origin}/browser` } },
+      });
+      if (followed.error !== null || followed.raw_body === null) {
+        throw new Error(
+          `the link of the capture page was not followed: ${followed.error?.message ?? followed.behavior?.entry?.outcome ?? 'no body'}`,
+        );
+      }
+      const viaLink = JSON.parse(followed.raw_body.data) as Observation;
 
       const navigation = typed['navigation'];
       if (navigation?.http2 == null) {
@@ -197,6 +208,7 @@ export async function captureEcho(
         ['fetch_post_json', typed['fetch_post_json']],
         ['xhr_get', typed['xhr_get']],
         ['navigation_http1', overHttp1],
+        ['navigation_link', viaLink],
       ] as const) {
         if (observation == null) {
           throw new Error(`the capture has no ${name}: the page could not ask the echo`);
