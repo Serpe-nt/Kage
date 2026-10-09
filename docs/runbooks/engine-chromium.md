@@ -205,31 +205,102 @@ named in the result's `side_effects`:
 
 | Capture | How | A page can notice |
 |---|---|---|
-| DOM, title | read in an isolated world after settle | no event; user activation without input (below) |
+| DOM, title, text, storage | read in an isolated world over the engine's own debugger session (below) | nothing |
 | raw body, headers, redirects, XHR and fetch bodies | network events; never request interception | nothing |
 | console | the browser's log domain: network and security messages | nothing; `console.*` calls and uncaught errors are not captured on chromium |
 | screenshot of the viewport | the compositor | nothing |
 | screenshot `full_page: true` | the page is laid out at its full height once | a `resize` |
 | PDF | the print pipeline | `beforeprint`, `afterprint` |
 
-### Known tell: user activation without input
+### Reading a page without touching it
 
-Measured in M5, on both engines. Every navigation reads the page through
-the driver at least once (title and text right after `load`, a wait for a
-selector, the DOM capture). The driver marks each of those evaluations as
-a user gesture: patchright-core 1.63.0 sends `Runtime.callFunctionOn` with
-`userGesture: true`. A page that nobody touched therefore reads
-`navigator.userActivation.hasBeenActive` and `isActive` as true from about
-the first read on, with no input event before it, and a new `AudioContext`
-starts `running` where an untouched Chrome's is `suspended`. Started by
-hand with a debugging port and evaluated without the flag, the same Chrome
-155 shows `false`, `false` and `suspended`.
+The driver marks every evaluation of a page as a user gesture:
+patchright-core 1.63.0 sends `Runtime.callFunctionOn` with
+`userGesture: true`, as Playwright does. M5 measured what that means: a
+page nobody touched reads `navigator.userActivation.isActive` and
+`hasBeenActive` as true about 300 ms after `load`, with no input event
+before it, and a new `AudioContext` is `running` where an untouched
+Chrome's is `suspended`. Every navigation reads the page at least once
+(the title and the text right after `load`), so that was true of every
+page.
 
-Kage's own probe does not look at it, so the self-test stays green; a
-detector that compares activation with the input events it saw can use
-it. Not solved in M5: the remedy is in the driver (a fingerprint-critical
-package, so a pull request of its own) or in reading pages over CDP
-without the flag, and the probe should report it from then on.
+Since M5.1 nothing the engine reads of a page goes through the driver
+(`engine-chromium/src/page-reader.ts`). The title, the text, the document,
+selector waits, storage and the measurements of the behavior engine
+(element boxes, the page's size and scroll position, the words in view)
+are evaluated over the engine's own debugger session, the one that already
+takes screenshots and reads cookies, with `Runtime.evaluate` in an
+isolated world and no gesture flag. The driver keeps what does not
+evaluate in the page (the launch, `goto`, `goBack`, the waits for a load
+state and for a URL, network events) and the input of flow steps that ask
+for it with `human: false`, which is visible to a page anyway.
+
+- **A world of the engine's own.** A script registered for every new
+  document (`Page.addScriptToEvaluateOnNewDocument` with a world name)
+  puts a mark into that world, and every expression first checks the mark
+  and that it runs in the top frame. The reason was measured: an execution
+  context id is a small number that the next renderer process hands out
+  again, and after a navigation to another origin id 1 was the new page's
+  own world. With the check an evaluation that lands anywhere else reads
+  nothing and is repeated in the right world. The world's name and the
+  mark are random per context: no page can read either. patchright
+  registers the same kind of script for its own world.
+- **The `Page` domain is enabled on the engine's session** for that
+  script: without it Chrome accepts the script and never runs it. The
+  `Runtime` domain stays off, as before.
+- **A wait for a selector looks every 100 ms** from the sidecar and leaves
+  nothing running in the page. A selector is CSS.
+- Measured on a page with a strict Content Security Policy and Trusted
+  Types: the reads raise no violation and no error the page can see, also
+  when an expression throws.
+
+What a page shows now (`engine parity`, "reads a page nobody touched
+without granting it user activation", and the M5 experiment rerun): not
+active, never active and a `suspended` `AudioContext` at `load`, 300 ms
+and 4 s later, with the selector wait and the DOM capture taken; still so
+after a mouse that only moved; active from the `mousedown` of a click, as
+for a person, and no longer six seconds after it.
+
+A patchright bump needs no step for this: the engine does not use the
+driver's evaluation at all, and the parity test fails if a read finds its
+way back to it.
+
+### The probe's check, and what it must not be tightened to
+
+The coherence probe counts the trusted input events it receives and reads
+`navigator.userActivation` and a new `AudioContext` when its script starts
+and again half a second after `load` (a driver that reads a page touches
+it within 300 ms of `load`).
+
+| Finding | Fails or warns when | Hard |
+|---|---|---|
+| `automation.user_activation` | `isActive` or `hasBeenActive` is true, the page received no event that grants activation (`keydown`, `mousedown`, `pointerdown`, `pointerup`, `touchend`), and it was not reached from a page of its own origin | yes: it fails the self-test whatever the score |
+| `automation.audio_autoplay` | an `AudioContext` runs, or the browser answers `allowed` when asked (`navigator.getAutoplayPolicy()` for `mediaelement` or `audiocontext`, Firefox only), under the same two conditions | no, a warning |
+
+Three things a browser does for a person too were measured and are why
+the rule is not stricter:
+
+- A resting pointer gives Chrome a `mousemove` on a page nobody touched.
+  It is input and grants nothing: the rule counts the events that grant
+  activation, not input.
+- Chrome carries a person's activation into the next page when that page
+  was reached by **a click on a link of the same origin**:
+  `hasBeenActive` is true and an `AudioContext` runs from the first script
+  on, with no input on that page. Firefox does not. A typed navigation
+  carries nothing on either engine, also when the page before it had been
+  clicked on. The self-test loads the probe by a typed navigation; a probe
+  that says it came from its own origin (by its referrer) is not judged.
+- A person can allow autoplay in a browser's settings, and then sound
+  starts on a page nobody touched. Sound that may start by itself is
+  therefore a warning and never a failure. (The Camoufox build ships with
+  autoplay allowed; what that looked like and what the engine does about
+  it is in `engine-firefox.md`. With Firefox's default in place no way
+  of reaching a page that was measured starts an `AudioContext` in
+  Firefox without input: typed, by a link, or back in history.)
+
+A probe page older than this check (a copy on a static host that nobody
+updated) reports nothing about activation and gets a warning, so that
+nobody trusts a check that did not run.
 
 ## Moving to a new Chrome
 

@@ -8,6 +8,25 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- M5.1, page reads without user activation:
+  - The Chromium engine reads a page over its own debugger session:
+    title, text, DOM, selector waits, storage and the measurements of the
+    behavior engine are evaluated with `Runtime.evaluate` in an isolated
+    world of the engine's own, without the user-gesture flag the driver
+    sends. The driver keeps the launch, navigation and its waits, and the
+    input of `human: false` steps.
+  - The pinned Camoufox build runs with upstream's Juggler fix backported
+    into its `omni.ja` (`scripts/patch-camoufox-juggler.mjs`, ADR 0010),
+    in the image and after `just setup-camoufox`.
+  - The coherence probe compares `navigator.userActivation` and a new
+    `AudioContext` with the trusted input events it received:
+    `automation.user_activation`, a hard failure, and
+    `automation.audio_autoplay`, a warning.
+  - The fixture site's activation recorder (`/activation/`) and a parity
+    test on both engines: an untouched page is not active and its
+    `AudioContext` is suspended at `load`, 300 ms and 4 s later, with the
+    captures taken; a click activates it.
+
 - M5, the Firefox engine and the behavior engine:
   - The Firefox engine: Camoufox `v152.0.4-beta.30`, fetched by URL and
     checksum, one browser per persona on its own X display with a
@@ -100,8 +119,32 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     checks it with a context open.
   - Runbook `docs/runbooks/engine-chromium.md`.
 
+### Fixed
+
+- Reading a page no longer grants it user activation on either engine
+  (spec §10.2): both drivers marked every evaluation as a user gesture, so
+  a page nobody touched read `navigator.userActivation` as active about
+  300 ms after `load` and Chrome let an `AudioContext` run.
+- `kage-proxy/tests/reputation.rs` no longer fails by chance (follow-up
+  F11): its windows were shorter than the spread of the first lookups for
+  about one set of random proxy ids in four. The windows now cover the
+  spread and the assertions are per address.
+
 ### Changed
 
+- The Firefox engine refuses a Camoufox build whose `omni.ja` is not the
+  one with the Juggler backport, and removes a profile's `startupCache`
+  when the profile last started under another archive (a note,
+  `omni.sha256`, in each profile directory). An existing developer
+  install needs `just setup-camoufox` once.
+- A Firefox persona answers `navigator.getAutoplayPolicy()` as a stock
+  Firefox does (`allowed-muted`, `disallowed`) and keeps an `AudioContext`
+  suspended until its user acts: the launch plan sets
+  `media.autoplay.default` to Firefox's default, where the Camoufox build
+  ships "allow". The probe's `automation.audio_autoplay` warns otherwise.
+- A self-test against a probe page older than M5.1 reports
+  `automation.user_activation` as a warning: update the copy on your echo
+  host from `tests/fixtures/site/probe/`.
 - The sidecar contract is 1.1.0: `behavior` on navigate and flow requests
   and on their results. Nothing was removed.
 - `ua-parser-js` is overridden to its MIT 1.0.x line and the license

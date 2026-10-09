@@ -24,6 +24,7 @@ profile and an authenticated proxy. No script of Kage's runs in any page.
 | fonts | the claimed system's own font files, which the build ships, through a fontconfig file Kage writes per persona |
 | canvas, audio and text-metric variation | the build's own, from three seeds drawn from the persona's seed: one stable device per persona, twenty devices for twenty personas |
 | media devices, `AudioContext` | one microphone, a camera on two personas in three, 48 or 44.1 kHz stereo: what a Firefox lists before any permission |
+| whether sound may start by itself (`navigator.getAutoplayPolicy()`, an `AudioContext` before any input) | Firefox's own default, set by the launch plan: `allowed-muted` for media, `disallowed` for an `AudioContext`. The build's own default says `allowed` |
 | cookies, storage, history | the persona's profile directory |
 | WebRTC | host candidates as names (`<uuid>.local`), nothing from a STUN server: no packet leaves outside the proxy |
 
@@ -63,12 +64,29 @@ fractional advances and whole-pixel advances are FreeType's signature. Not
 verified against a real Windows Firefox: that comparison belongs to the
 Windows engine-host milestone (follow-up F14 of the plan).
 
-Three more settings differ from the launcher's defaults, each for a
-measured reason: no addon is loaded; the build's own window theming is off
-(`disableTheming`: with it the toolbar is 51 px high, a stock Firefox has
-85, and a page reads the difference as `outerHeight - innerHeight`); and
-`history.length` and the size of the page area are never set, they are the
-tab's and the window's own.
+Four more settings differ from the launcher's or the build's defaults,
+each for a measured reason: no addon is loaded; the build's own window
+theming is off (`disableTheming`: with it the toolbar is 51 px high, a
+stock Firefox has 85, and a page reads the difference as
+`outerHeight - innerHeight`); `history.length` and the size of the page
+area are never set, they are the tab's and the window's own; and sound
+waits for the user (`media.autoplay.default` is 1, Firefox's default).
+
+The last one was found in M5.1. The build's `camoufox.cfg` sets
+`media.autoplay.default` to 0, "allow autoplay". Measured with nothing
+driving the browsers (each started with an address on its command line,
+with a sound server): on an untouched page a stock Mozilla Firefox 152.0.4
+answers `navigator.getAutoplayPolicy("mediaelement")` with `allowed-muted`
+and `("audiocontext")` with `disallowed` and keeps an `AudioContext`
+suspended; the build as it ships answers `allowed` twice and lets an
+`AudioContext` run 300 ms after `load`. A person can choose that in
+Firefox's settings, so it is no impossible value, but it is not what a
+Firefox says that nobody configured, and every Firefox persona would say
+it. With Firefox's default in the profile's preferences a persona
+answers as the stock browser does in every value measured, and a click
+through the display lets an `AudioContext` run. The parity suite asserts
+the answer (it needs no sound device) and the probe warns for it
+(`automation.audio_autoplay`).
 
 ### What was measured (M5, 2026-10-09)
 
@@ -125,18 +143,60 @@ Measured in M5 over 200 seeds per system:
 M6 decides whether a pool of twenty personas needs more variety than this
 (a screen constraint per persona is the lever that exists).
 
+### The Juggler backport (ADR 0010)
+
+The driver inside the pinned build (Juggler, in
+`chrome/juggler/content/content/Runtime.js` of the build's `omni.ja`) runs
+every evaluation of a page as user input: `setHandlingUserInput(true)` and
+`notifyUserGestureActivation()`. Every navigation reads the page at least
+once, so a page nobody touched read `navigator.userActivation.isActive`
+and `hasBeenActive` as true about 300 ms after `load`, with no input event
+before it (measured in M5). Upstream took both calls out in Camoufox pull
+request 779; the builds from `v156.0.1-beta.32` on have the fix, the
+pinned Firefox 152 build does not.
+
+Kage applies the same change to the pinned build:
+
+```bash
+node scripts/patch-camoufox-juggler.mjs /opt/camoufox \
+    --from <CAMOUFOX_OMNI_SHA256> --to <CAMOUFOX_OMNI_PATCHED_SHA256>
+```
+
+The image build and `just setup-camoufox` run it with the two checksums of
+`deploy/docker/sidecar.Dockerfile`. The file is stored uncompressed in the
+archive, so the four statements are overwritten by statements of the same
+length that do nothing and the entry's checksum is rewritten: nothing is
+repacked, 260 bytes differ, and the tool refuses any archive but the
+pinned one. Measured on the result: either call alone still grants
+activation, both gone grant none; an untouched page is not active at
+`load`, 300 ms, 1.5 s and 4 s later; a click through the display
+activates it from `mousedown` on, as for a person; the parity suite is
+green.
+
+Two rules follow from it, and their messages are what an operator sees:
+
+- **The engine runs the patched archive only.** At start it hashes
+  `omni.ja`; anything else answers `browser_launch_failed`, "does not hold
+  the Juggler backport". Run `just setup-camoufox`, or rebuild the image.
+- **A profile is told when the archive changed.** Firefox keeps the
+  compiled scripts of its own code in the profile (`startupCache/`) and
+  trusts them while version and install directory are the same. Measured:
+  a profile first opened under the unpatched build went on granting
+  activation after the build was patched in place, on every open. Each
+  profile directory holds a note of the archive it last started under
+  (`omni.sha256`, next to `user-data`); when it differs, the engine
+  removes that profile's `startupCache` before the launch and logs it.
+  The first start after that compiles the scripts again.
+
+What the backport leaves out: upstream's switch that lets an evaluation
+open a window without activation (it needs the browser's C++). Kage opens
+no window through an evaluation.
+
+The probe's check for all of this, and the cases it must not be tightened
+to, are in `engine-chromium.md` ("The probe's check").
+
 ### Known tells (not solved here)
 
-- User activation without input, on both engines. Every navigation reads
-  the page through the driver at least once (title and text right after
-  `load`, a wait for a selector, the DOM capture), and the driver inside
-  the browser marks each evaluation as a user gesture
-  (`notifyUserGestureActivation()` in the build's
-  `chrome/juggler/content/content/Runtime.js`). A page nobody touched
-  reads `navigator.userActivation.hasBeenActive` and `isActive` as true
-  from about the first read on, with no input event before it. On Firefox
-  the remedy needs another browser build; `engine-chromium.md` has the
-  measurement and the Chrome side.
 - No speech synthesis voices (`speechSynthesis.getVoices()` is empty); a
   Windows or macOS Firefox has the system's.
 - Pixels come from Mesa and glyph shapes from FreeType under a Windows or
@@ -178,7 +238,12 @@ in Firefox, 120 in Chrome) with its smooth scrolling, modifiers are keys.
   scroll depth, wander): a page load with no scroll and no dwell is not a
   person's.
 - Flow steps with `human: false` are done by the driver and are visible to
-  a page as such; they are for pages known not to look.
+  a page as such; they are for pages known not to look. One more way to
+  see it since the Juggler backport: at the `mousedown` of a driver's
+  click the page still reads `isActive` as false, and as true at `click`;
+  for a click through the display it is true at `mousedown`. And an
+  `AudioContext` made after a driver's click stays suspended, where one
+  made after a real click runs.
 
 Entry strategies (`behavior.entry`): `none` and `direct` are a typed
 navigation, with no `Referer`. `link` loads `from_url` as a typed
@@ -198,7 +263,7 @@ validation (M13).
 
 | Capture | How | A page can notice |
 |---|---|---|
-| DOM, title, storage | read in the driver's isolated world | no event; user activation without input (known tells, above) |
+| DOM, title, text, storage | read in the driver's isolated world | nothing: with the Juggler backport a read grants no user activation |
 | raw body, headers, redirects, XHR and fetch bodies | network events | nothing |
 | console | the page's `console.*` calls and uncaught errors, reported by the browser to its driver | nothing (the probe's console check stays at zero) |
 | screenshot, viewport or full page | drawn from the browser side | nothing, also for a full page |
@@ -267,18 +332,39 @@ uses that fetch.
    constants in `engine-firefox/src/host.ts`. The image build and
    `scripts/setup-camoufox.sh` read the Dockerfile lines; the engine
    refuses any build but the one its constants name.
-2. `just setup-camoufox`, then `just test-node`. The pinned-seed test
+2. The Juggler backport belongs to one build. `just setup-camoufox` stops
+   at the new archive ("neither the pinned build's archive nor the patched
+   one"), which is the reminder. A build from `v156.0.1-beta.32` on has
+   the fix itself: delete `scripts/patch-camoufox-juggler.mjs`, its two
+   `CAMOUFOX_OMNI_*` lines in the Dockerfile, its steps in the Dockerfile
+   and in `scripts/setup-camoufox.sh`, and set `CAMOUFOX_OMNI_SHA256` in
+   `engine-firefox/src/host.ts` to the new build's own `omni.ja` (the
+   engine keeps refusing any other archive). The parity test "reads a
+   page nobody touched without granting it user activation" then says
+   whether the build keeps the promise by itself.
+3. `just setup-camoufox`, then `just test-node`. The pinned-seed test
    shows what changed in generated fingerprints; the parity suite re-checks
    the coherence bar, the captures and the input path on the new build.
    Look at `fontconfig/*/fonts.conf` and `properties.json` of the new
    build: `personaFontconfig` and `validateConfig` fail loudly when they
    no longer fit.
-3. `just capture-browser-fingerprint firefox`, then "A new browser major"
+4. Read the build's own preference defaults (`camoufox.cfg` in the build
+   directory, a few hundred `defaultPref` lines) for values that differ
+   from a stock Firefox and that a page can read. They are the build's
+   choices, not the persona's, so every Firefox persona shares them: a
+   tell for the whole pool. The example is `media.autoplay.default`
+   (above): the build says 0, Firefox ships 1, a page reads it with
+   `navigator.getAutoplayPolicy()`. Check that this line is still what the
+   launch plan corrects, and measure anything new against a stock Firefox
+   of the same version that nothing drives; a preference set in
+   `basePreferences` (engine-firefox, `launch-plan.ts`) with its reason is
+   the remedy.
+5. `just capture-browser-fingerprint firefox`, then "A new browser major"
    in `docs/runbooks/fingerprint-echo.md`.
-4. Set `engines.firefox.browser_major` in the deployment.
-5. Run the self-test against your own pages, and the live suite once with
+6. Set `engines.firefox.browser_major` in the deployment.
+7. Run the self-test against your own pages, and the live suite once with
    `KAGE_LIVE_RECORD=1` after reviewing its findings.
-6. Update `docs/versions.md` and the changelog.
+8. Update `docs/versions.md` and the changelog.
 
 A persona's fingerprint document holds the browser's whole configuration
 for the build it was generated with. After a bump to another Firefox major
@@ -318,7 +404,13 @@ What a replacement must keep, because Kage relies on it and tests it:
   persona's keyboard layout; the upstream launcher's `humanize` stays off.
 - The fontconfig rule above (the Python launcher sets its own path: check
   that generic families resolve to three different fonts).
-- No addon, no theming of the build, no download at run time.
+- No addon, no theming of the build, no download at run time, and
+  Firefox's own default for autoplay (the Python launcher starts the same
+  build with the same `camoufox.cfg`).
+- Reads that grant no user activation. Playwright for Python drives the
+  same Juggler, so the same rule about the build holds: the backport above,
+  or a build that has the fix. The probe fails hard otherwise
+  (`automation.user_activation`).
 - The parity suite's expectations. Its tests are TypeScript, but they only
   need an `Engine`; the simplest proof for a Python engine is to run them
   against it through a thin `Engine` that calls its HTTP endpoints.

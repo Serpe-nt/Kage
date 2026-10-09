@@ -703,16 +703,39 @@ Captures must not change what the page experiences. Bodies come from
 network events, never from request interception; the DOM is read in an
 isolated world. A capture a page can notice is opt-in per request, off by
 default, and named in `side_effects`: a full-page screenshot (`resize`)
-and a PDF (`beforeprint`, `afterprint`). **Known violation, measured by M5
-on both engines and scheduled as M5.1:** both drivers mark every page
-evaluation as a user gesture (patchright sends `userGesture: true`,
-Camoufox's Juggler calls `notifyUserGestureActivation`), so an untouched
-page sees `navigator.userActivation` become active and Chrome's
-`AudioContext` start running after the first read. Page reads MUST be done
-without granting activation (an own CDP session without the gesture flag
-on chromium; a Juggler change or an upstream fix on Firefox), and the
-coherence probe MUST compare `userActivation` with the trusted input
-events it recorded so the self-test fails if it comes back. On chromium the console capture
+and a PDF (`beforeprint`, `afterprint`).
+
+Reading a page grants it nothing. Both drivers mark an evaluation as a
+user gesture (patchright sends `userGesture: true`; the Juggler of the
+pinned Camoufox build calls `setHandlingUserInput` and
+`notifyUserGestureActivation`), and M5 measured the result: a page nobody
+touched read `navigator.userActivation` as active from its first read on,
+and Chrome let an `AudioContext` run. Since M5.1:
+
+- On chromium every read the engine makes of a page (title, text, DOM,
+  selector waits, storage, the element boxes and page metrics of the
+  behavior engine) is evaluated over the engine's own debugger session
+  with `Runtime.evaluate`, in an isolated world of its own and without the
+  gesture flag. The world is marked by a script registered for every new
+  document, and every expression checks the mark and the top frame first,
+  because an execution context id is reused by the next renderer process.
+  The driver keeps the launch, navigation, the waits for a load state and
+  a URL, network events, and the input of `human: false` steps.
+- On firefox the pinned build runs with upstream's fix of its Juggler
+  backported into `omni.ja` (ADR 0010); the engine refuses a build without
+  it and clears a profile's startup cache when the profile last started
+  under another archive.
+- The coherence probe compares `navigator.userActivation` with the trusted
+  input events it received: `automation.user_activation` is a hard failure
+  when the page is or has been active without an event that grants
+  activation, unless it was reached from a page of its own origin (Chrome
+  carries activation over a same-origin link click).
+  `automation.audio_autoplay` warns for sound that may start by itself
+  under the same conditions: an `AudioContext` that runs, or a browser
+  that answers `allowed` to `navigator.getAutoplayPolicy()`. The engine parity suite asserts all of it on an
+  untouched page at `load`, 300 ms and 4 s later, with the captures taken.
+
+On chromium the console capture
 is the browser's log domain (network and security messages); `console.*`
 calls and uncaught errors are not captured, because reading them needs
 `Runtime.enable`, and the result says which source was used
@@ -780,7 +803,8 @@ application code, no `Runtime.enable`-dependent APIs.
 
 **firefox.** Camoufox at a pinned build (`v152.0.4-beta.30`, fetched by
 URL and checksum, never by the launcher's own download; the engine refuses
-any other build), driven through its own playwright-core, one browser per
+any other build, and this one without the Juggler backport of ADR 0010,
+§10.2), driven through its own playwright-core, one browser per
 context on its own Xvfb display, started through a wrapper that sets the
 persona's CPU affinity. The fingerprint is generated from a 64-hex seed
 with the parts of camoufox-js (the real-device generator under the seeded
@@ -792,7 +816,9 @@ is not reproducible, points fontconfig at a directory the pinned build
 does not have, and depends on ua-parser-js (ADR 0008). Language, time
 zone and position come from the open request (`geoip` is never used),
 `humanize` stays off (the shared behavior engine drives input), no addon
-is loaded and the build's window theming is off. The persona's fontconfig
+is loaded, the build's window theming is off, and autoplay is Firefox's
+own default (the build's allows it, which a page reads with
+`navigator.getAutoplayPolicy()`). The persona's fontconfig
 file is the build's own for the claimed system with an absolute font
 directory and, for Windows and macOS claims, hinting off. The proxy with
 credentials goes through the driver's option; loopback is sent through it
