@@ -125,7 +125,9 @@ function sample(
     const last = step === steps;
     const jitter = last ? 0 : random.uniform(-0.15, 0.15) * profile.pollInterval;
     const time = Math.min(part.duration, step * profile.pollInterval + jitter);
-    const point = last ? to : bezier(from, p1, p2, to, progress(time / part.duration, profile.velocityPeak));
+    const point = last
+      ? to
+      : bezier(from, p1, p2, to, progress(time / part.duration, profile.velocityPeak));
     tremorX = tremorX * 0.7 + random.normal(0, profile.tremor) * 0.55;
     tremorY = tremorY * 0.7 + random.normal(0, profile.tremor) * 0.55;
     const x = Math.round(point.x + (last ? 0 : tremorX));
@@ -184,7 +186,7 @@ export function planMove(
     sample(back, first.duration + pause, profile, random, samples);
   }
   const final = samples.at(-1);
-  if (final === undefined || final.x !== end.x || final.y !== end.y) {
+  if (final?.x !== end.x || final.y !== end.y) {
     samples.push({ t: (final?.t ?? 0) + profile.pollInterval, x: end.x, y: end.y });
   }
   return { from: start, to: end, samples, overshoot, duration: samples.at(-1)?.t ?? 0 };

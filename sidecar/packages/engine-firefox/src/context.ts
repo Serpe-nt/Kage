@@ -232,7 +232,8 @@ export class FirefoxContext implements EngineContext, SessionDriver {
   async setCookie(cookie: Cookie): Promise<boolean> {
     // The driver takes a cookie by its domain: without a leading dot it is
     // kept host-only, as a response without a Domain attribute sets it.
-    const { url: _url, ...param } = toBrowserCookieParam(cookie);
+    const param = toBrowserCookieParam(cookie);
+    delete param.url;
     await this.parts.context.addCookies([
       { ...param, domain: cookie.host_only ? cookie.domain : `.${cookie.domain}` },
     ]);

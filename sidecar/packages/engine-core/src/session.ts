@@ -297,7 +297,12 @@ const newDocument = (): DocumentState => ({
   proxyChallenged: false,
 });
 
-const emptyObservation: PageObservation = { title: null, text: null, scriptUrls: [], frameUrls: [] };
+const emptyObservation: PageObservation = {
+  title: null,
+  text: null,
+  scriptUrls: [],
+  frameUrls: [],
+};
 
 /** How a capture's files are named. */
 interface CaptureNames {
@@ -352,13 +357,14 @@ export class PageSession {
 
   private onResponse(response: DriverResponse): void {
     const asked = response.request();
-    let navigation = false;
-    try {
-      // A request without a frame (a service worker's) is no navigation of the page.
-      navigation = asked.isNavigationRequest() && asked.frame() === this.page.mainFrame();
-    } catch {
-      navigation = false;
-    }
+    const navigation = (() => {
+      try {
+        // A request without a frame (a service worker's) is no navigation of the page.
+        return asked.isNavigationRequest() && asked.frame() === this.page.mainFrame();
+      } catch {
+        return false;
+      }
+    })();
     if (navigation && response.status() === 407) {
       // The proxy asking for credentials is no document: the browser
       // answers it and asks again, or the navigation fails.
@@ -456,9 +462,8 @@ export class PageSession {
 
   private readonly surface: PageSurface = {
     metrics: async (): Promise<SurfaceMetrics> => {
-      const m = await this.read<Record<'iw' | 'ih' | 'ow' | 'oh' | 'sy' | 'sh', number>>(
-        READ_METRICS,
-      );
+      const m =
+        await this.read<Record<'iw' | 'ih' | 'ow' | 'oh' | 'sy' | 'sh', number>>(READ_METRICS);
       const window = this.parts.driver.windowOrigin();
       // A window has its side borders left and right and everything else
       // (title, tabs, toolbar) above the page.
@@ -560,7 +565,9 @@ export class PageSession {
       throw new EngineError('invalid_request', `the entry ${entry.strategy} needs from_url`);
     }
     const left = () => Math.max(1, deadline - Date.now());
-    const first = await this.page.goto(from, { waitUntil: 'load', timeout: left() }).catch(() => null);
+    const first = await this.page
+      .goto(from, { waitUntil: 'load', timeout: left() })
+      .catch(() => null);
     const observation = await this.observe().catch(() => emptyObservation);
     if (first === null || first.status() >= 400 || findInterstitial(observation) !== null) {
       // The page to start from did not load, or shows a wall. Nothing is
@@ -571,7 +578,10 @@ export class PageSession {
       LINK_PREFIX +
       JSON.stringify({ target, mode: entry.strategy === 'search_engine' ? 'host' : 'exact' });
     if ((await this.surface.boxOf(selector)) === null) {
-      return report(entry.strategy === 'search_engine' ? 'result_not_found' : 'link_not_found', null);
+      return report(
+        entry.strategy === 'search_engine' ? 'result_not_found' : 'link_not_found',
+        null,
+      );
     }
     // A person looks at a page before clicking on it.
     await human.dwell(Math.min(human.drawDwell() / 4, left() / 4), { wander: false });
@@ -580,7 +590,10 @@ export class PageSession {
     const clicked = Date.now();
     await human.click(selector);
     if (!(await this.afterClick(previous, until, deadline))) {
-      return report(entry.strategy === 'search_engine' ? 'result_not_found' : 'link_not_found', null);
+      return report(
+        entry.strategy === 'search_engine' ? 'result_not_found' : 'link_not_found',
+        null,
+      );
     }
     // Times of the result count from the click: that is when the target was asked for.
     this.document.started = clicked;
@@ -734,7 +747,12 @@ export class PageSession {
             }
           }
         } else {
-          entryReport = { strategy: entry.strategy, outcome: 'arrived', from_url: null, referer: null };
+          entryReport = {
+            strategy: entry.strategy,
+            outcome: 'arrived',
+            from_url: null,
+            referer: null,
+          };
         }
       }
       if (typed) {
@@ -950,12 +968,9 @@ export class PageSession {
       screenshot: (options) => snapshot({ ...nothing, screenshot: options }, null),
       pdf: (options) => snapshot({ ...nothing, pdf: options }, null),
     };
-    let ok = false;
-    try {
-      ok = await runFlow(request, host, emit);
-    } finally {
+    const ok = await runFlow(request, host, emit).finally(() => {
       this.freshOnNavigation = 'never';
-    }
+    });
     const result = await snapshot(request.capture, null);
     const done = acting.current;
     emit({

@@ -16,14 +16,8 @@
     "MIT, Apache-2.0, BSD-*, 0BSD, ISC, MPL-2.0": "Allowlist from docs/02-plan.md M0. MPL-2.0 covers camoufox-js.",
     "BlueOak-1.0.0": "Permissive. glob, minimatch, lru-cache and friends, reached from camoufox-js.",
     "CC0-1.0": "Public-domain dedication. language-subtag-registry (data), reached from camoufox-js.",
-    "CC-BY-4.0": "Attribution license on data only. caniuse-lite, reached from fingerprint-generator."
+    "CC-BY-4.0": "Attribution license on data only. caniuse-lite, reached from fingerprint-generator.",
+    "exceptions": "None. ua-parser-js 2.x (AGPL-3.0-or-later, asked for by camoufox-js) is replaced by the MIT 1.0.x line through a pnpm override; see ADR 0008."
   },
-  "exceptions": [
-    {
-      "package": "ua-parser-js",
-      "license": "AGPL-3.0-or-later",
-      "reason": "Required by camoufox-js 0.12.1. Not on the allowlist. Tolerated only until the owner decides ADR 0008; the decision is due before M5 ships the Firefox engine.",
-      "adr": "docs/adr/0008-agpl-ua-parser-js-in-firefox-engine.md"
-    }
-  ]
+  "exceptions": []
 }

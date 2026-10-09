@@ -12,11 +12,10 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import {
-  DisplayPool,
-  FIRST_DISPLAY,
   GENERATOR_ID,
   HOST_BOUND,
   LOOPBACK_THROUGH_PROXY,
+  PANEL_HEIGHT,
   WEBRTC_POLICY,
   allowedCpus,
   buildInjection,
@@ -34,7 +33,6 @@ import {
   personaCpus,
   prepareProfile,
   profilePaths,
-  startXvfb,
   suiteVersion,
 } from './index.js';
 
@@ -333,7 +331,10 @@ describe('launchPlan', () => {
     const plan = launchPlan(document, request, host);
     expect(plan).toMatchObject({
       display: { width: 1920, height: 1080, depth: 24 },
-      window: { width: 1920, height: 1080 },
+      // The desktop's bar is announced on the display and the window sits below it.
+      workArea: { x: 0, y: PANEL_HEIGHT, width: 1920, height: 1080 - PANEL_HEIGHT },
+      window: { x: 0, y: PANEL_HEIGHT, width: 1920, height: 1080 - PANEL_HEIGHT },
+      layout: 'de',
       env: { TZ: 'Europe/Berlin', LANG: 'de_DE.UTF-8', LANGUAGE: 'de_DE' },
       preferences: {
         intl: { accept_languages: 'de-DE,de,en-US,en', selected_languages: 'de-DE,de,en-US,en' },
@@ -442,7 +443,13 @@ describe('launchPlan', () => {
     const plan = launchPlan(dense, { ...request, screen: dense.native.screen }, host);
     expect(plan.display).toEqual({ width: 3840, height: 2160, depth: 24 });
     expect(plan.args).toContain('--force-device-scale-factor=2');
-    expect(plan.window).toEqual({ width: 1920, height: 1080 });
+    expect(plan.window).toEqual({
+      x: 0,
+      y: PANEL_HEIGHT,
+      width: 1920,
+      height: 1080 - PANEL_HEIGHT,
+    });
+    expect(plan.workArea).toEqual({ x: 0, y: 64, width: 3840, height: 2160 - 64 });
   });
 });
 
@@ -495,46 +502,6 @@ describe('profile preferences', () => {
     await writeFile(paths.preferences, '{ not json');
     await prepareProfile(root, preferences);
     expect(JSON.parse(await readFile(paths.preferences, 'utf8'))).toEqual(preferences);
-  });
-});
-
-describe('displays', () => {
-  it('hands out free display numbers and takes them back', () => {
-    const busy = new Set([FIRST_DISPLAY + 1]);
-    const pool = new DisplayPool((display) => !busy.has(display));
-    expect(pool.acquire()).toBe(FIRST_DISPLAY);
-    // The next number is in use on the machine and is skipped.
-    expect(pool.acquire()).toBe(FIRST_DISPLAY + 2);
-    pool.release(FIRST_DISPLAY);
-    expect(pool.acquire()).toBe(FIRST_DISPLAY);
-  });
-
-  it('gives up when no display number is free', () => {
-    const pool = new DisplayPool(() => false);
-    expect(() => pool.acquire()).toThrow(
-      expect.objectContaining({ code: 'browser_launch_failed' }) as Error,
-    );
-    expect(new DisplayPool().acquire()).toBeGreaterThanOrEqual(FIRST_DISPLAY);
-  });
-
-  it('starts an X server with the asked geometry and stops it', async () => {
-    const pool = new DisplayPool();
-    const number = pool.acquire();
-    const display = await startXvfb(number, { width: 1366, height: 768, depth: 24 });
-    expect(display.name).toBe(`:${number}`);
-    await display.stop();
-    await display.stop();
-    pool.release(number);
-  });
-
-  it('reports an X server that cannot start', async () => {
-    const number = new DisplayPool().acquire();
-    const error: unknown = await startXvfb(number, { width: 0, height: 0, depth: 7 }).catch(
-      (thrown: unknown) => thrown,
-    );
-    expect(error).toBeInstanceOf(EngineError);
-    expect((error as EngineError).code).toBe('browser_launch_failed');
-    expect((error as EngineError).message).toContain('Xvfb');
   });
 });
 

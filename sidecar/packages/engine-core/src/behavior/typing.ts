@@ -84,7 +84,11 @@ export function planTyping(
   let lastPress = 0;
 
   const interval = () =>
-    clamp(random.logNormal(profile.typing.interval, profile.typing.sigma), minInterval, maxInterval);
+    clamp(
+      random.logNormal(profile.typing.interval, profile.typing.sigma),
+      minInterval,
+      maxInterval,
+    );
   const hold = () => clamp(random.normal(profile.typing.hold, 14), 35, 160);
   const emit = (t: number, action: 'down' | 'up', key: string) => {
     actions.push({ t: Math.round(t * 10) / 10, action, key });
@@ -120,7 +124,10 @@ export function planTyping(
     if (wrong !== undefined && random.chance(profile.typing.typoRate)) {
       const slip = wrong[random.integer(0, wrong.length - 1)] ?? character;
       typos += 1;
-      end = Math.max(end, stroke(character === character.toLowerCase() ? slip : slip.toUpperCase()));
+      end = Math.max(
+        end,
+        stroke(character === character.toLowerCase() ? slip : slip.toUpperCase()),
+      );
       now += random.uniform(profile.typing.correctionPause[0], profile.typing.correctionPause[1]);
       end = Math.max(end, stroke('Backspace'));
       now += interval();

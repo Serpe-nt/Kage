@@ -1,0 +1,605 @@
+import { describe, expect, it } from 'vitest';
+
+import { SeededRandom } from '../seeded-random.js';
+
+import type {
+  Box,
+  Clock,
+  InputDevice,
+  KeyLevels,
+  PageSurface,
+  Point,
+  SurfaceMetrics,
+} from './device.js';
+import { BehaviorError, Human } from './human.js';
+import {
+  OVERSHOOT_MIN_DISTANCE,
+  fittsTime,
+  pathStatistics,
+  planClickPoint,
+  planMove,
+  planWander,
+  progress,
+} from './mouse.js';
+import { HUMAN_BOUNDS, MOTOR_PROFILE_LABEL, motorProfile, profileVector } from './profile.js';
+import { drawDwell, planFlick, readingPause, scrollsBack } from './scroll.js';
+import { keyIntervals, planTyping } from './typing.js';
+
+/** Twenty personas, as many as the pool has proxies. */
+const SEEDS = Array.from({ length: 20 }, (_unused, index) =>
+  (index + 1).toString(16).padStart(2, '0').repeat(32),
+);
+const seed = SEEDS[0] ?? '';
+const stream = (label: string, of = seed) => new SeededRandom(of, label);
+const usLayout = (key: string): KeyLevels => ({
+  shift: /^[A-Z!@#$%^&*()_+{}|:"<>?~]$/.test(key),
+  altGr: false,
+  onLayout: true,
+});
+
+describe('motor profiles', () => {
+  it('gives one persona one hand, always the same', () => {
+    expect(motorProfile(seed)).toEqual(motorProfile(seed));
+    expect(motorProfile(seed).id).toMatch(/^[0-9a-f]{16}$/);
+    expect(MOTOR_PROFILE_LABEL).toBe('motor-profile-v1');
+  });
+
+  it('keeps every hand inside human bounds', () => {
+    const inside = (value: number, range: readonly [number, number]) => {
+      expect(value).toBeGreaterThanOrEqual(range[0]);
+      expect(value).toBeLessThanOrEqual(range[1]);
+    };
+    for (const each of SEEDS) {
+      const profile = motorProfile(each);
+      inside(profile.fitts.a, HUMAN_BOUNDS.fittsA);
+      inside(profile.fitts.b, HUMAN_BOUNDS.fittsB);
+      inside(profile.velocityPeak, HUMAN_BOUNDS.velocityPeak);
+      inside(profile.curvature.bias, HUMAN_BOUNDS.curvatureBias);
+      inside(profile.tremor, HUMAN_BOUNDS.tremor);
+      inside(profile.overshoot.probability, HUMAN_BOUNDS.overshootProbability);
+      inside(profile.overshoot.size, HUMAN_BOUNDS.overshootSize);
+      inside(profile.hover.median, HUMAN_BOUNDS.hoverMedian);
+      inside(profile.buttonHold.mean, HUMAN_BOUNDS.buttonHold);
+      inside(profile.wheel.notches, HUMAN_BOUNDS.wheelNotches);
+      inside(profile.reading.wordsPerMinute, HUMAN_BOUNDS.wordsPerMinute);
+      inside(profile.reading.attention, HUMAN_BOUNDS.attention);
+      inside(profile.reading.scrollBack, HUMAN_BOUNDS.scrollBack);
+      inside(profile.dwell.median, HUMAN_BOUNDS.dwellMedian);
+      inside(profile.dwell.sigma, HUMAN_BOUNDS.dwellSigma);
+      inside(profile.typing.interval, HUMAN_BOUNDS.keyIntervalMedian);
+      inside(profile.typing.hold, HUMAN_BOUNDS.keyHold);
+      inside(profile.typing.typoRate, HUMAN_BOUNDS.typoRate);
+      expect([4, 8]).toContain(profile.pollInterval);
+      expect(profile.overshoot.pause[1]).toBeGreaterThan(profile.overshoot.pause[0]);
+      expect(profile.wander[1]).toBeGreaterThan(profile.wander[0]);
+    }
+  });
+
+  it('gives twenty personas twenty different hands', () => {
+    const profiles = SEEDS.map(motorProfile);
+    expect(new Set(profiles.map((profile) => profile.id)).size).toBe(20);
+    const vectors = profiles.map(profileVector);
+    let nearest = Number.POSITIVE_INFINITY;
+    for (const [index, a] of vectors.entries()) {
+      for (const b of vectors.slice(index + 1)) {
+        nearest = Math.min(nearest, Math.hypot(...a.map((value, at) => value - (b[at] ?? 0))));
+      }
+      for (const value of a) {
+        expect(value).toBeGreaterThanOrEqual(0);
+        expect(value).toBeLessThanOrEqual(1);
+      }
+    }
+    // The two most alike of twenty still differ by a clear margin over
+    // sixteen traits; equal hands would be at distance zero.
+    expect(nearest).toBeGreaterThan(0.35);
+    // No trait is the same for everybody.
+    for (let trait = 0; trait < (vectors[0]?.length ?? 0); trait += 1) {
+      const values = vectors.map((vector) => vector[trait] ?? 0);
+      expect(Math.max(...values) - Math.min(...values)).toBeGreaterThan(0.4);
+    }
+    // Both sides of every coin turn up.
+    expect(new Set(profiles.map((profile) => profile.curvature.side)).size).toBe(2);
+  });
+});
+
+describe('mouse paths', () => {
+  const from = { x: 120, y: 640 };
+  const to = { x: 1180, y: 210 };
+  const plans = (count: number, of = seed, target = to, size = 40) => {
+    const random = stream('paths', of);
+    const profile = motorProfile(of);
+    return Array.from({ length: count }, () => planMove(from, target, size, profile, random));
+  };
+
+  it('plans the same path for the same seeds, and another for another request', () => {
+    const profile = motorProfile(seed);
+    const again = () => planMove(from, to, 40, profile, stream('behavior:r1'));
+    expect(again()).toEqual(again());
+    expect(planMove(from, to, 40, profile, stream('behavior:r2')).samples).not.toEqual(
+      again().samples,
+    );
+  });
+
+  it('never draws a straight line, and ends on the target in whole pixels', () => {
+    for (const each of SEEDS) {
+      for (const path of plans(12, each)) {
+        const measured = pathStatistics(path.samples);
+        expect(measured).not.toBeNull();
+        expect(measured?.straightness).toBeGreaterThan(1.0005);
+        expect(measured?.maxDeviation).toBeGreaterThan(1.5);
+        expect(path.samples.at(-1)).toMatchObject(to);
+        expect(
+          path.samples.every((sample) => Number.isInteger(sample.x) && Number.isInteger(sample.y)),
+        ).toBe(true);
+        // Time only moves forward, and a mouse does not report standing still.
+        for (let index = 1; index < path.samples.length; index += 1) {
+          const now = path.samples[index];
+          const before = path.samples[index - 1];
+          expect(now?.t).toBeGreaterThan(before?.t ?? 0);
+          expect(now?.x === before?.x && now?.y === before?.y).toBe(false);
+        }
+      }
+    }
+  });
+
+  it('moves with one peak of speed, reached early: a fast start and a slow approach', () => {
+    for (const each of SEEDS.slice(0, 8)) {
+      const profile = motorProfile(each);
+      const direct = plans(40, each).filter((path) => !path.overshoot);
+      const peaks = direct.map((path) => pathStatistics(path.samples)?.peakAt ?? 0);
+      const mean = peaks.reduce((sum, value) => sum + value, 0) / peaks.length;
+      // The peak sits where the persona's profile puts it, before the middle.
+      expect(mean).toBeGreaterThan(0.18);
+      expect(mean).toBeLessThan(0.5);
+      expect(Math.abs(mean - profile.velocityPeak)).toBeLessThan(0.14);
+      for (const path of direct) {
+        const measured = pathStatistics(path.samples);
+        // Not a constant speed: the fastest stretch is well above the average.
+        expect(
+          (measured?.peakSpeed ?? 0) / ((measured?.travelled ?? 0) / (measured?.duration ?? 1)),
+        ).toBeGreaterThan(1.4);
+        // The reporting interval varies a little, as a real mouse's does.
+        expect(measured?.intervalSpread).toBeGreaterThan(1.05);
+      }
+    }
+    expect(progress(0, 0.4)).toBe(0);
+    expect(progress(1, 0.4)).toBe(1);
+    expect(progress(0.4, 0.4)).toBeCloseTo(0.5, 5);
+    expect(progress(2, 0.4)).toBe(1);
+  });
+
+  it('takes the time Fitts measured: longer for far and for small targets', () => {
+    const profile = motorProfile(seed);
+    expect(fittsTime(profile, 800, 20)).toBeGreaterThan(fittsTime(profile, 200, 20));
+    expect(fittsTime(profile, 800, 20)).toBeGreaterThan(fittsTime(profile, 800, 200));
+    const durations = plans(60)
+      .filter((path) => !path.overshoot)
+      .map((path) => path.duration);
+    const expected = fittsTime(profile, Math.hypot(to.x - from.x, to.y - from.y), 40);
+    const mean = durations.reduce((sum, value) => sum + value, 0) / durations.length;
+    expect(Math.abs(mean - expected) / expected).toBeLessThan(0.15);
+    // One person is not equally fast every time.
+    expect(Math.max(...durations) - Math.min(...durations)).toBeGreaterThan(expected * 0.2);
+  });
+
+  it('overshoots long movements as often as the persona does, and never short ones', () => {
+    for (const each of SEEDS.slice(0, 6)) {
+      const profile = motorProfile(each);
+      const long = plans(400, each);
+      const share = long.filter((path) => path.overshoot).length / long.length;
+      expect(Math.abs(share - profile.overshoot.probability)).toBeLessThan(0.07);
+      const missed = long.find((path) => path.overshoot);
+      // An overshoot goes past the target and comes back to it.
+      const farthest = Math.max(
+        ...(missed?.samples ?? []).map((sample) =>
+          Math.hypot(sample.x - from.x, sample.y - from.y),
+        ),
+      );
+      expect(farthest).toBeGreaterThan(Math.hypot(to.x - from.x, to.y - from.y));
+      expect(missed?.samples.at(-1)).toMatchObject(to);
+      const near = plans(200, each, { x: from.x + OVERSHOOT_MIN_DISTANCE - 60, y: from.y });
+      expect(near.some((path) => path.overshoot)).toBe(false);
+    }
+  });
+
+  it('has nothing to plan for a pointer that is already there', () => {
+    const still = planMove(
+      from,
+      { x: from.x + 0.2, y: from.y },
+      40,
+      motorProfile(seed),
+      stream('still'),
+    );
+    expect(still).toMatchObject({ samples: [], duration: 0, overshoot: false });
+    expect(pathStatistics(still.samples)).toBeNull();
+  });
+
+  it('clicks near the middle of an element, not on its centre every time, never outside', () => {
+    const box: Box = { x: 300, y: 200, width: 120, height: 36 };
+    const random = stream('clicks');
+    const points = Array.from({ length: 300 }, () => planClickPoint(box, random));
+    for (const point of points) {
+      expect(point.x).toBeGreaterThan(box.x);
+      expect(point.x).toBeLessThan(box.x + box.width);
+      expect(point.y).toBeGreaterThan(box.y);
+      expect(point.y).toBeLessThan(box.y + box.height);
+    }
+    expect(new Set(points.map((point) => `${point.x},${point.y}`)).size).toBeGreaterThan(100);
+    const meanX = points.reduce((sum, point) => sum + point.x, 0) / points.length;
+    expect(Math.abs(meanX - 360)).toBeLessThan(6);
+    // A tiny element still gets a click inside it.
+    const tiny = planClickPoint({ x: 10, y: 10, width: 4, height: 4 }, random);
+    expect(Math.abs(tiny.x - 12)).toBeLessThanOrEqual(1);
+    expect(Math.abs(tiny.y - 12)).toBeLessThanOrEqual(1);
+  });
+
+  it('wanders slowly and stays inside the page', () => {
+    const area: Box = { x: 0, y: 80, width: 800, height: 500 };
+    const random = stream('wander');
+    const profile = motorProfile(seed);
+    for (let count = 0; count < 100; count += 1) {
+      const path = planWander({ x: 790, y: 570 }, area, profile, random);
+      expect(path.overshoot).toBe(false);
+      expect(path.to.x).toBeLessThanOrEqual(796);
+      expect(path.to.y).toBeLessThanOrEqual(576);
+      expect(path.to.y).toBeGreaterThanOrEqual(84);
+    }
+  });
+});
+
+describe('typing', () => {
+  const profile = motorProfile(seed);
+  const text = 'The quick brown Fox jumps over 13 lazy dogs, twice!';
+
+  it('plans the same keys for the same seeds', () => {
+    const plan = () => planTyping(text, usLayout, profile, stream('typing'), { typos: false });
+    expect(plan()).toEqual(plan());
+  });
+
+  it("keeps every interval inside the spec, around the persona's own median", () => {
+    for (const each of SEEDS) {
+      const hand = motorProfile(each);
+      const plan = planTyping(text.repeat(4), usLayout, hand, stream('typing', each), {
+        typos: false,
+      });
+      const intervals = keyIntervals(plan.actions);
+      expect(intervals).toHaveLength(text.length * 4 - 1);
+      for (const interval of intervals) {
+        expect(interval).toBeGreaterThanOrEqual(HUMAN_BOUNDS.keyIntervalMs[0] - 0.11);
+        expect(interval).toBeLessThanOrEqual(HUMAN_BOUNDS.keyIntervalMs[1] + 0.11);
+      }
+      const sorted = [...intervals].sort((a, b) => a - b);
+      const median = sorted[Math.floor(sorted.length / 2)] ?? 0;
+      expect(Math.abs(median - hand.typing.interval)).toBeLessThan(18);
+      // Not a metronome.
+      expect(new Set(intervals.map((interval) => Math.round(interval))).size).toBeGreaterThan(25);
+    }
+  });
+
+  it('holds Shift for a capital, across neighbouring ones, and lets it go again', () => {
+    const plan = planTyping('aBCd', usLayout, profile, stream('shift'), { typos: false });
+    const order = plan.actions.map((action) => `${action.action}:${action.key}`);
+    const at = (entry: string) => order.indexOf(entry);
+    expect(order.filter((entry) => entry === 'down:Shift')).toHaveLength(1);
+    expect(at('down:a')).toBeLessThan(at('down:Shift'));
+    expect(at('down:Shift')).toBeLessThan(at('down:B'));
+    expect(at('down:C')).toBeLessThan(at('up:Shift'));
+    expect(at('up:Shift')).toBeLessThan(at('down:d'));
+    // A text that ends on a capital still lets the key go.
+    const ending = planTyping('aB', usLayout, profile, stream('shift'), { typos: false });
+    expect(ending.actions.at(-1)).toMatchObject({ action: 'up' });
+    expect(ending.actions.filter((action) => action.key === 'Shift')).toHaveLength(2);
+    // Every key that went down came up, and time never runs backwards.
+    for (const planned of [plan, ending]) {
+      const down = planned.actions.filter((action) => action.action === 'down').length;
+      expect(planned.actions.length).toBe(down * 2);
+      for (let index = 1; index < planned.actions.length; index += 1) {
+        expect(planned.actions[index]?.t).toBeGreaterThanOrEqual(
+          planned.actions[index - 1]?.t ?? 0,
+        );
+      }
+      expect(planned.duration).toBe(planned.actions.at(-1)?.t);
+    }
+  });
+
+  it('uses AltGr where the layout needs it, and Enter and Tab for line breaks and tabs', () => {
+    const german = (key: string): KeyLevels => ({
+      shift: false,
+      altGr: key === '@',
+      onLayout: true,
+    });
+    const plan = planTyping('a@\n\tb', german, profile, stream('altgr'), { typos: false });
+    const keys = plan.actions
+      .filter((action) => action.action === 'down')
+      .map((action) => action.key);
+    expect(keys).toEqual(['a', 'AltGraph', '@', 'Enter', 'Tab', 'b']);
+    expect(plan.actions.filter((action) => action.key === 'AltGraph')).toHaveLength(2);
+  });
+
+  it('makes a typo now and then when asked, notices it, and takes it back', () => {
+    const clumsy = { ...profile, typing: { ...profile.typing, typoRate: 0.2 } };
+    const plan = planTyping(text.repeat(3), usLayout, clumsy, stream('typos'), { typos: true });
+    expect(plan.typos).toBeGreaterThan(8);
+    const presses = plan.actions.filter(
+      (action) => action.action === 'down' && action.key !== 'Shift',
+    );
+    expect(presses.filter((action) => action.key === 'Backspace')).toHaveLength(plan.typos);
+    // What is left after the corrections is the text.
+    const typed: string[] = [];
+    for (const press of presses) {
+      if (press.key === 'Backspace') {
+        typed.pop();
+      } else {
+        typed.push(press.key);
+      }
+    }
+    expect(typed.join('')).toBe(text.repeat(3));
+    // Noticing takes longer than typing; the cadence around it stays a typist's.
+    for (const interval of keyIntervals(plan.actions)) {
+      expect(interval).toBeLessThanOrEqual(HUMAN_BOUNDS.keyIntervalMs[1] + 0.11);
+    }
+    const careful = planTyping(text, usLayout, clumsy, stream('typos'), { typos: false });
+    expect(careful.typos).toBe(0);
+  });
+});
+
+describe('scrolling and dwelling', () => {
+  const profile = motorProfile(seed);
+
+  it('turns the wheel a few notches at a time, never much further than is left', () => {
+    const random = stream('flicks');
+    const flicks = Array.from({ length: 300 }, () => planFlick('down', 4000, 114, profile, random));
+    const counts = flicks.map((flick) => flick.gaps.length);
+    expect(Math.min(...counts)).toBeGreaterThanOrEqual(1);
+    expect(Math.max(...counts)).toBeLessThanOrEqual(6);
+    const mean = counts.reduce((sum, value) => sum + value, 0) / counts.length;
+    expect(Math.abs(mean - profile.wheel.notches)).toBeLessThan(0.6);
+    for (const flick of flicks) {
+      expect(flick.gaps[0]).toBe(0);
+      for (const gap of flick.gaps.slice(1)) {
+        expect(gap).toBeGreaterThanOrEqual(profile.wheel.interval[0]);
+        expect(gap).toBeLessThanOrEqual(profile.wheel.interval[1]);
+      }
+    }
+    expect(planFlick('up', 30, 114, profile, random).gaps).toHaveLength(1);
+    expect(planFlick('down', 230, 114, profile, random).gaps.length).toBeLessThanOrEqual(3);
+  });
+
+  it('rests longer over more text, within bounds', () => {
+    const mean = (words: number) => {
+      const random = stream(`pause-${words}`);
+      const pauses = Array.from({ length: 200 }, () => readingPause(words, profile, random));
+      for (const pause of pauses) {
+        expect(pause).toBeGreaterThanOrEqual(220);
+        expect(pause).toBeLessThanOrEqual(6000);
+      }
+      return pauses.reduce((sum, value) => sum + value, 0) / pauses.length;
+    };
+    const few = mean(20);
+    const some = mean(100);
+    const many = mean(250);
+    expect(some).toBeGreaterThan(few * 1.5);
+    expect(many).toBeGreaterThan(some * 1.5);
+    // Proportional: twice the words is about twice the reading time.
+    const reading = (words: number) =>
+      (words / profile.reading.wordsPerMinute) * 60_000 * profile.reading.attention;
+    expect(
+      Math.abs(many - few - (reading(250) - reading(20))) / (reading(250) - reading(20)),
+    ).toBeLessThan(0.25);
+    expect(readingPause(100_000, profile, stream('long'))).toBe(6000);
+  });
+
+  it('scrolls back as often as the persona does', () => {
+    const random = stream('back');
+    const share =
+      Array.from({ length: 2000 }, () => scrollsBack(profile, random)).filter(Boolean).length /
+      2000;
+    expect(Math.abs(share - profile.reading.scrollBack)).toBeLessThan(0.03);
+  });
+
+  it('dwells around six seconds, log-normally, never longer than the cap', () => {
+    for (const each of SEEDS.slice(0, 6)) {
+      const hand = motorProfile(each);
+      const random = stream('dwell', each);
+      const dwells = Array.from({ length: 4000 }, () => drawDwell(hand, random)).sort(
+        (a, b) => a - b,
+      );
+      const median = dwells[2000] ?? 0;
+      expect(Math.abs(median - hand.dwell.median) / hand.dwell.median).toBeLessThan(0.08);
+      expect(dwells.at(-1)).toBeLessThanOrEqual(HUMAN_BOUNDS.dwellCapMs);
+      expect(dwells[0]).toBeGreaterThanOrEqual(600);
+      // A long tail to the right, as a log-normal has.
+      expect((dwells[3600] ?? 0) - median).toBeGreaterThan(median - (dwells[400] ?? 0));
+    }
+  });
+});
+
+/** A mouse, a keyboard and a clock that only write down what was asked of them. */
+function rig(
+  options: { scrollHeight?: number; boxes?: Record<string, Box>; notchPx?: number } = {},
+) {
+  const log: string[] = [];
+  let now = 1000;
+  let pointer: Point = { x: 960, y: 540 };
+  let scrollY = 0;
+  const viewport = { width: 1200, height: 800 };
+  const scrollHeight = options.scrollHeight ?? 4000;
+  const notch = options.notchPx ?? 114;
+  const boxes = options.boxes ?? {};
+  const clock: Clock = {
+    now: () => now,
+    sleep: (ms) => {
+      now += ms;
+      return Promise.resolve();
+    },
+  };
+  const device: InputDevice = {
+    screen: { width: 1920, height: 1080 },
+    pointerPosition: () => Promise.resolve(pointer),
+    pointerMove: (x, y) => {
+      pointer = { x, y };
+      log.push(`move ${x},${y} @${Math.round(now)}`);
+      return Promise.resolve();
+    },
+    buttonDown: (button) => {
+      log.push(`down ${button} @${Math.round(now)}`);
+      return Promise.resolve();
+    },
+    buttonUp: (button) => {
+      log.push(`up ${button} @${Math.round(now)}`);
+      return Promise.resolve();
+    },
+    wheelNotch: (direction) => {
+      scrollY = Math.max(
+        0,
+        Math.min(scrollHeight - viewport.height, scrollY + (direction === 'down' ? notch : -notch)),
+      );
+      log.push(`wheel ${direction}`);
+      return Promise.resolve();
+    },
+    levelsOf: usLayout,
+    keyDown: (key) => {
+      log.push(`key ${key}`);
+      return Promise.resolve();
+    },
+    keyUp: (key) => {
+      log.push(`keyup ${key}`);
+      return Promise.resolve();
+    },
+    flush: () => Promise.resolve(),
+    close: () => Promise.resolve(),
+  };
+  const metrics = (): SurfaceMetrics => ({
+    origin: { x: 0, y: 90 },
+    viewport,
+    scrollY,
+    scrollHeight,
+  });
+  const surface: PageSurface = {
+    metrics: () => Promise.resolve(metrics()),
+    visibleWords: () => Promise.resolve(180),
+    boxOf: (selector) => {
+      const box = boxes[selector];
+      return Promise.resolve(box === undefined ? null : { ...box, y: box.y - scrollY });
+    },
+  };
+  const human = new Human({
+    device,
+    surface,
+    profile: motorProfile(seed),
+    random: stream('behavior:rig'),
+    clock,
+  });
+  return {
+    human,
+    log,
+    pointer: () => pointer,
+    scrollY: () => scrollY,
+    elapsed: () => now - 1000,
+    place: (point: Point) => {
+      pointer = point;
+    },
+  };
+}
+
+describe('a persona at its mouse and keyboard', () => {
+  it('travels to an element, rests, and clicks inside it', async () => {
+    const box = { x: 700, y: 300, width: 140, height: 40 };
+    const { human, log, pointer, elapsed } = rig({ boxes: { '#go': box } });
+    await human.click('#go');
+    // Screen coordinates: the viewport begins 90 pixels below the top of the screen.
+    expect(pointer().x).toBeGreaterThan(box.x);
+    expect(pointer().x).toBeLessThan(box.x + box.width);
+    expect(pointer().y).toBeGreaterThan(box.y + 90);
+    expect(pointer().y).toBeLessThan(box.y + box.height + 90);
+    const moves = log.filter((entry) => entry.startsWith('move')).length;
+    expect(moves).toBeGreaterThan(8);
+    expect(log.slice(-2).map((entry) => entry.split(' @')[0])).toEqual(['down left', 'up left']);
+    const stamp = (entry: string | undefined) => Number(entry?.split('@')[1]);
+    // A rest before the click, a button held for a moment.
+    expect(stamp(log.at(-2)) - stamp(log.at(-3))).toBeGreaterThan(60);
+    expect(stamp(log.at(-1)) - stamp(log.at(-2))).toBeGreaterThan(34);
+    expect(human.counts).toMatchObject({ moves: 1, clicks: 1, positions: moves });
+    expect(elapsed()).toBeGreaterThan(300);
+  });
+
+  it('scrolls an element into view with the wheel before going to it', async () => {
+    const { human, log, scrollY } = rig({
+      boxes: { '#deep': { x: 100, y: 2600, width: 200, height: 40 } },
+    });
+    await human.hover('#deep');
+    expect(log.filter((entry) => entry === 'wheel down').length).toBeGreaterThan(10);
+    expect(2600 - scrollY()).toBeGreaterThan(0);
+    expect(2600 - scrollY()).toBeLessThan(800);
+    expect(human.counts.notches).toBe(log.filter((entry) => entry.startsWith('wheel')).length);
+  });
+
+  it('says so when there is no such element, or it cannot be reached', async () => {
+    const { human } = rig({
+      boxes: { '#below': { x: 0, y: 9000, width: 10, height: 10 } },
+      scrollHeight: 1200,
+    });
+    await expect(human.click('#missing')).rejects.toMatchObject({ reason: 'element_not_found' });
+    const stuck: unknown = await human.hover('#below').catch((error: unknown) => error);
+    expect(stuck).toBeInstanceOf(BehaviorError);
+    expect(stuck).toMatchObject({ reason: 'element_not_reachable' });
+  });
+
+  it('scrolls to a depth in flicks with rests, moving the mouse first, sometimes back', async () => {
+    const { human, log, scrollY, elapsed } = rig({ scrollHeight: 12_000 });
+    await human.scrollTo(0.8);
+    const target = (12_000 - 800) * 0.8;
+    expect(scrollY()).toBeGreaterThanOrEqual(target - 40);
+    expect(scrollY()).toBeLessThan(target + 114 * 6);
+    // A hand touches the mouse before it turns the wheel.
+    expect(log[0]).toMatch(/^move/);
+    expect(log.indexOf('wheel down')).toBeGreaterThan(0);
+    expect(log.filter((entry) => entry === 'wheel up').length).toBeGreaterThan(0);
+    // Reading takes time: far more than the wheel alone.
+    expect(elapsed()).toBeGreaterThan(20_000);
+    expect(human.counts.notches).toBe(log.filter((entry) => entry.startsWith('wheel')).length);
+  });
+
+  it('stops scrolling at a deadline, at the end of the page, and on a page that does not scroll', async () => {
+    const limited = rig({ scrollHeight: 30_000 });
+    await limited.human.scrollTo(1, 1000 + 4000);
+    expect(limited.scrollY()).toBeLessThan(6000);
+    const short = rig({ scrollHeight: 800 });
+    await short.human.scrollTo(1);
+    expect(short.human.counts.notches).toBe(0);
+    const frozen = rig({ scrollHeight: 5000, notchPx: 0 });
+    await frozen.human.scrollTo(0.5);
+    expect(frozen.human.counts.notches).toBeLessThanOrEqual(6);
+  });
+
+  it('types key by key at its pace, and presses a key with its modifiers', async () => {
+    const { human, log, elapsed } = rig();
+    await human.type('Hi you', { typos: false });
+    expect(log).toEqual(
+      expect.arrayContaining(['key Shift', 'key H', 'keyup Shift', 'key u', 'keyup u']),
+    );
+    expect(log.indexOf('key Shift')).toBeLessThan(log.indexOf('key H'));
+    expect(human.counts.keys).toBe(7);
+    expect(elapsed()).toBeGreaterThan(5 * 60);
+    const before = log.length;
+    await human.press('A');
+    expect(log.slice(before)).toEqual(['key Shift', 'key A', 'keyup A', 'keyup Shift']);
+    await human.chord(['Alt'], 'ArrowLeft');
+    expect(log.slice(-4)).toEqual(['key Alt', 'key ArrowLeft', 'keyup ArrowLeft', 'keyup Alt']);
+    expect(human.counts.keys).toBe(7 + 2 + 2);
+  });
+
+  it('dwells for the time asked, with an idle hand that moves a little, or does not', async () => {
+    const active = rig();
+    await active.human.dwell(40_000, { wander: true });
+    expect(active.elapsed()).toBeGreaterThanOrEqual(40_000);
+    expect(active.elapsed()).toBeLessThan(42_000);
+    expect(active.human.counts.wanders).toBeGreaterThanOrEqual(2);
+    expect(active.log.every((entry) => entry.startsWith('move'))).toBe(true);
+    const still = rig();
+    await still.human.dwell(9000, { wander: false });
+    expect(still.elapsed()).toBe(9000);
+    expect(still.log).toEqual([]);
+    expect(still.human.drawDwell()).toBeGreaterThan(599);
+  });
+});

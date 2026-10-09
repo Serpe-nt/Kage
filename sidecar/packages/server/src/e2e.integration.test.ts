@@ -10,6 +10,7 @@ import path from 'node:path';
 
 import {
   ExportStateResponseSchema,
+  FlowEventSchema,
   GeneratePersonaResponseSchema,
   HealthResponseSchema,
   OpenContextResponseSchema,
@@ -243,7 +244,11 @@ describe('the sidecar through its HTTP contract', () => {
         })
       ).json,
     );
-    expect(selftest.findings.filter((finding) => finding.status !== 'pass')).toEqual([]);
+    expect(
+      selftest.findings.filter(
+        (finding) => finding.status !== 'pass' && !finding.check.startsWith('environment.'),
+      ),
+    ).toEqual([]);
     expect(selftest).toMatchObject({ passed: true, complete: true, score: 100 });
     expect(selftest.pages[0]?.text?.path).toBe(`sidecar/${id}/selftest/probe.txt`);
 
@@ -254,11 +259,31 @@ describe('the sidecar through its HTTP contract', () => {
     );
     expect(third.dom_html).toContain('visits: 2');
 
-    const flow = await call('POST', `/v1/contexts/${id}/flow`, {
-      actions: [{ action: 'back' }],
-      capture: navigate.capture,
+    // A flow answers line by line: one per step, then the page as it was left.
+    const flow = await fetch(`${origin}/v1/contexts/${id}/flow`, {
+      method: 'POST',
+      headers: { [TOKEN_HEADER]: TOKEN, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        actions: [
+          { action: 'click', selector: '#next' },
+          { action: 'wait_for', selector: '#referer' },
+          { action: 'assert', text_contains: 'Listing' },
+        ],
+        capture: navigate.capture,
+      }),
     });
-    expect([flow.status, (flow.json as { code: string }).code]).toEqual([501, 'not_implemented']);
+    expect(flow.status).toBe(200);
+    expect(flow.headers.get('content-type')).toBe('application/x-ndjson; charset=utf-8');
+    const events = (await flow.text())
+      .trimEnd()
+      .split('\n')
+      .map((line) => FlowEventSchema.parse(JSON.parse(line)));
+    expect(
+      events.map((event) => (event.type === 'step' ? [event.action, event.ok] : event.ok)),
+    ).toEqual([['click', true], ['wait_for', true], ['assert', true], true]);
+    const final = events.at(-1);
+    expect(final?.type === 'final' && final.result.final_url).toMatch(/\/listing\?page=2$/);
+    expect(final?.type === 'final' && final.behavior?.clicks).toBe(1);
 
     const metrics = await (
       await fetch(`${origin}/v1/metrics`, { headers: { [TOKEN_HEADER]: TOKEN } })

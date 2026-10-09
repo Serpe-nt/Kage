@@ -146,7 +146,7 @@ export const CaptureOptionsSchema = z
     console: z
       .boolean()
       .describe(
-        'Log entries the engine can collect without a page noticing. On chromium: what the browser itself logs (failed loads, security and deprecation messages); `console.*` calls and uncaught exceptions are not available there, because reading them needs a debugger domain that pages can detect. On firefox: the page\'s `console.*` calls and uncaught errors.',
+        "Log entries the engine can collect without a page noticing. On chromium: what the browser itself logs (failed loads, security and deprecation messages); `console.*` calls and uncaught exceptions are not available there, because reading them needs a debugger domain that pages can detect. On firefox: the page's `console.*` calls and uncaught errors.",
       ),
     screenshot: ScreenshotOptionsSchema.nullable().describe('A screenshot; null for none.'),
     pdf: PdfOptionsSchema.nullable().describe('A PDF; null for none.'),
@@ -158,7 +158,7 @@ export type CaptureOptions = z.infer<typeof CaptureOptionsSchema>;
 export const EntryStrategySchema = z.enum(['none', 'direct', 'link', 'search_engine']).meta({
   id: 'EntryStrategy',
   description:
-    'How the target is arrived at. `none` and `direct`: a typed navigation, with no `Referer`, `Sec-Fetch-Site: none` and `Sec-Fetch-User: ?1`; the two names are equal on the wire. `link`: `from_url` is loaded as a typed navigation, the link to the target is found on it and clicked. `search_engine`: `from_url` is a results page; the first result that leads to the target\'s host is clicked. A referer is never forged: it is whatever the browser sends for the click.',
+    "How the target is arrived at. `none` and `direct`: a typed navigation, with no `Referer`, `Sec-Fetch-Site: none` and `Sec-Fetch-User: ?1`; the two names are equal on the wire. `link`: `from_url` is loaded as a typed navigation, the link to the target is found on it and clicked. `search_engine`: `from_url` is a results page; the first result that leads to the target's host is clicked. A referer is never forged: it is whatever the browser sends for the click.",
 });
 export type EntryStrategy = z.infer<typeof EntryStrategySchema>;
 
@@ -174,11 +174,12 @@ export type EntryFallback = z.infer<typeof EntryFallbackSchema>;
 export const EntrySchema = z
   .strictObject({
     strategy: EntryStrategySchema.describe('The strategy.'),
-    from_url: httpUrl(
-      'The page to start from: required for `link` and `search_engine`, ignored otherwise. For `search_engine` it is the results URL Kage built from its policy template.',
-    )
+    from_url: httpUrl('The page to start from.')
       .nullable()
-      .optional(),
+      .optional()
+      .describe(
+        'The page to start from: required for `link` and `search_engine`, ignored otherwise. For `search_engine` it is the results URL Kage built from its policy template.',
+      ),
     fallback: EntryFallbackSchema.optional().describe(
       'What to do without a link to the target; default `stop`.',
     ),
@@ -190,7 +191,7 @@ export type Entry = z.infer<typeof EntrySchema>;
 export const DwellModeSchema = z.enum(['fixed', 'human']).meta({
   id: 'DwellMode',
   description:
-    'Where the dwell time comes from. `fixed`: `dwell_ms` of the request. `human`: drawn from the persona\'s own distribution (log-normal, median about 6 s, at most 45 s), never longer than the budget allows.',
+    "Where the dwell time comes from. `fixed`: `dwell_ms` of the request. `human`: drawn from the persona's own distribution (log-normal, median about 6 s, at most 45 s), never longer than the budget allows.",
 });
 export type DwellMode = z.infer<typeof DwellModeSchema>;
 
@@ -198,9 +199,11 @@ export type DwellMode = z.infer<typeof DwellModeSchema>;
 export const BehaviorOptionsSchema = z
   .strictObject({
     seed: SeedSchema.optional().describe(
-      'Seed of this request. With the persona\'s own seed it decides every movement; the same pair replays the same behavior. Absent: the sidecar draws one and returns it.',
+      "Seed of this request. With the persona's own seed it decides every movement; the same pair replays the same behavior. Absent: the sidecar draws one and returns it.",
     ),
-    entry: EntrySchema.optional().describe('How the target is arrived at; default a typed navigation.'),
+    entry: EntrySchema.optional().describe(
+      'How the target is arrived at; default a typed navigation.',
+    ),
     scroll_depth: z
       .number()
       .min(0)
@@ -213,12 +216,14 @@ export const BehaviorOptionsSchema = z
     wander: z
       .boolean()
       .optional()
-      .describe('Move the mouse a little now and then while dwelling, as an idle hand does; default true.'),
+      .describe(
+        'Move the mouse a little now and then while dwelling, as an idle hand does; default true.',
+      ),
   })
   .meta({
     id: 'BehaviorOptions',
     description:
-      'What a persona does on a page besides loading it. All input is sent through the mouse and keyboard of the context\'s own display. Absent from a request: no input at all, a bare page load.',
+      "What a persona does on a page besides loading it. All input is sent through the mouse and keyboard of the context's own display. Absent from a request: no input at all, a bare page load.",
   });
 export type BehaviorOptions = z.infer<typeof BehaviorOptionsSchema>;
 
@@ -346,7 +351,7 @@ export type ConsoleEntry = z.infer<typeof ConsoleEntrySchema>;
 export const ConsoleCaptureSchema = z.enum(['browser_log', 'unsupported', 'not_requested']).meta({
   id: 'ConsoleCapture',
   description:
-    'What the console list holds. `browser_log`: entries the engine collected without the page noticing (chromium: the browser\'s own log; firefox: console calls and uncaught errors of the page). `unsupported`: the engine cannot read any log without becoming detectable. `not_requested`: the request did not ask.',
+    "What the console list holds. `browser_log`: entries the engine collected without the page noticing (chromium: the browser's own log; firefox: console calls and uncaught errors of the page). `unsupported`: the engine cannot read any log without becoming detectable. `not_requested`: the request did not ask.",
 });
 export type ConsoleCapture = z.infer<typeof ConsoleCaptureSchema>;
 
@@ -446,11 +451,16 @@ export const EntryReportSchema = z
   .strictObject({
     strategy: EntryStrategySchema.describe('The strategy that was asked for.'),
     outcome: EntryOutcomeSchema.describe('How it ended.'),
-    from_url: z.string().nullable().describe('The page the entry started from; null for a typed navigation.'),
+    from_url: z
+      .string()
+      .nullable()
+      .describe('The page the entry started from; null for a typed navigation.'),
     referer: z
       .string()
       .nullable()
-      .describe('The `Referer` the browser sent with the request for the target; null when it sent none.'),
+      .describe(
+        'The `Referer` the browser sent with the request for the target; null when it sent none.',
+      ),
   })
   .meta({ id: 'EntryReport', description: 'How a navigation arrived at its target.' });
 export type EntryReport = z.infer<typeof EntryReportSchema>;
@@ -460,12 +470,18 @@ const count = (description: string) => z.number().int().nonnegative().describe(d
 /** What the behavior engine did (spec §10.4). */
 export const BehaviorReportSchema = z
   .strictObject({
-    seed: SeedSchema.describe('The seed of this request: the one given, or the one the sidecar drew.'),
+    seed: SeedSchema.describe(
+      'The seed of this request: the one given, or the one the sidecar drew.',
+    ),
     profile_id: z
       .string()
       .regex(/^[0-9a-f]{16}$/)
-      .describe('Identifies the motor profile of the persona: the same for every request of one persona.'),
-    entry: EntryReportSchema.nullable().describe('What the entry did; null when the request named none.'),
+      .describe(
+        'Identifies the motor profile of the persona: the same for every request of one persona.',
+      ),
+    entry: EntryReportSchema.nullable().describe(
+      'What the entry did; null when the request named none.',
+    ),
     dwell_ms: count('Time spent dwelling on the page.'),
     moves: count('Movements of the pointer.'),
     positions: count('Positions the mouse reported during them.'),

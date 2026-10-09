@@ -307,8 +307,7 @@ export function buildApp(options: AppOptions): App {
   server.post(routePath(ENDPOINTS.flow), async (request, reply) => {
     const body = parse(ENDPOINTS.flow.request, request.body);
     const id = contextId(request);
-    let streaming = false;
-    let ok = false;
+    const stream = { started: false, ok: false };
     const emit = (event: FlowEvent) => {
       const checked = FlowEventSchema.safeParse(event);
       if (!checked.success) {
@@ -316,8 +315,8 @@ export function buildApp(options: AppOptions): App {
           `flow produced an event outside the contract: ${describeIssues(checked.error)}`,
         );
       }
-      if (!streaming) {
-        streaming = true;
+      if (!stream.started) {
+        stream.started = true;
         reply.hijack();
         reply.raw.writeHead(ENDPOINTS.flow.response.status, {
           'content-type': `${ENDPOINTS.flow.response.media}; charset=utf-8`,
@@ -325,21 +324,21 @@ export function buildApp(options: AppOptions): App {
         });
       }
       if (checked.data.type === 'final') {
-        ok = checked.data.ok;
+        stream.ok = checked.data.ok;
       }
       reply.raw.write(`${JSON.stringify(checked.data)}\n`);
     };
     try {
       await manager.run(id, true, (context) => context.flow(body, operationEnv(id), emit));
-      metrics.flowed(ok ? 'ok' : 'failed');
+      metrics.flowed(stream.ok ? 'ok' : 'failed');
     } catch (error) {
       metrics.flowed('error');
-      if (!streaming) {
+      if (!stream.started) {
         throw error;
       }
       request.log.error({ err: error, context_id: id }, 'a flow broke after its stream began');
     } finally {
-      if (streaming) {
+      if (stream.started) {
         reply.raw.end();
       }
     }

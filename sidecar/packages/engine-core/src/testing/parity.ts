@@ -269,9 +269,9 @@ export function defineParitySuite(subject: ParitySubject): void {
         ['fetch', '/api/items', 200],
         ['xhr', '/api/time', 200],
       ]);
-      expect(JSON.parse(result.xhr.find((entry) => entry.kind === 'fetch')?.body?.data ?? '{}')).toEqual(
-        { items: [{ name: 'alpha' }, { name: 'beta' }, { name: 'gamma' }] },
-      );
+      expect(
+        JSON.parse(result.xhr.find((entry) => entry.kind === 'fetch')?.body?.data ?? '{}'),
+      ).toEqual({ items: [{ name: 'alpha' }, { name: 'beta' }, { name: 'gamma' }] });
       // The files are where the result says, with the size and the hash it says.
       expect(result.screenshot?.content_type).toBe(subject.webpScreenshot);
       expect(result.screenshot?.path).toMatch(/^requests\/r1\/[a-z0-9]+-screenshot\.(webp|png)$/);
@@ -371,8 +371,12 @@ export function defineParitySuite(subject: ParitySubject): void {
         /visits=(\d+)/.exec(
           result.headers.find((header) => header.name === 'set-cookie')?.value ?? '',
         )?.[1];
-      expect(visits(await withContext('returning', (context) => go(context, named('/'))))).toBe('1');
-      expect(visits(await withContext('returning', (context) => go(context, named('/'))))).toBe('2');
+      expect(visits(await withContext('returning', (context) => go(context, named('/'))))).toBe(
+        '1',
+      );
+      expect(visits(await withContext('returning', (context) => go(context, named('/'))))).toBe(
+        '2',
+      );
       expect(visits(await withContext('stranger', (context) => go(context, named('/'))))).toBe('1');
     });
 
@@ -603,7 +607,12 @@ export function defineParitySuite(subject: ParitySubject): void {
           seed: SEEDS.other,
           profile_id: motorProfile(persona.seed).id,
           clicks: 1,
-          entry: { strategy: 'link', outcome: 'arrived', from_url: secure('/'), referer: secure('/') },
+          entry: {
+            strategy: 'link',
+            outcome: 'arrived',
+            from_url: secure('/'),
+            referer: secure('/'),
+          },
         });
         expect(linked.dom_html).toContain(`<p id="referer">${secure('/')}</p>`);
         const arrived = await lastRequest('/listing?page=2');
@@ -641,7 +650,11 @@ export function defineParitySuite(subject: ParitySubject): void {
 
         const fallback = await go(context, secure('/landing?fallback'), {
           behavior: {
-            entry: { strategy: 'search_engine', from_url: named('/search?q=nothing'), fallback: 'none' },
+            entry: {
+              strategy: 'search_engine',
+              from_url: named('/search?q=nothing'),
+              fallback: 'none',
+            },
           },
         });
         expect(fallback.behavior?.entry).toMatchObject({ outcome: 'fell_back' });
@@ -674,7 +687,10 @@ export function defineParitySuite(subject: ParitySubject): void {
         });
         // The recorder publishes every quarter of a second; read it afterwards.
         const read = await flow(context, {
-          actions: [{ action: 'wait_for', ms: 400 }, { action: 'extract', capture: DOM }],
+          actions: [
+            { action: 'wait_for', ms: 400 },
+            { action: 'extract', capture: DOM },
+          ],
         });
         return { page, report: inputReportOf(read.steps[1]?.capture?.dom_html ?? null) };
       });
@@ -685,9 +701,14 @@ export function defineParitySuite(subject: ParitySubject): void {
       const measured = inputStatistics(result.report);
       expect(measured.untrusted).toBe(0);
       // A wheel turns by the browser's own notch, and the page glides.
-      expect(measured.wheel.count).toBe(behavior?.notches);
+      // Chrome hands a page two notches of one frame as one event of twice
+      // the size; the distance per notch is what both browsers agree on.
+      const notches = behavior?.notches ?? 0;
+      expect(measured.wheel.count).toBeLessThanOrEqual(notches);
+      expect(measured.wheel.count).toBeGreaterThanOrEqual(notches / 2);
       expect(measured.wheel.modes).toEqual([0]);
-      expect(measured.wheel.deltas.every((delta) => delta >= 90 && delta <= 130)).toBe(true);
+      expect(measured.wheel.total / notches).toBeGreaterThanOrEqual(90);
+      expect(measured.wheel.total / notches).toBeLessThanOrEqual(130);
       expect(measured.scrollEvents).toBeGreaterThan(measured.wheel.count);
       const reached = result.report.window.scroll_top;
       const scrollable = result.report.window.scroll_height - result.report.window.inner[1];
@@ -715,9 +736,17 @@ export function defineParitySuite(subject: ParitySubject): void {
         }),
       );
       expect(run.steps.map((step) => [step.action, step.ok, step.error])).toEqual(
-        ['goto', 'wait_for', 'hover', 'click', 'type', 'select', 'click', 'wait_for', 'extract'].map(
-          (action) => [action, true, null],
-        ),
+        [
+          'goto',
+          'wait_for',
+          'hover',
+          'click',
+          'type',
+          'select',
+          'click',
+          'wait_for',
+          'extract',
+        ].map((action) => [action, true, null]),
       );
       expect(run.final).toMatchObject({ ok: true });
       const report = inputReportOf(run.steps.at(-1)?.capture?.dom_html ?? null);
@@ -727,14 +756,18 @@ export function defineParitySuite(subject: ParitySubject): void {
       expect(measured.pointerTypes).toEqual(['mouse']);
       expect(report.field).toBe(text);
       expect(report.choice).toBe('three');
-      const clicked = report.events.filter((event) => event.type === 'click').map((event) => event.target);
+      const clicked = report.events
+        .filter((event) => event.type === 'click')
+        .map((event) => event.target);
       expect(clicked).toEqual(expect.arrayContaining(['target', 'field', 'choice', 'bottom']));
       // The keyboard is a German one: Z and Y change places, and capitals
       // and @ need their modifier keys.
       const keys = report.events
         .filter((event) => event.type === 'keydown')
         .map((event) => `${event.key ?? ''}/${event.code ?? ''}`);
-      expect(keys).toEqual(expect.arrayContaining(['Shift/ShiftLeft', 'Z/KeyY', 'y/KeyZ', '@/KeyQ']));
+      expect(keys).toEqual(
+        expect.arrayContaining(['Shift/ShiftLeft', 'Z/KeyY', 'y/KeyZ', '@/KeyQ']),
+      );
       expect(keys.indexOf('Shift/ShiftLeft')).toBeLessThan(keys.indexOf('Z/KeyY'));
       expect(keys.some((key) => key.startsWith('AltGraph/'))).toBe(true);
       // Movements are curves at a mouse's pace, never lines at a script's.
@@ -769,7 +802,7 @@ export function defineParitySuite(subject: ParitySubject): void {
       expect(run.final.behavior?.clicks).toBeGreaterThanOrEqual(4);
     });
 
-    it('gives two personas two hands, each a person\'s', async () => {
+    it("gives two personas two hands, each a person's", async () => {
       // The two personas of this suite were picked so that their typing
       // differs more than one person's does from one run to the next.
       const profiles = [motorProfile(persona.seed), motorProfile(otherPersona.seed)];
@@ -792,15 +825,21 @@ export function defineParitySuite(subject: ParitySubject): void {
             }),
           { document, change: { persona_id: `0199c1f2-6b7a-7c3e-9d41-2f8a5b6c7d${80 + index}` } },
         );
-        const measured = inputStatistics(inputReportOf(run.steps.at(-1)?.capture?.dom_html ?? null));
+        const measured = inputStatistics(
+          inputReportOf(run.steps.at(-1)?.capture?.dom_html ?? null),
+        );
         expect(run.final.behavior?.profile_id).toBe(profiles[index]?.id);
         expect(measured.medianKeyInterval).toBeGreaterThan(HUMAN_BOUNDS.keyIntervalMs[0]);
         expect(measured.medianKeyInterval).toBeLessThan(HUMAN_BOUNDS.keyIntervalMs[1]);
         // What the page measures is what the profile says, within a busy machine's slack.
-        expect(Math.abs(measured.medianKeyInterval - (profiles[index]?.typing.interval ?? 0))).toBeLessThan(25);
+        expect(
+          Math.abs(measured.medianKeyInterval - (profiles[index]?.typing.interval ?? 0)),
+        ).toBeLessThan(25);
         medians.push(measured.medianKeyInterval);
       }
-      const planned = Math.abs((profiles[0]?.typing.interval ?? 0) - (profiles[1]?.typing.interval ?? 0));
+      const planned = Math.abs(
+        (profiles[0]?.typing.interval ?? 0) - (profiles[1]?.typing.interval ?? 0),
+      );
       expect(planned).toBeGreaterThan(30);
       expect(Math.abs((medians[0] ?? 0) - (medians[1] ?? 0))).toBeGreaterThan(planned - 25);
     });
@@ -824,7 +863,10 @@ export function defineParitySuite(subject: ParitySubject): void {
             { action: 'wait_for', selector: '#referer' },
             { action: 'screenshot', options: { full_page: false, format: 'png' } },
             { action: 'pdf', options: {} },
-            { action: 'extract', capture: { ...DOM, xhr: { content_types: ['application/json'], max_bytes: 10_000 } } },
+            {
+              action: 'extract',
+              capture: { ...DOM, xhr: { content_types: ['application/json'], max_bytes: 10_000 } },
+            },
             { action: 'assert', selector: '#no-such-element' },
             { action: 'goto', url: named('/landing') },
           ],
@@ -832,18 +874,42 @@ export function defineParitySuite(subject: ParitySubject): void {
       );
       const failed = run.steps.find((step) => !step.ok);
       expect(run.steps.filter((step) => step.ok).map((step) => step.action)).toEqual([
-        'goto', 'wait_for', 'click', 'wait_for', 'assert', 'back', 'wait_for', 'press',
-        'scroll', 'hover', 'click', 'wait_for', 'screenshot', 'pdf', 'extract',
+        'goto',
+        'wait_for',
+        'click',
+        'wait_for',
+        'assert',
+        'back',
+        'wait_for',
+        'press',
+        'scroll',
+        'hover',
+        'click',
+        'wait_for',
+        'screenshot',
+        'pdf',
+        'extract',
       ]);
       // The step that fails ends the flow: the one after it never runs.
-      expect(failed).toMatchObject({ index: 15, action: 'assert', error: 'no element matches #no-such-element' });
+      expect(failed).toMatchObject({
+        index: 15,
+        action: 'assert',
+        error: 'no element matches #no-such-element',
+      });
       expect(run.steps).toHaveLength(16);
-      expect(run.final).toMatchObject({ ok: false, result: { final_url: named('/listing?page=2') } });
-      const captured = (action: string) => run.steps.find((step) => step.action === action)?.capture;
+      expect(run.final).toMatchObject({
+        ok: false,
+        result: { final_url: named('/listing?page=2') },
+      });
+      const captured = (action: string) =>
+        run.steps.find((step) => step.action === action)?.capture;
       expect(captured('screenshot')?.screenshot?.content_type).toBe('image/png');
       expect(captured('pdf')?.pdf?.content_type).toBe('application/pdf');
       expect(captured('extract')?.dom_html).toContain('<h1>Listing</h1>');
-      expect(captured('extract')).toMatchObject({ status: 200, final_url: named('/listing?page=2') });
+      expect(captured('extract')).toMatchObject({
+        status: 200,
+        final_url: named('/listing?page=2'),
+      });
       // The driver's click is a click too: the link was followed with its referer.
       expect(captured('extract')?.dom_html).toContain(`<p id="referer">${named('/')}</p>`);
 
@@ -855,7 +921,10 @@ export function defineParitySuite(subject: ParitySubject): void {
           ],
         }),
       );
-      expect(timed.steps[1]).toMatchObject({ ok: false, error: 'no element matched #never within 600 ms' });
+      expect(timed.steps[1]).toMatchObject({
+        ok: false,
+        error: 'no element matched #never within 600 ms',
+      });
       expect(timed.final.ok).toBe(false);
     });
 
@@ -888,7 +957,9 @@ export function defineParitySuite(subject: ParitySubject): void {
 
     it('refuses what is not its own, and closes every context when it closes', async () => {
       const foreign = { ...persona, engine: subject.name === 'firefox' ? 'chromium' : 'firefox' };
-      await expect(engine.openContext(openRequest(foreign as FingerprintDocument, 'x1'))).rejects.toMatchObject({
+      await expect(
+        engine.openContext(openRequest(foreign as FingerprintDocument, 'x1')),
+      ).rejects.toMatchObject({
         code: 'invalid_request',
       });
       await expect(

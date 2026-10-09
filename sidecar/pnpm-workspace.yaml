@@ -12,6 +12,15 @@ savePrefix: ''
 autoInstallPeers: false
 strictPeerDependencies: true
 
+# camoufox-js 0.12.1 asks for ua-parser-js ^2.0.10, which is AGPL-3.0-or-later.
+# The MIT 1.0.x line is used instead (ADR 0008). The one launcher function
+# that behaves differently with it, launchOptions for a macOS User-Agent, is
+# never called: the Firefox engine names the claimed system itself, and a
+# test keeps the package from ever being loaded. Re-verify on every
+# camoufox-js bump (docs/versions.md).
+overrides:
+  ua-parser-js: 1.0.41
+
 # Refuse to resolve a version published less than a day ago.
 minimumReleaseAge: 1440
 

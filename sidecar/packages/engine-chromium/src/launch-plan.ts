@@ -139,7 +139,12 @@ export function launchPlan(
   const languages = request.languages.join(',');
   const locale = request.locale;
   const posixLocale = locale.replace('-', '_');
-  const window = { x: 0, y: PANEL_HEIGHT, width: screen.width, height: screen.height - PANEL_HEIGHT };
+  const window = {
+    x: 0,
+    y: PANEL_HEIGHT,
+    width: screen.width,
+    height: screen.height - PANEL_HEIGHT,
+  };
   const args = [
     `--window-position=${window.x},${window.y}`,
     `--window-size=${window.width},${window.height}`,

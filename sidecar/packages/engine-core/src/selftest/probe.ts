@@ -67,7 +67,13 @@ const ScopeSchema = z.object({
   fonts: z.array(z.string()).nullable().catch(null),
   /** Windows and frames only. */
   screen: z
-    .object({ width: count, height: count, avail_width: count, avail_height: count, color_depth: count })
+    .object({
+      width: count,
+      height: count,
+      avail_width: count,
+      avail_height: count,
+      color_depth: count,
+    })
     .nullable()
     .catch(null),
   error: text,
@@ -367,8 +373,7 @@ export function judgeProbe(
   if (environment !== null) {
     const screen = window.screen ?? null;
     if (screen !== null) {
-      const full =
-        screen.avail_width === screen.width && screen.avail_height === screen.height;
+      const full = screen.avail_width === screen.width && screen.avail_height === screen.height;
       list.add('environment.work_area', full ? 'warn' : 'pass', {
         observed: `${screen.avail_width ?? 0}x${screen.avail_height ?? 0} of ${screen.width ?? 0}x${screen.height ?? 0}`,
         expected: 'a work area smaller than the screen, as a desktop with a panel has',

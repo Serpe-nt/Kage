@@ -36,7 +36,9 @@ export function planFlick(
   const needed = Math.max(1, Math.ceil(remaining / Math.max(1, notchPx)));
   const notches = Math.min(wanted, needed, 6);
   const gaps = Array.from({ length: notches }, (_unused, index) =>
-    index === 0 ? 0 : Math.round(random.uniform(profile.wheel.interval[0], profile.wheel.interval[1])),
+    index === 0
+      ? 0
+      : Math.round(random.uniform(profile.wheel.interval[0], profile.wheel.interval[1])),
   );
   return { direction, gaps };
 }

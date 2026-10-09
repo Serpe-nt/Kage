@@ -157,7 +157,13 @@ export class Human {
   }
 
   private async flick(direction: 'up' | 'down', remaining: number): Promise<number> {
-    const flick = planFlick(direction, remaining, this.notchPx, this.parts.profile, this.parts.random);
+    const flick = planFlick(
+      direction,
+      remaining,
+      this.notchPx,
+      this.parts.profile,
+      this.parts.random,
+    );
     for (const gap of flick.gaps) {
       if (gap > 0) {
         await this.clock.sleep(gap);
@@ -196,10 +202,7 @@ export class Human {
       }
       await this.clock.sleep(random.uniform(90, 260));
     }
-    throw new BehaviorError(
-      'element_not_reachable',
-      `${selector} cannot be scrolled into view`,
-    );
+    throw new BehaviorError('element_not_reachable', `${selector} cannot be scrolled into view`);
   }
 
   /** Moves the pointer onto an element and rests there as a person does before acting. */

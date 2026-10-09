@@ -201,7 +201,8 @@ export class X11Input implements InputDevice {
     if (named !== undefined) {
       return this.keymap.find(named);
     }
-    if ([...key].length !== 1) {
+    const codePoint = key.codePointAt(0);
+    if (codePoint === undefined || String.fromCodePoint(codePoint) !== key) {
       throw new X11Error(`not a key this keyboard knows: ${JSON.stringify(key)}`);
     }
     return this.keymap.findCharacter(key);

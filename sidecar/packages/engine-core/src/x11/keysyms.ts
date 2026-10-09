@@ -49,13 +49,13 @@ export const KEYSYM_LEVEL3 = 0xfe03;
  */
 const LEGACY: Readonly<Record<string, number>> = {
   '€': 0x20ac,
-  'œ': 0x13bd,
-  'Œ': 0x13bc,
-  'š': 0x1b9,
-  'Š': 0x1a9,
-  'ž': 0x1be,
-  'Ž': 0x1ae,
-  'Ÿ': 0x13be,
+  œ: 0x13bd,
+  Œ: 0x13bc,
+  š: 0x1b9,
+  Š: 0x1a9,
+  ž: 0x1be,
+  Ž: 0x1ae,
+  Ÿ: 0x13be,
 };
 
 /**

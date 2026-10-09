@@ -169,7 +169,7 @@ export type FlowAction = z.infer<typeof FlowActionSchema>;
 export const FlowBehaviorSchema = z
   .strictObject({
     seed: SeedSchema.optional().describe(
-      'Seed of this flow. With the persona\'s own seed it decides every movement and key; absent: the sidecar draws one and returns it.',
+      "Seed of this flow. With the persona's own seed it decides every movement and key; absent: the sidecar draws one and returns it.",
     ),
     typos: z
       .boolean()

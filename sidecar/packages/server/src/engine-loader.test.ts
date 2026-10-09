@@ -14,10 +14,10 @@ const options = {
 };
 
 describe('loadEngine (the ENGINE switch)', () => {
-  it('loads the firefox engine package: a stub until M5', async () => {
+  it('loads the firefox engine package and finds the pinned Camoufox build', async () => {
     const engine = await loadEngine('firefox', options);
     expect(engine.name).toBe('firefox');
-    expect(engine.status()).toEqual({ browserVersion: null });
+    expect(engine.status().browserVersion).toMatch(/^\d+\.\d+\.\d+$/);
     await engine.close();
   });
 

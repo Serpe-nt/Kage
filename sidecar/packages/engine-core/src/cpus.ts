@@ -36,7 +36,7 @@ export function parseCpuList(text: string): number[] {
 export function formatCpuList(cpus: readonly number[]): string {
   const sorted = [...new Set(cpus)].sort((a, b) => a - b);
   const ranges: string[] = [];
-  for (let index = 0; index < sorted.length; ) {
+  for (let index = 0; index < sorted.length;) {
     const first = sorted[index] ?? 0;
     let end = index;
     while (sorted[end + 1] === (sorted[end] ?? 0) + 1) {

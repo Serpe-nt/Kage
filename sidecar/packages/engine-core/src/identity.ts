@@ -45,13 +45,13 @@ export function osOfHintPlatform(platform: string): ClaimedOs | null {
 
 /** The operating system Firefox's `navigator.oscpu` names. */
 export function osOfOscpu(oscpu: string): ClaimedOs | null {
-  if (/^Windows NT /.test(oscpu)) {
+  if (oscpu.startsWith('Windows NT ')) {
     return 'windows';
   }
-  if (/Mac OS X/.test(oscpu)) {
+  if (oscpu.includes('Mac OS X')) {
     return 'macos';
   }
-  return /^Linux /.test(oscpu) ? 'linux' : null;
+  return oscpu.startsWith('Linux ') ? 'linux' : null;
 }
 
 /** The operating system a `navigator.appVersion` names: the first word in its parentheses. */

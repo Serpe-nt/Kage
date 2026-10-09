@@ -37,11 +37,15 @@ export interface InputReport {
 
 /** Reads the recorder's report out of a captured document. */
 export function inputReportOf(domHtml: string | null): InputReport {
-  const json = /<script type="application\/json" id="kage-input-report"[^>]*>([\s\S]*?)<\/script>/.exec(
-    domHtml ?? '',
-  )?.[1];
+  const json =
+    /<script type="application\/json" id="kage-input-report"[^>]*>([\s\S]*?)<\/script>/.exec(
+      domHtml ?? '',
+    )?.[1];
   // The document is HTML: the characters a serializer escapes come back as entities.
-  const text = (json ?? 'null').replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&');
+  const text = (json ?? 'null')
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+    .replaceAll('&amp;', '&');
   const report = JSON.parse(text) as InputReport | null;
   if (report?.kage_input !== 1) {
     throw new Error('the input recorder published no report');
@@ -76,7 +80,12 @@ export interface InputStatistics {
   readonly buttonHolds: readonly number[];
   /** Milliseconds between the last movement and the button going down, per click. */
   readonly hovers: readonly number[];
-  readonly wheel: { readonly count: number; readonly deltas: readonly number[]; readonly modes: readonly number[] };
+  readonly wheel: {
+    readonly count: number;
+    /** Sum of the distances of every wheel event, whatever its direction. */
+    readonly total: number;
+    readonly modes: readonly number[];
+  };
   /** How many scroll events followed each notch of the wheel: more than one means the page glided. */
   readonly scrollEvents: number;
 }
@@ -169,7 +178,7 @@ export function inputStatistics(report: InputReport): InputStatistics {
     hovers,
     wheel: {
       count: wheels.length,
-      deltas: [...new Set(wheels.map((event) => Math.abs(event.dy ?? 0)))],
+      total: wheels.reduce((sum, event) => sum + Math.abs(event.dy ?? 0), 0),
       modes: [...new Set(wheels.map((event) => event.mode ?? 0))],
     },
     scrollEvents: events.filter((event) => event.type === 'scroll').length,

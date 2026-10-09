@@ -112,7 +112,11 @@ export async function detectHost(installDir: string = DEFAULT_CAMOUFOX_DIR): Pro
     version: CAMOUFOX_VERSION,
     release: CAMOUFOX_RELEASE,
     properties,
-    fontconfig: { windows: await conf('windows'), macos: await conf('macos'), linux: await conf('linux') },
+    fontconfig: {
+      windows: await conf('windows'),
+      macos: await conf('macos'),
+      linux: await conf('linux'),
+    },
     cpus: allowedCpus(),
   };
 }

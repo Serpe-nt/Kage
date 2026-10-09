@@ -48,6 +48,13 @@ const HIGH_ENTROPY = {
 const scope = (change: Partial<ProbeScope> = {}): ProbeScope => ({
   user_agent: LINUX_UA,
   platform: 'Linux x86_64',
+  // Chrome has no oscpu; what the probe page of before M5 did not read is absent.
+  oscpu: null,
+  app_version: null,
+  language: null,
+  intl_locale: null,
+  fonts: null,
+  screen: null,
   languages: ['de-DE', 'de', 'en-US', 'en'],
   hardware_concurrency: 8,
   device_memory: 16,
@@ -57,6 +64,11 @@ const scope = (change: Partial<ProbeScope> = {}): ProbeScope => ({
   webgl: {
     vendor: 'Google Inc. (Mesa)',
     renderer: 'ANGLE (Mesa, llvmpipe (LLVM 20.1.2 256 bits), OpenGL 4.5)',
+    plain_renderer: null,
+    version: null,
+    shading_language: null,
+    max_texture_size: null,
+    extensions: null,
   },
   error: null,
   ...change,
@@ -292,6 +304,8 @@ describe('the coherence probe', () => {
       'coherence.platform',
       'os.blob_worker',
       'os.worker',
+      // The renderer is Mesa's: a Linux one under a Windows claim.
+      'webgl.os',
     ]);
     expect(findings.find((finding) => finding.check === 'coherence.platform')?.observed).toContain(
       'worker=Linux x86_64',
@@ -374,7 +388,15 @@ describe('the coherence probe', () => {
       'a worker with another renderer',
       (value) =>
         (value.scopes.worker = scope({
-          webgl: { vendor: 'Google Inc.', renderer: 'SwiftShader' },
+          webgl: {
+            vendor: 'Google Inc.',
+            renderer: 'SwiftShader',
+            plain_renderer: null,
+            version: null,
+            shading_language: null,
+            max_texture_size: null,
+            extensions: null,
+          },
         })),
       ['coherence.webgl'],
     ],

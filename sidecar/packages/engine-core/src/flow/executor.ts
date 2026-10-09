@@ -57,12 +57,13 @@ export class FlowStepError extends Error {
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, ms)));
 
-function withTimeout<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
+/** Ends work that outlives its budget. The grace lets a step report its own, better worded, timeout first. */
+function withTimeout<T>(work: Promise<T>, ms: number, graceMs: number, what: string): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const limit = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
       reject(new FlowStepError(`${what} did not finish within ${ms} ms`));
-    }, ms);
+    }, ms + graceMs);
   });
   return Promise.race([work, limit]).finally(() => {
     clearTimeout(timer);
@@ -104,7 +105,11 @@ async function selectByKeyboard(
   await human.press('Enter');
 }
 
-async function perform(action: FlowAction, host: FlowHost, timeout: number): Promise<PageResult | null> {
+async function perform(
+  action: FlowAction,
+  host: FlowHost,
+  timeout: number,
+): Promise<PageResult | null> {
   const humanly = action.human ?? true;
   switch (action.action) {
     case 'goto':
@@ -248,7 +253,7 @@ export async function runFlow(
     } else {
       try {
         // Human steps take the time a person takes; the step's budget still ends them.
-        capture = await withTimeout(perform(action, host, timeout), timeout + 250, action.action);
+        capture = await withTimeout(perform(action, host, timeout), timeout, 250, action.action);
       } catch (thrown) {
         error = (thrown instanceof Error ? thrown.message : String(thrown)).split('\n')[0] ?? '';
       }

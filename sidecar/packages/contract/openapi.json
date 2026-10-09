@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Kage browser sidecar",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "Internal contract between Kage and its browser sidecars (spec §10.2). Generated from the zod schemas in sidecar/packages/contract; do not edit by hand. Regenerate with `just openapi`.",
     "license": {
       "name": "MIT OR Apache-2.0",
@@ -1045,6 +1045,132 @@
         "additionalProperties": false,
         "description": "Go back one history entry."
       },
+      "BehaviorOptions": {
+        "type": "object",
+        "properties": {
+          "seed": {
+            "description": "Seed of this request. With the persona's own seed it decides every movement; the same pair replays the same behavior. Absent: the sidecar draws one and returns it.",
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "entry": {
+            "description": "How the target is arrived at; default a typed navigation.",
+            "$ref": "#/components/schemas/Entry"
+          },
+          "scroll_depth": {
+            "description": "Scroll down to this share of the document with the wheel, a flick at a time, resting after each as long as the text in view takes the persona to skim. Absent: no scrolling.",
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "dwell": {
+            "description": "Where the dwell time comes from; default `fixed`.",
+            "$ref": "#/components/schemas/DwellMode"
+          },
+          "wander": {
+            "description": "Move the mouse a little now and then while dwelling, as an idle hand does; default true.",
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false,
+        "description": "What a persona does on a page besides loading it. All input is sent through the mouse and keyboard of the context's own display. Absent from a request: no input at all, a bare page load."
+      },
+      "BehaviorReport": {
+        "type": "object",
+        "properties": {
+          "seed": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "The seed of this request: the one given, or the one the sidecar drew."
+          },
+          "profile_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{16}$",
+            "description": "Identifies the motor profile of the persona: the same for every request of one persona."
+          },
+          "entry": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EntryReport"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the entry did; null when the request named none."
+          },
+          "dwell_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Time spent dwelling on the page."
+          },
+          "moves": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Movements of the pointer."
+          },
+          "positions": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Positions the mouse reported during them."
+          },
+          "overshoots": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Movements that went past their target and came back."
+          },
+          "clicks": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Clicks."
+          },
+          "notches": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Notches of the wheel."
+          },
+          "keys": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Keys pressed, modifiers and corrections included."
+          },
+          "typos": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Characters typed wrong and corrected."
+          },
+          "wanders": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Idle movements while dwelling."
+          }
+        },
+        "required": [
+          "seed",
+          "profile_id",
+          "entry",
+          "dwell_ms",
+          "moves",
+          "positions",
+          "overshoots",
+          "clicks",
+          "notches",
+          "keys",
+          "typos",
+          "wanders"
+        ],
+        "additionalProperties": false,
+        "description": "What the behavior engine did during a request. With the persona and this seed the behavior can be replayed."
+      },
       "BodyEncoding": {
         "type": "string",
         "enum": [
@@ -1077,7 +1203,7 @@
           },
           "console": {
             "type": "boolean",
-            "description": "Browser-generated log entries (failed loads, security and deprecation messages). `console.*` calls and uncaught exceptions are not available on the chromium engine: reading them needs a debugger domain that pages can detect."
+            "description": "Log entries the engine can collect without a page noticing. On chromium: what the browser itself logs (failed loads, security and deprecation messages); `console.*` calls and uncaught exceptions are not available there, because reading them needs a debugger domain that pages can detect. On firefox: the page's `console.*` calls and uncaught errors."
           },
           "screenshot": {
             "anyOf": [
@@ -1253,7 +1379,7 @@
           "unsupported",
           "not_requested"
         ],
-        "description": "What the console list holds. `browser_log`: entries the browser generated itself. `unsupported`: the engine cannot read any log without becoming detectable. `not_requested`: the request did not ask."
+        "description": "What the console list holds. `browser_log`: entries the engine collected without the page noticing (chromium: the browser's own log; firefox: console calls and uncaught errors of the page). `unsupported`: the engine cannot read any log without becoming detectable. `not_requested`: the request did not ask."
       },
       "ConsoleEntry": {
         "type": "object",
@@ -1382,6 +1508,14 @@
         ],
         "description": "Why a cookie was not imported. `foreign_domain`: it does not belong to the origin. `expired`: its expiry is in the past. `refused_by_browser`: the browser's own cookie rules refused it."
       },
+      "DwellMode": {
+        "type": "string",
+        "enum": [
+          "fixed",
+          "human"
+        ],
+        "description": "Where the dwell time comes from. `fixed`: `dwell_ms` of the request. `human`: drawn from the persona's own distribution (log-normal, median about 6 s, at most 45 s), never longer than the budget allows."
+      },
       "EchoExpectation": {
         "type": "object",
         "properties": {
@@ -1416,6 +1550,102 @@
           "firefox"
         ],
         "description": "A browser engine. One sidecar container runs exactly one."
+      },
+      "Entry": {
+        "type": "object",
+        "properties": {
+          "strategy": {
+            "description": "The strategy.",
+            "$ref": "#/components/schemas/EntryStrategy"
+          },
+          "from_url": {
+            "description": "The page to start from: required for `link` and `search_engine`, ignored otherwise. For `search_engine` it is the results URL Kage built from its policy template.",
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 8192,
+                "pattern": "^https?:\\/\\/[^\\s/?#]+[^\\s]*$",
+                "description": "The page to start from."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fallback": {
+            "description": "What to do without a link to the target; default `stop`.",
+            "$ref": "#/components/schemas/EntryFallback"
+          }
+        },
+        "required": [
+          "strategy"
+        ],
+        "additionalProperties": false,
+        "description": "How a navigation arrives at its target."
+      },
+      "EntryFallback": {
+        "type": "string",
+        "enum": [
+          "stop",
+          "none"
+        ],
+        "description": "What to do when the link or result is not there. `stop`: load nothing else and say so. `none`: load the target as a typed navigation."
+      },
+      "EntryOutcome": {
+        "type": "string",
+        "enum": [
+          "arrived",
+          "fell_back",
+          "link_not_found",
+          "result_not_found",
+          "blocked"
+        ],
+        "description": "How an entry ended. `arrived`: the target was reached the way the strategy says. `fell_back`: no link was there and the target was loaded as a typed navigation instead. `link_not_found`, `result_not_found`: no link or result led to the target and nothing else was loaded. `blocked`: the page to start from did not load or showed a wall; nothing was typed into it."
+      },
+      "EntryReport": {
+        "type": "object",
+        "properties": {
+          "strategy": {
+            "description": "The strategy that was asked for.",
+            "$ref": "#/components/schemas/EntryStrategy"
+          },
+          "outcome": {
+            "description": "How it ended.",
+            "$ref": "#/components/schemas/EntryOutcome"
+          },
+          "from_url": {
+            "description": "The page the entry started from; null for a typed navigation.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "referer": {
+            "description": "The `Referer` the browser sent with the request for the target; null when it sent none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "strategy",
+          "outcome",
+          "from_url",
+          "referer"
+        ],
+        "additionalProperties": false,
+        "description": "How a navigation arrived at its target."
+      },
+      "EntryStrategy": {
+        "type": "string",
+        "enum": [
+          "none",
+          "direct",
+          "link",
+          "search_engine"
+        ],
+        "description": "How the target is arrived at. `none` and `direct`: a typed navigation, with no `Referer`, `Sec-Fetch-Site: none` and `Sec-Fetch-User: ?1`; the two names are equal on the wire. `link`: `from_url` is loaded as a typed navigation, the link to the target is found on it and clicked. `search_engine`: `from_url` is a results page; the first result that leads to the target's host is clicked. A referer is never forged: it is whatever the browser sends for the click."
       },
       "ErrorCode": {
         "type": "string",
@@ -1752,6 +1982,22 @@
         ],
         "description": "One step of a flow, chosen by `action`."
       },
+      "FlowBehavior": {
+        "type": "object",
+        "properties": {
+          "seed": {
+            "description": "Seed of this flow. With the persona's own seed it decides every movement and key; absent: the sidecar draws one and returns it.",
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "typos": {
+            "description": "Now and then type a neighbouring key, notice, delete and retype; default false.",
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false,
+        "description": "How the human steps of a flow are performed."
+      },
       "FlowEvent": {
         "oneOf": [
           {
@@ -1865,8 +2111,93 @@
               },
               "pdf": null,
               "side_effects": [],
-              "error": null
+              "error": null,
+              "behavior": {
+                "seed": "5f1c0e9a7b3d2468ace013579bdf02468ace13579bdf0246813579bdf02468ac",
+                "profile_id": "3451761c17e3a615",
+                "entry": {
+                  "strategy": "link",
+                  "outcome": "arrived",
+                  "from_url": "https://www.example.org/",
+                  "referer": "https://www.example.org/"
+                },
+                "dwell_ms": 6840,
+                "moves": 3,
+                "positions": 141,
+                "overshoots": 1,
+                "clicks": 1,
+                "notches": 9,
+                "keys": 0,
+                "typos": 0,
+                "wanders": 1
+              }
+            },
+            "behavior": {
+              "seed": "5f1c0e9a7b3d2468ace013579bdf02468ace13579bdf0246813579bdf02468ac",
+              "profile_id": "3451761c17e3a615",
+              "entry": {
+                "strategy": "link",
+                "outcome": "arrived",
+                "from_url": "https://www.example.org/",
+                "referer": "https://www.example.org/"
+              },
+              "dwell_ms": 6840,
+              "moves": 3,
+              "positions": 141,
+              "overshoots": 1,
+              "clicks": 1,
+              "notches": 9,
+              "keys": 0,
+              "typos": 0,
+              "wanders": 1
             }
+          },
+          {
+            "type": "final",
+            "ok": false,
+            "result": {
+              "url": "https://example.org/listing?page=2",
+              "final_url": "https://example.org/listing?page=2",
+              "status": null,
+              "http_version": null,
+              "headers": [],
+              "redirects": [],
+              "title": null,
+              "dom_html": null,
+              "dom_truncated": false,
+              "raw_body": null,
+              "xhr": [],
+              "xhr_dropped": 0,
+              "console": [],
+              "console_capture": "not_requested",
+              "timing": {
+                "ttfb_ms": null,
+                "dom_content_loaded_ms": null,
+                "load_ms": null,
+                "total_ms": 60012
+              },
+              "challenge": {
+                "vendors": [],
+                "script_hosts": [
+                  "www.example.org"
+                ],
+                "iframe_hosts": [],
+                "interstitial": false,
+                "marker": null,
+                "resolved": null,
+                "waited_ms": 0
+              },
+              "screenshot": null,
+              "pdf": null,
+              "side_effects": [],
+              "error": {
+                "code": "timeout",
+                "message": "the navigation did not finish within 60000 ms",
+                "net_error": null
+              },
+              "behavior": null
+            },
+            "behavior": null
           }
         ]
       },
@@ -1885,12 +2216,24 @@
           "result": {
             "description": "The page as the flow left it.",
             "$ref": "#/components/schemas/PageResult"
+          },
+          "behavior": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BehaviorReport"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the behavior engine did over the whole flow; null when no step was a human one."
           }
         },
         "required": [
           "type",
           "ok",
-          "result"
+          "result",
+          "behavior"
         ],
         "additionalProperties": false,
         "description": "The end of a flow."
@@ -1916,6 +2259,10 @@
             "type": "integer",
             "minimum": 1000,
             "maximum": 300000
+          },
+          "behavior": {
+            "description": "How the human steps are performed.",
+            "$ref": "#/components/schemas/FlowBehavior"
           }
         },
         "required": [
@@ -2019,7 +2366,11 @@
               },
               "pdf": null
             },
-            "timeout_ms": 180000
+            "timeout_ms": 180000,
+            "behavior": {
+              "seed": "5f1c0e9a7b3d2468ace013579bdf02468ace13579bdf0246813579bdf02468ac",
+              "typos": true
+            }
           }
         ]
       },
@@ -2067,7 +2418,7 @@
                 "type": "null"
               }
             ],
-            "description": "The capture of an `extract` step; null otherwise."
+            "description": "What an `extract`, `screenshot` or `pdf` step captured; null otherwise."
           }
         },
         "required": [
@@ -2513,7 +2864,7 @@
             "type": "string",
             "maxLength": 8192,
             "pattern": "^https?:\\/\\/[^\\s/?#]+[^\\s]*$",
-            "description": "The page to load, as a typed navigation. `http` and `https` only. There is no referer option: a referer set by the driver leaves with `Sec-Fetch-Site: none`, a pair no real navigation has. Arriving from another page is done by clicking a link there (the behavior engine)."
+            "description": "The page to load. `http` and `https` only. There is no referer option: a referer set by the driver leaves with `Sec-Fetch-Site: none`, a pair no real navigation has. Arriving from another page is `behavior.entry`: a link there is clicked."
           },
           "wait": {
             "description": "What to wait for.",
@@ -2536,7 +2887,7 @@
             "maximum": 120000
           },
           "dwell_ms": {
-            "description": "Time spent on the page after the wait and before the capture, with no synthetic input; default 0. The behavior engine of a later milestone fills this time.",
+            "description": "Time spent on the page after the wait and before the capture; default 0. Ignored when `behavior.dwell` is `human`.",
             "type": "integer",
             "minimum": 0,
             "maximum": 120000
@@ -2552,6 +2903,10 @@
             "maxLength": 200,
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*(\\/[A-Za-z0-9][A-Za-z0-9._-]*)*$",
             "description": "Directory below the artifacts volume for the files of this navigation; default `sidecar/<context id>`."
+          },
+          "behavior": {
+            "description": "What the persona does on the page; absent for a bare page load.",
+            "$ref": "#/components/schemas/BehaviorOptions"
           }
         },
         "required": [
@@ -2608,7 +2963,18 @@
             "challenge_wait_ms": 15000,
             "dwell_ms": 0,
             "max_body_bytes": 10000000,
-            "artifact_prefix": "requests/0199c1f4-aaaa"
+            "artifact_prefix": "requests/0199c1f4-aaaa",
+            "behavior": {
+              "seed": "5f1c0e9a7b3d2468ace013579bdf02468ace13579bdf0246813579bdf02468ac",
+              "entry": {
+                "strategy": "link",
+                "from_url": "https://www.example.org/",
+                "fallback": "stop"
+              },
+              "scroll_depth": 0.8,
+              "dwell": "human",
+              "wander": true
+            }
           }
         ]
       },
@@ -2647,7 +3013,7 @@
           "proxy_failed",
           "aborted"
         ],
-        "description": "Why a navigation did not arrive. `timeout`: the budget ran out. `proxy_failed`: the proxy refused, failed or could not be reached. `navigation_failed`: the browser reported a network error for the target. `aborted`: the page turned into a download or was closed."
+        "description": "Why a navigation did not arrive. `timeout`: the budget ran out. `proxy_failed`: the proxy refused, failed or could not be reached. `navigation_failed`: the browser reported a network error for the target. `aborted`: the page turned into a download or was closed, or the entry did not find its link (`behavior.entry.outcome` says so)."
       },
       "OpenContextRequest": {
         "type": "object",
@@ -3030,6 +3396,17 @@
               }
             ],
             "description": "Why the navigation did not arrive; null when it did. Whatever was captured is still present."
+          },
+          "behavior": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BehaviorReport"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the behavior engine did; null when the request asked for no behavior."
           }
         },
         "required": [
@@ -3052,7 +3429,8 @@
           "screenshot",
           "pdf",
           "side_effects",
-          "error"
+          "error",
+          "behavior"
         ],
         "additionalProperties": false,
         "description": "What one page load produced.",
@@ -3138,7 +3516,26 @@
             },
             "pdf": null,
             "side_effects": [],
-            "error": null
+            "error": null,
+            "behavior": {
+              "seed": "5f1c0e9a7b3d2468ace013579bdf02468ace13579bdf0246813579bdf02468ac",
+              "profile_id": "3451761c17e3a615",
+              "entry": {
+                "strategy": "link",
+                "outcome": "arrived",
+                "from_url": "https://www.example.org/",
+                "referer": "https://www.example.org/"
+              },
+              "dwell_ms": 6840,
+              "moves": 3,
+              "positions": 141,
+              "overshoots": 1,
+              "clicks": 1,
+              "notches": 9,
+              "keys": 0,
+              "typos": 0,
+              "wanders": 1
+            }
           },
           {
             "url": "https://example.org/listing?page=2",
@@ -3179,7 +3576,8 @@
               "code": "timeout",
               "message": "the navigation did not finish within 60000 ms",
               "net_error": null
-            }
+            },
+            "behavior": null
           }
         ]
       },

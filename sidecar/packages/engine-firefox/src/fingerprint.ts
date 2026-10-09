@@ -16,7 +16,10 @@ import Database from 'better-sqlite3';
 // imported: `launchOptions` draws unseeded random values, points fontconfig
 // at a directory this build does not have, and decides the claimed system
 // by parsing the User-Agent (ADR 0008).
-import { fromBrowserforge, generateFingerprint as drawFingerprint } from 'camoufox-js/dist/fingerprints.js';
+import {
+  fromBrowserforge,
+  generateFingerprint as drawFingerprint,
+} from 'camoufox-js/dist/fingerprints.js';
 import FONTS from 'camoufox-js/dist/mappings/fonts.config.js';
 
 import type { PropertyType } from './host.js';
@@ -44,7 +47,12 @@ const SHORT: Readonly<Record<ClaimedOs, 'win' | 'mac' | 'lin'>> = {
 };
 
 /** Screen bounds applied when the request names none: common desktop sizes. */
-const DEFAULT_SCREEN_BOUNDS = { min_width: 1280, max_width: 1920, min_height: 720, max_height: 1200 };
+const DEFAULT_SCREEN_BOUNDS = {
+  min_width: 1280,
+  max_width: 1920,
+  min_height: 720,
+  max_height: 1200,
+};
 
 /**
  * What stays the host's whatever the persona claims: the strings and
