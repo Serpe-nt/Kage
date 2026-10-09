@@ -23,6 +23,10 @@
 #                            (tests/fixtures/selftest/); review, then commit
 #   KAGE_LIVE_EVIDENCE_DIR   keeps the pages' text and screenshots there;
 #                            they are evidence for a person, never committed
+#   KAGE_LIVE_IDLE_SECONDS   leaves the first context open and untouched for
+#                            this long before its pages load, and reports
+#                            what Chrome sent and received by itself in that
+#                            time (tests/live/background-traffic.mjs)
 #
 # Needs Docker, the Rust toolchain and Node.
 set -euo pipefail
@@ -36,11 +40,16 @@ fi
 # The same image, by digest, as deploy/compose.yaml (docs/versions.md).
 postgres_image="postgres:17.11-trixie@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3"
 sidecar_image="${KAGE_BROWSER_CHROMIUM_IMAGE:-kage-browser-chromium:dev}"
-postgres="kage-live-browser-db-$$"
-sidecar="kage-live-browser-$$"
+postgres="kage-live-browser-db-$"
+sidecar="kage-live-browser-$"
 workdir="$(mktemp -d)"
+idle="${KAGE_LIVE_IDLE_SECONDS:-0}"
+sampler=""
 
 cleanup() {
+    if [ -n "${sampler}" ]; then
+        kill "${sampler}" 2> /dev/null || true
+    fi
     docker rm --force --volumes "${postgres}" "${sidecar}" > /dev/null 2>&1 || true
     # The results name real proxy addresses; they do not outlive the run.
     rm -rf "${workdir}"
@@ -69,6 +78,7 @@ docker run --detach --name "${sidecar}" --init --read-only --cap-drop ALL \
     --shm-size 1g --tmpfs /tmp --pids-limit 4096 --memory 4g \
     --volume /var/lib/kage/personas --volume /var/lib/kage/artifacts \
     --env ENGINE=chromium --env "SIDECAR_TOKEN=${token}" --env SIDECAR_MAX_CONTEXTS=1 \
+    --env "SIDECAR_CONTEXT_IDLE_MS=$(((idle + 300) * 1000))" \
     --publish 127.0.0.1::8090 "${sidecar_image}" > /dev/null
 postgres_port="$(docker port "${postgres}" 5432/tcp | head -n 1 | sed 's/.*://')"
 sidecar_port="$(docker port "${sidecar}" 8090/tcp | head -n 1 | sed 's/.*://')"
@@ -112,6 +122,21 @@ day="${KAGE_LIVE_SELFTEST_DAY:-$(($(date -u +%s) / 86400))}"
 node tests/live/pick-browser-proxy.mjs "${workdir}/proxies.json" "${day}" > "${workdir}/pair.txt" \
     || fail "no pair of proxies could be picked"
 
+if [ "${idle}" -gt 0 ]; then
+    # The counters of the sidecar's network interface, every five seconds.
+    # Reading them goes through the container runtime, not the network.
+    (
+        while true; do
+            counters="$(docker exec "${sidecar}" cat \
+                /sys/class/net/eth0/statistics/rx_bytes /sys/class/net/eth0/statistics/tx_bytes \
+                2> /dev/null | tr '\n' ' ')" || break
+            echo "$(date +%s%3N) ${counters}" >> "${workdir}/net.txt"
+            sleep 5
+        done
+    ) &
+    sampler=$!
+fi
+
 status=0
 run=0
 while read -r proxy timezone languages; do
@@ -121,6 +146,11 @@ while read -r proxy timezone languages; do
     for tag in "${tags[@]}"; do
         language_flags+=(--language "${tag}")
     done
+    # Only the first context idles: one measurement per run is enough.
+    if [ "${idle}" -gt 0 ] && [ "${run}" -eq 1 ]; then
+        language_flags+=(--idle-before "${idle}s")
+        echo "    the first context stays idle for ${idle} s before its pages load"
+    fi
     echo "    chromium through proxy ${run} of the pair (${timezone}, ${languages})"
     # A failing self-test still prints its report; the judge reads it.
     # stdin is the list of the loop: the command must not read from it.
@@ -128,6 +158,13 @@ while read -r proxy timezone languages; do
         "${language_flags[@]}" --third-party --json \
         < /dev/null > "${workdir}/report-${run}.json" || status=1
 done < "${workdir}/pair.txt"
+
+if [ "${idle}" -gt 0 ]; then
+    kill "${sampler}" 2> /dev/null || true
+    sampler=""
+    docker logs "${sidecar}" > "${workdir}/sidecar.log" 2>&1 || true
+    node tests/live/background-traffic.mjs "${workdir}/net.txt" "${workdir}/sidecar.log"
+fi
 
 if [ -n "${KAGE_LIVE_EVIDENCE_DIR:-}" ]; then
     mkdir -p "${KAGE_LIVE_EVIDENCE_DIR}"

@@ -158,6 +158,12 @@ enum SelftestCommand {
         /// Also load `selftest.browser.third_party_pages`.
         #[arg(long)]
         third_party: bool,
+        /// Keep the context open and untouched for this long before the
+        /// pages are loaded, for example 10m. For measuring what the
+        /// browser sends by itself; the sidecar's idle limit
+        /// (`SIDECAR_CONTEXT_IDLE_MS`) must be longer.
+        #[arg(long, value_name = "DURATION")]
+        idle_before: Option<HumanDuration>,
         /// Print one JSON document instead of a table.
         #[arg(long)]
         json: bool,
@@ -293,6 +299,7 @@ async fn selftest(command: SelftestCommand, config_file: Option<&Path>) -> anyho
             timezone,
             languages,
             third_party,
+            idle_before,
             json,
         } => {
             let options = selftest_browser::BrowserSelftestOptions {
@@ -301,6 +308,7 @@ async fn selftest(command: SelftestCommand, config_file: Option<&Path>) -> anyho
                 timezone,
                 languages,
                 third_party,
+                idle_before: idle_before.map(HumanDuration::get),
                 json,
             };
             selftest_browser::browser(&config, &options, &mut out).await
@@ -648,12 +656,14 @@ mod tests {
                     timezone,
                     languages,
                     third_party,
+                    idle_before,
                     json,
                 },
         } = cli.command
         else {
             panic!("expected the browser self-test, got {:?}", cli.command);
         };
+        assert!(idle_before.is_none());
         assert_eq!(proxy.to_string(), id);
         assert_eq!(engine, Engine::Chromium);
         assert_eq!(timezone, "Europe/Vienna");
@@ -661,19 +671,29 @@ mod tests {
         assert!(!third_party);
         assert!(!json);
 
-        let flags = ["--engine", "firefox", "--third-party", "--json"];
+        let flags = [
+            "--engine",
+            "firefox",
+            "--third-party",
+            "--json",
+            "--idle-before",
+            "10m",
+        ];
         let cli = Cli::try_parse_from(base.into_iter().chain(full).chain(flags)).unwrap();
-        assert!(matches!(
-            cli.command,
-            Command::Selftest {
-                command: SelftestCommand::Browser {
+        let Command::Selftest {
+            command:
+                SelftestCommand::Browser {
                     engine: Engine::Firefox,
                     third_party: true,
                     json: true,
+                    idle_before: Some(idle),
                     ..
-                }
-            }
-        ));
+                },
+        } = cli.command
+        else {
+            panic!("expected every flag to be read, got {:?}", cli.command);
+        };
+        assert_eq!(idle.get(), Duration::from_mins(10));
 
         for arguments in [
             base.to_vec(),

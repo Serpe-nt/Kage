@@ -594,8 +594,17 @@ async fn the_browser_self_test_opens_a_context_through_the_proxy_and_closes_it_a
     let passing = sidecar(context.clone(), contract_example("SelftestResponse")).await;
     env.push(("KAGE__SIDECAR__CHROMIUM_URL".to_owned(), passing.uri()));
     let with_pages = [&arguments[..], &["--third-party"]].concat();
-    let report: Value =
-        serde_json::from_str(&ok(&env, &[&with_pages[..], &["--json"]].concat()).await).unwrap();
+    // With a pause before the pages: the context stays open that long.
+    let started = Instant::now();
+    let report: Value = serde_json::from_str(
+        &ok(
+            &env,
+            &[&with_pages[..], &["--json", "--idle-before", "2s"]].concat(),
+        )
+        .await,
+    )
+    .unwrap();
+    assert!(started.elapsed() >= Duration::from_secs(2));
     assert_eq!(report["engine"], "chromium");
     assert_eq!(report["proxy"], id.as_str());
     assert_eq!(report["persona"]["browser_major"], 155);

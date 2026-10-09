@@ -15,6 +15,7 @@
 //! keeps one profile directory (`selftest/<proxy id>`).
 
 use std::io::Write;
+use std::time::Duration;
 
 use anyhow::{Context, bail};
 use kage_browser::contract::{
@@ -43,6 +44,9 @@ pub(crate) struct BrowserSelftestOptions {
     pub(crate) languages: Vec<String>,
     /// Also load the detection pages run by others.
     pub(crate) third_party: bool,
+    /// Keep the context open and untouched for this long before any page
+    /// is loaded.
+    pub(crate) idle_before: Option<Duration>,
     /// One JSON document instead of a table.
     pub(crate) json: bool,
 }
@@ -151,6 +155,18 @@ async fn converse(
         })
         .await
         .context("the sidecar could not open a context")?;
+
+    // What a browser sends when nobody uses it (updates, safe browsing) is
+    // only visible on the wire. The gated live suite measures it in this
+    // pause; the sidecar's idle limit must be longer, or it closes the
+    // context meanwhile.
+    if let Some(idle) = options.idle_before {
+        tracing::info!(
+            seconds = idle.as_secs(),
+            "the context is open; leaving it idle"
+        );
+        tokio::time::sleep(idle).await;
+    }
 
     let selftest = &config.selftest.browser;
     let request = SelftestRequest {
@@ -365,6 +381,7 @@ mod tests {
             timezone: "Europe/Berlin".to_owned(),
             languages: vec!["de-DE".to_owned(), "de".to_owned()],
             third_party: true,
+            idle_before: None,
             json,
         }
     }

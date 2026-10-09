@@ -44,6 +44,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     the client drift apart.
   - `kage selftest browser`: runs the self-test for one proxy through the
     sidecar. `selftest.browser` in the configuration names the pages.
+    `--idle-before` leaves the context untouched first, and the gated live
+    check uses it to measure what an idle Chrome sends by itself
+    (`KAGE_LIVE_IDLE_SECONDS`).
   - The fingerprint echo serves `/browser`, a page that makes a real
     browser show its navigation, `fetch()` and `XMLHttpRequest` requests;
     `just capture-browser-fingerprint` records them. Chrome 155 is recorded

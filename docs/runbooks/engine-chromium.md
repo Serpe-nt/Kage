@@ -151,6 +151,7 @@ kage selftest browser --proxy <proxy id> --timezone Europe/Rome \
 | `--engine` | `chromium` (default) or `firefox` (from M5). |
 | `--timezone`, `--language` | The identity of the stand-in persona; use the proxy's country. |
 | `--third-party` | Also load `selftest.browser.third_party_pages`. |
+| `--idle-before` | Keep the context open and untouched for this long (for example `10m`) before the pages load. For measuring what the browser sends by itself; the sidecar's `SIDECAR_CONTEXT_IDLE_MS` must be longer, or it closes the context meanwhile. |
 | `--json` | One JSON document instead of a table. |
 
 Until personas exist (M6) the command stands in with one pseudo-persona per
@@ -165,6 +166,20 @@ runs it with `--third-party` through two proxies per run, in a container
 hardened as in production, and compares the findings with the recorded
 baseline in `tests/fixtures/selftest/`. `KAGE_LIVE_RECORD=1` records a
 passing run as the new baseline.
+
+### What an idle browser costs
+
+Chrome talks to Google by itself: component updates, safe browsing lists,
+field trial data. That traffic leaves through the persona's proxy like
+everything else and counts against the proxy plan. It is left on, because
+it is what a real Chrome at that address does (and no target sees it).
+`KAGE_LIVE_IDLE_SECONDS=600 just test-live` measures it: the first
+context of the browser check stays open and untouched for that long, the
+counters of the sidecar container's network interface are read every five
+seconds, and `tests/live/background-traffic.mjs` reports the bytes of the
+first two minutes (a browser that has just started fetches the most), the
+rate after that, and what one persona-hour costs. The interface counts
+packet headers too, so a provider bills slightly less than the figure.
 
 ## Captures and what they cost
 
