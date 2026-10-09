@@ -255,8 +255,15 @@ a real distribution's font set) with no script in the page;
 `allow_cross_os_claims` defaults to false. Chrome 155 is browser-only
 (`BROWSER_ONLY_MAJORS`): its TLS differs from the `chrome_149` profile in
 one extension and three signature algorithms. The sidecar runs real Chrome
-with its sandbox under its own seccomp profile. The live self-test was
-pending the owner's in-session approval when merged. Follow-ups:
+with its sandbox under its own seccomp profile. Live self-test passed on
+2026-10-09 (`m4-live-handover.md`): two Chromium contexts through two real
+proxies, bot.sannysoft all rows pass, CreepJS headless 0 % and stealth 0 %,
+score 100, worker scope coherent with the window; the baseline is
+`tests/fixtures/selftest/chromium-155-live.json`. Chrome's own idle traffic
+measured at about 92 kB per persona-hour (roughly 1.1 GB a month for twenty
+personas), because the driver starts Chrome with background networking
+disabled. Remaining container tells CreepJS still sees are F9 and F12.
+Follow-ups:
 - **F9 (M5 or M12):** a dummy audio sink in the image so media devices and
   `AudioContext` exist.
 - **F10 (M7):** a local forwarder per context (credentials out of Chrome,
