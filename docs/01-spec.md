@@ -703,7 +703,16 @@ Captures must not change what the page experiences. Bodies come from
 network events, never from request interception; the DOM is read in an
 isolated world. A capture a page can notice is opt-in per request, off by
 default, and named in `side_effects`: a full-page screenshot (`resize`)
-and a PDF (`beforeprint`, `afterprint`). On chromium the console capture
+and a PDF (`beforeprint`, `afterprint`). **Known violation, measured by M5
+on both engines and scheduled as M5.1:** both drivers mark every page
+evaluation as a user gesture (patchright sends `userGesture: true`,
+Camoufox's Juggler calls `notifyUserGestureActivation`), so an untouched
+page sees `navigator.userActivation` become active and Chrome's
+`AudioContext` start running after the first read. Page reads MUST be done
+without granting activation (an own CDP session without the gesture flag
+on chromium; a Juggler change or an upstream fix on Firefox), and the
+coherence probe MUST compare `userActivation` with the trusted input
+events it recorded so the self-test fails if it comes back. On chromium the console capture
 is the browser's log domain (network and security messages); `console.*`
 calls and uncaught errors are not captured, because reading them needs
 `Runtime.enable`, and the result says which source was used

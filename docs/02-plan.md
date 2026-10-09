@@ -318,6 +318,71 @@ Follow-ups:
 - Python fallback for the Firefox engine documented in `docs/runbooks/engine-firefox.md`
   with the exact contract endpoints it must implement.
 
+**Status.** Merged as thirteen commits ending `b3d2911`
+(`m5-handover.md`). Measured outcomes: Camoufox `152.0.4-beta.30` passes
+the worker-inclusive coherence bar for Windows and macOS claims, so the
+§6.1 mix is chromium/linux 40 %, firefox/windows 45 %, firefox/macos 15 %;
+the engine opens through its own launch plan (camoufox-js's launcher
+mis-points fontconfig, is unseeded and downloads an addon); all human input
+goes through XTEST on the context's display because driver input is
+distinguishable on both engines; `link` entry and a never-forged
+`search_engine` entry exist; Firefox 152 is browser-only (one cipher suite
+fewer than `firefox_151`); ADR 0008 option B applied with the Firefox
+image not published; F9 and F12 done (PulseAudio null devices, a work area
+below the screen). Live Firefox self-test pending the owner's in-session
+approval when merged. Follow-ups:
+- **F17 (M5.1, next):** page reads grant user activation on both engines
+  (spec §10.2 known violation). Chromium: read title, text, DOM, selector
+  waits and element boxes over the engine's own CDP session in an isolated
+  world without the gesture flag. Firefox: raise it upstream with Camoufox
+  and, if needed, repack `omni.ja` with our own checksum. Probe: report
+  `userActivation` against recorded trusted input so the self-test catches
+  a regression. Also fix F11 for good (the flaky reputation test fails
+  about four gate runs in nine): fixed ids in the test rig or a window
+  longer than the spread.
+- **F18 (M3 owner, small):** `Accept-Language` weights for Firefox http
+  profiles: Firefox 152 sends `en-US,en;q=0.9`, kage-http builds `q=0.5`;
+  measure 144 to 151 before changing the table.
+- **F19 (M6):** the Firefox generator's screen data is narrow (six sizes,
+  38 % on one) and one persona in ten has no taskbar; constrain per persona
+  when generating twenty.
+- **F20 (M8):** `kage selftest browser --engine firefox` should refuse a
+  language without a region before calling the sidecar; the nightly live
+  workflow fails for firefox until a baseline is recorded
+  (`KAGE_LIVE_ENGINES=chromium` narrows it meanwhile).
+
+---
+
+## M5.1 — Page reads without user activation, and the flaky test
+
+**Scope.** F17 and F11 above; spec §10.2 known violation; §21.
+
+**Deliverables**
+- Chromium: an adapter in `engine-chromium` that performs every page read
+  the engine makes (title, page text, DOM capture, selector waits, element
+  boxes for the behavior engine) through the engine's own CDP session with
+  `Runtime.evaluate` in an isolated world and no `userGesture`, leaving
+  patchright's driver for launch and navigation only.
+- Firefox: an issue filed upstream with the measurement; a documented
+  repack of the Juggler `Runtime.js` inside `omni.ja` with our own
+  checksum, applied in the image only if the measurement after the repack
+  shows no activation and the parity suite stays green; otherwise the
+  runbook records the open tell.
+- Probe: `navigator.userActivation.isActive` and `hasBeenActive` and a new
+  `AudioContext` state reported next to the count of trusted input events
+  the page saw; a hard failure when activation exists without input.
+- `kage-proxy/tests/reputation.rs`: deterministic proxy ids or a window
+  longer than the lookup spread, so the two listed tests never flake.
+
+**Acceptance**
+- On chromium an untouched page reports `isActive` false,
+  `hasBeenActive` false and a `suspended` `AudioContext` at `load`, 300 ms
+  later and 4 s later, with the DOM and text captures still taken.
+- The same on firefox, or the exact remaining state documented in the
+  runbook and the probe finding marked `warn` for firefox with the reason.
+- The parity suite and `just ci` green; 24 consecutive runs of the
+  reputation test binary pass.
+
 ---
 
 ## M6 — Persona manager and session binding
