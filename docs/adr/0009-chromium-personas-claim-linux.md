@@ -1,8 +1,8 @@
 # ADR 0009: A chromium persona claims the system its Chrome runs on
 
-Status: draft for owner review, 2026-10-09. The planning session approved
-the direction during M4 (consult 1 of 5, `m4-consults.md`); the owner
-reviews it with the M4 change. It changes the default of
+Status: accepted, 2026-10-09, by the planning session on the owner's
+standing delegation to pick the option best for stealth (consult 1 of 5,
+`m4-consults.md`); reviewed with the M4 merge. It changes the default of
 `engines.chromium.allow_cross_os_claims` from true to false and supersedes
 the chromium rule of spec §6.2 and the chromium rows of the persona mix in
 §6.1.

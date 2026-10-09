@@ -244,6 +244,36 @@ Follow-ups:
   flags; findings stored as a fixture for regression.
 - Container runs non-root, Chrome sandbox enabled, read-only root FS.
 
+**Status.** Merged as `b30e87a` + `2e126ed`. Measured outcome, recorded in
+ADR 0009: no way of claiming Windows from a Linux Chrome is coherent in
+web workers, and the injection library costs the HTTP cache, so a chromium
+persona claims Linux and its identity is set by launch parameters (own
+Xvfb display, `TZ`, language preferences, CPU affinity, Mesa llvmpipe,
+a real distribution's font set) with no script in the page;
+`allow_cross_os_claims` defaults to false. Chrome 155 is browser-only
+(`BROWSER_ONLY_MAJORS`): its TLS differs from the `chrome_149` profile in
+one extension and three signature algorithms. The sidecar runs real Chrome
+with its sandbox under its own seccomp profile. The live self-test was
+pending the owner's in-session approval when merged. Follow-ups:
+- **F9 (M5 or M12):** a dummy audio sink in the image so media devices and
+  `AudioContext` exist.
+- **F10 (M7):** a local forwarder per context (credentials out of Chrome,
+  bytes per persona).
+- **F11 (any):** fix the flaky M2 test
+  `kage-proxy/tests/reputation.rs::a_lookup_that_fails_is_tried_again_an_hour_later`
+  (random per-proxy offsets can exceed the 65-minute window; use fixed ids
+  or a longer window).
+- **F12 (M5):** a minimal window manager or panel so the work area is
+  smaller than the screen; link navigation with a real `Referer` captured
+  for the http path's followed-link table.
+- **F13 (M12):** an e2e test running the compose `echo` profile with a
+  browser self-test; drop the setuid bit of `chrome-sandbox` after checking
+  Chrome still picks the namespace sandbox.
+- **F14 (candidate milestone after M5):** a Windows engine host running the
+  same sidecar for common and coherent Chrome personas (risk R3).
+- **F15 (M6):** read `engines.chromium.allow_cross_os_claims` on the Rust
+  side when generating personas; apply the §6.1 mix.
+
 ---
 
 ## M5 — Firefox engine and behavior engine

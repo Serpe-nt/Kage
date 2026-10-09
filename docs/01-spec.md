@@ -252,10 +252,14 @@ A persona is generated when a proxy enters `healthy` for the first time.
    language, with `en` as a secondary at lower q. Geolocation is a random
    point within a few kilometers of the city centroid, or null for the
    persona if the city is unknown.
-2. **Engine and OS.** Weighted draw from `personas.mix` (default: chromium
-   on windows 55%, chromium on macos 15%, firefox on windows 15%, firefox on
-   macos 10%, firefox on linux 5%). The mix is configuration, and the health
-   subsystem reports the actual pool distribution.
+2. **Engine and OS.** Weighted draw from `personas.mix`. A chromium
+   persona claims the system its Chrome runs on, Linux in the shipped image
+   (ADR 0009), so the default mix is: chromium on linux 40%, firefox on
+   windows 40%, firefox on macos 15%, firefox on linux 5%, pending M5's
+   measurement of Camoufox under the same worker-inclusive coherence bar.
+   The mix is configuration, and the health subsystem reports the actual
+   pool distribution. A common and coherent Chrome-on-Windows persona needs
+   a real Windows engine host (risk R3), a candidate milestone after M5.
 3. **Fingerprint.** The sidecar generates it from constraints (engine, OS,
    locale, screen class, browser major equal to the engine's bundled browser)
    using fingerprint-generator (chromium) or Camoufox's generator (firefox),
@@ -481,7 +485,7 @@ row without it; never when the list is empty or shorter than half the pool.
 | Leak | with reachability | Exit IP (from echo) ≠ host public IP; host IP learned at boot by a direct GET of the same echo, refreshed hourly. Leak → `backoff` + `egress_unsafe` (§7.3). |
 | Geo (country, city, ASN, timezone) | first check of a `new` proxy, on exit IP change, and every 24 h jittered | `https://ipinfo.io/json` through the proxy (not Cloudflare-fronted). The observed record is persisted as authoritative; a change is a health event. Mismatch with the provider country on two consecutive lookups → `degraded` and alert, proxy stays usable. Lookup failures are not health failures (retry after an hour). |
 | Fingerprint self-test (http) | per PR in CI over loopback for every mapped profile; on demand (`kage selftest http --proxy --profile`) and two proxies per nightly live run against `selftest.http.third_party_url`; from M6 every 24 h jittered per persona, only against the operator's own echo (`selftest.http.echo_url`) and never against a third party on a timer | JA4, HTTP/2 Akamai string, header order, HTTP version and `User-Agent` equal the fixture recorded for the profile. The fingerprint is a function of the pins and the header code, not of the proxy, so the live runs only confirm that a real tunnel changes nothing. |
-| Fingerprint self-test (browser) | 24 h, staggered | Sidecar loads the detection test page set (configurable list, default: CreepJS, BrowserScan, pixelscan, bot.sannysoft, a JA4/H2 echo) and asserts: no automation flags, OS/browser/timezone/locale as claimed, JA4 as expected. Produces a per-persona score. |
+| Fingerprint self-test (browser) | per PR on the fixture site's coherence probe; on demand (`kage selftest browser`) and two proxies per nightly live run against the third-party pages; from M6 every 24 h staggered per persona, only against the operator's own pages (`selftest.browser.pages`: the probe and, when configured, the fingerprint echo), never a third party on a timer | The sidecar loads the page list given in the request. Default: our own probe and echo. Third parties (`bot.sannysoft.com`, CreepJS) only on demand and in the live suite; BrowserScan and Pixelscan never in a default. Findings `{page, check, status, observed, expected, hard}`; hard failures (any automation flag, an identity mismatch against the persona, a transport mismatch on the echo) fail the run; score `100 × (1 − (fails + ½ warns) / known)` with `min_score` 90; an unreachable page yields `unknown`, changes no score and sets `complete: false`, so a test-site outage never cools a persona down. Page text and a screenshot are stored as artifacts. |
 | IP reputation | 24 h, one proxy at a time spread over the day, asked from the host directly | Provider trait with AbuseIPDB first; disabled without a key. Bad = `abuseConfidenceScore` ≥ `reputation.bad_score` (default 75) on two consecutive lookups → `replacing` when the budget allows, else `degraded` + alert. `usageType` recorded; Data Center or Hosting on a residential IP raises `reputation_usage_type_suspicious`, never an automatic replacement. A 429 pauses lookups for as long as it says, or 24 h. |
 | Account sync | 10 min | Subscription, plan, counts, replacement quota, the four `auto_replace_*` flags (alert while any is on, never changed by Kage), available countries. |
 
