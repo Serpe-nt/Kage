@@ -294,12 +294,39 @@ mod tests {
             "chrome_149"
         );
 
-        // An engine upgrade past the profiles must not pass unnoticed.
+        // The engines of this release, Chrome 155 and Camoufox 152: a
+        // capture of each proved that no profile fits, so the check accepts
+        // them and says that their personas are browser-only.
+        let released: serde_json::Value = serde_json::from_str(
+            &run(
+                None,
+                env(
+                    &shipped_policies(),
+                    &[
+                        ("KAGE__ENGINES__CHROMIUM__BROWSER_MAJOR", "155"),
+                        ("KAGE__ENGINES__FIREFOX__BROWSER_MAJOR", "152"),
+                    ],
+                ),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let http = &released["http"];
+        assert_eq!(http["engines"]["firefox"]["browser_major"], 152);
+        assert!(http["engines"]["firefox"]["profile"].is_null());
+        assert!(http["engines"]["chromium"]["profile"].is_null());
+        assert_eq!(
+            http["browser_only_majors"],
+            serde_json::json!(["chromium-155", "firefox-152"])
+        );
+        assert_eq!(http["browser_captures"], 2);
+
+        // An engine upgrade past the captures must not pass unnoticed.
         let error = run(
             None,
             env(
                 &shipped_policies(),
-                &[("KAGE__ENGINES__FIREFOX__BROWSER_MAJOR", "152")],
+                &[("KAGE__ENGINES__FIREFOX__BROWSER_MAJOR", "153")],
             ),
         )
         .unwrap_err();
@@ -309,7 +336,7 @@ mod tests {
             message.contains("engines.firefox.browser_major"),
             "{message}"
         );
-        assert!(message.contains("firefox 152"), "{message}");
+        assert!(message.contains("firefox 153"), "{message}");
 
         // Firefox on Linux cannot be the probe's profile.
         let error = run(

@@ -89,9 +89,13 @@ export async function startAudioServer(
     child.once('error', (error) => {
       exited = true;
       reject(
-        new EngineError('browser_launch_failed', `PulseAudio could not be started: ${error.message}`, {
-          cause: error,
-        }),
+        new EngineError(
+          'browser_launch_failed',
+          `PulseAudio could not be started: ${error.message}`,
+          {
+            cause: error,
+          },
+        ),
       );
     });
     child.once('exit', (code, signal) => {

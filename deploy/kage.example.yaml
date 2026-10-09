@@ -208,8 +208,10 @@ engines:
     # sidecar has the same switch (SIDECAR_ALLOW_CROSS_OS_CLAIMS).
     allow_cross_os_claims: false
   firefox:
-    # Major version of the Firefox that Camoufox is built from; null until
-    # M5 pins it.
+    # Major version of the Firefox that Camoufox is built from. The image
+    # of this release bundles Camoufox 152.0.4: set it to 152 in a
+    # deployment. Firefox 152 is browser-only like Chrome 155: its personas
+    # never use the http path.
     browser_major: null
 
 policies:

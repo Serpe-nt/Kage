@@ -59,7 +59,12 @@ describe('the sound server', () => {
     expect(started).toHaveLength(1);
     expect(started[0]?.command).toBe('pulseaudio');
     expect(started[0]?.args).toEqual(
-      expect.arrayContaining(['--daemonize=no', '--exit-idle-time=-1', '-n', `--file=${path.join(dir, 'kage.pa')}`]),
+      expect.arrayContaining([
+        '--daemonize=no',
+        '--exit-idle-time=-1',
+        '-n',
+        `--file=${path.join(dir, 'kage.pa')}`,
+      ]),
     );
     // Its whole environment: nothing of the sidecar's own.
     expect(Object.keys(started[0]?.env ?? {}).sort()).toEqual([
@@ -68,7 +73,9 @@ describe('the sound server', () => {
       'XDG_CONFIG_HOME',
       'XDG_RUNTIME_DIR',
     ]);
-    expect(await readFile(path.join(dir, 'kage.pa'), 'utf8')).toBe(audioScript(path.join(dir, 'native')));
+    expect(await readFile(path.join(dir, 'kage.pa'), 'utf8')).toBe(
+      audioScript(path.join(dir, 'native')),
+    );
     await server.stop();
     expect(child.killed).toEqual(['SIGTERM']);
     expect(warnings).toEqual(['the sound server exited']);

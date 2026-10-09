@@ -52,8 +52,8 @@ default:
 
 # --- Setup -------------------------------------------------------------------
 
-# Install toolchains, pnpm deps, the pinned Chrome, git hooks and local dev secrets.
-setup: setup-rust setup-sqlx setup-node setup-chrome setup-hooks setup-env
+# Install toolchains, pnpm deps, the pinned browsers, git hooks and local dev secrets.
+setup: setup-rust setup-sqlx setup-node setup-chrome setup-camoufox setup-hooks setup-env
 
 # Install the pinned Rust toolchain and cargo tools.
 setup-rust:
@@ -89,11 +89,19 @@ setup-node:
     command -v pnpm > /dev/null || corepack enable pnpm
     cd sidecar && pnpm install --frozen-lockfile
 
-# Install the pinned Chrome, Xvfb and Mesa: what the sidecar's browser tests
+# Install the pinned Chrome, Xvfb and Mesa: what the Chromium engine's tests
 # start. The version is the one the chromium image is built with. Uses sudo
 # when not root; does nothing when everything is there already.
 setup-chrome:
     scripts/setup-chrome.sh
+
+# Install the pinned Camoufox build, Xvfb, setxkbmap, Mesa and the libraries
+# a Firefox needs: what the Firefox engine's tests start. The build is the
+# one the firefox image is built with, unpacked into /opt/camoufox (or
+# KAGE_CAMOUFOX_DIR). Uses sudo when not root; does nothing when everything
+# is there already.
+setup-camoufox:
+    scripts/setup-camoufox.sh
 
 # Point git at the hooks in .githooks/.
 setup-hooks:
@@ -167,13 +175,15 @@ sqlx-check:
 sqlx-prepare:
     scripts/check-migrations.sh --prepare
 
-# The Chromium engine's integration tests start the pinned Chrome on Xvfb
-# (`just setup-chrome`). Not as root: Chrome refuses to sandbox itself there.
+# The engines' integration tests start the pinned browsers on Xvfb: Chrome
+# (`just setup-chrome`) and Camoufox (`just setup-camoufox`). Not as root:
+# Chrome refuses to sandbox itself there.
 test-node:
     cd sidecar && pnpm run build && pnpm run test
 
-# Compose-based end-to-end suite: the stack smoke test, which since M4 also
-# opens a browser context and checks the Chromium container's hardening.
+# Compose-based end-to-end suite: the stack smoke test, which also opens a
+# browser context in each sidecar and checks the hardening of both
+# containers (Chromium since M4, Firefox since M5).
 test-e2e: setup-env
     tests/e2e/smoke.sh
 

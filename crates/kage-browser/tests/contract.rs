@@ -8,7 +8,7 @@
 //!   unchanged, which catches a type the generator maps too loosely or too
 //!   strictly;
 //! - every component schema must have a type, and every operation must be
-//!   one the client calls or one it is known not to call yet;
+//!   one the client calls;
 //! - the constants the client is written with (paths, the token header)
 //!   must be the document's.
 
@@ -21,14 +21,11 @@ use std::path::Path;
 
 use kage_browser::IMPLEMENTED_OPERATIONS;
 use kage_browser::contract::{
-    self, CONTRACT_VERSION, CaptureOptions, ClaimedOs, ErrorCode, FlowAction, FlowEvent,
-    NavigateRequest, OPERATIONS, PageResult, SCHEMA_NAMES, TOKEN_HEADER, Wait, WaitUntil,
+    self, BehaviorOptions, CONTRACT_VERSION, CaptureOptions, ClaimedOs, DwellMode, Entry,
+    EntryStrategy, ErrorCode, FlowAction, FlowEvent, NavigateRequest, OPERATIONS, PageResult,
+    SCHEMA_NAMES, TOKEN_HEADER, Wait, WaitUntil,
 };
 use serde_json::{Value, json};
-
-/// Operations of the contract the client does not call yet, each with the
-/// milestone that adds it.
-const NOT_YET: &[(&str, &str)] = &[("flow", "M5: the flow executor")];
 
 fn document() -> Value {
     let path =
@@ -67,7 +64,7 @@ was:
 }
 
 #[test]
-fn every_schema_has_a_type_and_every_operation_is_accounted_for() {
+fn every_schema_has_a_type_and_the_client_calls_every_operation() {
     let document = document();
     let schemas = document["components"]["schemas"].as_object().unwrap();
     // A schema that is only an option of a union is a variant of that
@@ -91,23 +88,20 @@ fn every_schema_has_a_type_and_every_operation_is_accounted_for() {
     assert!(expected.contains("PageResult") && expected.contains("FlowAction"));
     assert!(variants.contains("GotoAction") && !expected.contains("GotoAction"));
 
+    // Since M5 the client calls every operation: none is left for later.
     let operations: BTreeSet<&str> = OPERATIONS.iter().map(|(id, _, _)| *id).collect();
-    let known: BTreeSet<&str> = IMPLEMENTED_OPERATIONS
-        .iter()
-        .copied()
-        .chain(NOT_YET.iter().map(|(id, _)| *id))
-        .collect();
+    let implemented: BTreeSet<&str> = IMPLEMENTED_OPERATIONS.iter().copied().collect();
     assert_eq!(
-        operations, known,
-        "the contract and the client disagree about the operations: add the client method, or \
-         list the operation in NOT_YET with the milestone that will"
+        operations, implemented,
+        "the contract and the client disagree about the operations: add the client method and \
+         its name to IMPLEMENTED_OPERATIONS"
     );
-    for (id, _) in NOT_YET {
-        assert!(
-            !IMPLEMENTED_OPERATIONS.contains(id),
-            "{id} is implemented now"
-        );
-    }
+    assert_eq!(
+        implemented.len(),
+        IMPLEMENTED_OPERATIONS.len(),
+        "an operation is listed twice"
+    );
+    assert!(implemented.contains("flow"));
 }
 
 #[test]
@@ -131,6 +125,7 @@ fn the_constants_are_the_documents() {
         by_id("navigate"),
         Some(("POST", "/v1/contexts/{id}/navigate"))
     );
+    assert_eq!(by_id("flow"), Some(("POST", "/v1/contexts/{id}/flow")));
     assert_eq!(OPERATIONS.len(), 10);
 }
 
@@ -166,7 +161,7 @@ fn enums_are_written_as_the_contract_writes_them() {
 
 #[test]
 fn an_optional_field_is_left_out_and_a_nullable_one_is_written_as_null() {
-    let request = NavigateRequest {
+    let mut request = NavigateRequest {
         url: "https://example.org/".to_owned(),
         wait: Wait {
             until: WaitUntil::Load,
@@ -186,16 +181,49 @@ fn an_optional_field_is_left_out_and_a_nullable_one_is_written_as_null() {
         dwell_ms: None,
         max_body_bytes: None,
         artifact_prefix: None,
+        behavior: None,
     };
+    let bare = json!({
+        "url": "https://example.org/",
+        "wait": { "until": "load" },
+        // Required and nullable: written, as null.
+        "capture": { "dom": true, "raw": false, "xhr": null, "console": false, "screenshot": null, "pdf": null },
+        "timeout_ms": 60_000,
+    });
+    // No `behavior` at all is a bare page load, so the key is left out.
+    assert_eq!(serde_json::to_value(&request).unwrap(), bare);
+
+    // The behavior options of contract 1.1.0 follow the same rule one level
+    // down: what is not set is not written, and the sidecar's defaults apply.
+    request.behavior = Some(BehaviorOptions {
+        seed: None,
+        entry: Some(Entry {
+            strategy: EntryStrategy::Link,
+            from_url: Some("https://www.example.org/".to_owned()),
+            fallback: None,
+        }),
+        scroll_depth: Some(0.5),
+        dwell: Some(DwellMode::Human),
+        wander: None,
+    });
+    let mut with_behavior = bare;
+    with_behavior["behavior"] = json!({
+        "entry": { "strategy": "link", "from_url": "https://www.example.org/" },
+        "scroll_depth": 0.5,
+        "dwell": "human",
+    });
+    let written = serde_json::to_value(&request).unwrap();
+    assert!(common::same_json(&written, &with_behavior), "{written:#}");
     assert_eq!(
-        serde_json::to_value(&request).unwrap(),
-        json!({
-            "url": "https://example.org/",
-            "wait": { "until": "load" },
-            // Required and nullable: written, as null.
-            "capture": { "dom": true, "raw": false, "xhr": null, "console": false, "screenshot": null, "pdf": null },
-            "timeout_ms": 60_000,
-        })
+        serde_json::from_value::<NavigateRequest>(written).unwrap(),
+        request
+    );
+    assert_eq!(
+        EntryStrategy::ALL
+            .iter()
+            .map(|strategy| strategy.as_str())
+            .collect::<Vec<_>>(),
+        ["none", "direct", "link", "search_engine"]
     );
 }
 

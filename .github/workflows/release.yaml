@@ -1,8 +1,11 @@
 name: release
 
-# A semver tag on main builds and pushes the three images, records their
-# digests and creates the GitHub release (spec §21). The digests go into
-# deploy/compose.yaml in a follow-up PR.
+# A semver tag on main builds and pushes the kage and the Chromium sidecar
+# image, records their digests and creates the GitHub release (spec §21).
+# The digests go into deploy/compose.yaml in a follow-up PR.
+#
+# The Firefox sidecar image is not published (ADR 0008): operators build it
+# from the tagged source with `just build-images`.
 
 on:
   push:
@@ -68,10 +71,11 @@ jobs:
           - name: kage-browser-chromium
             dockerfile: deploy/docker/sidecar.Dockerfile
             engine: chromium
-          # ADR 0008 must be decided before this image is published.
-          - name: kage-browser-firefox
-            dockerfile: deploy/docker/sidecar.Dockerfile
-            engine: firefox
+          # No kage-browser-firefox entry, on purpose (ADR 0008). The
+          # Camoufox build that image unpacks bundles Microsoft's and
+          # Apple's font files, and a public image of ours would
+          # redistribute them. Operators build it locally with
+          # `just build-images`; CI still builds and scans it on every PR.
     env:
       IMAGE: ghcr.io/${{ needs.verify.outputs.owner }}/${{ matrix.name }}
     steps:
@@ -163,6 +167,8 @@ jobs:
             echo '```'
             cat release/*.digest
             echo '```'
+            echo
+            echo "The Firefox sidecar image is not published (docs/adr/0008). Build it from this tag with \`just build-images\`."
             echo
             echo "A CycloneDX SBOM per image is attached. See CHANGELOG.md for the curated change list."
           } > release/notes.md

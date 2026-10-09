@@ -18,6 +18,9 @@
 //! shared secret. A call is tried again only when the connection could not
 //! be made at all; a request that reached the sidecar is never repeated,
 //! because a navigation is not idempotent: it is a visit a site has seen.
+//! A flow answers with one event per line; [`SidecarClient::flow`] returns
+//! them in order and tells a flow that broke on the way
+//! ([`BrowserError::FlowInterrupted`]) from one that ran to its end.
 //!
 //! # After a navigation
 //!

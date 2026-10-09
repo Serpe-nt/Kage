@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use common::{TestEcho, TestProxy, factory, observation, spec};
 use kage_core::domain::{ClaimedOs, Engine};
-use kage_http::headers::IdentityOverride;
+use kage_http::headers::{IdentityOverride, accept_language};
 use kage_http::profile::{self, BROWSER_ONLY_MAJORS, Family, VERIFIED_MAJORS, mapping_table};
 use kage_http::selftest::{self, BrowserCapture, Expected, Observed};
 use kage_http::{ClientFactory, ClientSpec, FetchSpec, ProfileChoice};
@@ -410,6 +410,16 @@ async fn a_derived_profile_keeps_the_transport_and_presents_the_engines_major() 
     }
 }
 
+/// The operating system a capture's browser claimed.
+fn claimed_os(capture: &BrowserCapture) -> ClaimedOs {
+    profile::os_named(&capture.os).unwrap_or_else(|error| {
+        panic!(
+            "the capture of {} {}: {error}",
+            capture.engine, capture.browser_version
+        )
+    })
+}
+
 /// What of a browser capture differs from what the derived profile sends:
 /// any of `ja4`, `akamai`, `header_order`.
 async fn differences(
@@ -419,9 +429,15 @@ async fn differences(
     capture: &BrowserCapture,
 ) -> Vec<&'static str> {
     let family = Family::of_engine(engine);
-    // Whatever the capture's operating system, the transport and the header
-    // names are the family's.
-    let resolved = profile::derive(family, major, ClaimedOs::Windows)
+    // The derived profile claims the system the captured browser claimed:
+    // Linux for Chrome, Windows for Camoufox. The transport and the header
+    // names are the family's on every system, so this decides nothing
+    // about the three values compared here; it keeps the comparison one of
+    // like with like. wreq-util's Firefox on Linux names an Ubuntu build in
+    // its `User-Agent`, which the http path refuses to send until a persona
+    // supplies the real one (M6): one more reason the Firefox capture
+    // claims Windows.
+    let resolved = profile::derive(family, major, claimed_os(capture))
         .unwrap_or_else(|| panic!("{engine} {major} is not newer than the newest profile"));
     let spec = ClientSpec::new(resolved.choice.clone()).with_identity(IdentityOverride {
         user_agent: resolved.user_agent.clone(),
@@ -439,6 +455,121 @@ async fn differences(
         differing.push("header_order");
     }
     differing
+}
+
+/// The first value of a header of a captured navigation.
+fn navigation_header<'a>(capture: &'a BrowserCapture, name: &str) -> Option<&'a str> {
+    capture
+        .requests
+        .get("navigation")?
+        .headers
+        .iter()
+        .find(|(found, _)| found == name)
+        .map(|(_, value)| value.as_str())
+}
+
+/// What the capture of Firefox 152 was recorded to differ in, in detail:
+/// the cipher list, and the value of one header.
+fn firefox_152_differs_as_recorded(capture: &BrowserCapture) {
+    // `c009` is gone from the ciphers the profile offers.
+    let ciphers = capture.ja4_r.split('_').nth(1).unwrap_or_default();
+    assert_eq!(ciphers.split(',').count(), 16, "{ciphers}");
+    assert!(!ciphers.contains("c009"), "{ciphers}");
+    // The part of the JA4 that hashes the extensions and the signature
+    // algorithms is the profile's.
+    let newest = read_fixture("firefox_151-windows").unwrap();
+    assert_eq!(
+        capture.ja4.rsplit('_').next(),
+        newest.ja4.rsplit('_').next()
+    );
+    // One header value differs as well, and the header code must learn it
+    // before this major can be verified: for the same two languages the
+    // browser weights the second with 0.9, the Firefox rule of the http
+    // path with 0.5.
+    assert_eq!(
+        navigation_header(capture, "accept-language"),
+        Some("en-US,en;q=0.9")
+    );
+    assert_eq!(
+        accept_language(Family::Firefox, &["en-US", "en"]).unwrap(),
+        "en-US,en;q=0.5"
+    );
+}
+
+/// A capture file is the capture its name says, is consistent with itself,
+/// and shows the browser its engine runs.
+fn capture_says_what_its_name_says(stem: &str, capture: &BrowserCapture) {
+    let (engine, major) = stem.split_once('-').unwrap();
+    assert_eq!(capture.engine, engine, "{stem}");
+    assert!(
+        capture.browser_version.starts_with(&format!("{major}.")),
+        "{stem}: {}",
+        capture.browser_version
+    );
+    assert!(capture.ja4.starts_with("t13d"), "{stem}: {}", capture.ja4);
+
+    // The navigation's header names are the list the comparison uses.
+    let navigation = capture
+        .requests
+        .get("navigation")
+        .unwrap_or_else(|| panic!("{stem}: no typed navigation was captured"));
+    assert_eq!(navigation.http_version, "h2", "{stem}");
+    let names: Vec<String> = navigation
+        .headers
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect();
+    assert_eq!(names, capture.headers, "{stem}");
+    let value = |name: &str| navigation_header(capture, name);
+    if engine == "chromium" {
+        // The browser says what the brand computation says for its major.
+        assert_eq!(
+            value("sec-ch-ua"),
+            Some(profile::chrome_brands(major.parse().unwrap()).as_str()),
+            "{stem}"
+        );
+        assert!(
+            value("user-agent")
+                .is_some_and(|agent| agent.contains(&format!("Chrome/{major}.0.0.0"))),
+            "{stem}"
+        );
+        // Chrome claims the system it runs on (docs/adr/0009).
+        assert_eq!(capture.os, "linux", "{stem}");
+    }
+    if engine == "firefox" {
+        assert!(
+            value("user-agent")
+                .is_some_and(|agent| agent
+                    .ends_with(&format!("rv:{major}.0) Gecko/20100101 Firefox/{major}.0"))),
+            "{stem}"
+        );
+        // Firefox sends no client hints.
+        assert_eq!(value("sec-ch-ua"), None, "{stem}");
+        // Camoufox does not claim Linux by default, and a Firefox profile
+        // claiming Linux has no `User-Agent` of its own that the http path
+        // would send.
+        assert_ne!(capture.os, "linux", "{stem}");
+    }
+    // The `User-Agent` the http path would write for this major on the
+    // system the capture claims is the browser's own, to the letter.
+    let family = Family::of_engine(
+        engine
+            .parse::<Engine>()
+            .unwrap_or_else(|_| panic!("{stem}: {engine} is no engine")),
+    );
+    let derived = profile::derive(family, major.parse().unwrap(), claimed_os(capture))
+        .unwrap_or_else(|| panic!("{stem}: no profile is derived for it"));
+    assert_eq!(value("user-agent"), derived.user_agent.as_deref(), "{stem}");
+    // What a later milestone builds the fetch()/XHR request kind from
+    // (follow-up F6).
+    for kind in [
+        "fetch_get",
+        "fetch_post_json",
+        "xhr_get",
+        "navigation_http1",
+    ] {
+        assert!(capture.requests.contains_key(kind), "{stem}: no {kind}");
+    }
 }
 
 /// Consult 4 of M3 and follow-up F5: a major is offered a derived profile
@@ -486,6 +617,12 @@ async fn every_browser_capture_is_accounted_for() {
             // signature algorithms. HTTP/2 and the header order are equal.
             assert_eq!(differing, ["ja4"], "{}", capture.ja4_r);
         }
+        if (engine, major) == (Engine::Firefox, 152) {
+            // The recorded reason: one cipher suite fewer. HTTP/2 and the
+            // header order are equal.
+            assert_eq!(differing, ["ja4"], "{}", capture.ja4_r);
+            firefox_152_differs_as_recorded(&capture);
+        }
     }
 
     // A capture nobody lists verifies nothing and would mislead; one that
@@ -496,58 +633,7 @@ async fn every_browser_capture_is_accounted_for() {
             "{stem}.json is in neither VERIFIED_MAJORS nor BROWSER_ONLY_MAJORS"
         );
         let capture = capture.unwrap_or_else(|error| panic!("{stem}.json: {error}"));
-        let (engine, major) = stem.split_once('-').unwrap();
-        assert_eq!(capture.engine, engine, "{stem}");
-        assert!(
-            capture.browser_version.starts_with(&format!("{major}.")),
-            "{stem}: {}",
-            capture.browser_version
-        );
-        assert!(capture.ja4.starts_with("t13d"), "{stem}: {}", capture.ja4);
-
-        // The capture is consistent with itself: the navigation's header
-        // names are the list the comparison uses.
-        let navigation = capture
-            .requests
-            .get("navigation")
-            .unwrap_or_else(|| panic!("{stem}: no typed navigation was captured"));
-        assert_eq!(navigation.http_version, "h2", "{stem}");
-        let names: Vec<String> = navigation
-            .headers
-            .iter()
-            .map(|(name, _)| name.clone())
-            .collect();
-        assert_eq!(names, capture.headers, "{stem}");
-        let value = |name: &str| {
-            navigation
-                .headers
-                .iter()
-                .find(|(found, _)| found == name)
-                .map(|(_, value)| value.as_str())
-        };
-        if engine == "chromium" {
-            // The browser says what the brand computation says for its major.
-            assert_eq!(
-                value("sec-ch-ua"),
-                Some(profile::chrome_brands(major.parse().unwrap()).as_str()),
-                "{stem}"
-            );
-            assert!(
-                value("user-agent")
-                    .is_some_and(|agent| agent.contains(&format!("Chrome/{major}.0.0.0"))),
-                "{stem}"
-            );
-            // What a later milestone builds the fetch()/XHR request kind
-            // from (follow-up F6).
-            for kind in [
-                "fetch_get",
-                "fetch_post_json",
-                "xhr_get",
-                "navigation_http1",
-            ] {
-                assert!(capture.requests.contains_key(kind), "{stem}: no {kind}");
-            }
-        }
+        capture_says_what_its_name_says(stem, &capture);
     }
     assert!(
         VERIFIED_MAJORS

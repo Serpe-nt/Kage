@@ -23,7 +23,7 @@ use http_support::{
 use pool_support::{MASTER_KEY, TestDb};
 use serde_json::{Value, json};
 use tempfile::TempDir;
-use wiremock::matchers::{body_partial_json, header, method, path};
+use wiremock::matchers::{any, body_partial_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn shipped_policies() -> PathBuf {
@@ -487,20 +487,57 @@ fn contract_example(schema: &str) -> Value {
 
 const CONTEXT: &str = "0199c1f3-0a1b-7d2c-8e3f-4a5b6c7d8e9f";
 
-/// A stand-in for the Chromium sidecar: it answers one self-test
-/// conversation with the contract's examples and `report`, and only to
-/// calls that carry the shared secret. `context` is what the request that
-/// opens the context must say.
-async fn sidecar(context: Value, report: Value) -> MockServer {
+/// What the self-test must ask an engine's sidecar for: the system its
+/// stand-in persona claims, and the capture recorded for the browser the
+/// sidecar says it runs.
+struct StandIn {
+    claimed_os: &'static str,
+    browser_major: u64,
+    /// The JA4 of `tests/fixtures/fingerprints/browser/<engine>-<major>.json`.
+    ja4: &'static str,
+}
+
+const CHROMIUM: StandIn = StandIn {
+    claimed_os: "linux",
+    browser_major: 155,
+    ja4: "t13d1517h2_8daaf6152771_cb7bf5808d99",
+};
+
+const FIREFOX: StandIn = StandIn {
+    claimed_os: "windows",
+    browser_major: 152,
+    ja4: "t13d1617h2_86a278354501_3cbfd9057e0d",
+};
+
+/// The persona the Firefox sidecar generates: the contract's example with
+/// the summary of a Camoufox persona that claims `claimed_os`.
+fn firefox_persona(claimed_os: &str) -> Value {
+    let mut persona = contract_example("GeneratePersonaResponse");
+    for (key, value) in [
+        ("engine", json!("firefox")),
+        ("claimed_os", json!(claimed_os)),
+        ("browser_version", json!("152.0.4")),
+        ("browser_major", json!(152)),
+    ] {
+        persona["summary"][key] = value;
+    }
+    persona
+}
+
+/// A stand-in for an engine's sidecar: it answers one self-test
+/// conversation with `persona`, the contract's examples and `report`, and
+/// only to calls that carry the shared secret. `context` is what the
+/// request that opens the context must say.
+async fn sidecar(stand_in: &StandIn, persona: Value, context: Value, report: Value) -> MockServer {
     let server = MockServer::start().await;
     let authorized = || header("x-kage-sidecar-token", "sidecar-token-77c1");
     Mock::given(method("POST"))
         .and(path("/v1/personas/generate"))
         .and(authorized())
-        .and(body_partial_json(json!({ "claimed_os": "linux" })))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(contract_example("GeneratePersonaResponse")),
-        )
+        .and(body_partial_json(
+            json!({ "claimed_os": stand_in.claimed_os }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(persona))
         .expect(1)
         .mount(&server)
         .await;
@@ -529,11 +566,11 @@ async fn sidecar(context: Value, report: Value) -> MockServer {
                 },
             ],
             "expected": {
-                "claimed_os": "linux",
-                "browser_major": 155,
+                "claimed_os": stand_in.claimed_os,
+                "browser_major": stand_in.browser_major,
                 "timezone": "Europe/Berlin",
             },
-            "echo": { "ja4": "t13d1517h2_8daaf6152771_cb7bf5808d99" },
+            "echo": { "ja4": stand_in.ja4 },
         })))
         .respond_with(ResponseTemplate::new(200).set_body_json(report))
         .expect(1)
@@ -569,11 +606,11 @@ async fn the_browser_self_test_opens_a_context_through_the_proxy_and_closes_it_a
         "--language",
         "de",
     ];
-    // The proxy with its credentials, the proxy's own profile directory and
-    // the identity that was asked for.
+    // The proxy with its credentials, the proxy's own profile directory on
+    // this engine and the identity that was asked for.
     let context = json!({
         "persona_id": id,
-        "profile_dir": format!("selftest/{id}"),
+        "profile_dir": format!("selftest/chromium/{id}"),
         "proxy": {
             "server": format!("http://{}:{}", proxy.addr.ip(), proxy.addr.port()),
             "username": PROXY_USER,
@@ -591,7 +628,13 @@ async fn the_browser_self_test_opens_a_context_through_the_proxy_and_closes_it_a
     assert!(text(&output.stderr).contains("--third-party"));
 
     // A passing report: one JSON document, and the context is closed.
-    let passing = sidecar(context.clone(), contract_example("SelftestResponse")).await;
+    let passing = sidecar(
+        &CHROMIUM,
+        contract_example("GeneratePersonaResponse"),
+        context.clone(),
+        contract_example("SelftestResponse"),
+    )
+    .await;
     env.push(("KAGE__SIDECAR__CHROMIUM_URL".to_owned(), passing.uri()));
     let with_pages = [&arguments[..], &["--third-party"]].concat();
     // With a pause before the pages: the context stays open that long.
@@ -623,7 +666,13 @@ async fn the_browser_self_test_opens_a_context_through_the_proxy_and_closes_it_a
     failed["score"] = json!(40);
     failed["findings"][0]["status"] = json!("fail");
     failed["findings"][0]["observed"] = json!("true");
-    let failing = sidecar(context, failed).await;
+    let failing = sidecar(
+        &CHROMIUM,
+        contract_example("GeneratePersonaResponse"),
+        context,
+        failed,
+    )
+    .await;
     env.pop();
     env.push(("KAGE__SIDECAR__CHROMIUM_URL".to_owned(), failing.uri()));
     let output = run(&env, &with_pages).await;
@@ -647,4 +696,100 @@ async fn the_browser_self_test_opens_a_context_through_the_proxy_and_closes_it_a
     }
     assert!(!table.contains(PROXY_PASS));
     assert!(!report.to_string().contains(PROXY_PASS));
+}
+
+/// The same command on the other engine: the Firefox sidecar is asked, for a
+/// persona that claims Windows, and the browser is judged against the
+/// capture of Firefox 152.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_browser_self_test_of_firefox_asks_its_own_sidecar_for_a_windows_persona() {
+    let db = TestDb::migrated().await;
+    let proxy = TestProxy::start().await;
+    let dir = TempDir::new().unwrap();
+    let mut env = environment(&db, &proxy, &dir.path().join("unused.pem"));
+    env.retain(|(name, _)| !name.starts_with("KAGE__SELFTEST__HTTP__ECHO"));
+    let id = adopt_proxy(&env).await;
+    let arguments = [
+        "selftest",
+        "browser",
+        "--proxy",
+        id.as_str(),
+        "--engine",
+        "firefox",
+        "--timezone",
+        "Europe/Berlin",
+        "--language",
+        "de-DE",
+        "--language",
+        "de",
+        "--third-party",
+    ];
+    // The profile directory is the proxy's on this engine: the Chrome
+    // stand-in of the same proxy keeps its own on the same volume.
+    let context = json!({
+        "persona_id": id,
+        "profile_dir": format!("selftest/firefox/{id}"),
+        "proxy": {
+            "server": format!("http://{}:{}", proxy.addr.ip(), proxy.addr.port()),
+            "username": PROXY_USER,
+            "password": PROXY_PASS,
+        },
+        "locale": "de-DE",
+        "languages": ["de-DE", "de"],
+        "timezone": "Europe/Berlin",
+    });
+
+    // The Chromium sidecar hears nothing of it.
+    let chromium = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&chromium)
+        .await;
+    env.push(("KAGE__SIDECAR__CHROMIUM_URL".to_owned(), chromium.uri()));
+
+    let passing = sidecar(
+        &FIREFOX,
+        firefox_persona("windows"),
+        context.clone(),
+        contract_example("SelftestResponse"),
+    )
+    .await;
+    env.push(("KAGE__SIDECAR__FIREFOX_URL".to_owned(), passing.uri()));
+    let report: Value =
+        serde_json::from_str(&ok(&env, &[&arguments[..], &["--json"]].concat()).await).unwrap();
+    assert_eq!(report["engine"], "firefox");
+    assert_eq!(report["persona"]["engine"], "firefox");
+    assert_eq!(report["persona"]["claimed_os"], "windows");
+    assert_eq!(report["persona"]["browser_major"], 152);
+    assert_eq!(report["passed"], true);
+    passing.verify().await;
+    drop(passing);
+
+    // A sidecar that answers with a persona of another system than the one
+    // asked for does not move the expectation: the self-test still expects
+    // Windows (this stand-in answers to nothing else), and the first line
+    // says what the persona claims.
+    let stray = sidecar(
+        &FIREFOX,
+        firefox_persona("macos"),
+        context,
+        contract_example("SelftestResponse"),
+    )
+    .await;
+    env.pop();
+    env.push(("KAGE__SIDECAR__FIREFOX_URL".to_owned(), stray.uri()));
+    let table = ok(&env, &arguments).await;
+    assert!(
+        table.starts_with(&format!("firefox 152.0.4 on macos through proxy {id}")),
+        "{table}"
+    );
+    stray.verify().await;
+    chromium.verify().await;
+
+    // Both runs are in the audit log under the engine that ran.
+    let filter = "action = 'selftest.browser' AND outcome = 'success' \
+                  AND details ->> 'engine' = 'firefox' \
+                  AND details ->> 'browser_version' = '152.0.4'";
+    assert_eq!(count(&db, "audit_events", filter).await, 2);
 }

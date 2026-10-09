@@ -539,9 +539,7 @@ fn flow_events(status: u16, body: &[u8]) -> Result<Vec<FlowEvent>, BrowserError>
         }
         let number = index + 1;
         if finished {
-            return Err(unexpected(format!(
-                "line {number} follows the final event"
-            )));
+            return Err(unexpected(format!("line {number} follows the final event")));
         }
         let event: FlowEvent = serde_json::from_slice(line)
             .map_err(|error| unexpected(format!("line {number} is not a flow event: {error}")))?;

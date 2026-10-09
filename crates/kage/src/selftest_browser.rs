@@ -10,9 +10,12 @@
 //! load those, and the server never does.
 //!
 //! Personas arrive with milestone M6. Until then the self-test stands in
-//! with one pseudo-persona per proxy: its id is the proxy's id and its seed
-//! is derived from it, so a proxy shows the same browser on every run and
-//! keeps one profile directory (`selftest/<proxy id>`).
+//! with one pseudo-persona per proxy and engine: its id is the proxy's id
+//! and its seed is derived from it, so a proxy shows the same browser on
+//! every run and keeps one profile directory per engine
+//! (`selftest/<engine>/<proxy id>`). The stand-in claims the operating
+//! system its engine claims by default: Linux on chromium, Windows on
+//! firefox.
 
 use std::io::Write;
 use std::time::Duration;
@@ -100,6 +103,26 @@ fn seed_of(proxy: ProxyId) -> String {
     format!("{id:032x}{id:032x}")
 }
 
+/// The operating system the stand-in persona of an engine claims.
+///
+/// A chromium persona claims the system its browser runs on, Linux
+/// (docs/adr/0009). Camoufox sets the claimed system inside the browser
+/// and does not claim Linux by default, so its stand-in claims Windows,
+/// the system the engine's capture was recorded with.
+const fn stand_in_os(engine: Engine) -> ClaimedOs {
+    match engine {
+        Engine::Chromium => ClaimedOs::Linux,
+        Engine::Firefox => ClaimedOs::Windows,
+    }
+}
+
+/// The profile directory of the stand-in persona of a proxy on an engine,
+/// below the personas volume. The two sidecars share that volume and one
+/// browser cannot open the other's profile, so each engine has its own.
+fn profile_dir_of(engine: Engine, proxy: ProxyId) -> String {
+    format!("selftest/{}/{proxy}", engine.as_str())
+}
+
 /// What an echo page must report: the capture recorded for this browser.
 fn echo_expectation(engine: Engine, major: u64) -> Option<EchoExpectation> {
     let major = u32::try_from(major).ok()?;
@@ -124,12 +147,11 @@ async fn converse(
     let Some(locale) = options.languages.first() else {
         bail!("name at least one language");
     };
+    let claimed_os = stand_in_os(options.engine);
     let persona = client
         .generate_persona(&GeneratePersonaRequest {
             browser_major: None,
-            // A chromium persona claims the system its browser runs on
-            // (docs/adr/0009).
-            claimed_os: ClaimedOs::Linux,
+            claimed_os,
             languages: options.languages.clone(),
             screen: None,
             seed: seed.to_owned(),
@@ -144,7 +166,7 @@ async fn converse(
             languages: options.languages.clone(),
             locale: locale.clone(),
             persona_id: endpoint.id.as_uuid(),
-            profile_dir: format!("selftest/{}", endpoint.id),
+            profile_dir: profile_dir_of(options.engine, endpoint.id),
             proxy: ContextProxy {
                 password: endpoint.password.expose().to_owned(),
                 server: endpoint.url(),
@@ -173,8 +195,13 @@ async fn converse(
         artifact_prefix: None,
         echo: echo_expectation(options.engine, summary.browser_major),
         expected: ExpectedIdentity {
+            // The major of the browser the engine bundles, as its sidecar
+            // reports it.
             browser_major: summary.browser_major,
-            claimed_os: summary.claimed_os,
+            // The system that was asked for, not the one the sidecar says
+            // it generated: a persona that came back claiming another
+            // system must fail the test, not move its expectation.
+            claimed_os,
             languages: options.languages.clone(),
             timezone: options.timezone.clone(),
         },
@@ -334,13 +361,16 @@ fn write_report(
 #[cfg(test)]
 mod tests {
     use kage_browser::contract::{
-        EXAMPLES_JSON, GeneratePersonaResponse, PersonaSummary, SelftestResponse,
+        ClaimedOs, EXAMPLES_JSON, GeneratePersonaResponse, PersonaSummary, SelftestResponse,
     };
     use kage_core::config::{Config, SelftestPageConfig, SelftestPageKind};
     use kage_core::domain::Engine;
     use kage_core::ids::ProxyId;
 
-    use super::{BrowserSelftestOptions, echo_expectation, pages_of, seed_of, write_report};
+    use super::{
+        BrowserSelftestOptions, echo_expectation, pages_of, profile_dir_of, seed_of, stand_in_os,
+        write_report,
+    };
 
     fn config() -> Config {
         Config::load(
@@ -432,12 +462,57 @@ mod tests {
     }
 
     #[test]
+    fn the_stand_in_persona_fits_its_engine() {
+        // Chrome claims the system it runs on; Camoufox does not claim
+        // Linux by default.
+        assert_eq!(stand_in_os(Engine::Chromium), ClaimedOs::Linux);
+        assert_eq!(stand_in_os(Engine::Firefox), ClaimedOs::Windows);
+        // Each is the system the engine's capture was recorded with, so the
+        // stand-in is the browser the echo expectation describes.
+        for (engine, major) in [(Engine::Chromium, 155), (Engine::Firefox, 152)] {
+            let capture = kage_http::selftest::browser_capture(engine.as_str(), major)
+                .expect("a capture of the engine's browser");
+            assert_eq!(capture.os, stand_in_os(engine).as_str(), "{engine}");
+        }
+
+        // One proxy keeps one profile directory per engine: the sidecars
+        // share the personas volume.
+        let proxy = options(false).proxy;
+        assert_eq!(
+            profile_dir_of(Engine::Chromium, proxy),
+            "selftest/chromium/0199c1f2-6b7a-7c3e-9d41-2f8a5b6c7d8e"
+        );
+        assert_eq!(
+            profile_dir_of(Engine::Firefox, proxy),
+            "selftest/firefox/0199c1f2-6b7a-7c3e-9d41-2f8a5b6c7d8e"
+        );
+    }
+
+    #[test]
     fn an_echo_page_is_judged_against_the_recorded_capture() {
         let expectation = echo_expectation(Engine::Chromium, 155).expect("a capture of Chrome 155");
         assert!(expectation.ja4.starts_with("t13d"));
         assert!(expectation.headers.iter().any(|name| name == "user-agent"));
         assert!(echo_expectation(Engine::Chromium, 1).is_none());
         assert!(echo_expectation(Engine::Chromium, u64::MAX).is_none());
+
+        // The firefox engine is judged against its own capture.
+        let firefox = echo_expectation(Engine::Firefox, 152).expect("a capture of Firefox 152");
+        assert_eq!(firefox.ja4, "t13d1617h2_86a278354501_3cbfd9057e0d");
+        assert_eq!(
+            firefox.akamai,
+            "1:65536;2:0;4:131072;5:16384|12517377|0|m,p,a,s"
+        );
+        assert_eq!(
+            firefox.headers.first().map(String::as_str),
+            Some("user-agent")
+        );
+        assert_eq!(firefox.headers.last().map(String::as_str), Some("te"));
+        assert_ne!(firefox.ja4, expectation.ja4);
+        // A capture belongs to its engine: the major of one is nothing to
+        // the other.
+        assert!(echo_expectation(Engine::Firefox, 155).is_none());
+        assert!(echo_expectation(Engine::Chromium, 152).is_none());
     }
 
     #[test]
@@ -464,6 +539,31 @@ mod tests {
         assert_eq!(
             document["findings"].as_array().map(Vec::len),
             Some(report.findings.len())
+        );
+
+        // The first line names the engine that ran and what its persona
+        // claims.
+        let mut persona = example("GeneratePersonaResponse");
+        for (key, value) in [
+            ("engine", serde_json::json!("firefox")),
+            ("claimed_os", serde_json::json!("windows")),
+            ("browser_version", serde_json::json!("152.0.4")),
+            ("browser_major", serde_json::json!(152)),
+        ] {
+            persona["summary"][key] = value;
+        }
+        let persona: GeneratePersonaResponse =
+            serde_json::from_value(persona).expect("a firefox persona");
+        let firefox = BrowserSelftestOptions {
+            engine: Engine::Firefox,
+            ..options(false)
+        };
+        let mut table = Vec::new();
+        write_report(&mut table, &firefox, "seed", &persona.summary, &report).expect("a table");
+        let table = String::from_utf8(table).expect("text");
+        assert!(
+            table.starts_with("firefox 152.0.4 on windows through proxy"),
+            "{table}"
         );
     }
 }

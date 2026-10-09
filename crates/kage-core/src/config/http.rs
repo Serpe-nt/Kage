@@ -382,8 +382,9 @@ pub struct EngineConfig {
     /// The major version of the browser the engine image bundles. Set by
     /// the milestone that pins the browser (M4 for Chrome, M5 for Camoufox)
     /// and moved with every engine upgrade. A set major must resolve to an
-    /// emulation profile, or `kage config check` fails: an engine upgrade
-    /// must not switch the http path off unnoticed.
+    /// emulation profile, or be one a browser capture proved to be
+    /// browser-only, or `kage config check` fails: an engine upgrade must
+    /// not switch the http path off unnoticed.
     #[serde(default)]
     pub browser_major: Option<u32>,
 }
@@ -416,7 +417,8 @@ pub struct EnginesConfig {
     /// patchright with real Chrome.
     #[serde(default)]
     pub chromium: ChromiumEngineConfig,
-    /// Camoufox.
+    /// Camoufox. M5 pinned Camoufox 152.0.4, which is built from Firefox
+    /// 152.
     #[serde(default)]
     pub firefox: EngineConfig,
 }

@@ -1,10 +1,12 @@
 // Runs inside the browser-chromium container; tests/e2e/smoke.sh pipes it to
 // node. It checks what spec §19 and §22 ask of the container while a real
 // context is open: a non-root user, a read-only root filesystem, the pinned
-// Chrome, and Chrome's own sandbox around every renderer.
+// Chrome, Chrome's own sandbox around every renderer, and the sound server
+// the browser was given.
 //
 // The context gets a proxy address nobody listens on and is never navigated:
 // the check needs a running browser, not a page.
+import { execFileSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 
@@ -34,13 +36,13 @@ async function call(method, path, body) {
 }
 
 /**
- * Every Chrome process of the container as `{ pid, command, status }`.
+ * Every process of the container as `{ pid, command, status }`.
  *
  * The command line is read as one string: Chrome rewrites the title of the
  * processes it forks from its zygote, which leaves their arguments
  * separated by spaces and not by NUL bytes.
  */
-function chromeProcesses() {
+function processes() {
   const found = [];
   for (const entry of readdirSync('/proc')) {
     if (!/^\d+$/.test(entry)) {
@@ -48,10 +50,8 @@ function chromeProcesses() {
     }
     try {
       const command = readFileSync(`/proc/${entry}/cmdline`, 'utf8').replaceAll('\0', ' ').trim();
-      if (command.startsWith('/opt/google/chrome/chrome')) {
-        const status = readFileSync(`/proc/${entry}/status`, 'utf8');
-        found.push({ pid: Number(entry), command, status });
-      }
+      const status = readFileSync(`/proc/${entry}/status`, 'utf8');
+      found.push({ pid: Number(entry), command, status });
     } catch {
       // The process ended between the listing and the read.
     }
@@ -59,11 +59,65 @@ function chromeProcesses() {
   return found;
 }
 
+/** The Chrome processes: the browser and everything it starts. */
+const chromeProcesses = () =>
+  processes().filter((entry) => entry.command.startsWith('/opt/google/chrome/chrome'));
+
 const flags = (command) => command.split(/\s+/);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const field = (status, name) =>
   (new RegExp(`^${name}:\\s*(.*)$`, 'm').exec(status)?.[1] ?? '').trim();
+
+/** One variable of a process's environment, or undefined. */
+function environmentOf(pid, name) {
+  return readFileSync(`/proc/${pid}/environ`, 'utf8')
+    .split('\0')
+    .find((entry) => entry.startsWith(`${name}=`))
+    ?.slice(name.length + 1);
+}
+
+/**
+ * The sound server the browser was started with, when the sidecar runs one
+ * (`SIDECAR_AUDIO=pulse`, the image's default): a PulseAudio process, its
+ * address in the browser's `PULSE_SERVER`, and the devices it names when
+ * asked there. Without an output a page finds no media device, which is
+ * what a container looks like.
+ */
+function soundServer(browserPid) {
+  if (process.env.SIDECAR_AUDIO !== 'pulse') {
+    return { server: 'none' };
+  }
+  if (!processes().some((entry) => flags(entry.command)[0] === 'pulseaudio')) {
+    fail('SIDECAR_AUDIO is pulse and no PulseAudio process is running');
+  }
+  const address = environmentOf(browserPid, 'PULSE_SERVER');
+  if (address === undefined) {
+    fail('SIDECAR_AUDIO is pulse and the browser was started without PULSE_SERVER');
+  }
+  // One line per device: its index, its name, and more, separated by tabs.
+  const devices = (kind) => {
+    let listed;
+    try {
+      listed = execFileSync('pactl', ['--server', address, 'list', 'short', kind], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 10_000,
+      });
+    } catch (error) {
+      return fail(`the sound server at ${address} does not answer: ${error.message}`);
+    }
+    return listed
+      .split(/\n/)
+      .filter((line) => line !== '')
+      .map((line) => line.split(/\t/)[1]);
+  };
+  const outputs = devices('sinks');
+  if (outputs.length === 0) {
+    fail(`the sound server at ${address} has no output`);
+  }
+  return { server: 'pulse', outputs, inputs: devices('sources') };
+}
 
 if (process.getuid() !== 65532) {
   fail(`the sidecar runs as uid ${process.getuid()}, not 65532`);
@@ -155,6 +209,7 @@ try {
       no_new_privs: field(renderer.status, 'NoNewPrivs'),
       cap_eff: field(renderer.status, 'CapEff'),
     })),
+    audio: soundServer(browser.pid),
   };
 } finally {
   await call('DELETE', `/v1/contexts/${opened.context_id}`);

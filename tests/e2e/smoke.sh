@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Stack smoke test: brings the compose project up and checks that kage serves
-# /healthz, both sidecars serve /v1/health behind the shared secret, the
-# Chromium sidecar runs a real browser hardened as spec §19 and §22 ask,
-# Postgres accepts connections, the migrations are applied, and the
-# configuration loads with secrets redacted.
+# /healthz, both sidecars serve /v1/health behind the shared secret, each
+# sidecar runs a real browser hardened as spec §19 and §22 ask, Postgres
+# accepts connections, the migrations are applied, and the configuration
+# loads with secrets redacted.
 #
 # It uses its own compose project name and host port, so it never touches a
 # stack started with `just dev` or `docker compose up`.
@@ -65,22 +65,49 @@ without_token="$(reach "{}")"
 [ "${without_token}" = 401 ] || fail "browser-chromium answered ${without_token} to a call without the token"
 echo "    with the token: ${with_token}, without: ${without_token}"
 
+# What spec §19 asks of a sidecar's container, on one line: the user, a
+# read-only root, every capability dropped and none added, not privileged.
+hardening_of() {
+    docker inspect --format \
+        '{{.Config.User}} {{.HostConfig.ReadonlyRootfs}} {{json .HostConfig.CapDrop}} {{json .HostConfig.CapAdd}} {{.HostConfig.Privileged}}' \
+        "$1"
+}
+# The security options of a container, each up to its `=`. A seccomp entry
+# holds the whole profile after that; its name is all that is looked at.
+security_of() {
+    docker inspect --format \
+        '{{range $i, $option := .HostConfig.SecurityOpt}}{{if $i}} {{end}}{{index (split $option "=") 0}}{{end}}' \
+        "$1"
+}
+
 echo "==> browser-chromium is hardened and runs Chrome inside Chrome's own sandbox"
 container="$("${compose[@]}" ps --quiet browser-chromium)"
-hardening="$(docker inspect --format \
-    '{{.Config.User}} {{.HostConfig.ReadonlyRootfs}} {{json .HostConfig.CapDrop}} {{json .HostConfig.CapAdd}} {{.HostConfig.Privileged}}' \
-    "${container}")"
+hardening="$(hardening_of "${container}")"
 [ "${hardening}" = '65532:65532 true ["ALL"] null false' ] \
     || fail "browser-chromium container settings: ${hardening}"
-# The seccomp entry holds the whole profile; only its presence is checked.
-security="$(docker inspect --format '{{range .HostConfig.SecurityOpt}}{{slice (printf "%-20s" .) 0 20}}|{{end}}' "${container}")"
+security="$(security_of "${container}")"
 case "${security}" in
-    *no-new-privileges*seccomp=* | *seccomp=*no-new-privileges*) ;;
+    'no-new-privileges:true seccomp' | 'seccomp no-new-privileges:true') ;;
     *) fail "browser-chromium security options: ${security}" ;;
 esac
 echo "    user 65532, read-only root, no capabilities, no-new-privileges, the derived seccomp profile"
 sandbox="$("${compose[@]}" exec -T browser-chromium node --input-type=module - < tests/e2e/chromium-hardening.mjs)" \
     || fail "the Chromium hardening check failed"
+echo "    ${sandbox}"
+
+echo "==> browser-firefox is hardened and runs Camoufox under Docker's default seccomp profile"
+container="$("${compose[@]}" ps --quiet browser-firefox)"
+hardening="$(hardening_of "${container}")"
+[ "${hardening}" = '65532:65532 true ["ALL"] null false' ] \
+    || fail "browser-firefox container settings: ${hardening}"
+# no-new-privileges and nothing else: any seccomp entry would replace
+# Docker's default profile, and the firefox sidecar keeps the default.
+security="$(security_of "${container}")"
+[ "${security}" = 'no-new-privileges:true' ] \
+    || fail "browser-firefox security options: ${security}"
+echo "    user 65532, read-only root, no capabilities, no-new-privileges, Docker's default seccomp profile"
+sandbox="$("${compose[@]}" exec -T browser-firefox node --input-type=module - < tests/e2e/firefox-hardening.mjs)" \
+    || fail "the Firefox hardening check failed"
 echo "    ${sandbox}"
 
 echo "==> postgres accepts connections"

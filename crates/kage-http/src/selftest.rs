@@ -117,7 +117,10 @@ pub struct BrowserCapture {
     pub engine: String,
     /// The browser's full version.
     pub browser_version: String,
-    /// The operating system the browser ran on.
+    /// The operating system the capturing persona claimed: `linux` for
+    /// Chrome, which claims the system it runs on, and `windows` for
+    /// Camoufox, which runs on Linux and does not claim it by default. A
+    /// comparison with a derived profile uses the profile on this system.
     pub os: String,
     /// The day of the capture, `YYYY-MM-DD`.
     pub recorded: String,

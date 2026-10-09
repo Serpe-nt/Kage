@@ -87,6 +87,9 @@ services:
       # (CHROME_VERSION in deploy/docker/sidecar.Dockerfile). The stack
       # smoke test fails when the two disagree.
       KAGE__ENGINES__CHROMIUM__BROWSER_MAJOR: ${KAGE_CHROMIUM_BROWSER_MAJOR:-155}
+      # The same for the Firefox that the browser-firefox image bundles: the
+      # major of its Camoufox build (CAMOUFOX_VERSION in the same file).
+      KAGE__ENGINES__FIREFOX__BROWSER_MAJOR: ${KAGE_FIREFOX_BROWSER_MAJOR:-152}
     ports:
       # Loopback by default: the API has no authentication until M8.
       - "${KAGE_PUBLISH_ADDR:-127.0.0.1}:${KAGE_PUBLISH_PORT:-8080}:8080"
@@ -124,6 +127,10 @@ services:
       # Where WebGL comes from: llvmpipe (Mesa's software renderer), or host
       # when a GPU of the host is mapped in (docs/runbooks/engine-chromium.md).
       SIDECAR_GL: ${KAGE_SIDECAR_GL:-llvmpipe}
+      # A container has no sound card. With pulse the sidecar starts a sound
+      # server with one output and one input that go nowhere, so that a page
+      # finds media devices as on a desktop; none runs without one.
+      SIDECAR_AUDIO: ${KAGE_SIDECAR_AUDIO:-pulse}
       # The self-test's own pages; third-party pages are never a default.
       SIDECAR_SELFTEST_PROBE_URL: ${KAGE_SIDECAR_SELFTEST_PROBE_URL:-}
       SIDECAR_SELFTEST_ECHO_URL: ${KAGE_SIDECAR_SELFTEST_ECHO_URL:-}
@@ -150,6 +157,22 @@ services:
     environment:
       ENGINE: firefox
       SIDECAR_TOKEN: ${KAGE_SIDECAR_TOKEN:?run 'just setup' to create deploy/.env}
+      # The same limits and switches as browser-chromium, from the same
+      # variables. There is no cross-OS switch and no GL mode here: Camoufox
+      # sets the claimed system inside the browser, and the WebGL names a
+      # page reads come from the persona's fingerprint.
+      SIDECAR_MAX_CONTEXTS: ${KAGE_SIDECAR_MAX_CONTEXTS:-3}
+      SIDECAR_CONTEXT_IDLE_MS: ${KAGE_SIDECAR_CONTEXT_IDLE_MS:-120000}
+      SIDECAR_MAX_PAGES_PER_BROWSER: ${KAGE_SIDECAR_MAX_PAGES_PER_BROWSER:-500}
+      SIDECAR_AUDIO: ${KAGE_SIDECAR_AUDIO:-pulse}
+      SIDECAR_SELFTEST_PROBE_URL: ${KAGE_SIDECAR_SELFTEST_PROBE_URL:-}
+      SIDECAR_SELFTEST_ECHO_URL: ${KAGE_SIDECAR_SELFTEST_ECHO_URL:-}
+    # No seccomp entry: Camoufox runs under Docker's default profile (spec
+    # §19). That profile refuses the user namespaces Firefox would use for
+    # its sandbox; Firefox goes on without them and still puts its own
+    # seccomp filter on every content process (the smoke test looks).
+    # A browser is a few hundred threads here as well.
+    pids_limit: 4096
 
   # The fingerprint echo (spec §7.4): tells a client what its TLS handshake,
   # its HTTP/2 connection and its headers looked like. Off unless the `echo`

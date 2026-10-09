@@ -187,30 +187,37 @@ the majors the engines bundle (`engines`).
 
 `engines.chromium.browser_major` and `engines.firefox.browser_major` name
 the browser each engine image bundles. The Chromium image of this release
-bundles Chrome 155: set `engines.chromium.browser_major: 155`. A set major
-must be served by a profile, verified (`VERIFIED_MAJORS`), or recorded as
-browser-only (`BROWSER_ONLY_MAJORS`); anything else fails
-`kage config check` and the profile test. That is the gate working: a
-persona of that engine would otherwise present one browser version in the
-browser and another over http.
+bundles Chrome 155: set `engines.chromium.browser_major: 155`. The Firefox
+image bundles Camoufox 152.0.4, which is built from Firefox 152: set
+`engines.firefox.browser_major: 152`. A set major must be served by a
+profile, verified (`VERIFIED_MAJORS`), or recorded as browser-only
+(`BROWSER_ONLY_MAJORS`); anything else fails `kage config check` and the
+profile test. That is the gate working: a persona of that engine would
+otherwise present one browser version in the browser and another over http.
+Both majors of this release are browser-only (below), so both keys are
+accepted and neither engine's personas use the http path.
 
 ### Capturing the real browser
 
 ```bash
-just capture-browser-fingerprint
+just capture-browser-fingerprint            # the Chromium engine: Chrome
+just capture-browser-fingerprint firefox    # the Firefox engine: Camoufox
 ```
 
 starts `kage echo serve` on loopback with a throwaway certificate
-authority, opens a Chromium context of the engine itself through a local
-proxy, and lets the real Chrome make five requests to the echo: a typed
-navigation to `/browser` (a small page of the echo that then makes the
-others), a `fetch()` GET, a `fetch()` POST with a JSON body, an
+authority, opens a context of the named engine itself through a local
+proxy, and lets that engine's real browser make five requests to the echo:
+a typed navigation to `/browser` (a small page of the echo that then makes
+the others), a `fetch()` GET, a `fetch()` POST with a JSON body, an
 `XMLHttpRequest`, and a navigation over HTTP/1.1. It writes
 `tests/fixtures/fingerprints/browser/<engine>-<major>.json`: the JA4 with
 its written-out lists, the HTTP/2 fingerprint, and every request with its
-headers in wire order. No network beyond loopback is involved. The capture
-is compiled into `kage` (`kage config check` counts the captures under
-`http.browser_captures` and names the browser-only majors) and is what an `echo` page of the browser
+headers in wire order. `os` in the file is the system the capturing persona
+claimed: `linux` for Chrome, which claims the system it runs on, and
+`windows` for Camoufox, which does not claim Linux by default. No network
+beyond loopback is involved. The capture is compiled into `kage`
+(`kage config check` counts the captures under `http.browser_captures` and
+names the browser-only majors) and is what an `echo` page of the browser
 self-test is compared with.
 
 ### Deciding what the major may do
@@ -221,8 +228,8 @@ self-test is compared with.
    newer `User-Agent` on an older header order is the same kind of mismatch.
    `crates/kage-http/tests/fingerprints.rs`
    (`every_browser_capture_is_accounted_for`) makes this comparison for
-   every capture in the repository and fails for one that is in neither
-   list.
+   every capture in the repository, with the newest profile claiming the
+   system the capture claims, and fails for one that is in neither list.
 2. All three equal: add `(engine, major)` to `VERIFIED_MAJORS` in
    `crates/kage-http/src/profile.rs`. The http path then presents the
    newest profile's TLS and HTTP/2 with a `User-Agent` and `sec-ch-ua`
@@ -257,3 +264,50 @@ and is ready for that day: the navigation `Accept` now names `image/jxl`.
 
 The capture also holds what F6 (M8) needs: the header sets of `fetch()` and
 `XMLHttpRequest` as the real browser sends them.
+
+### Firefox 152: browser-only
+
+Recorded 2026-10-09 from Camoufox 152.0.4, which is built from Firefox
+152.0.4, claiming Windows
+(`tests/fixtures/fingerprints/browser/firefox-152.json`), compared with
+`firefox_151`, the newest Firefox profile of wreq-util 0.2.0:
+
+| | Firefox 152 (real, and Camoufox 152.0.4) | `firefox_151` (wreq-util) |
+|---|---|---|
+| JA4 | `t13d1617h2_86a278354501_3cbfd9057e0d` | `t13d1717h2_5b57614c22b0_3cbfd9057e0d` |
+| HTTP/2 | `1:65536;2:0;4:131072;5:16384\|12517377\|0\|m,p,a,s` | the same |
+| navigation header names and order | 11 names | the same 11, same order |
+
+The extensions and the signature algorithms are the same, which is why the
+last part of the JA4 is equal; the ciphers are not. Firefox 152 offers 16
+cipher suites where the profile offers 17: `c009`
+(`TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA`) is gone from the list. No header
+table can make an older TLS stack leave a cipher out, so 152 is in
+`BROWSER_ONLY_MAJORS` and a Firefox 152 persona has no http path until
+wreq-util ships a profile for it.
+
+This is Firefox 152's own TLS and nothing Camoufox changes. A stock Mozilla
+Firefox 152.0.4, measured against the same echo, showed the same JA4, the
+same HTTP/2 fingerprint and the same header order as the Camoufox build
+(`m5-evidence/experiments/stock-firefox-152.log` in the M5 hand-over).
+
+One header value differs as well and is ready for that day: for the
+languages `en-US, en` both the stock Firefox and the Camoufox build sent
+`accept-language: en-US,en;q=0.9`, where the Firefox rule of the http path
+(`accept_language` in `crates/kage-http/src/headers.rs`) writes
+`en-US,en;q=0.5`. The test pins both values, so a change of that rule is
+noticed there.
+
+To record the capture again, for example when the pinned Camoufox moves:
+
+```bash
+just capture-browser-fingerprint firefox
+```
+
+The capture claims Windows because the Firefox engine does not claim Linux
+by default (`engine-firefox.md`). That is also the system a derived Firefox
+profile can be compared on: a Firefox profile claiming Linux is refused
+until M6, as said above for `kage selftest http`.
+
+Like the Chrome capture it holds the header sets of `fetch()` and
+`XMLHttpRequest` for F6.

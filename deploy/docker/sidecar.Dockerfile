@@ -100,12 +100,30 @@ LABEL org.opencontainers.image.title="kage-browser-${ENGINE}" \
 #             `task-gnome-desktop` pulls in, read from the distribution's own
 #             metadata), not a hand-picked set: font enumeration looks like a
 #             desktop of the distribution the image is built on.
-#   firefox   A stub until M5 fetches the pinned Camoufox build.
+#   firefox   Camoufox, headful on Xvfb as well, with Mesa for its pixels.
+#             The build is complete but for the libraries a Firefox links
+#             against: GTK 3, the X client libraries, ALSA and D-Bus. The
+#             list is what its binaries name as needed, and the step fails
+#             when the browser cannot load one. No font package is
+#             installed for it: the build brings the fonts of the three
+#             systems a persona may claim and each persona's fontconfig
+#             file picks among them.
+#   both      setxkbmap (x11-xkb-utils) gives a persona's display the
+#             keyboard layout of its locale. PulseAudio is the sound card a
+#             container does not have: the sidecar starts one with an
+#             output and an input that go nowhere (SIDECAR_AUDIO below), so
+#             that a page finds media devices as on a desktop.
 #
 # Both variants record what they run under /etc/kage/.
-RUN install --directory /etc/kage \
+#
+# The Camoufox archive (663 MB) lives in a build cache, never in a layer: a
+# rebuild of this step does not download it again, and a copy from the
+# cache is checked against the pin like a fresh one.
+RUN --mount=type=cache,id=kage-camoufox,target=/var/cache/kage,sharing=locked \
+    install --directory /etc/kage \
     && printf '%s\n' "${ENGINE}" > /etc/kage/engine \
     && node --version > /etc/kage/node-version \
+    && common="xvfb x11-xkb-utils libgl1-mesa-dri libegl1 pulseaudio" \
     && if [ "${ENGINE}" = "chromium" ]; then \
         fonts="fonts-cantarell fonts-dejavu fonts-dejavu-core fonts-dejavu-extra fonts-dejavu-mono \
             fonts-droid-fallback fonts-liberation fonts-liberation-sans-narrow fonts-noto-color-emoji \
@@ -116,7 +134,7 @@ RUN install --directory /etc/kage \
             "https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_${CHROME_VERSION}-1_amd64.deb" \
         && echo "${CHROME_SHA256}  /tmp/chrome.deb" | sha256sum --check --strict \
         && apt-get install --yes --no-install-recommends \
-            /tmp/chrome.deb xvfb libgl1-mesa-dri libegl1 tzdata ${fonts} \
+            /tmp/chrome.deb ${common} tzdata ${fonts} \
         && apt-get purge --yes curl \
         && apt-get autoremove --yes \
         && rm -rf /tmp/chrome.deb /var/lib/apt/lists/* /etc/apt/sources.list.d/google-chrome.list \
@@ -132,11 +150,40 @@ RUN install --directory /etc/kage \
         && test "${installed}" = "${CHROME_VERSION}" \
         && printf '%s\n' "${installed}" > /etc/kage/chrome-version \
         && printf '%s\n' "${installed}" > /etc/kage/browser-version \
-        && dpkg-query --show --showformat '${Package} ${Version}\n' ${fonts} > /etc/kage/fonts \
-        && dpkg-query --show --showformat '${Package} ${Version}\n' xvfb libgl1-mesa-dri > /etc/kage/display; \
+        && dpkg-query --show --showformat '${Package} ${Version}\n' ${fonts} > /etc/kage/fonts; \
     else \
-        printf '%s\n' "none (engine stub: the browser is installed from M5 on)" > /etc/kage/browser-version; \
-    fi
+        libraries="libasound2t64 libatk1.0-0t64 libcairo-gobject2 libcairo2 libdbus-1-3 libfontconfig1 \
+            libfreetype6 libgdk-pixbuf-2.0-0 libglib2.0-0t64 libgtk-3-0t64 libpango-1.0-0 \
+            libpangocairo-1.0-0 libx11-6 libx11-xcb1 libxcb-shm0 libxcb1 libxcomposite1 libxcursor1 \
+            libxdamage1 libxext6 libxfixes3 libxi6 libxrandr2 libxrender1" \
+        && build="${CAMOUFOX_VERSION}-${CAMOUFOX_RELEASE}" \
+        && archive="/var/cache/kage/camoufox-${build}-lin.x86_64.zip" \
+        && apt-get update \
+        && apt-get install --yes --no-install-recommends ca-certificates curl unzip \
+        && if ! echo "${CAMOUFOX_SHA256}  ${archive}" | sha256sum --check --strict --status 2> /dev/null; then \
+            curl --fail --silent --show-error --location --retry 3 --output "${archive}" \
+                "https://github.com/daijro/camoufox/releases/download/v${build}/camoufox-${build}-lin.x86_64.zip"; \
+        fi \
+        && echo "${CAMOUFOX_SHA256}  ${archive}" | sha256sum --check --strict \
+        && unzip -q "${archive}" -d /opt/camoufox \
+        && chmod -R a+rX,go-w /opt/camoufox \
+        # The engine reads which build this is from this file and refuses
+        # any other (packages/engine-firefox/src/host.ts).
+        && printf '{"version":"%s","release":"%s"}\n' "${CAMOUFOX_VERSION}" "${CAMOUFOX_RELEASE}" \
+            > /opt/camoufox/version.json \
+        && apt-get install --yes --no-install-recommends ${common} ${libraries} \
+        && apt-get purge --yes curl unzip \
+        && apt-get autoremove --yes \
+        && rm -rf /var/lib/apt/lists/* \
+        # Loads the whole browser library, so a missing system library
+        # fails the build here and not the first context in production.
+        && installed="$(HOME=/nonexistent /opt/camoufox/camoufox-bin --version | sed -E 's/^.* //')" \
+        && test "${installed}" = "${build}" \
+        && printf '%s\n' "${installed}" > /etc/kage/camoufox-version \
+        && printf '%s\n' "${CAMOUFOX_VERSION}" > /etc/kage/browser-version; \
+    fi \
+    && dpkg-query --show --showformat '${Package} ${Version}\n' xvfb x11-xkb-utils libgl1-mesa-dri > /etc/kage/display \
+    && dpkg-query --show --showformat '${Package} ${Version}\n' pulseaudio > /etc/kage/audio
 
 # The runtime needs node only: drop the package managers. The user has the
 # same numeric identity as in the kage image, so both can share the artifacts
@@ -151,12 +198,15 @@ RUN rm -rf /usr/local/lib/node_modules /usr/local/bin/npm /usr/local/bin/npx \
 
 COPY --from=deps /app/sidecar /app/sidecar
 
+# SIDECAR_AUDIO=pulse: the sidecar starts the image's PulseAudio for its
+# browsers, with its socket and state below /tmp. `none` runs without one.
 ENV NODE_ENV=production \
     ENGINE=${ENGINE} \
     SIDECAR_HOST=0.0.0.0 \
     SIDECAR_PORT=8090 \
     SIDECAR_PERSONAS_DIR=/var/lib/kage/personas \
-    SIDECAR_ARTIFACTS_DIR=/var/lib/kage/artifacts
+    SIDECAR_ARTIFACTS_DIR=/var/lib/kage/artifacts \
+    SIDECAR_AUDIO=pulse
 USER 65532:65532
 WORKDIR /app/sidecar/packages/server
 EXPOSE 8090

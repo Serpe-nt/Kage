@@ -189,8 +189,27 @@ mod tests {
         assert_eq!(described["engines"]["firefox"]["profile"], "firefox_151");
         assert_eq!(described["scheduled_selftest"], true);
 
-        // Today's real engines: the check that makes M4 and M5 record a
-        // browser capture before the http path is switched on for them.
+        // The engines of this release: Chrome 155 (M4) and Camoufox 152
+        // (M5). A capture of each proved that no profile fits, so both are
+        // accepted, and their personas have no http path.
+        let released = config(&[
+            ("KAGE__ENGINES__CHROMIUM__BROWSER_MAJOR", "155"),
+            ("KAGE__ENGINES__FIREFOX__BROWSER_MAJOR", "152"),
+        ]);
+        assert_eq!(check_config(&released), Ok(()));
+        let described = describe(&released);
+        assert_eq!(
+            described["browser_only_majors"],
+            serde_json::json!(["chromium-155", "firefox-152"])
+        );
+        assert_eq!(described["browser_captures"], 2);
+        for engine in ["chromium", "firefox"] {
+            assert!(described["engines"][engine]["profile"].is_null());
+        }
+        assert_eq!(described["engines"]["firefox"]["browser_major"], 152);
+
+        // The next majors: the check that makes a milestone record a
+        // browser capture before it sets the key.
         for (key, major, name) in [
             (
                 "KAGE__ENGINES__CHROMIUM__BROWSER_MAJOR",
@@ -199,7 +218,7 @@ mod tests {
             ),
             (
                 "KAGE__ENGINES__FIREFOX__BROWSER_MAJOR",
-                "152",
+                "153",
                 "engines.firefox.browser_major",
             ),
         ] {

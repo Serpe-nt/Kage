@@ -10,8 +10,8 @@ use std::time::Duration;
 use common::BodySays;
 
 use kage_browser::contract::{
-    self, ErrorCode, ExportStateRequest, GeneratePersonaRequest, ImportStateRequest,
-    NavigateRequest, OpenContextRequest, PageResult, SelftestRequest,
+    self, ErrorCode, ExportStateRequest, FlowEvent, FlowRequest, GeneratePersonaRequest,
+    ImportStateRequest, NavigateRequest, OpenContextRequest, PageResult, SelftestRequest,
 };
 use kage_browser::{BrowserError, Closed, Navigation, SidecarClient, SidecarSettings};
 use kage_core::config::Config;
@@ -53,6 +53,46 @@ fn client(server: &MockServer) -> SidecarClient {
 
 fn context() -> Uuid {
     CONTEXT.parse().unwrap()
+}
+
+/// The media type of a flow's answer, as the sidecar sends it.
+const NDJSON: &str = "application/x-ndjson; charset=utf-8";
+
+/// The route of a flow on the test context.
+fn flow_route() -> String {
+    format!("/v1/contexts/{CONTEXT}/flow")
+}
+
+/// The answer of a flow made of the contract's example events, one per
+/// line. Examples 0 and 1 are steps (the second one failed), 2 and 3 are
+/// final events (of a flow that passed and of one that did not).
+fn flow_lines(examples: &[usize], end_of_line: &str) -> String {
+    let mut lines = String::new();
+    for index in examples {
+        lines.push_str(&example_json("FlowEvent", *index).to_string());
+        lines.push_str(end_of_line);
+    }
+    lines
+}
+
+/// A sidecar that answers the flows it is asked for with `answers`, in
+/// that order, whatever the request says.
+async fn sidecar_of_flows(answers: Vec<ResponseTemplate>) -> MockServer {
+    let server = MockServer::start().await;
+    for answer in answers {
+        Mock::given(method("POST"))
+            .and(path(flow_route()))
+            .respond_with(answer)
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    server
+}
+
+fn stream(body: impl Into<Vec<u8>>) -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_raw(body, NDJSON)
 }
 
 /// A sidecar that answers every operation with the contract's example, once,
@@ -126,6 +166,16 @@ async fn sidecar_of_the_examples() -> MockServer {
             .mount(&server)
             .await;
     }
+    // A flow is asked like every other operation and answered line by line.
+    Mock::given(method("POST"))
+        .and(path(flow_route()))
+        .and(authorized())
+        .and(header("content-type", "application/json"))
+        .and(BodySays(example_json("FlowRequest", 0)))
+        .respond_with(stream(flow_lines(&[0, 1, 3], "\n")))
+        .expect(1)
+        .mount(&server)
+        .await;
     Mock::given(method("DELETE"))
         .and(path(format!("/v1/contexts/{CONTEXT}")))
         .and(authorized())
@@ -196,11 +246,209 @@ async fn every_call_carries_the_shared_secret_and_reads_the_contracts_answer() {
         .unwrap();
     assert!(selftest.passed && !selftest.complete);
 
+    // Two steps and the final event, in the order the sidecar wrote them.
+    let events = client
+        .flow(context(), &example::<FlowRequest>("FlowRequest", 0))
+        .await
+        .unwrap();
+    assert_eq!(
+        events,
+        [
+            example::<FlowEvent>("FlowEvent", 0),
+            example::<FlowEvent>("FlowEvent", 1),
+            example::<FlowEvent>("FlowEvent", 3),
+        ]
+    );
+
     assert_eq!(
         client.close_context(context()).await.unwrap(),
         Closed::Closed
     );
     // The mock verifies on drop that every route was called exactly once.
+}
+
+#[tokio::test]
+async fn a_flow_is_read_line_by_line_whatever_ends_its_lines() {
+    let server = sidecar_of_flows(vec![
+        // `\r\n` between the lines and none after the last one.
+        stream(flow_lines(&[0, 1, 2], "\r\n").trim_end().to_owned()),
+        // An empty line is no event.
+        stream(format!(
+            "{}\n\n{}\n\n",
+            example_json("FlowEvent", 0),
+            example_json("FlowEvent", 2)
+        )),
+        // A flow of no finished step: the final event alone.
+        stream(flow_lines(&[3], "\n")),
+    ])
+    .await;
+    let client = client(&server);
+    let request = example::<FlowRequest>("FlowRequest", 0);
+
+    let events = client.flow(context(), &request).await.unwrap();
+    assert_eq!(events.len(), 3);
+    assert!(
+        matches!(
+            &events[0],
+            FlowEvent::Step { index: 0, action, ok: true, error: None, .. } if action == "goto"
+        ),
+        "{:?}",
+        events[0]
+    );
+    // A step that failed is an event, not an error of the call.
+    assert!(
+        matches!(
+            &events[1],
+            FlowEvent::Step { index: 3, ok: false, error: Some(error), .. } if error.contains("#results")
+        ),
+        "{:?}",
+        events[1]
+    );
+    let FlowEvent::Final {
+        ok,
+        result,
+        behavior,
+    } = &events[2]
+    else {
+        panic!("the last event is not the final one: {:?}", events[2]);
+    };
+    assert!(*ok);
+    assert_eq!(result.status, Some(200));
+    assert_eq!(behavior.as_ref().map(|report| report.clicks), Some(1));
+
+    let events = client.flow(context(), &request).await.unwrap();
+    assert_eq!(events.len(), 2);
+    assert!(matches!(events[1], FlowEvent::Final { ok: true, .. }));
+
+    let events = client.flow(context(), &request).await.unwrap();
+    assert!(
+        matches!(
+            &events[..],
+            [FlowEvent::Final {
+                ok: false,
+                behavior: None,
+                ..
+            }]
+        ),
+        "{events:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_flow_whose_answer_ends_without_a_final_event_was_interrupted() {
+    let server = sidecar_of_flows(vec![
+        stream(flow_lines(&[0, 1], "\n")),
+        // The stream began and ended at once.
+        stream(""),
+    ])
+    .await;
+    let client = client(&server);
+    let request = example::<FlowRequest>("FlowRequest", 0);
+
+    let broken = client.flow(context(), &request).await.unwrap_err();
+    let BrowserError::FlowInterrupted { steps } = &broken else {
+        panic!("{broken:?}");
+    };
+    // The steps that finished are kept: a site has seen them.
+    assert_eq!(
+        steps,
+        &[
+            example::<FlowEvent>("FlowEvent", 0),
+            example::<FlowEvent>("FlowEvent", 1),
+        ]
+    );
+    assert!(
+        broken
+            .to_string()
+            .contains("ended after 2 step(s) without a final event"),
+        "{broken}"
+    );
+    // The request was sent and answered: nothing to try again, no code.
+    assert!(!broken.is_unreachable() && !broken.is_context_gone());
+    assert_eq!(broken.code(), None);
+
+    let empty = client.flow(context(), &request).await.unwrap_err();
+    assert!(
+        matches!(&empty, BrowserError::FlowInterrupted { steps } if steps.is_empty()),
+        "{empty:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_flow_refused_before_its_first_step_is_a_refusal_like_any_other() {
+    let server = sidecar_of_flows(vec![
+        ResponseTemplate::new(409).set_body_json(json!({
+            "code": "context_busy", "message": "the context is running another operation"
+        })),
+        ResponseTemplate::new(404).set_body_json(json!({
+            "code": "context_not_found", "message": "no open context has the id"
+        })),
+        ResponseTemplate::new(400).set_body_json(json!({
+            "code": "invalid_request", "message": "actions: at least one step"
+        })),
+        ResponseTemplate::new(502).set_body_string("<html>Bad Gateway</html>"),
+    ])
+    .await;
+    let client = client(&server);
+    let request = example::<FlowRequest>("FlowRequest", 0);
+
+    let busy = client.flow(context(), &request).await.unwrap_err();
+    assert!(
+        matches!(&busy, BrowserError::Refused { operation: "flow", status: 409, code: ErrorCode::ContextBusy, message } if message.contains("another operation")),
+        "{busy:?}"
+    );
+    assert!(busy.to_string().contains("`flow` with context_busy (409)"));
+
+    let gone = client.flow(context(), &request).await.unwrap_err();
+    assert!(gone.is_context_gone(), "{gone:?}");
+
+    let invalid = client.flow(context(), &request).await.unwrap_err();
+    assert_eq!(invalid.code(), Some(ErrorCode::InvalidRequest));
+
+    let gateway = client.flow(context(), &request).await.unwrap_err();
+    assert!(
+        matches!(
+            gateway,
+            BrowserError::Unexpected {
+                operation: "flow",
+                status: 502,
+                ..
+            }
+        ),
+        "{gateway:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_line_that_is_no_flow_event_is_an_error_and_never_skipped() {
+    let step = example_json("FlowEvent", 0);
+    let last = example_json("FlowEvent", 2);
+    let server = sidecar_of_flows(vec![
+        // A line cut in the middle.
+        stream(format!("{step}\n{{\"type\":\"step\",\"index\":1\n{last}\n")),
+        // An event of a kind the contract does not have.
+        stream(format!("{{\"type\":\"pause\"}}\n{last}\n")),
+        // Not lines of JSON at all.
+        stream(vec![0xff, 0xfe, b'\n']),
+        // Something after the final event: the flow was over.
+        stream(format!("{last}\n{step}\n")),
+    ])
+    .await;
+    let client = client(&server);
+    let request = example::<FlowRequest>("FlowRequest", 0);
+
+    for (expected, case) in [
+        ("line 2 is not a flow event", "a cut line"),
+        ("line 1 is not a flow event", "an unknown kind"),
+        ("line 1 is not a flow event", "bytes"),
+        ("line 2 follows the final event", "a line after the end"),
+    ] {
+        let error = client.flow(context(), &request).await.unwrap_err();
+        assert!(
+            matches!(&error, BrowserError::Unexpected { operation: "flow", status: 200, detail } if detail.starts_with(expected)),
+            "{case}: {error:?}"
+        );
+    }
 }
 
 #[tokio::test]
