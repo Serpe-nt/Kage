@@ -70,6 +70,28 @@ export class SeededRandom {
     }
     return min + Math.floor(this.next() * (max - min + 1));
   }
+
+  /** A float in `[min, max)`. */
+  uniform(min: number, max: number): number {
+    return min + this.next() * (max - min);
+  }
+
+  /** Whether an event of the given probability happens. */
+  chance(probability: number): boolean {
+    return this.next() < probability;
+  }
+
+  /** A draw from a normal distribution (Box-Muller; two numbers of the stream per draw). */
+  normal(mean: number, deviation: number): number {
+    // 1 - next() is in (0, 1]: the logarithm is finite.
+    const radius = Math.sqrt(-2 * Math.log(1 - this.next()));
+    return mean + deviation * radius * Math.cos(2 * Math.PI * this.next());
+  }
+
+  /** A draw from a log-normal distribution given by its median and the sigma of its logarithm. */
+  logNormal(median: number, sigma: number): number {
+    return median * Math.exp(this.normal(0, sigma));
+  }
 }
 
 let swapped = false;

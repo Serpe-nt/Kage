@@ -15,7 +15,6 @@ export {
 export * from './host.js';
 export * from './launch-plan.js';
 export * from './profile.js';
-export * from './xvfb.js';
 
 /**
  * Creates the Chromium engine: patchright driving the real Chrome of the

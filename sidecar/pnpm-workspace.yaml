@@ -18,8 +18,10 @@ minimumReleaseAge: 1440
 # No dependency lifecycle script runs unless it is listed under
 # onlyBuiltDependencies. The packages below ship install scripts that the
 # scaffold does not need:
-#   better-sqlite3  native addon used by camoufox-js; allow it in M5 when the
-#                   Firefox engine starts launching the browser.
+#   better-sqlite3  native addon of camoufox-js, which the Firefox engine uses
+#                   to read the launcher's WebGL table. 13.0.3 ships its
+#                   prebuilt binaries inside the package, so nothing has to
+#                   be built or downloaded at install time.
 #   esbuild         optional self-check; the platform binary comes from its
 #                   optionalDependencies.
 ignoredBuiltDependencies:

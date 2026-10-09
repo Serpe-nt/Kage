@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Fixture input recorder</title>
+    <style>
+      body { font: 16px/1.5 sans-serif; margin: 24px; }
+      #target, #second { display: inline-block; padding: 10px 18px; margin: 12px 40px 12px 0; }
+      #far { position: absolute; left: 900px; top: 520px; padding: 10px 18px; }
+      #field { display: block; width: 420px; padding: 6px; margin: 12px 0; }
+      article p { max-width: 640px; }
+      .spacer { height: 900px; }
+    </style>
+  </head>
+  <body>
+    <h1 id="title">Input recorder</h1>
+    <p>
+      This page records every input event it receives, with the fields a script can read, and
+      reports them to the fixture server when asked. It judges nothing.
+    </p>
+    <button id="target" type="button">First button</button>
+    <button id="second" type="button">Second button</button>
+    <a id="link" href="/listing?page=2">A link to the listing</a>
+    <button id="far" type="button">Far button</button>
+    <input id="field" type="text" autocomplete="off" aria-label="text field" />
+    <select id="choice" aria-label="choice">
+      <option value="one">One</option>
+      <option value="two">Two</option>
+      <option value="three">Three</option>
+    </select>
+    <article id="article"></article>
+    <div class="spacer"></div>
+    <p id="bottom">The bottom of the page.</p>
+    <script type="application/json" id="kage-input-report">null</script>
+    <script>
+      (() => {
+        // Enough text to scroll through: the density differs by section, so
+        // that reading pauses have something to be proportional to.
+        const article = document.getElementById('article');
+        const sentence = 'The quick brown fox jumps over the lazy dog and keeps on running. ';
+        for (let section = 0; section < 14; section += 1) {
+          const heading = document.createElement('h2');
+          heading.textContent = `Section ${section + 1}`;
+          article.appendChild(heading);
+          const paragraph = document.createElement('p');
+          paragraph.textContent = sentence.repeat(section % 3 === 0 ? 14 : section % 3 === 1 ? 5 : 1);
+          article.appendChild(paragraph);
+        }
+
+        const events = [];
+        const started = performance.now();
+        const base = (event) => ({
+          type: event.type,
+          t: Math.round((performance.now() - started) * 100) / 100,
+          stamp: Math.round(event.timeStamp * 100) / 100,
+          trusted: event.isTrusted,
+          target: event.target && event.target.id ? event.target.id : (event.target && event.target.nodeName) || null,
+        });
+        const pointer = (event) => ({
+          ...base(event),
+          x: event.clientX, y: event.clientY, sx: event.screenX, sy: event.screenY,
+          mx: event.movementX, my: event.movementY, button: event.button, buttons: event.buttons,
+          pointer_type: event.pointerType ?? null, pressure: event.pressure ?? null,
+          width: event.width ?? null, height: event.height ?? null,
+          coalesced: typeof event.getCoalescedEvents === 'function' ? event.getCoalescedEvents().length : null,
+          detail: event.detail,
+        });
+        for (const type of ['pointermove', 'mousemove', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click', 'mouseover', 'mouseout', 'mouseenter', 'mouseleave', 'contextmenu', 'dblclick'])
+          addEventListener(type, (event) => events.push(pointer(event)), { capture: true, passive: true });
+        addEventListener('wheel', (event) => events.push({
+          ...base(event), x: event.clientX, y: event.clientY, dx: event.deltaX, dy: event.deltaY, mode: event.deltaMode,
+        }), { capture: true, passive: true });
+        addEventListener('scroll', (event) => events.push({ ...base(event), top: scrollY }), { capture: true, passive: true });
+        for (const type of ['keydown', 'keyup', 'keypress'])
+          addEventListener(type, (event) => events.push({
+            ...base(event), key: event.key, code: event.code, repeat: event.repeat, location: event.location,
+            shift: event.shiftKey, composing: event.isComposing,
+          }), { capture: true });
+        for (const type of ['input', 'change', 'focus', 'blur', 'beforeinput'])
+          addEventListener(type, (event) => events.push({
+            ...base(event), input_type: event.inputType ?? null, data: event.data ?? null,
+            value: event.target && 'value' in event.target ? event.target.value : null,
+          }), { capture: true });
+
+        // Publishes what was recorded so far; the sidecar's tests read the
+        // element in the isolated world, a person reads the server's log.
+        window.__kagePublish = () => {
+          const report = {
+            kage_input: 1,
+            window: {
+              inner: [innerWidth, innerHeight], outer: [outerWidth, outerHeight], screen: [screen.width, screen.height],
+              position: [screenX, screenY], scroll_height: document.documentElement.scrollHeight, scroll_top: scrollY,
+            },
+            field: document.getElementById('field').value,
+            choice: document.getElementById('choice').value,
+            events,
+          };
+          document.getElementById('kage-input-report').textContent = JSON.stringify(report);
+          document.getElementById('kage-input-report').setAttribute('data-count', String(events.length));
+          return report;
+        };
+        // A person or a test that cannot run script in the page asks with a key.
+        addEventListener('keydown', (event) => {
+          if (event.key === 'F9') {
+            navigator.sendBeacon('/__kage/report', JSON.stringify({ page: 'input', ...window.__kagePublish() }));
+          }
+        });
+        setInterval(window.__kagePublish, 250);
+        document.body.setAttribute('data-ready', '1');
+      })();
+    </script>
+  </body>
+</html>

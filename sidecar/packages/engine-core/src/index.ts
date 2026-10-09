@@ -4,12 +4,16 @@
  * challenge signals, cookies, the fingerprint document, seeded randomness,
  * the self-test judges and their score).
  *
- * The behavior engine and the flow executor join in M5.
+ * Since M5 also the behavior engine (how a persona moves, scrolls, reads
+ * and types), the X display a context runs on and the input device of that
+ * display, the flow executor and the navigation both engines share.
  */
 export * from './artifacts.js';
+export * from './behavior/index.js';
 export * from './capture.js';
 export * from './challenge.js';
 export * from './cookies.js';
+export * from './display.js';
 export * from './engine.js';
 export * from './fingerprint.js';
 export * from './identity.js';
@@ -18,3 +22,7 @@ export * from './selftest/findings.js';
 export * from './selftest/pages.js';
 export * from './selftest/probe.js';
 export * from './selftest/run.js';
+export * from './x11/connection.js';
+export * from './x11/input.js';
+export * from './x11/keysyms.js';
+export * from './x11/workarea.js';

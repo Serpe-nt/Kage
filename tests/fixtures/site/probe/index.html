@@ -14,51 +14,54 @@
     <iframe id="frame-same" src="frame.html" title="same-origin frame"></iframe>
     <iframe id="frame-srcdoc" srcdoc="<!doctype html><title>srcdoc</title>" title="srcdoc frame"></iframe>
     <script type="application/json" id="kage-probe-report">null</script>
+    <script src="scope.js"></script>
     <script>
       (async () => {
         // The server that hosts the probe writes the headers of the request
         // for this document here; a static host leaves null.
         const REQUEST_HEADERS = /*KAGE_REQUEST_HEADERS*/null;
 
-        // Reads one global scope. Self-contained: a blob worker runs its source.
-        const readScope = async (scope, makeCanvas) => {
+        // One reader for every scope (scope.js): the window, the frames, the
+        // dedicated worker and the blob worker all run the same function.
+        const readScope = self.kageReadScope;
+
+        // What only a window can tell: its geometry, and the devices and
+        // voices a desktop has. Read once, in the top window.
+        const readEnvironment = async () => {
           const out = {
-            user_agent: null, platform: null, languages: null, hardware_concurrency: null,
-            device_memory: null, timezone: null, uad_platform: null, high_entropy: null,
-            webgl: null, error: null,
+            window: null, media_devices: null, audio: null, voices: null, plugins: null,
+            pdf_viewer_enabled: null, max_touch_points: null,
           };
           try {
-            const nav = scope.navigator;
-            out.user_agent = nav.userAgent;
-            out.platform = nav.platform;
-            out.languages = Array.from(nav.languages || []);
-            out.hardware_concurrency = nav.hardwareConcurrency ?? null;
-            out.device_memory = nav.deviceMemory ?? null;
-            out.timezone = new scope.Intl.DateTimeFormat().resolvedOptions().timeZone;
-            if (nav.userAgentData) {
-              out.uad_platform = nav.userAgentData.platform;
-              const high = await nav.userAgentData.getHighEntropyValues(
-                ['platform', 'platformVersion', 'architecture', 'bitness', 'uaFullVersion'],
-              );
-              out.high_entropy = {
-                platform: high.platform ?? null,
-                platform_version: high.platformVersion ?? null,
-                architecture: high.architecture ?? null,
-                bitness: high.bitness ?? null,
-                ua_full_version: high.uaFullVersion ?? null,
-              };
-            }
-            const gl = makeCanvas().getContext('webgl');
-            const info = gl && gl.getExtension('WEBGL_debug_renderer_info');
-            if (gl && info) {
-              out.webgl = {
-                vendor: gl.getParameter(info.UNMASKED_VENDOR_WEBGL),
-                renderer: gl.getParameter(info.UNMASKED_RENDERER_WEBGL),
-              };
-            }
-          } catch (error) {
-            out.error = String(error);
-          }
+            out.window = {
+              inner_width: innerWidth, inner_height: innerHeight,
+              outer_width: outerWidth, outer_height: outerHeight,
+              screen_x: screenX, screen_y: screenY, device_pixel_ratio: devicePixelRatio,
+              avail_left: screen.availLeft ?? null, avail_top: screen.availTop ?? null,
+            };
+            out.plugins = navigator.plugins ? navigator.plugins.length : null;
+            out.pdf_viewer_enabled = navigator.pdfViewerEnabled ?? null;
+            out.max_touch_points = navigator.maxTouchPoints ?? null;
+          } catch (error) { out.window = null; }
+          try {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const count = (kind) => devices.filter((device) => device.kind === kind).length;
+            out.media_devices = {
+              audioinput: count('audioinput'), audiooutput: count('audiooutput'), videoinput: count('videoinput'),
+            };
+          } catch (error) { out.media_devices = null; }
+          try {
+            const audio = new (window.AudioContext || window.webkitAudioContext)();
+            out.audio = {
+              sample_rate: audio.sampleRate, state: audio.state,
+              base_latency: audio.baseLatency ?? null, output_latency: audio.outputLatency ?? null,
+              max_channel_count: audio.destination.maxChannelCount,
+            };
+            audio.close();
+          } catch (error) { out.audio = null; }
+          try {
+            out.voices = window.speechSynthesis ? speechSynthesis.getVoices().length : null;
+          } catch (error) { out.voices = null; }
           return out;
         };
 
@@ -121,11 +124,11 @@
         try { worker = new Worker('worker.js'); } catch (error) { worker = null; }
         let blobWorker = null;
         try {
-          const source = `(${readScope.toString()})(self, () => new OffscreenCanvas(8, 8)).then((scope) => postMessage({ scope }))`;
+          const source = `(${readScope.toString()})(self, () => new OffscreenCanvas(300, 150)).then((scope) => postMessage({ scope }))`;
           blobWorker = new Worker(URL.createObjectURL(new Blob([source], { type: 'text/javascript' })));
         } catch (error) { blobWorker = null; }
 
-        const [windowScope, sameScope, srcdocScope, blankScope, workerData, blobData, fetchHeaders] =
+        const [windowScope, sameScope, srcdocScope, blankScope, workerData, blobData, fetchHeaders, environment] =
           await Promise.all([
             readScope(window, () => document.createElement('canvas')),
             frameScope(same),
@@ -134,6 +137,7 @@
             worker ? fromWorker(worker) : null,
             blobWorker ? fromWorker(blobWorker) : null,
             fetchedHeaders(),
+            readEnvironment(),
           ]);
         await new Promise((resolve) => setTimeout(resolve, 150));
 
@@ -150,6 +154,7 @@
             worker: workerData ? workerData.scope : null,
             blob_worker: blobData ? blobData.scope : null,
           },
+          environment,
           automation: {
             webdriver: typeof navigator.webdriver === 'boolean' ? navigator.webdriver : null,
             console_stack_reads: stackReads,

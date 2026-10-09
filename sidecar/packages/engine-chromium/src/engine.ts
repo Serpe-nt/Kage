@@ -10,12 +10,15 @@ import type {
 import {
   EngineError,
   majorOfVersion,
+  DisplayPool,
   parseFingerprint,
+  startXvfb,
   summarize,
   type Engine,
   type EngineContext,
   type EngineOptions,
   type EngineStatus,
+  type VirtualDisplay,
 } from '@kage/engine-core';
 import { chromium, type BrowserContext } from 'patchright';
 
@@ -24,7 +27,6 @@ import { buildInjection, generateFingerprint, type Injection } from './fingerpri
 import type { HostFacts } from './host.js';
 import { cpuListOf, launchPlan } from './launch-plan.js';
 import { prepareProfile } from './profile.js';
-import { DisplayPool, startXvfb, type VirtualDisplay } from './xvfb.js';
 
 /** The wrapper that starts Chrome under the persona's CPU affinity mask. */
 export const CHROME_WRAPPER = fileURLToPath(new URL('../bin/chrome-affinity.sh', import.meta.url));

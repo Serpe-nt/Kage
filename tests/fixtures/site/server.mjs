@@ -26,6 +26,8 @@ const file = (name) => readFileSync(fileURLToPath(new URL(name, import.meta.url)
 const PROBE_PAGE = file('./probe/index.html');
 const PROBE_FRAME = file('./probe/frame.html');
 const PROBE_WORKER = file('./probe/worker.js');
+const PROBE_SCOPE = file('./probe/scope.js');
+const INPUT_PAGE = file('./input/index.html');
 
 /** Every request, oldest first. */
 const requests = [];
@@ -231,7 +233,11 @@ const routes = {
     }),
   '/probe/frame.html': (req, res) => html(res, withHeaders(PROBE_FRAME, req)),
   '/probe/worker.js': (req, res) => send(res, 200, 'text/javascript', withHeaders(PROBE_WORKER, req)),
+  '/probe/scope.js': (_req, res) => send(res, 200, 'text/javascript', PROBE_SCOPE),
   '/probe/headers': (req, res) => json(res, { headers: headerPairs(req) }),
+
+  // The input recorder (spec §10.4): what a page sees of the behavior engine.
+  '/input/': (_req, res) => html(res, INPUT_PAGE),
 
   '/__kage/requests': (_req, res) => json(res, requests),
   '/__kage/reports': (_req, res) => json(res, reports),
