@@ -33,8 +33,12 @@ describe('the sound server', () => {
     const script = audioScript('/tmp/a/native');
     expect(script).toContain('module-native-protocol-unix socket=/tmp/a/native auth-anonymous=1');
     expect(script).toContain('module-null-sink sink_name=speakers');
-    expect(script).toContain('module-null-source source_name=microphone');
+    expect(script).toContain('module-null-source source_name=microphone description=Microphone');
+    // The source module knows no `source_properties`: with it the module
+    // does not load and the server has no microphone.
+    expect(script).not.toContain('source_properties');
     expect(script).toContain('set-default-sink speakers');
+    expect(script).toContain('set-default-source microphone');
     // No hardware, no network, no discovery.
     expect(script).not.toMatch(/alsa|udev|tcp|zeroconf|bluetooth/);
   });

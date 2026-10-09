@@ -110,10 +110,17 @@ function soundServer(browserPid) {
       .map((line) => line.split(/\t/)[1]);
   };
   const outputs = devices('sinks');
-  if (outputs.length === 0) {
-    fail(`the sound server at ${address} has no output`);
+  const inputs = devices('sources');
+  // The two devices the server is configured with (engine-core, audio.ts).
+  // The output's monitor is an input too, and not the one a page should
+  // be offered as the microphone.
+  if (!outputs.includes('speakers')) {
+    fail(`the sound server at ${address} has no output named speakers: ${outputs.join(', ')}`);
   }
-  return { server: 'pulse', outputs, inputs: devices('sources') };
+  if (!inputs.includes('microphone')) {
+    fail(`the sound server at ${address} has no input named microphone: ${inputs.join(', ')}`);
+  }
+  return { server: 'pulse', outputs, inputs };
 }
 
 if (process.getuid() !== 65532) {
@@ -220,7 +227,9 @@ try {
       no_new_privs: field(entry.status, 'NoNewPrivs'),
       cap_eff: field(entry.status, 'CapEff'),
       // Filters of Firefox's own, on top of those every process here has.
-      seccomp_filters_of_firefox: counted ? Number(filters(entry)) - Number(filters(browser)) : null,
+      seccomp_filters_of_firefox: counted
+        ? Number(filters(entry)) - Number(filters(browser))
+        : null,
     })),
     audio: soundServer(browser.pid),
   };

@@ -25,12 +25,19 @@ export interface AudioServer {
 /** How long the server may take to open its socket. */
 const START_TIMEOUT_MS = 8000;
 
-/** The configuration the server is started with: two devices, no hardware, no network. */
+/**
+ * The configuration the server is started with: two devices, no hardware, no network.
+ *
+ * The two modules name their device differently: the sink takes
+ * `sink_properties`, the source only `description` (PulseAudio 17 refuses
+ * to load it with `source_properties`, and the server then runs with no
+ * input but the output's monitor).
+ */
 export function audioScript(socket: string): string {
   return [
     `load-module module-native-protocol-unix socket=${socket} auth-anonymous=1`,
     'load-module module-null-sink sink_name=speakers sink_properties=device.description=Speakers',
-    'load-module module-null-source source_name=microphone source_properties=device.description=Microphone',
+    'load-module module-null-source source_name=microphone description=Microphone',
     'set-default-sink speakers',
     'set-default-source microphone',
     '',
