@@ -46,6 +46,7 @@ excellently on any site it is pointed at; there is no fixed target list.
 | D28 | AGPL dependency | ADR 0008 accepted with option B then C: M5 overrides `ua-parser-js` to the MIT 1.x line under the engine parity suite; if behavior differs, the Firefox image is not published and is built locally by operators. |
 | D29 | Camoufox pin | M5 moves the Camoufox browser build to `v152.0.4-beta.30`, the only build `camoufox-js` 0.12.1 accepts with `playwright-core` 1.62.1, as the fingerprint-critical bump inside the M5 PR. |
 | D30 | Merging | Until the repository is pushed, milestone branches are fast-forwarded into local `main` by the owner and deleted; the PR workflow in D25 starts once `main` is on origin. |
+| D31 | Webshare auto-replace | `auto_replace_invalid_proxies` stays **on** in the Webshare account (owner decision 2026-10-09): Webshare replaces only a proxy its own checks find dead, which Kage would have replaced anyway after its backoff and `replace_after`. The other three `auto_replace_*` settings stay off. Kage's cope path (sync sees the swap, reads the reason from the replaced list, retires the persona, adopts the new IP) is the handling; the standing alert for this one flag is downgraded to an informational event (follow-up F16). |
 
 ## Open items (owner to confirm when relevant)
 

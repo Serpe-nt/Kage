@@ -282,6 +282,13 @@ Follow-ups:
   same sidecar for common and coherent Chrome personas (risk R3).
 - **F15 (M6):** read `engines.chromium.allow_cross_os_claims` on the Rust
   side when generating personas; apply the §6.1 mix.
+- **F16 (M6, kage-proxy):** D31 keeps `auto_replace_invalid_proxies` on;
+  add `webshare.accepted_auto_replace` (default
+  `[auto_replace_invalid_proxies]`) so an accepted flag logs an
+  informational event instead of raising `provider_auto_replace_enabled`,
+  and make sure a Webshare-initiated swap (`reason: auto_invalidated` in
+  the replaced list) retires the persona and generates a new one through
+  the same `PoolEvent` path as a Kage-requested replacement.
 
 ---
 
