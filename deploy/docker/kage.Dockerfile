@@ -40,6 +40,9 @@ COPY crates ./crates
 # The recorded fingerprints of the http path; kage-http's build script embeds
 # them, so that `kage selftest http` has its expected values in the image.
 COPY tests/fixtures/fingerprints ./tests/fixtures/fingerprints
+# The sidecar contract; kage-browser's build script generates its types
+# from this committed document.
+COPY sidecar/packages/contract/openapi.json ./sidecar/packages/contract/openapi.json
 # sqlx checks every query at compile time against this committed data, so the
 # build needs no database.
 COPY .sqlx ./.sqlx

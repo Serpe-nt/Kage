@@ -123,8 +123,10 @@ while read -r proxy timezone languages; do
     done
     echo "    chromium through proxy ${run} of the pair (${timezone}, ${languages})"
     # A failing self-test still prints its report; the judge reads it.
+    # stdin is the list of the loop: the command must not read from it.
     kage selftest browser --proxy "${proxy}" --engine chromium --timezone "${timezone}" \
-        "${language_flags[@]}" --third-party --json > "${workdir}/report-${run}.json" || status=1
+        "${language_flags[@]}" --third-party --json \
+        < /dev/null > "${workdir}/report-${run}.json" || status=1
 done < "${workdir}/pair.txt"
 
 if [ -n "${KAGE_LIVE_EVIDENCE_DIR:-}" ]; then
