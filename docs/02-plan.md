@@ -133,11 +133,37 @@ images.
 - Live (gated): `kage proxy health` against the owner's real list reports
   all 20 proxies with latency and country.
 
+**Status.** Merged as `6b28ca2`. Live check passed on 2026-10-09 (20 of 20,
+no leak, observed geo equals provider geo; `m2-live-handover.md` in the
+planning session's notes). Follow-ups it raised, each small and owned by the
+milestone named:
+- **F1 (M6, kage-proxy):** count the replacement budget per provider
+  subscription term when the account reports one, else per UTC month.
+- **F2 (M3):** the probe reports one latency for CONNECT plus TLS plus GET;
+  measure connect and request time separately, because the four GB proxies
+  (one ASN, one /16) take 3.2 to 4.0 s per fresh tunnel against 0.2 to 0.6 s
+  elsewhere, and a slow connection setup shows on every new connection a
+  persona opens.
+- **F3 (owner):** several exits sit in carrier or business ASNs rather than
+  consumer access networks; an AbuseIPDB key (free tier) in `deploy/.env`
+  turns on the usage-type lookups that classify them.
+- **F4 (owner):** `auto_replace_invalid_proxies` was still on at the live
+  check; the other three were off.
+
 ---
 
 ## M3 — HTTP path (wreq)
 
 **Scope.** §9, §6.1 step 4, §7.4 http self-test.
+
+**Notes from M2.** All outbound HTTP already goes through wreq; replace the
+body of `kage_proxy::health::probe::EmulatedClientFactory` with kage-http's
+client builder and keep the `ProbeClientFactory` seam. wreq-util's
+`emulation-compression` feature is on, so an emulated client sends the
+browser's `Accept-Encoding`; record fingerprint fixtures with it on. Do F2
+above. A live probe through a real proxy is possible now (`KAGE_LIVE=1`
+with the owner's key in `deploy/.env`), but only against the echo and
+fingerprint test endpoints listed in configuration.
 
 **Deliverables**
 - `kage-http`: client factory per persona from `wreq_profile`, proxy with

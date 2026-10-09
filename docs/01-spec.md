@@ -361,6 +361,18 @@ carries `Authorization: Token …`.
 on the `v3` config and stats endpoints; Kage uses `webshare.plan_id` when
 set, else the plan the subscription names.
 
+Observed against the live API on 2026-10-09 (M2 live check, 20 of 20
+proxies passed): each listed proxy also carries `asn_name`, `asn_number`
+(number) and `high_country_confidence`, which Kage reads where useful; the
+plan carries `high_quality_ips_only` (the High IP Reputation add-on) and a
+30-day subscription term with start and end; no response carries a
+rate-limit header, so limits are learned only from a 429; the proxy config
+response includes `proxy_list_download_token`, a secret Kage never reads or
+logs; one credential pair serves every proxy on the plan. Webshare counts
+manual replacements per subscription term, not per calendar month: when the
+plan reports a term, Kage's budget window MUST follow that term (follow-up
+F1 in `02-plan.md`).
+
 - Rate limits: general 240/min, proxy list endpoints 60/min; after a 429
   Webshare asks to wait 60 s. The client keeps its own token buckets below
   both (`webshare.requests_per_minute` 120, `webshare.list_requests_per_minute`
