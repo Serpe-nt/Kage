@@ -16,7 +16,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     kind of iframe and both kinds of worker, fonts and WebGL included
     (`docs/runbooks/engine-firefox.md`). The fingerprint is generated once
     from the persona's seed and persisted as the browser's whole
-    configuration; an open generates nothing.
+    configuration; an open generates nothing. The graphics card is drawn
+    from the launcher's table of real devices without the rows that name
+    another system's renderer or a software one.
   - The behavior engine, shared by both engines: mouse paths (curved, timed
     by Fitts' law, with tremor, overshoot and correction), wheel scrolling
     in flicks with reading pauses proportional to the text in view, dwell

@@ -7,6 +7,7 @@ import type { ClaimedOs, OpenContextRequest } from '@kage/contract';
 import {
   EngineError,
   FingerprintDocumentSchema,
+  SeededRandom,
   silentLog,
   type FingerprintDocument,
 } from '@kage/engine-core';
@@ -21,6 +22,7 @@ import {
   configEnvironment,
   cpuListOf,
   detectHost,
+  drawWebgl,
   generateFingerprint,
   generatedOf,
   generatorId,
@@ -29,6 +31,7 @@ import {
   localeConfig,
   parseProperties,
   personaFontconfig,
+  plausibleRenderer,
   profilePaths,
   validateConfig,
   type CamoufoxConfig,
@@ -182,7 +185,8 @@ describe('generateFingerprint', () => {
     const { config, webgl2 } = generatedOf(document);
     expect(config).toMatchObject({
       'navigator.oscpu': 'Windows NT 10.0; Win64; x64',
-      'webGl:renderer': 'ANGLE (NVIDIA, NVIDIA GeForce 8800 GTX Direct3D11 vs_4_0 ps_4_0)',
+      'webGl:renderer':
+        'ANGLE (NVIDIA, NVIDIA GeForce GTX 480 Direct3D11 vs_5_0 ps_5_0), or similar',
       'fonts:spacing_seed': 3_482_387_260,
       'audio:seed': 3_024_434_807,
       'canvas:seed': 104_999_401,
@@ -197,7 +201,44 @@ describe('generateFingerprint', () => {
       'AudioContext:sampleRate': 48_000,
       'AudioContext:maxChannelCount': 2,
     });
-    expect(webgl2).toBe(false);
+    expect(webgl2).toBe(true);
+  });
+
+  it('never draws a graphics card of another system, or a renderer that is a program', () => {
+    // What the launcher's table offers and a persona must not get.
+    const direct3d = 'ANGLE (NVIDIA, NVIDIA GeForce GTX 980 Direct3D11 vs_5_0 ps_5_0), or similar';
+    expect(plausibleRenderer('windows', direct3d)).toBe(true);
+    expect(plausibleRenderer('macos', direct3d)).toBe(false);
+    expect(plausibleRenderer('linux', direct3d)).toBe(false);
+    expect(plausibleRenderer('macos', 'Apple M1, or similar')).toBe(true);
+    expect(plausibleRenderer('windows', 'Apple M1, or similar')).toBe(false);
+    // A card's name says nothing about the system.
+    expect(plausibleRenderer('macos', 'Intel(R) HD Graphics 400, or similar')).toBe(true);
+    expect(plausibleRenderer('linux', 'NVIDIA GeForce GTX 980, or similar')).toBe(true);
+    for (const software of [
+      'ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)',
+      'llvmpipe (LLVM 15.0.7, 256 bits)',
+      'ANGLE (Microsoft, Microsoft Basic Render Driver Direct3D11 vs_5_0 ps_5_0)',
+    ]) {
+      for (const os of SYSTEMS) {
+        expect(plausibleRenderer(os, software), `${os}: ${software}`).toBe(false);
+      }
+    }
+    // The table has such rows for macOS (0.85 % of the draws) and Windows
+    // (0.27 %): four hundred draws would meet them.
+    for (const os of SYSTEMS) {
+      const drawn = new Set<string>();
+      for (let index = 0; index < 400; index += 1) {
+        const { config } = drawWebgl(os, new SeededRandom(SEED, `webgl ${index}`));
+        const renderer = config['webGl:renderer'];
+        expect(typeof renderer).toBe('string');
+        drawn.add(renderer as string);
+      }
+      expect(drawn.size).toBeGreaterThan(2);
+      for (const renderer of drawn) {
+        expect(plausibleRenderer(os, renderer), `${os}: ${renderer}`).toBe(true);
+      }
+    }
   });
 
   it('describes each system it may claim in every value that names one', () => {

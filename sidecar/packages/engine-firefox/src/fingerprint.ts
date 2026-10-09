@@ -8,6 +8,7 @@ import {
   FINGERPRINT_SCHEMA,
   SeededRandom,
   majorOfVersion,
+  osOfWebglRenderer,
   withSeededMathRandom,
   type FingerprintDocument,
 } from '@kage/engine-core';
@@ -139,13 +140,34 @@ export function validateConfig(
 }
 
 interface WebglRow {
+  readonly renderer: string;
   readonly data: string;
   readonly weight: number;
 }
 
+/** A renderer that is a program and no graphics card: what a browser falls back to on a machine without one. */
+const SOFTWARE_RENDERER = /SwiftShader|llvmpipe|softpipe|Basic Render Driver/i;
+
+/**
+ * Whether a renderer of the launcher's table can be the graphics card of a
+ * persona that claims a system (spec §6.2).
+ *
+ * The table is measured on real traffic and carries its noise: it offers a
+ * Direct3D renderer for macOS (0.85 % of the draws), which only Windows
+ * has, and for Windows a SwiftShader string (0.27 %), which is Chrome's
+ * software fallback and nothing a Firefox reports. Neither may become a
+ * persona.
+ */
+export function plausibleRenderer(os: ClaimedOs, renderer: string): boolean {
+  const named = osOfWebglRenderer(renderer);
+  return (named === null || named === os) && !SOFTWARE_RENDERER.test(renderer);
+}
+
 /**
  * Draws a graphics card for a claimed system from the launcher's table,
- * each in proportion to how often real devices of that system have it.
+ * each in proportion to how often real devices of that system have it,
+ * leaving out the rows that cannot be that system's
+ * ({@link plausibleRenderer}).
  */
 export function drawWebgl(
   os: ClaimedOs,
@@ -157,12 +179,13 @@ export function drawWebgl(
   try {
     rows = database
       .prepare(
-        `SELECT data, ${column} AS weight FROM webgl_fingerprints WHERE ${column} > 0 ORDER BY vendor, renderer`,
+        `SELECT renderer, data, ${column} AS weight FROM webgl_fingerprints WHERE ${column} > 0 ORDER BY vendor, renderer`,
       )
       .all() as WebglRow[];
   } finally {
     database.close();
   }
+  rows = rows.filter((row) => plausibleRenderer(os, row.renderer));
   const total = rows.reduce((sum, row) => sum + row.weight, 0);
   let threshold = random.next() * total;
   const chosen =

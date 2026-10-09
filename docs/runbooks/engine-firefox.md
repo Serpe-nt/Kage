@@ -103,6 +103,28 @@ the build's Linux fonts are Tor Browser's bundle (Arimo, Tinos, Cousine,
 Noto per script) and nothing a Linux desktop ships, so the persona looks
 like Tor Browser, not like Firefox on Ubuntu.
 
+### What the generator's data is like
+
+The fingerprint and the graphics card are drawn from the launcher's tables
+of real devices, and the tables have their own shape and their own noise.
+Measured in M5 over 200 seeds per system:
+
+- Every document is different, but the choice is narrow: 6 screen sizes
+  for Windows (1376x774 for 38 % of the personas, 1920x1080 for 31 %), 8
+  for macOS, 5 to 7 graphics cards per system.
+- 9 % of the Windows personas and 11 % of the macOS ones have a work area
+  as large as their screen (no taskbar, no menu bar). The probe reports
+  those as a warning (`environment.work_area`), never as a failure: such
+  machines exist.
+- The graphics-card table offers a Direct3D renderer for macOS (0.85 % of
+  the draws) and a SwiftShader string for Windows (0.27 %). Direct3D exists
+  on Windows only, and SwiftShader is Chrome's software fallback, nothing a
+  Firefox reports. The engine never draws a renderer that names another
+  system or that is a program (`plausibleRenderer`, engine-firefox).
+
+M6 decides whether a pool of twenty personas needs more variety than this
+(a screen constraint per persona is the lever that exists).
+
 ### Known tells (not solved here)
 
 - No speech synthesis voices (`speechSynthesis.getVoices()` is empty); a
