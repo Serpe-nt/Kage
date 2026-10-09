@@ -1272,9 +1272,10 @@ generated, images pushed with digests recorded in `deploy/compose.yaml`.
   (`CAMOUFOX_VERSION`, `CAMOUFOX_RELEASE`, `CAMOUFOX_SHA256`); both install
   PulseAudio, which the sidecar starts with one output and one input that
   go nowhere (`SIDECAR_AUDIO=pulse`), and record versions under
-  `/etc/kage/` (chromium: `chrome-version`, `fonts`, `display`; firefox:
-  `camoufox-version`, `display`). The Firefox image is built locally and
-  not published (ADR 0008).
+  `/etc/kage/` (both: `engine`, `node-version`, `browser-version`,
+  `display`, `audio`; chromium: `chrome-version`, `fonts`; firefox:
+  `camoufox-version`). The Firefox image is built locally and not
+  published (ADR 0008).
   `scripts/setup-chrome.sh` and `scripts/setup-camoufox.sh` install the
   same browsers on a CI runner or a developer machine from the same lines.
 - `deploy/compose.yaml`: services, healthchecks, resource limits,
