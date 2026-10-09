@@ -193,8 +193,10 @@ makes the per-PR fingerprint gate possible, kage-http-owned header tables
 per browser family and request kind, the gated profile derivation
 (`VERIFIED_MAJORS`, empty until M4 and M5 record captures), the cookie jar
 with browser rules, subresource emulation, and `connect_ms`/`tls_ms` timing
-(F2). The live self-test through a real proxy was still pending the owner's
-in-session approval when merged; its result lands in `m3-live-handover.md`.
+(F2). Live self-test passed on 2026-10-09 (`m3-live-handover.md`):
+`chrome_149` and `firefox_151` through two real proxies against
+`tls.peet.ws` equal their committed fixtures on HTTP version, JA4, HTTP/2
+string, header order and User-Agent; a real CONNECT tunnel changes nothing.
 Follow-ups:
 - **F5 (M4, M5):** capture the real browsers' navigation and fetch()
   requests against the echo; set `engines.<engine>.browser_major`; add the
