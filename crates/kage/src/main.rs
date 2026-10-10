@@ -1,18 +1,21 @@
 //! Kage command-line entry point.
 //!
-//! `serve` runs the API server and the proxy pool, `healthcheck` probes the
-//! server, `migrate` applies the database schema, `config check` validates
-//! the configuration, `proxy` inspects and operates the proxy pool,
-//! `selftest http` checks the http path's fingerprint, `selftest browser` runs
-//! a browser context against the self-test pages, and `echo serve`
-//! runs the fingerprint echo. The remaining commands (`persona`, `key`)
-//! land with the milestones that own them (see `docs/02-plan.md`).
+//! `serve` runs the API server, the proxy pool and the persona manager,
+//! `healthcheck` probes the server, `migrate` applies the database schema,
+//! `config check` validates the configuration, `proxy` inspects and
+//! operates the proxy pool, `persona` inspects and operates the personas,
+//! `selftest http` checks the http path's fingerprint, `selftest browser`
+//! runs a browser context against the self-test pages (both for a proxy
+//! with a stand-in, or for a persona), and `echo serve` runs the
+//! fingerprint echo. The remaining command (`key`) lands with the
+//! milestone that owns it (see `docs/02-plan.md`).
 
 mod alerts;
 mod config_cmd;
 mod echo_cmd;
 mod healthcheck;
 mod migrate;
+mod persona_cmd;
 mod proxy_cmd;
 mod selftest_browser;
 mod selftest_cmd;
@@ -24,19 +27,20 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use kage_core::config::process_env;
-use kage_core::domain::{Engine, ProxyState};
+use kage_core::domain::{Engine, PersonaState, ProxyState};
 use kage_core::duration::HumanDuration;
-use kage_core::ids::ProxyId;
+use kage_core::ids::{PersonaId, ProxyId};
 use tracing_subscriber::EnvFilter;
 
 /// Library crates composed into this binary, reported once at startup.
-const COMPONENTS: [&str; 8] = [
+const COMPONENTS: [&str; 9] = [
     kage_api::CRATE_NAME,
     kage_browser::CRATE_NAME,
     kage_core::CRATE_NAME,
     kage_crawl::CRATE_NAME,
     kage_extract::CRATE_NAME,
     kage_http::CRATE_NAME,
+    kage_persona::CRATE_NAME,
     kage_proxy::CRATE_NAME,
     kage_store::CRATE_NAME,
 ];
@@ -91,6 +95,11 @@ enum Command {
         #[command(subcommand)]
         command: ProxyCommand,
     },
+    /// Inspect and operate the personas. May run next to the server.
+    Persona {
+        #[command(subcommand)]
+        command: PersonaCommand,
+    },
     /// Check that Kage still looks like the browsers it presents as.
     Selftest {
         #[command(subcommand)]
@@ -105,6 +114,75 @@ enum Command {
 }
 
 #[derive(Debug, Subcommand)]
+enum PersonaCommand {
+    /// List the personas and how they spread over `personas.mix`.
+    List {
+        /// Only personas in this state: active, cooling or retired.
+        #[arg(long)]
+        state: Option<PersonaState>,
+        /// Include retired personas.
+        #[arg(long)]
+        all: bool,
+        /// Print one JSON document instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show one persona: its identity, its self-test runs and what it did
+    /// on which domain.
+    Show {
+        /// The persona.
+        #[arg(value_name = "PERSONA_ID")]
+        id: PersonaId,
+        /// Include the stored fingerprint document (with --json).
+        #[arg(long, requires = "json")]
+        fingerprint: bool,
+        /// Print one JSON document instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Retire a persona: its sessions end, its http cookies are deleted,
+    /// and its profile is archived and later deleted. Its proxy gets a new
+    /// persona at the server's next sweep.
+    Retire {
+        /// The persona.
+        #[arg(value_name = "PERSONA_ID")]
+        id: PersonaId,
+        /// Print one JSON document instead of a sentence.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run the self-tests of a persona through its own proxy: the http
+    /// path when it has one, and its own browser context. Exits non-zero
+    /// when one fails. A passing run ends a cooling that waits for one.
+    ///
+    /// By default the operator's own echo and pages are used.
+    /// `--third-party` uses the echo and the detection pages run by
+    /// others, which see the exit address of the persona's proxy.
+    Selftest {
+        /// The persona.
+        #[arg(value_name = "PERSONA_ID")]
+        id: PersonaId,
+        /// Use `selftest.http.third_party_url` and also load
+        /// `selftest.browser.third_party_pages`.
+        #[arg(long)]
+        third_party: bool,
+        /// Print one JSON document instead of tables.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Replace a persona with a new one behind the same proxy. The new
+    /// persona inherits nothing.
+    Regenerate {
+        /// The persona.
+        #[arg(value_name = "PERSONA_ID")]
+        id: PersonaId,
+        /// Print one JSON document instead of a sentence.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 enum SelftestCommand {
     /// Send one navigation through a proxy to a fingerprint echo and
     /// compare JA4, the HTTP/2 fingerprint and the header order with the
@@ -114,15 +192,26 @@ enum SelftestCommand {
     /// else the third-party one, which sees the proxy's exit address.
     Http {
         /// The proxy to leave through.
-        #[arg(long, value_name = "PROXY_ID")]
-        proxy: ProxyId,
+        #[arg(
+            long,
+            value_name = "PROXY_ID",
+            required_unless_present = "persona",
+            conflicts_with = "persona"
+        )]
+        proxy: Option<ProxyId>,
         /// The emulation profile to present as.
         #[arg(
             long,
             value_name = "NAME",
+            required_unless_present = "persona",
+            conflicts_with = "persona",
             help = "The emulation profile, for example chrome_149 or firefox_151"
         )]
-        profile: String,
+        profile: Option<String>,
+        /// Run the test as this persona instead: its profile, its
+        /// identity, its proxy. The run is recorded for the persona.
+        #[arg(long, value_name = "PERSONA_ID")]
+        persona: Option<PersonaId>,
         /// The operating system the profile claims: windows, macos or
         /// linux.
         #[arg(long, default_value = "windows", value_name = "OS")]
@@ -142,18 +231,35 @@ enum SelftestCommand {
     /// `--third-party` adds the detection pages run by others, which see
     /// the proxy's exit address.
     Browser {
-        /// The proxy to leave through.
-        #[arg(long, value_name = "PROXY_ID")]
-        proxy: ProxyId,
+        /// The proxy to leave through, with a stand-in persona.
+        #[arg(
+            long,
+            value_name = "PROXY_ID",
+            required_unless_present = "persona",
+            conflicts_with = "persona"
+        )]
+        proxy: Option<ProxyId>,
+        /// Run the test as this persona instead, in its own context:
+        /// its fingerprint, its profile, its proxy. The run is recorded
+        /// for the persona.
+        #[arg(long, value_name = "PERSONA_ID")]
+        persona: Option<PersonaId>,
         /// The engine whose sidecar runs the test.
-        #[arg(long, default_value = "chromium", value_name = "ENGINE")]
+        #[arg(
+            long,
+            default_value = "chromium",
+            value_name = "ENGINE",
+            conflicts_with = "persona"
+        )]
         engine: Engine,
-        /// The IANA time zone of the proxy's exit, for example
-        /// Europe/Berlin.
-        #[arg(long, value_name = "ZONE")]
-        timezone: String,
-        /// A language of the browser, most preferred first; repeat it.
-        #[arg(long = "language", value_name = "TAG", required = true)]
+        /// The IANA time zone of the stand-in persona, for example
+        /// Europe/Berlin. Default: the one of the proxy's geo record.
+        #[arg(long, value_name = "ZONE", conflicts_with = "persona")]
+        timezone: Option<String>,
+        /// A language of the stand-in persona, most preferred first;
+        /// repeat it. Default: the list the engine's browser ships with
+        /// in the proxy's country.
+        #[arg(long = "language", value_name = "TAG", conflicts_with = "persona")]
         languages: Vec<String>,
         /// Also load `selftest.browser.third_party_pages`.
         #[arg(long)]
@@ -278,20 +384,56 @@ async fn selftest(command: SelftestCommand, config_file: Option<&Path>) -> anyho
     let mut out = Vec::new();
     let result = match command {
         SelftestCommand::Http {
+            persona: Some(id),
+            echo,
+            json,
+            ..
+        } => {
+            let options = persona_cmd::SelftestOptions {
+                id,
+                paths: persona_cmd::Paths::Http,
+                // As without a persona: the operator's own echo when one
+                // is configured, else the one run by others.
+                third_party: config.selftest.http.echo_url.is_none(),
+                echo,
+                json,
+            };
+            persona_cmd::selftest(&config, &options, &mut out).await
+        }
+        SelftestCommand::Http {
             proxy,
             profile,
             platform,
             echo,
             json,
+            persona: None,
+        } => match (proxy, profile) {
+            (Some(proxy), Some(profile)) => {
+                let options = selftest_cmd::HttpSelftestOptions {
+                    proxy,
+                    profile,
+                    platform,
+                    echo,
+                    json,
+                };
+                selftest_cmd::http(&config, &options, &mut out).await
+            }
+            _ => Err(anyhow::anyhow!("name a proxy and a profile, or a persona")),
+        },
+        SelftestCommand::Browser {
+            persona: Some(id),
+            third_party,
+            json,
+            ..
         } => {
-            let options = selftest_cmd::HttpSelftestOptions {
-                proxy,
-                profile,
-                platform,
-                echo,
+            let options = persona_cmd::SelftestOptions {
+                id,
+                paths: persona_cmd::Paths::Browser,
+                third_party,
+                echo: None,
                 json,
             };
-            selftest_cmd::http(&config, &options, &mut out).await
+            persona_cmd::selftest(&config, &options, &mut out).await
         }
         SelftestCommand::Browser {
             proxy,
@@ -301,18 +443,22 @@ async fn selftest(command: SelftestCommand, config_file: Option<&Path>) -> anyho
             third_party,
             idle_before,
             json,
-        } => {
-            let options = selftest_browser::BrowserSelftestOptions {
-                proxy,
-                engine,
-                timezone,
-                languages,
-                third_party,
-                idle_before: idle_before.map(HumanDuration::get),
-                json,
-            };
-            selftest_browser::browser(&config, &options, &mut out).await
-        }
+            persona: None,
+        } => match proxy {
+            Some(proxy) => {
+                let options = selftest_browser::BrowserSelftestOptions {
+                    proxy,
+                    engine,
+                    timezone,
+                    languages,
+                    third_party,
+                    idle_before: idle_before.map(HumanDuration::get),
+                    json,
+                };
+                selftest_browser::browser(&config, &options, &mut out).await
+            }
+            None => Err(anyhow::anyhow!("name a proxy or a persona")),
+        },
     };
     std::io::Write::write_all(&mut std::io::stdout().lock(), &out)
         .context("cannot write to stdout")?;
@@ -336,7 +482,7 @@ async fn main() -> anyhow::Result<()> {
 
     init_tracing(matches!(
         cli.command,
-        Command::Proxy { .. } | Command::Selftest { .. }
+        Command::Proxy { .. } | Command::Persona { .. } | Command::Selftest { .. }
     ))?;
     match cli.command {
         // The echo is a tool of its own: it reads no configuration.
@@ -370,6 +516,15 @@ async fn main() -> anyhow::Result<()> {
         Command::Config {
             command: ConfigCommand::Check,
         } => Ok(()),
+        Command::Persona { command } => {
+            let config = config_cmd::load(config_file.as_deref(), process_env())?;
+            let mut out = Vec::new();
+            let result = persona(&config, command, &mut out).await;
+            // What was found is shown even when the command then fails.
+            std::io::Write::write_all(&mut std::io::stdout().lock(), &out)
+                .context("cannot write to stdout")?;
+            result
+        }
         Command::Proxy { command } => {
             let config = config_cmd::load(config_file.as_deref(), process_env())?;
             // The result is written in one piece once the command is done.
@@ -379,6 +534,48 @@ async fn main() -> anyhow::Result<()> {
             std::io::Write::write_all(&mut std::io::stdout().lock(), &out)
                 .context("cannot write to stdout")?;
             result
+        }
+    }
+}
+
+/// Runs one `kage persona` command, writing its result to `out`.
+async fn persona(
+    config: &kage_core::config::Config,
+    command: PersonaCommand,
+    out: &mut Vec<u8>,
+) -> anyhow::Result<()> {
+    match command {
+        PersonaCommand::List { state, all, json } => {
+            let options = persona_cmd::ListOptions {
+                state,
+                // Asking for retired personas implies seeing them.
+                all: all || state == Some(PersonaState::Retired),
+                json,
+            };
+            persona_cmd::list(config, options, out).await
+        }
+        PersonaCommand::Show {
+            id,
+            fingerprint,
+            json,
+        } => persona_cmd::show(config, id, fingerprint, json, out).await,
+        PersonaCommand::Retire { id, json } => persona_cmd::retire(config, id, json, out).await,
+        PersonaCommand::Selftest {
+            id,
+            third_party,
+            json,
+        } => {
+            let options = persona_cmd::SelftestOptions {
+                id,
+                paths: persona_cmd::Paths::Both,
+                third_party,
+                echo: None,
+                json,
+            };
+            persona_cmd::selftest(config, &options, out).await
+        }
+        PersonaCommand::Regenerate { id, json } => {
+            persona_cmd::regenerate(config, id, json, out).await
         }
     }
 }
@@ -434,10 +631,11 @@ mod tests {
     use std::time::Duration;
 
     use clap::{CommandFactory, Parser};
-    use kage_core::domain::{Engine, ProxyState};
+    use kage_core::domain::{Engine, PersonaState, ProxyState};
 
     use super::{
-        COMPONENTS, Cli, Command, ConfigCommand, EchoCommand, ProxyCommand, SelftestCommand,
+        COMPONENTS, Cli, Command, ConfigCommand, EchoCommand, PersonaCommand, ProxyCommand,
+        SelftestCommand,
     };
 
     #[test]
@@ -636,7 +834,8 @@ mod tests {
     }
 
     #[test]
-    fn selftest_browser_needs_a_proxy_a_time_zone_and_a_language() {
+    #[allow(clippy::too_many_lines)]
+    fn selftest_browser_needs_a_proxy_or_a_persona() {
         let id = "0199c2f0-0000-7000-8000-000000000001";
         let base = ["kage", "selftest", "browser", "--proxy", id];
         let full = [
@@ -652,6 +851,7 @@ mod tests {
             command:
                 SelftestCommand::Browser {
                     proxy,
+                    persona,
                     engine,
                     timezone,
                     languages,
@@ -664,9 +864,10 @@ mod tests {
             panic!("expected the browser self-test, got {:?}", cli.command);
         };
         assert!(idle_before.is_none());
-        assert_eq!(proxy.to_string(), id);
+        assert_eq!(persona, None);
+        assert_eq!(proxy.unwrap().to_string(), id);
         assert_eq!(engine, Engine::Chromium);
-        assert_eq!(timezone, "Europe/Vienna");
+        assert_eq!(timezone.as_deref(), Some("Europe/Vienna"));
         assert_eq!(languages, ["de-AT", "de"]);
         assert!(!third_party);
         assert!(!json);
@@ -695,20 +896,84 @@ mod tests {
         };
         assert_eq!(idle.get(), Duration::from_mins(10));
 
+        // The stand-in takes its time zone and languages from the proxy's
+        // geo record unless they are named.
+        let cli = Cli::try_parse_from(base).unwrap();
+        let Command::Selftest {
+            command:
+                SelftestCommand::Browser {
+                    proxy: Some(_),
+                    timezone: None,
+                    languages,
+                    ..
+                },
+        } = cli.command
+        else {
+            panic!("expected a proxy alone to do, got {:?}", cli.command);
+        };
+        assert_eq!(languages.len(), 0);
+
         for arguments in [
-            base.to_vec(),
-            [&base[..], &["--timezone", "Europe/Vienna"]].concat(),
-            [&base[..], &["--language", "de"]].concat(),
+            vec!["kage", "selftest", "browser", "--timezone", "Europe/Vienna"],
             [&base[..], &full[..], &["--engine", "safari"]].concat(),
+            // A persona brings its own proxy, engine, zone and languages.
+            [&base[..], &full[..], &["--persona", id]].concat(),
+            vec![
+                "kage",
+                "selftest",
+                "browser",
+                "--persona",
+                id,
+                "--engine",
+                "firefox",
+            ],
+            vec![
+                "kage",
+                "selftest",
+                "browser",
+                "--persona",
+                id,
+                "--language",
+                "de",
+            ],
+            vec!["kage", "selftest", "browser", "--persona", "seven"],
         ] {
             assert!(
                 Cli::try_parse_from(arguments.clone()).is_err(),
                 "{arguments:?}"
             );
         }
+
+        let cli = Cli::try_parse_from([
+            "kage",
+            "selftest",
+            "browser",
+            "--persona",
+            id,
+            "--third-party",
+        ])
+        .unwrap();
+        let Command::Selftest {
+            command:
+                SelftestCommand::Browser {
+                    proxy: None,
+                    persona: Some(persona),
+                    timezone: None,
+                    third_party: true,
+                    json: false,
+                    languages,
+                    ..
+                },
+        } = cli.command
+        else {
+            panic!("expected the self-test of a persona, got {:?}", cli.command);
+        };
+        assert_eq!(persona.to_string(), id);
+        assert_eq!(languages.len(), 0);
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn selftest_http_needs_a_proxy_and_a_profile() {
         let id = "0199c2f0-0000-7000-8000-000000000001";
         let cli = Cli::try_parse_from([
@@ -726,6 +991,7 @@ mod tests {
                 SelftestCommand::Http {
                     proxy,
                     profile,
+                    persona,
                     platform,
                     echo,
                     json,
@@ -734,8 +1000,9 @@ mod tests {
         else {
             panic!("expected the selftest command, got {:?}", cli.command);
         };
-        assert_eq!(proxy.to_string(), id);
-        assert_eq!(profile, "chrome_149");
+        assert_eq!(persona, None);
+        assert_eq!(proxy.unwrap().to_string(), id);
+        assert_eq!(profile.as_deref(), Some("chrome_149"));
         assert_eq!(platform, "windows");
         assert_eq!(echo, None);
         assert!(!json);
@@ -786,6 +1053,115 @@ mod tests {
                 "chrome_149",
             ],
             vec!["kage", "selftest", "browser"],
+            // A persona brings its own proxy and profile.
+            vec!["kage", "selftest", "http", "--persona", id, "--proxy", id],
+            vec![
+                "kage",
+                "selftest",
+                "http",
+                "--persona",
+                id,
+                "--profile",
+                "chrome_149",
+            ],
+        ] {
+            assert!(
+                Cli::try_parse_from(arguments.clone()).is_err(),
+                "{arguments:?}"
+            );
+        }
+
+        let cli =
+            Cli::try_parse_from(["kage", "selftest", "http", "--persona", id, "--json"]).unwrap();
+        let Command::Selftest {
+            command:
+                SelftestCommand::Http {
+                    proxy: None,
+                    profile: None,
+                    persona: Some(persona),
+                    echo: None,
+                    json: true,
+                    ..
+                },
+        } = cli.command
+        else {
+            panic!("expected the self-test of a persona, got {:?}", cli.command);
+        };
+        assert_eq!(persona.to_string(), id);
+    }
+
+    fn persona(arguments: &[&str]) -> PersonaCommand {
+        let cli = Cli::try_parse_from(["kage", "persona"].iter().chain(arguments)).unwrap();
+        match cli.command {
+            Command::Persona { command } => command,
+            other => panic!("expected a persona command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn persona_commands_take_an_id_and_list_shows_live_personas_by_default() {
+        let id = "0199c2f0-0000-7000-8000-000000000001";
+        assert!(matches!(
+            persona(&["list"]),
+            PersonaCommand::List {
+                state: None,
+                all: false,
+                json: false
+            }
+        ));
+        assert!(matches!(
+            persona(&["list", "--state", "cooling", "--all", "--json"]),
+            PersonaCommand::List {
+                state: Some(PersonaState::Cooling),
+                all: true,
+                json: true
+            }
+        ));
+        let PersonaCommand::Show {
+            id: shown,
+            fingerprint: true,
+            json: true,
+        } = persona(&["show", id, "--json", "--fingerprint"])
+        else {
+            panic!("expected show");
+        };
+        assert_eq!(shown.to_string(), id);
+        assert!(matches!(
+            persona(&["retire", id]),
+            PersonaCommand::Retire { json: false, .. }
+        ));
+        assert!(matches!(
+            persona(&["regenerate", id, "--json"]),
+            PersonaCommand::Regenerate { json: true, .. }
+        ));
+        // The self-test asks nobody else unless told to.
+        assert!(matches!(
+            persona(&["selftest", id]),
+            PersonaCommand::Selftest {
+                third_party: false,
+                json: false,
+                ..
+            }
+        ));
+        assert!(matches!(
+            persona(&["selftest", id, "--third-party", "--json"]),
+            PersonaCommand::Selftest {
+                third_party: true,
+                json: true,
+                ..
+            }
+        ));
+
+        for arguments in [
+            vec!["kage", "persona"],
+            vec!["kage", "persona", "show"],
+            vec!["kage", "persona", "show", "seven"],
+            vec!["kage", "persona", "retire"],
+            vec!["kage", "persona", "selftest"],
+            vec!["kage", "persona", "regenerate"],
+            vec!["kage", "persona", "list", "--state", "asleep"],
+            // The fingerprint is a document: it only fits JSON.
+            vec!["kage", "persona", "show", id, "--fingerprint"],
         ] {
             assert!(
                 Cli::try_parse_from(arguments.clone()).is_err(),

@@ -21,6 +21,7 @@ kage-core = { workspace = true }
 kage-crawl = { workspace = true }
 kage-extract = { workspace = true }
 kage-http = { workspace = true }
+kage-persona = { workspace = true }
 kage-proxy = { workspace = true }
 kage-store = { workspace = true }
 
@@ -43,6 +44,9 @@ sqlx = { workspace = true }
 tempfile = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["postgres"] }
+# The persona CLI test uses the mock sidecars of kage-persona's own tests
+# (crates/kage-persona/tests/common).
+uuid = { workspace = true }
 # The proxy CLI tests run against the mock Webshare API of kage-proxy's own
 # tests (crates/kage-proxy/tests/common).
 wiremock = { workspace = true }

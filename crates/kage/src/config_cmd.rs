@@ -77,6 +77,8 @@ pub(crate) fn check(
         },
         // What the http path can present as in this build.
         "http": kage_http::describe(&config),
+        // What the persona manager will do by itself.
+        "personas": kage_persona::describe(&config),
     });
     serde_json::to_writer_pretty(&mut *out, &report).context("cannot write the report")?;
     writeln!(out).context("cannot write the report")?;

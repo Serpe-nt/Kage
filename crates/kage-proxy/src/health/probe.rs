@@ -216,6 +216,13 @@ impl EmulatedClientFactory {
     pub const fn profile(&self) -> &ProfileChoice {
         &self.spec.profile
     }
+
+    /// The limits of a probe: its timeout and how much of an answer it
+    /// reads. Another probe client factory takes them from here, so that
+    /// every probe has the same.
+    pub const fn settings(&self) -> &HttpSettings {
+        self.factory.settings()
+    }
 }
 
 /// The name of every emulation profile this build of wreq-util ships.

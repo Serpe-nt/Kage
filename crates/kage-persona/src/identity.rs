@@ -203,6 +203,23 @@ impl PersonaProbeClients {
     }
 }
 
+impl PersonaProbeClients {
+    /// The probe clients the configuration describes: the persona behind
+    /// each proxy, with the limits and the fallback profile of
+    /// `proxies.health`.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the configured profile is not one this build ships.
+    pub fn from_config(
+        directory: std::sync::Arc<Directory>,
+        health: &kage_core::config::ProxyHealthConfig,
+    ) -> Result<Self, ProbeClientError> {
+        let fallback = EmulatedClientFactory::from_config(health)?;
+        Ok(Self::new(directory, *fallback.settings(), fallback))
+    }
+}
+
 impl ProbeClientFactory for PersonaProbeClients {
     fn client(&self, target: &ProxyEndpoint) -> Result<HttpClient, ProbeClientError> {
         match self.directory.spec(target.id) {

@@ -2,24 +2,19 @@
 //
 //   node pick-browser-proxy.mjs <proxy list json> <day number>
 //
-// Prints two lines, `<proxy id> <time zone> <languages, comma separated>`.
-// The time zone and the languages are those of the proxy's country, so that
-// the browser the detection pages see fits the address it comes from. The
+// Prints two lines, `<proxy id> <country>`. The time zone and the languages
+// of the browser are not chosen here: `kage selftest browser` derives them
+// from the proxy's observed geo record and the stock language list of the
+// engine's browser in that country, as it does for a persona, so that the
+// browser the detection pages see fits the address it comes from. The
 // pair moves through the pool by the day number and is never one of the
 // two that the http self-test shows a third-party echo on the same day
 // (pick-selftest-pair.mjs takes 2·day and 2·day + 1).
 import { readFileSync } from "node:fs";
 
-// The countries of the pool (docs/00-decisions.md). A persona's language
-// list is its country's language first and English last, as browsers
-// installed in that country are set up.
-export const COUNTRIES = {
-  AT: { timezone: "Europe/Vienna", languages: ["de-AT", "de", "en"] },
-  DE: { timezone: "Europe/Berlin", languages: ["de-DE", "de", "en"] },
-  FR: { timezone: "Europe/Paris", languages: ["fr-FR", "fr", "en"] },
-  GB: { timezone: "Europe/London", languages: ["en-GB", "en"] },
-  IT: { timezone: "Europe/Rome", languages: ["it-IT", "it", "en"] },
-};
+// The countries of the pool (docs/00-decisions.md): the ones Kage has a
+// locale and a stock language list for (`kage_core::persona::locale`).
+export const COUNTRIES = new Set(["AT", "DE", "FR", "GB", "IT"]);
 
 const [listFile, dayText] = process.argv.slice(2);
 if (!listFile || !dayText) {
@@ -48,14 +43,14 @@ const countryOf = (proxy) => String(proxy.observed_country ?? proxy.country ?? "
 const picked = [];
 for (let step = 0; step < proxies.length - 2 && picked.length < 2; step += 1) {
   const proxy = proxies[(2 * day + 2 + step) % proxies.length];
-  const country = COUNTRIES[countryOf(proxy)];
-  if (country !== undefined) {
-    picked.push(`${proxy.id} ${country.timezone} ${country.languages.join(",")}`);
+  const country = countryOf(proxy);
+  if (COUNTRIES.has(country)) {
+    picked.push(`${proxy.id} ${country}`);
   }
 }
 if (picked.length < 2) {
   console.error(
-    `fewer than two usable proxies are in a country this check knows the time zone of (${Object.keys(COUNTRIES).join(", ")})`,
+    `fewer than two usable proxies are in a country of the pool (${[...COUNTRIES].join(", ")})`,
   );
   process.exit(1);
 }

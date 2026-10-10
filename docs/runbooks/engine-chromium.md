@@ -143,17 +143,17 @@ Kage's own pages are the default set. Third-party pages are loaded only
 because someone asked: they see the exit address of the proxy.
 
 ```bash
-kage selftest browser --proxy <proxy id> --timezone Europe/Berlin \
-    --language de-DE --language de --language en
-kage selftest browser --proxy <proxy id> --timezone Europe/Rome \
-    --language it-IT --language it --third-party --json
+kage selftest browser --proxy <proxy id>
+kage selftest browser --proxy <proxy id> --engine firefox --third-party --json
+kage selftest browser --persona <persona id> --third-party
 ```
 
 | Flag | Meaning |
 |---|---|
-| `--proxy` | The proxy to leave through. A retired proxy is refused. |
+| `--proxy` | The proxy to leave through, with a stand-in persona. A retired proxy is refused. |
+| `--persona` | Run the test as this persona instead, in its own context: its fingerprint, its profile, its proxy. The run is recorded for the persona (`docs/runbooks/personas.md`). Not with `--engine`, `--timezone` or `--language`. |
 | `--engine` | `chromium` (default) or `firefox`. A Firefox stand-in persona claims Windows; see `engine-firefox.md`. |
-| `--timezone`, `--language` | The identity of the stand-in persona; use the proxy's country. |
+| `--timezone`, `--language` | Override the identity of the stand-in persona. By default its time zone, locale and languages are what a persona behind that proxy would get: the proxy's observed geo record and the list the engine's browser ships with in that country. |
 | `--third-party` | Also load `selftest.browser.third_party_pages`. |
 | `--idle-before` | Keep the context open and untouched for this long (for example `10m`) before the pages load. For measuring what the browser sends by itself; the sidecar's `SIDECAR_CONTEXT_IDLE_MS` must be longer, or it closes the context meanwhile. |
 | `--json` | One JSON document instead of a table. |

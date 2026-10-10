@@ -9,13 +9,18 @@
 //! address of the proxy. Only this command and the gated live suite ever
 //! load those, and the server never does.
 //!
-//! Personas arrive with milestone M6. Until then the self-test stands in
-//! with one pseudo-persona per proxy and engine: its id is the proxy's id
-//! and its seed is derived from it, so a proxy shows the same browser on
-//! every run and keeps one profile directory per engine
+//! A persona is tested with `kage persona selftest` (or `--persona`
+//! here), in its own context. This command is for a proxy that has none,
+//! and for comparing engines through one address: it stands in with one
+//! pseudo-persona per proxy and engine. Its id is the proxy's id and its
+//! seed is derived from it, so a proxy shows the same browser on every
+//! run and keeps one profile directory per engine
 //! (`selftest/<engine>/<proxy id>`). The stand-in claims the operating
 //! system its engine claims by default: Linux on chromium, Windows on
-//! firefox.
+//! firefox. Its time zone, locale and languages are what a persona behind
+//! that proxy would get: derived from the proxy's observed geo record and
+//! the stock language list of that browser in that country
+//! (`kage_core::persona::locale`), unless they are named.
 
 use std::io::Write;
 use std::time::Duration;
@@ -28,8 +33,9 @@ use kage_browser::contract::{
 };
 use kage_browser::{BrowserError, SidecarClient, SidecarSettings};
 use kage_core::config::{Config, SelftestPageConfig};
-use kage_core::domain::{AuditOutcome, Engine, ProxyEndpoint};
+use kage_core::domain::{AuditOutcome, Engine, Proxy, ProxyEndpoint};
 use kage_core::ids::ProxyId;
+use kage_core::seed::Seed;
 use serde_json::json;
 
 use crate::proxy_cmd::{Session, table};
@@ -41,9 +47,11 @@ pub(crate) struct BrowserSelftestOptions {
     pub(crate) proxy: ProxyId,
     /// The engine whose sidecar runs the test.
     pub(crate) engine: Engine,
-    /// The IANA time zone of the proxy's exit.
-    pub(crate) timezone: String,
-    /// The languages of the stand-in persona, most preferred first.
+    /// The IANA time zone of the stand-in persona; `None` for the one of
+    /// the proxy's geo record.
+    pub(crate) timezone: Option<String>,
+    /// The languages of the stand-in persona, most preferred first; empty
+    /// for the stock list of the engine's browser in the proxy's country.
     pub(crate) languages: Vec<String>,
     /// Also load the detection pages run by others.
     pub(crate) third_party: bool,
@@ -134,25 +142,48 @@ fn echo_expectation(engine: Engine, major: u64) -> Option<EchoExpectation> {
     })
 }
 
+/// Where the stand-in persona is and what it speaks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StandIn {
+    timezone: String,
+    locale: String,
+    languages: Vec<String>,
+}
+
+/// The place and languages of the stand-in persona of a proxy: what a
+/// persona behind it would get, unless the caller named them.
+fn stand_in(proxy: &Proxy, options: &BrowserSelftestOptions) -> StandIn {
+    let seed = Seed::derive("selftest-stand-in", &[proxy.id.as_uuid().as_bytes()]);
+    let place = kage_persona::lifecycle::place_of(proxy, options.engine, &seed);
+    let (locale, languages) = match options.languages.first() {
+        // Named languages: the first one is the locale, as before.
+        Some(first) => (first.clone(), options.languages.clone()),
+        None => (place.locale.locale, place.locale.languages),
+    };
+    StandIn {
+        timezone: options.timezone.clone().unwrap_or(place.timezone),
+        locale,
+        languages,
+    }
+}
+
 /// The conversation with the sidecar: a persona, a context through the
 /// proxy, the self-test, and the context closed again whatever it found.
 async fn converse(
     client: &SidecarClient,
     config: &Config,
     options: &BrowserSelftestOptions,
+    identity: &StandIn,
     endpoint: &ProxyEndpoint,
     seed: &str,
     pages: Vec<SelftestPage>,
 ) -> anyhow::Result<(PersonaSummary, Result<SelftestResponse, BrowserError>)> {
-    let Some(locale) = options.languages.first() else {
-        bail!("name at least one language");
-    };
     let claimed_os = stand_in_os(options.engine);
     let persona = client
         .generate_persona(&GeneratePersonaRequest {
             browser_major: None,
             claimed_os,
-            languages: options.languages.clone(),
+            languages: identity.languages.clone(),
             screen: None,
             seed: seed.to_owned(),
         })
@@ -163,8 +194,8 @@ async fn converse(
         .open_context(&OpenContextRequest {
             fingerprint: persona.fingerprint,
             geolocation: None,
-            languages: options.languages.clone(),
-            locale: locale.clone(),
+            languages: identity.languages.clone(),
+            locale: identity.locale.clone(),
             persona_id: endpoint.id.as_uuid(),
             profile_dir: profile_dir_of(options.engine, endpoint.id),
             proxy: ContextProxy {
@@ -173,7 +204,7 @@ async fn converse(
                 username: endpoint.username.expose().to_owned(),
             },
             screen: summary.screen.clone(),
-            timezone: options.timezone.clone(),
+            timezone: identity.timezone.clone(),
         })
         .await
         .context("the sidecar could not open a context")?;
@@ -202,8 +233,8 @@ async fn converse(
             // it generated: a persona that came back claiming another
             // system must fail the test, not move its expectation.
             claimed_os,
-            languages: options.languages.clone(),
-            timezone: options.timezone.clone(),
+            languages: identity.languages.clone(),
+            timezone: identity.timezone.clone(),
         },
         min_score: Some(f64::from(selftest.min_score)),
         pages: Some(pages),
@@ -237,13 +268,17 @@ async fn browser_in(
         .context("cannot build the sidecar client")?;
 
     let seed = seed_of(proxy.id);
-    let (summary, outcome) = converse(&client, config, options, &endpoint, &seed, pages).await?;
+    let identity = stand_in(&proxy, options);
+    let (summary, outcome) =
+        converse(&client, config, options, &identity, &endpoint, &seed, pages).await?;
 
     let details = |passed: Option<bool>, score: Option<f64>| {
         json!({
             "engine": options.engine.as_str(),
             "browser_version": summary.browser_version,
             "third_party": options.third_party,
+            "timezone": identity.timezone,
+            "languages": identity.languages,
             "seed": seed,
             "passed": passed,
             "score": score,
@@ -364,12 +399,15 @@ mod tests {
         ClaimedOs, EXAMPLES_JSON, GeneratePersonaResponse, PersonaSummary, SelftestResponse,
     };
     use kage_core::config::{Config, SelftestPageConfig, SelftestPageKind};
-    use kage_core::domain::Engine;
+    use kage_core::domain::{
+        Engine, GeoRecord, Proxy, ProxyHealth, ProxyProviderKind, ProxyScheme, ProxyState,
+    };
     use kage_core::ids::ProxyId;
+    use kage_core::secret::SealedSecret;
 
     use super::{
-        BrowserSelftestOptions, echo_expectation, pages_of, profile_dir_of, seed_of, stand_in_os,
-        write_report,
+        BrowserSelftestOptions, echo_expectation, pages_of, profile_dir_of, seed_of, stand_in,
+        stand_in_os, write_report,
     };
 
     fn config() -> Config {
@@ -408,7 +446,7 @@ mod tests {
                 .parse::<ProxyId>()
                 .expect("a proxy id"),
             engine: Engine::Chromium,
-            timezone: "Europe/Berlin".to_owned(),
+            timezone: Some("Europe/Berlin".to_owned()),
             languages: vec!["de-DE".to_owned(), "de".to_owned()],
             third_party: true,
             idle_before: None,
@@ -446,6 +484,91 @@ mod tests {
             ids(pages_of(&config, true).expect("pages")),
             ["probe=probe", "sannysoft=sannysoft", "creepjs=creepjs"]
         );
+    }
+
+    fn proxy(country: &str, observed: Option<(&str, &str)>) -> Proxy {
+        Proxy {
+            id: ProxyId::new(),
+            provider: ProxyProviderKind::Static,
+            provider_ref: "fixture".to_owned(),
+            host: "127.0.0.1".to_owned(),
+            port: 8080,
+            username: SealedSecret::new(Vec::new()),
+            password: SealedSecret::new(Vec::new()),
+            scheme: ProxyScheme::Http,
+            country: country.parse().ok(),
+            city: None,
+            asn: None,
+            state: ProxyState::Healthy,
+            consecutive_failures: 0,
+            backoff_count: 0,
+            backoff_until: None,
+            failing_since: None,
+            replacement: None,
+            last_health: observed.map(|(country, timezone)| ProxyHealth {
+                geo: Some(GeoRecord {
+                    country: country.parse().expect("a country"),
+                    city: None,
+                    region: None,
+                    asn: None,
+                    org: None,
+                    timezone: Some(timezone.to_owned()),
+                    loc: None,
+                    ip: "203.0.113.9".parse().expect("an address"),
+                    checked_at: chrono::Utc::now(),
+                }),
+                ..ProxyHealth::new(chrono::Utc::now(), true)
+            }),
+            created_at: chrono::Utc::now(),
+            retired_at: None,
+        }
+    }
+
+    #[test]
+    fn the_stand_in_speaks_what_a_persona_behind_the_proxy_would() {
+        let derived = |engine| BrowserSelftestOptions {
+            engine,
+            timezone: None,
+            languages: Vec::new(),
+            ..options(false)
+        };
+        // A German address: Firefox ships `de, en-US, en` there, and never
+        // the `de-DE, de, en` no stock Firefox sends; Chrome ships
+        // `de-DE, de, en-US, en`.
+        let german = proxy("DE", Some(("DE", "Europe/Berlin")));
+        let firefox = stand_in(&german, &derived(Engine::Firefox));
+        assert_eq!(firefox.languages, ["de", "en-US", "en"]);
+        assert_eq!(firefox.locale, "de-DE");
+        assert_eq!(firefox.timezone, "Europe/Berlin");
+        let chrome = stand_in(&german, &derived(Engine::Chromium));
+        assert_eq!(chrome.languages, ["de-DE", "de", "en-US", "en"]);
+        assert_eq!(chrome.locale, "de-DE");
+
+        // Where the address was observed to be wins over the provider.
+        let moved = proxy("DE", Some(("AT", "Europe/Vienna")));
+        let austrian = stand_in(&moved, &derived(Engine::Firefox));
+        assert_eq!(austrian.locale, "de-AT");
+        assert_eq!(austrian.languages, ["de", "en-US", "en"]);
+        assert_eq!(austrian.timezone, "Europe/Vienna");
+        // No lookup yet: the provider's country and its main zone.
+        let unplaced = stand_in(&proxy("IT", None), &derived(Engine::Chromium));
+        assert_eq!(unplaced.languages, ["it-IT", "it", "en-US", "en"]);
+        assert_eq!(unplaced.timezone, "Europe/Rome");
+
+        // What the caller names is used as it is.
+        let named = stand_in(&german, &options(false));
+        assert_eq!(named.languages, ["de-DE", "de"]);
+        assert_eq!(named.locale, "de-DE");
+        assert_eq!(named.timezone, "Europe/Berlin");
+        let zone_only = stand_in(
+            &german,
+            &BrowserSelftestOptions {
+                timezone: Some("Europe/Zurich".to_owned()),
+                ..derived(Engine::Firefox)
+            },
+        );
+        assert_eq!(zone_only.timezone, "Europe/Zurich");
+        assert_eq!(zone_only.languages, ["de", "en-US", "en"]);
     }
 
     #[test]

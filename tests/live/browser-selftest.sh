@@ -198,23 +198,21 @@ for engine in "${engines[@]}"; do
 
     status=0
     run=0
-    while read -r proxy timezone languages; do
+    while read -r proxy country; do
         run=$((run + 1))
-        language_flags=()
-        IFS=',' read -ra tags <<< "${languages}"
-        for tag in "${tags[@]}"; do
-            language_flags+=(--language "${tag}")
-        done
+        idle_flags=()
         # Only the first context idles: one measurement per engine is enough.
         if [ "${idle}" -gt 0 ] && [ "${run}" -eq 1 ]; then
-            language_flags+=(--idle-before "${idle}s")
+            idle_flags+=(--idle-before "${idle}s")
             echo "    the first context stays idle for ${idle} s before its pages load"
         fi
-        echo "    ${engine} through proxy ${run} of the pair (${timezone}, ${languages})"
+        echo "    ${engine} through proxy ${run} of the pair (${country})"
+        # The time zone and the languages are the stand-in's own: what a
+        # persona of this engine behind this proxy would get.
         # A failing self-test still prints its report; the judge reads it.
         # stdin is the list of the loop: the command must not read from it.
-        kage selftest browser --proxy "${proxy}" --engine "${engine}" --timezone "${timezone}" \
-            "${language_flags[@]}" --third-party --json \
+        kage selftest browser --proxy "${proxy}" --engine "${engine}" \
+            "${idle_flags[@]}" --third-party --json \
             < /dev/null > "${workdir}/${engine}-report-${run}.json" || status=1
     done < "${workdir}/pair.txt"
 

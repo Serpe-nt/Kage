@@ -12,12 +12,13 @@ use chrono::Utc;
 use kage_core::alert::AlertSink;
 use kage_core::config::Config;
 use kage_core::policy::PolicyStore;
+use kage_persona::PersonaProbeClients;
 use kage_proxy::{HealthChecker, Pool};
 use kage_store::{ArtifactStore, Store};
 use tokio::net::TcpListener;
 use tokio::time::MissedTickBehavior;
 
-use crate::{alerts, migrate};
+use crate::{alerts, migrate, persona_cmd};
 
 /// Blobs younger than this are never treated as orphans: a write in
 /// progress has a blob on disk before its row is committed.
@@ -122,16 +123,20 @@ pub(crate) async fn serve(
 }
 
 /// Starts the proxy pool's two loops (spec §7): upkeep (sync with the
-/// provider, backoffs, replacements) and health checks. Without a provider
-/// nothing is started, and every fetch will fail: Kage never connects to a
-/// target directly.
+/// provider, backoffs, replacements) and health checks, and the persona
+/// manager that follows the pool (spec §6): it generates a persona for
+/// every usable proxy, retires it with its proxy, and runs warm-up visits
+/// and scheduled self-tests. A health probe presents as the persona behind
+/// the proxy it checks. Without a provider nothing is started, and every
+/// fetch will fail: Kage never connects to a target directly.
 async fn start_proxy_pool(
     config: &Config,
     store: &Store,
     alerts: Arc<dyn AlertSink>,
 ) -> anyhow::Result<Vec<tokio::task::JoinHandle<()>>> {
     let pool = Arc::new(
-        Pool::from_config(config, store.clone(), alerts).context("cannot set up the proxy pool")?,
+        Pool::from_config(config, store.clone(), Arc::clone(&alerts))
+            .context("cannot set up the proxy pool")?,
     );
     if pool.provider_kind().is_none() {
         let stored = pool
@@ -165,11 +170,33 @@ async fn start_proxy_pool(
              probe shows a distinct exit address or `kage proxy egress --clear` is run"
         );
     }
+    let personas = Arc::new(persona_cmd::build(
+        config,
+        store,
+        Arc::clone(&pool),
+        alerts,
+    )?);
+    // Before anything is probed: which persona lives behind which proxy.
+    let stored = personas
+        .load()
+        .await
+        .context("cannot read the stored personas")?;
+    tracing::info!(
+        personas = stored,
+        warmup = config.personas.warmup.enabled,
+        scheduled_http_selftest = config.selftest.http.echo_url.is_some(),
+        scheduled_browser_selftest = !config.selftest.browser.pages.is_empty(),
+        "persona manager starting"
+    );
+    let probe_clients =
+        PersonaProbeClients::from_config(personas.directory(), &config.proxies.health)
+            .context("cannot set up the probe clients")?;
     let checker = Arc::new(
-        HealthChecker::from_config(config, Arc::clone(&pool))
+        HealthChecker::with_clients(config, Arc::clone(&pool), probe_clients)
             .context("cannot set up the proxy health checks")?,
     );
     Ok(vec![
+        tokio::spawn(personas.run(std::future::pending())),
         tokio::spawn(pool.run(
             config.proxies.sync_interval.get(),
             POOL_TICK.min(config.proxies.sync_interval.get()),

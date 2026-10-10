@@ -1948,6 +1948,7 @@ dependencies = [
  "kage-crawl",
  "kage-extract",
  "kage-http",
+ "kage-persona",
  "kage-proxy",
  "kage-store",
  "rcgen",
@@ -1960,6 +1961,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "uuid",
  "wiremock",
 ]
 

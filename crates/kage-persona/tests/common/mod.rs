@@ -64,6 +64,7 @@ pub const MASTER_KEY: &str = "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f
 /// migration applied.
 pub struct TestDb {
     pub store: Store,
+    pub url: String,
     _container: ContainerAsync<Postgres>,
 }
 
@@ -86,6 +87,7 @@ impl TestDb {
         store.migrate().await.unwrap();
         Self {
             store,
+            url,
             _container: container,
         }
     }
