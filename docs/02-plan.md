@@ -442,7 +442,13 @@ state, cookie handoff with the major rule, profile archive on the personas
 volume, scheduled self-tests against the operator's own pages only; the
 Finding A `oscpu` defect fixed at generation. Decisions D34 to D36 record
 the tables, the warm-up gate and the self-test hosting question (O5). The
-optional live persona check (`KAGE_LIVE_PERSONAS=1`) was not run.
+live persona check passed on 2026-10-10 (`m6-live-handover.md`): `kage
+serve` ran against the real pool for the first time, twenty personas for
+twenty proxies within three minutes, mix 8/8/4 with both engines in every
+country, stock language lists as observed by a third-party page, and one
+persona per engine scored 100 against the recorded baselines. Not yet
+exercised live: a replacement, a failing proxy, a geo change, a warm-up
+visit, the profile archive on the real volume.
 
 **Follow-ups closed by M6.** F1 (budget per subscription term), F7 except
 the persisted asset cache (see F26), F15 (the cross-OS rule on the Rust
