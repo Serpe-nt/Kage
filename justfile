@@ -33,11 +33,11 @@ compose := "docker compose --file deploy/compose.yaml"
 images := "kage:dev kage-browser-chromium:dev kage-browser-firefox:dev"
 
 # Spec §21: these crates must keep at least this line coverage. kage-store
-# joined the list in M1, kage-http in M3, kage-browser in M4 and
-# kage-persona in M6
+# joined the list in M1, kage-http in M3, kage-browser in M4,
+# kage-persona in M6 and kage-scheduler in M7
 # (docs/02-plan.md, acceptance of each). The sidecar gates (contract,
 # engine-core, engine-chromium, server) live in sidecar/vitest.config.ts.
-cov_gated_crates := "kage-core,kage-store,kage-proxy,kage-http,kage-browser,kage-persona,kage-crawl,kage-extract"
+cov_gated_crates := "kage-core,kage-store,kage-proxy,kage-http,kage-browser,kage-persona,kage-scheduler,kage-crawl,kage-extract"
 cov_min_lines := "80"
 
 # sqlx checks every query at compile time against the committed data in
@@ -188,14 +188,21 @@ test-node:
 # containers (Chromium since M4, Firefox since M5).
 test-e2e: setup-env
     tests/e2e/smoke.sh
+    tests/e2e/fetch.sh
 
 # Gated live suite: needs KAGE_LIVE=1 and secrets, never runs in PR CI.
 test-live:
     tests/live/run.sh
 
-# Mutation testing on kage-core. Reported only; gating starts in M7.
+# Mutation testing on kage-core: fails under a score of 70 % (spec §21, a
+# gate since M7). It tests about two thousand mutants and takes about two
+# hours, so it is not part of `ci`; run it before a milestone is merged.
 mutants:
-    cargo mutants --package kage-core --output target/mutants
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # cargo-mutants exits non-zero when any mutant survives; the score decides.
+    cargo mutants --package kage-core --output target/mutants || true
+    node scripts/check-mutation-score.mjs target/mutants/mutants.out 70
 
 # --- Coverage ----------------------------------------------------------------
 
