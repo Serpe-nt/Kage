@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -18,6 +19,7 @@ import {
   CAMOUFOX_RELEASE,
   CAMOUFOX_VERSION,
   FirefoxEngine,
+  OSCPU,
   basePreferences,
   classifyNavigationError,
   configEnvironment,
@@ -383,6 +385,112 @@ describe('generateFingerprint', () => {
     expect(() => generatedOf({ ...generate('windows'), generated: { fingerprint: {} } })).toThrow(
       expect.objectContaining({ code: 'invalid_request' }) as Error,
     );
+  });
+});
+
+/** Fewest distinct (system, screen, processors) among forty personas of the tables. */
+const MIN_PAIRS = 16;
+
+/** The n-th of a series of persona seeds. */
+const seedOf = (n: number) => createHash('sha256').update(`persona-${n}`).digest('hex');
+
+// The screen classes Kage draws a Firefox persona's screen from and asks
+// for by exact bounds (`crates/kage-core/src/persona/screen.rs`, tables v1).
+const SCREEN_CLASSES: Record<'windows' | 'macos', [number, number][]> = {
+  windows: [
+    [1920, 1080],
+    [2560, 1440],
+    [1600, 900],
+    [3440, 1440],
+    [3840, 1080],
+  ],
+  macos: [
+    [2560, 1440],
+    [1920, 1080],
+    [3440, 1440],
+    [2560, 1600],
+    [1680, 1050],
+  ],
+};
+
+describe('what Kage asks the generator for (spec §6.1)', () => {
+  it('gives every persona the oscpu of the system it claims, whatever its device record lacks', () => {
+    const kind: Record<ClaimedOs, RegExp> = {
+      windows: /^Windows NT \d+\.\d+; Win64; x64$/u,
+      macos: /^Intel Mac OS X \d+[._]\d+/u,
+      linux: /^Linux /u,
+    };
+    let recordsWithout = 0;
+    for (const [os, count] of [
+      ['windows', 240],
+      ['macos', 40],
+      ['linux', 40],
+    ] as const) {
+      for (let n = 0; n < count; n += 1) {
+        const document = generate(os, seedOf(n));
+        const { config, fingerprint } = generatedOf(document);
+        const recorded = (fingerprint['navigator'] as Record<string, unknown> | undefined)?.[
+          'oscpu'
+        ];
+        if (typeof recorded !== 'string' || recorded === '') {
+          recordsWithout += 1;
+          // The record is silent: the stock value of the claimed system.
+          expect(config['navigator.oscpu'], `${os} ${n}`).toBe(OSCPU[os]);
+        }
+        expect(config['navigator.oscpu'], `${os} ${n}`).toMatch(kind[os]);
+        expect(() => {
+          validateConfig(config, host.properties);
+        }).not.toThrow();
+      }
+    }
+    // The sample holds device records without the value, or this test
+    // would prove nothing.
+    expect(recordsWithout).toBeGreaterThan(0);
+    for (const os of SYSTEMS) {
+      expect(OSCPU[os]).toMatch(kind[os]);
+    }
+    // Hundreds of fingerprints take a few seconds.
+  }, 60_000);
+
+  it('generates every screen class of the tables by exact bounds, on varied hardware', () => {
+    const pairs = new Set<string>();
+    const processors = new Set<number>();
+    let n = 0;
+    for (const os of ['windows', 'macos'] as const) {
+      for (const [width, height] of SCREEN_CLASSES[os]) {
+        for (let repeat = 0; repeat < 4; repeat += 1) {
+          n += 1;
+          const document = generateFingerprint(
+            {
+              seed: seedOf(n),
+              claimed_os: os,
+              languages: LANGUAGES,
+              screen: {
+                min_width: width,
+                max_width: width,
+                min_height: height,
+                max_height: height,
+              },
+            },
+            host,
+          );
+          expect(document.native.screen, `${os} ${width}x${height}`).toMatchObject({
+            width,
+            height,
+            dpr: 1,
+          });
+          const { config } = generatedOf(document);
+          expect(config['screen.width']).toBe(width);
+          expect(config['screen.height']).toBe(height);
+          pairs.add(`${os} ${width}x${height} ${document.native.hardware_concurrency}`);
+          processors.add(document.native.hardware_concurrency);
+        }
+      }
+    }
+    // Forty personas over ten classes: the processors are the
+    // generator's own draw and differ within a class.
+    expect(processors.size).toBeGreaterThanOrEqual(3);
+    expect(pairs.size).toBeGreaterThanOrEqual(MIN_PAIRS);
   });
 });
 

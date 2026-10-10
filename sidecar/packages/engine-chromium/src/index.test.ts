@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -184,6 +185,46 @@ describe('generateFingerprint', () => {
     const generated = document.generated as { fingerprint: { navigator: { userAgent: string } } };
     expect(generated.fingerprint.navigator.userAgent).toContain('X11; Linux');
     expect(generated.fingerprint.navigator.userAgent).not.toContain('Chrome/155');
+  });
+
+  it('generates every screen class of the tables by exact bounds, on varied hardware', () => {
+    // The classes Kage draws a Chrome persona's screen from
+    // (`crates/kage-core/src/persona/screen.rs`, tables v1).
+    const classes: [number, number][] = [
+      [1920, 1080],
+      [2560, 1440],
+      [1680, 1050],
+      [1366, 768],
+      [1440, 900],
+      [1600, 900],
+      [1920, 1200],
+      [2560, 1600],
+      [1280, 800],
+    ];
+    const processors = new Set<number>();
+    let n = 0;
+    for (const [width, height] of classes) {
+      for (let repeat = 0; repeat < 4; repeat += 1) {
+        n += 1;
+        const document = generateFingerprint(
+          {
+            ...request,
+            seed: createHash('sha256').update(`persona-${n}`).digest('hex'),
+            screen: { min_width: width, max_width: width, min_height: height, max_height: height },
+          },
+          facts,
+        );
+        expect(document.native.screen, `${width}x${height}`).toEqual({
+          width,
+          height,
+          dpr: 1,
+          color_depth: 24,
+        });
+        processors.add(document.native.hardware_concurrency);
+      }
+    }
+    // The processors are the generator's own draw.
+    expect(processors.size).toBeGreaterThanOrEqual(3);
   });
 
   it('honors screen bounds and says when nothing fits them', () => {

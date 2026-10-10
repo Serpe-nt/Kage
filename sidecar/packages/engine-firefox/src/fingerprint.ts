@@ -205,6 +205,13 @@ export function generatorId(facts: GenerationFacts): string {
   return `camoufox-js@${launcherVersion()}+camoufox-${facts.version}-${facts.release}`;
 }
 
+/** `navigator.oscpu` of a stock Firefox on each system a persona may claim. */
+export const OSCPU: Record<ClaimedOs, string> = {
+  windows: 'Windows NT 10.0; Win64; x64',
+  macos: 'Intel Mac OS X 10.15',
+  linux: 'Linux x86_64',
+};
+
 /**
  * Generates the fingerprint document of a Firefox persona (spec §6.1 step 3).
  *
@@ -268,6 +275,15 @@ export function generateFingerprint(
   for (const key of NEVER_SET) {
     // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- the keys are a fixed list
     delete config[key];
+  }
+
+  // Some recorded devices carry no `oscpu` (about one Windows record in
+  // thirty). The browser would then answer with its own, the engine
+  // host's `Linux x86_64`, in the window of a persona that claims another
+  // system: the one value that contradicts everything else it says.
+  const oscpu = config['navigator.oscpu'];
+  if (typeof oscpu !== 'string' || oscpu === '') {
+    config['navigator.oscpu'] = OSCPU[request.claimed_os];
   }
 
   const random = new SeededRandom(request.seed, 'camoufox-config');
