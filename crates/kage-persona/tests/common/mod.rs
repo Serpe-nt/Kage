@@ -3,8 +3,9 @@
 //! - [`TestDb`]: a throwaway Postgres with the schema applied.
 //! - [`ListProvider`]: a proxy provider whose list a test edits.
 //! - [`MockSidecar`]: a sidecar that generates what it is asked for, opens
-//!   and closes contexts, and answers navigations, state export and import
-//!   and self-tests with what a test set, recording every call.
+//!   a persona's context once and hands the same one back until it is
+//!   closed, and answers navigations, state export and import and
+//!   self-tests with what a test set, recording every call.
 //! - [`Harness`]: a pool, two mock sidecars and a manager over them, on a
 //!   clock the test moves.
 
@@ -191,6 +192,11 @@ pub struct SidecarState {
     pub export_cookies: Value,
     /// The answer of a self-test.
     pub selftest: Value,
+    /// Contexts the container holds at once.
+    pub capacity: usize,
+    /// The open contexts: by persona, the context and the request that
+    /// opened it.
+    pub contexts: BTreeMap<String, (String, Value)>,
     /// Requests, by operation, in order.
     pub generated: Vec<Value>,
     pub opened: Vec<Value>,
@@ -294,10 +300,33 @@ impl Respond for SidecarResponder {
         }
         let mut state = self.state.lock().unwrap();
         if method == "POST" && path == "/v1/contexts" {
+            let persona = body["persona_id"].as_str().unwrap_or_default().to_owned();
             let mut answer = example("OpenContextResponse");
-            answer["context_id"] = json!(uuid::Uuid::now_v7());
-            answer["persona_id"] = body["persona_id"].clone();
-            state.opened.push(body);
+            answer["persona_id"] = json!(persona);
+            state.opened.push(body.clone());
+            // Opening is idempotent: the open context is handed back as it
+            // is, unless it was opened with other parameters.
+            if let Some((context, opened_with)) = state.contexts.get(&persona) {
+                if *opened_with != body {
+                    return ResponseTemplate::new(409).set_body_json(json!({
+                        "code": "context_conflict",
+                        "message": "the persona's context is open with other parameters",
+                    }));
+                }
+                answer["context_id"] = json!(context);
+                answer["reused"] = json!(true);
+                return ResponseTemplate::new(200).set_body_json(answer);
+            }
+            if state.contexts.len() >= state.capacity {
+                return ResponseTemplate::new(429).set_body_json(json!({
+                    "code": "context_limit",
+                    "message": "this container is full",
+                }));
+            }
+            let context = uuid::Uuid::now_v7().to_string();
+            answer["context_id"] = json!(context);
+            answer["reused"] = json!(false);
+            state.contexts.insert(persona, (context, body));
             return ResponseTemplate::new(200).set_body_json(answer);
         }
         let Some(rest) = path.strip_prefix("/v1/contexts/") else {
@@ -306,6 +335,7 @@ impl Respond for SidecarResponder {
         let (context, operation) = rest.split_once('/').unwrap_or((rest, ""));
         match (method, operation) {
             ("DELETE", "") => {
+                state.contexts.retain(|_, (open, _)| open != context);
                 state.closed.push(context.to_owned());
                 ResponseTemplate::new(204)
             }
@@ -358,6 +388,8 @@ impl MockSidecar {
             page_status: 200,
             export_cookies: json!([]),
             selftest: selftest_answer(true),
+            capacity: 64,
+            contexts: BTreeMap::new(),
             generated: Vec::new(),
             opened: Vec::new(),
             closed: Vec::new(),
