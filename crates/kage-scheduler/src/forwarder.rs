@@ -626,7 +626,9 @@ impl Forwarder {
         *self.stop.lock().unwrap_or_else(PoisonError::into_inner) = stop;
     }
 
-    /// Connections relayed and connections refused since the start.
+    /// Connections relayed and connections refused since the start. A
+    /// connection counts as relayed from the moment its first request went
+    /// to the persona's proxy and, for a tunnel, the proxy opened it.
     pub fn counts(&self) -> (u64, u64) {
         (
             self.relayed.load(Ordering::Relaxed),
@@ -683,14 +685,9 @@ impl Forwarder {
         else {
             return;
         };
-        match self.relay(&mut client, head, buffer).await {
-            Ok(()) => {
-                self.relayed.fetch_add(1, Ordering::Relaxed);
-            }
-            Err(refused) => {
-                self.refused.fetch_add(1, Ordering::Relaxed);
-                tracing::debug!(reason = ?refused, "the forwarder refused a connection");
-            }
+        if let Err(refused) = self.relay(&mut client, head, buffer).await {
+            self.refused.fetch_add(1, Ordering::Relaxed);
+            tracing::debug!(reason = ?refused, "the forwarder refused a connection");
         }
         let _ = client.shutdown().await;
     }
@@ -808,6 +805,7 @@ impl Forwarder {
                 "the proxy answered the tunnel with {status}"
             )));
         }
+        self.relayed.fetch_add(1, Ordering::Relaxed);
         if !early.is_empty() {
             server.write_all(&early).await.map_err(failed)?;
             self.meter.add(persona, early.len() as u64, 0);
@@ -851,6 +849,7 @@ impl Forwarder {
         persona: PersonaId,
         upstream: &ProxyEndpoint,
     ) {
+        self.relayed.fetch_add(1, Ordering::Relaxed);
         let active = Activity::new();
         let idle = self.settings.idle_timeout;
         let (mut client_read, mut client_write) = client.split();
