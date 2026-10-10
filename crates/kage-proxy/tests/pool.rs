@@ -879,6 +879,100 @@ async fn the_budget_is_never_exceeded_and_the_longest_failing_proxy_goes_first()
     assert!(now > start());
 }
 
+/// Decision D5: the bandwidth budget is counted over the same window, and
+/// judged on what the provider itself counted as well as on Kage's own
+/// count.
+#[tokio::test]
+async fn the_bandwidth_term_and_the_providers_own_count_come_from_the_provider() {
+    let harness = harness_with(PoolRules::default(), 2).await;
+    harness.healthy_pool().await;
+    let now = start();
+
+    // Before the account is read: the calendar month, to its end.
+    let month_start = Utc.with_ymd_and_hms(2026, 10, 1, 0, 0, 0).unwrap();
+    assert_eq!(harness.pool.budget_window(now).0, month_start);
+    assert_eq!(
+        harness.pool.budget_window_end(now),
+        Utc.with_ymd_and_hms(2026, 11, 1, 0, 0, 0).unwrap()
+    );
+    let december = Utc.with_ymd_and_hms(2026, 12, 20, 8, 0, 0).unwrap();
+    assert_eq!(
+        harness.pool.budget_window_end(december),
+        Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap()
+    );
+
+    // The provider reports no traffic yet.
+    assert_eq!(
+        harness
+            .pool
+            .provider_traffic_since(month_start)
+            .await
+            .unwrap(),
+        None
+    );
+    // Then two hours of it; an hour that is only projected does not count.
+    harness.mock.with(|state| {
+        state.stats = vec![
+            json!({
+                "timestamp": "2026-10-07T10:00:00Z", "is_projected": false,
+                "bandwidth_total": 5000, "requests_total": 5, "requests_successful": 4,
+                "requests_failed": 1, "error_reasons": [], "number_of_proxies_used": 2
+            }),
+            json!({
+                "timestamp": "2026-10-07T11:00:00Z", "is_projected": false,
+                "bandwidth_total": 7000, "requests_total": 9, "requests_successful": 9,
+                "requests_failed": 0, "error_reasons": [], "number_of_proxies_used": 3
+            }),
+            json!({
+                "timestamp": "2026-10-07T12:00:00Z", "is_projected": true,
+                "bandwidth_total": 99_999, "requests_total": 9, "requests_successful": 9,
+                "requests_failed": 0, "error_reasons": [], "number_of_proxies_used": 20
+            }),
+        ];
+    });
+    assert_eq!(
+        harness
+            .pool
+            .provider_traffic_since(month_start)
+            .await
+            .unwrap(),
+        Some(12_000)
+    );
+
+    // Once the account is read the window is the provider's own term, to
+    // its end, and the term after it once it ran out.
+    let term_start = Utc.with_ymd_and_hms(2026, 10, 3, 12, 20, 31).unwrap();
+    let term_end = term_start + chrono::Duration::days(30);
+    harness.mock.with(|state| {
+        state.term = (term_start.to_rfc3339(), term_end.to_rfc3339());
+    });
+    harness.pool.sync_account().await.unwrap();
+    assert_eq!(harness.pool.budget_window(now).0, term_start);
+    assert_eq!(harness.pool.budget_window_end(now), term_end);
+    let renewed = term_end + chrono::Duration::hours(2);
+    assert_eq!(harness.pool.budget_window(renewed).0, term_end);
+    assert_eq!(
+        harness.pool.budget_window_end(renewed),
+        term_end + chrono::Duration::days(30)
+    );
+
+    // A provider that cannot be asked is an error, not a count of nothing.
+    harness.mock.inject(
+        Some("GET"),
+        "/api/v2/stats/",
+        400,
+        json!({ "detail": "boom" }),
+        5,
+    );
+    assert!(
+        harness
+            .pool
+            .provider_traffic_since(term_start)
+            .await
+            .is_err()
+    );
+}
+
 /// Follow-up F1: Webshare counts replacements per subscription term, so
 /// once the account is read Kage's budget is counted over that term and not
 /// over the calendar month.
