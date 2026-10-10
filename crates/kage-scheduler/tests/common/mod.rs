@@ -23,6 +23,7 @@
     clippy::too_many_lines
 )]
 
+pub mod lab;
 pub mod proxy;
 
 use std::collections::VecDeque;
