@@ -14,6 +14,8 @@ workspace = true
 
 [dependencies]
 chrono = { workspace = true }
+# A persona's local day and its waking hours (personas, pacing counters).
+chrono-tz = { workspace = true }
 # YAML for kage.yaml and the policy files, plus KAGE__SECTION__KEY layering.
 figment = { workspace = true, features = ["env", "yaml"] }
 ipnet = { workspace = true }

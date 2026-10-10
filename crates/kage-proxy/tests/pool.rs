@@ -1306,7 +1306,7 @@ async fn a_leak_makes_egress_unsafe_until_a_clean_probe_or_an_operator_clears_it
     assert!(
         alerts
             .iter()
-            .all(|alert| alert.severity == kage_core::alert::AlertSeverity::Critical)
+            .all(|alert| alert.severity == AlertSeverity::Critical)
     );
     assert_eq!(alerts[0].subject, Some(leaking.id.as_uuid()));
     assert_eq!(alerts[0].details["exit_ip"], "192.0.2.77");

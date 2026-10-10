@@ -11,6 +11,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::domain::SubjectKind;
+use crate::ids::PersonaId;
+
 /// How urgent an alert is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -91,6 +94,15 @@ pub enum AlertKind {
     /// The fingerprint self-test of the http path saw another JA4, HTTP/2
     /// fingerprint or header order than the one recorded for the profile.
     HttpSelftestFailed,
+    /// The self-test of the browser path found an automation flag or an
+    /// identity that contradicts the persona. The persona is cooling until
+    /// a self-test passes.
+    BrowserSelftestFailed,
+    /// A proxy is usable but no persona could be generated for it: the
+    /// engine's sidecar refused or could not be reached. Nothing can be
+    /// fetched through that proxy until one exists; the manager tries
+    /// again.
+    PersonaGenerationFailed,
 }
 
 impl AlertKind {
@@ -114,6 +126,8 @@ impl AlertKind {
         Self::HostIpUnknown,
         Self::HttpProfileMissing,
         Self::HttpSelftestFailed,
+        Self::BrowserSelftestFailed,
+        Self::PersonaGenerationFailed,
     ];
 
     /// The stable `snake_case` name used in logs and the store.
@@ -137,6 +151,8 @@ impl AlertKind {
             Self::HostIpUnknown => "host_ip_unknown",
             Self::HttpProfileMissing => "http_profile_missing",
             Self::HttpSelftestFailed => "http_selftest_failed",
+            Self::BrowserSelftestFailed => "browser_selftest_failed",
+            Self::PersonaGenerationFailed => "persona_generation_failed",
         }
     }
 }
@@ -156,6 +172,11 @@ pub struct Alert {
     /// when it concerns a whole subsystem.
     #[serde(default)]
     pub subject: Option<Uuid>,
+    /// What kind of thing [`Self::subject`] is, when the alert's kind does
+    /// not already say: a self-test fails for a persona, or for the proxy
+    /// a stand-in ran through.
+    #[serde(default)]
+    pub subject_kind: Option<SubjectKind>,
     /// When it was raised.
     pub at: DateTime<Utc>,
 }
@@ -174,6 +195,7 @@ impl Alert {
             message: message.into(),
             details,
             subject: None,
+            subject_kind: None,
             at: Utc::now(),
         }
     }
@@ -182,6 +204,14 @@ impl Alert {
     #[must_use]
     pub fn about(mut self, subject: impl Into<Uuid>) -> Self {
         self.subject = Some(subject.into());
+        self
+    }
+
+    /// Names the persona the alert is about.
+    #[must_use]
+    pub fn about_persona(mut self, persona: PersonaId) -> Self {
+        self.subject = Some(persona.as_uuid());
+        self.subject_kind = Some(SubjectKind::Persona);
         self
     }
 
@@ -276,7 +306,8 @@ mod tests {
     use serde_json::json;
 
     use super::{Alert, AlertKind, AlertSeverity, AlertSink, MemoryAlertSink, TracingAlertSink};
-    use crate::ids::ProxyId;
+    use crate::domain::SubjectKind;
+    use crate::ids::{PersonaId, ProxyId};
 
     fn sample(severity: AlertSeverity) -> Alert {
         Alert::new(
@@ -311,6 +342,8 @@ mod tests {
                 "host_ip_unknown",
                 "http_profile_missing",
                 "http_selftest_failed",
+                "browser_selftest_failed",
+                "persona_generation_failed",
             ]
         );
         // The serialized name is the stable name.
@@ -340,7 +373,15 @@ mod tests {
         let alert = sample(AlertSeverity::Warning).about(proxy).at(at);
 
         assert_eq!(alert.subject, Some(proxy.as_uuid()));
+        assert_eq!(alert.subject_kind, None);
         assert_eq!(alert.at, at);
+
+        let persona = PersonaId::new();
+        let alert = sample(AlertSeverity::Warning).about_persona(persona);
+        assert_eq!(alert.subject, Some(persona.as_uuid()));
+        assert_eq!(alert.subject_kind, Some(SubjectKind::Persona));
+        let json = serde_json::to_value(&alert).unwrap();
+        assert_eq!(json["subject_kind"], "persona");
     }
 
     #[test]

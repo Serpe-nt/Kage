@@ -40,7 +40,9 @@ pub mod subresources;
 pub mod timing;
 
 pub use client::{ClientFactory, ClientSpec, HopResolver, HttpClient, HttpSettings};
-pub use cookies::{CookieBackend, CookieBackendError, CookieJar, MemoryCookies, StoreCookies};
+pub use cookies::{
+    CookieBackend, CookieBackendError, CookieJar, JarOwner, MemoryCookies, StoreCookies,
+};
 pub use error::{HttpError, Stage};
 pub use fetch::{FetchSpec, Fetched, Guard, Hop};
 pub use headers::{CallerHeaders, HeaderError, IdentityOverride, RequestKind};

@@ -1,0 +1,352 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, proxy_id, engine, claimed_os, browser_major, seed, fingerprint,\n                    user_agent, hardware_concurrency, wreq_profile, country, locale, languages,\n                    timezone, geolocation, screen, tables_version, profile_dir, state,\n                    cooling_reason, warmup_visits, warmed_at, created_at, retired_at,\n                    retire_reason, profile_archived_at, profile_archive, profile_deleted_at\n             FROM personas\n             WHERE $1::text IS NULL OR state = $1\n             ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "personas",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "proxy_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "personas",
+            "name": "proxy_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "engine",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "personas",
+            "name": "engine"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "claimed_os",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "personas",
+            "name": "claimed_os"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "browser_major",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "personas",
+            "name": "browser_major"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "seed",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "personas",
+            "name": "seed"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "fingerprint",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "personas",
+            "name": "fingerprint"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "user_agent",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "personas",
+            "name": "user_agent"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "hardware_concurrency",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "personas",
+            "name": "hardware_concurrency"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "wreq_profile",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "personas",
+            "name": "wreq_profile"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "country",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "personas",
+            "name": "country"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "locale",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "personas",
+            "name": "locale"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "languages",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "personas",
+            "name": "languages"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "timezone",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "personas",
+            "name": "timezone"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "geolocation",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "personas",
+            "name": "geolocation"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "screen",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "personas",
+            "name": "screen"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "tables_version",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "personas",
+            "name": "tables_version"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "profile_dir",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "personas",
+            "name": "profile_dir"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "state",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "personas",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "cooling_reason",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "personas",
+            "name": "cooling_reason"
+          }
+        }
+      },
+      {
+        "ordinal": 20,
+        "name": "warmup_visits",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "personas",
+            "name": "warmup_visits"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
+        "name": "warmed_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "personas",
+            "name": "warmed_at"
+          }
+        }
+      },
+      {
+        "ordinal": 22,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "personas",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 23,
+        "name": "retired_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "personas",
+            "name": "retired_at"
+          }
+        }
+      },
+      {
+        "ordinal": 24,
+        "name": "retire_reason",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "personas",
+            "name": "retire_reason"
+          }
+        }
+      },
+      {
+        "ordinal": 25,
+        "name": "profile_archived_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "personas",
+            "name": "profile_archived_at"
+          }
+        }
+      },
+      {
+        "ordinal": 26,
+        "name": "profile_archive",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "personas",
+            "name": "profile_archive"
+          }
+        }
+      },
+      {
+        "ordinal": 27,
+        "name": "profile_deleted_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "personas",
+            "name": "profile_deleted_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "5196de21609cdb3c6eeb9f1b79a7659173ff32873e8d100454304f9d3aea6cfc"
+}

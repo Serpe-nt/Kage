@@ -83,6 +83,36 @@ pub struct Lognormal {
 }
 
 impl Lognormal {
+    /// The same distribution at a persona's own pace: the median and the
+    /// 95th percentile are multiplied by `factor`. The floor and the
+    /// ceiling are limits of the profile, not of the persona, and stay:
+    /// when the scaled median would fall to the floor, only the part above
+    /// the floor is scaled, and a p95 that would rise above the ceiling
+    /// stops there. A factor that is not a positive number changes nothing.
+    #[must_use]
+    pub fn scaled(&self, factor: f64) -> Self {
+        if !(factor.is_finite() && factor > 0.0) {
+            return *self;
+        }
+        let floor = self.min.unwrap_or(0.0);
+        let (mut median, mut p95) = (self.median * factor, self.p95 * factor);
+        if median <= floor {
+            median = floor + (self.median - floor) * factor;
+            p95 = floor + (self.p95 - floor) * factor;
+        }
+        p95 = p95.max(median);
+        if let Some(max) = self.max {
+            p95 = p95.min(max);
+            median = median.min(p95);
+        }
+        Self {
+            median,
+            p95,
+            min: self.min,
+            max: self.max,
+        }
+    }
+
     /// Checks that the parameters describe a distribution.
     ///
     /// # Errors
@@ -251,6 +281,25 @@ pub struct PacingProfile {
 }
 
 impl PacingProfile {
+    /// The profile as one persona paces it (spec §11): the log-normal gap
+    /// and break are stretched by the persona's factor, which is drawn once
+    /// from its seed ([`crate::persona::pacing_factor`], roughly 0.8 to
+    /// 1.25), so that twenty personas never share one identical gap
+    /// distribution. Uniform distributions, the burst length, the daily cap
+    /// and the per-domain limits are the profile's and do not move.
+    #[must_use]
+    pub fn for_persona(&self, factor: f64) -> Self {
+        let stretch = |distribution: &Distribution| match distribution {
+            Distribution::Lognormal(lognormal) => Distribution::Lognormal(lognormal.scaled(factor)),
+            Distribution::Uniform(uniform) => Distribution::Uniform(*uniform),
+        };
+        Self {
+            gap_ms: stretch(&self.gap_ms),
+            burst_break_ms: stretch(&self.burst_break_ms),
+            ..*self
+        }
+    }
+
     /// Checks every field.
     ///
     /// # Errors
@@ -888,7 +937,70 @@ fast:
             );
             // The floor is the profile's, whatever the persona's factor.
             assert!(samples[0] > 1500.0);
+            // It is what `scaled` gives.
+            assert_eq!(base.scaled(factor), scaled);
         }
+    }
+
+    #[test]
+    fn a_scaled_distribution_stays_inside_the_profiles_limits() {
+        // A floor close to the median: only the part above it is scaled,
+        // so the result is still a distribution.
+        let tight = Lognormal {
+            median: 1800.0,
+            p95: 4000.0,
+            min: Some(1500.0),
+            max: Some(4500.0),
+        };
+        let slower = tight.scaled(0.8);
+        slower.validate().unwrap();
+        assert!((slower.median - 1740.0).abs() < 1e-9);
+        assert!((slower.p95 - 3500.0).abs() < 1e-9);
+        // A ceiling stops the p95.
+        let faster = tight.scaled(1.25);
+        faster.validate().unwrap();
+        assert!((faster.median - 2250.0).abs() < 1e-9);
+        assert!((faster.p95 - 4500.0).abs() < 1e-9);
+        assert_eq!((faster.min, faster.max), (tight.min, tight.max));
+        // Not a factor: nothing changes.
+        for factor in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(tight.scaled(factor), tight);
+        }
+    }
+
+    /// Spec §11: twenty personas never share one identical gap
+    /// distribution, and each keeps the profile's limits.
+    #[test]
+    fn a_profile_is_paced_differently_by_every_persona() {
+        let profile = human();
+        let mut medians = std::collections::BTreeSet::new();
+        for index in 0..20 {
+            let factor = crate::persona::pacing_factor(&Seed::from_u64(index));
+            let own = profile.for_persona(factor);
+            own.validate("human").unwrap();
+            let (Distribution::Lognormal(gap), Distribution::Lognormal(base)) =
+                (own.gap_ms, profile.gap_ms)
+            else {
+                panic!("the human profile uses a log-normal gap");
+            };
+            assert!((gap.median / base.median - factor).abs() < 1e-9);
+            assert!((gap.p95 / base.p95 - factor).abs() < 1e-9);
+            assert_eq!(gap.min, base.min);
+            medians.insert(gap.median.to_bits());
+            // What belongs to the profile and to the domain does not move.
+            assert_eq!(own.burst_pages, profile.burst_pages);
+            assert_eq!(
+                own.daily_cap_per_persona_per_domain,
+                profile.daily_cap_per_persona_per_domain
+            );
+            assert_eq!(own.domain_rpm, profile.domain_rpm);
+            assert_eq!(own.domain_concurrency, profile.domain_concurrency);
+        }
+        assert_eq!(medians.len(), 20);
+
+        // A uniform gap has no median to scale.
+        let fast = fast();
+        assert_eq!(fast.for_persona(1.2), fast);
     }
 
     #[test]

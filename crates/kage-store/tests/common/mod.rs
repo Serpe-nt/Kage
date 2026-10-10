@@ -99,16 +99,28 @@ pub fn proxy(provider_ref: &str) -> Proxy {
 }
 
 pub fn persona(proxy_id: ProxyId) -> Persona {
+    let id = PersonaId::new();
     Persona {
-        id: PersonaId::new(),
+        id,
         proxy_id,
         engine: Engine::Chromium,
-        claimed_os: ClaimedOs::Windows,
-        browser_major: 141,
-        fingerprint: serde_json::json!({ "navigator": { "hardwareConcurrency": 8 } }),
-        wreq_profile: Some("chrome_141".to_owned()),
+        claimed_os: ClaimedOs::Linux,
+        browser_major: 149,
+        seed: kage_core::persona::seed_for(id),
+        fingerprint: serde_json::json!({ "schema": 1, "native": { "hardware_concurrency": 8 } }),
+        user_agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) \
+                     Chrome/149.0.0.0 Safari/537.36"
+            .to_owned(),
+        hardware_concurrency: 8,
+        wreq_profile: Some("chrome_149".to_owned()),
+        country: Some("DE".parse().unwrap()),
         locale: "de-DE".to_owned(),
-        languages: vec!["de-DE".to_owned(), "de".to_owned(), "en".to_owned()],
+        languages: vec![
+            "de-DE".to_owned(),
+            "de".to_owned(),
+            "en-US".to_owned(),
+            "en".to_owned(),
+        ],
         timezone: "Europe/Berlin".to_owned(),
         geolocation: Some(Geolocation {
             latitude: 52.52,
@@ -121,10 +133,18 @@ pub fn persona(proxy_id: ProxyId) -> Persona {
             dpr: 1.0,
             color_depth: 24,
         },
-        profile_dir: "personas/p1".to_owned(),
+        tables_version: kage_core::persona::TABLES_VERSION.to_owned(),
+        profile_dir: kage_core::persona::profile_dir(Engine::Chromium, id),
         state: PersonaState::Active,
+        cooling_reason: None,
+        warmup_visits: 0,
+        warmed_at: None,
         created_at: now(),
         retired_at: None,
+        retire_reason: None,
+        profile_archived_at: None,
+        profile_archive: None,
+        profile_deleted_at: None,
     }
 }
 

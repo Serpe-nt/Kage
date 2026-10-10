@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT persona_id, domain, cooldown_until, requests_today, counter_day,\n                    last_request_at, last_outcome, block_count_24h\n             FROM persona_domain_state WHERE domain = $1 ORDER BY persona_id",
+  "query": "SELECT persona_id, domain, cooldown_until, requests_today, counter_day,\n                    last_request_at, last_outcome, block_count_24h, block_window_started_at\n             FROM persona_domain_state WHERE persona_id = $1 ORDER BY domain",
   "describe": {
     "columns": [
       {
@@ -90,11 +90,22 @@
             "name": "block_count_24h"
           }
         }
+      },
+      {
+        "ordinal": 8,
+        "name": "block_window_started_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "persona_domain_state",
+            "name": "block_window_started_at"
+          }
+        }
       }
     ],
     "parameters": {
       "Left": [
-        "Text"
+        "Uuid"
       ]
     },
     "nullable": [
@@ -105,8 +116,9 @@
       true,
       true,
       true,
-      false
+      false,
+      true
     ]
   },
-  "hash": "9fd30469461b603d75397fc3e3f9aa6a48f005b00b36de2d90a1ed2fd62a1fcf"
+  "hash": "775879238138ac259a257ff88008c3db6c0d2331635d840d14c3de0a81bcb23e"
 }

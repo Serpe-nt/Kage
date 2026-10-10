@@ -9,7 +9,7 @@ use common::TestDb;
 use kage_core::config::Config;
 use kage_store::{Store, StoreError};
 
-/// Every table spec §18 names, and `http_cookies` (milestone M3).
+/// Every table spec §18 names. Milestone M6 added columns, no table.
 const SPEC_TABLES: [&str; 19] = [
     "api_keys",
     "artifacts",

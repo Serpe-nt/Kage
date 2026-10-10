@@ -1,0 +1,125 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, persona_id, engine, render, started_at, finished_at, passed, score, findings\n             FROM selftest_runs\n             WHERE persona_id = $1\n             ORDER BY started_at DESC, id DESC\n             LIMIT $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "selftest_runs",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "persona_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "selftest_runs",
+            "name": "persona_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "engine",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "selftest_runs",
+            "name": "engine"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "render",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "selftest_runs",
+            "name": "render"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "started_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "selftest_runs",
+            "name": "started_at"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "finished_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "selftest_runs",
+            "name": "finished_at"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "passed",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "selftest_runs",
+            "name": "passed"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "score",
+        "type_info": "Float4",
+        "origin": {
+          "Table": {
+            "table": "selftest_runs",
+            "name": "score"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "findings",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "selftest_runs",
+            "name": "findings"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "311f1a91a4ef4fa2fbe9e2b02abc0a61b3fb5f343351908d2efecf7619d7f923"
+}

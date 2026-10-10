@@ -203,6 +203,10 @@ selftest:
     min_score: 90
     # Budget of one page.
     page_timeout: 45s
+    # Time between two scheduled self-tests of one persona, before its own
+    # jitter. A scheduled run loads `pages` only, never a third party, so
+    # nothing is scheduled while `pages` is empty.
+    interval: 1d
 
 # The browser engines (spec §6.1).
 engines:
@@ -224,6 +228,105 @@ engines:
     # deployment. Firefox 152 is browser-only like Chrome 155: its personas
     # never use the http path.
     browser_major: null
+
+# Personas (spec §6): one synthetic household per proxy, generated when the
+# proxy first passes its health check.
+personas:
+  # The personas volume as kage sees it: the directory the sidecars keep
+  # browser profiles in (SIDECAR_PERSONAS_DIR). kage only moves and deletes
+  # the profile of a retired persona there; it never reads one.
+  dir: personas
+  # Shares of engines and claimed systems. A new persona gets what the pool,
+  # and first of all its own country, is shortest of. chromium claims the
+  # system its Chrome runs on, linux, unless
+  # engines.chromium.allow_cross_os_claims is true.
+  mix:
+    - engine: chromium
+      os: linux
+      weight: 40
+    - engine: firefox
+      os: windows
+      weight: 45
+    - engine: firefox
+      os: macos
+      weight: 15
+  # Days the archived profile of a retired persona is kept before it is
+  # deleted. Nothing of a retired persona is ever given to another.
+  retention_days: 7
+  # How long after retirement the profile is archived: longer than the
+  # sidecar's idle close, so that no browser still has it open.
+  archive_after: 10m
+  # How often the manager looks for what no event announces: proxies
+  # without a persona, visits and self-tests that are due, profiles to
+  # archive or delete.
+  sweep_interval: 1m
+  # A new persona reads a few popular neutral pages in its first hours,
+  # through its own browser and with human behavior, so that its profile
+  # is not empty when it first meets a target.
+  warmup:
+    enabled: true
+    # Finished visits after which the persona is ready for real work, and
+    # the longest it waits for them.
+    min_visits: 3
+    max_wait: 12h
+    # How many visits one persona makes, drawn from its seed.
+    visits:
+      min: 6
+      max: 10
+    # The first visit comes this long after generation.
+    first_visit_after:
+      min: 3m
+      max: 20m
+    # Time between two visits: a log-normal with this median and this
+    # 95th percentile.
+    gap:
+      median: 25m
+      p95: 90m
+    # Nothing happens at night: a visit that would fall outside these
+    # hours of the persona's own time zone waits for the next morning.
+    active_hours:
+      from: "07:00"
+      until: "23:30"
+    # Each persona takes its own selection in its own order. {language}
+    # is the language of the persona's locale. A site with countries is
+    # for personas of those countries only, and likelier for them than a
+    # site for everyone.
+    sites:
+      - url: https://{language}.wikipedia.org/
+        countries: []
+      - url: https://{language}.wikipedia.org/wiki/Special:Random
+        countries: []
+      - url: https://www.openstreetmap.org/
+        countries: []
+      - url: https://orf.at/
+        countries: [AT]
+      - url: https://www.geosphere.at/
+        countries: [AT]
+      - url: https://www.tagesschau.de/
+        countries: [DE]
+      - url: https://www.dwd.de/
+        countries: [DE]
+      - url: https://www.franceinfo.fr/
+        countries: [FR]
+      - url: https://meteofrance.com/
+        countries: [FR]
+      - url: https://www.bbc.co.uk/news
+        countries: [GB]
+      - url: https://www.metoffice.gov.uk/
+        countries: [GB]
+      - url: https://www.rainews.it/
+        countries: [IT]
+      - url: https://www.meteoam.it/
+        countries: [IT]
+
+# Sessions (spec §5): handles that pin a caller's requests to one persona.
+sessions:
+  # A session ends after this long without use, and this long after it was
+  # opened however busy it is.
+  idle_ttl: 10m
+  max_lifetime: 6h
+  # How often ended sessions are removed.
+  sweep_interval: 1m
 
 policies:
   # Directory with domains.yaml, block-signatures.yaml, pacing-profiles.yaml.

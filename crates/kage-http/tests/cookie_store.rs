@@ -1,6 +1,7 @@
 //! The cookie jar on its real store (spec §6.4, §9): Postgres through
-//! `kage-store`. Cookies survive a restart, belong to exactly one proxy, are
-//! refused for a retired proxy, and the session ends after long idleness.
+//! `kage-store`. Cookies survive a restart, belong to exactly one proxy and
+//! to the persona behind it, are refused for a retired proxy or persona,
+//! and the session ends after long idleness.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -13,13 +14,14 @@ use chrono::{SubsecRound, Utc};
 use common::{TestProxy, spec};
 use kage_core::config::DatabaseConfig;
 use kage_core::domain::{
-    ClaimedOs, CookieSameSite, HttpCookie, Proxy, ProxyProviderKind, ProxyScheme, ProxyState,
+    ClaimedOs, CookieSameSite, Engine, HttpCookie, Persona, PersonaState, Proxy, ProxyProviderKind,
+    ProxyScheme, ProxyState, Screen,
 };
 use kage_core::duration::HumanDuration;
-use kage_core::ids::ProxyId;
+use kage_core::ids::{PersonaId, ProxyId};
 use kage_core::secret::{SealedSecret, Secret};
 use kage_core::ssrf::SsrfPolicy;
-use kage_http::cookies::{CookieBackend, CookieBackendError};
+use kage_http::cookies::{CookieBackend, CookieBackendError, JarOwner};
 use kage_http::{ClientFactory, FetchSpec, HttpError, HttpSettings, StoreCookies};
 use kage_store::Store;
 use testcontainers::runners::AsyncRunner;
@@ -88,6 +90,61 @@ impl TestDb {
         };
         self.store.proxies().insert(&proxy).await.unwrap();
     }
+
+    /// Stores a persona behind a proxy and returns its id.
+    async fn persona(&self, proxy: ProxyId) -> PersonaId {
+        let id = PersonaId::new();
+        let persona = Persona {
+            id,
+            proxy_id: proxy,
+            engine: Engine::Chromium,
+            claimed_os: ClaimedOs::Linux,
+            browser_major: 149,
+            seed: kage_core::persona::seed_for(id),
+            fingerprint: serde_json::json!({ "schema": 1 }),
+            user_agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like \
+                         Gecko) Chrome/149.0.0.0 Safari/537.36"
+                .to_owned(),
+            hardware_concurrency: 8,
+            wreq_profile: Some("chrome_149".to_owned()),
+            country: Some("DE".parse().unwrap()),
+            locale: "de-DE".to_owned(),
+            languages: vec!["de-DE".to_owned(), "de".to_owned()],
+            timezone: "Europe/Berlin".to_owned(),
+            geolocation: None,
+            screen: Screen {
+                width: 1920,
+                height: 1080,
+                dpr: 1.0,
+                color_depth: 24,
+            },
+            tables_version: kage_core::persona::TABLES_VERSION.to_owned(),
+            profile_dir: kage_core::persona::profile_dir(Engine::Chromium, id),
+            state: PersonaState::Active,
+            cooling_reason: None,
+            warmup_visits: 0,
+            warmed_at: None,
+            created_at: Utc::now().trunc_subsecs(6),
+            retired_at: None,
+            retire_reason: None,
+            profile_archived_at: None,
+            profile_archive: None,
+            profile_deleted_at: None,
+        };
+        self.store.personas().insert(&persona).await.unwrap();
+        id
+    }
+
+    async fn retire(&self, persona: PersonaId) {
+        self.store
+            .personas()
+            .modify(persona, |persona| {
+                persona.state = PersonaState::Retired;
+                persona.retired_at = Some(Utc::now().trunc_subsecs(6));
+            })
+            .await
+            .unwrap();
+    }
 }
 
 fn get(text: &str) -> FetchSpec {
@@ -141,7 +198,7 @@ async fn cookies_are_stored_in_postgres_and_found_again_after_a_restart() {
         .unwrap();
 
     // One row per cookie, with every attribute.
-    let stored = db.store.http_cookies().list(proxy.id).await.unwrap();
+    let stored = db.store.http_cookies().list(proxy.id, None).await.unwrap();
     assert_eq!(stored.len(), 2);
     let sid = &stored[0];
     assert_eq!((sid.name.as_str(), sid.value.as_str()), ("sid", "abc"));
@@ -226,13 +283,112 @@ async fn a_jar_that_sat_idle_for_long_has_lost_its_session_cookies() {
     let stored: Vec<String> = db
         .store
         .http_cookies()
-        .list(proxy.id)
+        .list(proxy.id, None)
         .await
         .unwrap()
         .into_iter()
         .map(|cookie| cookie.name)
         .collect();
     assert_eq!(stored, ["theme"]);
+}
+
+/// Spec §6.4: the jar is the persona's. A persona generated behind the same
+/// address never sends what its predecessor earned there, and a retired
+/// persona's jar is neither loaded nor written.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_personas_jar_is_its_own_and_is_never_inherited() {
+    let db = TestDb::migrated().await;
+    let proxy = TestProxy::start().await;
+    let server = site(&proxy).await;
+    db.adopt(proxy.id, ProxyState::Healthy).await;
+    let first = db.persona(proxy.id).await;
+    let backend = StoreCookies::new(db.store.clone());
+    let factory = ClientFactory::new(HttpSettings::default(), Arc::new(backend.clone()));
+    let chrome = |persona| spec("chrome_149", ClaimedOs::Linux).for_persona(persona);
+
+    let client = factory
+        .client(&chrome(first), &proxy.endpoint())
+        .await
+        .unwrap();
+    assert_eq!(client.persona(), Some(first));
+    client
+        .fetch(&get("http://site.kage.test/login"))
+        .await
+        .unwrap();
+    // The rows are the persona's.
+    let cookies = db.store.http_cookies();
+    assert_eq!(cookies.list(proxy.id, Some(first)).await.unwrap().len(), 2);
+    assert_eq!(cookies.list(proxy.id, None).await.unwrap(), []);
+    // A client of the same proxy that is no persona has a jar of its own.
+    let nobody = factory
+        .client(&spec("chrome_149", ClaimedOs::Linux), &proxy.endpoint())
+        .await
+        .unwrap();
+    assert!(nobody.jar().is_empty());
+
+    // The persona is retired, and another one is generated behind the
+    // same address. Even with the old rows still in the table, the new
+    // persona starts with nothing and sends nothing.
+    db.retire(first).await;
+    let second = db.persona(proxy.id).await;
+    assert_eq!(cookies.count(proxy.id).await.unwrap(), 2);
+    let successor = factory
+        .client(&chrome(second), &proxy.endpoint())
+        .await
+        .unwrap();
+    assert!(successor.jar().is_empty());
+    successor
+        .fetch(&get("http://site.kage.test/account"))
+        .await
+        .unwrap();
+    assert_eq!(last_cookie_header(&server).await, None);
+
+    // The retired persona's jar is refused both ways.
+    let owner = JarOwner::persona(proxy.id, first);
+    assert!(matches!(
+        backend.load(owner).await,
+        Err(CookieBackendError::PersonaGone(id)) if id == first
+    ));
+    assert!(matches!(
+        backend.save(owner, &[]).await,
+        Err(CookieBackendError::PersonaGone(_))
+    ));
+    factory.forget_persona(first).await;
+    let error = factory
+        .client(&chrome(first), &proxy.endpoint())
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            HttpError::Cookies(CookieBackendError::PersonaGone(_))
+        ),
+        "{error:?}"
+    );
+    // So is a persona nobody knows, and one that lives behind another
+    // proxy.
+    let stranger = PersonaId::new();
+    assert!(matches!(
+        backend.load(JarOwner::persona(proxy.id, stranger)).await,
+        Err(CookieBackendError::UnknownPersona(id)) if id == stranger
+    ));
+    let elsewhere = TestProxy::start().await;
+    db.adopt(elsewhere.id, ProxyState::Healthy).await;
+    assert!(matches!(
+        backend.load(JarOwner::persona(elsewhere.id, second)).await,
+        Err(CookieBackendError::PersonaGone(id)) if id == second
+    ));
+
+    // What the successor earns replaces what was left behind the proxy;
+    // retiring it deletes its rows outright.
+    successor
+        .fetch(&get("http://site.kage.test/login"))
+        .await
+        .unwrap();
+    assert_eq!(cookies.list(proxy.id, Some(second)).await.unwrap().len(), 2);
+    assert_eq!(cookies.list(proxy.id, Some(first)).await.unwrap(), []);
+    assert_eq!(cookies.delete_for_persona(second).await.unwrap(), 2);
+    assert_eq!(cookies.count(proxy.id).await.unwrap(), 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -247,6 +403,7 @@ async fn the_jar_of_a_retired_or_unknown_proxy_is_never_loaded_or_saved() {
         .http_cookies()
         .replace(
             retired.id,
+            None,
             &[HttpCookie {
                 domain: "site.kage.test".to_owned(),
                 host_only: true,
@@ -278,7 +435,7 @@ async fn the_jar_of_a_retired_or_unknown_proxy_is_never_loaded_or_saved() {
     );
     assert!(error.to_string().contains("retired"));
     assert!(matches!(
-        backend.save(retired.id, &[]).await,
+        backend.save(JarOwner::proxy(retired.id), &[]).await,
         Err(CookieBackendError::ProxyRetired(_))
     ));
     assert_eq!(db.store.http_cookies().count(retired.id).await.unwrap(), 1);

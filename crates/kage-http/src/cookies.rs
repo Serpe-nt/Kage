@@ -22,10 +22,12 @@
 //!
 //! # Persistence
 //!
-//! A jar is loaded from and saved to a [`CookieBackend`], keyed by the proxy
-//! the client leaves through (one persona per proxy; milestone M6 adds the
-//! persona). [`StoreCookies`] keeps jars in Postgres and refuses the jar of
-//! a retired proxy: cookies must never follow a persona to a new address.
+//! A jar is loaded from and saved to a [`CookieBackend`], keyed by its
+//! [`JarOwner`]: the proxy the client leaves through and the persona the
+//! client is. [`StoreCookies`] keeps jars in Postgres and refuses the jar
+//! of a retired proxy or persona: cookies must never follow a persona to a
+//! new address, and a new persona behind an old address never inherits
+//! any.
 //!
 //! Session cookies are persisted too, because a restart of Kage is not the
 //! user closing the browser. They are dropped when the jar is loaded after
@@ -40,7 +42,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use http::{HeaderValue, Uri, Version};
 use kage_core::domain::{CookieSameSite, HttpCookie};
-use kage_core::ids::ProxyId;
+use kage_core::ids::{PersonaId, ProxyId};
 use kage_store::{Store, StoreError};
 use url::Url;
 use wreq::cookie::{CookieStore, Cookies};
@@ -729,34 +731,75 @@ pub enum CookieBackendError {
     /// The proxy is not in the store.
     #[error("proxy {0} is not known")]
     UnknownProxy(ProxyId),
+    /// The persona is retired, or lives behind another proxy: its cookies
+    /// must not be used here.
+    #[error(
+        "persona {0} is retired or does not live behind this proxy; its cookies are not loaded"
+    )]
+    PersonaGone(PersonaId),
+    /// The persona is not in the store.
+    #[error("persona {0} is not known")]
+    UnknownPersona(PersonaId),
     /// The store failed.
     #[error("cookie store: {0}")]
     Store(#[from] StoreError),
 }
 
+/// Whose jar it is: the proxy the cookies were earned behind, and the
+/// persona that earned them (spec §6.4). Until a persona is named the
+/// proxy stands for it; with one, a jar is only ever that persona's, so a
+/// persona generated behind the same address never sends its predecessor's
+/// cookies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct JarOwner {
+    /// The proxy the client leaves through.
+    pub proxy: ProxyId,
+    /// The persona the client is.
+    pub persona: Option<PersonaId>,
+}
+
+impl JarOwner {
+    /// The jar behind a proxy that no persona owns.
+    pub const fn proxy(proxy: ProxyId) -> Self {
+        Self {
+            proxy,
+            persona: None,
+        }
+    }
+
+    /// The jar of a persona behind its proxy.
+    pub const fn persona(proxy: ProxyId, persona: PersonaId) -> Self {
+        Self {
+            proxy,
+            persona: Some(persona),
+        }
+    }
+}
+
 /// Where jars are kept between clients and across restarts.
 #[async_trait]
 pub trait CookieBackend: Send + Sync + fmt::Debug {
-    /// The stored cookies of the client that leaves through `proxy`.
+    /// The stored cookies of `owner`.
     ///
     /// # Errors
     ///
     /// Fails when the jar must not or cannot be loaded.
-    async fn load(&self, proxy: ProxyId) -> Result<Vec<HttpCookie>, CookieBackendError>;
+    async fn load(&self, owner: JarOwner) -> Result<Vec<HttpCookie>, CookieBackendError>;
 
-    /// Replaces the stored cookies of that client.
+    /// Replaces the stored cookies of `owner`.
     ///
     /// # Errors
     ///
     /// Fails when the jar cannot be saved.
-    async fn save(&self, proxy: ProxyId, cookies: &[HttpCookie]) -> Result<(), CookieBackendError>;
+    async fn save(&self, owner: JarOwner, cookies: &[HttpCookie])
+    -> Result<(), CookieBackendError>;
 }
 
 /// Jars kept in memory: for probes, tests and tools that must leave no
 /// trace.
 #[derive(Debug, Default)]
 pub struct MemoryCookies {
-    jars: Mutex<HashMap<ProxyId, Vec<HttpCookie>>>,
+    jars: Mutex<HashMap<JarOwner, Vec<HttpCookie>>>,
 }
 
 impl MemoryCookies {
@@ -768,21 +811,25 @@ impl MemoryCookies {
 
 #[async_trait]
 impl CookieBackend for MemoryCookies {
-    async fn load(&self, proxy: ProxyId) -> Result<Vec<HttpCookie>, CookieBackendError> {
+    async fn load(&self, owner: JarOwner) -> Result<Vec<HttpCookie>, CookieBackendError> {
         Ok(self
             .jars
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .get(&proxy)
+            .get(&owner)
             .cloned()
             .unwrap_or_default())
     }
 
-    async fn save(&self, proxy: ProxyId, cookies: &[HttpCookie]) -> Result<(), CookieBackendError> {
+    async fn save(
+        &self,
+        owner: JarOwner,
+        cookies: &[HttpCookie],
+    ) -> Result<(), CookieBackendError> {
         self.jars
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(proxy, cookies.to_vec());
+            .insert(owner, cookies.to_vec());
         Ok(())
     }
 }
@@ -799,10 +846,24 @@ impl StoreCookies {
         Self { store }
     }
 
-    async fn live(&self, proxy: ProxyId) -> Result<(), CookieBackendError> {
-        match self.store.proxies().get(proxy).await? {
-            None => Err(CookieBackendError::UnknownProxy(proxy)),
-            Some(found) if !found.state.is_live() => Err(CookieBackendError::ProxyRetired(proxy)),
+    /// A jar is used only while its proxy belongs to the pool and its
+    /// persona, when it has one, lives behind that proxy.
+    async fn live(&self, owner: JarOwner) -> Result<(), CookieBackendError> {
+        match self.store.proxies().get(owner.proxy).await? {
+            None => return Err(CookieBackendError::UnknownProxy(owner.proxy)),
+            Some(found) if !found.state.is_live() => {
+                return Err(CookieBackendError::ProxyRetired(owner.proxy));
+            }
+            Some(_) => {}
+        }
+        let Some(persona) = owner.persona else {
+            return Ok(());
+        };
+        match self.store.personas().get(persona).await? {
+            None => Err(CookieBackendError::UnknownPersona(persona)),
+            Some(found) if !found.is_live() || found.proxy_id != owner.proxy => {
+                Err(CookieBackendError::PersonaGone(persona))
+            }
             Some(_) => Ok(()),
         }
     }
@@ -810,15 +871,28 @@ impl StoreCookies {
 
 #[async_trait]
 impl CookieBackend for StoreCookies {
-    async fn load(&self, proxy: ProxyId) -> Result<Vec<HttpCookie>, CookieBackendError> {
-        self.live(proxy).await?;
-        Ok(self.store.http_cookies().list(proxy).await?)
+    async fn load(&self, owner: JarOwner) -> Result<Vec<HttpCookie>, CookieBackendError> {
+        self.live(owner).await?;
+        Ok(self
+            .store
+            .http_cookies()
+            .list(owner.proxy, owner.persona)
+            .await?)
     }
 
-    async fn save(&self, proxy: ProxyId, cookies: &[HttpCookie]) -> Result<(), CookieBackendError> {
-        // A proxy retired while a request was in flight keeps nothing.
-        self.live(proxy).await?;
-        Ok(self.store.http_cookies().replace(proxy, cookies).await?)
+    async fn save(
+        &self,
+        owner: JarOwner,
+        cookies: &[HttpCookie],
+    ) -> Result<(), CookieBackendError> {
+        // A proxy or a persona retired while a request was in flight keeps
+        // nothing.
+        self.live(owner).await?;
+        Ok(self
+            .store
+            .http_cookies()
+            .replace(owner.proxy, owner.persona, cookies)
+            .await?)
     }
 }
 
@@ -830,14 +904,14 @@ mod tests {
     use chrono::{DateTime, Duration, TimeZone, Utc};
     use http::{HeaderValue, Uri, Version};
     use kage_core::domain::{CookieSameSite, HttpCookie};
-    use kage_core::ids::ProxyId;
+    use kage_core::ids::{PersonaId, ProxyId};
     use url::Url;
     use wreq::cookie::{CookieStore, Cookies};
 
     use super::{
-        CookieBackend, CookieContext, CookieJar, HopCookies, MAX_COOKIES_PER_SITE, MemoryCookies,
-        SetCookieVerdict, default_path, domain_matches, parse_http_date, parse_set_cookie,
-        path_matches,
+        CookieBackend, CookieContext, CookieJar, HopCookies, JarOwner, MAX_COOKIES_PER_SITE,
+        MemoryCookies, SetCookieVerdict, default_path, domain_matches, parse_http_date,
+        parse_set_cookie, path_matches,
     };
 
     fn url(text: &str) -> Url {
@@ -1564,9 +1638,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_memory_backend_keeps_one_jar_per_proxy() {
+    async fn the_memory_backend_keeps_one_jar_per_owner() {
         let backend = MemoryCookies::new();
-        let (first, second) = (ProxyId::new(), ProxyId::new());
+        let proxy = ProxyId::new();
+        let (first, second) = (JarOwner::proxy(proxy), JarOwner::proxy(ProxyId::new()));
+        // A persona behind the first proxy has a jar of its own.
+        let persona = JarOwner::persona(proxy, PersonaId::new());
+        assert_eq!(persona.proxy, first.proxy);
+        assert_ne!(persona, first);
+        backend
+            .save(persona, &[cookie("p", None, now())])
+            .await
+            .unwrap();
 
         assert_eq!(backend.load(first).await.unwrap(), []);
         backend
@@ -1585,5 +1668,6 @@ mod tests {
         assert_eq!(backend.load(second).await.unwrap().len(), 2);
         backend.save(first, &[]).await.unwrap();
         assert_eq!(backend.load(first).await.unwrap(), []);
+        assert_eq!(backend.load(persona).await.unwrap().len(), 1);
     }
 }

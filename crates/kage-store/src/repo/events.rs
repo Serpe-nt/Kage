@@ -226,6 +226,50 @@ impl SelftestRepo<'_> {
         .map(SelftestRun::try_from)
         .transpose()
     }
+
+    /// A persona's most recent runs on both paths, newest first.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the query fails or a row does not parse.
+    pub async fn recent(
+        &self,
+        persona_id: PersonaId,
+        limit: u32,
+    ) -> Result<Vec<SelftestRun>, StoreError> {
+        sqlx::query_as!(
+            SelftestRow,
+            "SELECT id, persona_id, engine, render, started_at, finished_at, passed, score, findings
+             FROM selftest_runs
+             WHERE persona_id = $1
+             ORDER BY started_at DESC, id DESC
+             LIMIT $2",
+            persona_id.as_uuid(),
+            page_limit(limit),
+        )
+        .fetch_all(self.pool)
+        .await?
+        .into_iter()
+        .map(SelftestRun::try_from)
+        .collect()
+    }
+
+    /// How many runs a persona has on one path: the number of its next
+    /// scheduled run, which decides that run's jitter.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the query fails.
+    pub async fn count(&self, persona_id: PersonaId, render: Render) -> Result<u64, StoreError> {
+        let count = sqlx::query_scalar!(
+            r#"SELECT count(*) AS "count!" FROM selftest_runs WHERE persona_id = $1 AND render = $2"#,
+            persona_id.as_uuid(),
+            render.as_str(),
+        )
+        .fetch_one(self.pool)
+        .await?;
+        Ok(u64::try_from(count).unwrap_or(0))
+    }
 }
 
 repository!(

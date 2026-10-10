@@ -267,6 +267,11 @@ pub struct BrowserSelftestConfig {
     /// Budget of one page.
     #[serde(default = "default_page_timeout")]
     pub page_timeout: HumanDuration,
+    /// Time between two scheduled self-tests of one persona, before
+    /// jitter. A scheduled run loads the operator's own pages only, so
+    /// nothing is scheduled while `pages` is empty.
+    #[serde(default = "default_selftest_interval")]
+    pub interval: HumanDuration,
 }
 
 fn default_third_party_pages() -> Vec<SelftestPageConfig> {
@@ -299,6 +304,7 @@ impl Default for BrowserSelftestConfig {
             third_party_pages: default_third_party_pages(),
             min_score: default_min_score(),
             page_timeout: default_page_timeout(),
+            interval: default_selftest_interval(),
         }
     }
 }
@@ -482,6 +488,9 @@ pub(super) fn validate(
     if selftest.http.interval.get() < std::time::Duration::from_secs(60) {
         return Err("selftest.http.interval must be at least 1m".to_owned());
     }
+    if selftest.browser.interval.get() < std::time::Duration::from_secs(60) {
+        return Err("selftest.browser.interval must be at least 1m".to_owned());
+    }
     validate_browser_selftest(&selftest.browser)?;
     for (key, browser_major) in [
         (
@@ -633,7 +642,7 @@ mod tests {
 
     #[test]
     fn values_out_of_range_are_named() {
-        let cases: [(&str, Change); 14] = [
+        let cases: [(&str, Change); 15] = [
             (
                 "http.timeout",
                 Box::new(|http, _, _| http.timeout = HumanDuration::from_secs(0)),
@@ -683,6 +692,12 @@ mod tests {
             (
                 "selftest.http.interval",
                 Box::new(|_, selftest, _| selftest.http.interval = HumanDuration::from_secs(5)),
+            ),
+            (
+                "selftest.browser.interval",
+                Box::new(|_, selftest, _| {
+                    selftest.browser.interval = HumanDuration::from_secs(5);
+                }),
             ),
             (
                 "engines.firefox.browser_major",

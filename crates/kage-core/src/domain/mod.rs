@@ -25,7 +25,7 @@ pub use fetch::{
 };
 pub use health::{BreakerState, DomainBreaker, HealthEvent, SelftestRun, SubjectKind};
 pub use job::{FrontierEntry, FrontierState, Job, JobItem, JobItemState, JobKind, JobState};
-pub use persona::{Geolocation, Persona, PersonaDomainState, PersonaState, Screen};
+pub use persona::{CoolingReason, Geolocation, Persona, PersonaDomainState, PersonaState, Screen};
 pub use proxy::{
     GeoRecord, HealthFailure, Proxy, ProxyEndpoint, ProxyHealth, ProxyProviderKind,
     ProxyReplacement, ProxyScheme, ProxyState, ReplaceReason,

@@ -654,6 +654,25 @@ impl StaticProxy {
     }
 }
 
+/// Checks `webshare.accepted_auto_replace`: each name is one of the
+/// provider's four settings, and none is named twice.
+fn accepted_settings(accepted: &[String]) -> Result<(), String> {
+    for (index, name) in accepted.iter().enumerate() {
+        if !WEBSHARE_AUTO_REPLACE_SETTINGS.contains(&name.as_str()) {
+            return Err(format!(
+                "webshare.accepted_auto_replace: {name:?} is not one of {}",
+                WEBSHARE_AUTO_REPLACE_SETTINGS.join(", ")
+            ));
+        }
+        if accepted[..index].contains(name) {
+            return Err(format!(
+                "webshare.accepted_auto_replace names {name} more than once"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Checks the pool sections; returns the first problem as a message.
 pub(super) fn validate(
     webshare: &WebshareConfig,
@@ -683,19 +702,7 @@ pub(super) fn validate(
     if webshare.max_retries > 10 {
         return fail("webshare.max_retries must be at most 10");
     }
-    for (index, name) in webshare.accepted_auto_replace.iter().enumerate() {
-        if !WEBSHARE_AUTO_REPLACE_SETTINGS.contains(&name.as_str()) {
-            return Err(format!(
-                "webshare.accepted_auto_replace: {name:?} is not one of {}",
-                WEBSHARE_AUTO_REPLACE_SETTINGS.join(", ")
-            ));
-        }
-        if webshare.accepted_auto_replace[..index].contains(name) {
-            return Err(format!(
-                "webshare.accepted_auto_replace names {name} more than once"
-            ));
-        }
-    }
+    accepted_settings(&webshare.accepted_auto_replace)?;
 
     http_url("reputation.base_url", &reputation.base_url, true)?;
     if reputation.interval.get() < Duration::from_hours(1) {

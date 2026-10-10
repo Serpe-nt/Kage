@@ -19,9 +19,13 @@ pub(crate) fn subject_of(kind: AlertKind) -> SubjectKind {
         | AlertKind::ReplacementBudgetExhausted
         | AlertKind::ReplacementFailed
         | AlertKind::ProviderReplacedProxy
-        // Until personas exist the self-test is about the proxy it ran
-        // through.
+        // The proxy that has no persona yet.
+        | AlertKind::PersonaGenerationFailed
+        // A stand-in's self-test (`kage selftest http --proxy`) is about
+        // the proxy it ran through; a persona's names the persona itself
+        // (`Alert::about_persona`).
         | AlertKind::HttpSelftestFailed => SubjectKind::Proxy,
+        AlertKind::BrowserSelftestFailed => SubjectKind::Persona,
         // The pool as a whole, the provider account and the host. Kinds
         // added by later milestones land here too until they are mapped.
         _ => SubjectKind::System,
@@ -57,7 +61,8 @@ pub(crate) fn recorder(store: Store) -> (Arc<dyn AlertSink>, tokio::task::JoinHa
 /// Stores one alert as a health event. A failure is logged: the alert
 /// itself already is.
 pub(crate) async fn record(store: &Store, alert: &Alert) {
-    let subject = subject_of(alert.kind);
+    // An alert that names what its subject is knows better than its kind.
+    let subject = alert.subject_kind.unwrap_or_else(|| subject_of(alert.kind));
     if let Err(error) = store.health_events().record_alert(subject, alert).await {
         tracing::error!(%error, alert = alert.kind.as_str(), "cannot store the alert");
     }
@@ -85,7 +90,12 @@ mod tests {
             AlertKind::ReplacementFailed,
             AlertKind::ProviderReplacedProxy,
             AlertKind::HttpSelftestFailed,
+            AlertKind::PersonaGenerationFailed,
         ];
+        assert_eq!(
+            subject_of(AlertKind::BrowserSelftestFailed),
+            SubjectKind::Persona
+        );
         let about_the_system = [
             AlertKind::EgressUnsafe,
             AlertKind::PoolOutageSuspected,
@@ -103,9 +113,10 @@ mod tests {
         for kind in about_the_system {
             assert_eq!(subject_of(kind), SubjectKind::System, "{kind:?}");
         }
-        // Every kind is in exactly one of the lists above.
+        // Every kind is in exactly one of the lists above, or is one of
+        // the two named by themselves.
         assert_eq!(
-            1 + about_one_proxy.len() + about_the_system.len(),
+            2 + about_one_proxy.len() + about_the_system.len(),
             AlertKind::ALL.len()
         );
     }

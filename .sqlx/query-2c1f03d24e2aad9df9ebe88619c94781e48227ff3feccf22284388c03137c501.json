@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE personas\n         SET browser_major = $2, user_agent = $3, wreq_profile = $4, country = $5, locale = $6,\n             languages = $7, timezone = $8, geolocation = $9, state = $10, cooling_reason = $11,\n             warmup_visits = $12, warmed_at = $13, retired_at = $14, retire_reason = $15,\n             profile_archived_at = $16, profile_archive = $17, profile_deleted_at = $18\n         WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "TextArray",
+        "Text",
+        "Jsonb",
+        "Text",
+        "Text",
+        "Int4",
+        "Timestamptz",
+        "Timestamptz",
+        "Text",
+        "Timestamptz",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2c1f03d24e2aad9df9ebe88619c94781e48227ff3feccf22284388c03137c501"
+}

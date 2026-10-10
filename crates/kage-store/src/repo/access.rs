@@ -331,6 +331,43 @@ impl SessionRepo<'_> {
             .await?;
         Ok(done.rows_affected())
     }
+
+    /// Ends every session pinned to a persona: the persona was retired, and
+    /// a session never moves to another one. Returns how many there were.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the query fails.
+    pub async fn delete_for_persona(&self, persona_id: PersonaId) -> Result<u64, StoreError> {
+        let done = sqlx::query!(
+            "DELETE FROM sessions WHERE persona_id = $1",
+            persona_id.as_uuid()
+        )
+        .execute(self.pool)
+        .await?;
+        Ok(done.rows_affected())
+    }
+
+    /// How many sessions are pinned to a persona and have not expired by
+    /// `now`: the persona's load from sessions.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the query fails.
+    pub async fn count_for_persona(
+        &self,
+        persona_id: PersonaId,
+        now: DateTime<Utc>,
+    ) -> Result<u64, StoreError> {
+        let count = sqlx::query_scalar!(
+            r#"SELECT count(*) AS "count!" FROM sessions WHERE persona_id = $1 AND expires_at > $2"#,
+            persona_id.as_uuid(),
+            now,
+        )
+        .fetch_one(self.pool)
+        .await?;
+        Ok(u64::try_from(count).unwrap_or(0))
+    }
 }
 
 repository!(

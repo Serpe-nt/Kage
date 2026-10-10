@@ -10,11 +10,11 @@ use common::{TestDb, now};
 use kage_core::alert::{Alert, AlertKind, AlertSeverity};
 use kage_core::domain::{
     ArtifactKind, ArtifactRef, Attempt, AuditActor, AuditEvent, AuditOutcome, BreakerState,
-    ClaimedOs, CookieSameSite, DomainBreaker, Engine, FetchRecord, FrontierEntry, FrontierState,
-    GeoRecord, Header, HealthEvent, HealthFailure, HttpCookie, Job, JobItem, JobItemState, JobKind,
-    JobState, PersonaDomainState, PersonaState, PersonaSummary, ProxyHealth, ProxyProviderKind,
-    ProxyReplacement, ProxyState, Render, ReplaceReason, RobotsVerdict, Scope, SelftestRun,
-    Session, SessionId, SessionLimits, SubjectKind, Timing,
+    ClaimedOs, CookieSameSite, CoolingReason, DomainBreaker, Engine, FetchRecord, FrontierEntry,
+    FrontierState, GeoRecord, Header, HealthEvent, HealthFailure, HttpCookie, Job, JobItem,
+    JobItemState, JobKind, JobState, Persona, PersonaDomainState, PersonaState, PersonaSummary,
+    ProxyHealth, ProxyProviderKind, ProxyReplacement, ProxyState, Render, ReplaceReason,
+    RobotsVerdict, Scope, SelftestRun, Session, SessionId, SessionLimits, SubjectKind, Timing,
 };
 use kage_core::ids::{
     ApiKeyId, ArtifactId, AttemptId, AuditEventId, FrontierId, HealthEventId, JobId, JobItemId,
@@ -437,6 +437,9 @@ async fn a_stored_value_that_does_not_parse_is_reported_as_corrupt() {
     assert!(db.store.proxies().list(None).await.is_err());
 }
 
+// One persona followed through its whole life: each step needs the one
+// before.
+#[allow(clippy::too_many_lines)]
 #[tokio::test]
 async fn personas_round_trip_and_follow_their_lifecycle() {
     let db = TestDb::migrated().await;
@@ -469,82 +472,236 @@ async fn personas_round_trip_and_follow_their_lifecycle() {
         personas.list(Some(PersonaState::Retired)).await.unwrap(),
         []
     );
+    assert_eq!(
+        personas.list_live().await.unwrap(),
+        std::slice::from_ref(&persona)
+    );
 
-    // A proxy has exactly one persona.
+    // A proxy has exactly one persona that is not retired.
     let conflict = personas
         .insert(&common::persona(proxy.id))
         .await
         .unwrap_err();
     assert!(conflict.is_conflict());
+    assert!(conflict.to_string().contains("personas_proxy_live_idx"));
 
-    // A persona without geolocation or a wreq profile is browser-only.
+    // A persona without a position, a country or a wreq profile is
+    // browser-only.
     let other_proxy = common::proxy("ref-2");
     db.store.proxies().insert(&other_proxy).await.unwrap();
     let mut browser_only = common::persona(other_proxy.id);
     browser_only.engine = Engine::Firefox;
-    browser_only.claimed_os = ClaimedOs::Linux;
+    browser_only.claimed_os = ClaimedOs::Windows;
     browser_only.wreq_profile = None;
     browser_only.geolocation = None;
+    browser_only.country = None;
+    browser_only.screen.color_depth = 30;
     personas.insert(&browser_only).await.unwrap();
     assert_eq!(
         personas.get(browser_only.id).await.unwrap(),
         Some(browser_only.clone())
     );
 
-    // Engine upgrade: major and profile change together.
-    assert!(
-        personas
-            .set_browser(persona.id, 142, Some("chrome_142"))
-            .await
-            .unwrap()
+    // What follows the address, the warm-up and an engine upgrade can
+    // change; the change is returned and read back whole.
+    let warmed = now() + Duration::hours(2);
+    let changed = personas
+        .modify(persona.id, |stored| {
+            stored.country = Some("AT".parse().unwrap());
+            stored.locale = "de-AT".to_owned();
+            stored.languages = vec!["de-DE".to_owned(), "de".to_owned()];
+            stored.timezone = "Europe/Vienna".to_owned();
+            stored.geolocation = None;
+            stored.browser_major = 150;
+            stored.wreq_profile = None;
+            stored.user_agent = stored.user_agent.replace("149", "150");
+            stored.warmup_visits = 3;
+            stored.warmed_at = Some(warmed);
+            stored.clone()
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        personas.get(persona.id).await.unwrap(),
+        Some(changed.clone())
     );
-    let upgraded = personas.get(persona.id).await.unwrap().unwrap();
-    assert_eq!(upgraded.browser_major, 142);
-    assert_eq!(upgraded.wreq_profile.as_deref(), Some("chrome_142"));
-    assert!(personas.set_browser(persona.id, 143, None).await.unwrap());
+    assert_eq!(changed.timezone, "Europe/Vienna");
+    assert_eq!(changed.warmed_at, Some(warmed));
+    assert!(changed.user_agent.contains("Chrome/150"));
+    // What makes the persona is written once: a change to it is not kept.
+    personas
+        .modify(persona.id, |stored| {
+            stored.engine = Engine::Firefox;
+            stored.claimed_os = ClaimedOs::Macos;
+            stored.fingerprint = serde_json::json!({});
+            stored.screen.width = 800;
+            stored.profile_dir = "elsewhere".to_owned();
+            stored.tables_version = "v9".to_owned();
+            stored.hardware_concurrency = 64;
+        })
+        .await
+        .unwrap();
+    assert_eq!(personas.get(persona.id).await.unwrap(), Some(changed));
+    // A persona that does not exist is not changed, and the closure does
+    // not run.
     assert_eq!(
         personas
-            .get(persona.id)
+            .modify(PersonaId::new(), |_| panic!("called for a missing persona"))
             .await
-            .unwrap()
-            .unwrap()
-            .wreq_profile,
-        None
+            .unwrap(),
+        None::<()>
     );
 
-    // Cooling, then retired with a timestamp.
-    assert!(
-        personas
-            .set_state(persona.id, PersonaState::Cooling, None)
-            .await
-            .unwrap()
+    // Cooling needs its reason, and only cooling has one.
+    personas
+        .modify(persona.id, |stored| {
+            stored.state = PersonaState::Cooling;
+            stored.cooling_reason = Some(CoolingReason::SelftestFailed);
+        })
+        .await
+        .unwrap();
+    let cooling = personas.get(persona.id).await.unwrap().unwrap();
+    assert_eq!(cooling.cooling_reason, Some(CoolingReason::SelftestFailed));
+    assert_eq!(
+        personas.list(Some(PersonaState::Cooling)).await.unwrap(),
+        [cooling]
     );
-    let retired_at = now();
-    assert!(
-        personas
-            .set_state(persona.id, PersonaState::Retired, Some(retired_at))
-            .await
-            .unwrap()
-    );
+    // Cooling without a reason, active with one, retired without a time.
+    let broken: [fn(&mut Persona); 3] = [
+        |stored| stored.cooling_reason = None,
+        |stored| stored.state = PersonaState::Active,
+        |stored| {
+            stored.state = PersonaState::Retired;
+            stored.cooling_reason = None;
+        },
+    ];
+    for change in broken {
+        assert!(personas.modify(persona.id, change).await.is_err());
+    }
+
+    // Retired with a time and a reason. The proxy may then get another
+    // persona, and the retired one stays as history.
+    let retired_at = now() + Duration::hours(3);
+    personas
+        .modify(persona.id, |stored| {
+            stored.state = PersonaState::Retired;
+            stored.cooling_reason = None;
+            stored.retired_at = Some(retired_at);
+            stored.retire_reason = Some("operator".to_owned());
+        })
+        .await
+        .unwrap();
     let retired = personas.get(persona.id).await.unwrap().unwrap();
     assert_eq!(retired.state, PersonaState::Retired);
     assert_eq!(retired.retired_at, Some(retired_at));
+    assert_eq!(retired.retire_reason.as_deref(), Some("operator"));
+    assert_eq!(personas.get_by_proxy(proxy.id).await.unwrap(), None);
+    let successor = common::persona(proxy.id);
+    personas.insert(&successor).await.unwrap();
     assert_eq!(
-        personas.list(Some(PersonaState::Active)).await.unwrap(),
-        [browser_only]
+        personas.get_by_proxy(proxy.id).await.unwrap(),
+        Some(successor.clone())
+    );
+    assert_eq!(
+        personas.list(Some(PersonaState::Retired)).await.unwrap(),
+        std::slice::from_ref(&retired)
+    );
+    let live: Vec<PersonaId> = personas
+        .list_live()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|persona| persona.id)
+        .collect();
+    assert_eq!(live.len(), 2);
+    assert!(live.contains(&browser_only.id) && live.contains(&successor.id));
+
+    // The profile of a retired persona is archived once it has been
+    // retired for long enough, and the archive deleted after its
+    // retention.
+    assert_eq!(
+        personas
+            .list_archive_due(retired_at - Duration::seconds(1))
+            .await
+            .unwrap(),
+        []
+    );
+    assert_eq!(
+        personas.list_archive_due(retired_at).await.unwrap(),
+        std::slice::from_ref(&retired)
+    );
+    assert_eq!(personas.list_delete_due(retired_at).await.unwrap(), []);
+    let archived_at = retired_at + Duration::minutes(10);
+    personas
+        .modify(persona.id, |stored| {
+            stored.profile_archived_at = Some(archived_at);
+            stored.profile_archive = Some(format!(".archive/{}", stored.id));
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        personas
+            .list_archive_due(archived_at + Duration::days(1))
+            .await
+            .unwrap(),
+        []
+    );
+    assert_eq!(
+        personas
+            .list_delete_due(archived_at - Duration::seconds(1))
+            .await
+            .unwrap(),
+        []
+    );
+    let due = personas.list_delete_due(archived_at).await.unwrap();
+    assert_eq!(due.len(), 1);
+    assert_eq!(
+        due[0].profile_archive,
+        Some(format!(".archive/{}", persona.id))
+    );
+    personas
+        .modify(persona.id, |stored| {
+            stored.profile_deleted_at = Some(archived_at + Duration::days(7));
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        personas
+            .list_delete_due(archived_at + Duration::days(30))
+            .await
+            .unwrap(),
+        []
+    );
+    // An archive needs a retired persona and a date.
+    assert!(
+        personas
+            .modify(successor.id, |stored| {
+                stored.profile_archived_at = Some(archived_at);
+            })
+            .await
+            .is_err()
+    );
+    assert!(
+        personas
+            .modify(successor.id, |stored| {
+                stored.profile_archive = Some("x".to_owned());
+            })
+            .await
+            .is_err()
     );
 
+    // The schema refuses a seed that is none.
+    let error = sqlx::query("UPDATE personas SET seed = 'not-a-seed' WHERE id = $1")
+        .bind(successor.id.as_uuid())
+        .execute(db.store.pool())
+        .await
+        .unwrap_err();
     assert!(
-        !personas
-            .set_state(PersonaId::new(), PersonaState::Cooling, None)
-            .await
-            .unwrap()
-    );
-    assert!(
-        !personas
-            .set_browser(PersonaId::new(), 1, None)
-            .await
-            .unwrap()
+        error
+            .as_database_error()
+            .is_some_and(sqlx::error::DatabaseError::is_check_violation),
+        "{error}"
     );
 }
 
@@ -573,6 +730,7 @@ async fn persona_domain_state_is_upserted_per_persona_and_domain() {
     state.requests_today = 13;
     state.last_outcome = Some(Outcome::Forbidden);
     state.block_count_24h = 1;
+    state.block_window_started_at = Some(now());
     states.upsert(&state).await.unwrap();
     assert_eq!(
         states.get(persona.id, "example.org").await.unwrap(),
@@ -587,14 +745,96 @@ async fn persona_domain_state_is_upserted_per_persona_and_domain() {
 
     let mut for_domain = states.list_for_domain("example.org").await.unwrap();
     for_domain.sort_by_key(|state| state.persona_id);
-    let mut expected = vec![state, other_state];
+    let mut expected = vec![state.clone(), other_state];
     expected.sort_by_key(|state| state.persona_id);
     assert_eq!(for_domain, expected);
     assert_eq!(
         states.list_for_domain("example.net").await.unwrap(),
-        [elsewhere]
+        std::slice::from_ref(&elsewhere)
     );
     assert_eq!(states.list_for_domain("unknown.test").await.unwrap(), []);
+    // One persona's domains, by name.
+    assert_eq!(
+        states.list_for_persona(persona.id).await.unwrap(),
+        [elsewhere, state]
+    );
+    assert_eq!(states.list_for_persona(PersonaId::new()).await.unwrap(), []);
+}
+
+#[tokio::test]
+async fn domain_state_changes_are_counted_one_after_the_other() {
+    let db = TestDb::migrated().await;
+    let persona = common::seed_persona(&db.store).await;
+    let day = NaiveDate::from_ymd_opt(2026, 10, 9).unwrap();
+    let at = now();
+
+    // A first visit creates the row, and what the change returns comes
+    // back.
+    let counted = db
+        .store
+        .persona_domain_state()
+        .modify(persona.id, "example.org", |state| {
+            state.record_request(at, day);
+            state.requests_today
+        })
+        .await
+        .unwrap();
+    assert_eq!(counted, 1);
+
+    // Forty requests counted at once from separate tasks are forty.
+    let mut tasks = Vec::new();
+    for _ in 0..40 {
+        let store = db.store.clone();
+        tasks.push(tokio::spawn(async move {
+            store
+                .persona_domain_state()
+                .modify(persona.id, "example.org", |state| {
+                    state.record_request(at, day);
+                })
+                .await
+                .unwrap();
+        }));
+    }
+    for task in tasks {
+        task.await.unwrap();
+    }
+    let state = db
+        .store
+        .persona_domain_state()
+        .get(persona.id, "example.org")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(state.requests_on(day), 41);
+    assert_eq!(state.last_request_at, Some(at));
+
+    // A block is recorded through the same door.
+    db.store
+        .persona_domain_state()
+        .modify(persona.id, "example.org", |state| {
+            state.record_outcome(Outcome::RateLimited, at, Some(Duration::hours(2)));
+        })
+        .await
+        .unwrap();
+    let blocked = db
+        .store
+        .persona_domain_state()
+        .get(persona.id, "example.org")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(blocked.is_cooling(at + Duration::minutes(119)));
+    assert_eq!(blocked.blocks_in_window(at), 1);
+    assert_eq!(blocked.block_window_started_at, Some(at));
+
+    // A state needs its persona.
+    assert!(
+        db.store
+            .persona_domain_state()
+            .modify(PersonaId::new(), "example.org", |_| ())
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -708,6 +948,46 @@ async fn sessions_are_unique_per_key_and_expire() {
     assert!(sessions.delete(key.id, &id).await.unwrap());
     assert!(!sessions.delete(key.id, &id).await.unwrap());
     assert!(!sessions.touch(&session).await.unwrap());
+
+    // A persona's sessions are counted while they run and all end with it.
+    let other_persona = common::seed_persona(&db.store).await;
+    for (name, pinned) in [
+        ("a", persona.id),
+        ("b", persona.id),
+        ("c", other_persona.id),
+    ] {
+        sessions
+            .insert(&Session::open(
+                name.parse().unwrap(),
+                key.id,
+                pinned,
+                start,
+                limits,
+            ))
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        sessions.count_for_persona(persona.id, start).await.unwrap(),
+        2
+    );
+    // Expired ones are not load.
+    assert_eq!(
+        sessions
+            .count_for_persona(persona.id, start + Duration::minutes(10))
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(sessions.delete_for_persona(persona.id).await.unwrap(), 2);
+    assert_eq!(sessions.delete_for_persona(persona.id).await.unwrap(), 0);
+    assert_eq!(
+        sessions
+            .count_for_persona(other_persona.id, start)
+            .await
+            .unwrap(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -1517,6 +1797,23 @@ async fn selftest_runs_report_the_latest_per_path() {
         runs.latest(PersonaId::new(), Render::Http).await.unwrap(),
         None
     );
+
+    // The history of a persona, newest first, over both paths.
+    let recent = runs.recent(persona.id, 10).await.unwrap();
+    let started: Vec<_> = recent.iter().map(|run| run.started_at).collect();
+    assert_eq!(
+        started,
+        [
+            start + Duration::minutes(60),
+            start + Duration::minutes(30),
+            start
+        ]
+    );
+    assert_eq!(runs.recent(persona.id, 1).await.unwrap().len(), 1);
+    assert_eq!(runs.recent(PersonaId::new(), 10).await.unwrap(), []);
+    assert_eq!(runs.count(persona.id, Render::Browser).await.unwrap(), 2);
+    assert_eq!(runs.count(persona.id, Render::Http).await.unwrap(), 1);
+    assert_eq!(runs.count(PersonaId::new(), Render::Http).await.unwrap(), 0);
 }
 
 #[tokio::test]
@@ -1607,7 +1904,7 @@ async fn cookie_jars_are_kept_per_proxy_in_order_and_die_with_it() {
     let second = common::proxy("ref-2");
     db.store.proxies().insert(&first).await.unwrap();
     db.store.proxies().insert(&second).await.unwrap();
-    assert_eq!(cookies.list(first.id).await.unwrap(), []);
+    assert_eq!(cookies.list(first.id, None).await.unwrap(), []);
     assert_eq!(cookies.count(first.id).await.unwrap(), 0);
 
     let mut session = http_cookie("www.example.org", "sid");
@@ -1625,27 +1922,27 @@ async fn cookie_jars_are_kept_per_proxy_in_order_and_die_with_it() {
     scoped.same_site = Some(CookieSameSite::Strict);
     let jar = vec![session.clone(), lasting.clone(), scoped.clone()];
 
-    cookies.replace(first.id, &jar).await.unwrap();
+    cookies.replace(first.id, None, &jar).await.unwrap();
 
     // Read back equal, in the order given, whatever the timestamps say.
-    assert_eq!(cookies.list(first.id).await.unwrap(), jar);
+    assert_eq!(cookies.list(first.id, None).await.unwrap(), jar);
     assert_eq!(cookies.count(first.id).await.unwrap(), 3);
-    assert_eq!(cookies.list(second.id).await.unwrap(), []);
+    assert_eq!(cookies.list(second.id, None).await.unwrap(), []);
 
     // Replacing swaps the whole jar.
     let other = http_cookie("api.example.net", "token");
     cookies
-        .replace(first.id, &[scoped.clone(), other.clone()])
+        .replace(first.id, None, &[scoped.clone(), other.clone()])
         .await
         .unwrap();
     assert_eq!(
-        cookies.list(first.id).await.unwrap(),
+        cookies.list(first.id, None).await.unwrap(),
         [scoped.clone(), other.clone()]
     );
 
     // The same cookie twice is refused, and the jar stays as it was.
     let conflict = cookies
-        .replace(first.id, &[session.clone(), session.clone()])
+        .replace(first.id, None, &[session.clone(), session.clone()])
         .await
         .unwrap_err();
     assert!(conflict.is_conflict(), "{conflict}");
@@ -1653,7 +1950,7 @@ async fn cookie_jars_are_kept_per_proxy_in_order_and_die_with_it() {
     // A jar needs its proxy.
     assert!(
         cookies
-            .replace(ProxyId::new(), &[session.clone()])
+            .replace(ProxyId::new(), None, &[session.clone()])
             .await
             .is_err()
     );
@@ -1662,6 +1959,7 @@ async fn cookie_jars_are_kept_per_proxy_in_order_and_die_with_it() {
     cookies
         .replace(
             second.id,
+            None,
             &[
                 http_cookie("example.org", "a"),
                 http_cookie("shop.example.org", "b"),
@@ -1679,7 +1977,7 @@ async fn cookie_jars_are_kept_per_proxy_in_order_and_die_with_it() {
         2
     );
     let left: Vec<String> = cookies
-        .list(second.id)
+        .list(second.id, None)
         .await
         .unwrap()
         .into_iter()
@@ -1694,10 +1992,48 @@ async fn cookie_jars_are_kept_per_proxy_in_order_and_die_with_it() {
         0
     );
 
+    // A jar belongs to the persona that wrote it: another persona behind
+    // the same proxy, and nobody, read nothing of it.
+    let owner = common::persona(first.id);
+    db.store.personas().insert(&owner).await.unwrap();
+    cookies
+        .replace(first.id, Some(owner.id), &[session.clone(), other.clone()])
+        .await
+        .unwrap();
+    assert_eq!(
+        cookies.list(first.id, Some(owner.id)).await.unwrap(),
+        [session.clone(), other.clone()]
+    );
+    assert_eq!(cookies.list(first.id, None).await.unwrap(), []);
+    assert_eq!(
+        cookies
+            .list(first.id, Some(PersonaId::new()))
+            .await
+            .unwrap(),
+        []
+    );
+    assert_eq!(cookies.count(first.id).await.unwrap(), 2);
+    // A persona that does not exist owns nothing.
+    assert!(
+        cookies
+            .replace(first.id, Some(PersonaId::new()), &[session.clone()])
+            .await
+            .is_err()
+    );
+    assert_eq!(cookies.count(first.id).await.unwrap(), 2);
+    // Retiring the persona deletes its rows, and only its rows.
+    assert_eq!(cookies.delete_for_persona(owner.id).await.unwrap(), 2);
+    assert_eq!(cookies.delete_for_persona(owner.id).await.unwrap(), 0);
+    assert_eq!(cookies.count(second.id).await.unwrap(), 2);
+    cookies
+        .replace(first.id, Some(owner.id), &[scoped.clone(), other.clone()])
+        .await
+        .unwrap();
+
     // A retired persona's jar is deleted outright.
     assert_eq!(cookies.delete_for_proxy(first.id).await.unwrap(), 2);
     assert_eq!(cookies.delete_for_proxy(first.id).await.unwrap(), 0);
-    assert_eq!(cookies.list(first.id).await.unwrap(), []);
+    assert_eq!(cookies.list(first.id, Some(owner.id)).await.unwrap(), []);
     assert_eq!(cookies.count(second.id).await.unwrap(), 2);
 
     // The schema refuses what the jar never writes: a domain that is not
@@ -1733,8 +2069,21 @@ async fn cookie_jars_are_kept_per_proxy_in_order_and_die_with_it() {
             "{statement}: {error}"
         );
     }
-    // The rows go when the proxy row goes.
-    cookies.replace(first.id, &[session.clone()]).await.unwrap();
+    // The rows go when the persona row goes, and when the proxy row goes.
+    cookies
+        .replace(first.id, Some(owner.id), &[session.clone()])
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM personas WHERE id = $1")
+        .bind(owner.id.as_uuid())
+        .execute(db.store.pool())
+        .await
+        .unwrap();
+    assert_eq!(cookies.count(first.id).await.unwrap(), 0);
+    cookies
+        .replace(first.id, None, &[session.clone()])
+        .await
+        .unwrap();
     sqlx::query("DELETE FROM proxies WHERE id = $1")
         .bind(first.id.as_uuid())
         .execute(db.store.pool())
@@ -1752,7 +2101,7 @@ async fn cookie_jars_are_kept_per_proxy_in_order_and_die_with_it() {
         .await
         .unwrap();
     assert!(matches!(
-        cookies.list(second.id).await,
+        cookies.list(second.id, None).await,
         Err(StoreError::Corrupt {
             table: "http_cookies",
             column: "same_site",

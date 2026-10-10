@@ -1,13 +1,13 @@
-//! The client factory (spec §9): one wreq client per emulation profile and
-//! proxy, with that proxy's cookie jar.
+//! The client factory (spec §9): one wreq client per persona, emulation
+//! profile and proxy, with that persona's cookie jar.
 //!
-//! A [`ClientSpec`] says who the client is (profile, languages, and from
-//! milestone M6 the persona's own identity values); a
+//! A [`ClientSpec`] says who the client is (the persona, its profile, its
+//! languages and its own identity values); a
 //! [`kage_core::domain::ProxyEndpoint`] says where it leaves from. The
 //! factory keeps one [`HttpClient`] per pair, so a persona's requests share
 //! their connections, their TLS sessions and their cookies, as one browser's
-//! do. Until personas exist the proxy stands for the persona: there is one
-//! per proxy.
+//! do. A spec that names no persona (a probe, the self-test of a profile)
+//! is keyed by its proxy alone.
 //!
 //! Every client the factory builds
 //!
@@ -31,10 +31,10 @@ use async_trait::async_trait;
 use chrono::Utc;
 use kage_core::config::{HttpConfig, SubresourceScope};
 use kage_core::domain::{ClaimedOs, ProxyEndpoint};
-use kage_core::ids::ProxyId;
+use kage_core::ids::{PersonaId, ProxyId};
 use tokio::sync::Mutex;
 
-use crate::cookies::{CookieBackend, CookieJar, MemoryCookies};
+use crate::cookies::{CookieBackend, CookieJar, JarOwner, MemoryCookies};
 use crate::error::HttpError;
 use crate::headers::{DEFAULT_LANGUAGES, Identity, IdentityOverride};
 use crate::profile::ProfileChoice;
@@ -121,6 +121,9 @@ pub struct ClientSpec {
     pub languages: Vec<String>,
     /// The persona's own identity values, where they replace the profile's.
     pub identity: IdentityOverride,
+    /// The persona the client is, when it is one: its cookie jar is its
+    /// own (spec §6.4).
+    pub persona: Option<PersonaId>,
 }
 
 impl ClientSpec {
@@ -134,7 +137,16 @@ impl ClientSpec {
                 .map(|&tag| tag.to_owned())
                 .collect(),
             identity: IdentityOverride::default(),
+            persona: None,
         }
+    }
+
+    /// The same client as a persona: it keeps that persona's cookies and
+    /// no one else's.
+    #[must_use]
+    pub const fn for_persona(mut self, persona: PersonaId) -> Self {
+        self.persona = Some(persona);
+        self
     }
 
     /// The same client speaking other languages, most preferred first.
@@ -177,6 +189,7 @@ pub trait HopResolver: Send + Sync + fmt::Debug {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ClientKey {
     proxy: ProxyId,
+    persona: Option<PersonaId>,
     profile: String,
     os: ClaimedOs,
 }
@@ -270,8 +283,13 @@ impl ClientFactory {
         spec: &ClientSpec,
         proxy: &ProxyEndpoint,
     ) -> Result<Arc<HttpClient>, HttpError> {
+        let owner = JarOwner {
+            proxy: proxy.id,
+            persona: spec.persona,
+        };
         let key = ClientKey {
             proxy: proxy.id,
+            persona: spec.persona,
             profile: spec.profile.name().to_owned(),
             os: spec.profile.os(),
         };
@@ -283,7 +301,7 @@ impl ClientFactory {
             // Same persona, new address or login: the cookies stay.
             Some(cached) => Arc::clone(&cached.client.jar),
             None => {
-                let stored = self.cookies.load(proxy.id).await?;
+                let stored = self.cookies.load(owner).await?;
                 Arc::new(CookieJar::from_stored(
                     stored,
                     Utc::now(),
@@ -327,6 +345,16 @@ impl ClientFactory {
             .retain(|key, _| key.proxy != proxy);
     }
 
+    /// Forgets the clients of a persona, closing their idle connections and
+    /// dropping the cookies they hold in memory. For a persona that was
+    /// retired while its proxy stays.
+    pub async fn forget_persona(&self, persona: PersonaId) {
+        self.clients
+            .lock()
+            .await
+            .retain(|key, _| key.persona != Some(persona));
+    }
+
     fn build(
         &self,
         spec: &ClientSpec,
@@ -367,6 +395,7 @@ impl ClientFactory {
             identity,
             profile: spec.profile.clone(),
             proxy: proxy.id,
+            persona: spec.persona,
             jar,
             backend,
             settings: self.settings,
@@ -383,6 +412,7 @@ pub struct HttpClient {
     pub(crate) identity: Identity,
     pub(crate) profile: ProfileChoice,
     pub(crate) proxy: ProxyId,
+    pub(crate) persona: Option<PersonaId>,
     pub(crate) jar: Arc<CookieJar>,
     pub(crate) backend: Option<Arc<dyn CookieBackend>>,
     pub(crate) settings: HttpSettings,
@@ -416,6 +446,11 @@ impl HttpClient {
         self.proxy
     }
 
+    /// The persona the client is, when it is one.
+    pub const fn persona(&self) -> Option<PersonaId> {
+        self.persona
+    }
+
     /// The client's cookies.
     pub fn jar(&self) -> &CookieJar {
         &self.jar
@@ -438,7 +473,11 @@ impl HttpClient {
             return;
         }
         let cookies = self.jar.snapshot(Utc::now());
-        if let Err(error) = backend.save(self.proxy, &cookies).await {
+        let owner = JarOwner {
+            proxy: self.proxy,
+            persona: self.persona,
+        };
+        if let Err(error) = backend.save(owner, &cookies).await {
             self.jar.mark_dirty();
             tracing::warn!(proxy = %self.proxy, %error, "the cookie jar could not be saved");
         }

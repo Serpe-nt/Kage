@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT domain, host_only, path, name, value, secure, http_only, same_site,\n                    expires_at, created_at, last_used_at\n             FROM http_cookies\n             WHERE proxy_id = $1\n             ORDER BY ordinal",
+  "query": "SELECT domain, host_only, path, name, value, secure, http_only, same_site,\n                    expires_at, created_at, last_used_at\n             FROM http_cookies\n             WHERE proxy_id = $1 AND persona_id IS NOT DISTINCT FROM $2\n             ORDER BY ordinal",
   "describe": {
     "columns": [
       {
@@ -127,6 +127,7 @@
     ],
     "parameters": {
       "Left": [
+        "Uuid",
         "Uuid"
       ]
     },
@@ -144,5 +145,5 @@
       false
     ]
   },
-  "hash": "04de34977359ee11d8f516bb6dcd2c5c98d6e2f2b4f9121925c42d7ec0b6b432"
+  "hash": "9b77cabbb00fd169472a12bdb0ac9299ae74ca5ff51cff4c08db8cf2b88f6e3d"
 }

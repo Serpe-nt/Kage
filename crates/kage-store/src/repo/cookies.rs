@@ -1,9 +1,9 @@
 //! The `http_cookies` table: the cookie jar of the http path, one jar per
-//! proxy.
+//! proxy, owned by the persona that lives behind it.
 
 use chrono::{DateTime, Utc};
 use kage_core::domain::HttpCookie;
-use kage_core::ids::ProxyId;
+use kage_core::ids::{PersonaId, ProxyId};
 
 use super::repository;
 use crate::StoreError;
@@ -49,20 +49,28 @@ impl TryFrom<CookieRow> for HttpCookie {
 }
 
 impl HttpCookieRepo<'_> {
-    /// The jar of a proxy, oldest cookie first.
+    /// The jar behind a proxy as `persona` wrote it, oldest cookie first.
+    /// Cookies another persona left behind the same proxy are not this
+    /// persona's and are not returned; `None` asks for the jar that was
+    /// written without a persona.
     ///
     /// # Errors
     ///
     /// Fails when the query fails or a row does not parse.
-    pub async fn list(&self, proxy: ProxyId) -> Result<Vec<HttpCookie>, StoreError> {
+    pub async fn list(
+        &self,
+        proxy: ProxyId,
+        persona: Option<PersonaId>,
+    ) -> Result<Vec<HttpCookie>, StoreError> {
         sqlx::query_as!(
             CookieRow,
             "SELECT domain, host_only, path, name, value, secure, http_only, same_site,
                     expires_at, created_at, last_used_at
              FROM http_cookies
-             WHERE proxy_id = $1
+             WHERE proxy_id = $1 AND persona_id IS NOT DISTINCT FROM $2
              ORDER BY ordinal",
             proxy.as_uuid(),
+            persona.map(|persona| persona.as_uuid()),
         )
         .fetch_all(self.pool)
         .await?
@@ -71,16 +79,23 @@ impl HttpCookieRepo<'_> {
         .collect()
     }
 
-    /// Replaces the jar of a proxy with `cookies`, which are stored in the
-    /// order given. One transaction: a reader sees the old jar or the new
-    /// one, never half of each.
+    /// Replaces the jar behind a proxy with `cookies`, owned by `persona`
+    /// and stored in the order given. Whatever was behind the proxy before,
+    /// of whichever persona, is gone. One transaction: a reader sees the
+    /// old jar or the new one, never half of each.
     ///
     /// # Errors
     ///
     /// [`StoreError::Conflict`] when two of the cookies are the same cookie
     /// (equal domain, host-only flag, path and name); a database error when
-    /// the proxy does not exist. Nothing is written in either case.
-    pub async fn replace(&self, proxy: ProxyId, cookies: &[HttpCookie]) -> Result<(), StoreError> {
+    /// the proxy or the persona does not exist. Nothing is written in
+    /// either case.
+    pub async fn replace(
+        &self,
+        proxy: ProxyId,
+        persona: Option<PersonaId>,
+        cookies: &[HttpCookie],
+    ) -> Result<(), StoreError> {
         let mut transaction = self.pool.begin().await?;
         sqlx::query!(
             "DELETE FROM http_cookies WHERE proxy_id = $1",
@@ -90,11 +105,12 @@ impl HttpCookieRepo<'_> {
         .await?;
         for (ordinal, cookie) in cookies.iter().enumerate() {
             sqlx::query!(
-                "INSERT INTO http_cookies (proxy_id, domain, host_only, path, name, value, secure,
-                                           http_only, same_site, expires_at, created_at,
-                                           last_used_at, ordinal)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+                "INSERT INTO http_cookies (proxy_id, persona_id, domain, host_only, path, name,
+                                           value, secure, http_only, same_site, expires_at,
+                                           created_at, last_used_at, ordinal)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
                 proxy.as_uuid(),
+                persona.map(|persona| persona.as_uuid()),
                 cookie.domain,
                 cookie.host_only,
                 cookie.path,
@@ -136,6 +152,22 @@ impl HttpCookieRepo<'_> {
         Ok(done.rows_affected())
     }
 
+    /// Deletes every cookie a persona owns and returns how many there
+    /// were.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the query fails.
+    pub async fn delete_for_persona(&self, persona: PersonaId) -> Result<u64, StoreError> {
+        let done = sqlx::query!(
+            "DELETE FROM http_cookies WHERE persona_id = $1",
+            persona.as_uuid()
+        )
+        .execute(self.pool)
+        .await?;
+        Ok(done.rows_affected())
+    }
+
     /// Deletes the cookies a proxy holds for one domain and its subdomains,
     /// and returns how many there were.
     ///
@@ -155,7 +187,7 @@ impl HttpCookieRepo<'_> {
         Ok(done.rows_affected())
     }
 
-    /// How many cookies a proxy holds.
+    /// How many cookies a proxy holds, of whichever persona.
     ///
     /// # Errors
     ///

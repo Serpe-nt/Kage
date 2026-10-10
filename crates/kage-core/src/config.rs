@@ -32,12 +32,18 @@ use crate::ssrf::SsrfPolicy;
 use crate::urlnorm::NormalizeOptions;
 
 mod http;
+mod personas;
 mod proxies;
 
 pub use http::{
     BrowserSelftestConfig, ChromiumEngineConfig, EngineConfig, EnginesConfig, HttpConfig,
     HttpSelftestConfig, MAX_REDIRECTS_LIMIT, MAX_SELFTEST_PAGES, MAX_SUBRESOURCE_CONCURRENCY,
     SelftestConfig, SelftestPageConfig, SelftestPageKind, SubresourceScope, SubresourcesConfig,
+};
+pub use personas::{
+    ActiveHoursConfig, ClockTime, DelayRange, GapConfig, InvalidClockTime, LANGUAGE_PLACEHOLDER,
+    MAX_WARMUP_SITES, MAX_WARMUP_VISITS, PersonasConfig, SessionsConfig, VisitRange, WarmupConfig,
+    WarmupSite, warmup_url,
 };
 pub use proxies::{
     ProviderChoice, ProxiesConfig, ProxyHealthConfig, ReputationConfig, ResolvedProvider,
@@ -412,6 +418,12 @@ pub struct Config {
     /// The browser engines.
     #[serde(default)]
     pub engines: EnginesConfig,
+    /// Personas.
+    #[serde(default)]
+    pub personas: PersonasConfig,
+    /// Sessions.
+    #[serde(default)]
+    pub sessions: SessionsConfig,
     /// The policy files.
     #[serde(default)]
     pub policies: PoliciesConfig,
@@ -570,6 +582,12 @@ impl Config {
         proxies::validate(&self.webshare, &self.reputation, &self.proxies)
             .map_err(ConfigError::Invalid)?;
         http::validate(&self.http, &self.selftest, &self.engines).map_err(ConfigError::Invalid)?;
+        personas::validate(
+            &self.personas,
+            &self.sessions,
+            self.engines.chromium.allow_cross_os_claims,
+        )
+        .map_err(ConfigError::Invalid)?;
         match self.proxies.provider {
             ProviderChoice::Webshare if self.webshare.api_key.is_none() => {
                 return Err(ConfigError::MissingSecrets(vec!["KAGE__WEBSHARE__API_KEY"]));

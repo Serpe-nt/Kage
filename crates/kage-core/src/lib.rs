@@ -9,6 +9,9 @@
 //! - [`policy`]: per-domain policies, their resolution order, the three
 //!   policy files and the hot-reloading [`policy::PolicyStore`].
 //! - [`pacing`]: pacing profiles and their seeded samplers.
+//! - [`persona`]: how a persona is made: the mix of engines and systems,
+//!   locales and languages per country, screen classes, position, the
+//!   warm-up plan.
 //! - [`classifier`]: block signatures as data and the rule engine.
 //! - [`ssrf`]: the SSRF guard as pure functions over resolved addresses.
 //! - [`urlnorm`]: URL normalization for dedupe and cache keys (spec §13).
@@ -29,6 +32,7 @@ pub mod duration;
 pub mod ids;
 pub mod outcome;
 pub mod pacing;
+pub mod persona;
 pub mod policy;
 pub mod secret;
 pub mod seed;

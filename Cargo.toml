@@ -128,6 +128,10 @@ rand = { version = "=0.10.3", default-features = false }
 secrecy = { version = "=0.10.3" }
 uuid = { version = "=1.27.0", features = ["v7", "serde"] }
 chrono = { version = "=0.4.45", default-features = false, features = ["clock", "serde", "std"] }
+# The IANA time zone database, compiled in: a persona's daily counters turn
+# at midnight of its own time zone, and nothing it does by itself happens at
+# night there. A newer database is a deliberate bump like any other pin.
+chrono-tz = { version = "=0.10.4" }
 
 # --- Artifact store -------------------------------------------------------
 # gzip for text bodies on disk. Default (pure Rust) backend.
