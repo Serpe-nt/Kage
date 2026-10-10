@@ -94,15 +94,21 @@ otel-collector, jaeger, prometheus, grafana (optional compose profiles)
    key's rate limit, runs the SSRF guard on the URL.
 2. Policy resolves the effective domain policy and the render decision.
 3. Scheduler picks a persona: session-pinned if a session is given, otherwise
-   the best-scored eligible persona for the domain (country match, engine
-   match, not cooling down, lowest recent load), and waits for the pacing
-   slot.
-4. Executor runs the attempt on the http path or the browser path.
+   a persona already visiting the domain whose slot is free, otherwise the
+   best-scored eligible persona (§8.2), preferring one that is awake in its
+   own day; it waits for the persona's pacing slot and spaces starts of
+   different personas apart (§11).
+4. Executor runs the attempt on the http path or the browser path, every
+   byte through the in-process forwarder (§7.5).
 5. Classifier labels the outcome from status, headers, cookies, body and
    browser signals.
-6. On a retryable block, the scheduler cools the persona down for that
-   domain, picks another persona, and repeats up to the retry budget. On
-   `http` blocks with `auto` render, the next attempt escalates to `browser`.
+6. On a block a browser cures (`challenge_failed`, `soft_block`, a rule
+   marked `escalate` that is not a refusal) under `auto`, the same persona
+   makes the browser attempt once, and the verdict on the persona comes
+   from that attempt. On a refusal (`forbidden`, `captcha`, `rate_limited`)
+   or a browser block, the persona cools for the domain, its visit ends and
+   its context is closed, and another persona on another network retries
+   after a seeded pause, up to the retry budget.
 7. Result and artifacts are stored; the response is returned or the job
    record is updated and webhooks fire.
 
@@ -637,22 +643,40 @@ escalation: an http attempt with outcome in {challenge_*, captcha, forbidden, so
 
 ### 8.2 Persona selection score
 
-Eligible = `active`, proxy `healthy` or `degraded`, not cooling for domain,
-daily cap not reached, engine ∈ policy.engines, country ∈ policy.countries
-(if set), for http: `wreq_profile` non-null. Score = country preference
-match (+3) + no visit to this domain in the last hour (+2) + low load (+1) +
-previous `ok` on this domain (+1). Ties random.
+Eligible = `active` and warmed (`Persona::is_ready()`), proxy `healthy` or
+`degraded`, not cooling for domain, daily cap not reached, engine ∈
+policy.engines, country ∈ policy.countries (if set), for http:
+`wreq_profile` non-null. A persona already visiting the domain keeps its
+work while its visit lasts (§11); the score chooses a new visitor only
+when work waits and fewer than `domain_concurrency` personas are visiting.
+Score = country preference match (+3) + no visit to this domain in the last
+hour (+2) + low load (+1) + previous `ok` on this domain (+1); an awake
+persona is always taken before a sleeping one (`active_hours: prefer`);
+after a block, never the blocked persona's /24 while another is eligible
+and minus 2 for its ASN. Ties seeded.
 
 ### 8.3 Retry policy
 
 `max_retries` default 2 (3 attempts). Retryable outcomes: `rate_limited`,
 `challenge_failed`, `captcha`, `forbidden`, `soft_block`, `provider_error`,
-`timeout`. Each retry uses a different persona. Non-retryable:
-`ssrf_denied`, `robots_denied`, 4xx other than 403/429 (returned as `ok`
-with the status). Circuit breaker per domain: if `block_count_1h` over all
-personas ≥ `policy.breaker_threshold` (default 5), the domain is `paused`
-for `policy.breaker_pause` (default 30 min); requests return
-`provider_error` with `reason: domain_paused` immediately.
+`timeout`. Each retry after a refusal or a browser block uses a different
+persona, after a seeded pause (shifted log-normal, at least 2 s, median
+6 s, p95 20 s, scaled by the persona's factor); the one exception is the
+same persona's single browser escalation of a curable http block (§3.2).
+Cooldown = `Cooldowns::resolve(outcome, class)` × confidence, at least
+5 min, ±10 % seeded per persona. Non-retryable: `ssrf_denied`,
+`robots_denied`, 4xx other than 403/429 (returned as `ok` with the
+status). Three 5xx or timeouts in a row from one domain pause it for 30 s,
+doubling to 10 min, with no cooldown and no breaker count. Circuit breaker
+per domain: if `block_count_1h` over all personas ≥
+`policy.breaker_threshold` (default 5), the domain is `paused` for
+`policy.breaker_pause` (default 30 min); requests return `provider_error`
+with `reason: domain_paused` immediately. The breaker is half-open: when
+the pause ends one trial request goes through on one persona; success
+closes it, a block reopens it with the pause doubled (at most 6 h) and a
+success resets the length. Blocks of real work and warm-up count; server
+errors, an http block cured by its own escalation, a passed challenge and
+self-tests never do.
 
 ### 8.4 Timeouts
 
@@ -1061,8 +1085,36 @@ Resolution order: request `pacing` → domain policy `pacing` → global default
 `human`. A domain policy may set `pacing_locked: true`, which makes the
 request value ignored (the response reports `pacing.applied`). Global caps:
 `scheduler.max_browser_sessions` (default 6), `scheduler.max_http_inflight`
-(default 20). The scheduler is a priority queue (sync requests before jobs,
-then FIFO) with per-domain and per-persona gates; it never busy-waits.
+(default 20). The scheduler is a priority queue (sync requests and an
+operator's self-test, then jobs, then the manager's own warm-up and
+self-test work, FIFO within) with per-domain and per-persona gates; it
+never busy-waits.
+
+**Visits.** A persona that fetched a page from a domain keeps that
+domain's work for `visit_bursts` bursts (default 2 to 5), then leaves for
+`visit_break_ms` (log-normal, median 25 min, p95 90 min, in place of the
+last burst break). Other personas join only while fewer than
+`domain_concurrency` are visiting, so a site sees a few households
+reading, not twenty addresses taking turns. A sync request never waits for
+a visitor's break; a session-pinned request waits for its persona. On the
+browser path the gap counts from the start of the previous page and is a
+floor under the behaviour engine's own time on the page; a page is dwelt on
+once. A persona's browser stays open for its whole visit, breaks included,
+and `scheduler.context_idle` (5 min) after its last page; Kage closes it
+(the sidecar's idle limit, a minute behind, is the backstop).
+
+**A persona's day.** Each persona has its own waking hours from its seed
+(up 06:30 to 08:30, to bed 22:30 to 00:30 local time, drifting up to 20
+min day to day). `active_hours: prefer` (the default) takes an awake
+persona first, never wakes a sleeper for a job, and lets a sync request
+wake one for a single page; `enforce` fetches nothing at night; `ignore`
+ignores the hour.
+
+**Never in lockstep.** Every sampler is seeded from the persona, the domain
+and the visit number and scaled by the persona's factor; nothing dispatches
+on a shared timer; starts that a persona's own slot did not time are kept
+apart from the previous such start of another persona by a seeded pause
+(at least 150 ms, median 700 ms, p95 2.5 s).
 
 ---
 

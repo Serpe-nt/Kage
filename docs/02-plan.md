@@ -513,6 +513,16 @@ bare load is the http path's signature (M5); track bandwidth against the
   escalation happens exactly once for `auto`.
 - Mutation score ≥ 70 % on `kage-core`.
 
+**Status.** Merged as sixteen commits ending `f0bedbf` (`m7-handover.md`).
+New crate `kage-scheduler` with the pure rules in `kage_core::schedule`
+under mutation testing (91.7 % caught); visits, persona days and start
+spacing (D37); escalation, cooldowns by confidence, the half-open breaker
+and the 5xx pause (D38); the in-process forwarder counting bytes to the
+byte against the proxies' own sockets, adding under a millisecond per
+connection, and the budget with its hard stop (D39); `kage fetch`; the
+compose end-to-end test through both real browsers with real personas.
+Spec §3.2, §8.2, §8.3 and §11 now carry the visit and escalation models.
+
 **Follow-ups closed by M7.** F10 (the forwarder: the provider's credentials
 stay in the kage process, bytes are counted per persona and domain; the
 command-line self-tests still hand the sidecar the provider's proxy, see
