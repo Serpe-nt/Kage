@@ -12,7 +12,8 @@
 // and the pool shows at least three different screens.
 //
 // Prints two lines, `<engine> <persona id>`: the first active persona of
-// each engine by id.
+// each engine by id, and for firefox one that claims Windows when there is
+// one, because that is the system the recorded baseline was taken with.
 import { readFileSync } from "node:fs";
 
 const [personaFile, proxyFile] = process.argv.slice(2);
@@ -105,7 +106,10 @@ const active = personas
   .filter((persona) => persona.state === "active")
   .sort((a, b) => (a.id < b.id ? -1 : 1));
 for (const engine of ["chromium", "firefox"]) {
-  const persona = active.find((candidate) => candidate.engine === engine);
+  const ofEngine = active.filter((candidate) => candidate.engine === engine);
+  const persona =
+    ofEngine.find((candidate) => engine !== "firefox" || candidate.claimed_os === "windows") ??
+    ofEngine[0];
   if (persona === undefined) {
     console.error(`error: the pool has no active ${engine} persona`);
     process.exit(1);

@@ -166,12 +166,13 @@ wait "${server}" 2> /dev/null || true
 server=""
 [ "${usable}" -gt 0 ] || fail "no proxy became usable; see docs/runbooks/proxies.md"
 [ "${personas}" -eq "${usable}" ] || {
-    grep -E '"level":"(WARN|ERROR)"' "${workdir}/serve.log" | tail -n 20 >&2 || true
+    grep -E '"level":"(WARN|ERROR)"' "${workdir}/serve.log" | tail -n 20 \
+        | sed -E 's/([0-9]{1,3}\.){3}[0-9]{1,3}/[address]/g' >&2 || true
     fail "${personas} personas were generated for ${usable} usable proxies"
 }
 
 echo "==> the personas of the pool"
-kage persona list
+kage persona list | tee "${workdir}/personas.txt"
 # Every persona is where its proxy was observed to be, the mix is within
 # two personas of the configured shares, and no two share a seed.
 node tests/live/check-personas.mjs "${workdir}/personas.json" "${workdir}/proxies.json" \
@@ -186,6 +187,7 @@ if [ -n "${KAGE_LIVE_EVIDENCE_DIR:-}" ]; then
         for (const persona of document.personas) { delete persona.user_agent; delete persona.geolocation; }
         writeFileSync(process.argv[2], JSON.stringify(document, null, 2) + '\n');
     " "${workdir}/personas.json" "${KAGE_LIVE_EVIDENCE_DIR}/personas.json"
+    cp "${workdir}/personas.txt" "${KAGE_LIVE_EVIDENCE_DIR}/personas.txt"
 fi
 
 baseline_dir="tests/fixtures/selftest"
@@ -218,10 +220,16 @@ while read -r engine persona; do
         failed+=("${engine}")
         continue
     }
+    # What the judge prints holds no address: it replaces anything that
+    # looks like one in what a page showed. The report itself is not kept.
+    judged=0
+    node tests/live/check-browser-selftest.mjs "${workdir}/${engine}-report.json" "${baseline_dir}" \
+        > "${workdir}/${engine}-judged.txt" 2>&1 || judged=1
+    cat "${workdir}/${engine}-judged.txt"
     if [ -n "${KAGE_LIVE_EVIDENCE_DIR:-}" ]; then
-        cp "${workdir}/${engine}-report.json" "${KAGE_LIVE_EVIDENCE_DIR}/${engine}-report.json"
+        cp "${workdir}/${engine}-judged.txt" "${KAGE_LIVE_EVIDENCE_DIR}/${engine}-judged.txt"
     fi
-    if ! node tests/live/check-browser-selftest.mjs "${workdir}/${engine}-report.json" "${baseline_dir}"; then
+    if [ "${judged}" -ne 0 ]; then
         echo "error: the ${engine} persona did not pass" >&2
         failed+=("${engine}")
     elif [ "${status}" -ne 0 ]; then
