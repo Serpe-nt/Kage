@@ -350,6 +350,7 @@ impl HealthChecker {
                 asn: lookup.asn,
                 org: lookup.org,
                 timezone: lookup.timezone,
+                loc: lookup.loc,
                 ip: exit.ip,
                 checked_at: at,
             }),

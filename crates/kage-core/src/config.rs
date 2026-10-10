@@ -41,8 +41,8 @@ pub use http::{
 };
 pub use proxies::{
     ProviderChoice, ProxiesConfig, ProxyHealthConfig, ReputationConfig, ResolvedProvider,
-    StaticListError, StaticProxy, WEBSHARE_GENERAL_LIMIT_PER_MINUTE,
-    WEBSHARE_LIST_LIMIT_PER_MINUTE, WebshareConfig,
+    StaticListError, StaticProxy, WEBSHARE_AUTO_REPLACE_SETTINGS,
+    WEBSHARE_GENERAL_LIMIT_PER_MINUTE, WEBSHARE_LIST_LIMIT_PER_MINUTE, WebshareConfig,
 };
 
 /// Length of the master key in bytes; it is written as twice as many

@@ -185,23 +185,86 @@ pub struct AutoReplace {
 }
 
 impl AutoReplace {
+    /// The provider's names of the four settings, in the order of the
+    /// fields.
+    pub const SETTINGS: [&'static str; 4] = [
+        "auto_replace_invalid_proxies",
+        "auto_replace_low_country_confidence_proxies",
+        "auto_replace_out_of_rotation_proxies",
+        "auto_replace_failed_site_check_proxies",
+    ];
+
+    /// The settings named in `names`, as flags. A name that is none of
+    /// [`Self::SETTINGS`] is returned as the error.
+    ///
+    /// # Errors
+    ///
+    /// The first unknown name.
+    pub fn from_names<N: AsRef<str>>(names: &[N]) -> std::result::Result<Self, String> {
+        let mut flags = Self::default();
+        for name in names {
+            match name.as_ref() {
+                "auto_replace_invalid_proxies" => flags.invalid = true,
+                "auto_replace_low_country_confidence_proxies" => {
+                    flags.low_country_confidence = true;
+                }
+                "auto_replace_out_of_rotation_proxies" => flags.out_of_rotation = true,
+                "auto_replace_failed_site_check_proxies" => flags.failed_site_check = true,
+                other => return Err(other.to_owned()),
+            }
+        }
+        Ok(flags)
+    }
+
     /// The names of the settings that are switched on.
     pub fn enabled(&self) -> Vec<&'static str> {
         [
-            (self.invalid, "auto_replace_invalid_proxies"),
-            (
-                self.low_country_confidence,
-                "auto_replace_low_country_confidence_proxies",
-            ),
-            (self.out_of_rotation, "auto_replace_out_of_rotation_proxies"),
-            (
-                self.failed_site_check,
-                "auto_replace_failed_site_check_proxies",
-            ),
+            self.invalid,
+            self.low_country_confidence,
+            self.out_of_rotation,
+            self.failed_site_check,
         ]
         .into_iter()
+        .zip(Self::SETTINGS)
         .filter_map(|(on, name)| on.then_some(name))
         .collect()
+    }
+
+    /// The settings that are on here and off in `other`.
+    #[must_use]
+    pub const fn without(&self, other: &Self) -> Self {
+        Self {
+            invalid: self.invalid && !other.invalid,
+            low_country_confidence: self.low_country_confidence && !other.low_country_confidence,
+            out_of_rotation: self.out_of_rotation && !other.out_of_rotation,
+            failed_site_check: self.failed_site_check && !other.failed_site_check,
+        }
+    }
+
+    /// The settings that are on in both.
+    #[must_use]
+    pub const fn both(&self, other: &Self) -> Self {
+        Self {
+            invalid: self.invalid && other.invalid,
+            low_country_confidence: self.low_country_confidence && other.low_country_confidence,
+            out_of_rotation: self.out_of_rotation && other.out_of_rotation,
+            failed_site_check: self.failed_site_check && other.failed_site_check,
+        }
+    }
+
+    /// Whether the setting behind a reason of the provider's log of
+    /// replaced proxies is switched on here: `auto_invalidated` is what
+    /// `auto_replace_invalid_proxies` does, and so on. A reason that is not
+    /// one of the provider's automatic ones (`proxy_replaced`,
+    /// `list_updated`, `auto_deleted`) belongs to no setting.
+    pub fn covers_reason(&self, reason: &str) -> bool {
+        match reason {
+            "auto_invalidated" => self.invalid,
+            "auto_low_country_confidence" => self.low_country_confidence,
+            "auto_out_of_rotation" => self.out_of_rotation,
+            "auto_site_check" => self.failed_site_check,
+            _ => false,
+        }
     }
 }
 
@@ -229,6 +292,9 @@ pub struct AccountInfo {
     pub replacements_used: Option<u32>,
     /// Replacements left.
     pub replacements_available: Option<u32>,
+    /// Start of the paid term. The provider counts replacements per term,
+    /// so Kage's own budget follows the term when both ends are known.
+    pub term_started_at: Option<DateTime<Utc>>,
     /// End of the paid term.
     pub term_ends_at: Option<DateTime<Utc>>,
     /// Whether the subscription renews by itself.
@@ -366,16 +432,72 @@ mod tests {
                 "auto_replace_out_of_rotation_proxies"
             ]
         );
+        let all = AutoReplace {
+            invalid: true,
+            low_country_confidence: true,
+            out_of_rotation: true,
+            failed_site_check: true,
+        };
+        assert_eq!(all.enabled(), AutoReplace::SETTINGS);
+    }
+
+    #[test]
+    fn accepted_settings_are_read_by_name_and_taken_out_of_what_is_on() {
+        let accepted = AutoReplace::from_names(&["auto_replace_invalid_proxies"]).unwrap();
+        assert_eq!(accepted.enabled(), ["auto_replace_invalid_proxies"]);
         assert_eq!(
-            AutoReplace {
-                invalid: true,
-                low_country_confidence: true,
-                out_of_rotation: true,
-                failed_site_check: true,
-            }
-            .enabled()
-            .len(),
-            4
+            AutoReplace::from_names(&AutoReplace::SETTINGS)
+                .unwrap()
+                .enabled(),
+            AutoReplace::SETTINGS
         );
+        assert_eq!(
+            AutoReplace::from_names(&Vec::<String>::new()).unwrap(),
+            AutoReplace::default()
+        );
+        assert_eq!(
+            AutoReplace::from_names(&["auto_replace_everything"]),
+            Err("auto_replace_everything".to_owned())
+        );
+
+        let on = AutoReplace {
+            invalid: true,
+            low_country_confidence: true,
+            out_of_rotation: false,
+            failed_site_check: false,
+        };
+        assert_eq!(
+            on.without(&accepted).enabled(),
+            ["auto_replace_low_country_confidence_proxies"]
+        );
+        assert_eq!(
+            on.both(&accepted).enabled(),
+            ["auto_replace_invalid_proxies"]
+        );
+        assert_eq!(
+            AutoReplace::default().without(&accepted),
+            AutoReplace::default()
+        );
+    }
+
+    #[test]
+    fn a_reason_of_the_replaced_log_belongs_to_one_setting() {
+        let all = AutoReplace::from_names(&AutoReplace::SETTINGS).unwrap();
+        for reason in [
+            "auto_invalidated",
+            "auto_low_country_confidence",
+            "auto_out_of_rotation",
+            "auto_site_check",
+        ] {
+            assert!(all.covers_reason(reason), "{reason}");
+            assert!(!AutoReplace::default().covers_reason(reason), "{reason}");
+        }
+        // What Kage asked for, and what no setting does, is never covered.
+        for reason in ["proxy_replaced", "list_updated", "auto_deleted", ""] {
+            assert!(!all.covers_reason(reason), "{reason}");
+        }
+        let invalid_only = AutoReplace::from_names(&["auto_replace_invalid_proxies"]).unwrap();
+        assert!(invalid_only.covers_reason("auto_invalidated"));
+        assert!(!invalid_only.covers_reason("auto_site_check"));
     }
 }

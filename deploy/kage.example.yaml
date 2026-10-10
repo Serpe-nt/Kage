@@ -61,6 +61,15 @@ webshare:
   # Extra tries after a 429 or a failed read. A request that changes
   # something is never sent twice.
   max_retries: 2
+  # The account's automatic replacement settings that are left on on
+  # purpose. One of these being on is recorded as an event, not raised as
+  # the alert provider_auto_replace_enabled, and a proxy Webshare replaced
+  # for that reason is retired without the alert provider_replaced_proxy;
+  # its persona is retired and a new one generated either way. Names:
+  # auto_replace_invalid_proxies, auto_replace_low_country_confidence_proxies,
+  # auto_replace_out_of_rotation_proxies, auto_replace_failed_site_check_proxies.
+  accepted_auto_replace:
+    - auto_replace_invalid_proxies
 
 # IP reputation lookups (AbuseIPDB). Disabled without the key.
 reputation:
@@ -83,7 +92,9 @@ proxies:
   # Syncs in a row a proxy must be missing from the list before it is
   # retired, unless the provider itself reports it replaced.
   missing_syncs: 3
-  # Replacements kage may request per UTC calendar month.
+  # Replacements kage may request per budget window: the provider's
+  # subscription term when the account reports one (Webshare counts its own
+  # quota per term), else the UTC calendar month.
   replacements_per_month: 5
   # Failed checks in a row before backoff.
   failure_threshold: 3

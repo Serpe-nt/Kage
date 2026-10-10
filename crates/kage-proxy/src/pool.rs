@@ -59,7 +59,8 @@ use tokio::sync::broadcast;
 use crate::clock::{Clock, SystemClock};
 use crate::crypto::{CredentialCipher, CredentialField, CryptoError};
 use crate::machine::{
-    self, Effect, PoolRules, ProbeReport, ReplacementDecision, ReputationReport, month_start,
+    self, Effect, PoolRules, ProbeReport, ReplacementDecision, ReputationReport,
+    budget_window_start,
 };
 use crate::provider::{
     AccountInfo, ProviderError, ProviderProxy, ProxyProvider, ReplaceSpec, ReplaceState,
@@ -205,10 +206,36 @@ pub struct PoolSummary {
     pub usable: usize,
     /// Whether a leak is on record; see the module documentation.
     pub egress_unsafe: bool,
-    /// Replacements requested this UTC calendar month.
+    /// Replacements requested in the current budget window.
     pub replacements_this_month: u32,
-    /// The monthly budget.
+    /// The budget of one window.
     pub replacements_per_month: u32,
+    /// Where the current budget window began.
+    pub budget_window_start: DateTime<Utc>,
+    /// What the window is: the provider's subscription term, or the UTC
+    /// calendar month when the account reports none.
+    pub budget_window: BudgetWindow,
+}
+
+/// What the replacement budget is counted over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BudgetWindow {
+    /// The provider's subscription term, which is what the provider counts
+    /// its own quota over.
+    Term,
+    /// The UTC calendar month: the provider reported no term.
+    Month,
+}
+
+impl BudgetWindow {
+    /// The stable lowercase name.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Term => "term",
+            Self::Month => "month",
+        }
+    }
 }
 
 /// What one maintenance pass did.
@@ -267,10 +294,12 @@ struct Memory {
     traffic: HashMap<ProxyId, DateTime<Utc>>,
     /// When each replacement in flight was last asked about.
     polled: HashMap<ProxyId, DateTime<Utc>>,
-    /// The month the budget alert was last raised for.
+    /// The budget window the budget alert was last raised for.
     budget_alert: Option<DateTime<Utc>>,
     /// The account problems last alerted on.
     account_problems: Vec<String>,
+    /// The accepted automatic replacement settings last noted as on.
+    accepted_auto_replace: Vec<&'static str>,
 }
 
 /// The proxy pool. See the module documentation.
@@ -490,6 +519,7 @@ impl Pool {
             *by_state.entry(proxy.state).or_insert(0) += 1;
         }
         let now = self.clock.now();
+        let (window, kind) = self.budget_window(now);
         Ok(PoolSummary {
             live: proxies.iter().filter(|proxy| proxy.state.is_live()).count(),
             usable: proxies
@@ -498,13 +528,31 @@ impl Pool {
                 .count(),
             by_state,
             egress_unsafe: proxies.iter().any(Proxy::leak_detected),
-            replacements_this_month: self
-                .store
-                .proxies()
-                .replacements_since(month_start(now))
-                .await?,
+            replacements_this_month: self.store.proxies().replacements_since(window).await?,
             replacements_per_month: self.rules.replacements_per_month,
+            budget_window_start: window,
+            budget_window: kind,
         })
+    }
+
+    /// Where the window of the replacement budget began at `now`, and what
+    /// it is. The provider counts its own quota per subscription term, so
+    /// the budget follows the term the account last reported (spec §7.2);
+    /// before the account was read, or for a provider without terms, it is
+    /// the UTC calendar month.
+    pub fn budget_window(&self, now: DateTime<Utc>) -> (DateTime<Utc>, BudgetWindow) {
+        let term = self
+            .memory()
+            .account
+            .as_ref()
+            .and_then(|account| account.term_started_at.zip(account.term_ends_at));
+        let start = budget_window_start(now, term);
+        let kind = if term.is_some_and(|(from, to)| from < to && from <= now) {
+            BudgetWindow::Term
+        } else {
+            BudgetWindow::Month
+        };
+        (start, kind)
     }
 
     // --- Hooks ------------------------------------------------------------
@@ -1016,18 +1064,39 @@ impl Pool {
             if let Some(entry) = confirmed {
                 if proxy.state != ProxyState::Replacing {
                     // Not a replacement Kage asked for.
-                    self.alerts.raise(
-                        self.alert(
-                            AlertKind::ProviderReplacedProxy,
-                            AlertSeverity::Warning,
-                            "the provider replaced a proxy by itself",
-                            json!({
-                                "reason": entry.reason, "host": proxy.host,
-                                "replaced_with": entry.new_host, "at": entry.at,
-                            }),
+                    let details = json!({
+                        "reason": entry.reason, "host": proxy.host,
+                        "replaced_with": entry.new_host, "at": entry.at,
+                    });
+                    if self
+                        .rules
+                        .accepted_auto_replace
+                        .covers_reason(&entry.reason)
+                    {
+                        // The operator accepted this setting (decision D31):
+                        // the swap is noted, and handled like any other.
+                        tracing::info!(
+                            proxy = %proxy.id, reason = %entry.reason,
+                            "the provider replaced a proxy by itself, as accepted"
+                        );
+                        self.event(
+                            Some(proxy.id),
+                            "provider_replaced_proxy",
+                            AlertSeverity::Info,
+                            details,
                         )
-                        .about(proxy.id),
-                    );
+                        .await;
+                    } else {
+                        self.alerts.raise(
+                            self.alert(
+                                AlertKind::ProviderReplacedProxy,
+                                AlertSeverity::Warning,
+                                "the provider replaced a proxy by itself",
+                                details,
+                            )
+                            .about(proxy.id),
+                        );
+                    }
                 }
                 self.retire(proxy, now, &entry.reason, &mut report).await?;
             } else if missed >= self.missing_syncs {
@@ -1227,11 +1296,32 @@ impl Pool {
             .await;
         }
 
-        let auto = account
-            .auto_replace
-            .map(|flags| flags.enabled())
-            .unwrap_or_default();
-        if auto.is_empty() {
+        // A setting the operator accepted (`webshare.accepted_auto_replace`)
+        // is noted when it is found on; any other one is an alert.
+        let on = account.auto_replace.unwrap_or_default();
+        let accepted = on.both(&self.rules.accepted_auto_replace).enabled();
+        let unexpected = on.without(&self.rules.accepted_auto_replace).enabled();
+        let newly_noted = {
+            let mut memory = self.memory();
+            let changed = memory.accepted_auto_replace != accepted;
+            memory.accepted_auto_replace.clone_from(&accepted);
+            changed && !accepted.is_empty()
+        };
+        if newly_noted {
+            tracing::info!(
+                enabled = ?accepted,
+                "the provider account replaces proxies automatically, as accepted in \
+                 webshare.accepted_auto_replace"
+            );
+            self.event(
+                None,
+                "provider_auto_replace_accepted",
+                AlertSeverity::Info,
+                json!({ "enabled": accepted }),
+            )
+            .await;
+        }
+        if unexpected.is_empty() {
             self.settle(AlertKind::ProviderAutoReplaceEnabled, None);
         } else {
             self.raise_once(self.alert(
@@ -1239,8 +1329,8 @@ impl Pool {
                 AlertSeverity::Warning,
                 "the provider account replaces proxies automatically, so an address and its \
                  persona can change without Kage deciding it; switch these settings off in \
-                 the provider's dashboard",
-                json!({ "enabled": auto }),
+                 the provider's dashboard, or name them in webshare.accepted_auto_replace",
+                json!({ "enabled": unexpected, "accepted": accepted }),
             ));
         }
 
@@ -1328,10 +1418,11 @@ impl Pool {
         let now = self.clock.now();
         let rules = self.rules;
         let available = account.and_then(|account| account.replacements_available);
+        let (window, _) = self.budget_window(now);
         let decision = self
             .store
             .proxies()
-            .modify_counting_replacements(id, month_start(now), |proxy, used| {
+            .modify_counting_replacements(id, window, |proxy, used| {
                 // The pool decided on what it read a moment ago; a probe may
                 // have passed since. Only an operator's request is taken
                 // whatever the proxy's health.
@@ -1416,18 +1507,22 @@ impl Pool {
         budget: u32,
         now: DateTime<Utc>,
     ) {
-        // Once per month, however many proxies wait.
-        let month = month_start(now);
-        if self.memory().budget_alert.replace(month) == Some(month) {
+        // Once per budget window, however many proxies wait.
+        let (window, kind) = self.budget_window(now);
+        if self.memory().budget_alert.replace(window) == Some(window) {
             return;
         }
         self.alerts.raise(
             self.alert(
                 AlertKind::ReplacementBudgetExhausted,
                 AlertSeverity::Critical,
-                "a proxy qualifies for replacement but this month's replacement budget is used \
-                 up; it stays where it is and recovers by itself if the address comes back",
-                json!({ "used": used, "budget": budget, "reason": reason, "month": month }),
+                "a proxy qualifies for replacement but the replacement budget of this \
+                 subscription term or month is used up; it stays where it is and recovers by \
+                 itself if the address comes back",
+                json!({
+                    "used": used, "budget": budget, "reason": reason,
+                    "window_start": window, "window": kind,
+                }),
             )
             .about(id),
         );

@@ -50,6 +50,30 @@ pub struct WebshareConfig {
     /// something is never sent twice.
     #[serde(default = "default_api_retries")]
     pub max_retries: u32,
+    /// The account's automatic replacement settings the operator leaves on
+    /// on purpose (decision D31). One of them being on is recorded as an
+    /// informational event instead of the alert
+    /// `provider_auto_replace_enabled`, and a proxy Webshare replaced for
+    /// that reason is retired without the alert `provider_replaced_proxy`:
+    /// its persona is retired and a new one generated either way. Names
+    /// are Webshare's own, see [`WEBSHARE_AUTO_REPLACE_SETTINGS`].
+    #[serde(default = "default_accepted_auto_replace")]
+    pub accepted_auto_replace: Vec<String>,
+}
+
+/// The four settings of a Webshare account that replace proxies without
+/// being asked.
+pub const WEBSHARE_AUTO_REPLACE_SETTINGS: [&str; 4] = [
+    "auto_replace_invalid_proxies",
+    "auto_replace_low_country_confidence_proxies",
+    "auto_replace_out_of_rotation_proxies",
+    "auto_replace_failed_site_check_proxies",
+];
+
+fn default_accepted_auto_replace() -> Vec<String> {
+    // Webshare replaces only a proxy its own checks find dead, which Kage
+    // would have replaced anyway after its backoff.
+    vec!["auto_replace_invalid_proxies".to_owned()]
 }
 
 fn default_webshare_base_url() -> String {
@@ -92,6 +116,7 @@ impl Default for WebshareConfig {
             timeout: default_api_timeout(),
             rate_limit_backoff: default_rate_limit_backoff(),
             max_retries: default_api_retries(),
+            accepted_auto_replace: default_accepted_auto_replace(),
         }
     }
 }
@@ -334,7 +359,9 @@ pub struct ProxiesConfig {
     /// before it is retired, unless the provider itself reports it replaced.
     #[serde(default = "default_missing_syncs")]
     pub missing_syncs: u32,
-    /// Replacements Kage may request per UTC calendar month.
+    /// Replacements Kage may request per budget window: the provider's
+    /// subscription term when the account reports one, else the UTC
+    /// calendar month.
     #[serde(default = "default_replacements_per_month")]
     pub replacements_per_month: u32,
     /// Failed checks in a row that send a proxy into backoff (N).
@@ -656,6 +683,19 @@ pub(super) fn validate(
     if webshare.max_retries > 10 {
         return fail("webshare.max_retries must be at most 10");
     }
+    for (index, name) in webshare.accepted_auto_replace.iter().enumerate() {
+        if !WEBSHARE_AUTO_REPLACE_SETTINGS.contains(&name.as_str()) {
+            return Err(format!(
+                "webshare.accepted_auto_replace: {name:?} is not one of {}",
+                WEBSHARE_AUTO_REPLACE_SETTINGS.join(", ")
+            ));
+        }
+        if webshare.accepted_auto_replace[..index].contains(name) {
+            return Err(format!(
+                "webshare.accepted_auto_replace names {name} more than once"
+            ));
+        }
+    }
 
     http_url("reputation.base_url", &reputation.base_url, true)?;
     if reputation.interval.get() < Duration::from_hours(1) {
@@ -833,6 +873,18 @@ mod tests {
                 w.timeout = HumanDuration::from_secs(0);
             }),
             ("webshare.max_retries", |w, _, _| w.max_retries = 11),
+            (
+                "webshare.accepted_auto_replace: \"auto_replace_everything\"",
+                |w, _, _| {
+                    w.accepted_auto_replace = vec!["auto_replace_everything".to_owned()];
+                },
+            ),
+            ("webshare.accepted_auto_replace names", |w, _, _| {
+                w.accepted_auto_replace = vec![
+                    "auto_replace_invalid_proxies".to_owned(),
+                    "auto_replace_invalid_proxies".to_owned(),
+                ];
+            }),
             ("reputation.base_url", |_, r, _| {
                 r.base_url = "not a url".to_owned();
             }),

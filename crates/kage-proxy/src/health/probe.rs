@@ -72,6 +72,9 @@ pub struct GeoLookup {
     pub org: Option<String>,
     /// IANA time zone of the exit address.
     pub timezone: Option<String>,
+    /// Where the lookup places the address: `latitude,longitude` in decimal
+    /// degrees.
+    pub loc: Option<String>,
 }
 
 /// When a probe should also look the exit address up.
@@ -420,6 +423,7 @@ pub fn parse_geo(body: &str) -> Option<GeoLookup> {
             asn: None,
             org: None,
             timezone: None,
+            loc: None,
         });
     };
     let text = |keys: &[&str]| -> Option<String> {
@@ -455,7 +459,36 @@ pub fn parse_geo(body: &str) -> Option<GeoLookup> {
         asn,
         org,
         timezone,
+        loc: coordinates(&map),
     })
+}
+
+/// The coordinates a lookup names, as `latitude,longitude`: ipinfo.io's
+/// `loc`, or a pair of numbers under the usual names. Anything that is not
+/// a point on the globe is left out.
+fn coordinates(map: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
+    let number = |keys: &[&str]| -> Option<f64> {
+        keys.iter().find_map(|key| {
+            let value = map.get(*key)?;
+            value
+                .as_f64()
+                .or_else(|| value.as_str()?.trim().parse().ok())
+        })
+    };
+    let pair = map
+        .get("loc")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|loc| {
+            let (latitude, longitude) = loc.split_once(',')?;
+            Some((
+                latitude.trim().parse().ok()?,
+                longitude.trim().parse().ok()?,
+            ))
+        })
+        .or_else(|| number(&["latitude", "lat"]).zip(number(&["longitude", "lon", "lng"])));
+    let (latitude, longitude): (f64, f64) = pair?;
+    ((-90.0..=90.0).contains(&latitude) && (-180.0..=180.0).contains(&longitude))
+        .then(|| format!("{latitude},{longitude}"))
 }
 
 /// Separates the AS number from the operator's name. ipinfo.io writes both
@@ -559,6 +592,7 @@ mod tests {
         assert_eq!(geo.asn.as_deref(), Some("AS3320"));
         assert_eq!(geo.org.as_deref(), Some("Deutsche Telekom AG"));
         assert_eq!(geo.timezone.as_deref(), Some("Europe/Berlin"));
+        assert_eq!(geo.loc.as_deref(), Some("52.52,13.405"));
     }
 
     #[test]
@@ -569,6 +603,7 @@ mod tests {
         assert_eq!(minimal.city, None);
         assert_eq!(minimal.asn, None);
         assert_eq!(minimal.timezone, None);
+        assert_eq!(minimal.loc, None);
 
         // The name under `country`, the code under another key; the zone
         // as an object; the AS number as a number.
@@ -584,6 +619,29 @@ mod tests {
         assert_eq!(verbose.timezone.as_deref(), Some("Europe/Vienna"));
         assert_eq!(verbose.asn.as_deref(), Some("AS8447"));
         assert_eq!(verbose.org.as_deref(), Some("A1 Telekom Austria AG"));
+        assert_eq!(verbose.loc, None);
+
+        // Coordinates as two numbers, or as text; a point off the globe is
+        // left out and the record still stands.
+        for (body, expected) in [
+            (
+                r#"{"countryCode":"IT","lat":45.4643,"lon":9.1895}"#,
+                Some("45.4643,9.1895"),
+            ),
+            (
+                r#"{"country":"FR","latitude":"48.8534","longitude":"2.3488"}"#,
+                Some("48.8534,2.3488"),
+            ),
+            (
+                r#"{"country":"FR","loc":"48.8534, 2.3488"}"#,
+                Some("48.8534,2.3488"),
+            ),
+            (r#"{"country":"FR","loc":"948.8,2.3"}"#, None),
+            (r#"{"country":"FR","loc":"Paris"}"#, None),
+            (r#"{"country":"FR","lat":48.8}"#, None),
+        ] {
+            assert_eq!(parse_geo(body).unwrap().loc.as_deref(), expected, "{body}");
+        }
 
         // Cloudflare's trace.
         let trace = parse_geo("ip=203.0.113.20\ncolo=LIS\nloc=PT\ntls=TLSv1.3\n").unwrap();

@@ -18,7 +18,8 @@ use kage_core::config::Config;
 use kage_core::domain::{AuditActor, AuditEvent, AuditOutcome, Proxy, ProxyState, ReplaceReason};
 use kage_core::ids::{AuditEventId, ProxyId};
 use kage_proxy::{
-    AccountInfo, CheckResult, HealthChecker, Pool, PoolError, PoolSummary, ReplacementOutcome,
+    AccountInfo, AutoReplace, BudgetWindow, CheckResult, HealthChecker, Pool, PoolError,
+    PoolSummary, ReplacementOutcome,
 };
 use kage_store::Store;
 use serde_json::{Value, json};
@@ -212,8 +213,17 @@ fn summary_line(summary: &PoolSummary) -> String {
         .filter(|(_, count)| **count > 0)
         .map(|(state, count)| format!("{count} {state}"))
         .collect();
+    // The budget is counted over the provider's subscription term when the
+    // account reports one, else over the calendar month.
+    let window = match summary.budget_window {
+        BudgetWindow::Term => format!(
+            "term (since {})",
+            summary.budget_window_start.format("%Y-%m-%d")
+        ),
+        BudgetWindow::Month => "month".to_owned(),
+    };
     format!(
-        "{} live, {} usable ({}); replacements this month: {} of {}; egress: {}",
+        "{} live, {} usable ({}); replacements this {window}: {} of {}; egress: {}",
         summary.live,
         summary.usable,
         if states.is_empty() {
@@ -318,8 +328,15 @@ async fn list_in(
         return Ok(());
     }
 
-    list_table(out, &proxies, &usernames, &summary, pool.account().as_ref())
-        .context("cannot write the list")
+    list_table(
+        out,
+        &proxies,
+        &usernames,
+        &summary,
+        pool.account().as_ref(),
+        &pool.rules().accepted_auto_replace,
+    )
+    .context("cannot write the list")
 }
 
 /// The list as a table, followed by the pool's summary and what the
@@ -330,6 +347,7 @@ fn list_table(
     usernames: &[Option<String>],
     summary: &PoolSummary,
     account: Option<&AccountInfo>,
+    accepted: &AutoReplace,
 ) -> std::io::Result<()> {
     let mut header = vec![
         "ID",
@@ -377,15 +395,22 @@ fn list_table(
     if let Some(available) = account.replacements_available {
         writeln!(out, "provider plan: {available} replacements left")?;
     }
-    let auto = account
-        .auto_replace
-        .map(|flags| flags.enabled())
-        .unwrap_or_default();
-    if !auto.is_empty() {
+    let on = account.auto_replace.unwrap_or_default();
+    let unexpected = on.without(accepted).enabled();
+    if !unexpected.is_empty() {
         writeln!(
             out,
             "provider replaces proxies by itself ({}); switch this off in its dashboard",
-            auto.join(", ")
+            unexpected.join(", ")
+        )?;
+    }
+    let noted = on.both(accepted).enabled();
+    if !noted.is_empty() {
+        writeln!(
+            out,
+            "provider replaces proxies by itself ({}), as accepted in \
+             webshare.accepted_auto_replace",
+            noted.join(", ")
         )?;
     }
     Ok(())
@@ -747,7 +772,7 @@ mod tests {
     use kage_core::ids::ProxyId;
     use kage_core::secret::SealedSecret;
     use kage_proxy::machine::{ExitObservation, ProbeReport};
-    use kage_proxy::{CheckResult, PoolSummary};
+    use kage_proxy::{BudgetWindow, CheckResult, PoolSummary};
 
     use super::{country, proxy_json, summary_line, table, time, verdict};
 
@@ -791,6 +816,7 @@ mod tests {
             asn: None,
             org: None,
             timezone: None,
+            loc: None,
             ip: "203.0.113.20".parse().unwrap(),
             checked_at: health.checked_at,
         });
@@ -885,12 +911,14 @@ mod tests {
             egress_unsafe: false,
             replacements_this_month: 2,
             replacements_per_month: 5,
+            budget_window_start: Utc.with_ymd_and_hms(2026, 10, 9, 12, 20, 0).unwrap(),
+            budget_window: BudgetWindow::Term,
         };
 
         assert_eq!(
             summary_line(&summary),
             "20 live, 19 usable (18 healthy, 1 degraded, 1 backoff, 2 retired); \
-             replacements this month: 2 of 5; egress: safe"
+             replacements this term (since 2026-10-09): 2 of 5; egress: safe"
         );
 
         summary.egress_unsafe = true;
@@ -903,8 +931,12 @@ mod tests {
             egress_unsafe: false,
             replacements_this_month: 0,
             replacements_per_month: 5,
+            budget_window_start: Utc.with_ymd_and_hms(2026, 10, 1, 0, 0, 0).unwrap(),
+            budget_window: BudgetWindow::Month,
         };
-        assert!(summary_line(&empty).starts_with("0 live, 0 usable (no proxies)"));
+        let line = summary_line(&empty);
+        assert!(line.starts_with("0 live, 0 usable (no proxies)"), "{line}");
+        assert!(line.contains("replacements this month: 0 of 5"), "{line}");
     }
 
     #[test]

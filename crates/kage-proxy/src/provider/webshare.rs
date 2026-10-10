@@ -440,6 +440,7 @@ impl ProxyProvider for WebshareProvider {
             .or_else(|| subscription.plan.map(Id::into_string));
         let mut account = AccountInfo {
             plan_id: plan_id.clone(),
+            term_started_at: subscription.start_date,
             term_ends_at: subscription.end_date,
             renewals_enabled: subscription.renewals_enabled,
             paused: subscription.paused,
@@ -768,6 +769,8 @@ impl From<ReplacedEntry> for ReplacedProxy {
 struct Subscription {
     #[serde(default)]
     plan: Option<Id>,
+    #[serde(default)]
+    start_date: Option<DateTime<Utc>>,
     #[serde(default)]
     end_date: Option<DateTime<Utc>>,
     #[serde(default)]

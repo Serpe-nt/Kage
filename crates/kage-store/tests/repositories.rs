@@ -84,6 +84,7 @@ async fn proxies_round_trip_filter_and_update() {
             asn: Some("AS3320".to_owned()),
             org: Some("Deutsche Telekom AG".to_owned()),
             timezone: Some("Europe/Berlin".to_owned()),
+            loc: Some("52.52,13.405".to_owned()),
             ip: "203.0.113.5".parse().unwrap(),
             checked_at: now(),
         }),

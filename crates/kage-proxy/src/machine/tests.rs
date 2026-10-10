@@ -13,9 +13,9 @@ use proptest::prelude::*;
 
 use super::{
     ALLOWED_TRANSITIONS, Effect, ExitObservation, PoolRules, ProbeReport, ReplacementDecision,
-    ReputationReport, apply_probe, apply_reputation, backoff_delay, clear_leak, expire_backoff,
-    fail_replacement, finish_replacement, is_allowed, is_hosting, month_start, replacement_due,
-    retire, start_replacement,
+    ReputationReport, apply_probe, apply_reputation, backoff_delay, budget_window_start,
+    clear_leak, expire_backoff, fail_replacement, finish_replacement, is_allowed, is_hosting,
+    month_start, replacement_due, retire, start_replacement,
 };
 use crate::test_support::{noon, proxy};
 
@@ -77,6 +77,7 @@ fn geo(country: &str, at: DateTime<Utc>) -> GeoRecord {
         asn: Some("AS8447".to_owned()),
         org: Some("A1 Telekom Austria AG".to_owned()),
         timezone: Some("Europe/Vienna".to_owned()),
+        loc: Some("48.2085,16.3721".to_owned()),
         ip: ip(EXIT),
         checked_at: at,
     }
@@ -1076,6 +1077,54 @@ fn the_budget_window_is_the_utc_calendar_month() {
         month_start(Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap()),
         Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap()
     );
+    // Without a term, or with one that says nothing, it is the month.
+    let now = at(15, 12);
+    assert_eq!(budget_window_start(now, None), first);
+    assert_eq!(budget_window_start(now, Some((now, now))), first);
+    assert_eq!(
+        budget_window_start(
+            now,
+            Some((now + Duration::days(1), now + Duration::days(31)))
+        ),
+        first
+    );
+}
+
+#[test]
+fn the_budget_window_follows_the_providers_subscription_term() {
+    // The owner's plan: bought on the 9th at 12:20, thirty days long.
+    let start = Utc.with_ymd_and_hms(2026, 10, 9, 12, 20, 31).unwrap();
+    let end = start + Duration::days(30);
+    let term = Some((start, end));
+
+    // Inside the term the window starts where the term does, across the
+    // turn of the calendar month.
+    for now in [
+        start,
+        start + Duration::seconds(1),
+        Utc.with_ymd_and_hms(2026, 10, 31, 23, 59, 59).unwrap(),
+        Utc.with_ymd_and_hms(2026, 11, 1, 0, 0, 0).unwrap(),
+        end - Duration::seconds(1),
+    ] {
+        assert_eq!(budget_window_start(now, term), start, "{now}");
+    }
+    // An account read that is older than its term: the plan renewed, and
+    // the window is the term the plan is in now.
+    assert_eq!(budget_window_start(end, term), end);
+    assert_eq!(budget_window_start(end + Duration::days(29), term), end);
+    assert_eq!(
+        budget_window_start(end + Duration::days(30), term),
+        end + Duration::days(30)
+    );
+    assert_eq!(
+        budget_window_start(start + Duration::days(95), term),
+        start + Duration::days(90)
+    );
+    // Before the term began the account says nothing about now.
+    assert_eq!(
+        budget_window_start(start - Duration::seconds(1), term),
+        Utc.with_ymd_and_hms(2026, 10, 1, 0, 0, 0).unwrap()
+    );
 }
 
 #[test]
@@ -1221,6 +1270,7 @@ fn any_rules() -> impl Strategy<Value = PoolRules> {
                     geo_mismatches: geo,
                     bad_score,
                     bad_lookups,
+                    ..PoolRules::default()
                 }
             },
         )

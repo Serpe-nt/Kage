@@ -139,6 +139,11 @@ pub struct GeoRecord {
     /// IANA time zone of the exit address.
     #[serde(default)]
     pub timezone: Option<String>,
+    /// Where the lookup places the address, as `latitude,longitude` in
+    /// decimal degrees: the centre of the city, not of a house. A persona's
+    /// reported position is drawn near it.
+    #[serde(default)]
+    pub loc: Option<String>,
     /// The address that was looked up.
     pub ip: IpAddr,
     /// When the lookup ran.
@@ -146,8 +151,20 @@ pub struct GeoRecord {
 }
 
 impl GeoRecord {
-    /// Whether two records describe the same place and network. The lookup
-    /// time is not part of the comparison.
+    /// The coordinates of [`Self::loc`] as degrees north and east, when the
+    /// lookup gave a pair inside the globe.
+    pub fn coordinates(&self) -> Option<(f64, f64)> {
+        let (latitude, longitude) = self.loc.as_deref()?.split_once(',')?;
+        let latitude: f64 = latitude.trim().parse().ok()?;
+        let longitude: f64 = longitude.trim().parse().ok()?;
+        ((-90.0..=90.0).contains(&latitude) && (-180.0..=180.0).contains(&longitude))
+            .then_some((latitude, longitude))
+    }
+
+    /// Whether two records describe the same place and network. Neither the
+    /// lookup time nor the coordinates are part of the comparison: a lookup
+    /// service moves a city's centre by a few hundred metres now and then,
+    /// which is no change of place.
     pub fn same_location(&self, other: &Self) -> bool {
         self.country == other.country
             && self.city == other.city
@@ -341,6 +358,7 @@ mod tests {
             asn: Some("AS8447".to_owned()),
             org: Some("A1 Telekom Austria AG".to_owned()),
             timezone: Some("Europe/Vienna".to_owned()),
+            loc: Some("48.2085,16.3721".to_owned()),
             ip: "203.0.113.9".parse().unwrap(),
             checked_at: Utc::now(),
         }
@@ -502,5 +520,37 @@ mod tests {
         moved.timezone = Some("Europe/Berlin".to_owned());
         assert!(!first.same_location(&moved));
         assert!(!first.same_location(&geo("DE")));
+
+        // The centre of a city drifting in the lookup's data is no move.
+        let mut drifted = first.clone();
+        drifted.loc = Some("48.2100,16.3700".to_owned());
+        assert!(first.same_location(&drifted));
+    }
+
+    #[test]
+    fn coordinates_are_read_from_the_lookups_pair() {
+        let mut record = geo("AT");
+        assert_eq!(record.coordinates(), Some((48.2085, 16.3721)));
+
+        for (loc, expected) in [
+            (Some(" -33.8688 , 151.2093 "), Some((-33.8688, 151.2093))),
+            (Some("90,-180"), Some((90.0, -180.0))),
+            (Some("91,10"), None),
+            (Some("10,181"), None),
+            (Some("48.2085"), None),
+            (Some("north,east"), None),
+            (Some(""), None),
+            (None, None),
+        ] {
+            record.loc = loc.map(str::to_owned);
+            assert_eq!(record.coordinates(), expected, "{loc:?}");
+        }
+
+        // A record stored before the field existed reads as having none.
+        let old: GeoRecord = serde_json::from_str(
+            r#"{"country":"AT","ip":"203.0.113.9","checked_at":"2026-10-08T12:00:00Z"}"#,
+        )
+        .unwrap();
+        assert_eq!(old.loc, None);
     }
 }

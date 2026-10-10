@@ -38,8 +38,8 @@ pub use crypto::{CredentialCipher, CredentialField, CryptoError};
 pub use health::{CheckResult, HealthChecker, HealthSettings, HealthSetupError};
 pub use machine::PoolRules;
 pub use pool::{
-    Pool, PoolError, PoolEvent, PoolParts, PoolSummary, ProxyEndpoint, ReconcileReport,
-    ReplacementOutcome, TickReport,
+    BudgetWindow, Pool, PoolError, PoolEvent, PoolParts, PoolSummary, ProxyEndpoint,
+    ReconcileReport, ReplacementOutcome, TickReport,
 };
 pub use provider::{
     AccountInfo, AutoReplace, ProviderError, ProviderProxy, ProxyActivity, ProxyProvider,

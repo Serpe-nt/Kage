@@ -14,7 +14,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use common::{
     MASTER_KEY, MASTER_KEY_BYTES, MockWebshare, PROXY_PASS, PROXY_USER, TestDb, WEBSHARE_TOKEN,
 };
-use kage_core::alert::{AlertKind, MemoryAlertSink};
+use kage_core::alert::{AlertKind, AlertSeverity, MemoryAlertSink};
 use kage_core::config::{Config, StaticProxy, WebshareConfig};
 use kage_core::domain::{
     GeoRecord, HealthEvent, HealthFailure, Proxy, ProxyHealth, ProxyProviderKind, ProxyState,
@@ -26,8 +26,9 @@ use kage_core::secret::Secret;
 use kage_core::seed::Seed;
 use kage_proxy::machine::{ExitObservation, ProbeReport, ReputationReport};
 use kage_proxy::{
-    CredentialCipher, CryptoError, ManualClock, Pool, PoolError, PoolEvent, PoolParts, PoolRules,
-    ProviderError, ProxyProvider, ReplacementOutcome, StaticListProvider, WebshareProvider,
+    AutoReplace, BudgetWindow, CredentialCipher, CryptoError, ManualClock, Pool, PoolError,
+    PoolEvent, PoolParts, PoolRules, ProviderError, ProxyProvider, ReplacementOutcome,
+    StaticListProvider, WebshareProvider,
 };
 use serde_json::json;
 
@@ -461,16 +462,17 @@ async fn a_proxy_the_provider_replaced_by_itself_is_retired_at_once_with_an_aler
     let replaced = proxies[2].clone();
     harness.advance(chrono::Duration::hours(3));
     let now = harness.now();
+    // A setting the operator did not accept did it.
     let new_ip = harness
         .mock
-        .with(|state| state.auto_replace(&replaced.host, "auto_invalidated", now));
+        .with(|state| state.auto_replace(&replaced.host, "auto_out_of_rotation", now));
 
     let report = harness.pool.reconcile().await.unwrap();
 
     // One sync is enough: the provider's own log confirms it.
     assert_eq!(
         report.retired,
-        [(replaced.id, "auto_invalidated".to_owned())]
+        [(replaced.id, "auto_out_of_rotation".to_owned())]
     );
     assert_eq!(report.added.len(), 1);
     assert_eq!(harness.proxy(replaced.id).await.state, ProxyState::Retired);
@@ -483,10 +485,86 @@ async fn a_proxy_the_provider_replaced_by_itself_is_retired_at_once_with_an_aler
         .find(|alert| alert.kind == AlertKind::ProviderReplacedProxy)
         .unwrap();
     assert_eq!(alert.subject, Some(replaced.id.as_uuid()));
-    assert_eq!(alert.details["reason"], "auto_invalidated");
+    assert_eq!(alert.details["reason"], "auto_out_of_rotation");
     assert_eq!(alert.details["replaced_with"], new_ip);
+    assert_eq!(harness.events("provider_replaced_proxy").await, []);
     // That was not a replacement Kage asked for: the budget is untouched.
     assert_eq!(harness.used_this_month().await, 0);
+}
+
+/// Decision D31 and follow-up F16: Webshare may replace a proxy its own
+/// checks found dead. The swap is noted instead of alerted, and takes the
+/// same path as any other: the old proxy retired, the new one adopted, both
+/// published, so the persona behind the old address is retired and a new one
+/// generated.
+#[tokio::test]
+async fn a_swap_by_an_accepted_provider_setting_is_noted_and_takes_the_same_path() {
+    let harness = harness(4).await;
+    let proxies = harness.healthy_pool().await;
+    let replaced = proxies[1].clone();
+    harness.advance(chrono::Duration::hours(3));
+    let now = harness.now();
+    let mut events = harness.pool.subscribe();
+    let new_ip = harness
+        .mock
+        .with(|state| state.auto_replace(&replaced.host, "auto_invalidated", now));
+
+    let report = harness.pool.reconcile().await.unwrap();
+
+    assert_eq!(
+        report.retired,
+        [(replaced.id, "auto_invalidated".to_owned())]
+    );
+    assert_eq!(harness.proxy(replaced.id).await.state, ProxyState::Retired);
+    let adopted = harness.at(&new_ip).await;
+    assert_eq!(adopted.state, ProxyState::New);
+    assert_eq!(report.added, [adopted.id]);
+    // What subscribers see is what they see for a replacement Kage asked
+    // for: one proxy added (the list is read first), one retired.
+    let mut published = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        published.push(event);
+    }
+    assert_eq!(
+        published,
+        [
+            PoolEvent::Added { proxy: adopted.id },
+            PoolEvent::StateChanged {
+                proxy: replaced.id,
+                from: ProxyState::Healthy,
+                to: ProxyState::Retired,
+            },
+        ]
+    );
+    // An event, not an alert.
+    assert_eq!(harness.alerts_of(AlertKind::ProviderReplacedProxy), 0);
+    assert_eq!(harness.alerts.alerts(), []);
+    let noted = harness.events("provider_replaced_proxy").await;
+    assert_eq!(noted.len(), 1);
+    assert_eq!(noted[0].subject_id, Some(replaced.id.as_uuid()));
+    assert_eq!(noted[0].severity, AlertSeverity::Info);
+    assert_eq!(noted[0].details["reason"], "auto_invalidated");
+    assert_eq!(noted[0].details["replaced_with"], new_ip);
+    assert_eq!(harness.used_this_month().await, 0);
+
+    // With nothing accepted the same swap is an alert again.
+    let strict = harness_with(
+        PoolRules {
+            accepted_auto_replace: AutoReplace::default(),
+            ..PoolRules::default()
+        },
+        2,
+    )
+    .await;
+    let proxies = strict.healthy_pool().await;
+    strict.advance(chrono::Duration::hours(1));
+    let now = strict.now();
+    strict
+        .mock
+        .with(|state| state.auto_replace(&proxies[0].host, "auto_invalidated", now));
+    strict.pool.reconcile().await.unwrap();
+    assert_eq!(strict.alerts_of(AlertKind::ProviderReplacedProxy), 1);
+    assert_eq!(strict.events("provider_replaced_proxy").await, []);
 }
 
 #[tokio::test]
@@ -801,6 +879,86 @@ async fn the_budget_is_never_exceeded_and_the_longest_failing_proxy_goes_first()
     assert!(now > start());
 }
 
+/// Follow-up F1: Webshare counts replacements per subscription term, so
+/// once the account is read Kage's budget is counted over that term and not
+/// over the calendar month.
+#[tokio::test]
+async fn the_budget_follows_the_providers_subscription_term() {
+    let rules = PoolRules {
+        replacements_per_month: 1,
+        ..PoolRules::default()
+    };
+    let harness = harness_with(rules, 6).await;
+    let proxies = harness.healthy_pool().await;
+    // Before the account is read the window is the calendar month.
+    let summary = harness.pool.summary().await.unwrap();
+    assert_eq!(summary.budget_window, BudgetWindow::Month);
+    assert_eq!(
+        summary.budget_window_start,
+        Utc.with_ymd_and_hms(2026, 10, 1, 0, 0, 0).unwrap()
+    );
+
+    // The owner's plan: bought on the 9th, thirty days long.
+    let term_start = Utc.with_ymd_and_hms(2026, 10, 9, 12, 20, 31).unwrap();
+    let term_end = term_start + chrono::Duration::days(30);
+    harness.mock.with(|state| {
+        state.term = (term_start.to_rfc3339(), term_end.to_rfc3339());
+    });
+    let account = harness.pool.sync_account().await.unwrap();
+    assert_eq!(account.term_started_at, Some(term_start));
+    assert_eq!(account.term_ends_at, Some(term_end));
+    let summary = harness.pool.summary().await.unwrap();
+    assert_eq!(summary.budget_window, BudgetWindow::Term);
+    assert_eq!(summary.budget_window_start, term_start);
+
+    let replace = |proxy: ProxyId| {
+        let pool = harness.pool.clone();
+        async move {
+            pool.request_replacement(proxy, ReplaceReason::Operator)
+                .await
+                .unwrap()
+        }
+    };
+    assert!(matches!(
+        replace(proxies[0].id).await,
+        ReplacementOutcome::Requested { .. }
+    ));
+    harness.finish_replacement().await;
+    assert_eq!(harness.used_this_month().await, 1);
+
+    // A new calendar month inside the same term: the budget is not new.
+    let november = Utc.with_ymd_and_hms(2026, 11, 1, 0, 0, 5).unwrap();
+    harness.clock.set(november);
+    harness.mock.with(|state| state.now = november);
+    assert_eq!(harness.used_this_month().await, 1);
+    assert_eq!(
+        replace(proxies[1].id).await,
+        ReplacementOutcome::BudgetExhausted { used: 1, budget: 1 }
+    );
+    let alert = harness
+        .alerts
+        .alerts()
+        .into_iter()
+        .find(|alert| alert.kind == AlertKind::ReplacementBudgetExhausted)
+        .unwrap();
+    assert_eq!(alert.details["window"], "term");
+    assert_eq!(alert.details["window_start"], json!(term_start));
+
+    // The term ran out and the plan renewed. Even on the account as it was
+    // last read, the window is the new term.
+    let renewed = term_end + chrono::Duration::minutes(1);
+    harness.clock.set(renewed);
+    harness.mock.with(|state| state.now = renewed);
+    let summary = harness.pool.summary().await.unwrap();
+    assert_eq!(summary.budget_window_start, term_end);
+    assert_eq!(summary.replacements_this_month, 0);
+    assert!(matches!(
+        replace(proxies[1].id).await,
+        ReplacementOutcome::Requested { .. }
+    ));
+    assert_eq!(harness.used_this_month().await, 1);
+}
+
 #[tokio::test]
 async fn the_providers_quota_and_its_stock_in_the_country_are_respected() {
     let harness = harness(5).await;
@@ -1083,12 +1241,22 @@ async fn the_account_is_reported_and_never_changed() {
         .iter()
         .find(|alert| alert.kind == AlertKind::ProviderAutoReplaceEnabled)
         .unwrap();
+    // The alert names the setting nobody accepted; the accepted one
+    // (decision D31) is noted once as an event.
     assert_eq!(
         auto.details["enabled"],
-        json!([
-            "auto_replace_invalid_proxies",
-            "auto_replace_low_country_confidence_proxies"
-        ])
+        json!(["auto_replace_low_country_confidence_proxies"])
+    );
+    assert_eq!(
+        auto.details["accepted"],
+        json!(["auto_replace_invalid_proxies"])
+    );
+    let noted = harness.events("provider_auto_replace_accepted").await;
+    assert_eq!(noted.len(), 1);
+    assert_eq!(noted[0].severity, AlertSeverity::Info);
+    assert_eq!(
+        noted[0].details["enabled"],
+        json!(["auto_replace_invalid_proxies"])
     );
     let paused = alerts
         .iter()
@@ -1336,6 +1504,7 @@ async fn geo_and_reputation_findings_are_stored_and_alerted() {
         asn: Some("AS8447".to_owned()),
         org: Some("A1 Telekom Austria AG".to_owned()),
         timezone: Some(timezone.to_owned()),
+        loc: None,
         ip: Harness::exit(&proxy),
         checked_at: at,
     };

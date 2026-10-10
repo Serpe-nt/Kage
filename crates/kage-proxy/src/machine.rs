@@ -41,6 +41,8 @@ use kage_core::domain::{
     ReplaceReason,
 };
 
+use crate::provider::AutoReplace;
+
 /// Every state change the machine can make. Staying in a state is always
 /// allowed and not listed.
 pub const ALLOWED_TRANSITIONS: &[(ProxyState, ProxyState)] = &[
@@ -87,8 +89,15 @@ pub struct PoolRules {
     /// How long a proxy must have been failing without a break before it is
     /// replaced.
     pub replace_after: chrono::Duration,
-    /// Replacements Kage may request per UTC calendar month.
+    /// Replacements Kage may request per budget window: the provider's
+    /// subscription term when the account reports one, else the UTC calendar
+    /// month ([`budget_window_start`]).
     pub replacements_per_month: u32,
+    /// The provider's automatic replacement settings the operator accepts
+    /// (`webshare.accepted_auto_replace`): one of these being on is noted,
+    /// not alerted, and a proxy the provider replaced for that reason is
+    /// retired without the alert.
+    pub accepted_auto_replace: AutoReplace,
     /// Geo lookups in a row that must disagree with the provider's country
     /// before the proxy is degraded.
     pub geo_mismatches: u32,
@@ -111,6 +120,9 @@ impl PoolRules {
             backoff_cycles: config.proxies.backoff_cycles,
             replace_after: duration(config.proxies.replace_after.get()),
             replacements_per_month: config.proxies.replacements_per_month,
+            // A configuration that loaded names known settings only.
+            accepted_auto_replace: AutoReplace::from_names(&config.webshare.accepted_auto_replace)
+                .unwrap_or_default(),
             geo_mismatches: config.proxies.health.geo_mismatches,
             bad_score: config.reputation.bad_score,
             bad_lookups: config.reputation.bad_lookups,
@@ -128,6 +140,14 @@ impl Default for PoolRules {
             backoff_cycles: 3,
             replace_after: chrono::Duration::hours(6),
             replacements_per_month: 5,
+            // Decision D31: Webshare may replace a proxy its own checks
+            // found dead.
+            accepted_auto_replace: AutoReplace {
+                invalid: true,
+                low_country_confidence: false,
+                out_of_rotation: false,
+                failed_site_check: false,
+            },
             geo_mismatches: 2,
             bad_score: 75,
             bad_lookups: 2,
@@ -254,8 +274,31 @@ pub enum ReplacementDecision {
     },
 }
 
+/// The start of the window the replacement budget is counted over at `now`.
+///
+/// The provider counts replacements per subscription term, not per calendar
+/// month (Webshare: thirty days from the day the plan was bought). When the
+/// account reports a term, Kage's budget follows it: the window starts at
+/// the term's start. An account read that is older than its own term (the
+/// plan renewed since) is rolled forward by whole terms. Without a usable
+/// term the window is the UTC calendar month ([`month_start`]).
+pub fn budget_window_start(
+    now: DateTime<Utc>,
+    term: Option<(DateTime<Utc>, DateTime<Utc>)>,
+) -> DateTime<Utc> {
+    let Some((start, end)) = term.filter(|(start, end)| start < end && *start <= now) else {
+        return month_start(now);
+    };
+    if now < end {
+        return start;
+    }
+    let length = end.signed_duration_since(start).num_seconds().max(1);
+    let terms = now.signed_duration_since(start).num_seconds() / length;
+    start + chrono::Duration::seconds(terms.saturating_mul(length))
+}
+
 /// The start of the UTC calendar month `now` falls in: the window the
-/// replacement budget is counted over.
+/// replacement budget is counted over when the provider reports no term.
 pub fn month_start(now: DateTime<Utc>) -> DateTime<Utc> {
     Utc.with_ymd_and_hms(now.year(), now.month(), 1, 0, 0, 0)
         .single()
