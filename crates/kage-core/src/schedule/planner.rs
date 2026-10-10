@@ -1096,14 +1096,37 @@ impl Planner {
     }
 
     /// Takes a persona and a browser session for the manager's own work: a
-    /// warm-up visit or a self-test. It never waits and comes last: it is
-    /// refused when the persona is in use, when no session is free, and
-    /// when it would take the last free session while work waits for one.
+    /// warm-up visit or a scheduled self-test. It never waits and comes
+    /// last, after synchronous requests and jobs: it is refused when the
+    /// persona is in use, when no session is free, and when it would take
+    /// the last free session while work waits for one.
     ///
     /// # Errors
     ///
     /// [`Held`] says why not.
     pub fn reserve(&mut self, persona: PersonaId, honour_stop: bool) -> Result<GrantId, Held> {
+        self.take(persona, honour_stop, true)
+    }
+
+    /// Takes a persona and a browser session for a self-test an operator
+    /// asked for. It counts as a synchronous request: it leaves no session
+    /// to work that waits, and no stop holds it. It never waits either.
+    ///
+    /// # Errors
+    ///
+    /// [`Held`] when the persona is in use, unknown, or no session is free.
+    pub fn reserve_for_operator(&mut self, persona: PersonaId) -> Result<GrantId, Held> {
+        self.take(persona, false, false)
+    }
+
+    /// A reservation outside the queue. With `yields` the last free session
+    /// is left to work that waits for one.
+    fn take(
+        &mut self,
+        persona: PersonaId,
+        honour_stop: bool,
+        yields: bool,
+    ) -> Result<GrantId, Held> {
         if honour_stop && let Some(reason) = self.stop {
             return Err(Held::Stopped(reason));
         }
@@ -1114,10 +1137,11 @@ impl Planner {
         if self.busy(persona) {
             return Err(Held::PersonaBusy);
         }
-        let waiting = self
-            .queue
-            .iter()
-            .any(|(_, queued)| queued.work.render == Render::Browser);
+        let waiting = yields
+            && self
+                .queue
+                .iter()
+                .any(|(_, queued)| queued.work.render == Render::Browser);
         let reserve = u32::from(waiting);
         if self.browser_in_flight + reserve >= self.rules.max_browser_sessions
             || self.engine_load(engine) + reserve >= self.rules.max_per_engine

@@ -511,3 +511,59 @@ async fn a_warm_up_visits_bytes_count_toward_its_site() {
     );
     world.shut_down().await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn an_operators_self_test_counts_as_a_synchronous_request() {
+    let mut world = World::with(
+        3,
+        true,
+        DEFAULT_DOMAINS,
+        &[("KAGE__SCHEDULER__MAX_BROWSER_SESSIONS", "2")],
+    );
+    let gate = gate(&world);
+    // One persona is making an attempt, and a request waits for that
+    // persona's browser: of the two sessions, one is in use and the other
+    // is the one the waiting request will need.
+    let busy = world
+        .scheduler
+        .acquire(world.work("a.example", Render::Browser, Priority::Sync))
+        .await
+        .unwrap();
+    let taken = busy.dispatch().persona;
+    let mut pinned = world.work("b.example", Render::Browser, Priority::Job);
+    pinned.pin = Some(taken);
+    let scheduler = Arc::clone(&world.scheduler);
+    let waiting = tokio::spawn(async move { scheduler.acquire(pinned).await });
+    settle().await;
+    assert_eq!(world.scheduler.depth(Priority::Job), 1);
+    let free = (0..3).find(|number| id(*number) != taken).unwrap();
+
+    // The manager's own work comes after what waits: it leaves the
+    // session alone.
+    for purpose in [
+        Purpose::Warmup {
+            domain: "news.example",
+        },
+        Purpose::Selftest { operator: false },
+    ] {
+        assert_eq!(
+            gate.reserve(&persona(free, true), purpose)
+                .await
+                .unwrap_err(),
+            Held::NoSession
+        );
+    }
+    // An operator's self-test does not wait behind a job.
+    let permit = gate
+        .reserve(&persona(free, true), Purpose::Selftest { operator: true })
+        .await
+        .unwrap();
+    assert_eq!(world.scheduler.in_flight(Render::Browser), 2);
+
+    drop(permit);
+    busy.complete(ANSWERED);
+    let granted = waiting.await.unwrap().unwrap();
+    assert_eq!(granted.dispatch().persona, taken);
+    granted.complete(ANSWERED);
+    world.shut_down().await;
+}

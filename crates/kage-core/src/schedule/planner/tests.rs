@@ -2290,6 +2290,17 @@ fn the_managers_own_work_leaves_the_last_session_to_work_that_waits() {
     assert_eq!(planner.plan(noon(), &HashMap::new()), []);
     assert_eq!(planner.reserve(id(1), true), Err(Held::NoSlot));
     assert_eq!(planner.reserve(id(2), true), Err(Held::NoSlot));
+    // An operator's self-test counts as a synchronous request: it takes
+    // the free session, and then there is none for anybody.
+    let asked = planner.reserve_for_operator(id(1)).unwrap();
+    assert_eq!(planner.in_flight(Render::Browser), 2);
+    assert_eq!(planner.reserve_for_operator(id(2)), Err(Held::NoSlot));
+    assert_eq!(planner.reserve_for_operator(id(1)), Err(Held::PersonaBusy));
+    assert_eq!(
+        planner.reserve_for_operator(id(99)),
+        Err(Held::UnknownPersona)
+    );
+    assert!(planner.complete(asked, noon(), done));
     // Nobody waits any more: it can be had again.
     planner.cancel(ticket);
     let again = planner.reserve(id(1), true).unwrap();
@@ -2317,6 +2328,16 @@ fn the_managers_own_work_leaves_the_last_session_to_work_that_waits() {
     planner.reserve(id(1), true).unwrap();
     assert_eq!(planner.reserve(id(3), true), Err(Held::NoSlot));
     assert_eq!(planner.in_flight(Render::Browser), 2);
+    // An operator's self-test takes the engine's last session, and no
+    // stop holds it.
+    planner.set_stop(Some(Refusal::BandwidthExhausted));
+    assert_eq!(
+        planner.reserve(id(4), true),
+        Err(Held::Stopped(Refusal::BandwidthExhausted))
+    );
+    planner.reserve_for_operator(id(2)).unwrap();
+    assert_eq!(planner.reserve_for_operator(id(4)), Err(Held::NoSlot));
+    assert_eq!(planner.in_flight(Render::Browser), 3);
 }
 
 #[test]

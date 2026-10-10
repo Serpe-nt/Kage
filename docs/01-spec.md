@@ -1014,8 +1014,10 @@ The sidecar's own `SIDECAR_CONTEXT_IDLE_MS` (compose default 6 min) is the
 backstop for a context Kage lost track of; a context it closed is reopened
 on demand (profile persists). The manager's warm-up visits and scheduled
 self-tests ask the scheduler for the persona and a browser session before
-they take a lease (`BrowserGate`); they close a context only when they
-opened it. A browser process is recycled after
+they take a lease (`BrowserGate`): they come after synchronous requests
+and jobs, and leave the last free session to a request that waits for one.
+An operator's self-test counts as a synchronous request. All of them close
+a context only when they opened it. A browser process is recycled after
 `SIDECAR_MAX_PAGES_PER_BROWSER` (default 500) navigations: the context is
 reopened from the same request before the next operation, which the
 metrics count. A context whose browser died is closed and reported, never

@@ -498,9 +498,16 @@ impl BrowserGate for SchedulerGate {
                 Some(Admission::Paused { until }) => return Err(Held::DomainPaused { until }),
             }
         }
+        // An operator's self-test counts as a synchronous request; the
+        // manager's own work comes after everything that waits.
+        let asked_by_operator = matches!(purpose, Purpose::Selftest { operator: true });
         let reserved = {
             let mut inner = scheduler.inner();
-            let known = inner.planner.reserve(persona.id, false);
+            let known = if asked_by_operator {
+                inner.planner.reserve_for_operator(persona.id)
+            } else {
+                inner.planner.reserve(persona.id, false)
+            };
             if known == Err(PlannerHeld::UnknownPersona) {
                 // A persona the planner has not been shown yet: at the
                 // next pass it is.
