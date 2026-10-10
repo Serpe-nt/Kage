@@ -40,7 +40,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, TimeZone, Utc};
 use kage_core::alert::{Alert, AlertKind, AlertSeverity, AlertSink};
 use kage_core::config::{Config, ResolvedProvider};
 // `ProxyEndpoint` lives in kage-core so that the http path can take one
@@ -553,6 +553,52 @@ impl Pool {
             BudgetWindow::Month
         };
         (start, kind)
+    }
+
+    /// When the window of [`Pool::budget_window`] ends: the end of the
+    /// provider's term, or the start of the next UTC month.
+    pub fn budget_window_end(&self, now: DateTime<Utc>) -> DateTime<Utc> {
+        let (start, kind) = self.budget_window(now);
+        let term = self
+            .memory()
+            .account
+            .as_ref()
+            .and_then(|account| account.term_started_at.zip(account.term_ends_at));
+        if let (BudgetWindow::Term, Some((from, to))) = (kind, term) {
+            return start + (to - from);
+        }
+        // The first day of the month after the one `start` is in.
+        let (year, month) = if start.month() == 12 {
+            (start.year() + 1, 1)
+        } else {
+            (start.year(), start.month() + 1)
+        };
+        Utc.with_ymd_and_hms(year, month, 1, 0, 0, 0)
+            .single()
+            .unwrap_or(start + chrono::Duration::days(31))
+    }
+
+    /// The bytes the provider counted for the whole account from `since`
+    /// on: what it bills, whoever sent them. `None` without a provider, or
+    /// when the provider reports no traffic figures.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the provider cannot be asked.
+    pub async fn provider_traffic_since(
+        &self,
+        since: DateTime<Utc>,
+    ) -> Result<Option<u64>, PoolError> {
+        let Some(provider) = &self.provider else {
+            return Ok(None);
+        };
+        let hours = provider.stats(since).await?;
+        if hours.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(hours.iter().fold(0_u64, |total, hour| {
+            total.saturating_add(hour.bytes)
+        })))
     }
 
     // --- Hooks ------------------------------------------------------------

@@ -16,6 +16,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::PersonaError;
+use crate::contexts::Via;
 use crate::identity::http_spec;
 use crate::manager::PersonaManager;
 
@@ -84,7 +85,7 @@ impl PersonaManager {
             persona: persona.id,
             reason,
         })?;
-        let (_, endpoint) = self.route(persona).await?;
+        let (_, endpoint) = self.egress(persona, Via::Http).await?;
         let client = self.http.client(&spec, &endpoint).await?;
         let exported = self
             .sidecars
@@ -134,7 +135,7 @@ impl PersonaManager {
             persona: persona.id,
             reason,
         })?;
-        let (_, endpoint) = self.route(persona).await?;
+        let (_, endpoint) = self.egress(persona, Via::Http).await?;
         let client = self.http.client(&spec, &endpoint).await?;
         let cookies: Vec<_> = client
             .jar()

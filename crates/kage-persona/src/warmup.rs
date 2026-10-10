@@ -8,8 +8,13 @@
 //! context is closed again, so that cookies, storage and history land in
 //! the profile. The http path never warms up.
 //!
-//! - One visit of the manager's own per engine at a time, one per persona
-//!   per sweep, and none outside the persona's active hours.
+//! - One visit per persona per sweep, and none outside the persona's
+//!   active hours. With a scheduler in the process a visit asks its gate
+//!   first ([`crate::contexts::BrowserGate`]): it takes a browser session
+//!   only when one is free and real work does not want it, waits while
+//!   the site's breaker is open, and what it finds is judged and counted
+//!   like any attempt. Without one (a CLI command) there is one visit of
+//!   the manager's own per engine at a time.
 //! - Nothing is sent while a leak is on record or the proxy cannot carry
 //!   traffic; the visit waits.
 //! - A visit counts toward the persona's state on that site like any
@@ -36,8 +41,8 @@ use kage_core::policy::Cooldowns;
 use kage_core::seed::Seed;
 use serde_json::json;
 
+use crate::contexts::{Purpose, Via};
 use crate::manager::PersonaManager;
-use crate::sidecar::open_request;
 use crate::{PersonaError, PersonaEvent};
 
 /// How far down a warm-up visit scrolls, as a share of the page.
@@ -223,7 +228,7 @@ impl PersonaManager {
         persona: &Persona,
         visit: &PlannedVisit,
     ) -> Result<bool, PersonaError> {
-        let (proxy, endpoint) = match self.route(persona).await {
+        let (proxy, endpoint) = match self.egress(persona, Via::Browser).await {
             Ok(route) => route,
             Err(PersonaError::ProxyNotUsable { .. } | PersonaError::EgressUnsafe) => {
                 return Ok(false);
@@ -240,14 +245,27 @@ impl PersonaManager {
             self.visit_done(persona, visit, "skipped", None).await?;
             return Ok(true);
         }
-        let Ok(_one_at_a_time) = self.browser_work(persona.engine).try_lock() else {
-            return Ok(false);
+        // With a scheduler its gate decides; without one, one visit of
+        // the manager's own per engine at a time.
+        let (_permit, _one_at_a_time) = match self.gate() {
+            Some(gate) => {
+                let purpose = Purpose::Warmup { domain: &domain };
+                match gate.reserve(persona, purpose).await {
+                    Ok(permit) => (Some(permit), None),
+                    Err(held) => {
+                        tracing::debug!(persona = %persona.id, %domain, %held, "a warm-up visit waits");
+                        return Ok(false);
+                    }
+                }
+            }
+            None => match self.browser_work(persona.engine).try_lock() {
+                Ok(alone) => (None, Some(alone)),
+                Err(_) => return Ok(false),
+            },
         };
         let sidecar = self.sidecars.of(persona.engine);
-        let context = sidecar
-            .open_context(&open_request(persona, &endpoint)?)
-            .await?
-            .context_id;
+        let lease = self.contexts().acquire(persona, &endpoint).await?;
+        let context = lease.context();
         domains.record_request(persona, &domain).await?;
         let timeout_ms =
             u64::try_from(self.config.selftest.browser.page_timeout.get().as_millis()).ok();
@@ -259,25 +277,34 @@ impl PersonaManager {
                 usize::try_from(self.config.http.max_redirects).unwrap_or(usize::MAX),
             )
             .await;
-        if let Err(error) = sidecar.close_context(context).await {
-            tracing::warn!(persona = %persona.id, %error, "a warm-up context could not be closed");
+        // The visit's own browser is closed again, so that what it left
+        // lands in the profile; one that real work had open stays open.
+        if lease.reused() {
+            lease.keep(false);
+        } else {
+            lease.close().await;
+        }
+        if let Err(error) = &navigation {
+            tracing::warn!(persona = %persona.id, %error, "a warm-up navigation failed");
         }
         // The request went out, or may have: the visit is done either way.
-        let (outcome, status) = match &navigation {
-            Ok(navigation) => classify(navigation),
-            Err(error) => {
-                tracing::warn!(persona = %persona.id, %error, "a warm-up navigation failed");
-                (Outcome::ProviderError, None)
-            }
+        let (outcome, status) = if let Some(gate) = self.gate() {
+            let judged = gate.judge(persona, &domain, navigation.as_ref()).await?;
+            (judged.outcome, judged.status.map(i64::from))
+        } else {
+            let (outcome, status) = navigation
+                .as_ref()
+                .map_or((Outcome::ProviderError, None), classify);
+            domains
+                .record_outcome(
+                    persona,
+                    &domain,
+                    outcome,
+                    Cooldowns::default().after(outcome),
+                )
+                .await?;
+            (outcome, status)
         };
-        domains
-            .record_outcome(
-                persona,
-                &domain,
-                outcome,
-                Cooldowns::default().after(outcome),
-            )
-            .await?;
         if matches!(outcome, Outcome::Ok | Outcome::ChallengePassed) {
             self.pool.report_traffic_ok(proxy.id);
         }

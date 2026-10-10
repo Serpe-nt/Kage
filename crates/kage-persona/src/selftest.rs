@@ -45,10 +45,11 @@ use kage_http::selftest::{SelftestError, SelftestReport};
 use serde_json::json;
 use url::Url;
 
+use crate::contexts::{Purpose, Via};
 use crate::identity::http_spec;
 use crate::lifecycle;
 use crate::manager::PersonaManager;
-use crate::sidecar::{contract_os, open_request};
+use crate::sidecar::contract_os;
 use crate::{PersonaError, PersonaEvent};
 
 /// The earliest and the latest the first scheduled self-test of a new
@@ -249,7 +250,7 @@ impl PersonaManager {
             }
             .into());
         }
-        let (_, endpoint) = self.route(&persona).await?;
+        let (_, endpoint) = self.egress(&persona, Via::Http).await?;
         let client = self.selftest_http.ephemeral(&spec, &endpoint)?;
         let started_at = self.now();
         let outcome =
@@ -330,6 +331,18 @@ impl PersonaManager {
         id: PersonaId,
         pages: Vec<SelftestPage>,
     ) -> Result<BrowserRun, PersonaError> {
+        self.selftest_browser_for(id, pages, true).await
+    }
+
+    /// [`Self::selftest_browser`], for an operator or for the schedule. A
+    /// scheduled run waits ([`PersonaError::Held`]) where an operator's
+    /// goes ahead.
+    async fn selftest_browser_for(
+        &self,
+        id: PersonaId,
+        pages: Vec<SelftestPage>,
+        operator: bool,
+    ) -> Result<BrowserRun, PersonaError> {
         if pages.is_empty() {
             return Err(PersonaError::NothingToTest(
                 "there is no page to load: name the operator's own pages in \
@@ -338,7 +351,7 @@ impl PersonaManager {
             ));
         }
         let persona = self.get(id).await?;
-        let (_, endpoint) = self.route(&persona).await?;
+        let (_, endpoint) = self.egress(&persona, Via::Browser).await?;
         let config = &self.config.selftest.browser;
         let request = SelftestRequest {
             artifact_prefix: None,
@@ -355,16 +368,31 @@ impl PersonaManager {
             pages: Some(pages),
             timeout_ms: u64::try_from(config.page_timeout.get().as_millis()).ok(),
         };
-        let open = open_request(&persona, &endpoint)?;
         let sidecar = self.sidecars.of(persona.engine);
 
+        // With a scheduler its gate decides whether the persona and a
+        // session can be had; without one, one context of the manager's
+        // own per engine at a time.
+        let (_permit, _one_at_a_time) = match self.gate() {
+            Some(gate) => {
+                let permit = gate
+                    .reserve(&persona, Purpose::Selftest { operator })
+                    .await
+                    .map_err(|held| PersonaError::Held { persona: id, held })?;
+                (Some(permit), None)
+            }
+            None => (None, Some(self.browser_work(persona.engine).lock().await)),
+        };
         let started_at = self.now();
         let outcome = {
-            let _one_at_a_time = self.browser_work(persona.engine).lock().await;
-            let context = sidecar.open_context(&open).await?.context_id;
-            let outcome = sidecar.selftest(context, &request).await;
-            if let Err(error) = sidecar.close_context(context).await {
-                tracing::warn!(persona = %id, %error, "the self-test's context could not be closed");
+            let lease = self.contexts().acquire(&persona, &endpoint).await?;
+            let outcome = sidecar.selftest(lease.context(), &request).await;
+            // The test's own browser is closed again; one that real work
+            // had open stays open.
+            if lease.reused() {
+                lease.keep(false);
+            } else {
+                lease.close().await;
             }
             outcome
         };
@@ -583,7 +611,9 @@ impl PersonaManager {
         let waits = |error: &PersonaError| {
             matches!(
                 error,
-                PersonaError::ProxyNotUsable { .. } | PersonaError::EgressUnsafe
+                PersonaError::ProxyNotUsable { .. }
+                    | PersonaError::EgressUnsafe
+                    | PersonaError::Held { .. }
             )
         };
         let mut runs = 0;
@@ -617,7 +647,10 @@ impl PersonaManager {
                     .selftest_is_due(&persona, Render::Browser, selftest.browser.interval.get())
                     .await?
             {
-                match self.selftest_browser(persona.id, own_pages.clone()).await {
+                match self
+                    .selftest_browser_for(persona.id, own_pages.clone(), false)
+                    .await
+                {
                     Ok(_) => {
                         runs += 1;
                         browser_ran[engine] = true;

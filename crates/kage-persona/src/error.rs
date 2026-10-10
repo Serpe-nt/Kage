@@ -94,6 +94,18 @@ pub enum PersonaError {
     /// An origin that is not `http(s)://host[:port]`.
     #[error("{0:?} is not an origin: http or https, a host, and nothing after it")]
     Origin(String),
+    /// The persona's browser cannot be had now: it is in use, no session
+    /// is free, or nothing may be fetched. Whoever asked waits.
+    #[error("persona {persona} has to wait: {held}")]
+    Held {
+        /// The persona.
+        persona: PersonaId,
+        /// Why it waits.
+        held: crate::contexts::Held,
+    },
+    /// The scheduler's gate could not judge or record what a visit found.
+    #[error("the scheduler's gate failed: {0}")]
+    Gate(String),
     /// A profile directory could not be moved or removed.
     #[error("profile directory {path}: {source}")]
     Profile {
@@ -119,9 +131,11 @@ impl PersonaError {
                         BrowserError::Timeout { .. } | BrowserError::Transport { .. }
                     )
             }
-            Self::Store(_) | Self::Pool(_) | Self::ProxyNotUsable { .. } | Self::EgressUnsafe => {
-                true
-            }
+            Self::Store(_)
+            | Self::Pool(_)
+            | Self::ProxyNotUsable { .. }
+            | Self::EgressUnsafe
+            | Self::Held { .. } => true,
             _ => false,
         }
     }

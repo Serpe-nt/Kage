@@ -14,6 +14,8 @@
 //!   persona on one domain.
 //! - [`handoff`]: cookies between a persona's browser and its http jar
 //!   (spec §6.4).
+//! - [`contexts`]: the one owner of every persona's browser context, and
+//!   the gate the manager's own browser work asks before it takes one.
 //! - [`warmup`]: the first visits of a new persona.
 //! - [`selftest`]: the self-tests of one persona, on demand and scheduled.
 //! - [`archive`]: the profile directory of a retired persona.
@@ -25,6 +27,7 @@
 #![forbid(unsafe_code)]
 
 pub mod archive;
+pub mod contexts;
 pub mod domain_state;
 mod error;
 mod events;
@@ -40,6 +43,9 @@ pub mod warmup;
 #[cfg(test)]
 mod test_support;
 
+pub use contexts::{
+    BrowserGate, Contexts, DirectEgress, Egress, Held, Judged, Lease, Permit, Purpose, Via,
+};
 pub use domain_state::{DomainStates, Eligibility};
 pub use error::PersonaError;
 pub use events::PersonaEvent;

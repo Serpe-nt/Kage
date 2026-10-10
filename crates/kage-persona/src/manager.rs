@@ -26,7 +26,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use chrono::{DateTime, Utc};
 use kage_browser::contract::{GeneratePersonaRequest, PersonaSummary};
@@ -48,6 +48,7 @@ use kage_store::{Store, StoreError};
 use serde_json::json;
 use tokio::sync::broadcast;
 
+use crate::contexts::{BrowserGate, Contexts, DirectEgress, Egress, Via};
 use crate::domain_state::DomainStates;
 use crate::identity::{Directory, profile_for};
 use crate::lifecycle::{self, GeoChange, Place, Transition};
@@ -149,9 +150,15 @@ pub struct PersonaManager {
     events: broadcast::Sender<PersonaEvent>,
     /// One generation at a time: each draw sees the personas before it.
     generation: tokio::sync::Mutex<()>,
-    /// One context of the manager's own per engine: a warm-up visit or a
-    /// self-test, never two at once.
+    /// One context of the manager's own per engine, in a process without
+    /// a scheduler: a warm-up visit or a self-test, never two at once.
     browser_work: [tokio::sync::Mutex<()>; 2],
+    /// The one owner of every persona's context.
+    contexts: Arc<Contexts>,
+    /// Where a persona's traffic leaves the process.
+    egress: Arc<dyn Egress>,
+    /// The scheduler, when one runs in this process.
+    gate: OnceLock<Arc<dyn BrowserGate>>,
     memory: Mutex<Memory>,
 }
 
@@ -185,9 +192,17 @@ impl PersonaManager {
             selftest_http = selftest_http.with_trust_anchor(pem);
         }
         let (events, _) = broadcast::channel(256);
+        let clock = Arc::clone(parts.pool.clock());
         Ok(Self {
+            contexts: Arc::new(Contexts::new(
+                parts.sidecars.clone(),
+                parts.config.scheduler.max_contexts_per_engine,
+                Arc::clone(&clock),
+            )),
+            egress: Arc::new(DirectEgress),
+            gate: OnceLock::new(),
             store: parts.store,
-            clock: Arc::clone(parts.pool.clock()),
+            clock,
             pool: parts.pool,
             sidecars: parts.sidecars,
             http: parts.http,
@@ -200,6 +215,47 @@ impl PersonaManager {
             browser_work: [tokio::sync::Mutex::new(()), tokio::sync::Mutex::new(())],
             memory: Mutex::new(Memory::default()),
         })
+    }
+
+    /// The same manager with every persona's traffic leaving through
+    /// `egress`: the forwarder. Without this call it goes straight to the
+    /// provider's proxy.
+    #[must_use]
+    pub fn with_egress(mut self, egress: Arc<dyn Egress>) -> Self {
+        self.egress = egress;
+        self
+    }
+
+    /// Makes the manager's own browser work (warm-up visits, scheduled
+    /// self-tests) ask `gate` before it takes a persona: the scheduler of
+    /// this process. The first gate stays; `false` when there was one.
+    pub fn set_gate(&self, gate: Arc<dyn BrowserGate>) -> bool {
+        self.gate.set(gate).is_ok()
+    }
+
+    /// The scheduler's gate, when one was set.
+    pub fn gate(&self) -> Option<&Arc<dyn BrowserGate>> {
+        self.gate.get()
+    }
+
+    /// The one owner of every persona's browser context.
+    pub const fn contexts(&self) -> &Arc<Contexts> {
+        &self.contexts
+    }
+
+    /// The two sidecars.
+    pub const fn sidecars(&self) -> &Sidecars {
+        &self.sidecars
+    }
+
+    /// The clients of the http path.
+    pub const fn http(&self) -> &Arc<ClientFactory> {
+        &self.http
+    }
+
+    /// The proxy pool.
+    pub const fn pool(&self) -> &Arc<Pool> {
+        &self.pool
     }
 
     /// Which persona lives behind which proxy on the http path. The health
@@ -348,6 +404,23 @@ impl PersonaManager {
             return Err(PersonaError::EgressUnsafe);
         }
         let endpoint = self.pool.endpoint(&proxy)?;
+        Ok((proxy, endpoint))
+    }
+
+    /// A live persona's proxy, and the endpoint its browser or its http
+    /// client is given for it: the forwarder under the persona's own
+    /// credential when there is one, else the proxy itself.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::route`].
+    pub async fn egress(
+        &self,
+        persona: &Persona,
+        via: Via,
+    ) -> Result<(Proxy, ProxyEndpoint), PersonaError> {
+        let (proxy, upstream) = self.route(persona).await?;
+        let endpoint = self.egress.endpoint(persona, &upstream, via);
         Ok((proxy, endpoint))
     }
 
@@ -780,6 +853,9 @@ impl PersonaManager {
         }
         // No probe presents as a persona that is gone, from this moment.
         self.directory.record(&persona);
+        // Its browser has nothing left to do. One that is held by an
+        // attempt is closed by whoever holds it.
+        self.contexts.close_of(id).await;
         let sessions = self.store.sessions().delete_for_persona(id).await?;
         self.http.forget_persona(id).await;
         let cookies = self.store.http_cookies().delete_for_persona(id).await?;

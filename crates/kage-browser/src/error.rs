@@ -103,4 +103,16 @@ impl BrowserError {
     pub const fn is_at_capacity(&self) -> bool {
         matches!(self.code(), Some(ErrorCode::ContextLimit))
     }
+
+    /// Whether the persona's context is open with other parameters than
+    /// were asked for: someone else opened it.
+    pub const fn is_context_conflict(&self) -> bool {
+        matches!(self.code(), Some(ErrorCode::ContextConflict))
+    }
+
+    /// Whether another operation runs on the context: someone else is
+    /// using it.
+    pub const fn is_context_busy(&self) -> bool {
+        matches!(self.code(), Some(ErrorCode::ContextBusy))
+    }
 }
