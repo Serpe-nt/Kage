@@ -94,6 +94,12 @@ services:
       # first hours (personas.warmup). On in production; the smoke test
       # and every other test setup switch it off.
       KAGE__PERSONAS__WARMUP__ENABLED: ${KAGE_PERSONAS_WARMUP:-true}
+      # The forwarder (follow-up F10): the one proxy every persona's browser
+      # and http client is given. The sidecars reach it by the service name
+      # on the compose network; it is never published on the host. The
+      # provider's credentials stay in this container.
+      KAGE__FORWARDER__BIND: 0.0.0.0:8899
+      KAGE__FORWARDER__ADVERTISE: http://kage:8899
     ports:
       # Loopback by default: the API has no authentication until M8.
       - "${KAGE_PUBLISH_ADDR:-127.0.0.1}:${KAGE_PUBLISH_PORT:-8080}:8080"
@@ -127,8 +133,11 @@ services:
       # the same value kage gets as KAGE__SIDECAR__TOKEN.
       SIDECAR_TOKEN: ${KAGE_SIDECAR_TOKEN:?run 'just setup' to create deploy/.env}
       # Contexts at once, idle close and browser recycling (spec §10.1, §10.6).
+      # Kage closes a persona's context itself, five minutes after its last
+      # page (scheduler.context_idle); the sidecar's own idle limit is the
+      # backstop a minute behind it, for a context kage lost track of.
       SIDECAR_MAX_CONTEXTS: ${KAGE_SIDECAR_MAX_CONTEXTS:-3}
-      SIDECAR_CONTEXT_IDLE_MS: ${KAGE_SIDECAR_CONTEXT_IDLE_MS:-120000}
+      SIDECAR_CONTEXT_IDLE_MS: ${KAGE_SIDECAR_CONTEXT_IDLE_MS:-360000}
       SIDECAR_MAX_PAGES_PER_BROWSER: ${KAGE_SIDECAR_MAX_PAGES_PER_BROWSER:-500}
       # A chromium persona claims the system it runs on, Linux (docs/adr/0009).
       SIDECAR_ALLOW_CROSS_OS_CLAIMS: ${KAGE_SIDECAR_ALLOW_CROSS_OS_CLAIMS:-false}
@@ -170,7 +179,7 @@ services:
       # sets the claimed system inside the browser, and the WebGL names a
       # page reads come from the persona's fingerprint.
       SIDECAR_MAX_CONTEXTS: ${KAGE_SIDECAR_MAX_CONTEXTS:-3}
-      SIDECAR_CONTEXT_IDLE_MS: ${KAGE_SIDECAR_CONTEXT_IDLE_MS:-120000}
+      SIDECAR_CONTEXT_IDLE_MS: ${KAGE_SIDECAR_CONTEXT_IDLE_MS:-360000}
       SIDECAR_MAX_PAGES_PER_BROWSER: ${KAGE_SIDECAR_MAX_PAGES_PER_BROWSER:-500}
       SIDECAR_AUDIO: ${KAGE_SIDECAR_AUDIO:-pulse}
       SIDECAR_SELFTEST_PROBE_URL: ${KAGE_SIDECAR_SELFTEST_PROBE_URL:-}

@@ -9,7 +9,13 @@ services:
   browser-chromium:
     ports:
       - "127.0.0.1:8091:8090"
+    # kage runs on the host: its forwarder is reached there
+    # (scripts/dev-env.sh, docs/runbooks/fetching.md).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   browser-firefox:
     ports:
       - "127.0.0.1:8092:8090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

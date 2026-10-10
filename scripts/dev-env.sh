@@ -30,6 +30,10 @@ fi
 if [ -n "${KAGE_ABUSEIPDB_KEY:-}" ]; then
     export KAGE__REPUTATION__ABUSEIPDB_KEY="${KAGE_ABUSEIPDB_KEY}"
 fi
+# The sidecars run in containers and kage on the host: they reach kage's
+# forwarder by the name deploy/compose.dev.yaml gives the host
+# (docs/runbooks/fetching.md).
+export KAGE__FORWARDER__ADVERTISE="${KAGE_FORWARDER_ADVERTISE:-http://host.docker.internal:8899}"
 # A development server does not send new personas to real sites unless it
 # is told to (docs/runbooks/personas.md): KAGE_PERSONAS_WARMUP=true.
 export KAGE__PERSONAS__WARMUP__ENABLED="${KAGE_PERSONAS_WARMUP:-false}"
