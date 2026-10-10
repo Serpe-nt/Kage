@@ -1,0 +1,52 @@
+[package]
+name = "kage-scheduler"
+description = "The scheduler: queue, pacing, persona selection, retries, escalation, circuit breakers, the attempt executor over both paths, and the forwarder that counts every byte."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# The browser path: the sidecar contract and its client.
+kage-browser = { workspace = true }
+# The rules: the planner, retries, the breaker, the budget, the classifier.
+kage-core = { workspace = true }
+# The http path.
+kage-http = { workspace = true }
+# Personas, their contexts, their state per domain, the cookie handoff.
+kage-persona = { workspace = true }
+# The pool: which proxy carries traffic, the leak flag, the provider's
+# traffic figures.
+kage-proxy = { workspace = true }
+kage-store = { workspace = true }
+
+async-trait = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
+# The token a persona's clients present to the forwarder.
+hmac = { workspace = true }
+http = { workspace = true }
+metrics = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+tracing = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+axum = { workspace = true }
+sqlx = { workspace = true }
+tempfile = { workspace = true }
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true, features = ["postgres"] }
+tokio = { workspace = true, features = ["io-util", "net", "rt-multi-thread", "test-util"] }
+wiremock = { workspace = true }

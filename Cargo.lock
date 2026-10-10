@@ -2118,6 +2118,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "kage-scheduler"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "bytes",
+ "chrono",
+ "hmac",
+ "http",
+ "kage-browser",
+ "kage-core",
+ "kage-http",
+ "kage-persona",
+ "kage-proxy",
+ "kage-store",
+ "metrics",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "sqlx",
+ "tempfile",
+ "testcontainers",
+ "testcontainers-modules",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+ "wiremock",
+]
+
+[[package]]
 name = "kage-store"
 version = "0.1.0"
 dependencies = [

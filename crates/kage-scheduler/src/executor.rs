@@ -1,0 +1,788 @@
+//! One attempt, on the http path or in the persona's browser (spec §8,
+//! §9, §10).
+//!
+//! The scheduler decides who makes an attempt and when; an
+//! [`AttemptExecutor`] makes it and says what the site answered.
+//! [`PathExecutor`] is the real one.
+//!
+//! **Http path.** The persona's own client (its profile, its languages,
+//! its cookie jar) fetches through the persona's egress. A later page of a
+//! visit carries the persona's previous page on that site as `Referer`
+//! when the policy's entry is `direct` and the caller gave none.
+//!
+//! **Browser path.** The persona's context is leased from the one owner of
+//! contexts, the cookies its http jar holds for the origin are handed to
+//! the browser, and the page is loaded with the behavior the domain policy
+//! asks for: a human dwell, a scroll depth drawn from the attempt's seed,
+//! a wandering pointer, and the policy's entry. A detected interstitial is
+//! given `browser.challenge_wait_ms` to resolve by itself. The redirect
+//! chain is checked against the SSRF guard afterwards. After a page the
+//! site served, the origin's cookies are handed to the http jar and the
+//! browser stays open; after a block nothing is handed over and the
+//! browser is closed: the persona leaves.
+//!
+//! Both paths end at the classifier with the signatures in force. A
+//! success postpones the next health probe of the persona's proxy.
+
+use std::collections::HashMap;
+use std::fmt;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
+
+use async_trait::async_trait;
+use bytes::Bytes;
+use chrono::{DateTime, Utc};
+use kage_browser::Navigation;
+use kage_browser::contract::{
+    BehaviorOptions, CaptureOptions, DwellMode, Entry, EntryStrategy, NavigateRequest, PageResult,
+    Wait, WaitUntil,
+};
+use kage_core::classifier::{Classification, Observation};
+use kage_core::config::{BrowserConfig, Config};
+use kage_core::domain::{Header, Persona, Render, Timing};
+use kage_core::ids::{PersonaId, RequestId};
+use kage_core::outcome::Outcome;
+use kage_core::policy::{EffectivePolicy, RefererStrategy};
+use kage_core::schedule::politeness::Courtesy;
+use kage_core::seed::Seed;
+use kage_core::ssrf::SsrfPolicy;
+use kage_http::{FetchSpec, Fetched, Guard, HttpError};
+use kage_persona::identity::http_spec;
+use kage_persona::{PersonaError, PersonaManager, Via};
+use url::Url;
+
+use crate::forwarder::Meter;
+use crate::verdicts::{Verdicts, cookies_set, courtesy_of, page_failure, unanswered};
+
+/// How much longer than its own budget a browser attempt is waited for:
+/// the sidecar answers when the budget ran out, a little after it.
+const BROWSER_GRACE: Duration = Duration::from_secs(20);
+
+/// What one attempt is asked to do.
+#[derive(Debug, Clone)]
+pub struct AttemptJob {
+    /// The request the attempt belongs to.
+    pub request: RequestId,
+    /// 1 for the first attempt, 2 for the second, and so on.
+    pub n: u32,
+    /// The persona that makes it.
+    pub persona: Persona,
+    /// The path.
+    pub render: Render,
+    /// The page.
+    pub url: Url,
+    /// `GET`, `HEAD` or `POST`; a browser attempt is always a navigation.
+    pub method: http::Method,
+    /// The caller's headers (http path).
+    pub headers: Vec<(String, String)>,
+    /// The request body (http path).
+    pub body: Option<Bytes>,
+    /// The host: the key of policy and pacing.
+    pub domain: String,
+    /// The seed of the attempt: the behavior of a browser attempt and the
+    /// pauses of an http attempt are drawn from it and the persona's own.
+    pub seed: Seed,
+    /// Longest the attempt may take.
+    pub timeout: Duration,
+    /// The domain's policy.
+    pub policy: EffectivePolicy,
+    /// Whether this page starts a visit of the persona to the domain.
+    pub starts_visit: bool,
+    /// Whether the persona is still visiting the domain after this page.
+    pub keeps_visiting: bool,
+    /// What a browser attempt captures besides the document.
+    pub capture: CaptureOptions,
+    /// What a browser attempt waits for.
+    pub wait: Wait,
+    /// The largest body kept.
+    pub max_body_bytes: Option<u64>,
+}
+
+/// What an attempt came to.
+#[derive(Debug, Clone)]
+pub struct AttemptOutput {
+    /// The classifier's verdict, or the failure in its shape.
+    pub classification: Classification,
+    /// What the end says about the site's health.
+    pub courtesy: Courtesy,
+    /// Why the attempt ended as it did when the site did not say.
+    pub reason: Option<String>,
+    /// The status of the final response, when one arrived.
+    pub status: Option<u16>,
+    /// The URL after redirects, when a response arrived.
+    pub final_url: Option<String>,
+    /// The headers of the final response.
+    pub headers: Vec<Header>,
+    /// Every URL visited before the final one, in order.
+    pub redirects: Vec<String>,
+    /// Time per phase.
+    pub timing: Timing,
+    /// The page as the browser returned it (browser path).
+    pub page: Option<Box<PageResult>>,
+    /// What the http path fetched (http path).
+    pub fetched: Option<Box<Fetched>>,
+    /// Cookies handed from the http jar to the browser before the page.
+    pub cookies_to_browser: Option<usize>,
+    /// Cookies handed from the browser to the http jar after the page.
+    pub cookies_to_http: Option<usize>,
+}
+
+impl AttemptOutput {
+    /// An attempt that ended without the site's answer.
+    pub fn failed(outcome: Outcome, reason: &str, courtesy: Courtesy) -> Self {
+        Self {
+            classification: unanswered(outcome, reason),
+            courtesy,
+            reason: Some(reason.to_owned()),
+            status: None,
+            final_url: None,
+            headers: Vec::new(),
+            redirects: Vec::new(),
+            timing: Timing::default(),
+            page: None,
+            fetched: None,
+            cookies_to_browser: None,
+            cookies_to_http: None,
+        }
+    }
+
+    /// The same failure, but one no other persona would change.
+    #[must_use]
+    pub fn finally(mut self) -> Self {
+        self.classification.retryable = false;
+        self
+    }
+
+    /// The outcome.
+    pub const fn outcome(&self) -> Outcome {
+        self.classification.outcome
+    }
+}
+
+/// Makes attempts.
+#[async_trait]
+pub trait AttemptExecutor: Send + Sync + fmt::Debug {
+    /// Makes one attempt and says what it came to. An attempt never fails
+    /// as a call: what went wrong is its outcome.
+    async fn run(&self, job: &AttemptJob) -> AttemptOutput;
+}
+
+/// The behavior a domain policy asks of a browser on a page (spec §10.4):
+/// a human dwell, a scroll depth drawn from the attempt's seed inside the
+/// configured range, a wandering pointer, and the policy's entry.
+pub fn behavior_for(
+    policy: &EffectivePolicy,
+    browser: &BrowserConfig,
+    seed: &Seed,
+) -> BehaviorOptions {
+    let depth = seed
+        .child("scroll-depth")
+        .rng()
+        .uniform(browser.scroll_depth.min, browser.scroll_depth.max);
+    BehaviorOptions {
+        dwell: Some(DwellMode::Human),
+        entry: Some(Entry {
+            fallback: None,
+            from_url: None,
+            strategy: match policy.referer_strategy {
+                RefererStrategy::None => EntryStrategy::None,
+                // A search entry needs a results URL built from a
+                // template, and none is configured: a typed navigation.
+                RefererStrategy::Direct | RefererStrategy::SearchEngine => EntryStrategy::Direct,
+            },
+        }),
+        scroll_depth: Some(depth),
+        seed: Some(seed.to_string()),
+        wander: Some(true),
+    }
+}
+
+/// The navigation of one browser attempt.
+pub fn navigation_for(job: &AttemptJob, browser: &BrowserConfig) -> NavigateRequest {
+    NavigateRequest {
+        artifact_prefix: None,
+        behavior: Some(behavior_for(&job.policy, browser, &job.seed)),
+        capture: CaptureOptions {
+            // The classifier reads the document, whatever the caller wants.
+            dom: true,
+            ..job.capture.clone()
+        },
+        challenge_wait_ms: Some(browser.challenge_wait_ms),
+        dwell_ms: None,
+        max_body_bytes: job.max_body_bytes,
+        timeout_ms: u64::try_from(job.timeout.as_millis()).ok(),
+        url: job.url.to_string(),
+        wait: job.wait.clone(),
+    }
+}
+
+/// What a navigation waits for when the request does not say: the load
+/// event.
+pub const fn default_wait() -> Wait {
+    Wait {
+        extra_ms: None,
+        selector: None,
+        until: WaitUntil::Load,
+    }
+}
+
+/// What a navigation captures when the request does not say: the document.
+pub const fn default_capture() -> CaptureOptions {
+    CaptureOptions {
+        console: false,
+        dom: true,
+        pdf: None,
+        raw: false,
+        screenshot: None,
+        xhr: None,
+    }
+}
+
+/// The origin of a URL as the handoff takes it.
+fn origin_of(url: &Url) -> Option<String> {
+    let host = url.host_str()?;
+    Some(match url.port() {
+        Some(port) => format!("{}://{host}:{port}", url.scheme()),
+        None => format!("{}://{host}", url.scheme()),
+    })
+}
+
+fn timing_of(page: &PageResult) -> Timing {
+    Timing {
+        dns_ms: None,
+        connect_ms: None,
+        tls_ms: None,
+        ttfb_ms: page.timing.ttfb_ms,
+        dom_content_loaded_ms: page.timing.dom_content_loaded_ms,
+        load_ms: page.timing.load_ms,
+        total_ms: page.timing.total_ms,
+    }
+}
+
+/// The attempt executor over the real paths.
+pub struct PathExecutor {
+    manager: Arc<PersonaManager>,
+    verdicts: Arc<Verdicts>,
+    browser: BrowserConfig,
+    security: SsrfPolicy,
+    max_redirects: usize,
+    meter: Option<Arc<Meter>>,
+    /// The last page each persona fetched from each domain over the http
+    /// path, and when: the `Referer` of its next one.
+    last_pages: Mutex<LastPages>,
+}
+
+/// The last page of each persona on each domain, and when it was fetched.
+type LastPages = HashMap<(PersonaId, String), (Url, DateTime<Utc>)>;
+
+impl fmt::Debug for PathExecutor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PathExecutor")
+            .field("browser", &self.browser)
+            .field("security", &self.security)
+            .finish_non_exhaustive()
+    }
+}
+
+/// How a failure of the persona's own plumbing is named.
+fn plumbing(error: &PersonaError) -> (&'static str, bool) {
+    match error {
+        PersonaError::EgressUnsafe => ("egress_unsafe", false),
+        PersonaError::ProxyNotUsable { .. } | PersonaError::ProxyNotFound(_) => {
+            ("proxy_not_usable", true)
+        }
+        PersonaError::Retired(_) | PersonaError::NotFound(_) => ("persona_gone", true),
+        PersonaError::Browser(browser) if browser.is_context_conflict() => {
+            ("context_conflict", true)
+        }
+        PersonaError::Browser(browser) if browser.is_context_busy() => ("context_busy", true),
+        PersonaError::Browser(browser) if browser.is_at_capacity() => ("context_limit", true),
+        PersonaError::Browser(browser) if browser.is_unreachable() => ("sidecar_unreachable", true),
+        PersonaError::Browser(_) => ("sidecar_error", true),
+        PersonaError::Http(_) => ("http_client", true),
+        _ => ("persona_error", true),
+    }
+}
+
+impl PathExecutor {
+    /// An executor over the persona manager's contexts, clients and
+    /// handoff. With a `meter` the bytes of an attempt count toward its
+    /// domain.
+    pub fn new(
+        manager: Arc<PersonaManager>,
+        verdicts: Arc<Verdicts>,
+        config: &Config,
+        meter: Option<Arc<Meter>>,
+    ) -> Self {
+        Self {
+            manager,
+            verdicts,
+            browser: config.browser,
+            security: config.security,
+            max_redirects: usize::try_from(config.http.max_redirects).unwrap_or(usize::MAX),
+            meter,
+            last_pages: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn unavailable(error: &PersonaError) -> AttemptOutput {
+        let (reason, retryable) = plumbing(error);
+        tracing::warn!(%error, reason, "an attempt could not be made");
+        let output = AttemptOutput::failed(Outcome::ProviderError, reason, Courtesy::NotTheSite);
+        if retryable { output } else { output.finally() }
+    }
+
+    fn last_page(&self, persona: PersonaId, domain: &str) -> Option<Url> {
+        self.last_pages
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&(persona, domain.to_owned()))
+            .map(|(url, _)| url.clone())
+    }
+
+    fn remember_page(&self, persona: PersonaId, domain: &str, url: Url) {
+        let now = self.manager.clock().now();
+        let mut pages = self
+            .last_pages
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        // What nobody came back to for a day is forgotten.
+        pages.retain(|_, (_, at)| now.signed_duration_since(*at) < chrono::Duration::days(1));
+        pages.insert((persona, domain.to_owned()), (url, now));
+    }
+
+    async fn http(&self, job: &AttemptJob) -> AttemptOutput {
+        let persona = &job.persona;
+        let Ok(spec) = http_spec(persona) else {
+            // The planner only sends a persona with an http path; one that
+            // lost it meanwhile is another persona's turn.
+            return AttemptOutput::failed(
+                Outcome::ProviderError,
+                "no_http_path",
+                Courtesy::NotTheSite,
+            );
+        };
+        let (proxy, endpoint) = match self.manager.egress(persona, Via::Http).await {
+            Ok(route) => route,
+            Err(error) => return Self::unavailable(&error),
+        };
+        let client = match self.manager.http().client(&spec, &endpoint).await {
+            Ok(client) => client,
+            Err(error) => return Self::unavailable(&PersonaError::Http(error)),
+        };
+        let mut headers = job.headers.clone();
+        let has_referer = headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("referer"));
+        if !job.starts_visit
+            && !has_referer
+            && job.policy.referer_strategy == RefererStrategy::Direct
+            && let Some(previous) = self.last_page(persona.id, &job.domain)
+        {
+            // A later page of a visit arrives from the page before it.
+            headers.push(("Referer".to_owned(), previous.to_string()));
+        }
+        let fetch = FetchSpec {
+            url: job.url.clone(),
+            method: job.method.clone(),
+            headers,
+            body: job.body.clone(),
+            guard: Guard::Target(self.security),
+            timeout: Some(job.timeout),
+            max_body_bytes: job
+                .max_body_bytes
+                .and_then(|bytes| usize::try_from(bytes).ok()),
+            max_redirects: None,
+            fetch_subresources: None,
+            seed: Some(job.seed),
+        };
+        let fetched = match client.fetch(&fetch).await {
+            Ok(fetched) => fetched,
+            Err(error) => return Self::http_failure(&error),
+        };
+
+        let classification = self.verdicts.classify(&Observation {
+            render: Render::Http,
+            status: fetched.status,
+            url: fetched.final_url.to_string(),
+            headers: fetched.headers.clone(),
+            cookies: cookies_set(&fetched.headers),
+            body: fetched.text(),
+            browser: None,
+        });
+        if classification.outcome.is_success() {
+            self.manager.pool().report_traffic_ok(proxy.id);
+            self.remember_page(persona.id, &job.domain, fetched.final_url.clone());
+        }
+        AttemptOutput {
+            courtesy: courtesy_of(classification.outcome, Some(fetched.status)),
+            classification,
+            reason: None,
+            status: Some(fetched.status),
+            final_url: Some(fetched.final_url.to_string()),
+            headers: fetched.headers.clone(),
+            redirects: fetched
+                .redirects()
+                .iter()
+                .map(|hop| hop.url.to_string())
+                .collect(),
+            timing: fetched.timing,
+            page: None,
+            fetched: Some(Box::new(fetched)),
+            cookies_to_browser: None,
+            cookies_to_http: None,
+        }
+    }
+
+    fn http_failure(error: &HttpError) -> AttemptOutput {
+        tracing::debug!(%error, "an http attempt failed");
+        let mut output = match error {
+            HttpError::Timeout { .. } => {
+                AttemptOutput::failed(Outcome::Timeout, "timeout", Courtesy::ServerError)
+            }
+            HttpError::Denied(_) | HttpError::RedirectDenied(_) => {
+                AttemptOutput::failed(Outcome::SsrfDenied, "ssrf_denied", Courtesy::NotTheSite)
+            }
+            HttpError::ProxyAuth | HttpError::Connect(_) => {
+                AttemptOutput::failed(Outcome::ProviderError, "proxy_failed", Courtesy::NotTheSite)
+            }
+            // The site answered, with nothing that can be used.
+            HttpError::TooManyRedirects { .. } => AttemptOutput::failed(
+                Outcome::ProviderError,
+                "too_many_redirects",
+                Courtesy::Answered,
+            )
+            .finally(),
+            HttpError::Tls | HttpError::Request(_) | HttpError::Body(_) => AttemptOutput::failed(
+                Outcome::ProviderError,
+                "connection_failed",
+                Courtesy::ServerError,
+            ),
+            // The request itself cannot be sent: no persona changes that.
+            HttpError::Header(_)
+            | HttpError::InvalidUrl(_)
+            | HttpError::InvalidReferer(_)
+            | HttpError::Method(_) => AttemptOutput::failed(
+                Outcome::ProviderError,
+                "invalid_request",
+                Courtesy::NotTheSite,
+            )
+            .finally(),
+            HttpError::Profile(_)
+            | HttpError::Build(_)
+            | HttpError::Cookies(_)
+            | HttpError::Resolve { .. } => {
+                AttemptOutput::failed(Outcome::ProviderError, "http_client", Courtesy::NotTheSite)
+            }
+        };
+        output
+            .classification
+            .evidence
+            .push(format!("error:{error}"));
+        output
+    }
+
+    async fn browser(&self, job: &AttemptJob) -> AttemptOutput {
+        let persona = &job.persona;
+        let (proxy, endpoint) = match self.manager.egress(persona, Via::Browser).await {
+            Ok(route) => route,
+            Err(error) => return Self::unavailable(&error),
+        };
+        let lease = match self.manager.contexts().acquire(persona, &endpoint).await {
+            Ok(lease) => lease,
+            Err(error) => return Self::unavailable(&error),
+        };
+        let context = lease.context();
+        let origin = origin_of(&job.url);
+
+        // What the http path earned for this origin goes into the browser
+        // first. A persona without an http path has nothing to hand over.
+        let mut cookies_to_browser = None;
+        if let Some(origin) = &origin {
+            match self.manager.http_to_browser(persona, context, origin).await {
+                Ok(handoff) => cookies_to_browser = Some(handoff.moved),
+                Err(PersonaError::HttpPathOff { .. }) => {}
+                Err(error) => {
+                    tracing::warn!(persona = %persona.id, %error, "cookies could not be handed to the browser");
+                }
+            }
+        }
+
+        let request = navigation_for(job, &self.browser);
+        let sidecar = self.manager.sidecars().of(persona.engine);
+        let navigating =
+            sidecar.navigate_checked(context, &request, self.security, self.max_redirects);
+        let navigation = match tokio::time::timeout(job.timeout + BROWSER_GRACE, navigating).await {
+            Ok(Ok(navigation)) => navigation,
+            Ok(Err(error)) => {
+                // The browser is in a state nobody knows: it is closed.
+                lease.close().await;
+                return Self::unavailable(&PersonaError::Browser(error));
+            }
+            Err(_) => {
+                lease.close().await;
+                return AttemptOutput::failed(Outcome::Timeout, "timeout", Courtesy::ServerError);
+            }
+        };
+        let page = match navigation {
+            Navigation::Page(page) => page,
+            Navigation::SsrfDenied { denied, result } => {
+                lease.close().await;
+                let mut output =
+                    AttemptOutput::failed(Outcome::SsrfDenied, "ssrf_denied", Courtesy::NotTheSite);
+                output.classification.evidence.push(denied.evidence());
+                output.final_url = Some(denied.url);
+                output.timing = timing_of(&result);
+                output.page = Some(result);
+                return output;
+            }
+        };
+
+        let failure = page_failure(&page);
+        let classification = self.verdicts.judge_page(&page);
+        let outcome = classification.outcome;
+        let status = page.status.and_then(|status| u16::try_from(status).ok());
+        let courtesy = match &failure {
+            Some(failure) if !outcome.is_block() => failure.courtesy,
+            _ => courtesy_of(outcome, status),
+        };
+
+        let mut cookies_to_http = None;
+        if outcome.is_success() {
+            self.manager.pool().report_traffic_ok(proxy.id);
+            // What the browser earned goes to the persona's http jar.
+            if let Some(origin) = &origin {
+                match self.manager.browser_to_http(persona, context, origin).await {
+                    Ok(handoff) => cookies_to_http = Some(handoff.moved),
+                    Err(PersonaError::HttpPathOff { .. }) => {}
+                    Err(error) => {
+                        tracing::warn!(persona = %persona.id, %error, "cookies could not be handed to the http path");
+                    }
+                }
+            }
+            lease.keep(job.keeps_visiting);
+        } else if outcome.is_block() {
+            // It leaves: no reload, no cookies of the wall, the window
+            // closed.
+            lease.close().await;
+        } else {
+            lease.keep(false);
+        }
+
+        AttemptOutput {
+            courtesy,
+            reason: failure
+                .filter(|_| !outcome.is_block())
+                .map(|failure| failure.reason.to_owned()),
+            classification,
+            status,
+            final_url: Some(page.final_url.clone()),
+            headers: page
+                .headers
+                .iter()
+                .map(|header| Header {
+                    name: header.name.clone(),
+                    value: header.value.clone(),
+                })
+                .collect(),
+            redirects: page.redirects.iter().map(|hop| hop.url.clone()).collect(),
+            timing: timing_of(&page),
+            page: Some(page),
+            fetched: None,
+            cookies_to_browser,
+            cookies_to_http,
+        }
+    }
+}
+
+#[async_trait]
+impl AttemptExecutor for PathExecutor {
+    async fn run(&self, job: &AttemptJob) -> AttemptOutput {
+        // The bytes of the attempt count toward its domain.
+        let _label = self
+            .meter
+            .as_ref()
+            .map(|meter| meter.label(job.persona.id, &job.domain));
+        match job.render {
+            Render::Http => self.http(job).await,
+            Render::Browser => self.browser(job).await,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kage_browser::contract::{DwellMode, EntryStrategy};
+    use kage_core::config::BrowserConfig;
+    use kage_core::outcome::Outcome;
+    use kage_core::policy::{DomainPolicies, EffectivePolicy};
+    use kage_core::schedule::politeness::Courtesy;
+    use kage_core::seed::Seed;
+    use kage_http::{HttpError, Stage};
+    use url::Url;
+
+    use super::{AttemptOutput, PathExecutor, behavior_for, origin_of};
+
+    fn policy(yaml: &str) -> EffectivePolicy {
+        DomainPolicies::from_yaml(yaml)
+            .unwrap()
+            .resolve("example.org")
+    }
+
+    #[test]
+    fn a_browser_render_asks_for_human_behavior() {
+        let browser = BrowserConfig::default();
+        let seed = Seed::from_u64(5);
+
+        let behavior = behavior_for(&policy(""), &browser, &seed);
+
+        assert_eq!(behavior.dwell, Some(DwellMode::Human));
+        assert_eq!(behavior.wander, Some(true));
+        assert_eq!(behavior.seed.as_deref(), Some(seed.to_string().as_str()));
+        let entry = behavior.entry.clone().unwrap();
+        assert_eq!(entry.strategy, EntryStrategy::Direct);
+        assert_eq!((entry.from_url, entry.fallback), (None, None));
+        // The same seed scrolls as deep every time; other seeds cover the
+        // range and never leave it.
+        assert_eq!(behavior, behavior_for(&policy(""), &browser, &seed));
+        let depths: Vec<f64> = (0..400)
+            .map(|n| {
+                behavior_for(&policy(""), &browser, &Seed::from_u64(n))
+                    .scroll_depth
+                    .unwrap()
+            })
+            .collect();
+        assert!(depths.iter().all(|depth| (0.6..0.9).contains(depth)));
+        assert!(depths.iter().any(|depth| *depth < 0.63));
+        assert!(depths.iter().any(|depth| *depth > 0.87));
+
+        // `none` is asked for as written; a search entry has no template
+        // and is a typed navigation.
+        let none = policy("defaults:\n  referer_strategy: none\n");
+        assert_eq!(
+            behavior_for(&none, &browser, &seed).entry.unwrap().strategy,
+            EntryStrategy::None
+        );
+        let search = policy("defaults:\n  referer_strategy: search_engine\n");
+        assert_eq!(
+            behavior_for(&search, &browser, &seed)
+                .entry
+                .unwrap()
+                .strategy,
+            EntryStrategy::Direct
+        );
+    }
+
+    #[test]
+    fn an_origin_is_a_scheme_a_host_and_a_port_that_is_not_the_default() {
+        let origin = |text: &str| origin_of(&Url::parse(text).unwrap());
+
+        assert_eq!(
+            origin("https://shop.example/cart?x=1#top").as_deref(),
+            Some("https://shop.example")
+        );
+        assert_eq!(
+            origin("http://shop.example:8080/").as_deref(),
+            Some("http://shop.example:8080")
+        );
+        assert_eq!(
+            origin("https://shop.example:443/").as_deref(),
+            Some("https://shop.example")
+        );
+        assert_eq!(origin("data:text/plain,hi"), None);
+    }
+
+    #[test]
+    fn a_failed_http_attempt_says_what_failed_and_whose_fault_it_was() {
+        let told = |error: HttpError| {
+            let output = PathExecutor::http_failure(&error);
+            (
+                output.outcome(),
+                output.reason.clone().unwrap(),
+                output.courtesy,
+                output.classification.retryable,
+            )
+        };
+
+        assert_eq!(
+            told(HttpError::Timeout {
+                stage: Stage::ReadingBody,
+                after: std::time::Duration::from_secs(30),
+            }),
+            (
+                Outcome::Timeout,
+                "timeout".to_owned(),
+                Courtesy::ServerError,
+                true
+            )
+        );
+        assert_eq!(
+            told(HttpError::ProxyAuth),
+            (
+                Outcome::ProviderError,
+                "proxy_failed".to_owned(),
+                Courtesy::NotTheSite,
+                true
+            )
+        );
+        assert_eq!(
+            told(HttpError::Connect("no tunnel")).1,
+            "proxy_failed".to_owned()
+        );
+        assert_eq!(
+            told(HttpError::Tls),
+            (
+                Outcome::ProviderError,
+                "connection_failed".to_owned(),
+                Courtesy::ServerError,
+                true
+            )
+        );
+        // What no other persona would change is not retried.
+        assert_eq!(
+            told(HttpError::Method("PUT".to_owned())),
+            (
+                Outcome::ProviderError,
+                "invalid_request".to_owned(),
+                Courtesy::NotTheSite,
+                false
+            )
+        );
+        assert_eq!(
+            told(HttpError::TooManyRedirects {
+                max: 10,
+                location: "/again".to_owned(),
+            }),
+            (
+                Outcome::ProviderError,
+                "too_many_redirects".to_owned(),
+                Courtesy::Answered,
+                false
+            )
+        );
+        assert_eq!(
+            told(HttpError::Build("no".to_owned())).1,
+            "http_client".to_owned()
+        );
+        // The error itself is part of the evidence.
+        let output = PathExecutor::http_failure(&HttpError::Tls);
+        assert_eq!(
+            output.classification.evidence,
+            [
+                "failure:connection_failed",
+                "error:the TLS handshake with the target failed"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_failure_can_be_made_final() {
+        let output =
+            AttemptOutput::failed(Outcome::ProviderError, "why", Courtesy::NotTheSite).finally();
+
+        assert!(!output.classification.retryable);
+        assert_eq!(output.outcome(), Outcome::ProviderError);
+        assert_eq!(output.status, None);
+        assert!(output.page.is_none() && output.fetched.is_none());
+    }
+}
