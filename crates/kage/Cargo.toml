@@ -23,6 +23,7 @@ kage-extract = { workspace = true }
 kage-http = { workspace = true }
 kage-persona = { workspace = true }
 kage-proxy = { workspace = true }
+kage-scheduler = { workspace = true }
 kage-store = { workspace = true }
 
 anyhow = { workspace = true }
@@ -34,6 +35,8 @@ tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-th
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "json"] }
 url = { workspace = true }
+# The seed of the scheduler, and ids on the command line.
+uuid = { workspace = true }
 
 [dev-dependencies]
 # The self-test CLI test runs the local proxy and the fingerprint echo of
@@ -46,7 +49,6 @@ testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["postgres"] }
 # The persona CLI test uses the mock sidecars of kage-persona's own tests
 # (crates/kage-persona/tests/common).
-uuid = { workspace = true }
 # The proxy CLI tests run against the mock Webshare API of kage-proxy's own
 # tests (crates/kage-proxy/tests/common).
 wiremock = { workspace = true }

@@ -1,5 +1,6 @@
 //! `kage serve`: checks the database, loads the policies, starts the
-//! background jobs and the proxy pool, and runs the API router until
+//! background jobs, the proxy pool, the personas and the fetch engine
+//! (forwarder, scheduler, bandwidth budget), and runs the API router until
 //! shutdown.
 
 use std::future::Future;
@@ -18,7 +19,8 @@ use kage_store::{ArtifactStore, Store};
 use tokio::net::TcpListener;
 use tokio::time::MissedTickBehavior;
 
-use crate::{alerts, migrate, persona_cmd};
+use crate::engine::Engine;
+use crate::{alerts, migrate};
 
 /// Blobs younger than this are never treated as orphans: a write in
 /// progress has a blob on disk before its row is committed.
@@ -71,8 +73,8 @@ pub(crate) async fn run(config: Config, bind: Option<SocketAddr>) -> anyhow::Res
         config.artifacts.sweep_interval.get(),
     ));
 
-    let proxy_pool = match start_proxy_pool(&config, &store, alerts).await {
-        Ok(tasks) => tasks,
+    let (proxy_pool, engine) = match start_proxy_pool(&config, &store, alerts, policies).await {
+        Ok(started) => started,
         Err(error) => {
             retention.abort();
             recorder.abort();
@@ -88,6 +90,11 @@ pub(crate) async fn run(config: Config, bind: Option<SocketAddr>) -> anyhow::Res
 
     for task in proxy_pool {
         task.abort();
+    }
+    // After the manager's own work stopped: what waits is refused, the
+    // browsers are closed and the last byte counts are written.
+    if let Some(engine) = engine {
+        engine.stop().await;
     }
     retention.abort();
     recorder.abort();
@@ -123,17 +130,21 @@ pub(crate) async fn serve(
 }
 
 /// Starts the proxy pool's two loops (spec §7): upkeep (sync with the
-/// provider, backoffs, replacements) and health checks, and the persona
-/// manager that follows the pool (spec §6): it generates a persona for
-/// every usable proxy, retires it with its proxy, and runs warm-up visits
-/// and scheduled self-tests. A health probe presents as the persona behind
-/// the proxy it checks. Without a provider nothing is started, and every
-/// fetch will fail: Kage never connects to a target directly.
+/// provider, backoffs, replacements) and health checks, the fetch engine
+/// (spec §3.2, §11: the forwarder every persona's traffic leaves through,
+/// the scheduler, the bandwidth budget), and the persona manager that
+/// follows the pool (spec §6): it generates a persona for every usable
+/// proxy, retires it with its proxy, and runs warm-up visits and scheduled
+/// self-tests, each of which asks the scheduler first. A health probe
+/// presents as the persona behind the proxy it checks. Without a provider
+/// nothing is started, and every fetch will fail: Kage never connects to a
+/// target directly.
 async fn start_proxy_pool(
     config: &Config,
     store: &Store,
     alerts: Arc<dyn AlertSink>,
-) -> anyhow::Result<Vec<tokio::task::JoinHandle<()>>> {
+    policies: Arc<PolicyStore>,
+) -> anyhow::Result<(Vec<tokio::task::JoinHandle<()>>, Option<Engine>)> {
     let pool = Arc::new(
         Pool::from_config(config, store.clone(), Arc::clone(&alerts))
             .context("cannot set up the proxy pool")?,
@@ -149,7 +160,7 @@ async fn start_proxy_pool(
                 "no proxy provider is configured (KAGE__WEBSHARE__API_KEY or \
                  KAGE__PROXIES__STATIC_LIST): the proxy pool is empty and nothing can be fetched"
             );
-            return Ok(Vec::new());
+            return Ok((Vec::new(), None));
         }
         // Proxies of an earlier provider are still in the pool and may be
         // used, so they are still checked: a leak must not go unseen because
@@ -170,12 +181,17 @@ async fn start_proxy_pool(
              probe shows a distinct exit address or `kage proxy egress --clear` is run"
         );
     }
-    let personas = Arc::new(persona_cmd::build(
+    let mut engine = Engine::start(
         config,
         store,
         Arc::clone(&pool),
         alerts,
-    )?);
+        policies,
+        config.forwarder.bind,
+    )
+    .await?;
+    engine.serve();
+    let personas = Arc::clone(&engine.personas);
     // Before anything is probed: which persona lives behind which proxy.
     let stored = personas
         .load()
@@ -195,7 +211,7 @@ async fn start_proxy_pool(
         HealthChecker::with_clients(config, Arc::clone(&pool), probe_clients)
             .context("cannot set up the proxy health checks")?,
     );
-    Ok(vec![
+    let tasks = vec![
         tokio::spawn(personas.run(std::future::pending())),
         tokio::spawn(pool.run(
             config.proxies.sync_interval.get(),
@@ -203,7 +219,8 @@ async fn start_proxy_pool(
             std::future::pending(),
         )),
         tokio::spawn(checker.run(std::future::pending())),
-    ])
+    ];
+    Ok((tasks, Some(engine)))
 }
 
 /// The artifact retention job: one sweep at startup, then one per interval.

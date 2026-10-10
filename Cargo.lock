@@ -1950,6 +1950,7 @@ dependencies = [
  "kage-http",
  "kage-persona",
  "kage-proxy",
+ "kage-scheduler",
  "kage-store",
  "rcgen",
  "serde_json",

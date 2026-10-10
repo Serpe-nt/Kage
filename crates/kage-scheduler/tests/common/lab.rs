@@ -72,6 +72,7 @@ pub const SITE: &str = "shop.kage.test";
 /// migration applied.
 pub struct TestDb {
     pub store: Store,
+    pub url: String,
     _container: ContainerAsync<Postgres>,
 }
 
@@ -94,6 +95,7 @@ impl TestDb {
         store.migrate().await.unwrap();
         Self {
             store,
+            url,
             _container: container,
         }
     }
@@ -471,7 +473,7 @@ pub struct Lab {
     pub config: Config,
     stops: Vec<oneshot::Sender<()>>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
-    _policy_dir: TempDir,
+    policy_dir: TempDir,
     _volume: TempDir,
 }
 
@@ -646,7 +648,7 @@ impl Lab {
             config,
             stops,
             tasks,
-            _policy_dir: policy_dir,
+            policy_dir,
             _volume: volume,
         };
         for _ in 0..personas {
@@ -657,6 +659,11 @@ impl Lab {
 
     pub fn store(&self) -> &Store {
         &self.db.store
+    }
+
+    /// The directory of the policies in force.
+    pub fn policy_dir(&self) -> &std::path::Path {
+        self.policy_dir.path()
     }
 
     pub fn now(&self) -> DateTime<Utc> {

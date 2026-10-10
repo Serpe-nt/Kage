@@ -1,18 +1,21 @@
 //! Kage command-line entry point.
 //!
-//! `serve` runs the API server, the proxy pool and the persona manager,
-//! `healthcheck` probes the server, `migrate` applies the database schema,
-//! `config check` validates the configuration, `proxy` inspects and
-//! operates the proxy pool, `persona` inspects and operates the personas,
-//! `selftest http` checks the http path's fingerprint, `selftest browser`
-//! runs a browser context against the self-test pages (both for a proxy
-//! with a stand-in, or for a persona), and `echo serve` runs the
-//! fingerprint echo. The remaining command (`key`) lands with the
-//! milestone that owns it (see `docs/02-plan.md`).
+//! `serve` runs the API server, the proxy pool, the persona manager, the
+//! scheduler and the forwarder, `healthcheck` probes the server, `migrate`
+//! applies the database schema, `config check` validates the
+//! configuration, `proxy` inspects and operates the proxy pool, `persona`
+//! inspects and operates the personas, `fetch` runs one request through
+//! the whole pipeline, `selftest http` checks the http path's
+//! fingerprint, `selftest browser` runs a browser context against the
+//! self-test pages (both for a proxy with a stand-in, or for a persona),
+//! and `echo serve` runs the fingerprint echo. The remaining command
+//! (`key`) lands with the milestone that owns it (see `docs/02-plan.md`).
 
 mod alerts;
 mod config_cmd;
 mod echo_cmd;
+mod engine;
+mod fetch_cmd;
 mod healthcheck;
 mod migrate;
 mod persona_cmd;
@@ -27,13 +30,13 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use kage_core::config::process_env;
-use kage_core::domain::{Engine, PersonaState, ProxyState};
+use kage_core::domain::{Engine, PersonaState, ProxyState, RenderMode};
 use kage_core::duration::HumanDuration;
 use kage_core::ids::{PersonaId, ProxyId};
 use tracing_subscriber::EnvFilter;
 
 /// Library crates composed into this binary, reported once at startup.
-const COMPONENTS: [&str; 9] = [
+const COMPONENTS: [&str; 10] = [
     kage_api::CRATE_NAME,
     kage_browser::CRATE_NAME,
     kage_core::CRATE_NAME,
@@ -42,6 +45,7 @@ const COMPONENTS: [&str; 9] = [
     kage_http::CRATE_NAME,
     kage_persona::CRATE_NAME,
     kage_proxy::CRATE_NAME,
+    kage_scheduler::CRATE_NAME,
     kage_store::CRATE_NAME,
 ];
 
@@ -99,6 +103,41 @@ enum Command {
     Persona {
         #[command(subcommand)]
         command: PersonaCommand,
+    },
+    /// Fetch one page through the whole pipeline: the domain policy, the
+    /// scheduler, a persona, its path, the classifier and the store. May
+    /// run next to the server. Exits non-zero unless the page was fetched.
+    Fetch {
+        /// The page.
+        #[arg(value_name = "URL")]
+        url: url::Url,
+        /// The path: auto (the domain policy decides, and a block on the
+        /// http path moves the request to the browser), http or browser.
+        #[arg(long, default_value = "auto")]
+        render: RenderMode,
+        /// Only this persona.
+        #[arg(long, value_name = "PERSONA_ID")]
+        persona: Option<PersonaId>,
+        /// Only personas on this engine: chromium or firefox.
+        #[arg(long)]
+        engine: Option<Engine>,
+        /// Longest one attempt may take, for example 45s.
+        #[arg(long, value_name = "DURATION")]
+        timeout: Option<HumanDuration>,
+        /// Retries after the first attempt, instead of the policy's.
+        #[arg(long, value_name = "N")]
+        retries: Option<u32>,
+        /// A pacing profile instead of the policy's, unless the policy
+        /// locks pacing.
+        #[arg(long, value_name = "PROFILE")]
+        pacing: Option<String>,
+        /// Write the document (the DOM of a browser attempt, the body of
+        /// an http one) to this file.
+        #[arg(long, short, value_name = "FILE")]
+        output: Option<PathBuf>,
+        /// Print one JSON document instead of sentences.
+        #[arg(long)]
+        json: bool,
     },
     /// Check that Kage still looks like the browsers it presents as.
     Selftest {
@@ -482,7 +521,10 @@ async fn main() -> anyhow::Result<()> {
 
     init_tracing(matches!(
         cli.command,
-        Command::Proxy { .. } | Command::Persona { .. } | Command::Selftest { .. }
+        Command::Proxy { .. }
+            | Command::Persona { .. }
+            | Command::Selftest { .. }
+            | Command::Fetch { .. }
     ))?;
     match cli.command {
         // The echo is a tool of its own: it reads no configuration.
@@ -495,6 +537,36 @@ async fn main() -> anyhow::Result<()> {
                 .context("the fingerprint echo failed")
         }
         Command::Selftest { command } => selftest(command, config_file.as_deref()).await,
+        Command::Fetch {
+            url,
+            render,
+            persona,
+            engine,
+            timeout,
+            retries,
+            pacing,
+            output,
+            json,
+        } => {
+            let config = config_cmd::load(config_file.as_deref(), process_env())?;
+            let options = fetch_cmd::FetchOptions {
+                url,
+                render,
+                persona,
+                engine,
+                timeout: timeout.map(HumanDuration::get),
+                retries,
+                pacing,
+                output,
+                json,
+            };
+            let mut out = Vec::new();
+            let result = fetch_cmd::fetch(&config, &options, &mut out).await;
+            // What was found is shown even when the page was not fetched.
+            std::io::Write::write_all(&mut std::io::stdout().lock(), &out)
+                .context("cannot write to stdout")?;
+            result
+        }
         Command::Serve { bind } => {
             let config = config_cmd::load(config_file.as_deref(), process_env())?;
             tracing::info!(
@@ -631,7 +703,8 @@ mod tests {
     use std::time::Duration;
 
     use clap::{CommandFactory, Parser};
-    use kage_core::domain::{Engine, PersonaState, ProxyState};
+    use kage_core::domain::{Engine, PersonaState, ProxyState, RenderMode};
+    use kage_core::duration::HumanDuration;
 
     use super::{
         COMPONENTS, Cli, Command, ConfigCommand, EchoCommand, PersonaCommand, ProxyCommand,
@@ -641,6 +714,90 @@ mod tests {
     #[test]
     fn cli_definition_is_consistent() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn fetch_takes_a_url_and_leaves_the_rest_to_the_policy() {
+        let cli = Cli::try_parse_from(["kage", "fetch", "https://shop.example/page"]).unwrap();
+        let Command::Fetch {
+            url,
+            render,
+            persona,
+            engine,
+            timeout,
+            retries,
+            pacing,
+            output,
+            json,
+        } = cli.command
+        else {
+            panic!("expected the fetch command, got {:?}", cli.command);
+        };
+        assert_eq!(url.as_str(), "https://shop.example/page");
+        assert_eq!(render, RenderMode::Auto);
+        assert_eq!(
+            (persona, engine, timeout, retries),
+            (None, None, None, None)
+        );
+        assert_eq!((pacing, output, json), (None, None, false));
+
+        let cli = Cli::try_parse_from([
+            "kage",
+            "fetch",
+            "https://shop.example/page",
+            "--render",
+            "browser",
+            "--persona",
+            "0199c1f2-6b7a-7c3e-9d41-2f8a5b6c7d8e",
+            "--engine",
+            "firefox",
+            "--timeout",
+            "45s",
+            "--retries",
+            "0",
+            "--pacing",
+            "fast",
+            "-o",
+            "page.html",
+            "--json",
+        ])
+        .unwrap();
+        let Command::Fetch {
+            render,
+            persona,
+            engine,
+            timeout,
+            retries,
+            pacing,
+            output,
+            json,
+            ..
+        } = cli.command
+        else {
+            panic!("expected the fetch command, got {:?}", cli.command);
+        };
+        assert_eq!(render, RenderMode::Browser);
+        assert_eq!(
+            persona.map(|persona| persona.to_string()).as_deref(),
+            Some("0199c1f2-6b7a-7c3e-9d41-2f8a5b6c7d8e")
+        );
+        assert_eq!(engine, Some(Engine::Firefox));
+        assert_eq!(
+            timeout.map(HumanDuration::get),
+            Some(Duration::from_secs(45))
+        );
+        assert_eq!(retries, Some(0));
+        assert_eq!(pacing.as_deref(), Some("fast"));
+        assert_eq!(output, Some(PathBuf::from("page.html")));
+        assert!(json);
+
+        // Not a URL, not a path: refused before anything starts.
+        assert!(Cli::try_parse_from(["kage", "fetch", "not a url"]).is_err());
+        assert!(
+            Cli::try_parse_from(["kage", "fetch", "https://shop.example/", "--render", "tor"])
+                .is_err()
+        );
+        assert!(Cli::try_parse_from(["kage", "fetch"]).is_err());
     }
 
     #[test]

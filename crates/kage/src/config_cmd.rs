@@ -79,6 +79,8 @@ pub(crate) fn check(
         "http": kage_http::describe(&config),
         // What the persona manager will do by itself.
         "personas": kage_persona::describe(&config),
+        // The scheduler's caps, the bandwidth budget and the forwarder.
+        "scheduler": kage_scheduler::describe(&config),
     });
     serde_json::to_writer_pretty(&mut *out, &report).context("cannot write the report")?;
     writeln!(out).context("cannot write the report")?;
