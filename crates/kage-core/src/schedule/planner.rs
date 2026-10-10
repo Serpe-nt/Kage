@@ -45,6 +45,7 @@ use super::breaker::{Admission, BreakerRules};
 use super::day::{DayBook, DayRules};
 use super::politeness::{Courtesy, ServerErrorRules, ServerErrors};
 use super::queue::{Priority, Ticket, WorkQueue};
+use super::retry::retry_pause;
 use super::selection::{self, Candidate, Network};
 use crate::domain::{CountryCode, DomainBreaker, Engine, PersonaDomainState, Render};
 use crate::ids::PersonaId;
@@ -142,6 +143,17 @@ pub struct DomainFacts {
     pub breaker: Option<DomainBreaker>,
 }
 
+/// The pause before a retry on another persona: drawn from `pause` at the
+/// pace of whichever persona takes the retry, counted from the moment the
+/// retry was asked for.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RetryPause {
+    /// The distribution of the pause, in milliseconds.
+    pub pause: Lognormal,
+    /// The seed of the draw.
+    pub seed: Seed,
+}
+
 /// One attempt that waits for a persona.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Work {
@@ -176,7 +188,10 @@ pub struct Work {
     /// browser after its http attempt was blocked): it does not wait for
     /// the persona's slot and is no new page of its pacing.
     pub follow_up: bool,
-    /// Not before this moment: the pause before a retry.
+    /// The pause before this attempt when it is a retry on another
+    /// persona.
+    pub retry_pause: Option<RetryPause>,
+    /// Not before this moment, whoever takes it.
     pub not_before: Option<DateTime<Utc>>,
     /// Refuse instead of waiting past this moment.
     pub give_up_at: Option<DateTime<Utc>>,
@@ -217,6 +232,9 @@ pub struct Dispatch {
     pub woken: bool,
     /// The seed of the persona's pacing on the domain.
     pub pacing_seed: Seed,
+    /// The rules of the domain's breaker, for whoever reports the
+    /// attempt's end to it.
+    pub breaker: BreakerRules,
 }
 
 /// What the planner decided about one waiting request.
@@ -581,7 +599,7 @@ impl Planner {
             let Some(known) = facts.get(&domain) else {
                 continue;
             };
-            let looked = self.look(now, &queued.work, known, &mut claimed, &mut held, &trials);
+            let looked = self.look(now, queued, known, &mut claimed, &mut held, &trials);
             match looked {
                 Looked::Go {
                     persona,
@@ -627,12 +645,13 @@ impl Planner {
     fn look(
         &self,
         now: DateTime<Utc>,
-        work: &Work,
+        queued: &Queued,
         facts: &DomainFacts,
         claimed: &mut HashSet<PersonaId>,
         held: &mut HashSet<String>,
         trials: &HashSet<String>,
     ) -> Looked {
+        let work = &queued.work;
         if let Some(reason) = self.stop {
             return Looked::Refuse(reason, None);
         }
@@ -686,7 +705,7 @@ impl Planner {
             return Looked::Wait(None);
         }
 
-        let possible = self.possible(now, work, facts);
+        let possible = self.possible(now, queued, facts);
         if possible.is_empty() {
             return Looked::Refuse(Refusal::NoPersona, None);
         }
@@ -820,9 +839,10 @@ impl Planner {
     fn possible<'a>(
         &'a self,
         now: DateTime<Utc>,
-        work: &Work,
+        queued: &Queued,
         facts: &DomainFacts,
     ) -> Vec<Possible<'a>> {
+        let work = &queued.work;
         let mut possible = Vec::new();
         for view in self.personas.values() {
             if !view.ready
@@ -868,6 +888,12 @@ impl Planner {
             };
             if sleeps_through && !work.follow_up {
                 at = at.max(up);
+            }
+            if let Some(retry) = &work.retry_pause {
+                // A retry leaves a pause after the block, at the pace of
+                // the persona that makes it.
+                let pause = retry_pause(&retry.pause, pacing_factor(&view.seed), &retry.seed);
+                at = at.max(queued.since + chrono_of(pause));
             }
             // Whether anything but the persona's own pacing delays it.
             let held_back = at > now;
@@ -1065,6 +1091,7 @@ impl Planner {
             trial,
             woken,
             pacing_seed,
+            breaker: self.breaker_rules(work),
         }
     }
 

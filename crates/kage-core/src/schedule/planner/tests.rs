@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use super::{
     Completion, Decision, Dispatch, DomainFacts, Held, PersonaView, Planner, PlannerRules, Refusal,
-    Work,
+    RetryPause, Work,
 };
 use crate::domain::{BreakerState, CountryCode, DomainBreaker, Engine, PersonaDomainState, Render};
 use crate::ids::PersonaId;
@@ -158,6 +158,7 @@ fn work(domain: &str) -> Work {
         breaker_threshold: 5,
         breaker_pause: StdDuration::from_mins(30),
         follow_up: false,
+        retry_pause: None,
         not_before: None,
         give_up_at: None,
     }
@@ -1424,6 +1425,56 @@ fn a_retry_is_not_made_before_its_pause_is_over() {
     assert_eq!(sim.log.len(), 1);
     assert_eq!(sim.log[0].0, after);
     assert_eq!(sim.log[0].1.waited, secs(6));
+}
+
+#[test]
+fn a_retry_waits_a_drawn_pause_at_the_pace_of_the_persona_that_makes_it() {
+    let pause = Lognormal {
+        median: 6000.0,
+        p95: 20_000.0,
+        min: Some(2000.0),
+        max: None,
+    };
+    let seed = Seed::from_u64(41);
+    let retried_by = |number: u8| {
+        let mut sim = Sim::new(vec![persona(number)]);
+        sim.submit(Work {
+            retry_pause: Some(RetryPause { pause, seed }),
+            ..sync("example.org")
+        });
+        sim.settle();
+        assert_eq!(sim.log, []);
+        let wake = sim.planner.wake_at().unwrap();
+        sim.run_until(wake + secs(1));
+        assert_eq!(sim.log.len(), 1);
+        assert_eq!(sim.log[0].0, wake);
+        // The breaker's rules travel with the attempt.
+        assert_eq!(sim.log[0].1.breaker.threshold, 5);
+        assert_eq!(sim.log[0].1.breaker.pause, StdDuration::from_mins(30));
+        assert_eq!(sim.log[0].1.breaker.max_pause, StdDuration::from_hours(6));
+        assert_eq!(
+            sim.log[0].1.breaker.trial_timeout,
+            StdDuration::from_mins(10)
+        );
+        (wake - noon(), pacing_factor(&persona(number).seed))
+    };
+
+    let (first, first_factor) = retried_by(0);
+    let (second, second_factor) = retried_by(1);
+    // Never under two seconds, and the same draw is longer for the slower
+    // of two personas.
+    assert!(first > secs(2) && second > secs(2), "{first} {second}");
+    assert_ne!(first, second);
+    assert_eq!(first > second, first_factor > second_factor);
+    assert_eq!(
+        first,
+        Duration::from_std(crate::schedule::retry::retry_pause(
+            &pause,
+            first_factor,
+            &seed
+        ))
+        .unwrap()
+    );
 }
 
 #[test]

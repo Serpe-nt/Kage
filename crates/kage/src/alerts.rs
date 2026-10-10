@@ -106,6 +106,9 @@ mod tests {
             AlertKind::ProviderSyncFailed,
             AlertKind::HostIpUnknown,
             AlertKind::HttpProfileMissing,
+            AlertKind::DomainPaused,
+            AlertKind::BandwidthBudgetWarning,
+            AlertKind::BandwidthBudgetExhausted,
         ];
         for kind in about_one_proxy {
             assert_eq!(subject_of(kind), SubjectKind::Proxy, "{kind:?}");

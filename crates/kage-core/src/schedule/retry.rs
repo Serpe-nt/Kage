@@ -167,6 +167,17 @@ impl RequestProgress {
         &self.blocked
     }
 
+    /// Gives up the persona's own second try: its browser could not be
+    /// had. Returns the http block it was to cure, which now stands, and
+    /// the persona that answers for it; the next attempt is another
+    /// persona's.
+    pub fn forfeit(&mut self) -> Option<(PersonaId, AttemptVerdict)> {
+        let verdict = self.deferred.take()?;
+        let persona = *self.used.last()?;
+        self.blocked.push(persona);
+        Some((persona, verdict))
+    }
+
     /// Whether a block on the http path may still send the request to the
     /// browser: it asked for `auto`, is on the http path and has not moved
     /// yet.
@@ -523,6 +534,31 @@ mod tests {
             request.record(b, verdict(Outcome::Timeout)),
             Ruling {
                 step: Step::Finish,
+                penalty: None
+            }
+        );
+        assert_eq!(request.blocked(), [a]);
+    }
+
+    #[test]
+    fn an_escalation_that_cannot_be_made_leaves_the_http_block_standing() {
+        let [a, b] = [PersonaId::new(), PersonaId::new()];
+        let http_block = verdict(Outcome::SoftBlock);
+        let mut request = RequestProgress::new(RenderMode::Auto, Render::Http, 2);
+        // Nothing to give up before anything was deferred.
+        assert_eq!(request.forfeit(), None);
+        request.record(a, http_block);
+
+        assert_eq!(request.forfeit(), Some((a, http_block)));
+        assert_eq!(request.blocked(), [a]);
+        // It is given up once, and the next persona does not inherit it.
+        assert_eq!(request.forfeit(), None);
+        assert_eq!(
+            request.record(b, verdict(Outcome::Timeout)),
+            Ruling {
+                step: Step::RetryOtherPersona {
+                    render: Render::Browser
+                },
                 penalty: None
             }
         );

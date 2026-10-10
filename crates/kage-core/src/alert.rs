@@ -103,6 +103,16 @@ pub enum AlertKind {
     /// fetched through that proxy until one exists; the manager tries
     /// again.
     PersonaGenerationFailed,
+    /// The blocks of a domain reached its breaker's threshold: the domain
+    /// is paused and every request for it is answered at once (spec §8.3).
+    DomainPaused,
+    /// A share of the proxy plan's bandwidth for the billing term is used
+    /// (decision D5). Raised once per term.
+    BandwidthBudgetWarning,
+    /// The proxy plan's bandwidth for the billing term is used up. With the
+    /// hard stop on, nothing is fetched until the term ends or the cap is
+    /// raised. Raised once per term.
+    BandwidthBudgetExhausted,
 }
 
 impl AlertKind {
@@ -128,6 +138,9 @@ impl AlertKind {
         Self::HttpSelftestFailed,
         Self::BrowserSelftestFailed,
         Self::PersonaGenerationFailed,
+        Self::DomainPaused,
+        Self::BandwidthBudgetWarning,
+        Self::BandwidthBudgetExhausted,
     ];
 
     /// The stable `snake_case` name used in logs and the store.
@@ -153,6 +166,9 @@ impl AlertKind {
             Self::HttpSelftestFailed => "http_selftest_failed",
             Self::BrowserSelftestFailed => "browser_selftest_failed",
             Self::PersonaGenerationFailed => "persona_generation_failed",
+            Self::DomainPaused => "domain_paused",
+            Self::BandwidthBudgetWarning => "bandwidth_budget_warning",
+            Self::BandwidthBudgetExhausted => "bandwidth_budget_exhausted",
         }
     }
 }
@@ -344,6 +360,9 @@ mod tests {
                 "http_selftest_failed",
                 "browser_selftest_failed",
                 "persona_generation_failed",
+                "domain_paused",
+                "bandwidth_budget_warning",
+                "bandwidth_budget_exhausted",
             ]
         );
         // The serialized name is the stable name.
