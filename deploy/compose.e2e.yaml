@@ -1,0 +1,101 @@
+# Overlay for the end-to-end test of the fetch pipeline (tests/e2e/fetch.sh).
+# Never for a deployment: it adds a world for Kage to fetch from that lives
+# entirely on the compose network.
+#
+#   fixture   the fixture site (tests/fixtures/site), reached by names that
+#             only the proxies can resolve: fixture.kage.test, lenient.kage.test
+#   proxy-a/b/c  three "residential proxies" of a provider, each with its own
+#             credential, relaying to the fixture and the echo only
+#   world     the echo the proxy health probe asks for its exit address and
+#             its place
+#
+# Kage runs on a static proxy list of the three proxies, with the health
+# probe pointed at the echo, so nothing here needs or reaches the internet.
+
+x-helper: &helper
+  # The image has node and nothing else is needed.
+  image: ${KAGE_BROWSER_CHROMIUM_IMAGE:-kage-browser-chromium:dev}
+  entrypoint: [node]
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: "no"
+  init: true
+  mem_limit: 256m
+  cpus: 1
+  pids_limit: 128
+  volumes:
+    - ../tests/e2e:/e2e:ro
+    - ../tests/fixtures/site:/fixtures/site:ro
+
+services:
+  kage:
+    depends_on:
+      fixture:
+        condition: service_healthy
+      world:
+        condition: service_healthy
+      proxy-a:
+        condition: service_healthy
+      proxy-b:
+        condition: service_healthy
+      proxy-c:
+        condition: service_healthy
+    environment:
+      # host:port:username:password:country, one proxy per line. Not
+      # secrets: they open three containers of this test and nothing else.
+      KAGE__PROXIES__STATIC_LIST: |
+        proxy-a:3128:provider-a:e2e-only-a:DE
+        proxy-b:3128:provider-b:e2e-only-b:DE
+        proxy-c:3128:provider-c:e2e-only-c:DE
+      KAGE__PROXIES__HEALTH__ECHO_URL: http://world.kage.test:8089/ip
+      KAGE__PROXIES__HEALTH__CONFIRM_URL: http://world.kage.test:8089/ip
+      KAGE__PROXIES__HEALTH__GEO_URL: http://world.kage.test:8089/geo
+      # Asked directly, without a proxy: the address of this container.
+      KAGE__PROXIES__HEALTH__HOST_IP_URL: http://world:8089/ip
+      KAGE__PROXIES__HEALTH__STARTUP_SPREAD: 1s
+      KAGE__PROXIES__HEALTH__INTERVAL: 1m
+    volumes:
+      # The shipped policies with the domain rules of the test.
+      - ${KAGE_E2E_POLICIES:?tests/e2e/fetch.sh sets this}:/etc/kage/policies:ro
+
+  fixture:
+    <<: *helper
+    command: [/fixtures/site/server.mjs, --host, 0.0.0.0, --port, "8088"]
+    networks:
+      default:
+        aliases: [fixture.kage.test, lenient.kage.test]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8088/__kage/requests').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  world:
+    <<: *helper
+    command: [/e2e/world.mjs, echo, --port, "8089"]
+    networks:
+      default:
+        aliases: [world.kage.test]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8089/ip').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  proxy-a: &proxy
+    <<: *helper
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-a, --pass, e2e-only-a, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,world.kage.test:8089"]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3128/__stats').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  proxy-b:
+    <<: *proxy
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-b, --pass, e2e-only-b, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,world.kage.test:8089"]
+
+  proxy-c:
+    <<: *proxy
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-c, --pass, e2e-only-c, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,world.kage.test:8089"]
