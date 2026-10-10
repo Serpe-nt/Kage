@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO results (id, request_id, outcome, status, headers, final_url, redirects,\n                                  extract, xhr, artifacts, persona, block, robots, cached,\n                                  reason, created_at)\n             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Int4",
+        "Jsonb",
+        "Text",
+        "TextArray",
+        "Jsonb",
+        "Jsonb",
+        "Jsonb",
+        "Jsonb",
+        "Jsonb",
+        "Jsonb",
+        "Bool",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fecd9570d2d30dbcb76b0c315e789683cbf909b183ecbb17143d37ebcf0cfb78"
+}

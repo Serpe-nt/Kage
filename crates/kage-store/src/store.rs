@@ -7,9 +7,10 @@ use sqlx::postgres::PgPoolOptions;
 
 use crate::StoreError;
 use crate::repo::{
-    ApiKeyRepo, ArtifactRepo, AttemptRepo, AuditRepo, BreakerRepo, FrontierRepo, HealthEventRepo,
-    HttpCookieRepo, JobItemRepo, JobRepo, PersonaDomainStateRepo, PersonaRepo, ProxyRepo,
-    RequestRepo, ResponseCacheRepo, ResultRepo, RobotsCacheRepo, SelftestRepo, SessionRepo,
+    ApiKeyRepo, ArtifactRepo, AttemptRepo, AuditRepo, BandwidthRepo, BreakerRepo, FrontierRepo,
+    HealthEventRepo, HttpCookieRepo, JobItemRepo, JobRepo, PersonaDomainStateRepo, PersonaRepo,
+    ProxyRepo, RequestRepo, ResponseCacheRepo, ResultRepo, RobotsCacheRepo, SelftestRepo,
+    SessionRepo,
 };
 
 /// The migrations in `crates/kage-store/migrations`, embedded at compile time.
@@ -255,6 +256,11 @@ impl Store {
     /// Per-domain circuit breakers.
     pub const fn domain_breakers(&self) -> BreakerRepo<'_> {
         BreakerRepo::new(&self.pool)
+    }
+
+    /// Bytes through the forwarder.
+    pub const fn bandwidth(&self) -> BandwidthRepo<'_> {
+        BandwidthRepo::new(&self.pool)
     }
 }
 

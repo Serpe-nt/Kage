@@ -12,6 +12,10 @@
 //! - [`persona`]: how a persona is made: the mix of engines and systems,
 //!   locales and languages per country, screen classes, position, the
 //!   warm-up plan.
+//! - [`schedule`]: the scheduler's rules without its I/O: the queue, a
+//!   persona's day and its visits to a domain, persona selection, retries
+//!   and escalation, the circuit breaker, the bandwidth budget, and the
+//!   planner that puts them together.
 //! - [`classifier`]: block signatures as data and the rule engine.
 //! - [`ssrf`]: the SSRF guard as pure functions over resolved addresses.
 //! - [`urlnorm`]: URL normalization for dedupe and cache keys (spec §13).
@@ -34,6 +38,7 @@ pub mod outcome;
 pub mod pacing;
 pub mod persona;
 pub mod policy;
+pub mod schedule;
 pub mod secret;
 pub mod seed;
 pub mod ssrf;

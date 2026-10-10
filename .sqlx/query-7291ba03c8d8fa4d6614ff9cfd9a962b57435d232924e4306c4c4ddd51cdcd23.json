@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, request_id, outcome, status, headers, final_url, redirects, extract, xhr,\n                    artifacts, persona, block, robots, cached, created_at\n             FROM results WHERE id = $1",
+  "query": "SELECT id, request_id, n, persona_id, engine, render, started_at, finished_at, status,\n                    final_url, outcome, block, timing, seed, reason\n             FROM attempts WHERE request_id = $1 ORDER BY n",
   "describe": {
     "columns": [
       {
@@ -9,7 +9,7 @@
         "type_info": "Uuid",
         "origin": {
           "Table": {
-            "table": "results",
+            "table": "attempts",
             "name": "id"
           }
         }
@@ -20,107 +20,107 @@
         "type_info": "Uuid",
         "origin": {
           "Table": {
-            "table": "results",
+            "table": "attempts",
             "name": "request_id"
           }
         }
       },
       {
         "ordinal": 2,
-        "name": "outcome",
-        "type_info": "Text",
+        "name": "n",
+        "type_info": "Int4",
         "origin": {
           "Table": {
-            "table": "results",
-            "name": "outcome"
+            "table": "attempts",
+            "name": "n"
           }
         }
       },
       {
         "ordinal": 3,
-        "name": "status",
-        "type_info": "Int4",
+        "name": "persona_id",
+        "type_info": "Uuid",
         "origin": {
           "Table": {
-            "table": "results",
-            "name": "status"
+            "table": "attempts",
+            "name": "persona_id"
           }
         }
       },
       {
         "ordinal": 4,
-        "name": "headers",
-        "type_info": "Jsonb",
+        "name": "engine",
+        "type_info": "Text",
         "origin": {
           "Table": {
-            "table": "results",
-            "name": "headers"
+            "table": "attempts",
+            "name": "engine"
           }
         }
       },
       {
         "ordinal": 5,
-        "name": "final_url",
+        "name": "render",
         "type_info": "Text",
         "origin": {
           "Table": {
-            "table": "results",
-            "name": "final_url"
+            "table": "attempts",
+            "name": "render"
           }
         }
       },
       {
         "ordinal": 6,
-        "name": "redirects",
-        "type_info": "TextArray",
+        "name": "started_at",
+        "type_info": "Timestamptz",
         "origin": {
           "Table": {
-            "table": "results",
-            "name": "redirects"
+            "table": "attempts",
+            "name": "started_at"
           }
         }
       },
       {
         "ordinal": 7,
-        "name": "extract",
-        "type_info": "Jsonb",
+        "name": "finished_at",
+        "type_info": "Timestamptz",
         "origin": {
           "Table": {
-            "table": "results",
-            "name": "extract"
+            "table": "attempts",
+            "name": "finished_at"
           }
         }
       },
       {
         "ordinal": 8,
-        "name": "xhr",
-        "type_info": "Jsonb",
+        "name": "status",
+        "type_info": "Int4",
         "origin": {
           "Table": {
-            "table": "results",
-            "name": "xhr"
+            "table": "attempts",
+            "name": "status"
           }
         }
       },
       {
         "ordinal": 9,
-        "name": "artifacts",
-        "type_info": "Jsonb",
+        "name": "final_url",
+        "type_info": "Text",
         "origin": {
           "Table": {
-            "table": "results",
-            "name": "artifacts"
+            "table": "attempts",
+            "name": "final_url"
           }
         }
       },
       {
         "ordinal": 10,
-        "name": "persona",
-        "type_info": "Jsonb",
+        "name": "outcome",
+        "type_info": "Text",
         "origin": {
           "Table": {
-            "table": "results",
-            "name": "persona"
+            "table": "attempts",
+            "name": "outcome"
           }
         }
       },
@@ -130,41 +130,41 @@
         "type_info": "Jsonb",
         "origin": {
           "Table": {
-            "table": "results",
+            "table": "attempts",
             "name": "block"
           }
         }
       },
       {
         "ordinal": 12,
-        "name": "robots",
+        "name": "timing",
         "type_info": "Jsonb",
         "origin": {
           "Table": {
-            "table": "results",
-            "name": "robots"
+            "table": "attempts",
+            "name": "timing"
           }
         }
       },
       {
         "ordinal": 13,
-        "name": "cached",
-        "type_info": "Bool",
+        "name": "seed",
+        "type_info": "Text",
         "origin": {
           "Table": {
-            "table": "results",
-            "name": "cached"
+            "table": "attempts",
+            "name": "seed"
           }
         }
       },
       {
         "ordinal": 14,
-        "name": "created_at",
-        "type_info": "Timestamptz",
+        "name": "reason",
+        "type_info": "Text",
         "origin": {
           "Table": {
-            "table": "results",
-            "name": "created_at"
+            "table": "attempts",
+            "name": "reason"
           }
         }
       }
@@ -178,19 +178,19 @@
       false,
       false,
       false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
       true,
       false,
       true,
       false,
       true,
-      true,
-      false,
-      true,
-      true,
-      true,
-      false,
-      false
+      true
     ]
   },
-  "hash": "f129f67fafbac3ee90e6f2cf174f448201352f025853f5030c42fa56f26e2f7a"
+  "hash": "7291ba03c8d8fa4d6614ff9cfd9a962b57435d232924e4306c4c4ddd51cdcd23"
 }

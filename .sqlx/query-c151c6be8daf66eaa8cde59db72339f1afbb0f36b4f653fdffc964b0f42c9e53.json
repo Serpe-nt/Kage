@@ -1,0 +1,208 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, request_id, outcome, status, headers, final_url, redirects, extract, xhr,\n                    artifacts, persona, block, robots, cached, reason, created_at\n             FROM results WHERE request_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "results",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "request_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "results",
+            "name": "request_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "outcome",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "results",
+            "name": "outcome"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "status",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "results",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "headers",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "results",
+            "name": "headers"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "final_url",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "results",
+            "name": "final_url"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "redirects",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "results",
+            "name": "redirects"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "extract",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "results",
+            "name": "extract"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "xhr",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "results",
+            "name": "xhr"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "artifacts",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "results",
+            "name": "artifacts"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "persona",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "results",
+            "name": "persona"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "block",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "results",
+            "name": "block"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "robots",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "results",
+            "name": "robots"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "cached",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "results",
+            "name": "cached"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "reason",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "results",
+            "name": "reason"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "results",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "c151c6be8daf66eaa8cde59db72339f1afbb0f36b4f653fdffc964b0f42c9e53"
+}

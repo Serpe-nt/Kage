@@ -34,6 +34,7 @@ use crate::urlnorm::NormalizeOptions;
 mod http;
 mod personas;
 mod proxies;
+mod scheduler;
 
 pub use http::{
     BrowserSelftestConfig, ChromiumEngineConfig, EngineConfig, EnginesConfig, HttpConfig,
@@ -49,6 +50,10 @@ pub use proxies::{
     ProviderChoice, ProxiesConfig, ProxyHealthConfig, ReputationConfig, ResolvedProvider,
     StaticListError, StaticProxy, WEBSHARE_AUTO_REPLACE_SETTINGS,
     WEBSHARE_GENERAL_LIMIT_PER_MINUTE, WEBSHARE_LIST_LIMIT_PER_MINUTE, WebshareConfig,
+};
+pub use scheduler::{
+    BandwidthConfig, BrowserConfig, ClockRange, DepthRange, ForwarderConfig, MAX_ATTEMPT_TIMEOUT,
+    MAX_INFLIGHT, PauseConfig, PersonaDayConfig, SchedulerConfig, ServerErrorsConfig,
 };
 
 /// Length of the master key in bytes; it is written as twice as many
@@ -424,6 +429,18 @@ pub struct Config {
     /// Sessions.
     #[serde(default)]
     pub sessions: SessionsConfig,
+    /// The scheduler.
+    #[serde(default)]
+    pub scheduler: SchedulerConfig,
+    /// A browser attempt.
+    #[serde(default)]
+    pub browser: BrowserConfig,
+    /// The bandwidth budget of the proxy plan.
+    #[serde(default)]
+    pub bandwidth: BandwidthConfig,
+    /// The forwarder every persona's traffic leaves through.
+    #[serde(default)]
+    pub forwarder: ForwarderConfig,
     /// The policy files.
     #[serde(default)]
     pub policies: PoliciesConfig,
@@ -586,6 +603,14 @@ impl Config {
             &self.personas,
             &self.sessions,
             self.engines.chromium.allow_cross_os_claims,
+        )
+        .map_err(ConfigError::Invalid)?;
+        scheduler::validate(
+            &self.scheduler,
+            &self.browser,
+            &self.bandwidth,
+            &self.forwarder,
+            self.sidecar.timeout.get(),
         )
         .map_err(ConfigError::Invalid)?;
         match self.proxies.provider {

@@ -4,6 +4,7 @@
 //! stable lowercase names shared by the API, the policy files and the store.
 
 mod access;
+mod bandwidth;
 mod cookie;
 mod fetch;
 mod health;
@@ -18,6 +19,7 @@ use std::str::FromStr;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub use access::{ApiKey, AuditActor, AuditEvent, AuditOutcome, KeyLimits, Scope};
+pub use bandwidth::{BandwidthUsage, IDLE_DOMAIN, hour_of};
 pub use cookie::{CookieSameSite, HttpCookie};
 pub use fetch::{
     Artifact, ArtifactEncoding, ArtifactKind, ArtifactRef, Attempt, ContentHash, FetchRecord,

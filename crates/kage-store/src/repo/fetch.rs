@@ -145,6 +145,8 @@ struct AttemptRow {
     outcome: String,
     block: Option<serde_json::Value>,
     timing: serde_json::Value,
+    seed: Option<String>,
+    reason: Option<String>,
 }
 
 impl TryFrom<AttemptRow> for Attempt {
@@ -166,6 +168,8 @@ impl TryFrom<AttemptRow> for Attempt {
             outcome: parse((TABLE, "outcome"), &row.outcome)?,
             block: from_json_opt((TABLE, "block"), row.block)?,
             timing: from_json((TABLE, "timing"), row.timing)?,
+            seed: parse_opt((TABLE, "seed"), row.seed.as_deref())?,
+            reason: row.reason,
         })
     }
 }
@@ -181,8 +185,9 @@ impl AttemptRepo<'_> {
         const TABLE: &str = "attempts";
         sqlx::query!(
             "INSERT INTO attempts (id, request_id, n, persona_id, engine, render, started_at,
-                                   finished_at, status, final_url, outcome, block, timing)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+                                   finished_at, status, final_url, outcome, block, timing, seed,
+                                   reason)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
             attempt.id.as_uuid(),
             attempt.request_id.as_uuid(),
             to_i32((TABLE, "n"), attempt.n)?,
@@ -196,6 +201,8 @@ impl AttemptRepo<'_> {
             attempt.outcome.as_str(),
             to_json_opt((TABLE, "block"), attempt.block.as_ref())?,
             to_json((TABLE, "timing"), &attempt.timing)?,
+            attempt.seed.map(|seed| seed.to_string()),
+            attempt.reason,
         )
         .execute(self.pool)
         .await?;
@@ -214,7 +221,7 @@ impl AttemptRepo<'_> {
         sqlx::query_as!(
             AttemptRow,
             "SELECT id, request_id, n, persona_id, engine, render, started_at, finished_at, status,
-                    final_url, outcome, block, timing
+                    final_url, outcome, block, timing, seed, reason
              FROM attempts WHERE request_id = $1 ORDER BY n",
             request_id.as_uuid(),
         )
@@ -246,6 +253,7 @@ struct ResultRow {
     block: Option<serde_json::Value>,
     robots: Option<serde_json::Value>,
     cached: bool,
+    reason: Option<String>,
     created_at: DateTime<Utc>,
 }
 
@@ -269,6 +277,7 @@ impl TryFrom<ResultRow> for FetchRecord {
             block: from_json_opt((TABLE, "block"), row.block)?,
             robots: from_json_opt((TABLE, "robots"), row.robots)?,
             cached: row.cached,
+            reason: row.reason,
             created_at: row.created_at,
         })
     }
@@ -285,8 +294,8 @@ impl ResultRepo<'_> {
         sqlx::query!(
             "INSERT INTO results (id, request_id, outcome, status, headers, final_url, redirects,
                                   extract, xhr, artifacts, persona, block, robots, cached,
-                                  created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
+                                  reason, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
             record.id.as_uuid(),
             record.request_id.as_uuid(),
             record.outcome.as_str(),
@@ -301,6 +310,7 @@ impl ResultRepo<'_> {
             to_json_opt((TABLE, "block"), record.block.as_ref())?,
             to_json_opt((TABLE, "robots"), record.robots.as_ref())?,
             record.cached,
+            record.reason,
             record.created_at,
         )
         .execute(self.pool)
@@ -317,7 +327,7 @@ impl ResultRepo<'_> {
         sqlx::query_as!(
             ResultRow,
             "SELECT id, request_id, outcome, status, headers, final_url, redirects, extract, xhr,
-                    artifacts, persona, block, robots, cached, created_at
+                    artifacts, persona, block, robots, cached, reason, created_at
              FROM results WHERE id = $1",
             id.as_uuid(),
         )
@@ -339,7 +349,7 @@ impl ResultRepo<'_> {
         sqlx::query_as!(
             ResultRow,
             "SELECT id, request_id, outcome, status, headers, final_url, redirects, extract, xhr,
-                    artifacts, persona, block, robots, cached, created_at
+                    artifacts, persona, block, robots, cached, reason, created_at
              FROM results WHERE request_id = $1",
             request_id.as_uuid(),
         )

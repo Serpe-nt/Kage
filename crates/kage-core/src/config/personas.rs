@@ -35,6 +35,15 @@ impl ClockTime {
         NaiveTime::from_hms_opt(hour, minute, 0).map(Self)
     }
 
+    /// A time of day, or midnight when the hour or the minute does not
+    /// exist. For defaults written in the code, where both do.
+    pub(crate) const fn new_or_midnight(hour: u32, minute: u32) -> Self {
+        match NaiveTime::from_hms_opt(hour, minute, 0) {
+            Some(time) => Self(time),
+            None => Self(NaiveTime::MIN),
+        }
+    }
+
     /// The time.
     pub const fn get(self) -> NaiveTime {
         self.0

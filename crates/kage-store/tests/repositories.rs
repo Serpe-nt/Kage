@@ -22,6 +22,7 @@ use kage_core::ids::{
 };
 use kage_core::outcome::{Block, BlockType, Outcome, Vendor};
 use kage_core::secret::SealedSecret;
+use kage_core::seed::Seed;
 use kage_store::StoreError;
 use kage_store::repo::{ResponseCacheEntry, RobotsCacheEntry};
 
@@ -1098,6 +1099,8 @@ async fn requests_attempts_and_results_round_trip() {
             load_ms: None,
             total_ms: 840,
         },
+        seed: None,
+        reason: None,
     };
     let succeeded = Attempt {
         id: AttemptId::new(),
@@ -1113,6 +1116,8 @@ async fn requests_attempts_and_results_round_trip() {
             total_ms: 9000,
             ..Timing::default()
         },
+        // What the behavior of the attempt was drawn from.
+        seed: Some(Seed::from_u64(7)),
         ..blocked.clone()
     };
     // Timed out before any response: no status, no final URL.
@@ -1123,6 +1128,7 @@ async fn requests_attempts_and_results_round_trip() {
         final_url: None,
         outcome: Outcome::Timeout,
         block: None,
+        reason: Some("navigation_failed".to_owned()),
         ..blocked.clone()
     };
     // Inserted out of order; listed in order.
@@ -1215,6 +1221,7 @@ async fn requests_attempts_and_results_round_trip() {
             crawl_delay: None,
         }),
         cached: false,
+        reason: None,
         created_at: now(),
     };
     store.results().insert(&record).await.unwrap();
@@ -1267,6 +1274,7 @@ async fn requests_attempts_and_results_round_trip() {
         block: Some(block()),
         robots: None,
         cached: true,
+        reason: Some("domain_paused".to_owned()),
         created_at: now(),
     };
     store.results().insert(&blocked_record).await.unwrap();
@@ -1624,6 +1632,7 @@ async fn caches_serve_entries_until_they_expire() {
         block: None,
         robots: None,
         cached: false,
+        reason: None,
         created_at: fetched_at,
     };
     db.store.results().insert(&record).await.unwrap();

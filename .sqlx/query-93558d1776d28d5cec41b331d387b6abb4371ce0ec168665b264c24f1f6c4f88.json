@@ -1,0 +1,112 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT domain, state, block_count_1h, window_started_at, paused_until, trips,\n                    trial_started_at, updated_at\n             FROM domain_breakers WHERE domain = $1 FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "domain",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "domain_breakers",
+            "name": "domain"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "state",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "domain_breakers",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "block_count_1h",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "domain_breakers",
+            "name": "block_count_1h"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "window_started_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "domain_breakers",
+            "name": "window_started_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "paused_until",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "domain_breakers",
+            "name": "paused_until"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "trips",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "domain_breakers",
+            "name": "trips"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "trial_started_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "domain_breakers",
+            "name": "trial_started_at"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "domain_breakers",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "93558d1776d28d5cec41b331d387b6abb4371ce0ec168665b264c24f1f6c4f88"
+}

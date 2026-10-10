@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(SUM(bytes_up), 0)::bigint AS \"up!\",\n                      COALESCE(SUM(bytes_down), 0)::bigint AS \"down!\"\n               FROM bandwidth_usage WHERE hour >= $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "up!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "down!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "8af2f1821d7d83d23f284ecfa0a9b1e1d3d70b22a20cdbdf2f2d4190899f18d8"
+}

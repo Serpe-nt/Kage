@@ -3,6 +3,7 @@
 
 mod access;
 mod artifacts;
+mod bandwidth;
 mod caches;
 mod cookies;
 mod events;
@@ -13,6 +14,7 @@ mod proxies;
 
 pub use access::{ApiKeyRepo, AuditRepo, SessionRepo};
 pub use artifacts::ArtifactRepo;
+pub use bandwidth::{BandwidthRepo, Traffic};
 pub use caches::{ResponseCacheEntry, ResponseCacheRepo, RobotsCacheEntry, RobotsCacheRepo};
 pub use cookies::HttpCookieRepo;
 pub use events::{BreakerRepo, HealthEventRepo, SelftestRepo};

@@ -10,6 +10,7 @@ use super::{ClaimedOs, CountryCode, Engine, Render, RenderMode, SessionId};
 use crate::ids::{ApiKeyId, ArtifactId, AttemptId, JobId, PersonaId, RequestId, ResultId};
 use crate::macros::string_enum;
 use crate::outcome::{Block, Outcome};
+use crate::seed::Seed;
 
 /// One fetch request as it was accepted, whether synchronous or a job item.
 #[derive(Debug, Clone, PartialEq)]
@@ -95,6 +96,12 @@ pub struct Attempt {
     pub block: Option<Block>,
     /// Per-phase timing.
     pub timing: Timing,
+    /// The seed of the attempt: with the persona's own seed it replays the
+    /// behavior of a browser attempt and the pauses of an http attempt.
+    pub seed: Option<Seed>,
+    /// Why the attempt ended as it did when the site did not say, as a
+    /// stable `snake_case` name: for example `proxy_failed`.
+    pub reason: Option<String>,
 }
 
 /// One response header. A list keeps order and repeated names.
@@ -300,6 +307,9 @@ pub struct FetchRecord {
     pub robots: Option<RobotsVerdict>,
     /// Whether this result was served from the response cache.
     pub cached: bool,
+    /// Why the request ended without the site's verdict, as a stable
+    /// `snake_case` name: for example `domain_paused` (spec §8.3).
+    pub reason: Option<String>,
     /// When the result was stored.
     pub created_at: DateTime<Utc>,
 }
@@ -450,6 +460,7 @@ mod tests {
             block: None,
             robots: None,
             cached: false,
+            reason: None,
             created_at: Utc::now(),
         };
 

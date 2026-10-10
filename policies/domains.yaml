@@ -24,6 +24,15 @@
 #                      none           the same on the wire as direct
 #                      search_engine  load a results page first and click
 #                                     the result that leads to the domain
+#   active_hours       what the personas' own days mean for the domain.
+#                      Every persona is awake for a stretch of its day
+#                      (scheduler.active_hours in kage.yaml).
+#                      prefer   a persona that is awake is chosen first; job
+#                               work waits for the morning, a synchronous
+#                               request may wake a persona for its one page
+#                      enforce  only personas that are awake; at night
+#                               nothing is fetched from the domain
+#                      ignore   the hour is not looked at
 #   retries            retries after the first attempt, each on another persona
 #   breaker_threshold  blocks per hour, over all personas, that pause the domain
 #   breaker_pause      how long the domain stays paused
@@ -55,6 +64,7 @@ defaults:
   pacing_locked: false
   robots: report
   referer_strategy: direct
+  active_hours: prefer
   engines: [chromium, firefox]
   retries: 2
   breaker_threshold: 5

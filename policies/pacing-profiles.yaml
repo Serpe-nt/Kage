@@ -4,9 +4,24 @@
 #
 # Durations are in milliseconds.
 #
-#   gap_ms          wait between two consecutive pages
+#   gap_ms          wait between two consecutive pages, counted from the
+#                   start of the page before: a floor. In a browser the
+#                   persona's own reading of the page usually takes longer.
 #   burst_pages     how many pages make a burst
 #   burst_break_ms  extra pause after a burst, added to the normal gap
+#   visit_bursts    how many bursts make a visit (optional, with
+#                   visit_break_ms). A persona that fetched a page from a
+#                   domain keeps that domain's work for its visit; other
+#                   personas join only while fewer than domain_concurrency
+#                   are visiting.
+#   visit_break_ms  the pause after a visit, in place of the burst break;
+#                   the persona is away from the domain for that long
+#   daily_cap_per_persona_per_domain
+#                   pages one persona fetches from one domain per day of
+#                   its own time zone
+#   domain_concurrency, domain_rpm
+#                   requests in flight and per minute to one domain, over
+#                   all personas
 #
 # dist: lognormal takes median and p95, and optionally min and max. With a
 # min the curve starts at min and still has exactly the configured median and
@@ -23,6 +38,8 @@ human:
   daily_cap_per_persona_per_domain: 300
   domain_concurrency: 3
   domain_rpm: 20
+  visit_bursts: { min: 2, max: 5 }
+  visit_break_ms: { dist: lognormal, median: 1500000, p95: 5400000 }
 
 fast:
   gap_ms: { dist: uniform, min: 300, max: 1200 }

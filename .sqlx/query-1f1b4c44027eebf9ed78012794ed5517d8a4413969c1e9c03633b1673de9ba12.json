@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO domain_breakers (domain, updated_at) VALUES ($1, $2)\n             ON CONFLICT (domain) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1f1b4c44027eebf9ed78012794ed5517d8a4413969c1e9c03633b1673de9ba12"
+}

@@ -91,6 +91,12 @@ pub struct DomainBreaker {
     pub window_started_at: Option<DateTime<Utc>>,
     /// End of the pause, when open.
     pub paused_until: Option<DateTime<Utc>>,
+    /// How often the breaker opened since the domain last answered well:
+    /// every time doubles the next pause.
+    pub trips: u32,
+    /// When the one trial request after a pause was let through; `None`
+    /// while none is under way.
+    pub trial_started_at: Option<DateTime<Utc>>,
     /// Last change.
     pub updated_at: DateTime<Utc>,
 }
@@ -104,12 +110,15 @@ impl DomainBreaker {
             block_count_1h: 0,
             window_started_at: None,
             paused_until: None,
+            trips: 0,
+            trial_started_at: None,
             updated_at: now,
         }
     }
 
-    /// Whether the domain is paused at `now`. An open breaker whose pause
-    /// has run out counts as closed.
+    /// Whether the pause of the domain still runs at `now`. An open breaker
+    /// whose pause has run out is half open: one trial request decides
+    /// whether it closes (`crate::schedule::breaker`).
     pub fn is_open(&self, now: DateTime<Utc>) -> bool {
         self.state == BreakerState::Open && self.paused_until.is_none_or(|until| until > now)
     }

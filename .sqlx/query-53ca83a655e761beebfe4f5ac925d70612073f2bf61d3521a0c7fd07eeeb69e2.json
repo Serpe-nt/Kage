@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT persona_id,\n                      SUM(bytes_up)::bigint AS \"up!\",\n                      SUM(bytes_down)::bigint AS \"down!\"\n               FROM bandwidth_usage WHERE hour >= $1\n               GROUP BY persona_id\n               ORDER BY SUM(bytes_up) + SUM(bytes_down) DESC, persona_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "persona_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "bandwidth_usage",
+            "name": "persona_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "up!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "down!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "53ca83a655e761beebfe4f5ac925d70612073f2bf61d3521a0c7fd07eeeb69e2"
+}

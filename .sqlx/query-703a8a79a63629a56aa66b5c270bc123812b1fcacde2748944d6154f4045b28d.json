@@ -1,0 +1,43 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT domain,\n                      SUM(bytes_up)::bigint AS \"up!\",\n                      SUM(bytes_down)::bigint AS \"down!\"\n               FROM bandwidth_usage WHERE hour >= $1\n               GROUP BY domain\n               ORDER BY SUM(bytes_up) + SUM(bytes_down) DESC, domain\n               LIMIT $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "domain",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bandwidth_usage",
+            "name": "domain"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "up!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "down!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "703a8a79a63629a56aa66b5c270bc123812b1fcacde2748944d6154f4045b28d"
+}

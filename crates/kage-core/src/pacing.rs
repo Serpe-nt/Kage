@@ -278,15 +278,25 @@ pub struct PacingProfile {
     pub domain_concurrency: u32,
     /// Requests per minute to one domain, over all personas.
     pub domain_rpm: u32,
+    /// How many bursts make a visit. After the last burst of a visit the
+    /// persona leaves the domain for `visit_break_ms`. Absent: a visit
+    /// never ends by itself. Set together with `visit_break_ms`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visit_bursts: Option<IntRange>,
+    /// The pause after a visit, on top of the normal gap and in place of
+    /// the burst break. Set together with `visit_bursts`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visit_break_ms: Option<Distribution>,
 }
 
 impl PacingProfile {
     /// The profile as one persona paces it (spec §11): the log-normal gap
-    /// and break are stretched by the persona's factor, which is drawn once
-    /// from its seed ([`crate::persona::pacing_factor`], roughly 0.8 to
-    /// 1.25), so that twenty personas never share one identical gap
-    /// distribution. Uniform distributions, the burst length, the daily cap
-    /// and the per-domain limits are the profile's and do not move.
+    /// and breaks are stretched by the persona's factor, which is drawn
+    /// once from its seed ([`crate::persona::pacing_factor`], roughly 0.8
+    /// to 1.25), so that twenty personas never share one identical gap
+    /// distribution. Uniform distributions, the burst and visit lengths,
+    /// the daily cap and the per-domain limits are the profile's and do not
+    /// move.
     #[must_use]
     pub fn for_persona(&self, factor: f64) -> Self {
         let stretch = |distribution: &Distribution| match distribution {
@@ -296,6 +306,7 @@ impl PacingProfile {
         Self {
             gap_ms: stretch(&self.gap_ms),
             burst_break_ms: stretch(&self.burst_break_ms),
+            visit_break_ms: self.visit_break_ms.as_ref().map(stretch),
             ..*self
         }
     }
@@ -339,6 +350,35 @@ impl PacingProfile {
         ] {
             if value == 0 {
                 return Err(invalid(field, "must be at least 1".to_owned()));
+            }
+        }
+        match (&self.visit_bursts, &self.visit_break_ms) {
+            (None, None) => {}
+            (Some(bursts), Some(pause)) => {
+                pause
+                    .validate()
+                    .map_err(|reason| invalid("visit_break_ms", reason))?;
+                if bursts.min == 0 {
+                    return Err(invalid("visit_bursts", "min must be at least 1".to_owned()));
+                }
+                if bursts.min > bursts.max {
+                    return Err(invalid(
+                        "visit_bursts",
+                        format!("min {} is greater than max {}", bursts.min, bursts.max),
+                    ));
+                }
+            }
+            (Some(_), None) => {
+                return Err(invalid(
+                    "visit_break_ms",
+                    "is required when visit_bursts is set".to_owned(),
+                ));
+            }
+            (None, Some(_)) => {
+                return Err(invalid(
+                    "visit_bursts",
+                    "is required when visit_break_ms is set".to_owned(),
+                ));
             }
         }
         Ok(())
@@ -436,6 +476,10 @@ pub struct Gap {
     pub wait: Duration,
     /// Whether this wait ends a burst and so includes a break.
     pub after_burst: bool,
+    /// Whether this wait ends a visit: the break is the long one, and the
+    /// persona has left the domain until it is over. Only a profile with
+    /// `visit_bursts` ever ends a visit.
+    pub after_visit: bool,
 }
 
 /// Produces the sequence of waits for one persona on one domain.
@@ -454,17 +498,23 @@ pub struct PacingSampler {
     rng: SeededRng,
     /// Pages left in the current burst, counting the next one to be fetched.
     remaining_in_burst: u32,
+    /// Bursts left in the current visit, counting the one in progress.
+    /// `None` when the profile has no visits.
+    remaining_in_visit: Option<u32>,
 }
 
 impl PacingSampler {
-    /// Starts a sequence. The first burst length is drawn immediately.
+    /// Starts a sequence. The first burst length is drawn immediately, and
+    /// after it the length of the first visit when the profile has visits.
     pub fn new(profile: PacingProfile, seed: Seed) -> Self {
         let mut rng = seed.rng();
         let remaining_in_burst = draw_burst(&profile, &mut rng);
+        let remaining_in_visit = draw_visit(&profile, &mut rng);
         Self {
             profile,
             rng,
             remaining_in_burst,
+            remaining_in_visit,
         }
     }
 
@@ -478,12 +528,19 @@ impl PacingSampler {
         self.remaining_in_burst
     }
 
+    /// Bursts left in the current visit, counting the one in progress;
+    /// `None` when the profile has no visits.
+    pub const fn remaining_in_visit(&self) -> Option<u32> {
+        self.remaining_in_visit
+    }
+
     /// The wait between the page just fetched and the next one.
     ///
     /// Inside a burst this is a draw from `gap_ms`. After the last page of a
     /// burst it is a draw from `gap_ms` plus a draw from `burst_break_ms`, so
     /// a break is never shorter than an ordinary gap, and a new burst length
-    /// is drawn.
+    /// is drawn. After the last burst of a visit the break is a draw from
+    /// `visit_break_ms` instead, and the length of the next visit is drawn.
     pub fn next_gap(&mut self) -> Gap {
         let gap = self.profile.gap_ms.sample_duration(&mut self.rng);
         self.remaining_in_burst = self.remaining_in_burst.saturating_sub(1);
@@ -491,22 +548,48 @@ impl PacingSampler {
             return Gap {
                 wait: gap,
                 after_burst: false,
+                after_visit: false,
             };
         }
-        let pause = self.profile.burst_break_ms.sample_duration(&mut self.rng);
+        let last_of_visit = match &mut self.remaining_in_visit {
+            Some(bursts) => {
+                *bursts = bursts.saturating_sub(1);
+                *bursts == 0
+            }
+            None => false,
+        };
+        let pause = match (&self.profile.visit_break_ms, last_of_visit) {
+            (Some(away), true) => away.sample_duration(&mut self.rng),
+            _ => self.profile.burst_break_ms.sample_duration(&mut self.rng),
+        };
         self.remaining_in_burst = draw_burst(&self.profile, &mut self.rng);
+        if last_of_visit {
+            self.remaining_in_visit = draw_visit(&self.profile, &mut self.rng);
+        }
         Gap {
             wait: gap + pause,
             after_burst: true,
+            after_visit: last_of_visit,
         }
     }
 }
 
-fn draw_burst(profile: &PacingProfile, rng: &mut SeededRng) -> u32 {
-    let IntRange { min, max } = profile.burst_pages;
-    let pages = rng.int_inclusive(u64::from(min), u64::from(max));
+fn draw_in(range: IntRange, rng: &mut SeededRng) -> u32 {
+    let IntRange { min, max } = range;
+    let drawn = rng.int_inclusive(u64::from(min), u64::from(max));
     // The draw lies between two u32 values.
-    u32::try_from(pages).unwrap_or(max).max(1)
+    u32::try_from(drawn).unwrap_or(max).max(1)
+}
+
+fn draw_burst(profile: &PacingProfile, rng: &mut SeededRng) -> u32 {
+    draw_in(profile.burst_pages, rng)
+}
+
+/// The number of bursts of the next visit. Nothing is drawn for a profile
+/// without visits, so its sequence of waits is what it was before visits
+/// existed.
+fn draw_visit(profile: &PacingProfile, rng: &mut SeededRng) -> Option<u32> {
+    profile.visit_bursts.map(|range| draw_in(range, rng))
 }
 
 #[cfg(test)]
@@ -1098,5 +1181,204 @@ fast:
         let mut sampler = PacingSampler::new(profile, Seed::from_u64(21));
 
         assert!((0..50).all(|_| sampler.next_gap().after_burst));
+    }
+
+    fn with_visits() -> PacingProfile {
+        let mut profile = human();
+        profile.visit_bursts = Some(IntRange { min: 2, max: 5 });
+        profile.visit_break_ms = Some(Distribution::Lognormal(Lognormal {
+            median: 1_500_000.0,
+            p95: 5_400_000.0,
+            min: None,
+            max: None,
+        }));
+        profile
+    }
+
+    #[test]
+    fn a_profile_without_visits_never_ends_one_and_keeps_its_sequence() {
+        let mut sampler = PacingSampler::new(human(), Seed::from_u64(22));
+        assert_eq!(sampler.remaining_in_visit(), None);
+
+        let gaps: Vec<Gap> = (0..2_000).map(|_| sampler.next_gap()).collect();
+
+        assert!(gaps.iter().all(|gap| !gap.after_visit));
+        assert_eq!(sampler.remaining_in_visit(), None);
+        // A profile that does not ask for visits draws nothing for them: its
+        // stream is one burst length, then the first gap, as it was before
+        // visits existed.
+        let mut rng = Seed::from_u64(22).rng();
+        let burst = rng.int_inclusive(4, 14);
+        let first_gap = human().gap_ms.sample_duration(&mut rng);
+        let plain = PacingSampler::new(human(), Seed::from_u64(22));
+        assert_eq!(u64::from(plain.remaining_in_burst()), burst);
+        assert_eq!(gaps[0].wait, first_gap);
+        // With visits one more number is drawn before the first gap.
+        let mut visiting = PacingSampler::new(with_visits(), Seed::from_u64(22));
+        assert_eq!(u64::from(visiting.remaining_in_burst()), burst);
+        assert_ne!(visiting.next_gap().wait, first_gap);
+    }
+
+    #[test]
+    fn visits_have_between_min_and_max_bursts_and_end_with_the_long_break() {
+        let mut sampler = PacingSampler::new(with_visits(), Seed::from_u64(23));
+        let first_visit = sampler.remaining_in_visit().unwrap();
+        assert!((2..=5).contains(&first_visit));
+
+        let mut bursts_in_visit = 0_u32;
+        let mut visit_lengths = Vec::new();
+        let mut burst_breaks = Vec::new();
+        let mut visit_breaks = Vec::new();
+        for _ in 0..20_000 {
+            let gap = sampler.next_gap();
+            // A wait that ends a visit also ends a burst, never the reverse.
+            assert!(!gap.after_visit || gap.after_burst);
+            if gap.after_visit {
+                visit_lengths.push(bursts_in_visit + 1);
+                bursts_in_visit = 0;
+                visit_breaks.push(gap.wait);
+            } else if gap.after_burst {
+                bursts_in_visit += 1;
+                burst_breaks.push(gap.wait);
+            }
+        }
+
+        assert_eq!(visit_lengths[0], first_visit);
+        assert!(visit_lengths.iter().all(|bursts| (2..=5).contains(bursts)));
+        for length in 2..=5 {
+            assert!(
+                visit_lengths.contains(&length),
+                "no visit of {length} bursts"
+            );
+        }
+        burst_breaks.sort();
+        visit_breaks.sort();
+        let burst_median = burst_breaks[burst_breaks.len() / 2];
+        let visit_median = visit_breaks[visit_breaks.len() / 2];
+        // The burst break is the profile's (about a minute), the break after
+        // a visit is the long one (about 25 minutes) and replaces it.
+        assert!(
+            (Duration::from_secs(45)..Duration::from_secs(90)).contains(&burst_median),
+            "{burst_median:?}"
+        );
+        assert!(
+            (Duration::from_mins(20)..Duration::from_mins(31)).contains(&visit_median),
+            "{visit_median:?}"
+        );
+        // Never shorter than an ordinary gap.
+        assert!(visit_breaks[0] > Duration::from_millis(1500));
+    }
+
+    #[test]
+    fn a_visit_of_one_burst_ends_after_every_burst() {
+        let mut profile = with_visits();
+        profile.visit_bursts = Some(IntRange { min: 1, max: 1 });
+        profile.burst_pages = IntRange { min: 3, max: 3 };
+        let mut sampler = PacingSampler::new(profile, Seed::from_u64(24));
+
+        let ends: Vec<(bool, bool)> = (0..9)
+            .map(|_| {
+                let gap = sampler.next_gap();
+                (gap.after_burst, gap.after_visit)
+            })
+            .collect();
+
+        let inside = (false, false);
+        let over = (true, true);
+        assert_eq!(
+            ends,
+            [
+                inside, inside, over, inside, inside, over, inside, inside, over
+            ]
+        );
+        assert_eq!(sampler.remaining_in_visit(), Some(1));
+        assert_eq!(sampler.remaining_in_burst(), 3);
+    }
+
+    #[test]
+    fn the_visit_fields_come_together_or_not_at_all() {
+        let mut only_bursts = with_visits();
+        only_bursts.visit_break_ms = None;
+        assert_eq!(
+            only_bursts.validate("p"),
+            Err(PacingError::InvalidField {
+                profile: "p".to_owned(),
+                field: "visit_break_ms",
+                reason: "is required when visit_bursts is set".to_owned(),
+            })
+        );
+        let mut only_break = with_visits();
+        only_break.visit_bursts = None;
+        assert_eq!(
+            only_break.validate("p"),
+            Err(PacingError::InvalidField {
+                profile: "p".to_owned(),
+                field: "visit_bursts",
+                reason: "is required when visit_break_ms is set".to_owned(),
+            })
+        );
+
+        let mut none = with_visits();
+        none.visit_bursts = Some(IntRange { min: 0, max: 2 });
+        assert!(matches!(
+            none.validate("p"),
+            Err(PacingError::InvalidField { field: "visit_bursts", reason, .. })
+                if reason == "min must be at least 1"
+        ));
+        let mut backwards = with_visits();
+        backwards.visit_bursts = Some(IntRange { min: 4, max: 2 });
+        assert!(matches!(
+            backwards.validate("p"),
+            Err(PacingError::InvalidField { field: "visit_bursts", reason, .. })
+                if reason == "min 4 is greater than max 2"
+        ));
+        let mut broken = with_visits();
+        broken.visit_break_ms = Some(Distribution::Uniform(Uniform { min: 9.0, max: 1.0 }));
+        assert!(matches!(
+            broken.validate("p"),
+            Err(PacingError::InvalidField {
+                field: "visit_break_ms",
+                ..
+            })
+        ));
+        assert_eq!(with_visits().validate("p"), Ok(()));
+        // The smallest visit there is.
+        let mut single = with_visits();
+        single.visit_bursts = Some(IntRange { min: 1, max: 1 });
+        assert_eq!(single.validate("p"), Ok(()));
+    }
+
+    #[test]
+    fn a_persona_stretches_the_break_after_a_visit_too() {
+        let slow = with_visits().for_persona(1.25);
+
+        assert_eq!(
+            slow.visit_break_ms,
+            Some(Distribution::Lognormal(Lognormal {
+                median: 1_875_000.0,
+                p95: 6_750_000.0,
+                min: None,
+                max: None,
+            }))
+        );
+        assert_eq!(slow.visit_bursts, Some(IntRange { min: 2, max: 5 }));
+        assert_eq!(human().for_persona(1.25).visit_break_ms, None);
+    }
+
+    #[test]
+    fn the_visit_fields_parse_from_a_profile() {
+        let text = format!(
+            "{SPEC_YAML}calm:\n  gap_ms: {{ dist: uniform, min: 1, max: 2 }}\n  burst_pages: {{ min: 1, max: 1 }}\n  burst_break_ms: {{ dist: uniform, min: 0, max: 0 }}\n  daily_cap_per_persona_per_domain: 1\n  domain_concurrency: 1\n  domain_rpm: 1\n  visit_bursts: {{ min: 2, max: 5 }}\n  visit_break_ms: {{ dist: lognormal, median: 1500000, p95: 5400000 }}\n"
+        );
+        let profiles = PacingProfiles::from_yaml(&text).unwrap();
+
+        let calm = profiles.require("calm").unwrap();
+        assert_eq!(calm.visit_bursts, Some(IntRange { min: 2, max: 5 }));
+        assert!(calm.visit_break_ms.is_some());
+        assert_eq!(profiles.require("human").unwrap().visit_bursts, None);
+        // A profile without visits serializes without the keys.
+        let written = serde_json::to_value(human()).unwrap();
+        assert!(written.get("visit_bursts").is_none());
+        assert!(written.get("visit_break_ms").is_none());
     }
 }

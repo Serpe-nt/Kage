@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO domain_breakers (domain, state, block_count_1h, window_started_at,\n                                      paused_until, trips, trial_started_at, updated_at)\n         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)\n         ON CONFLICT (domain) DO UPDATE\n         SET state = EXCLUDED.state, block_count_1h = EXCLUDED.block_count_1h,\n             window_started_at = EXCLUDED.window_started_at,\n             paused_until = EXCLUDED.paused_until, trips = EXCLUDED.trips,\n             trial_started_at = EXCLUDED.trial_started_at, updated_at = EXCLUDED.updated_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int4",
+        "Timestamptz",
+        "Timestamptz",
+        "Int4",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e236582b5ee8182beeee034da0554ee5097f5ed6b7cd18234462fcd06f6719af"
+}

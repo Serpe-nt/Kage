@@ -9,6 +9,7 @@ use uuid::Uuid;
 use super::{page_limit, repository};
 use crate::StoreError;
 use crate::convert::{parse, to_i32, to_u32};
+use sqlx::PgConnection;
 
 repository!(
     /// Health events, including stored operator alerts.
@@ -108,6 +109,23 @@ impl HealthEventRepo<'_> {
         };
         self.insert(&event).await?;
         Ok(event)
+    }
+
+    /// Whether an event of this kind was recorded at or after `since`: for
+    /// what is raised once per period, across restarts.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the query fails.
+    pub async fn exists_since(&self, kind: &str, since: DateTime<Utc>) -> Result<bool, StoreError> {
+        let found = sqlx::query_scalar!(
+            r#"SELECT EXISTS (SELECT 1 FROM health_events WHERE kind = $1 AND at >= $2) AS "found!""#,
+            kind,
+            since,
+        )
+        .fetch_one(self.pool)
+        .await?;
+        Ok(found)
     }
 
     /// The most recent events, newest first, optionally about one kind of
@@ -283,6 +301,8 @@ struct BreakerRow {
     block_count_1h: i32,
     window_started_at: Option<DateTime<Utc>>,
     paused_until: Option<DateTime<Utc>>,
+    trips: i32,
+    trial_started_at: Option<DateTime<Utc>>,
     updated_at: DateTime<Utc>,
 }
 
@@ -297,6 +317,8 @@ impl TryFrom<BreakerRow> for DomainBreaker {
             block_count_1h: to_u32((TABLE, "block_count_1h"), row.block_count_1h)?,
             window_started_at: row.window_started_at,
             paused_until: row.paused_until,
+            trips: to_u32((TABLE, "trips"), row.trips)?,
+            trial_started_at: row.trial_started_at,
             updated_at: row.updated_at,
         })
     }
@@ -312,7 +334,8 @@ impl BreakerRepo<'_> {
     pub async fn get(&self, domain: &str) -> Result<Option<DomainBreaker>, StoreError> {
         sqlx::query_as!(
             BreakerRow,
-            "SELECT domain, state, block_count_1h, window_started_at, paused_until, updated_at
+            "SELECT domain, state, block_count_1h, window_started_at, paused_until, trips,
+                    trial_started_at, updated_at
              FROM domain_breakers WHERE domain = $1",
             domain,
         )
@@ -324,31 +347,57 @@ impl BreakerRepo<'_> {
 
     /// Stores a breaker, replacing the one for the same domain.
     ///
+    /// Two writers that both read, change and `upsert` can overwrite each
+    /// other; use [`BreakerRepo::modify`] for a change that depends on what
+    /// is stored, such as counting a block.
+    ///
     /// # Errors
     ///
-    /// Fails when the query fails or the counter is out of range.
+    /// Fails when the query fails or a counter is out of range.
     pub async fn upsert(&self, breaker: &DomainBreaker) -> Result<(), StoreError> {
+        let mut connection = self.pool.acquire().await?;
+        write_breaker(&mut connection, breaker).await
+    }
+
+    /// Reads the breaker of a domain (a closed one as of `now` when the
+    /// domain has none), lets `change` alter it, and writes it back, in one
+    /// transaction that holds the row lock: two blocks counted at the same
+    /// moment are both counted, and only one request becomes the trial.
+    ///
+    /// # Errors
+    ///
+    /// Fails when a query fails, the row does not parse or a counter is out
+    /// of range; nothing is written in that case.
+    pub async fn modify<T>(
+        &self,
+        domain: &str,
+        now: DateTime<Utc>,
+        change: impl FnOnce(&mut DomainBreaker) -> T,
+    ) -> Result<T, StoreError> {
+        let mut transaction = self.pool.begin().await?;
+        // The row must exist before it can be locked.
         sqlx::query!(
-            "INSERT INTO domain_breakers (domain, state, block_count_1h, window_started_at,
-                                          paused_until, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6)
-             ON CONFLICT (domain) DO UPDATE
-             SET state = EXCLUDED.state, block_count_1h = EXCLUDED.block_count_1h,
-                 window_started_at = EXCLUDED.window_started_at,
-                 paused_until = EXCLUDED.paused_until, updated_at = EXCLUDED.updated_at",
-            breaker.domain,
-            breaker.state.as_str(),
-            to_i32(
-                ("domain_breakers", "block_count_1h"),
-                breaker.block_count_1h
-            )?,
-            breaker.window_started_at,
-            breaker.paused_until,
-            breaker.updated_at,
+            "INSERT INTO domain_breakers (domain, updated_at) VALUES ($1, $2)
+             ON CONFLICT (domain) DO NOTHING",
+            domain,
+            now,
         )
-        .execute(self.pool)
+        .execute(&mut *transaction)
         .await?;
-        Ok(())
+        let mut breaker: DomainBreaker = sqlx::query_as!(
+            BreakerRow,
+            "SELECT domain, state, block_count_1h, window_started_at, paused_until, trips,
+                    trial_started_at, updated_at
+             FROM domain_breakers WHERE domain = $1 FOR UPDATE",
+            domain,
+        )
+        .fetch_one(&mut *transaction)
+        .await?
+        .try_into()?;
+        let result = change(&mut breaker);
+        write_breaker(&mut transaction, &breaker).await?;
+        transaction.commit().await?;
+        Ok(result)
     }
 
     /// Every breaker stored as open, by domain. Use
@@ -360,7 +409,8 @@ impl BreakerRepo<'_> {
     pub async fn list_open(&self) -> Result<Vec<DomainBreaker>, StoreError> {
         sqlx::query_as!(
             BreakerRow,
-            "SELECT domain, state, block_count_1h, window_started_at, paused_until, updated_at
+            "SELECT domain, state, block_count_1h, window_started_at, paused_until, trips,
+                    trial_started_at, updated_at
              FROM domain_breakers WHERE state = 'open' ORDER BY domain",
         )
         .fetch_all(self.pool)
@@ -369,4 +419,32 @@ impl BreakerRepo<'_> {
         .map(DomainBreaker::try_from)
         .collect()
     }
+}
+
+async fn write_breaker(
+    connection: &mut PgConnection,
+    breaker: &DomainBreaker,
+) -> Result<(), StoreError> {
+    const TABLE: &str = "domain_breakers";
+    sqlx::query!(
+        "INSERT INTO domain_breakers (domain, state, block_count_1h, window_started_at,
+                                      paused_until, trips, trial_started_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (domain) DO UPDATE
+         SET state = EXCLUDED.state, block_count_1h = EXCLUDED.block_count_1h,
+             window_started_at = EXCLUDED.window_started_at,
+             paused_until = EXCLUDED.paused_until, trips = EXCLUDED.trips,
+             trial_started_at = EXCLUDED.trial_started_at, updated_at = EXCLUDED.updated_at",
+        breaker.domain,
+        breaker.state.as_str(),
+        to_i32((TABLE, "block_count_1h"), breaker.block_count_1h)?,
+        breaker.window_started_at,
+        breaker.paused_until,
+        to_i32((TABLE, "trips"), breaker.trips)?,
+        breaker.trial_started_at,
+        breaker.updated_at,
+    )
+    .execute(connection)
+    .await?;
+    Ok(())
 }

@@ -328,6 +328,109 @@ sessions:
   # How often ended sessions are removed.
   sweep_interval: 1m
 
+# The scheduler (spec §8, §11): which request leaves when, on which persona.
+scheduler:
+  # Attempts in flight at once: browser navigations over both engines, and
+  # fetches on the http path.
+  max_browser_sessions: 6
+  max_http_inflight: 20
+  # Contexts one engine's sidecar holds open at once: its
+  # SIDECAR_MAX_CONTEXTS.
+  max_contexts_per_engine: 3
+  # How long a persona's browser stays open after its last page. Kage closes
+  # it; keep the sidecars' SIDECAR_CONTEXT_IDLE_MS above this.
+  context_idle: 5m
+  # Total time a synchronous fetch may take before it is handed over as a
+  # job (spec §8.4).
+  sync_wall_time: 3m
+  # How long a synchronous request waits for a persona that is already
+  # visiting the domain before another persona starts a visit of its own.
+  visitor_wait: 5s
+  # A visit in which no page was asked for this long is over.
+  visit_idle: 10m
+  # The pause between the starts of two visits of different personas, so
+  # that requests arriving together do not leave together: never shorter
+  # than min, half below median, nineteen in twenty below p95.
+  visit_start_spacing:
+    min: 150ms
+    median: 700ms
+    p95: 2500ms
+  # The pause before a retry on another persona, drawn the same way.
+  retry_pause:
+    min: 2s
+    median: 6s
+    p95: 20s
+  # A blocked persona stays away from the domain for the policy's cooldown
+  # scaled by the confidence of the block signature, never less than the
+  # floor, and moved per persona by up to the jitter (a share of it), so
+  # that personas blocked together do not return together.
+  cooldown_floor: 5m
+  cooldown_jitter: 0.1
+  # Server errors or timeouts in a row from one domain, over all personas,
+  # pause that domain: for `pause`, doubled with every further one, at most
+  # `max_pause`. Any other answer ends the row.
+  server_errors:
+    after: 3
+    pause: 30s
+    max_pause: 10m
+  # A domain's circuit breaker pauses for the policy's breaker_pause, twice
+  # as long every time the one trial request after a pause is blocked, at
+  # most this long. A trial that never reports back holds the breaker for
+  # breaker_trial_timeout.
+  breaker_max_pause: 6h
+  breaker_trial_timeout: 10m
+  # When personas are awake, in their own time zones. Each persona gets up
+  # and goes to bed at its own times inside these ranges, moved by up to
+  # `drift` from day to day. What that means for a domain is its policy's
+  # active_hours (enforce | prefer | ignore).
+  active_hours:
+    up:
+      from: "06:30"
+      until: "08:30"
+    to_bed:
+      from: "22:30"
+      until: "00:30"
+    drift: 20m
+
+# A browser attempt (spec §8.4, §10.4, §12).
+browser:
+  # Longest one attempt may take when the request does not say: the load,
+  # the persona's behavior on the page and the captures together. At most
+  # 300s, and below sidecar.timeout.
+  timeout: 1m
+  # How long a detected interstitial is given to resolve by itself.
+  challenge_wait_ms: 15000
+  # How deep a page is scrolled, as a share of the document; the depth of
+  # each page is drawn from the request's seed.
+  scroll_depth:
+    min: 0.6
+    max: 0.9
+
+# The bandwidth budget of the proxy plan (decision D5).
+bandwidth:
+  # What the plan includes per billing term, in gigabytes.
+  monthly_cap_gb: 250
+  # The share of the cap at which bandwidth_budget_warning is raised.
+  warn_at: 0.8
+  # At the cap: no dispatch, open browsers closed, the forwarder refuses new
+  # connections. false: alerts only.
+  hard_stop: true
+  # How often the forwarder's counters are written to the store.
+  flush_interval: 30s
+
+# The forwarder: the one proxy every persona's browser and http client is
+# given. It adds the provider's credentials, relays, and counts what passes.
+forwarder:
+  # Where it listens. The sidecars must reach it; never publish this port.
+  bind: 0.0.0.0:8899
+  # The forwarder as the sidecars reach it.
+  advertise: http://kage:8899
+  # Longest the connection to a persona's proxy and its answer may take.
+  connect_timeout: 20s
+  # A relayed connection on which nothing moved for this long is closed.
+  idle_timeout: 10m
+  max_connections: 4096
+
 policies:
   # Directory with domains.yaml, block-signatures.yaml, pacing-profiles.yaml.
   dir: policies

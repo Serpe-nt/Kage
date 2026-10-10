@@ -9,12 +9,14 @@ use common::TestDb;
 use kage_core::config::Config;
 use kage_store::{Store, StoreError};
 
-/// Every table spec §18 names. Milestone M6 added columns, no table.
-const SPEC_TABLES: [&str; 19] = [
+/// Every table spec §18 names. Milestone M6 added columns, no table; M7
+/// added `bandwidth_usage`.
+const SPEC_TABLES: [&str; 20] = [
     "api_keys",
     "artifacts",
     "attempts",
     "audit_events",
+    "bandwidth_usage",
     "crawl_frontier",
     "domain_breakers",
     "health_events",

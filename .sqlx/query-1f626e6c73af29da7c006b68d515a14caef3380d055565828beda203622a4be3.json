@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT domain, state, block_count_1h, window_started_at, paused_until, updated_at\n             FROM domain_breakers WHERE domain = $1",
+  "query": "SELECT domain, state, block_count_1h, window_started_at, paused_until, trips,\n                    trial_started_at, updated_at\n             FROM domain_breakers WHERE state = 'open' ORDER BY domain",
   "describe": {
     "columns": [
       {
@@ -60,6 +60,28 @@
       },
       {
         "ordinal": 5,
+        "name": "trips",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "domain_breakers",
+            "name": "trips"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "trial_started_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "domain_breakers",
+            "name": "trial_started_at"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
         "name": "updated_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -71,9 +93,7 @@
       }
     ],
     "parameters": {
-      "Left": [
-        "Text"
-      ]
+      "Left": []
     },
     "nullable": [
       false,
@@ -81,8 +101,10 @@
       false,
       true,
       true,
+      false,
+      true,
       false
     ]
   },
-  "hash": "5ebbf32ae6c767d0abab714070956fc32f977c74c57fb0a8aab9d973e3ed6d1d"
+  "hash": "1f626e6c73af29da7c006b68d515a14caef3380d055565828beda203622a4be3"
 }

@@ -64,6 +64,22 @@ string_enum! {
     }
 }
 
+string_enum! {
+    /// What a persona's own day means for a domain (spec §11). Every
+    /// persona is awake for a stretch of the day drawn from its seed.
+    pub enum ActiveHoursMode {
+        /// Only personas that are awake serve the domain. At night nothing
+        /// is fetched from it.
+        Enforce => "enforce",
+        /// A persona that is awake is always chosen before one that sleeps.
+        /// Job work never wakes a sleeper; a synchronous request may, for
+        /// the one page it asks for.
+        Prefer => "prefer",
+        /// The hour of the day is not looked at.
+        Ignore => "ignore",
+    }
+}
+
 /// A problem in `policies/domains.yaml`.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PolicyError {
@@ -240,6 +256,9 @@ pub struct DomainRule {
     /// How the first navigation arrives.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub referer_strategy: Option<RefererStrategy>,
+    /// What the personas' own days mean for this domain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_hours: Option<ActiveHoursMode>,
     /// Retries after the first attempt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retries: Option<u32>,
@@ -375,6 +394,8 @@ pub struct EffectivePolicy {
     pub robots: RobotsMode,
     /// How the first navigation arrives.
     pub referer_strategy: RefererStrategy,
+    /// What the personas' own days mean for this domain.
+    pub active_hours: ActiveHoursMode,
     /// Retries after the first attempt.
     pub retries: u32,
     /// Blocks per hour that pause the domain.
@@ -600,6 +621,8 @@ impl DomainPolicies {
             robots: inherited(&rules, defaults, |rule| rule.robots).unwrap_or(RobotsMode::Report),
             referer_strategy: inherited(&rules, defaults, |rule| rule.referer_strategy)
                 .unwrap_or(RefererStrategy::Direct),
+            active_hours: inherited(&rules, defaults, |rule| rule.active_hours)
+                .unwrap_or(ActiveHoursMode::Prefer),
             retries: inherited(&rules, defaults, |rule| rule.retries).unwrap_or(2),
             breaker_threshold: inherited(&rules, defaults, |rule| rule.breaker_threshold)
                 .unwrap_or(5),
@@ -684,8 +707,8 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        Cooldowns, DomainPolicies, DomainRule, PacingRequest, PacingSource, PolicyError,
-        PolicyMatch, RefererStrategy, RobotsMode, normalize_host,
+        ActiveHoursMode, Cooldowns, DomainPolicies, DomainRule, PacingRequest, PacingSource,
+        PolicyError, PolicyMatch, RefererStrategy, RobotsMode, normalize_host,
     };
     use crate::domain::{Engine, Render, RenderMode};
     use crate::duration::HumanDuration;
@@ -757,6 +780,54 @@ fast:
             RefererStrategy::as_str,
             &["direct", "search_engine", "none"],
         );
+        assert_string_enum(
+            ActiveHoursMode::ALL,
+            ActiveHoursMode::as_str,
+            &["enforce", "prefer", "ignore"],
+        );
+    }
+
+    #[test]
+    fn active_hours_default_to_prefer_and_cascade_like_every_field() {
+        assert_eq!(
+            DomainPolicies::default()
+                .resolve("example.org")
+                .active_hours,
+            ActiveHoursMode::Prefer
+        );
+        let policies = DomainPolicies::from_yaml(
+            "defaults:
+  active_hours: ignore
+domains:
+  example.org:
+    active_hours: enforce
+  shop.example.org:
+    render: http
+",
+        )
+        .unwrap();
+
+        assert_eq!(
+            policies.resolve("example.org").active_hours,
+            ActiveHoursMode::Enforce
+        );
+        // Inherited from the parent domain, not from the defaults.
+        assert_eq!(
+            policies.resolve("shop.example.org").active_hours,
+            ActiveHoursMode::Enforce
+        );
+        assert_eq!(
+            policies.resolve("other.test").active_hours,
+            ActiveHoursMode::Ignore
+        );
+        assert!(matches!(
+            DomainPolicies::from_yaml(
+                "defaults:
+  active_hours: sometimes
+"
+            ),
+            Err(PolicyError::Parse(_))
+        ));
     }
 
     #[test]
