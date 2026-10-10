@@ -43,7 +43,6 @@ url = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
-axum = { workspace = true }
 sqlx = { workspace = true }
 tempfile = { workspace = true }
 testcontainers = { workspace = true }
