@@ -334,7 +334,7 @@ async fn list_in(
         &usernames,
         &summary,
         pool.account().as_ref(),
-        &pool.rules().accepted_auto_replace,
+        pool.rules().accepted_auto_replace,
     )
     .context("cannot write the list")
 }
@@ -347,7 +347,7 @@ fn list_table(
     usernames: &[Option<String>],
     summary: &PoolSummary,
     account: Option<&AccountInfo>,
-    accepted: &AutoReplace,
+    accepted: AutoReplace,
 ) -> std::io::Result<()> {
     let mut header = vec![
         "ID",
@@ -396,7 +396,7 @@ fn list_table(
         writeln!(out, "provider plan: {available} replacements left")?;
     }
     let on = account.auto_replace.unwrap_or_default();
-    let unexpected = on.without(accepted).enabled();
+    let unexpected = on.without(&accepted).enabled();
     if !unexpected.is_empty() {
         writeln!(
             out,
@@ -404,7 +404,7 @@ fn list_table(
             unexpected.join(", ")
         )?;
     }
-    let noted = on.both(accepted).enabled();
+    let noted = on.both(&accepted).enabled();
     if !noted.is_empty() {
         writeln!(
             out,
