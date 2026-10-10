@@ -30,3 +30,6 @@ fi
 if [ -n "${KAGE_ABUSEIPDB_KEY:-}" ]; then
     export KAGE__REPUTATION__ABUSEIPDB_KEY="${KAGE_ABUSEIPDB_KEY}"
 fi
+# A development server does not send new personas to real sites unless it
+# is told to (docs/runbooks/personas.md): KAGE_PERSONAS_WARMUP=true.
+export KAGE__PERSONAS__WARMUP__ENABLED="${KAGE_PERSONAS_WARMUP:-false}"

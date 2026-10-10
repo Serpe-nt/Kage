@@ -434,6 +434,31 @@ the backport and the read path. Follow-ups:
 - Cookie handoff test: cookie set in the browser path is sent by the http
   path and vice versa; blocked when majors differ.
 
+**Follow-ups closed by M6.** F1 (budget per subscription term), F7 except
+the persisted asset cache (see F26), F15 (the cross-OS rule on the Rust
+side and the §6.1 mix), F16 (`webshare.accepted_auto_replace`, one path for
+a swap whoever made it), F19 (screen classes by exact bounds from Kage's
+own tables).
+
+**Follow-ups raised by M6**
+- **F25 (M7 or M12):** a chromium persona's processor count is clamped to
+  the engine host's CPUs when its context opens (ADR 0009), so twenty
+  chromium personas on a small host report the same count whatever the
+  generator drew. Size the host, or record the accepted spread.
+- **F26 (with the first engine major that has an http path):** persist the
+  asset freshness cache of the http path per persona. It is per persona
+  in memory already (one client per persona); both engines of this
+  release are browser-only, so nothing uses it yet.
+- **F27 (M7):** one owner per persona context. The manager's own browser
+  work (warm-up visits, scheduled self-tests) and the scheduler's real
+  work open the same context of a persona; M7 must route both through one
+  gate per persona so that neither closes the context under the other.
+- **Next to F22 (Camoufox v156 milestone):** a stock localized Firefox
+  reports the bare language as its `Intl` locale (`de`) where Camoufox
+  with the persona's locale reports the regional tag (`de-DE`, `de-AT`).
+  Measured on Camoufox only; compare with a stock Firefox when the
+  defaults are audited.
+
 ---
 
 ## M7 — Scheduler, pacing, block handling, escalation

@@ -48,7 +48,14 @@ stderr.
    whenever it sees fit, and the persona that lived on it is lost without
    Kage having decided it. Kage only reads these settings: while one is on,
    `kage proxy list --sync` says so and the alert
-   `provider_auto_replace_enabled` is raised.
+   `provider_auto_replace_enabled` is raised. One setting is accepted by
+   default and raises nothing, `auto_replace_invalid_proxies`: Webshare
+   then replaces only an address its own checks find dead, which Kage
+   could not use anyway (`webshare.accepted_auto_replace`; an empty list
+   accepts none). A swap made for an accepted reason is recorded as
+   `provider_replaced_proxy` at info; the old proxy is retired with its
+   persona and the new address gets a new persona, exactly as when Kage
+   replaces one.
 3. If the account has more than one plan, set `webshare.plan_id`.
 4. Optional: an AbuseIPDB key in `KAGE__REPUTATION__ABUSEIPDB_KEY`
    (`KAGE_ABUSEIPDB_KEY` in `deploy/.env`) switches the daily reputation
@@ -136,9 +143,12 @@ backoff ──3 cycles and 6 h of failing, or bad reputation──▶ replacing 
 ## Replacing a proxy
 
 Automatic replacements and `kage proxy replace` share one budget:
-`proxies.replacements_per_month` (5) per UTC calendar month. The budget is
-checked in the database, so the server and the CLI cannot overspend it
-together.
+`proxies.replacements_per_month` (5) per budget window. The window is the
+provider's subscription term when the account reports one (Webshare counts
+its own replacement quota per 30-day term, not per calendar month), else
+the UTC calendar month; `kage proxy list` names it ("replacements this
+term (since 2026-09-21)"). The budget is checked in the database, so the
+server and the CLI cannot overspend it together.
 
 ```bash
 kage proxy replace <proxy-id>
@@ -179,7 +189,7 @@ restart, and a `kage proxy` command, raise a still-standing alert once more.
 | `proxy_geo_mismatch` | warning | Two geo lookups in a row place the exit address in another country than the provider states. The proxy stays usable; personas and country filters go by the observed country |
 | `proxy_reputation_bad` | warning | AbuseIPDB scored the address at or above `reputation.bad_score` twice in a row. It is replaced when the budget allows, else it stays usable as `degraded` |
 | `reputation_usage_type_suspicious` | warning | AbuseIPDB classifies a residential address as data center or hosting space. Never replaced automatically: decide, and use `kage proxy replace` |
-| `provider_replaced_proxy` | warning | Webshare replaced a proxy by itself. Switch its automatic replacement off |
+| `provider_replaced_proxy` | warning (info for a reason `webshare.accepted_auto_replace` covers) | Webshare replaced a proxy by itself. Switch its automatic replacement off, unless the reason is an accepted one |
 | `provider_auto_replace_enabled` | warning | One of Webshare's automatic replacement settings is on |
 | `provider_account` | warning | The subscription is paused or throttled, or the plan has no replacements left |
 | `provider_sync_failed` | warning | The provider's list could not be read. The pool keeps what it has |

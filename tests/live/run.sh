@@ -29,6 +29,12 @@ checks=(
     tests/live/browser-selftest.sh
 )
 
+# The persona check generates the pool's personas and shows two more exit
+# addresses to the third-party detection pages: on request only.
+if [ "${KAGE_LIVE_PERSONAS:-}" = "1" ]; then
+    checks+=(tests/live/personas.sh)
+fi
+
 for check in "${checks[@]}"; do
     echo "==> ${check}"
     "${check}"

@@ -17,6 +17,8 @@ export KAGE_PUBLISH_PORT="${KAGE_E2E_PORT:-18080}"
 # deploy/.env holds: the shell wins over the env file.
 export KAGE_WEBSHARE_API_KEY=
 export KAGE_ABUSEIPDB_KEY=
+# And no persona of a test ever visits a real site.
+export KAGE_PERSONAS_WARMUP=false
 compose=(docker compose --file deploy/compose.yaml --project-name "${KAGE_E2E_PROJECT:-kage-e2e}")
 
 cleanup() {
@@ -147,6 +149,19 @@ case "${config}" in
     *) fail "unexpected kage config check output: ${config}" ;;
 esac
 echo "    secrets redacted, policies loaded from /etc/kage/policies"
+
+echo "==> the persona manager has the shipped mix, sees the personas volume and tests nothing by itself"
+# A sidecar's node reads the document, so the host needs no JSON tool.
+personas="$(printf '%s' "${config}" | "${compose[@]}" exec -T browser-chromium node -e \
+    "let text = ''; process.stdin.on('data', (chunk) => (text += chunk)).on('end', () => { const report = JSON.parse(text); const mix = report.personas.mix.map((entry) => entry.engine + '/' + entry.os + ' ' + entry.share).join(', '); console.log([mix, report.config.personas.dir, report.config.personas.warmup.enabled, report.personas.scheduled_selftests.http, report.personas.scheduled_selftests.browser].join(' | ')); });")"
+expected='chromium/linux 0.4, firefox/windows 0.45, firefox/macos 0.15 | /var/lib/kage/personas | false | false | false'
+[ "${personas}" = "${expected}" ] || fail "unexpected persona configuration: ${personas}"
+# The same identity as the sidecars: kage can move what they wrote.
+"${compose[@]}" exec -T kage /usr/local/bin/kage persona list > /dev/null \
+    || fail "kage persona list failed on an empty pool"
+owner="$("${compose[@]}" exec -T browser-chromium stat -c '%u:%g' /var/lib/kage/personas)"
+[ "${owner}" = "65532:65532" ] || fail "the personas volume belongs to ${owner}"
+echo "    ${personas}"
 
 echo "==> kage is configured for the browsers its sidecars bundle"
 # engines.<engine>.browser_major of the configuration kage printed. A

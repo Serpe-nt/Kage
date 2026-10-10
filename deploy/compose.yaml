@@ -90,10 +90,18 @@ services:
       # The same for the Firefox that the browser-firefox image bundles: the
       # major of its Camoufox build (CAMOUFOX_VERSION in the same file).
       KAGE__ENGINES__FIREFOX__BROWSER_MAJOR: ${KAGE_FIREFOX_BROWSER_MAJOR:-152}
+      # Whether a new persona visits a few popular neutral sites in its
+      # first hours (personas.warmup). On in production; the smoke test
+      # and every other test setup switch it off.
+      KAGE__PERSONAS__WARMUP__ENABLED: ${KAGE_PERSONAS_WARMUP:-true}
     ports:
       # Loopback by default: the API has no authentication until M8.
       - "${KAGE_PUBLISH_ADDR:-127.0.0.1}:${KAGE_PUBLISH_PORT:-8080}:8080"
     volumes:
+      # The sidecars keep each persona's browser profile here. kage never
+      # reads one: it archives the directory of a retired persona and
+      # deletes the archive after personas.retention_days.
+      - personas:/var/lib/kage/personas
       - artifacts:/var/lib/kage/artifacts
     mem_limit: 1g
     cpus: 2

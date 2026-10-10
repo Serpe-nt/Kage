@@ -54,7 +54,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/build/target,sharing=locked \
     cargo auditable build --release --locked --package kage \
     && install -D --mode 0755 target/release/kage /out/usr/local/bin/kage \
-    && install --directory --mode 0750 /out/var/lib/kage/artifacts
+    && install --directory --mode 0750 /out/var/lib/kage/artifacts \
+    && install --directory --mode 0750 /out/var/lib/kage/personas
 
 # --- runtime ---------------------------------------------------------------
 FROM ${RUNTIME_IMAGE} AS runtime
@@ -76,7 +77,8 @@ COPY policies /etc/kage/policies
 USER 65532:65532
 ENV KAGE__SERVER__BIND=0.0.0.0:8080 \
     KAGE__POLICIES__DIR=/etc/kage/policies \
-    KAGE__ARTIFACTS__DIR=/var/lib/kage/artifacts
+    KAGE__ARTIFACTS__DIR=/var/lib/kage/artifacts \
+    KAGE__PERSONAS__DIR=/var/lib/kage/personas
 EXPOSE 8080
 
 # The image has no shell and no curl: the binary probes its own /healthz.

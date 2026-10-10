@@ -129,6 +129,7 @@ kage/
     kage-proxy/              provider trait, Webshare client, pool, health, replacement
     kage-http/               wreq client factory, cookie jar persistence, fingerprint self-test (http)
     kage-browser/            sidecar contract types (generated from sidecar OpenAPI) and client
+    kage-persona/            persona manager: generation, lifecycle, sessions, per-domain state, cookie handoff, warm-up, self-tests, profile archive
     kage-crawl/              frontier, sitemap, dedupe (url normalization lives in kage-core)
     kage-extract/            html → text/markdown/metadata/links/jsonld, robots parsing
     kage-api/                axum router, handlers, OpenAPI, auth, webhooks
@@ -184,19 +185,25 @@ All ids are UUIDv7. Timestamps are UTC.
 | Field | Type | Notes |
 |---|---|---|
 | id | uuid | |
-| proxy_id | uuid | 1:1, unique |
+| proxy_id | uuid | 1:1: unique among the personas that are not retired, so that `regenerate` can replace one behind the same proxy |
 | engine | enum | `chromium`, `firefox` |
 | claimed_os | enum | `windows`, `macos`, `linux` |
 | browser_major | int | from the engine's bundled browser at generation |
+| seed | bytea | 32 bytes derived from the id; the fingerprint, the screen class, the position, the pacing factor, the warm-up plan and the sidecar's motor profile hang on it; never changes |
 | fingerprint | jsonb | full generated fingerprint, re-applied on every session |
+| user_agent, hardware_concurrency | text, int | what the generated browser sends and reports |
 | wreq_profile | text nullable | wreq-util profile name; null disables the http path |
-| locale, languages | text, text[] | derived from proxy country |
-| timezone | text | IANA, derived from proxy geo |
-| geolocation | jsonb nullable | lat/lon/accuracy near the proxy city |
+| country | text nullable | observed country of the address, the provider's while no lookup has succeeded |
+| locale, languages | text, text[] | the country-carrying locale tag and the stock language list of that browser in that country (§6.1) |
+| timezone | text | IANA, from the observed geo record |
+| geolocation | jsonb nullable | lat/lon/accuracy near the lookup's coordinates |
 | screen | jsonb | width, height, dpr, color depth |
-| profile_dir | text | path under the personas volume |
-| state | enum | `active`, `cooling`, `retired` |
-| created_at, retired_at | ts | |
+| tables_version | text | version of the locale and screen tables the persona was drawn from |
+| profile_dir | text | `<engine>/<id>` under the personas volume |
+| state, cooling_reason | enum, enum nullable | `active`, `cooling`, `retired`; while cooling: `proxy_backoff`, `selftest_failed` or `geo_changed` |
+| warmup_visits, warmed_at | int, ts nullable | warm-up progress; the scheduler uses a persona only once `warmed_at` is set (§6.1 step 5) |
+| created_at, retired_at, retire_reason | ts, ts, text | |
+| profile_archived_at, profile_archive, profile_deleted_at | ts, text, ts | the archive of the retired persona's profile directory (§6.3) |
 
 ### PersonaDomainState
 
@@ -206,7 +213,7 @@ All ids are UUIDv7. Timestamps are UTC.
 | cooldown_until | set on block |
 | requests_today, counter_day, last_request_at | pacing counters; `counter_day` is the calendar day in the persona's timezone that `requests_today` counts, so the cap resets at local midnight |
 | last_outcome | |
-| block_count_24h | feeds circuit breaker |
+| block_count_24h, block_window_started_at | blocks in the 24 hours that began with the first of them; feeds circuit breaker |
 
 ### Session
 
@@ -214,8 +221,8 @@ All ids are UUIDv7. Timestamps are UTC.
 |---|---|
 | id | caller-supplied (≤ 64 chars, `[A-Za-z0-9_.-]`) or server-minted; unique per API key, primary key is `(api_key_id, id)` |
 | api_key_id | owner |
-| persona_id | pinned persona |
-| created_at, last_used_at, expires_at | idle TTL default 10 min, max lifetime default 6 h |
+| persona_id | pinned persona: the ready persona with the fewest open sessions when the session is opened; it never moves |
+| created_at, last_used_at, expires_at | idle TTL default 10 min, max lifetime default 6 h (`sessions.idle_ttl`, `sessions.max_lifetime`); ended at once when the persona is retired; an id whose session has ended names a new session |
 
 ### FetchRequest (API) — see §16.3
 
@@ -244,15 +251,28 @@ attempts, robots verdict, cached flag.
 
 ### 6.1 Generation
 
-A persona is generated when a proxy enters `healthy` for the first time.
+A persona is generated when a proxy is usable (`healthy` or `degraded`) and
+has none: on the pool's events, and at every sweep of the persona manager
+(`kage-persona`) for whatever no event announced. Its id is new, its seed
+derives from the id, and every draw below is seeded by it.
 
-1. **Geo.** Country and city come from the provider record and are verified
-   by the health check (exit IP geo lookup). Timezone comes from the city when
-   known, else the country's primary zone. Locale is the country's primary
-   language, with `en` as a secondary at lower q. Geolocation is a random
-   point within a few kilometers of the city centroid, or null for the
-   persona if the city is unknown.
-2. **Engine and OS.** Weighted draw from `personas.mix`. A chromium
+1. **Geo.** Everything derives from the observed geo record of the proxy
+   (§7.4); the provider's country is the fallback only while no lookup has
+   succeeded. Timezone is the lookup's, else the country's primary zone.
+   The locale is the country's primary language with the country as its
+   region (`de-AT`), and the language list is the one a stock installation
+   of that browser ships with there, which differs by browser
+   (`kage_core::persona::locale`, a table per country with overrides for
+   regions that speak another language): Chrome in Austria
+   `de-DE, de, en-US, en`, Firefox `de, en-US, en`. A country without an
+   entry gets `en-US, en` and a health event. Geolocation is a seeded point
+   0.5 to 4 km from the lookup's coordinates, or null without them.
+2. **Engine and OS.** Seeded draw from `personas.mix`, weighted by what the
+   pool is short of: among the entries the persona's own country has fewer
+   of than its share, the one the whole pool is shortest of is likeliest,
+   so that twenty proxies get 8, 9 and 3 within one and no country is all
+   one browser. `engines.chromium.allow_cross_os_claims` is read at
+   generation and at `kage config check`. A chromium
    persona claims the system its Chrome runs on, Linux in the shipped image
    (ADR 0009). A firefox persona claims Windows or macOS: M5 measured
    Camoufox under the same worker-inclusive coherence bar and both pass
@@ -263,7 +283,11 @@ A persona is generated when a proxy enters `healthy` for the first time.
    The mix is configuration, and the health subsystem reports the actual
    pool distribution. A common and coherent Chrome-on-Windows persona needs
    a real Windows engine host (risk R3), a candidate milestone after M5.
-3. **Fingerprint.** The sidecar generates it from constraints (engine, OS,
+3. **Fingerprint.** Kage draws a screen class from a seeded table per
+   engine and system (`kage_core::persona::screen`, version in
+   `tables_version`) and asks for it by exact bounds: the generators' own
+   screen data is narrow, and twenty personas must not share one screen.
+   The sidecar generates it from constraints (engine, OS,
    locale, screen class, browser major equal to the engine's bundled browser)
    using fingerprint-generator (chromium) or Camoufox's generator (firefox),
    returns the full fingerprint JSON, and Kage persists it. The same JSON is
@@ -284,9 +308,19 @@ A persona is generated when a proxy enters `healthy` for the first time.
    name each engine's bundled major (unset until M4 and M5); a major that
    resolves to no profile fails `kage config check` and a test.
 5. **Profile directory.** Created empty. Cookies, storage and history accrue
-   over the persona's life. A persona SHOULD warm up by visiting a small set
-   of popular neutral sites during its first hours (configurable list), so
-   that its profile is not empty on first contact with a target.
+   over the persona's life. A persona warms up by visiting a small set
+   of popular neutral sites during its first hours (`personas.warmup`,
+   configurable list, on by default and off in every test setup), so
+   that its profile is not empty on first contact with a target: 6 to 10
+   visits in its own browser through its own proxy with the behavior
+   engine on, the first 3 to 20 minutes after generation and then
+   log-normal gaps (median 25 min), only between 07:00 and 23:30 of its
+   own time zone, one visit of the manager's per engine at a time. A
+   visit counts toward the persona's state on that site; a blocked one is
+   recorded, cools that site for that persona and is never repeated. The
+   persona is ready for real work (`warmed_at`) after
+   `personas.warmup.min_visits` (3) visits or `personas.warmup.max_wait`
+   (12 h), whichever is first; with warm-up off, at once.
 
 ### 6.2 Coherence rules (tested by the self-test suite)
 
@@ -350,11 +384,13 @@ A persona is generated when a proxy enters `healthy` for the first time.
 
 | Event | Effect |
 |---|---|
-| Proxy enters `backoff` | Persona `cooling`; no new sessions; existing sessions finish. |
-| Proxy `retired` (replaced) | Persona `retired`, profile dir archived then deleted after `personas.retention_days` (default 7). New persona generated for the replacement proxy. |
+| Proxy enters `backoff` or `replacing` | Persona `cooling` (`proxy_backoff`); no new sessions; existing sessions finish. Active again when the proxy is usable. |
+| Proxy `retired` (replaced, by Kage or by the provider itself) | Persona `retired`: its sessions end and its http cookies are deleted at once; `personas.archive_after` (10 min) later its profile directory is moved to `.archive/<persona id>` on the personas volume with a `persona.json` (ids, engine, system, the proxy's address without credentials, reason, times), and the archive is deleted after `personas.retention_days` (default 7). The row, the fingerprint, the per-domain state and the self-test runs stay. New persona generated for the replacement proxy; it inherits nothing. |
+| Geo record of the address changes | Same country: time zone and position follow, event `persona_geo_updated` at info. Another country (or a region of another language): locale and languages follow too, the event is a warning and the persona is `cooling` (`geo_changed`) until a self-test passes. Seed, fingerprint, screen and profile never change. |
 | Block on domain D | `PersonaDomainState.cooldown_until = now + cooldown(D, block_type)`; defaults: `rate_limited` 2 h, `forbidden`/`captcha`/`challenge_failed` 24 h, `soft_block` 6 h. A rule may carry a cooldown class instead: `none`, `short` (policy key `short`, default 30 min, never longer than the outcome's own cooldown) or `long` (the outcome's cooldown). M7 scales the duration by the classification confidence. |
 | Daily cap reached on D | Persona ineligible for D until local midnight in the persona's timezone. |
-| Self-test failure | Persona `cooling` until an operator or the next self-test clears it. |
+| Self-test failure | Persona `cooling` (`selftest_failed`) until a self-test passes: the next scheduled one (retried after a twelfth of the interval) or an operator's `kage persona selftest`. A run that could not read its test site is inconclusive and changes nothing. |
+| Operator | `kage persona retire` retires a persona; `kage persona regenerate` replaces it with a new one behind the same proxy. |
 
 ### 6.4 State export and import (http ↔ browser)
 
@@ -365,10 +401,14 @@ into that persona's wreq jar. The http path MAY reuse them only when
 major. Cookies set by the http path are imported back into the browser
 context before the next browser attempt for that origin.
 
-Until M6 gives each persona its jar, the http path keeps one jar per proxy
-(table `http_cookies`, §9). It dies with the proxy: a replacement never
-inherits cookies, because a new address presenting the old cookies links the
-two.
+Each persona has its own http jar (table `http_cookies`, keyed by proxy and
+persona, §9). It dies with the persona and with the proxy: a replacement
+never inherits cookies, because a new address presenting the old cookies
+links the two. Both directions of the handoff
+(`PersonaManager::browser_to_http`, `http_to_browser`) are refused when the
+persona has no profile or its stored profile is not the one its engine
+major resolves to; only the cookies a browser would send to the origin
+move.
 
 ---
 
@@ -430,8 +470,9 @@ rate-limit header, so limits are learned only from a 429; the proxy config
 response includes `proxy_list_download_token`, a secret Kage never reads or
 logs; one credential pair serves every proxy on the plan. Webshare counts
 manual replacements per subscription term, not per calendar month: when the
-plan reports a term, Kage's budget window MUST follow that term (follow-up
-F1 in `02-plan.md`).
+plan reports a term, Kage's budget window follows that term
+(`Pool::budget_window`: the term that contains now, rolled forward by whole
+terms when the reported start is stale), and the UTC month otherwise.
 
 - Rate limits: general 240/min, proxy list endpoints 60/min; after a 429
   Webshare asks to wait 60 s. The client keeps its own token buckets below
@@ -442,9 +483,16 @@ F1 in `02-plan.md`).
   plain wreq without browser emulation and sends `User-Agent: kage/<version>`:
   Webshare is a vendor, not a target.
 - Webshare replaces proxies by itself unless the four `auto_replace_*`
-  settings are off. Kage reports them and alerts when one is on; it never
-  changes account settings. The owner switches them off in the dashboard, so
-  that an address (and its persona) only changes when Kage decided it.
+  settings are off. Kage reports them and alerts when one is on that
+  `webshare.accepted_auto_replace` does not name; it never
+  changes account settings. The owner switches the others off in the
+  dashboard, so that an address (and its persona) only changes when Kage
+  decided it. The default accepts `auto_replace_invalid_proxies` (D31):
+  while it is on Kage records `provider_auto_replace_accepted` at info, and
+  a swap Webshare made for that reason is recorded as
+  `provider_replaced_proxy` at info instead of a warning. Whoever replaced a
+  proxy, the path is the same: the old proxy is retired, its persona with
+  it, and the new address gets a new persona (§6.3).
 - Sync: the pool reconciles with the list every `proxies.sync_interval`
   (default 10 min): new IPs → `new`. A missing IP is `retired` at once only
   when the replaced-proxy list confirms it, otherwise after
@@ -485,7 +533,9 @@ fails its latest probe, failures are recorded but advance no counter, and
 more of such a pool is in `backoff` or `replacing`.
 
 Replacement: budget `proxies.replacements_per_month` (default 5) counts
-requests in the current UTC month, automatic and operator alike, enforced
+requests in the current budget window (the provider's subscription term
+when the account reports one, else the UTC month; §7.2), automatic and
+operator alike, enforced
 atomically in Postgres; Kage never requests when the plan's own quota shows
 0 available; the longest-failing proxy goes first; one replacement at a time
 (the provider allows one); same country as the proxy replaced, else no
@@ -502,11 +552,11 @@ row without it; never when the list is empty or shorter than half the pool.
 
 | Check | Default interval | Method |
 |---|---|---|
-| Reachability, latency, exit IP | 5 min × U(0.75, 1.25) per proxy from its seed; first probes spread over 2 min after boot; at most 3 in flight; real traffic through a proxy postpones its next probe (`Pool::report_traffic_ok`) | Through-proxy GET of the provider's own echo (`https://ipv4.webshare.io/`), so no third party sees the pool; a failed probe is retried once against the confirmation echo (`https://checkip.amazonaws.com/`) before it counts. Client from the `ProbeClientFactory` seam: one wreq-util profile (`proxies.health.profile`, default `chrome_149` on Windows) until M6 substitutes the persona's own client. |
+| Reachability, latency, exit IP | 5 min × U(0.75, 1.25) per proxy from its seed; first probes spread over 2 min after boot; at most 3 in flight; real traffic through a proxy postpones its next probe (`Pool::report_traffic_ok`) | Through-proxy GET of the provider's own echo (`https://ipv4.webshare.io/`), so no third party sees the pool; a failed probe is retried once against the confirmation echo (`https://checkip.amazonaws.com/`) before it counts. Client from the `ProbeClientFactory` seam: the client of the persona behind the proxy when it has an http path (its profile, `User-Agent`, brand list and languages, on a fresh connection without its cookies), else one wreq-util profile (`proxies.health.profile`, default `chrome_149` on Windows). |
 | Leak | with reachability | Exit IP (from echo) ≠ host public IP; host IP learned at boot by a direct GET of the same echo, refreshed hourly. Leak → `backoff` + `egress_unsafe` (§7.3). |
 | Geo (country, city, ASN, timezone) | first check of a `new` proxy, on exit IP change, and every 24 h jittered | `https://ipinfo.io/json` through the proxy (not Cloudflare-fronted). The observed record is persisted as authoritative; a change is a health event. Mismatch with the provider country on two consecutive lookups → `degraded` and alert, proxy stays usable. Lookup failures are not health failures (retry after an hour). |
-| Fingerprint self-test (http) | per PR in CI over loopback for every mapped profile; on demand (`kage selftest http --proxy --profile`) and two proxies per nightly live run against `selftest.http.third_party_url`; from M6 every 24 h jittered per persona, only against the operator's own echo (`selftest.http.echo_url`) and never against a third party on a timer | JA4, HTTP/2 Akamai string, header order, HTTP version and `User-Agent` equal the fixture recorded for the profile. The fingerprint is a function of the pins and the header code, not of the proxy, so the live runs only confirm that a real tunnel changes nothing. |
-| Fingerprint self-test (browser) | per PR on the fixture site's coherence probe; on demand (`kage selftest browser`) and two proxies per nightly live run against the third-party pages; from M6 every 24 h staggered per persona, only against the operator's own pages (`selftest.browser.pages`: the probe and, when configured, the fingerprint echo), never a third party on a timer | The sidecar loads the page list given in the request. Default: our own probe and echo. Third parties (`bot.sannysoft.com`, CreepJS) only on demand and in the live suite; BrowserScan and Pixelscan never in a default. Findings `{page, check, status, observed, expected, hard}`; hard failures (any automation flag, an identity mismatch against the persona, a transport mismatch on the echo) fail the run; score `100 × (1 − (fails + ½ warns) / known)` with `min_score` 90; an unreachable page yields `unknown`, changes no score and sets `complete: false`, so a test-site outage never cools a persona down. Page text and a screenshot are stored as artifacts. |
+| Fingerprint self-test (http) | per PR in CI over loopback for every mapped profile; on demand (`kage selftest http --proxy --profile`) and two proxies per nightly live run against `selftest.http.third_party_url`; every 24 h × U(0.75, 1.25) per persona from its seed (`selftest.http.interval`; first run 2 to 30 min after generation; `kage selftest http --persona`, `kage persona selftest`), only against the operator's own echo (`selftest.http.echo_url`) and never against a third party on a timer; without an echo of the operator's nothing is scheduled | JA4, HTTP/2 Akamai string, header order, HTTP version and `User-Agent` equal the fixture recorded for the profile. The fingerprint is a function of the pins and the header code, not of the proxy, so the live runs only confirm that a real tunnel changes nothing. |
+| Fingerprint self-test (browser) | per PR on the fixture site's coherence probe; on demand (`kage selftest browser`) and two proxies per nightly live run against the third-party pages; every 24 h × U(0.75, 1.25) per persona from its seed (`selftest.browser.interval`), in the persona's own context, only against the operator's own pages (`selftest.browser.pages`: the probe and, when configured, the fingerprint echo), never a third party on a timer; without such pages nothing is scheduled. Every run is a row in `selftest_runs` | The sidecar loads the page list given in the request. Default: our own probe and echo. Third parties (`bot.sannysoft.com`, CreepJS) only on demand and in the live suite; BrowserScan and Pixelscan never in a default. Findings `{page, check, status, observed, expected, hard}`; hard failures (any automation flag, an identity mismatch against the persona, a transport mismatch on the echo) fail the run; score `100 × (1 − (fails + ½ warns) / known)` with `min_score` 90; an unreachable page yields `unknown`, changes no score and sets `complete: false`, so a test-site outage never cools a persona down. Page text and a screenshot are stored as artifacts. |
 | IP reputation | 24 h, one proxy at a time spread over the day, asked from the host directly | Provider trait with AbuseIPDB first; disabled without a key. Bad = `abuseConfidenceScore` ≥ `reputation.bad_score` (default 75) on two consecutive lookups → `replacing` when the budget allows, else `degraded` + alert. `usageType` recorded; Data Center or Hosting on a residential IP raises `reputation_usage_type_suspicious`, never an automatic replacement. A 429 pauses lookups for as long as it says, or 24 h. |
 | Account sync | 10 min | Subscription, plan, counts, replacement quota, the four `auto_replace_*` flags (alert while any is on, never changed by Kage), available countries. |
 
@@ -560,8 +610,9 @@ request is converted into a job and `202` returned with the job id.
   claimed OS) from a wreq-util profile, with that proxy (`Proxy::all` with
   credentials) as its only route, HTTP/2 preferred and HTTP/3 disabled.
   wreq's redirect handling, cookie store and default-header merge are off:
-  kage-http does all three itself. Until M6 a client is asked for with a
-  profile name, an OS and a `ProxyEndpoint`; M6 asks with the persona and
+  kage-http does all three itself. A client is asked for with a
+  profile name, an OS and a `ProxyEndpoint`; the persona manager asks with
+  the persona (`kage_persona::identity::http_spec`) and
   passes its exact `User-Agent` and `sec-ch-ua` through the identity
   override, which API callers cannot reach. A Firefox profile that claims
   Linux is refused without that override, because wreq-util's own value
@@ -575,7 +626,7 @@ request is converted into a job and `202` returned with the job id.
   `http://` origin is treated as the browser treats it: no client hints, no
   fetch metadata, `Accept-Encoding: gzip, deflate`. `Accept-Language` is
   written in the family's own format from the client's language list
-  (`en-US, en` until M6 supplies the persona's).
+  (the persona's; `en-US, en` for a client without one).
 - **Caller headers** are checked against a denylist, and a denied header is
   a typed error that names it, never a silent drop. Denied: `User-Agent`,
   `Accept-Language`, `Accept-Encoding`, `Cookie`, `Origin`, every `Sec-*`
@@ -599,7 +650,7 @@ request is converted into a job and `202` returned with the job id.
   HEAD into a GET, 307 and 308 repeat the request. Host names are resolved
   by the proxy, never by Kage; resolved addresses are checked on every hop
   only when a resolver is injected (`HopResolver`), and none is by default.
-- **Cookies.** One jar per proxy until M6 keys it by persona (§6.4), with
+- **Cookies.** One jar per persona (§6.4; per proxy for a client without a persona), with
   the rules browsers apply (RFC 6265bis): `SameSite` with `Lax` as the
   default, `Secure`, the `__Secure-` and `__Host-` prefixes, no cookie for a
   public suffix, no replacing a `Secure` cookie from an insecure origin, 400
@@ -637,7 +688,7 @@ request is converted into a job and `202` returned with the job id.
   same comparison through a real proxy, against `selftest.http.echo_url`
   when set and else, on demand only, against the third-party echo
   `selftest.http.third_party_url`. Kage never contacts a third-party echo on
-  a timer; the scheduled check of §7.4 comes with M6 and uses the operator's
+  a timer; the scheduled check of §7.4 uses the operator's
   own echo. See `docs/runbooks/fingerprint-echo.md`.
 - The http path never executes JavaScript and never pretends to; a page that
   requires it will surface as a block or as `ok` with thin content, which
@@ -927,8 +978,10 @@ A `lognormal` with `min` is a shifted log-normal: `min` plus a log-normal
 fitted so the configured median and p95 hold exactly, density zero at `min`
 and rising smoothly (no spike, no cliff). `max` is enforced by bounded
 resampling, never clamping; samples are whole milliseconds. The sampler takes
-its parameters as a value plus a seed, so M6/M7 can perturb median and p95
-per persona (a fixed factor from the persona seed, roughly 0.8 to 1.25) and
+its parameters as a value plus a seed, and median and p95 are scaled
+per persona by a fixed factor from the persona seed, log-uniform in
+0.8 to 1.25 (`kage_core::persona::pacing_factor`,
+`PacingProfile::for_persona`; M7 applies it), so that
 twenty personas never share one identical gap distribution. A wait that ends
 a burst is `gap_ms` plus `burst_break_ms`, so the gap floor holds everywhere.
 
@@ -1147,7 +1200,10 @@ validates and prints the effective config as JSON with secrets redacted.
 Sections at this point: `server`, `database`, `secrets`, `sidecar`,
 `policies`, `artifacts`, `proxies` (with `proxies.health`), `webshare`,
 `reputation`, `http` (with `http.subresources`), `selftest` (`selftest.http`,
-`selftest.browser` with its own pages and the third-party pages),
+`selftest.browser` with its own pages and the third-party pages, each with
+the `interval` of its scheduled run), `personas` (`dir`, `mix`,
+`retention_days`, `archive_after`, `sweep_interval`, `warmup`), `sessions`
+(`idle_ttl`, `max_lifetime`, `sweep_interval`),
 `engines` (`engines.<engine>.browser_major`: 155 for the chromium image of
 M4, 152 for the firefox image of M5; a set major must be served by a profile,
 verified or recorded as browser-only, or `kage config check` fails;
@@ -1197,8 +1253,8 @@ Tables: `proxies`, `personas`, `persona_domain_state`, `sessions`,
 `requests`, `attempts`, `results`, `artifacts`, `jobs`, `job_items`,
 `crawl_frontier`, `robots_cache`, `response_cache`, `api_keys`,
 `audit_events`, `health_events`, `selftest_runs`, `domain_breakers`,
-`http_cookies` (one row per cookie, keyed by proxy until M6 adds the
-persona; rows die with the proxy).
+`http_cookies` (one row per cookie, keyed by proxy and persona; rows die
+with the persona and with the proxy).
 Migrations in `crates/kage-store/migrations`, applied by `kage migrate` and
 checked in CI (`sqlx migrate info`, offline query data committed). Bodies and
 artifacts live on disk under `artifacts/` keyed by content hash with a

@@ -8,6 +8,48 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- M6, the persona manager and session binding:
+  - A new crate, `kage-persona`. A proxy that is usable gets one persona,
+    generated from the observed geo record of its address: time zone,
+    a position near the lookup's coordinates, the country-carrying locale
+    and the language list a stock installation of that browser ships with
+    in that country (which differs between Chrome and Firefox), an entry
+    of `personas.mix` drawn by what the pool and the country are short of,
+    and a screen class from a seeded table that the generator is asked
+    for by exact bounds. The sidecar's fingerprint is stored whole. The
+    persona's seed, in its own column, is what every draw hangs on.
+  - A persona follows its proxy: cooling in backoff, a new time zone and
+    position when the geo record moves, new locale and languages and a
+    cooling until a self-test passes when it moves across a border, and
+    retirement with the proxy, whoever replaced it. A retired persona's
+    sessions end and its http cookies are deleted at once; its profile
+    directory is archived after ten minutes and the archive deleted
+    after `personas.retention_days`. `kage serve` runs the manager.
+  - Sessions: ids unique per API key, pinned to the least loaded ready
+    persona, with an idle and a maximum lifetime (`sessions.*`).
+  - Per-domain state on the persona's own calendar: cooldowns after a
+    block, the daily cap until local midnight, block counters.
+  - The http cookie jar belongs to the persona (`http_cookies.persona_id`),
+    and cookies move between its browser context and its http jar in both
+    directions, unless its profile is not its browser's major.
+  - Warm-up (`personas.warmup`, on by default): a new persona visits a few
+    popular neutral sites in its own browser during its first hours and is
+    given real work only after three of them or twelve hours.
+  - Self-tests per persona, every 24 hours with a jitter of its own, only
+    against the operator's own echo and pages; a failure cools the persona
+    and raises `http_selftest_failed` or `browser_selftest_failed`, a run
+    that cannot read its test site changes nothing. A health probe now
+    presents as the persona behind the proxy it checks.
+  - `kage persona list|show|retire|selftest|regenerate`, and `--persona`
+    on `kage selftest http` and `kage selftest browser`.
+  - Pacing: a persona's own factor, log-uniform in 0.8 to 1.25 from its
+    seed, for the median and the 95th percentile of its gaps.
+  - The replacement budget counts per subscription term when the provider
+    reports one. `webshare.accepted_auto_replace` names the automatic
+    replacement settings that raise no alert (default
+    `auto_replace_invalid_proxies`). The geo record keeps the lookup's
+    coordinates.
+
 - M5.1, page reads without user activation:
   - The Chromium engine reads a page over its own debugger session:
     title, text, DOM, selector waits, storage and the measurements of the
@@ -124,6 +166,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - Runbook `docs/runbooks/engine-chromium.md`.
 
 ### Fixed
+
+- One Firefox persona in thirty that claims Windows had no
+  `navigator.oscpu` in its generated configuration and showed the engine
+  host's `Linux x86_64` in its window. The generator now writes the stock
+  value of the claimed system when the device record has none.
+- The stand-in persona of `kage selftest browser --proxy` took its
+  languages from the caller, and the live suite passed `de-DE, de, en` for
+  both engines, a list no stock Firefox sends. Its time zone, locale and
+  languages are now derived from the proxy's geo record, like a persona's.
 
 - Reading a page no longer grants it user activation on either engine
   (spec §10.2): both drivers marked every evaluation as a user gesture, so
