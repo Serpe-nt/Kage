@@ -25,6 +25,7 @@ kage-core = { path = "crates/kage-core", version = "0.1.0" }
 kage-crawl = { path = "crates/kage-crawl", version = "0.1.0" }
 kage-extract = { path = "crates/kage-extract", version = "0.1.0" }
 kage-http = { path = "crates/kage-http", version = "0.1.0" }
+kage-persona = { path = "crates/kage-persona", version = "0.1.0" }
 kage-proxy = { path = "crates/kage-proxy", version = "0.1.0" }
 kage-store = { path = "crates/kage-store", version = "0.1.0" }
 

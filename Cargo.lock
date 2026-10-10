@@ -2060,6 +2060,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "kage-persona"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "chrono",
+ "http",
+ "kage-browser",
+ "kage-core",
+ "kage-http",
+ "kage-proxy",
+ "kage-store",
+ "rcgen",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "testcontainers",
+ "testcontainers-modules",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+ "wiremock",
+]
+
+[[package]]
 name = "kage-proxy"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,45 @@
+[package]
+name = "kage-persona"
+description = "The persona manager: generation, lifecycle, sessions, per-domain state, cookie handoff, warm-up and self-tests."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# The sidecar contract and its client: a persona's fingerprint is generated
+# there and its browser lives there.
+kage-browser = { workspace = true }
+kage-core = { workspace = true }
+# The persona's client on the http path, and its cookie jar.
+kage-http = { workspace = true }
+# The pool's events drive a persona's life; its clock is the manager's.
+kage-proxy = { workspace = true }
+kage-store = { workspace = true }
+
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "macros", "rt", "sync", "time"] }
+tracing = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+async-trait = { workspace = true }
+axum = { workspace = true }
+http = { workspace = true }
+rcgen = { workspace = true }
+sqlx = { workspace = true }
+tempfile = { workspace = true }
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true, features = ["postgres"] }
+tokio = { workspace = true, features = ["io-util", "net", "rt-multi-thread", "test-util"] }
+wiremock = { workspace = true }

@@ -194,6 +194,25 @@ impl HealthChecker {
     /// Fails when the emulation profile is unknown or a client cannot be
     /// built.
     pub fn from_config(config: &Config, pool: Arc<Pool>) -> Result<Self, HealthSetupError> {
+        let clients = EmulatedClientFactory::from_config(&config.proxies.health)?;
+        Self::with_clients(config, pool, clients)
+    }
+
+    /// The checker the configuration describes, probing with the clients
+    /// of `clients` instead of the one configured profile. The persona
+    /// manager passes a factory that answers with the client of the
+    /// persona behind each proxy, so that a probe carries the fingerprint
+    /// of that persona's real traffic (spec §7.4).
+    ///
+    /// # Errors
+    ///
+    /// Fails when the host address lookup or the reputation client cannot
+    /// be built.
+    pub fn with_clients<F: ProbeClientFactory + 'static>(
+        config: &Config,
+        pool: Arc<Pool>,
+        clients: F,
+    ) -> Result<Self, HealthSetupError> {
         let health = &config.proxies.health;
         let reputation: Option<Arc<dyn ReputationProvider>> =
             match AbuseIpDb::from_config(&config.reputation)? {
@@ -209,7 +228,7 @@ impl HealthChecker {
         );
         Ok(Self::new(
             pool,
-            Arc::new(HttpProber::from_config(health)?),
+            Arc::new(HttpProber::new(clients, health)),
             Arc::new(HostIp::new(
                 health.host_ip_url.clone(),
                 health.timeout.get(),
