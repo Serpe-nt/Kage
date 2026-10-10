@@ -153,7 +153,32 @@ shared seed, at least three screens), then runs
 persona through their own proxies and judges the reports with the recorded
 baselines of the engines' live checks. It needs the Webshare key and the
 master key, and it shows two exit addresses to the third-party detection
-pages. It never touches a target site.
+pages. It never touches a target site. The Firefox persona it tests is one
+that claims Windows when the pool has one, the system the baseline was
+recorded with. With `KAGE_LIVE_EVIDENCE_DIR` it keeps the persona table and
+what the judge printed, which holds no address; the raw reports are not
+kept.
+
+It last ran on 2026-10-10, against the real pool of twenty proxies (four
+each in AT, DE, FR, GB and IT) and passed:
+
+- Twenty personas existed two and a half minutes after `kage serve`
+  started, one per proxy, as fast as the health checks placed the
+  addresses: 8 chromium on Linux, 8 firefox on Windows, 4 firefox on macOS
+  (the mix asks for 8, 9 and 3), both browsers in every country, six
+  different screens. Every persona had the time zone and the locale of the
+  country its address was observed in and the language list its browser
+  ships with there (a Firefox in Germany or Austria `de, en-US, en`, a
+  Chrome in Austria `de-DE, de, en-US, en`).
+- A Chrome persona in Austria and a Firefox persona claiming Windows in
+  Germany each passed `kage persona selftest --third-party` through its
+  own proxy with a score of 100: every row of bot.sannysoft.com passes,
+  CreepJS reports headless 0 % and stealth 0 % for both and like headless
+  38 % for Chrome and 6 % for Firefox, and no check is worse than in the
+  recorded baselines (`tests/fixtures/selftest/`).
+- No persona visited a site by itself (warm-up was off, and no self-test
+  is scheduled without pages of the operator's own), and no replacement
+  was requested.
 
 ## Limits to know
 
