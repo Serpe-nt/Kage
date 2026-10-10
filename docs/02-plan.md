@@ -434,6 +434,16 @@ the backport and the read path. Follow-ups:
 - Cookie handoff test: cookie set in the browser path is sent by the http
   path and vice versa; blocked when majors differ.
 
+**Status.** Merged as eight commits ending `151f45b` (`m6-handover.md`).
+New crate `kage-persona`; versioned identity tables (screens, locales,
+mix) in `kage-core`; personas derived from the observed geo record;
+warm-up on by default gating real work on `warmed_at`; sessions, per-domain
+state, cookie handoff with the major rule, profile archive on the personas
+volume, scheduled self-tests against the operator's own pages only; the
+Finding A `oscpu` defect fixed at generation. Decisions D34 to D36 record
+the tables, the warm-up gate and the self-test hosting question (O5). The
+optional live persona check (`KAGE_LIVE_PERSONAS=1`) was not run.
+
 **Follow-ups closed by M6.** F1 (budget per subscription term), F7 except
 the persisted asset cache (see F26), F15 (the cross-OS rule on the Rust
 side and the §6.1 mix), F16 (`webshare.accepted_auto_replace`, one path for
@@ -464,6 +474,21 @@ own tables).
 ## M7 — Scheduler, pacing, block handling, escalation
 
 **Scope.** §8, §11, §12 (runtime), §3.2.
+
+**Notes from M2 to M6.** Honour `Pool::egress_unsafe()` before every
+dispatch and call `Pool::report_traffic_ok` after a success (M2); add the
+politeness pause after consecutive 5xx and scale cooldowns by
+classification confidence through `Cooldowns::resolve` (M1); use
+`Persona::is_ready()` (active and warmed) and `DomainStates::eligibility`,
+apply `PacingProfile::for_persona(persona::pacing_factor(&persona.seed))`,
+route browser attempts through `PersonaManager::browser_to_http` and
+`http_to_browser`, and take the proxy from `route(&persona)` (M6); F27: one
+gate per persona context shared with the manager's warm-up and self-test
+work; F10: the local forwarder per context for bandwidth accounting; the
+domain-policy default for a browser render MUST request human behaviour
+(`dwell: "human"`, scroll depth around 0.6 to 0.9, wander on) because a
+bare load is the http path's signature (M5); track bandwidth against the
+250 GB cap and warn at 80 % (D5).
 
 **Deliverables**
 - Queue with priorities, per-domain and per-persona gates, pacing samplers,
