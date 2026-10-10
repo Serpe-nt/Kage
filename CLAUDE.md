@@ -64,9 +64,8 @@ just ci           everything a PR runs
 ## Layout
 
 - `crates/` Rust workspace (`kage` binary, `kage-core`, `kage-store`,
-  `kage-proxy`, `kage-http`, `kage-browser`, `kage-persona`, `kage-crawl`,
-  `kage-extract`,
-  `kage-api`).
+  `kage-proxy`, `kage-http`, `kage-browser`, `kage-persona`,
+  `kage-scheduler`, `kage-crawl`, `kage-extract`, `kage-api`).
 - `sidecar/` pnpm workspace (`contract`, `engine-core`, `engine-chromium`,
   `engine-firefox`, `server`). `engine-chromium` and `engine-firefox` pin
   different playwright versions on purpose; never hoist them.

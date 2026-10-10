@@ -8,6 +8,58 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- M7, the scheduler, pacing, block handling and escalation:
+  - A new crate, `kage-scheduler`, over rules in `kage-core` that take
+    time as an argument (`kage_core::schedule`) and are mutation-tested.
+    A request waits for a persona and its slot: synchronous work before
+    jobs, then first come first served, under the caps
+    `scheduler.max_browser_sessions` and `scheduler.max_http_inflight`
+    and the domain's own concurrency and requests per minute.
+  - Pace: a persona that fetched a page from a domain keeps that domain's
+    work for its visit, in bursts and breaks at its own factor, with a long
+    break after a few bursts (`visit_bursts`, `visit_break_ms` in the
+    pacing profiles); the daily cap turns at the persona's own midnight;
+    each persona has a day of its own, and `active_hours: enforce | prefer
+    | ignore` per domain says what it means; no two personas start in the
+    same moment.
+  - Persona selection by the score of spec §8.2 over the personas that may
+    serve, away from the network of a persona that was just blocked.
+  - Retries on another persona after a drawn pause; cooldowns from the
+    policy scaled by the confidence of the signature that matched, with a
+    floor and a jitter; a pause for a domain after server errors in a row;
+    the circuit breaker in `domain_breakers` with one trial after its
+    pause and a doubling pause; `domain_paused` as an alert.
+  - Under `render: auto` a block on the http path moves the request to
+    the browser exactly once: the same persona's for a block a browser
+    cures, another persona's after a refusal.
+  - One attempt on either path (`PathExecutor`): the http path with the
+    persona's client, cookies and the previous page as `Referer`; the
+    browser path with a human dwell, a scroll depth from the attempt's
+    seed and a wandering pointer, cookies handed over before and after,
+    the redirect chain checked against the SSRF guard, a detected
+    interstitial given `browser.challenge_wait_ms` to resolve, and the
+    browser closed after a block. Every attempt stores its seed.
+  - The forwarder (follow-up F10): the one proxy every persona's browser
+    and http client is given. The provider's credentials stay in the kage
+    process, every byte is counted per persona and domain
+    (`bandwidth_usage`), and it relays nothing the SSRF guard refuses,
+    nothing for a persona that may not send, and nothing new while a leak
+    is on record or the budget is used up.
+  - The bandwidth budget (decision D5): `bandwidth.monthly_cap_gb` (250)
+    per billing term, judged on the larger of Kage's count and the
+    provider's; `bandwidth_budget_warning` at 80 % with the projected
+    day, `bandwidth_budget_exhausted` and a hard stop at the cap.
+  - One owner of persona contexts (follow-up F27): a persona's browser
+    stays open through its visit and `scheduler.context_idle` after it,
+    and warm-up visits and self-tests ask the scheduler first.
+  - `kage fetch <url>`: one request through the whole pipeline, in
+    sentences or as JSON. `kage serve` runs the scheduler, the forwarder
+    and the budget; `kage config check` reports them.
+  - Metrics of the scheduler and of attempts (spec §20), recorded through
+    the `metrics` facade.
+  - A compose end-to-end test of the fetch pipeline with real browsers on
+    a world of its own (`tests/e2e/fetch.sh`, `deploy/compose.e2e.yaml`).
+
 - M6, the persona manager and session binding:
   - A new crate, `kage-persona`. A proxy that is usable gets one persona,
     generated from the observed geo record of its address: time zone,
@@ -187,6 +239,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The sidecars' `SIDECAR_CONTEXT_IDLE_MS` is 6 minutes in compose (was 2):
+  Kage closes a persona's context itself, and the sidecar's limit is the
+  backstop.
+- Mutation testing of `kage-core` is a gate: `just mutants` fails under
+  a score of 70 % (`scripts/check-mutation-score.mjs`). It takes about
+  two hours and is not part of `just ci`.
 - The Firefox engine refuses a Camoufox build whose `omni.ja` is not the
   one with the Juggler backport, and removes a profile's `startupCache`
   when the profile last started under another archive (a note,

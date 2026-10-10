@@ -66,6 +66,7 @@ real human on a real household connection would present.
 consumers ──HTTPS/JSON──▶ kage (Rust, axum)
                            ├─ api        : auth, OpenAPI, validation, SSRF guard, rate limits
                            ├─ scheduler  : queue, pacing, persona selection, retries, circuit breakers
+                           ├─ forwarder  : the one proxy every persona is given; adds the provider's credentials, counts bytes
                            ├─ policy     : domain policies, robots, block signatures (hot reload)
                            ├─ http path  : wreq clients per persona (TLS/H2/header emulation)
                            ├─ browser    : client for the sidecar contract
@@ -79,9 +80,9 @@ consumers ──HTTPS/JSON──▶ kage (Rust, axum)
                                  ▼
           browser-chromium (Node, patchright + Chrome, Xvfb)
           browser-firefox  (Node, camoufox-js + Camoufox, virtual display)
-                                 │  per-context authenticated proxy
+                                 │  per-context proxy: kage's forwarder, under the persona's own credential
                                  ▼
-                     Webshare static residential IPs ──▶ target sites
+                 kage forwarder ──▶ Webshare static residential IPs ──▶ target sites
 
 postgres (jobs, personas, proxies, results, keys, audit)
 otel-collector, jaeger, prometheus, grafana (optional compose profiles)
@@ -110,7 +111,8 @@ otel-collector, jaeger, prometheus, grafana (optional compose profiles)
 One Compose project. Services: `kage`, `browser-chromium`, `browser-firefox`,
 `postgres`. Optional profile `observability`: `otel-collector`, `jaeger`,
 `prometheus`, `grafana`. Volumes: `personas` (browser profile directories),
-`artifacts`, `pgdata`. Only `kage` publishes a port.
+`artifacts`, `pgdata`. Only `kage` publishes a port, and only the API's:
+the forwarder (§7.5) listens on the compose network alone.
 
 ---
 
@@ -123,13 +125,14 @@ kage/
   justfile                   every dev and CI command has a just target
   CLAUDE.md                  house rules for agents
   crates/
-    kage/                    binary: CLI (serve, migrate, selftest, persona, proxy, key)
+    kage/                    binary: CLI (serve, migrate, fetch, selftest, persona, proxy, key)
     kage-core/               domain types, outcomes, policy model, pacing math, classifier
     kage-store/              sqlx repositories, migrations/, artifact store
     kage-proxy/              provider trait, Webshare client, pool, health, replacement
     kage-http/               wreq client factory, cookie jar persistence, fingerprint self-test (http)
     kage-browser/            sidecar contract types (generated from sidecar OpenAPI) and client
-    kage-persona/            persona manager: generation, lifecycle, sessions, per-domain state, cookie handoff, warm-up, self-tests, profile archive
+    kage-persona/            persona manager: generation, lifecycle, sessions, per-domain state, cookie handoff, warm-up, self-tests, profile archive, the owner of persona contexts
+    kage-scheduler/          scheduler over the rules in kage-core (`schedule`): grants, the fetch pipeline, the attempt executor over both paths, verdicts, the forwarder, the bandwidth budget
     kage-crawl/              frontier, sitemap, dedupe (url normalization lives in kage-core)
     kage-extract/            html → text/markdown/metadata/links/jsonld, robots parsing
     kage-api/                axum router, handlers, OpenAPI, auth, webhooks
@@ -146,7 +149,7 @@ kage/
     block-signatures.yaml    vendor detection rules (hot reload)
     pacing-profiles.yaml     named pacing distributions
   deploy/
-    compose.yaml, compose.observability.yaml
+    compose.yaml, compose.observability.yaml, compose.e2e.yaml (the world of the end-to-end fetch test)
     docker/kage.Dockerfile, docker/sidecar.Dockerfile
     grafana/, otel/
   docs/                      this spec, plan, ADRs, versions, runbooks
@@ -563,6 +566,60 @@ row without it; never when the list is empty or shorter than half the pool.
 
 All health traffic obeys pacing and never targets real target sites.
 
+### 7.5 The forwarder and the bandwidth budget
+
+**Forwarder (follow-up F10).** `kage serve` runs one HTTP proxy of its own
+(`forwarder.bind`, default `0.0.0.0:8899`; `forwarder.advertise`, default
+`http://kage:8899`, is what the sidecars are told). Every persona's browser
+context and http client is given the forwarder as its proxy, under a
+credential that only names the persona: its id as the user name and a
+token derived from the master key (HMAC-SHA-256, 128 bits) as the password,
+the same after a restart. The forwarder then
+
+- looks up that persona's own proxy and connects to it and nowhere else,
+  adding the provider's credentials, so those never enter a browser or a
+  sidecar container. A persona that is unknown, cooling or retired, or
+  whose proxy is not usable, is refused (`PoolRoutes`, cached for 5 s);
+- relays `CONNECT host:port` and absolute-form `http://` requests only,
+  and refuses every target the SSRF guard refuses by name or by range
+  (loopback, private, link-local, metadata, single-label and local names,
+  port 0, credentials in the URL). A public address by number is relayed:
+  whether a request may *name* one is decided where requests are accepted
+  (`security.allow_ip_targets`). The operator's own self-test hosts
+  (`selftest.browser.pages`, `selftest.http.echo_url`) pass by name and
+  port;
+- counts every byte in both directions per persona and per domain being
+  fetched (the attempt in flight for that persona; `(idle)` outside one);
+- relays no new connection while a leak is on record (`egress_unsafe`) or
+  the bandwidth budget is used up, and the open browsers are closed when
+  such a stop begins.
+
+A refusal looks like a network that does not answer: a refused tunnel gets
+a bare `403`, a refused plain request is closed without an answer, so no
+page ever reads a response Kage wrote. A missing or wrong credential gets
+`407`, as from any proxy. Health probes do not pass the forwarder: they
+present the provider's credentials themselves. A CLI command that opens a
+context in its own process (`kage fetch`) binds a forwarder of its own on
+a free port; `kage persona selftest` and the stand-in self-tests hand the
+sidecar the provider's proxy as before M7.
+
+**Bandwidth budget (decision D5).** The counts are written to
+`bandwidth_usage` by the hour (`bandwidth.flush_interval`, default 30 s).
+The budget is `bandwidth.monthly_cap_gb` (default 250) per billing term:
+the provider's subscription term once the account was read, else the UTC
+calendar month. It is judged on the larger of Kage's own count and the
+provider's (`stats`, asked at most every ten minutes), because the provider
+also bills what does not pass the forwarder. At `bandwidth.warn_at`
+(default 0.8) `bandwidth_budget_warning` is raised once per term with the
+day the cap would be reached at the rate so far. At the cap
+`bandwidth_budget_exhausted` is raised once per term and, with
+`bandwidth.hard_stop` (default on), nothing is fetched until the term ends
+or the cap is raised: the scheduler answers every request with
+`provider_error` and reason `bandwidth_exhausted`, the forwarder relays
+nothing new, the open browsers are closed, and the manager's warm-up
+visits and scheduled self-tests wait. An operator's own
+`kage persona selftest` is not held by it.
+
 ---
 
 ## 8. Fetch pipeline
@@ -944,9 +1001,21 @@ typos.
 
 `shm_size` ≥ 1 GB for Chromium, memory and process limits per container
 (`pids_limit` 4096 for chromium: three browsers are a few hundred threads
-each), hard context cap, contexts are closed after
-`SIDECAR_CONTEXT_IDLE_MS` (default 2 min) and reopened on demand (profile
-persists). A browser process is recycled after
+each), hard context cap. Kage owns the closing of a persona's context
+(`kage_persona::Contexts`, follow-up F27): it is taken as an exclusive
+lease by whatever works with it (an attempt, a warm-up visit, a
+self-test), stays open when the lease is given back so that the persona's
+next page finds its session, and is closed after a block, when it was not
+used for `scheduler.context_idle` (default 5 min), when another persona
+needs the engine's slot and none is free (the least recently used context
+that is not held, one whose persona is not in the middle of a visit before
+one whose persona is), and at a stop (leak, bandwidth cap) and at shutdown.
+The sidecar's own `SIDECAR_CONTEXT_IDLE_MS` (compose default 6 min) is the
+backstop for a context Kage lost track of; a context it closed is reopened
+on demand (profile persists). The manager's warm-up visits and scheduled
+self-tests ask the scheduler for the persona and a browser session before
+they take a lease (`BrowserGate`); they close a context only when they
+opened it. A browser process is recycled after
 `SIDECAR_MAX_PAGES_PER_BROWSER` (default 500) navigations: the context is
 reopened from the same request before the next operation, which the
 metrics count. A context whose browser died is closed and reported, never
@@ -1208,7 +1277,16 @@ the `interval` of its scheduled run), `personas` (`dir`, `mix`,
 `engines` (`engines.<engine>.browser_major`: 155 for the chromium image of
 M4, 152 for the firefox image of M5; a set major must be served by a profile,
 verified or recorded as browser-only, or `kage config check` fails;
-`engines.chromium.allow_cross_os_claims`, default false). `sidecar` holds
+`engines.chromium.allow_cross_os_claims`, default false), `scheduler`
+(the caps `max_browser_sessions` 6, `max_http_inflight` 20 and
+`max_contexts_per_engine` 3, which is `SIDECAR_MAX_CONTEXTS`;
+`context_idle`, `sync_wall_time`, `visitor_wait`, `visit_idle`,
+`visit_start_spacing`, `retry_pause`, `cooldown_floor`,
+`cooldown_jitter`, `server_errors`, `breaker_max_pause`,
+`breaker_trial_timeout`, `active_hours`), `browser` (`timeout`,
+`challenge_wait_ms`, `scroll_depth`), `bandwidth` and `forwarder` (§7.5).
+`kage config check` reports the scheduler's caps, the budget and the
+forwarder. `sidecar` holds
 the token, each engine's URL, the timeouts and `connect_retries`;
 every section rejects unknown keys and every non-secret key is listed in
 `deploy/kage.example.yaml` (a test compares them).
@@ -1253,9 +1331,15 @@ keeps the last good policy and raises an alert.
 Tables: `proxies`, `personas`, `persona_domain_state`, `sessions`,
 `requests`, `attempts`, `results`, `artifacts`, `jobs`, `job_items`,
 `crawl_frontier`, `robots_cache`, `response_cache`, `api_keys`,
-`audit_events`, `health_events`, `selftest_runs`, `domain_breakers`,
+`audit_events`, `health_events`, `selftest_runs`, `domain_breakers`
+(with how often the breaker opened since the domain last answered well,
+`trips`, and when its one trial was let through, `trial_started_at`),
 `http_cookies` (one row per cookie, keyed by proxy and persona; rows die
-with the persona and with the proxy).
+with the persona and with the proxy), `bandwidth_usage` (bytes up and down
+through the forwarder per hour, persona and domain; §7.5). An attempt
+stores its seed (`attempts.seed`: the persona's, the request's id and the
+attempt's number, from which its behavior and its pauses are drawn) and,
+like a result, the `reason` of an outcome the site did not give.
 Migrations in `crates/kage-store/migrations`, applied by `kage migrate` and
 checked in CI (`sqlx migrate info`, offline query data committed). Bodies and
 artifacts live on disk under `artifacts/` keyed by content hash with a
@@ -1297,6 +1381,12 @@ are gzip-compressed on disk.
   The request to such a hop has left through the proxy by then; that is the
   limit of a check that does not intercept requests. WebRTC sends no UDP
   outside the proxy.
+- **Forwarder.** The provider's proxy credentials never leave the kage
+  process: browsers and sidecars hold a per-persona credential that opens
+  only that persona's own proxy, through the forwarder, which refuses what
+  the SSRF guard refuses (§7.5). It is the one place where a browser's own
+  background traffic and a page's redirect to the compose network would
+  pass, and it is never published on the host.
 - **Input limits.** Body size limits on all endpoints, header count and
   size limits, URL length, items per job (default 10 000), artifact size.
 - **Rate limiting.** Per key and global; `429` with `Retry-After`.
@@ -1318,9 +1408,14 @@ are gzip-compressed on disk.
   id, domain, render, outcome, vendor, timing. Sidecar logs via pino in the
   same shape; both carry the trace id.
 - Metrics (Prometheus): `kage_requests_total{domain,render,outcome,vendor}`,
-  `kage_attempt_duration_seconds`, `kage_persona_state{state}`,
-  `kage_proxy_state{state}`, `kage_scheduler_wait_seconds`,
-  `kage_queue_depth{kind}`, `kage_breaker_open{domain}`,
+  `kage_attempts_total{domain,render,outcome,vendor}`,
+  `kage_attempt_duration_seconds{render,outcome}`, `kage_persona_state{state}`,
+  `kage_proxy_state{state}`, `kage_scheduler_wait_seconds{kind}`,
+  `kage_queue_depth{kind}`, `kage_scheduler_in_flight{render}`,
+  `kage_scheduler_refusals_total{reason}`, `kage_breaker_open{domain}`,
+  `kage_bandwidth_bytes_total{direction}`, `kage_bandwidth_budget_ratio`
+  (the scheduler's are recorded through the `metrics` facade since M7 and
+  exported with the API's in M8),
   `kage_selftest_score{persona,engine}`, `kage_replacements_total`,
   `sidecar_contexts_open{engine}`, `sidecar_navigation_duration_seconds`.
 - Traces: OTLP from both processes; one trace per request spanning API →
@@ -1342,7 +1437,7 @@ are gzip-compressed on disk.
 | E2E | compose + fixture site + mock Webshare | fetch, job, crawl, webhook, admin flows |
 | Live (gated) | `KAGE_LIVE=1`, real proxies | fingerprint self-tests for every persona and engine, echo-service equality, detection page scores; nightly and pre-release |
 | Static | rustfmt, clippy `-D warnings`, eslint, tsc, cargo-deny, cargo-audit, pnpm audit, gitleaks, trivy, SBOM | every PR |
-| Coverage | cargo-llvm-cov, vitest coverage | ≥ 80 % lines on `kage-core`, `kage-store`, `kage-proxy`, `kage-crawl`, `kage-extract`, `engine-core`; reported elsewhere |
+| Coverage | cargo-llvm-cov, vitest coverage | ≥ 80 % lines on `kage-core`, `kage-store`, `kage-proxy`, `kage-http`, `kage-browser`, `kage-persona`, `kage-scheduler`, `kage-crawl`, `kage-extract`, `engine-core`; reported elsewhere |
 | Mutation | cargo-mutants on `kage-core` | score reported; ≥ 70 % required from M7 on |
 
 Branch protection on `main`: PRs only, required checks, linear history,
@@ -1371,7 +1466,8 @@ generated, images pushed with digests recorded in `deploy/compose.yaml`.
   `scripts/setup-chrome.sh` and `scripts/setup-camoufox.sh` install the
   same browsers on a CI runner or a developer machine from the same lines.
 - `deploy/compose.yaml`: services, healthchecks, resource limits,
-  `shm_size`, read-only FS, secrets, volumes, digests.
+  `shm_size`, read-only FS, secrets, volumes, digests. The sidecars reach
+  kage's forwarder at `http://kage:8899` on the compose network.
 - Runbooks in `docs/runbooks/`: first start, adding proxies, replacing an
   IP, rotating keys, upgrading an engine, reading a block report.
 - Local dev: `just dev` brings up Postgres and sidecars in compose and runs

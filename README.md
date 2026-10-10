@@ -82,6 +82,7 @@ kage migrate        # apply the database schema; safe to run again
 kage proxy list     # the proxy pool; also `health`, `replace` and `egress`
 kage persona list   # the personas; also `show`, `selftest`, `regenerate` and `retire`
 kage selftest http  # compare the http path's fingerprint with the recorded one
+kage fetch <url>    # one request through the whole pipeline; see docs/runbooks/fetching.md
 kage serve
 ```
 
@@ -92,7 +93,11 @@ replacement within a budget. Without a provider the pool is empty and
 nothing is fetched. [docs/runbooks/proxies.md](docs/runbooks/proxies.md) is
 the operator's guide. Every usable proxy gets one persona, a long-lived
 synthetic household user with its own browser, screen, language and place:
-[docs/runbooks/personas.md](docs/runbooks/personas.md).
+[docs/runbooks/personas.md](docs/runbooks/personas.md). What a request
+passes through (pace, retries on another persona, the circuit breaker, the
+forwarder that keeps the provider's credentials out of the browsers, the
+bandwidth budget) is in
+[docs/runbooks/fetching.md](docs/runbooks/fetching.md).
 
 Per-domain behaviour is data in [policies/](policies/): `domains.yaml`
 (render mode, pacing, robots, retries, cooldowns), `pacing-profiles.yaml`

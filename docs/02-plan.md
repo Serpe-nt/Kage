@@ -513,6 +513,36 @@ bare load is the http path's signature (M5); track bandwidth against the
   escalation happens exactly once for `auto`.
 - Mutation score ≥ 70 % on `kage-core`.
 
+**Follow-ups closed by M7.** F10 (the forwarder: the provider's credentials
+stay in the kage process, bytes are counted per persona and domain; the
+command-line self-tests still hand the sidecar the provider's proxy, see
+F29), F27 (`kage_persona::Contexts` owns every persona context and the
+manager's own browser work asks the scheduler's gate first), and F25 as far
+as M7 goes (recorded in `docs/runbooks/fetching.md`; sizing the host stays
+with M12).
+
+**Follow-ups raised by M7**
+- **F28 (M10):** the later pages of a visit are typed navigations in M7.
+  A person follows a link: when the open page has a link to the target,
+  click it (the sidecar's `link` entry on the page that is open, not on a
+  page loaded for the purpose), else type. Needs a contract addition
+  (1.2.0) on both engines.
+- **F29 (M8):** an operator's self-test of a persona runs in its own
+  process, hands the sidecar the provider's proxy, and meets
+  `context_conflict` while the server holds that persona's browser open
+  (up to `scheduler.context_idle` after its last page). Run it in the
+  server, behind the admin API, through the gate and the forwarder.
+- **F30 (with the first engine major that has an http path):** the
+  compose end-to-end test (`tests/e2e/fetch.sh`) fetches through the
+  browser path only, because no persona of this release has an http
+  profile. Add the http path, the http to browser escalation and the cookie
+  handoff with real personas to it; until then they are proven one layer
+  down (`crates/kage-scheduler/tests/paths.rs`).
+- **Question for M13:** should a persona forget a site after a hard block
+  (clear that site's cookies and storage from its profile before it comes
+  back after the cooldown)? M7 closes the browser and takes nothing of the
+  wall into the http jar, but the profile keeps what the site set.
+
 ---
 
 ## M8 — Public API v1 and admin
