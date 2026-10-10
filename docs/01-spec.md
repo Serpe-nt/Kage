@@ -270,8 +270,9 @@ derives from the id, and every draw below is seeded by it.
 2. **Engine and OS.** Seeded draw from `personas.mix`, weighted by what the
    pool is short of: among the entries the persona's own country has fewer
    of than its share, the one the whole pool is shortest of is likeliest,
-   so that twenty proxies get 8, 9 and 3 within one and no country is all
-   one browser. `engines.chromium.allow_cross_os_claims` is read at
+   so that twenty proxies get 8, 9 and 3 give or take one (two at the
+   most, in fewer than one pool in a hundred) and no country is all one
+   browser. `engines.chromium.allow_cross_os_claims` is read at
    generation and at `kage config check`. A chromium
    persona claims the system its Chrome runs on, Linux in the shipped image
    (ADR 0009). A firefox persona claims Windows or macOS: M5 measured
@@ -280,7 +281,7 @@ derives from the id, and every draw below is seeded by it.
    45%, firefox on macos 15%. Firefox on linux stays possible by
    configuration but is not in the default: its fonts are Tor Browser's
    bundle, not a Linux desktop's (`docs/runbooks/engine-firefox.md`).
-   The mix is configuration, and the health subsystem reports the actual
+   The mix is configuration, and `kage persona list` reports the actual
    pool distribution. A common and coherent Chrome-on-Windows persona needs
    a real Windows engine host (risk R3), a candidate milestone after M5.
 3. **Fingerprint.** Kage draws a screen class from a seeded table per

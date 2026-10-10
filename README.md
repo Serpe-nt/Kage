@@ -80,6 +80,7 @@ refuses to start when a required one is missing.
 kage config check   # validate, then print the effective configuration, secrets redacted
 kage migrate        # apply the database schema; safe to run again
 kage proxy list     # the proxy pool; also `health`, `replace` and `egress`
+kage persona list   # the personas; also `show`, `selftest`, `regenerate` and `retire`
 kage selftest http  # compare the http path's fingerprint with the recorded one
 kage serve
 ```
@@ -87,9 +88,11 @@ kage serve
 Kage fetches only through proxies. Give it a Webshare API key
 (`KAGE__WEBSHARE__API_KEY`, or `KAGE_WEBSHARE_API_KEY` in `deploy/.env`) or a
 static list, and it keeps the pool by itself: health checks, backoff, and
-replacement within a monthly budget. Without a provider the pool is empty and
+replacement within a budget. Without a provider the pool is empty and
 nothing is fetched. [docs/runbooks/proxies.md](docs/runbooks/proxies.md) is
-the operator's guide.
+the operator's guide. Every usable proxy gets one persona, a long-lived
+synthetic household user with its own browser, screen, language and place:
+[docs/runbooks/personas.md](docs/runbooks/personas.md).
 
 Per-domain behaviour is data in [policies/](policies/): `domains.yaml`
 (render mode, pacing, robots, retries, cooldowns), `pacing-profiles.yaml`
@@ -126,7 +129,8 @@ them all.
 House rules for contributors and coding agents are in
 [CLAUDE.md](CLAUDE.md). Repository settings, CI jobs and the release
 procedure are in [docs/runbooks/repo.md](docs/runbooks/repo.md); running the
-proxy pool is in [docs/runbooks/proxies.md](docs/runbooks/proxies.md), and
+proxy pool is in [docs/runbooks/proxies.md](docs/runbooks/proxies.md), the
+personas are in [docs/runbooks/personas.md](docs/runbooks/personas.md),
 the fingerprint echo and the http self-test are in
 [docs/runbooks/fingerprint-echo.md](docs/runbooks/fingerprint-echo.md), and
 the Chromium engine, its container and the browser self-test are in

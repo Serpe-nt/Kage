@@ -12,7 +12,7 @@ do, and what each event and alert means.
 | Attribute | Where it comes from |
 |---|---|
 | seed | Derived from the persona's id; stored; never changes. Everything below that is drawn hangs on it. |
-| engine and system | `personas.mix` (default: chromium on linux 40, firefox on windows 45, firefox on macos 15), drawn by what the pool is short of, the persona's own country first. Twenty proxies give 8, 9 and 3 within one, and no country is all one browser. |
+| engine and system | `personas.mix` (default: chromium on linux 40, firefox on windows 45, firefox on macos 15), drawn by what the pool is short of, the persona's own country first. Twenty proxies give 8, 9 and 3 give or take one (two at the most), and no country is all one browser. |
 | country, time zone, position | The observed geo record of the proxy (`kage proxy health`). The provider's country only while no lookup has succeeded. The position is a seeded point 0.5 to 4 km from the lookup's coordinates. |
 | locale and languages | A table per country (`kage_core::persona::locale`): the locale carries the country (`de-AT`), the language list is the one a stock installation of that browser ships with there. Chrome in Austria sends `de-DE, de, en-US, en`; Firefox sends `de, en-US, en`. A country without an entry gets `en-US, en` and the event `persona_locale_unknown`. |
 | screen | A class from a seeded table per engine and system, asked of the generator by exact bounds. |
