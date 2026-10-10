@@ -2258,3 +2258,104 @@ fn the_same_seed_replays_the_same_afternoon() {
             .all(|(a, b)| a.0 == b.0 && a.1.persona == b.1.persona && a.1.domain == b.1.domain)
     );
 }
+
+#[test]
+fn the_managers_own_work_leaves_the_last_session_to_work_that_waits() {
+    let done = Completion {
+        courtesy: Courtesy::NotTheSite,
+        blocked: false,
+    };
+    let waiting_for = |persona: u128| Work {
+        pin: Some(id(persona)),
+        ..sync("shop.test")
+    };
+
+    // Two sessions in all, three per engine: only the first limit binds.
+    let mut limits = rules();
+    limits.max_browser_sessions = 2;
+    limits.max_per_engine = 3;
+    let mut planner = Planner::new(limits, Seed::from_u64(3));
+    planner.set_personas(personas(6));
+    // Nothing waits: both sessions can be had, each under its own name.
+    let first = planner.reserve(id(0), true).unwrap();
+    let second = planner.reserve(id(1), true).unwrap();
+    assert_ne!(first, second);
+    assert_eq!(planner.in_flight(Render::Browser), 2);
+    assert_eq!(planner.reserve(id(2), true), Err(Held::NoSlot));
+    assert!(planner.complete(second, noon(), done));
+    assert_eq!(planner.in_flight(Render::Browser), 1);
+    // A request for a browser waits (its persona is taken): the one free
+    // session is kept for it, whatever the engine of who asks.
+    let ticket = planner.submit(waiting_for(0), noon());
+    assert_eq!(planner.plan(noon(), &HashMap::new()), []);
+    assert_eq!(planner.reserve(id(1), true), Err(Held::NoSlot));
+    assert_eq!(planner.reserve(id(2), true), Err(Held::NoSlot));
+    // Nobody waits any more: it can be had again.
+    planner.cancel(ticket);
+    let again = planner.reserve(id(1), true).unwrap();
+    assert_ne!(again, first);
+    assert!(planner.complete(again, noon(), done));
+    // Work for the http path wants no browser session.
+    let mut plain = waiting_for(0);
+    plain.render = Render::Http;
+    planner.submit(plain, noon());
+    planner.reserve(id(1), true).unwrap();
+    assert_eq!(planner.in_flight(Render::Browser), 2);
+
+    // Six sessions in all, two per engine: only the second limit binds.
+    let mut limits = rules();
+    limits.max_browser_sessions = 6;
+    limits.max_per_engine = 2;
+    let mut planner = Planner::new(limits, Seed::from_u64(3));
+    planner.set_personas(personas(6));
+    planner.reserve(id(0), true).unwrap();
+    planner.submit(waiting_for(0), noon());
+    assert_eq!(planner.plan(noon(), &HashMap::new()), []);
+    // The engine of the taken persona keeps its last session; the other
+    // engine keeps one of its two.
+    assert_eq!(planner.reserve(id(2), true), Err(Held::NoSlot));
+    planner.reserve(id(1), true).unwrap();
+    assert_eq!(planner.reserve(id(3), true), Err(Held::NoSlot));
+    assert_eq!(planner.in_flight(Render::Browser), 2);
+}
+
+#[test]
+fn work_that_would_rather_be_refused_is_told_when_to_come_back() {
+    let mut planner = Planner::new(rules(), Seed::from_u64(3));
+    planner.set_personas(personas(1));
+    let back_at = noon() + Duration::hours(2);
+    let mut state = PersonaDomainState::new(id(0), "shop.test");
+    state.cooldown_until = Some(back_at);
+    let facts = HashMap::from([(
+        "shop.test".to_owned(),
+        DomainFacts {
+            states: HashMap::from([(id(0), state)]),
+            breaker: None,
+        },
+    )]);
+    let with_patience = |until: Option<DateTime<Utc>>| Work {
+        give_up_at: until,
+        ..sync("shop.test")
+    };
+
+    // The only persona is back in two hours. Without a limit the work
+    // waits for it, and so it does with a limit at or after that moment.
+    planner.submit(with_patience(None), noon());
+    planner.submit(with_patience(Some(back_at)), noon());
+    planner.submit(with_patience(Some(back_at + secs(1))), noon());
+    assert_eq!(planner.plan(noon(), &facts), []);
+    assert_eq!(planner.wake_at(), Some(back_at));
+    assert_eq!(planner.depth(Priority::Sync), 3);
+
+    // With a limit before it, the work is refused at once and told when.
+    let hurried = planner.submit(with_patience(Some(back_at - secs(1))), noon());
+    assert_eq!(
+        planner.plan(noon(), &facts),
+        [Decision::Refuse {
+            work: hurried,
+            reason: Refusal::NoPersona,
+            retry_at: Some(back_at),
+        }]
+    );
+    assert_eq!(planner.depth(Priority::Sync), 3);
+}
