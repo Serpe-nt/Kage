@@ -675,16 +675,34 @@ pub(crate) struct HopCookies {
     jar: Arc<CookieJar>,
     url: Url,
     context: CookieContext,
+    /// Whether the request carries cookies at all.
+    credentials: bool,
 }
 
 impl HopCookies {
     pub(crate) const fn new(jar: Arc<CookieJar>, url: Url, context: CookieContext) -> Self {
-        Self { jar, url, context }
+        Self {
+            jar,
+            url,
+            context,
+            credentials: true,
+        }
+    }
+
+    /// With `false`: a request that neither sends cookies nor keeps the
+    /// ones its response sets, as a script's request to another origin.
+    #[must_use]
+    pub(crate) const fn with_credentials(mut self, credentials: bool) -> Self {
+        self.credentials = credentials;
+        self
     }
 }
 
 impl CookieStore for HopCookies {
     fn set_cookies(&self, cookie_headers: &mut dyn Iterator<Item = &HeaderValue>, _uri: &Uri) {
+        if !self.credentials {
+            return;
+        }
         let now = Utc::now();
         for header in cookie_headers {
             let text = String::from_utf8_lossy(header.as_bytes());
@@ -696,6 +714,9 @@ impl CookieStore for HopCookies {
     }
 
     fn cookies(&self, _uri: &Uri, version: Version) -> Cookies {
+        if !self.credentials {
+            return Cookies::Empty;
+        }
         let pairs = self.jar.matching(&self.url, self.context, Utc::now());
         if pairs.is_empty() {
             return Cookies::Empty;

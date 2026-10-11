@@ -70,7 +70,7 @@ pub const DEFAULT_LANGUAGES: [&str; 2] = ["en-US", "en"];
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RequestKind {
     /// A top-level navigation: a typed address, a bookmark or a followed
-    /// link. The only kind a caller can ask for.
+    /// link.
     Document,
     /// A stylesheet a document links to.
     Style,
@@ -78,6 +78,12 @@ pub enum RequestKind {
     Script,
     /// An image a document links to; here, its icon.
     Image,
+    /// A `fetch()` call of a page's script. It always has a page behind
+    /// it: the `Referer` of the request.
+    Fetch,
+    /// A request of a page's `XMLHttpRequest`. Chrome sends it as it sends
+    /// a `fetch()`; Firefox leaves the priority signal out.
+    Xhr,
 }
 
 impl RequestKind {
@@ -88,6 +94,7 @@ impl RequestKind {
             Self::Style => "style",
             Self::Script => "script",
             Self::Image => "image",
+            Self::Fetch | Self::Xhr => "empty",
         }
     }
 
@@ -96,11 +103,18 @@ impl RequestKind {
         match self {
             Self::Document => "navigate",
             Self::Style | Self::Script | Self::Image => "no-cors",
+            Self::Fetch | Self::Xhr => "cors",
         }
     }
 
     const fn is_document(self) -> bool {
         matches!(self, Self::Document)
+    }
+
+    /// Whether the request is made by a page's script: a `fetch()` or an
+    /// `XMLHttpRequest`.
+    pub const fn is_scripted(self) -> bool {
+        matches!(self, Self::Fetch | Self::Xhr)
     }
 }
 
@@ -185,6 +199,17 @@ pub enum HeaderError {
     /// The same header was given twice.
     #[error("the header {0:?} is given more than once")]
     Duplicate(String),
+    /// A caller's header has no known place in this kind of request.
+    #[error(
+        "the header {name:?} cannot be sent with a {kind} request: no capture of a real browser \
+         says where it goes"
+    )]
+    Unplaced {
+        /// The header, as the caller wrote it.
+        name: String,
+        /// The kind of request: `fetch()` or `XMLHttpRequest`.
+        kind: &'static str,
+    },
     /// More headers than one request may carry.
     #[error("{count} headers given, at most {max} are allowed")]
     TooMany {
@@ -478,6 +503,11 @@ impl CallerHeaders {
         self.entries.is_empty()
     }
 
+    /// The names of the headers the caller passed.
+    pub fn names(&self) -> impl Iterator<Item = &HeaderName> {
+        self.entries.iter().map(|entry| &entry.name)
+    }
+
     /// The same headers without one of them: a redirect that turns a POST
     /// into a GET drops what described the body.
     #[must_use]
@@ -614,13 +644,77 @@ const FIREFOX_SUBRESOURCE: &[Slot] = &[
     H("te", "TE"),
 ];
 
+/// Chrome, a `fetch()` or an `XMLHttpRequest` of a page's script, as
+/// Chrome 155 was captured sending them (`fetch_get`, `fetch_post_json`
+/// and `xhr_get` in `tests/fixtures/fingerprints/browser/`).
+///
+/// There is no place for a header the table does not name. Chrome keeps
+/// the headers a script sets in a hash map next to its own client hints,
+/// so where one lands depends on its name and on how many there are, and
+/// only a capture says where. A header without one is refused
+/// ([`HeaderError::Unplaced`]) rather than sent where no Chrome puts it.
+const CHROME_FETCH: &[Slot] = &[
+    H("host", "Host"),
+    Connection,
+    H("proxy-authorization", "Proxy-Authorization"),
+    H("content-length", "Content-Length"),
+    H("sec-ch-ua-platform", "sec-ch-ua-platform"),
+    H("user-agent", "User-Agent"),
+    H("sec-ch-ua", "sec-ch-ua"),
+    H("content-type", "Content-Type"),
+    H("sec-ch-ua-mobile", "sec-ch-ua-mobile"),
+    H("accept", "Accept"),
+    H("origin", "Origin"),
+    H("sec-fetch-site", "Sec-Fetch-Site"),
+    H("sec-fetch-mode", "Sec-Fetch-Mode"),
+    H("sec-fetch-dest", "Sec-Fetch-Dest"),
+    H("referer", "Referer"),
+    H("accept-encoding", "Accept-Encoding"),
+    H("accept-language", "Accept-Language"),
+    H("cookie", "Cookie"),
+    H("priority", "Priority"),
+];
+
+/// Firefox, a `fetch()` or an `XMLHttpRequest` of a page's script, as
+/// Firefox 152 was captured sending them. The same rule as for Chrome: a
+/// header the table does not name is refused.
+const FIREFOX_FETCH: &[Slot] = &[
+    H("host", "Host"),
+    H("user-agent", "User-Agent"),
+    H("accept", "Accept"),
+    H("accept-language", "Accept-Language"),
+    H("accept-encoding", "Accept-Encoding"),
+    Connection,
+    H("proxy-authorization", "Proxy-Authorization"),
+    H("referer", "Referer"),
+    H("content-type", "Content-Type"),
+    H("content-length", "Content-Length"),
+    H("origin", "Origin"),
+    H("cookie", "Cookie"),
+    H("sec-fetch-dest", "Sec-Fetch-Dest"),
+    H("sec-fetch-mode", "Sec-Fetch-Mode"),
+    H("sec-fetch-site", "Sec-Fetch-Site"),
+    H("priority", "Priority"),
+    H("te", "TE"),
+];
+
 const fn table(family: Family, kind: RequestKind) -> &'static [Slot] {
-    match (family, kind.is_document()) {
-        (Family::Chrome, true) => CHROME_DOCUMENT,
-        (Family::Chrome, false) => CHROME_SUBRESOURCE,
-        (Family::Firefox, true) => FIREFOX_DOCUMENT,
-        (Family::Firefox, false) => FIREFOX_SUBRESOURCE,
+    match (family, kind) {
+        (Family::Chrome, RequestKind::Document) => CHROME_DOCUMENT,
+        (Family::Chrome, RequestKind::Fetch | RequestKind::Xhr) => CHROME_FETCH,
+        (Family::Chrome, _) => CHROME_SUBRESOURCE,
+        (Family::Firefox, RequestKind::Document) => FIREFOX_DOCUMENT,
+        (Family::Firefox, RequestKind::Fetch | RequestKind::Xhr) => FIREFOX_FETCH,
+        (Family::Firefox, _) => FIREFOX_SUBRESOURCE,
     }
+}
+
+/// Whether a caller's header has a place in a `fetch()` or an
+/// `XMLHttpRequest` of both browser families. `Referer` names the page
+/// behind the request; the others are sent at the place a capture showed.
+pub fn placed_in_scripted(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    is_slotted(CHROME_FETCH, &name) && is_slotted(FIREFOX_FETCH, &name)
 }
 
 /// The headers a family sends on HTTP/2 only.
@@ -640,7 +734,9 @@ fn accept_for(identity: &Identity, kind: RequestKind) -> HeaderValue {
     match (identity.family, kind) {
         (_, RequestKind::Document) => identity.accept_document.clone(),
         (_, RequestKind::Style) => HeaderValue::from_static("text/css,*/*;q=0.1"),
-        (_, RequestKind::Script) => HeaderValue::from_static("*/*"),
+        (_, RequestKind::Script | RequestKind::Fetch | RequestKind::Xhr) => {
+            HeaderValue::from_static("*/*")
+        }
         (Family::Chrome, RequestKind::Image) => HeaderValue::from_static(
             "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
         ),
@@ -650,15 +746,19 @@ fn accept_for(identity: &Identity, kind: RequestKind) -> HeaderValue {
     }
 }
 
-fn priority_for(family: Family, kind: RequestKind) -> HeaderValue {
-    HeaderValue::from_static(match (family, kind) {
+/// The priority signal of a request; `None` where the browser sends none.
+fn priority_for(family: Family, kind: RequestKind) -> Option<HeaderValue> {
+    Some(HeaderValue::from_static(match (family, kind) {
         (_, RequestKind::Document) => "u=0, i",
         (Family::Chrome, RequestKind::Style) => "u=0",
         (Family::Chrome, RequestKind::Script) => "u=1",
-        (Family::Chrome, RequestKind::Image) => "u=1, i",
+        (Family::Chrome, RequestKind::Image | RequestKind::Fetch | RequestKind::Xhr) => "u=1, i",
         (Family::Firefox, RequestKind::Style | RequestKind::Script) => "u=2",
         (Family::Firefox, RequestKind::Image) => "u=6",
-    })
+        (Family::Firefox, RequestKind::Fetch) => "u=4",
+        // Firefox gives an XMLHttpRequest no priority header.
+        (Family::Firefox, RequestKind::Xhr) => return None,
+    }))
 }
 
 /// Everything that decides the headers of one request.
@@ -676,8 +776,9 @@ pub struct HeaderPlan<'a> {
     pub site: FetchSite,
     /// The `Referer` value, already cut down to what the page would send.
     pub referer: Option<&'a str>,
-    /// The origin of the page that caused the request, for a request with a
-    /// body.
+    /// The origin of the page that caused the request: sent with a
+    /// navigation that carries a body, and with a scripted request that
+    /// is not a same-origin `GET` or `HEAD`.
     pub origin: Option<&'a str>,
     /// Whether the request carries a body.
     pub has_body: bool,
@@ -692,6 +793,7 @@ pub struct HeaderPlan<'a> {
 /// # Errors
 ///
 /// Fails when a referer or origin is not a valid header value.
+#[allow(clippy::too_many_lines)] // Every header of a request, slot by slot.
 pub fn build(plan: &HeaderPlan<'_>) -> Result<(HeaderMap, HeaderOrder), HeaderError> {
     let identity = plan.identity;
     let family = identity.family;
@@ -731,7 +833,9 @@ pub fn build(plan: &HeaderPlan<'_>) -> Result<(HeaderMap, HeaderOrder), HeaderEr
             headers.insert("sec-fetch-user", HeaderValue::from_static("?1"));
         }
     }
-    headers.insert("priority", priority_for(family, plan.kind));
+    if let Some(priority) = priority_for(family, plan.kind) {
+        headers.insert("priority", priority);
+    }
     if family == Family::Firefox {
         headers.insert("te", HeaderValue::from_static("trailers"));
     }
@@ -757,10 +861,26 @@ pub fn build(plan: &HeaderPlan<'_>) -> Result<(HeaderMap, HeaderOrder), HeaderEr
             headers.insert(CACHE_CONTROL, HeaderValue::from_static("max-age=0"));
         }
     }
+    if plan.kind.is_scripted() {
+        // A script's request names its page's origin whenever it changes
+        // something or leaves the origin.
+        let safe = matches!(*plan.method, Method::GET | Method::HEAD);
+        if (!safe || plan.site != FetchSite::SameOrigin)
+            && let Some(origin) = plan.origin
+        {
+            headers.insert(
+                ORIGIN,
+                HeaderValue::from_str(origin).map_err(|_| HeaderError::InvalidValue {
+                    name: "Origin".to_owned(),
+                })?,
+            );
+        }
+    }
     for (name, value) in plan.conditional {
         headers.insert(name.clone(), value.clone());
     }
 
+    let has_custom_slot = slots.iter().any(|slot| matches!(slot, Custom));
     let mut custom = Vec::new();
     for entry in &plan.caller.entries {
         // The Referer is the page the request comes from; `plan.referer`
@@ -769,6 +889,15 @@ pub fn build(plan: &HeaderPlan<'_>) -> Result<(HeaderMap, HeaderOrder), HeaderEr
             continue;
         }
         if !is_slotted(slots, entry.name.as_str()) {
+            if !has_custom_slot {
+                return Err(HeaderError::Unplaced {
+                    name: entry.spelled.clone(),
+                    kind: match plan.kind {
+                        RequestKind::Xhr => "XMLHttpRequest",
+                        _ => "fetch()",
+                    },
+                });
+            }
             custom.push((entry.name.clone(), entry.spelled.clone()));
         }
         headers.insert(entry.name.clone(), entry.value.clone());
@@ -1845,5 +1974,193 @@ mod tests {
         assert_eq!(FetchSite::CrossSite.to_string(), "cross-site");
         assert_eq!(RequestKind::Document.mode(), "navigate");
         assert_eq!(RequestKind::Image.dest(), "image");
+    }
+
+    /// What a real browser was captured sending for one kind of request:
+    /// the header names in wire order, and the values by name.
+    fn captured(engine: &str, major: u32, request: &str) -> Vec<(String, String)> {
+        crate::selftest::browser_capture(engine, major)
+            .unwrap_or_else(|| panic!("no capture of {engine} {major}"))
+            .requests
+            .get(request)
+            .unwrap_or_else(|| panic!("{engine} {major}: no {request} was captured"))
+            .headers
+            .clone()
+    }
+
+    /// A script's request of the page the captures were made from.
+    fn scripted(identity: &Identity, kind: RequestKind, post: bool) -> Case<'_> {
+        Case {
+            identity,
+            kind,
+            method: if post { Method::POST } else { Method::GET },
+            url: "https://echo.kage.test:18443/echo",
+            site: FetchSite::SameOrigin,
+            referer: Some("https://echo.kage.test:18443/browser"),
+            origin: Some("https://echo.kage.test:18443"),
+            has_body: post,
+            caller: if post {
+                CallerHeaders::parse(&[("Content-Type", "application/json")]).unwrap()
+            } else {
+                CallerHeaders::none()
+            },
+        }
+    }
+
+    #[test]
+    fn a_fetch_and_an_xhr_go_out_as_the_real_browsers_were_captured_sending_them() {
+        let chrome = identity("chrome_149", ClaimedOs::Linux, &DEFAULT_LANGUAGES);
+        let firefox = firefox();
+        for (engine, major, identity) in [("chromium", 155, &chrome), ("firefox", 152, &firefox)] {
+            for (request, kind, post) in [
+                ("fetch_get", RequestKind::Fetch, false),
+                ("fetch_post_json", RequestKind::Fetch, true),
+                ("xhr_get", RequestKind::Xhr, false),
+            ] {
+                let capture = captured(engine, major, request);
+                let case = scripted(identity, kind, post);
+
+                // The names, in the order they left the browser.
+                let expected: Vec<&str> = capture.iter().map(|(name, _)| name.as_str()).collect();
+                assert_eq!(case.http2(false), expected, "{engine} {request}");
+
+                // And the values that say what kind of request it is.
+                let (headers, _) = case.built();
+                for name in [
+                    "accept",
+                    "sec-fetch-site",
+                    "sec-fetch-mode",
+                    "sec-fetch-dest",
+                    "referer",
+                    "origin",
+                    "priority",
+                    "content-type",
+                    "accept-encoding",
+                    "te",
+                ] {
+                    let sent = headers.get(name).and_then(|value| value.to_str().ok());
+                    let seen = capture
+                        .iter()
+                        .find(|(found, _)| found == name)
+                        .map(|(_, value)| value.as_str());
+                    assert_eq!(sent, seen, "{engine} {request}: {name}");
+                }
+                // Nothing of a navigation is left in it.
+                assert!(!headers.contains_key("upgrade-insecure-requests"));
+                assert!(!headers.contains_key("sec-fetch-user"));
+            }
+        }
+    }
+
+    #[test]
+    fn a_scripts_request_names_its_origin_when_it_changes_something_or_leaves_home() {
+        let chrome = chrome();
+        let origin_of = |case: &Case<'_>| {
+            case.built()
+                .0
+                .get("origin")
+                .map(|value| value.to_str().unwrap().to_owned())
+        };
+
+        // A same-origin GET names none; a HEAD neither.
+        let mut get = scripted(&chrome, RequestKind::Fetch, false);
+        assert_eq!(origin_of(&get), None);
+        get.method = Method::HEAD;
+        assert_eq!(origin_of(&get), None);
+        // A POST always does.
+        let post = scripted(&chrome, RequestKind::Fetch, true);
+        assert_eq!(
+            origin_of(&post).as_deref(),
+            Some("https://echo.kage.test:18443")
+        );
+        // So does a GET to another origin, of the same site or not, at
+        // Chrome's place for it: after `accept`.
+        for site in [FetchSite::SameSite, FetchSite::CrossSite] {
+            let mut cross = scripted(&chrome, RequestKind::Xhr, false);
+            cross.site = site;
+            assert_eq!(
+                origin_of(&cross).as_deref(),
+                Some("https://echo.kage.test:18443")
+            );
+            let names = cross.http2(true);
+            let at = |name: &str| names.iter().position(|found| found == name).unwrap();
+            assert_eq!(at("origin"), at("accept") + 1, "{names:?}");
+            assert_eq!(
+                cross.built().0["sec-fetch-site"],
+                site.as_str(),
+                "{names:?}"
+            );
+            // Cookies, when the request carries any, come before the
+            // priority signal, as in every Chrome request.
+            assert_eq!(at("cookie") + 1, at("priority"), "{names:?}");
+        }
+        // After a chain that crossed origins twice the origin is opaque.
+        let mut opaque = scripted(&chrome, RequestKind::Fetch, false);
+        opaque.site = FetchSite::CrossSite;
+        opaque.origin = Some("null");
+        assert_eq!(origin_of(&opaque).as_deref(), Some("null"));
+    }
+
+    #[test]
+    fn a_header_without_a_captured_place_is_refused_in_a_scripts_request() {
+        let chrome = chrome();
+        let firefox = firefox();
+        for identity in [&chrome, &firefox] {
+            let mut case = scripted(identity, RequestKind::Fetch, false);
+            case.caller = CallerHeaders::parse(&[("X-Requested-With", "XMLHttpRequest")]).unwrap();
+            let target = url(case.url);
+            let refused = build(&HeaderPlan {
+                identity: case.identity,
+                kind: case.kind,
+                method: &case.method,
+                url: &target,
+                site: case.site,
+                referer: case.referer,
+                origin: case.origin,
+                has_body: false,
+                caller: &case.caller,
+                conditional: &[],
+            })
+            .unwrap_err();
+            assert_eq!(
+                refused,
+                HeaderError::Unplaced {
+                    name: "X-Requested-With".to_owned(),
+                    kind: "fetch()",
+                }
+            );
+            assert!(refused.to_string().contains("no capture"), "{refused}");
+
+            // An `Accept` of the script's own takes the browser's place
+            // for it.
+            case.caller = CallerHeaders::parse(&[("Accept", "application/json")]).unwrap();
+            let plain = scripted(identity, RequestKind::Fetch, false);
+            assert_eq!(case.http2(false), plain.http2(false));
+            assert_eq!(case.built().0["accept"], "application/json");
+        }
+        // The same header is welcome in a navigation, before the cookies.
+        let mut navigation = Case::navigation(&chrome, "https://example.org/");
+        navigation.caller =
+            CallerHeaders::parse(&[("X-Requested-With", "XMLHttpRequest")]).unwrap();
+        assert!(
+            navigation
+                .http2(true)
+                .contains(&"x-requested-with".to_owned())
+        );
+
+        // What the API checks before a persona is known.
+        for (name, placed) in [
+            ("Referer", true),
+            ("accept", true),
+            ("Content-Type", true),
+            ("X-Requested-With", false),
+            ("Authorization", false),
+            ("X-CSRF-Token", false),
+        ] {
+            assert_eq!(super::placed_in_scripted(name), placed, "{name}");
+        }
+        assert_eq!(RequestKind::Fetch.dest(), "empty");
+        assert_eq!(RequestKind::Xhr.mode(), "cors");
+        assert!(RequestKind::Xhr.is_scripted() && !RequestKind::Document.is_scripted());
     }
 }

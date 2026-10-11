@@ -616,6 +616,8 @@ impl AssetRun<'_> {
                     url: &url,
                     site,
                     referrer: Some(self.document),
+                    opaque_origin: false,
+                    credentials: true,
                     body: None,
                     caller: &caller,
                     conditional,

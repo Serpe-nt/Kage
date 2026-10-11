@@ -18,12 +18,29 @@
 //!
 //! The http path never runs JavaScript and never pretends to (spec §9): a
 //! `Refresh` header or a `<meta>` redirect is not followed.
+//!
+//! # Requests of a page's script
+//!
+//! A fetch is a navigation unless its [`FetchSpec::kind`] says it is a
+//! `fetch()` or an `XMLHttpRequest`. Such a request has a page behind it,
+//! named by the caller's `Referer`; without one it is refused, because
+//! Kage never invents the page. It is sent as the browser sends it:
+//!
+//! - `Origin` whenever it is not a same-origin `GET` or `HEAD`; after a
+//!   redirect that left an origin other than the page's for yet another
+//!   one, `null`, as the Fetch standard says;
+//! - cookies only to the page's own origin, and none are stored from
+//!   another: the default of both APIs (`credentials: same-origin`);
+//! - never where a browser would ask first. A cross-origin request that is
+//!   not "simple" is preceded by a preflight in a browser; the preflight
+//!   is not emulated, so such a request is refused
+//!   ([`HttpError::PreflightRequired`]).
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::{Bytes, BytesMut};
-use http::header::{CONTENT_TYPE, HeaderName, HeaderValue, LOCATION};
+use http::header::{ACCEPT, CONTENT_TYPE, HeaderName, HeaderValue, LOCATION, REFERER};
 use http::{Method, StatusCode, Uri, Version};
 use http_body_util::BodyExt;
 use kage_core::domain::{Header, Timing};
@@ -69,6 +86,9 @@ pub struct FetchSpec {
     pub headers: Vec<(String, String)>,
     /// The request body.
     pub body: Option<Bytes>,
+    /// What the request is: a navigation ([`RequestKind::Document`]), a
+    /// `fetch()` or an `XMLHttpRequest`. The last two need a `Referer`.
+    pub kind: RequestKind,
     /// Which checks the URL and its redirects must pass.
     pub guard: Guard,
     /// Longest the fetch may take; the client's setting when `None`.
@@ -94,6 +114,7 @@ impl FetchSpec {
             method: Method::GET,
             headers: Vec::new(),
             body: None,
+            kind: RequestKind::Document,
             guard: Guard::Target(policy),
             timeout: None,
             max_body_bytes: None,
@@ -112,6 +133,7 @@ impl FetchSpec {
             method: Method::GET,
             headers: Vec::new(),
             body: None,
+            kind: RequestKind::Document,
             guard: Guard::OperatorEndpoint,
             timeout: None,
             max_body_bytes: None,
@@ -283,6 +305,12 @@ pub(crate) struct Outgoing<'a> {
     pub site: FetchSite,
     /// The page the request comes from.
     pub referrer: Option<&'a Url>,
+    /// The request names no origin but `null`: a scripted request whose
+    /// redirect chain crossed origins twice.
+    pub opaque_origin: bool,
+    /// Whether cookies are sent with the request and stored from its
+    /// response. A script's request to another origin carries none.
+    pub credentials: bool,
     pub body: Option<Bytes>,
     pub caller: &'a CallerHeaders,
     pub conditional: &'a [(HeaderName, HeaderValue)],
@@ -318,6 +346,60 @@ pub(crate) const fn version_name(version: Version) -> &'static str {
         Version::HTTP_10 => "http/1.0",
         _ => "http/1.1",
     }
+}
+
+/// The content types a script may send to another origin without the
+/// browser asking first (the Fetch standard's CORS-safelisted values).
+const SIMPLE_CONTENT_TYPES: [&str; 3] = [
+    "application/x-www-form-urlencoded",
+    "multipart/form-data",
+    "text/plain",
+];
+
+/// Refuses a script's request that a browser would preflight: one to
+/// another origin than its page's that sets a header beyond the safelist
+/// or a content type outside it. The methods the http path sends (`GET`,
+/// `HEAD`, `POST`) are all safelisted.
+///
+/// # Errors
+///
+/// [`HttpError::PreflightRequired`], saying what makes the request one a
+/// browser asks about.
+pub fn check_preflight(
+    page: &Url,
+    target: &Url,
+    method: &Method,
+    caller: &CallerHeaders,
+) -> Result<(), HttpError> {
+    if site::same_origin(page, target) {
+        return Ok(());
+    }
+    let refused = |reason: &'static str| {
+        Err(HttpError::PreflightRequired {
+            reason,
+            method: method.to_string(),
+        })
+    };
+    if let Some(content_type) = caller.get(&CONTENT_TYPE) {
+        let essence = content_type
+            .to_str()
+            .unwrap_or_default()
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        if !SIMPLE_CONTENT_TYPES.contains(&essence.as_str()) {
+            return refused("its Content-Type is not one a form could send");
+        }
+    }
+    if caller
+        .names()
+        .any(|name| !(name == CONTENT_TYPE || name == ACCEPT || name == REFERER))
+    {
+        return refused("it sets a header a page may not send across origins unasked");
+    }
+    Ok(())
 }
 
 fn millis(duration: Duration) -> u64 {
@@ -410,6 +492,11 @@ impl HttpClient {
         if !matches!(spec.method, Method::GET | Method::HEAD | Method::POST) {
             return Err(HttpError::Method(spec.method.to_string()));
         }
+        // Only a navigation and a script's request are a caller's to ask
+        // for; a page's own assets are fetched by the emulation.
+        if !(spec.kind == RequestKind::Document || spec.kind.is_scripted()) {
+            return Err(HttpError::Kind(spec.kind.dest()));
+        }
         let caller = CallerHeaders::parse(&spec.headers)?;
         let referrer = match caller.referer() {
             None => None,
@@ -420,6 +507,12 @@ impl HttpClient {
                     .ok_or_else(|| HttpError::InvalidReferer(text.to_owned()))?,
             ),
         };
+        if spec.kind.is_scripted() {
+            let Some(page) = &referrer else {
+                return Err(HttpError::InitiatorRequired);
+            };
+            check_preflight(page, &spec.url, &spec.method, &caller)?;
+        }
         let max_redirects = spec.max_redirects.unwrap_or(self.settings.max_redirects);
         let cap = spec
             .max_body_bytes
@@ -480,6 +573,7 @@ impl HttpClient {
         };
         // Only a page that was asked for with a GET has a first paint.
         if arrived.method == Method::GET
+            && spec.kind == RequestKind::Document
             && spec
                 .fetch_subresources
                 .unwrap_or(self.settings.fetch_subresources)
@@ -518,16 +612,24 @@ impl HttpClient {
         });
         let mut hops = Vec::new();
         let (mut connect, mut tls) = (None, None);
+        // Whether the chain of a script's request left an origin that was
+        // not its page's for yet another one.
+        let mut opaque_origin = false;
         loop {
             self.check_addresses(trail).await?;
             let url = trail.current().clone();
             let incoming = self
                 .send(Outgoing {
-                    kind: RequestKind::Document,
+                    kind: spec.kind,
                     method: &method,
                     url: &url,
                     site,
                     referrer,
+                    opaque_origin,
+                    // A script's request carries cookies to its page's
+                    // own origin only.
+                    credentials: !spec.kind.is_scripted()
+                        || referrer.is_some_and(|page| site::same_origin(page, &url)),
                     body: body.clone(),
                     caller: &caller,
                     conditional: &[],
@@ -561,8 +663,19 @@ impl HttpClient {
             // A browser does not read the body of a redirect. A short one
             // is read so that the connection is free for the next hop.
             let _ = read_body(incoming.response, REDIRECT_BODY_BYTES, started, deadline).await;
+            let previous = trail.current().clone();
             let next = trail.follow(&location)?;
             site = site.after_redirect(referrer, &next);
+            if spec.kind.is_scripted()
+                && let Some(page) = referrer
+            {
+                if !site::same_origin(&previous, &next) && !site::same_origin(page, &previous) {
+                    opaque_origin = true;
+                }
+                // A redirect that takes the request to another origin makes
+                // it one a browser would have asked about first.
+                check_preflight(page, &next, &method, &caller)?;
+            }
             // 303 always, and 301 and 302 for a POST, continue as a GET
             // without the body; 307 and 308 repeat the request as it was.
             let to_get = match status {
@@ -606,6 +719,7 @@ impl HttpClient {
 
     /// Sends one request with the headers and cookies the client's browser
     /// would give it, and waits for the response headers.
+    #[allow(clippy::too_many_lines)] // One request, from its plan to its response's head.
     pub(crate) async fn send(&self, outgoing: Outgoing<'_>) -> Result<Incoming, HttpError> {
         let Outgoing {
             kind,
@@ -613,6 +727,8 @@ impl HttpClient {
             url,
             site,
             referrer,
+            opaque_origin,
+            credentials,
             body,
             caller,
             conditional,
@@ -620,7 +736,11 @@ impl HttpClient {
             deadline,
         } = outgoing;
         let referer = referrer.and_then(|page| site::referer_for(page, url));
-        let origin = referrer.map(site::serialize_origin);
+        let origin = if opaque_origin {
+            Some("null".to_owned())
+        } else {
+            referrer.map(site::serialize_origin)
+        };
         let (headers, order) = headers::build(&HeaderPlan {
             identity: &self.identity,
             kind,
@@ -667,11 +787,10 @@ impl HttpClient {
         };
         let sending = wreq::RequestBuilder::from_parts(self.wreq.clone(), request)
             .default_headers(false)
-            .cookie_provider(Arc::new(HopCookies::new(
-                Arc::clone(&self.jar),
-                url.clone(),
-                cookies,
-            )))
+            .cookie_provider(Arc::new(
+                HopCookies::new(Arc::clone(&self.jar), url.clone(), cookies)
+                    .with_credentials(credentials),
+            ))
             .timeout(remaining)
             .send();
 

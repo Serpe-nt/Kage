@@ -66,6 +66,27 @@ pub enum HttpError {
     /// The method cannot be sent on the http path.
     #[error("the method {0} is not supported")]
     Method(String),
+    /// The kind of request is not one a caller may ask for.
+    #[error("a request for a {0} is made by the page that needs it, not asked for")]
+    Kind(&'static str),
+    /// A `fetch()` or an `XMLHttpRequest` was asked for without the page
+    /// that makes it.
+    #[error(
+        "a fetch() or XMLHttpRequest needs the page that makes it: give its URL as the Referer"
+    )]
+    InitiatorRequired,
+    /// A browser would ask the server first (a CORS preflight), and that
+    /// exchange is not emulated.
+    #[error(
+        "a browser would send a preflight before this cross-origin {method}: {reason}; \
+         preflights are not emulated"
+    )]
+    PreflightRequired {
+        /// What makes the request one a browser asks about.
+        reason: &'static str,
+        /// The method of the request.
+        method: String,
+    },
     /// The attempt ran out of time.
     #[error("timed out after {after:?} while {}", stage.as_str())]
     Timeout {
@@ -109,6 +130,22 @@ impl HttpError {
     /// Whether the SSRF guard stopped the fetch, on the URL or on a hop.
     pub const fn is_ssrf_denied(&self) -> bool {
         matches!(self, Self::Denied(_) | Self::RedirectDenied(_))
+    }
+
+    /// Whether the request itself cannot be sent as asked, whoever sends
+    /// it: a refused header, a method, a missing page behind a script's
+    /// request, a request a browser would preflight.
+    pub const fn is_invalid_request(&self) -> bool {
+        matches!(
+            self,
+            Self::Header(_)
+                | Self::InvalidUrl(_)
+                | Self::InvalidReferer(_)
+                | Self::Method(_)
+                | Self::Kind(_)
+                | Self::InitiatorRequired
+                | Self::PreflightRequired { .. }
+        )
     }
 
     /// Whether the fetch ran out of time.
