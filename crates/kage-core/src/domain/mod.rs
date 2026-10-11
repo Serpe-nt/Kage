@@ -23,7 +23,8 @@ pub use bandwidth::{BandwidthUsage, IDLE_DOMAIN, hour_of};
 pub use cookie::{CookieSameSite, HttpCookie};
 pub use fetch::{
     Artifact, ArtifactEncoding, ArtifactKind, ArtifactRef, Attempt, ContentHash, FetchRecord,
-    Header, InvalidContentHash, PersonaSummary, RequestRecord, RobotsVerdict, Timing,
+    Header, InvalidContentHash, PersonaSummary, REDACTED_COOKIE, RequestRecord, RobotsVerdict,
+    Timing, redact_set_cookie,
 };
 pub use health::{BreakerState, DomainBreaker, HealthEvent, SelftestRun, SubjectKind};
 pub use job::{FrontierEntry, FrontierState, Job, JobItem, JobItemState, JobKind, JobState};

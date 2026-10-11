@@ -34,6 +34,17 @@ use crate::macros::string_enum;
 use crate::outcome::{CooldownClass, Outcome};
 use crate::pacing::{PacingError, PacingProfile, PacingProfiles};
 
+/// The shortest time a persona stays on a page of a browser render, unless
+/// a domain says otherwise: long enough for a page's own scripts to run and
+/// report, and for the page not to look like the http path in a browser.
+pub const DEFAULT_MIN_DWELL: Duration = Duration::from_secs(2);
+
+/// The bounds a `min_dwell` must lie in. Below the first a page is as good
+/// as a bare load; above the second it is longer than a person's dwell is
+/// ever drawn.
+pub const MIN_DWELL_BOUNDS: (Duration, Duration) =
+    (Duration::from_millis(500), Duration::from_secs(45));
+
 /// Most retries a policy may ask for. Each retry spends another persona.
 pub const MAX_RETRIES: u32 = 10;
 
@@ -259,6 +270,13 @@ pub struct DomainRule {
     /// What the personas' own days mean for this domain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_hours: Option<ActiveHoursMode>,
+    /// The shortest time a persona stays on a page of a browser render,
+    /// whatever a request asks for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_dwell: Option<HumanDuration>,
+    /// When true, a request cannot choose its own behavior on a page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub behavior_locked: Option<bool>,
     /// Retries after the first attempt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retries: Option<u32>,
@@ -308,6 +326,13 @@ impl DomainRule {
         }
         if self.pacing.as_deref() == Some("") {
             return Err(invalid("pacing", "must name a profile"));
+        }
+        let (shortest, longest) = MIN_DWELL_BOUNDS;
+        if self
+            .min_dwell
+            .is_some_and(|dwell| dwell.get() < shortest || dwell.get() > longest)
+        {
+            return Err(invalid("min_dwell", "must be between 500ms and 45s"));
         }
         Ok(())
     }
@@ -396,6 +421,10 @@ pub struct EffectivePolicy {
     pub referer_strategy: RefererStrategy,
     /// What the personas' own days mean for this domain.
     pub active_hours: ActiveHoursMode,
+    /// The shortest time a persona stays on a page of a browser render.
+    pub min_dwell: HumanDuration,
+    /// Whether requests may not choose their own behavior on a page.
+    pub behavior_locked: bool,
     /// Retries after the first attempt.
     pub retries: u32,
     /// Blocks per hour that pause the domain.
@@ -623,6 +652,10 @@ impl DomainPolicies {
                 .unwrap_or(RefererStrategy::Direct),
             active_hours: inherited(&rules, defaults, |rule| rule.active_hours)
                 .unwrap_or(ActiveHoursMode::Prefer),
+            min_dwell: inherited(&rules, defaults, |rule| rule.min_dwell)
+                .unwrap_or(HumanDuration::new(DEFAULT_MIN_DWELL)),
+            behavior_locked: inherited(&rules, defaults, |rule| rule.behavior_locked)
+                .unwrap_or(false),
             retries: inherited(&rules, defaults, |rule| rule.retries).unwrap_or(2),
             breaker_threshold: inherited(&rules, defaults, |rule| rule.breaker_threshold)
                 .unwrap_or(5),
@@ -1583,5 +1616,60 @@ defaults:
             rule,
             serde_json::json!({ "render": "http", "pacing": "fast" })
         );
+    }
+
+    #[test]
+    fn the_shortest_dwell_and_the_behavior_lock_cascade_like_every_field() {
+        let unset = DomainPolicies::default().resolve("example.org");
+        assert_eq!(unset.min_dwell, HumanDuration::from_secs(2));
+        assert_eq!(unset.min_dwell.get(), super::DEFAULT_MIN_DWELL);
+        assert!(!unset.behavior_locked);
+
+        let policies = DomainPolicies::from_yaml(
+            "defaults:\n  min_dwell: 3s\ndomains:\n  example.org:\n    behavior_locked: true\n  \
+             shop.example.org:\n    min_dwell: 6s\n  open.example.org:\n    behavior_locked: false\n",
+        )
+        .unwrap();
+        let site = policies.resolve("www.example.org");
+        assert_eq!(site.min_dwell, HumanDuration::from_secs(3));
+        assert!(site.behavior_locked);
+        // The nearest entry that sets a field decides it; the lock above
+        // still covers the subdomain that only changes the dwell.
+        let shop = policies.resolve("shop.example.org");
+        assert_eq!(shop.min_dwell, HumanDuration::from_secs(6));
+        assert!(shop.behavior_locked);
+        assert!(!policies.resolve("open.example.org").behavior_locked);
+        let other = policies.resolve("other.test");
+        assert_eq!(other.min_dwell, HumanDuration::from_secs(3));
+        assert!(!other.behavior_locked);
+
+        let json = serde_json::to_value(&shop).unwrap();
+        assert_eq!(json["min_dwell"], "6s");
+        assert_eq!(json["behavior_locked"], true);
+    }
+
+    #[test]
+    fn a_dwell_floor_that_is_no_floor_or_no_dwell_is_refused() {
+        for (written, valid) in [
+            ("500ms", true),
+            ("45s", true),
+            ("499ms", false),
+            ("0s", false),
+            ("46s", false),
+            ("2h", false),
+        ] {
+            let result = DomainPolicies::from_yaml(&format!("defaults:\n  min_dwell: {written}\n"));
+            assert_eq!(result.is_ok(), valid, "{written}: {result:?}");
+            if !valid {
+                assert!(
+                    matches!(
+                        &result,
+                        Err(PolicyError::InvalidField { scope, field: "min_dwell", .. })
+                            if scope == "defaults"
+                    ),
+                    "{written}: {result:?}"
+                );
+            }
+        }
     }
 }

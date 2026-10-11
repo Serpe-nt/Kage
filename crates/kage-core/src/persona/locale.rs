@@ -253,6 +253,24 @@ pub fn language_of(locale: &str) -> &str {
     locale.split('-').next().unwrap_or(locale)
 }
 
+/// The region subtag of a locale tag: `AT` of `de-AT`, `419` of `es-419`,
+/// `CH` of `de-Latn-CH`. `None` for a tag that names a language only.
+///
+/// The Firefox engine needs a locale with a region (the browser's regional
+/// formats hang on it) and refuses one without; this is the same rule, so
+/// that a request is refused before a sidecar is asked.
+pub fn region_of(locale: &str) -> Option<&str> {
+    let mut subtags = locale.split('-');
+    let language = subtags.next()?;
+    if language.is_empty() || !language.bytes().all(|byte| byte.is_ascii_alphabetic()) {
+        return None;
+    }
+    subtags.find(|subtag| {
+        (subtag.len() == 2 && subtag.bytes().all(|byte| byte.is_ascii_alphabetic()))
+            || (subtag.len() == 3 && subtag.bytes().all(|byte| byte.is_ascii_digit()))
+    })
+}
+
 /// The countries the table has an entry for.
 pub fn known_countries() -> Vec<&'static str> {
     COUNTRIES.iter().map(|entry| entry.code).collect()
@@ -260,7 +278,7 @@ pub fn known_countries() -> Vec<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{COUNTRIES, PersonaLocale, known_countries, language_of, resolve};
+    use super::{COUNTRIES, PersonaLocale, known_countries, language_of, region_of, resolve};
     use crate::domain::{CountryCode, Engine};
 
     fn of(country: &str, region: Option<&str>, engine: Engine) -> PersonaLocale {
@@ -412,5 +430,33 @@ mod tests {
         assert_eq!(sorted.len(), known.len());
         assert_eq!(language_of("de-AT"), "de");
         assert_eq!(language_of("en"), "en");
+    }
+
+    #[test]
+    fn a_region_is_two_letters_or_three_digits_after_the_language() {
+        for (tag, region) in [
+            ("de-AT", Some("AT")),
+            ("en-us", Some("us")),
+            ("es-419", Some("419")),
+            ("de-Latn-CH", Some("CH")),
+            ("sr-Cyrl-RS", Some("RS")),
+            ("de", None),
+            ("en-", None),
+            ("zh-Hant", None),
+            ("de-1996", None),
+            ("", None),
+            ("-DE", None),
+            ("12-DE", None),
+        ] {
+            assert_eq!(region_of(tag), region, "{tag:?}");
+        }
+        // Every locale the table gives has one.
+        for entry in COUNTRIES {
+            let country = entry.code.parse::<CountryCode>().unwrap();
+            for engine in Engine::ALL.iter().copied() {
+                let locale = resolve(Some(country), None, engine).locale;
+                assert_eq!(region_of(&locale), Some(entry.code), "{locale}");
+            }
+        }
     }
 }

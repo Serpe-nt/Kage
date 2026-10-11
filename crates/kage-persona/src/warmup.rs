@@ -273,7 +273,7 @@ impl PersonaManager {
             .navigate_checked(
                 context,
                 &visit_request(persona, visit, timeout_ms),
-                self.config.security,
+                self.config.security.ssrf(),
                 usize::try_from(self.config.http.max_redirects).unwrap_or(usize::MAX),
             )
             .await;

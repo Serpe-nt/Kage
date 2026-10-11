@@ -33,6 +33,16 @@
 #                      enforce  only personas that are awake; at night
 #                               nothing is fetched from the domain
 #                      ignore   the hour is not looked at
+#   min_dwell          the shortest time a persona stays on a page of a
+#                      browser render, whatever a request asks for. A
+#                      request may shorten the default behavior (less
+#                      scrolling, a shorter dwell) but never below this:
+#                      a page's own scripts need the time to run and
+#                      report, and a page left at once is what the http
+#                      path looks like. Between 500ms and 45s.
+#   behavior_locked    true: requests cannot choose their own behavior; every
+#                      page gets the default (scroll to 0.6 to 0.9 of the
+#                      page, a human dwell)
 #   retries            retries after the first attempt, each on another persona
 #   breaker_threshold  blocks per hour, over all personas, that pause the domain
 #   breaker_pause      how long the domain stays paused
@@ -65,6 +75,8 @@ defaults:
   robots: report
   referer_strategy: direct
   active_hours: prefer
+  min_dwell: 2s
+  behavior_locked: false
   engines: [chromium, firefox]
   retries: 2
   breaker_threshold: 5

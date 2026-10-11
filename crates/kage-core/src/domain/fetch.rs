@@ -113,6 +113,47 @@ pub struct Header {
     pub value: String,
 }
 
+/// What stands in a result where a cookie's value was.
+pub const REDACTED_COOKIE: &str = "[redacted]";
+
+/// The same headers with the value of every `Set-Cookie` replaced by
+/// [`REDACTED_COOKIE`]; names and attributes stay.
+///
+/// A cookie a site sets is the persona's standing there, bound to its
+/// address and its fingerprint. A result that carried the values would
+/// hand them to whoever reads it, and a log of results would be a list of
+/// the pool's sessions (spec §19; `security.expose_set_cookie` turns the
+/// redaction off).
+pub fn redact_set_cookie(headers: &[Header]) -> Vec<Header> {
+    headers
+        .iter()
+        .map(|header| {
+            if !header.name.eq_ignore_ascii_case("set-cookie")
+                && !header.name.eq_ignore_ascii_case("set-cookie2")
+            {
+                return header.clone();
+            }
+            let (pair, attributes) = match header.value.split_once(';') {
+                Some((pair, attributes)) => (pair, Some(attributes)),
+                None => (header.value.as_str(), None),
+            };
+            // A cookie without `=` is all value.
+            let mut value = match pair.split_once('=') {
+                Some((name, _)) => format!("{name}={REDACTED_COOKIE}"),
+                None => REDACTED_COOKIE.to_owned(),
+            };
+            if let Some(attributes) = attributes {
+                value.push(';');
+                value.push_str(attributes);
+            }
+            Header {
+                name: header.name.clone(),
+                value,
+            }
+        })
+        .collect()
+}
+
 /// The persona that produced a result, as reported to the caller.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PersonaSummary {
@@ -330,7 +371,8 @@ mod tests {
 
     use super::{
         ArtifactEncoding, ArtifactKind, ArtifactRef, ContentHash, FetchRecord, Header,
-        InvalidContentHash, PersonaSummary, RobotsVerdict, Timing,
+        InvalidContentHash, PersonaSummary, REDACTED_COOKIE, RobotsVerdict, Timing,
+        redact_set_cookie,
     };
     use crate::domain::{ClaimedOs, Engine};
     use crate::ids::{ArtifactId, PersonaId, RequestId, ResultId};
@@ -430,6 +472,46 @@ mod tests {
         };
         let json = serde_json::to_string(&header).unwrap();
         assert_eq!(serde_json::from_str::<Header>(&json).unwrap(), header);
+    }
+
+    #[test]
+    fn a_cookie_a_site_sets_keeps_its_name_and_loses_its_value() {
+        let header = |name: &str, value: &str| Header {
+            name: name.to_owned(),
+            value: value.to_owned(),
+        };
+        let headers = [
+            header("content-type", "text/html"),
+            header(
+                "set-cookie",
+                "cf_clearance=AbC.dEf-123; Path=/; Expires=Thu, 08 Oct 2027 10:00:00 GMT; Secure; HttpOnly; SameSite=None",
+            ),
+            header("Set-Cookie", "sid=a=b=c"),
+            header("SET-COOKIE", "bare-value"),
+            header("set-cookie", "=nameless; Path=/"),
+            header("x-set-cookie", "left=alone"),
+        ];
+
+        let redacted = redact_set_cookie(&headers);
+
+        assert_eq!(redacted.len(), headers.len());
+        assert_eq!(redacted[0], headers[0]);
+        assert_eq!(
+            redacted[1].value,
+            "cf_clearance=[redacted]; Path=/; Expires=Thu, 08 Oct 2027 10:00:00 GMT; Secure; HttpOnly; SameSite=None"
+        );
+        // The name is what stands before the first `=`.
+        assert_eq!(redacted[2].value, "sid=[redacted]");
+        assert_eq!(redacted[2].name, "Set-Cookie");
+        assert_eq!(redacted[3].value, REDACTED_COOKIE);
+        assert_eq!(redacted[4].value, "=[redacted]; Path=/");
+        assert_eq!(redacted[5], headers[5]);
+        // No value survives anywhere.
+        let text = serde_json::to_string(&redacted).unwrap();
+        for secret in ["AbC.dEf-123", "a=b=c", "bare-value", "nameless"] {
+            assert!(!text.contains(secret), "{secret}");
+        }
+        assert_eq!(redact_set_cookie(&[]), Vec::<Header>::new());
     }
 
     #[test]

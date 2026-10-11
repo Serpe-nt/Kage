@@ -20,11 +20,48 @@
 # `kage config check` validates everything and prints the effective
 # configuration with the secrets redacted.
 
+# The API server (spec §16.1, §19). Every request but /healthz and /readyz
+# needs a key: `Authorization: Bearer kage_<keyid>_<secret>`, made with
+# `kage key create`.
 server:
-  # Address `kage serve` listens on.
-  bind: 0.0.0.0:8080
+  # Address `kage serve` listens on. Loopback by default; the compose file
+  # listens on 0.0.0.0 inside the container and publishes the port on the
+  # host's loopback only. Put a TLS-terminating proxy in front of it before
+  # anything outside the host may reach it.
+  bind: 127.0.0.1:8080
   # Address `kage healthcheck` probes.
   healthcheck_addr: 127.0.0.1:8080
+  # A second address serving /metrics and /healthz without a key, for a
+  # Prometheus on the same private network. null: metrics are served by the
+  # API only, to keys with the admin scope. Never publish this port.
+  metrics_bind: null
+  # Largest request body in bytes.
+  max_body_bytes: 1048576
+  # Largest head of a request (request line and headers) in bytes, and the
+  # most headers it may carry.
+  max_header_bytes: 16384
+  max_headers: 64
+  # Longest request target (path and query) in bytes.
+  max_uri_bytes: 8192
+  # How long a client may take to send the head and the body of a request.
+  # A connection that trickles its headers, or sits idle between two
+  # requests for as long, is closed when the first runs out.
+  header_read_timeout: 10s
+  body_read_timeout: 30s
+  # How long any request other than a fetch may take; a fetch has
+  # scheduler.sync_wall_time.
+  request_timeout: 30s
+  # How long requests in flight are waited for when the server stops.
+  shutdown_grace: 30s
+  # Most connections served at once.
+  max_connections: 1024
+  # Requests per minute over all keys together; 0 for no such limit. Each
+  # key has its own limit besides.
+  requests_per_minute: 600
+  # Origins a browser may call the API from. Empty: no CORS header is sent.
+  cors_allowed_origins: []
+  # Serve Swagger UI at /docs to keys with the admin scope.
+  docs: true
 
 database:
   max_connections: 10
@@ -451,6 +488,16 @@ security:
   # Allow URLs whose host is a literal IP address. Private, loopback,
   # link-local and cloud metadata ranges are denied either way.
   allow_ip_targets: false
+  # Also look up every target, redirect hop and webhook host with this
+  # host's resolver, and refuse a name that resolves into a denied range.
+  # Off: the proxy resolves, and no name a consumer asks for is looked up
+  # from here. Turn it on only when the proxies could reach your own
+  # networks (a static list of self-hosted proxies, for example).
+  resolve_on_host: false
+  # Return the values of a target's Set-Cookie headers in results. Off: a
+  # result shows their names and attributes only, because the values are a
+  # persona's standing on that site, bound to its address and fingerprint.
+  expose_set_cookie: false
 
 urls:
   # Query parameters ignored when two URLs are compared for dedupe and

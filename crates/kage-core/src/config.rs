@@ -18,7 +18,6 @@
 //! the text it is. Every secret is a [`Secret`], which prints and serializes
 //! as `[redacted]`.
 
-use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -28,13 +27,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::duration::HumanDuration;
 use crate::secret::Secret;
-use crate::ssrf::SsrfPolicy;
 use crate::urlnorm::NormalizeOptions;
 
 mod http;
 mod personas;
 mod proxies;
 mod scheduler;
+mod server;
 
 pub use http::{
     BrowserSelftestConfig, ChromiumEngineConfig, EngineConfig, EnginesConfig, HttpConfig,
@@ -54,6 +53,9 @@ pub use proxies::{
 pub use scheduler::{
     BandwidthConfig, BrowserConfig, ClockRange, DepthRange, ForwarderConfig, MAX_ATTEMPT_TIMEOUT,
     MAX_INFLIGHT, PauseConfig, PersonaDayConfig, SchedulerConfig, ServerErrorsConfig,
+};
+pub use server::{
+    MAX_API_BODY_BYTES, MAX_HEADER_BYTES, MIN_HEADER_BYTES, SecurityConfig, ServerConfig,
 };
 
 /// Length of the master key in bytes; it is written as twice as many
@@ -172,35 +174,6 @@ pub enum ConfigError {
     /// that is out of range.
     #[error("invalid configuration: {0}")]
     Invalid(String),
-}
-
-/// The HTTP server.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ServerConfig {
-    /// Address `kage serve` listens on.
-    #[serde(default = "default_bind")]
-    pub bind: SocketAddr,
-    /// Address `kage healthcheck` probes.
-    #[serde(default = "default_healthcheck_addr")]
-    pub healthcheck_addr: SocketAddr,
-}
-
-const fn default_bind() -> SocketAddr {
-    SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::UNSPECIFIED), 8080)
-}
-
-const fn default_healthcheck_addr() -> SocketAddr {
-    SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::LOCALHOST), 8080)
-}
-
-impl Default for ServerConfig {
-    fn default() -> Self {
-        Self {
-            bind: default_bind(),
-            healthcheck_addr: default_healthcheck_addr(),
-        }
-    }
 }
 
 /// The Postgres connection.
@@ -447,9 +420,9 @@ pub struct Config {
     /// The artifact store.
     #[serde(default)]
     pub artifacts: ArtifactsConfig,
-    /// The SSRF guard.
+    /// The SSRF guard and what a result may reveal.
     #[serde(default)]
-    pub security: SsrfPolicy,
+    pub security: SecurityConfig,
     /// URL normalization.
     #[serde(default)]
     pub urls: NormalizeOptions,
@@ -596,6 +569,7 @@ impl Config {
                 "secrets.master_key must be 32 random bytes written as 64 hexadecimal characters",
             );
         }
+        server::validate(&self.server).map_err(ConfigError::Invalid)?;
         proxies::validate(&self.webshare, &self.reputation, &self.proxies)
             .map_err(ConfigError::Invalid)?;
         http::validate(&self.http, &self.selftest, &self.engines).map_err(ConfigError::Invalid)?;
@@ -806,7 +780,7 @@ mod tests {
     fn defaults_apply_with_only_the_required_secrets() {
         let config = Config::load(None, required()).unwrap();
 
-        assert_eq!(config.server.bind.to_string(), "0.0.0.0:8080");
+        assert_eq!(config.server.bind.to_string(), "127.0.0.1:8080");
         assert_eq!(config.server.healthcheck_addr.to_string(), "127.0.0.1:8080");
         assert_eq!(config.database.url.expose(), DB_URL);
         assert_eq!(config.database.max_connections, 10);
@@ -904,7 +878,7 @@ urls:
         )
         .unwrap();
 
-        assert_eq!(config.server.bind.to_string(), "0.0.0.0:8080");
+        assert_eq!(config.server.bind.to_string(), "127.0.0.1:8080");
     }
 
     #[test]
@@ -1431,7 +1405,7 @@ reputation:
             assert_eq!(redacted[section][key], REDACTED, "{}", spec.key);
         }
         // Everything that is not a secret is shown.
-        assert_eq!(redacted["server"]["bind"], "0.0.0.0:8080");
+        assert_eq!(redacted["server"]["bind"], "127.0.0.1:8080");
         assert_eq!(redacted["database"]["max_connections"], 10);
         assert_eq!(redacted["database"]["connect_timeout"], "10s");
         assert_eq!(redacted["artifacts"]["retention_days"], 14);
