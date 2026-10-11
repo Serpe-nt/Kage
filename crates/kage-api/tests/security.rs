@@ -179,7 +179,8 @@ async fn the_listener_refuses_heads_that_are_too_long_and_cuts_off_clients_that_
                 }
             }
         }
-        cut
+        // When it was cut off, not when anyone looked.
+        (cut, started.elapsed())
     });
     // Meanwhile others are served.
     let ok = served
@@ -189,8 +190,7 @@ async fn the_listener_refuses_heads_that_are_too_long_and_cuts_off_clients_that_
         )
         .await;
     assert!(ok.starts_with("HTTP/1.1 200"), "{ok}");
-    let cut = trickle.await.unwrap();
-    let took = started.elapsed();
+    let (cut, took) = trickle.await.unwrap();
     let answer = cut.expect("the trickling client was never cut off");
     // Either the connection just ends, or it ends with a 408.
     assert!(
@@ -306,7 +306,7 @@ async fn cors_is_off_until_origins_are_named() {
 #[tokio::test]
 async fn what_is_not_served_is_a_problem_document_too() {
     let mut api = Api::start(0, 149, LENIENT_FAST).await;
-    let token = api.key(&[Scope::Fetch]).await;
+    let token = api.key(&[Scope::Fetch, Scope::Sessions]).await;
 
     // No such path, with or without a key: nothing says which paths exist
     // for whom.

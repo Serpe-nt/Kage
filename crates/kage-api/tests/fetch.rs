@@ -21,9 +21,7 @@ use wiremock::{Mock, ResponseTemplate};
 const BROWSER_FAST: &str = "defaults: { render: browser, pacing: fast, active_hours: ignore, min_dwell: 500ms }\ndomains: {}\n";
 
 fn page(title: &str) -> ResponseTemplate {
-    ResponseTemplate::new(200)
-        .insert_header("content-type", "text/html; charset=utf-8")
-        .set_body_string(article(title))
+    ResponseTemplate::new(200).set_body_raw(article(title), "text/html; charset=utf-8")
 }
 
 async fn serve(api: &Api, at: &str, response: ResponseTemplate) {
@@ -353,8 +351,12 @@ async fn a_page_is_fetched_in_a_browser_with_what_was_asked_for() {
         panic!("one navigation, not {navigated:?}");
     };
     assert_eq!(asked["url"], url);
-    assert_eq!(asked["behavior"]["scroll"]["depth"], 0.0, "{asked}");
-    let dwell = asked["behavior"]["dwell_ms"].as_u64().unwrap();
+    // (The contract's way to say "no scrolling" is to leave the depth out.)
+    assert_eq!(asked["behavior"]["scroll_depth"], Value::Null, "{asked}");
+    assert_eq!(asked["behavior"]["dwell"], "fixed", "{asked}");
+    assert_eq!(asked["behavior"]["wander"], true, "{asked}");
+    assert_eq!(asked["behavior"]["entry"]["strategy"], "none", "{asked}");
+    let dwell = asked["dwell_ms"].as_u64().unwrap();
     assert!((500..=60_000).contains(&dwell), "{dwell}");
     assert_eq!(asked["wait"]["until"], "network_idle");
     assert_eq!(asked["wait"]["selector"], "main");
@@ -423,7 +425,7 @@ async fn a_policy_that_locks_behaviour_ignores_the_requests_and_says_so() {
             &json!({
                 "url": Api::url("/page"),
                 "behavior": { "scroll_depth": 0, "dwell_ms": 100 },
-                "pacing": { "profile": "aggressive" },
+                "pacing": { "profile": "human" },
             }),
         )
         .await
@@ -437,10 +439,7 @@ async fn a_policy_that_locks_behaviour_ignores_the_requests_and_says_so() {
     // The persona scrolled as its policy has it.
     let navigated = api.lab.chromium.with(|sidecar| sidecar.navigated.clone());
     assert!(
-        navigated[0]["behavior"]["scroll"]["depth"]
-            .as_f64()
-            .unwrap()
-            > 0.0,
+        navigated[0]["behavior"]["scroll_depth"].as_f64().unwrap() > 0.0,
         "{}",
         navigated[0]
     );

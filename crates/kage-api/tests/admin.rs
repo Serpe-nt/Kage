@@ -106,14 +106,17 @@ async fn personas_are_listed_shown_retired_and_made_again() {
         .await
         .json();
     assert_eq!(only["personas"][0]["id"], json!(first.id));
-    // Retiring what is retired changes nothing and is said.
-    api.post(
-        &admin,
-        &format!("/v1/admin/personas/{}/retire", first.id),
-        &json!({}),
-    )
-    .await
-    .problem(StatusCode::CONFLICT, "conflict");
+    // Retiring what is retired changes nothing: it is retired, as asked.
+    let again = api
+        .post(
+            &admin,
+            &format!("/v1/admin/personas/{}/retire", first.id),
+            &json!({}),
+        )
+        .await;
+    assert_eq!(again.status, StatusCode::OK, "{:?}", again.json());
+    assert_eq!(again.json()["state"], "retired");
+    assert_eq!(again.json()["retired_at"], retired.json()["retired_at"]);
 
     // Made again: the old one is retired, a new one lives behind the
     // same proxy, with another identity.
@@ -181,7 +184,8 @@ async fn personas_are_listed_shown_retired_and_made_again() {
         .iter()
         .find(|event| event["action"] == "admin.persona.retire" && event["outcome"] == "failure")
         .unwrap();
-    assert_eq!(refused["details"]["code"], "conflict");
+    assert_eq!(refused["details"]["code"], "persona_not_found");
+    assert_eq!(refused["details"]["status"], 404);
     let regenerate = last(&events, "admin.persona.regenerate");
     assert_eq!(regenerate["target"], json!(second.id));
     assert_eq!(regenerate["details"]["result"]["new_persona"], fresh["id"]);
@@ -240,15 +244,19 @@ async fn a_self_test_runs_in_the_server_in_the_personas_own_browser() {
     assert_eq!(result["persona"]["id"], json!(tested));
     assert_eq!(result["persona"]["state"], "active");
     assert_eq!(result["persona"]["browser_open"], true);
-    let (opened, tests, closed) = api.lab.chromium.with(|sidecar| {
+    let (contexts, opened, tests, closed) = api.lab.chromium.with(|sidecar| {
         (
-            sidecar.opened.len(),
+            sidecar.contexts.len(),
+            sidecar.opened.clone(),
             sidecar.selftested.clone(),
             sidecar.closed.len(),
         )
     });
-    assert_eq!(opened, 1);
+    assert_eq!(contexts, 1);
     assert_eq!(closed, 0);
+    // Whoever asked the sidecar for the persona's context asked for the
+    // same one: the sidecar never saw two sets of parameters.
+    assert!(opened.iter().all(|asked| *asked == opened[0]), "{opened:?}");
     let [asked] = tests.as_slice() else {
         panic!("one self-test, not {tests:?}");
     };
@@ -435,7 +443,7 @@ async fn proxies_the_pool_and_the_policies_are_an_admins_to_see_and_to_act_on() 
     std::fs::write(
         &rules,
         "defaults: { render: http, pacing: fast, active_hours: ignore }\n\
-         domains:\n  news.example: { render: browser }\n  shop.example: { max_retries: 1 }\n",
+         domains:\n  news.example: { render: browser }\n  shop.example: { retries: 1 }\n",
     )
     .unwrap();
     let reloaded = api
@@ -443,7 +451,7 @@ async fn proxies_the_pool_and_the_policies_are_an_admins_to_see_and_to_act_on() 
         .await;
     assert_eq!(reloaded.status, StatusCode::OK, "{:?}", reloaded.json());
     assert_eq!(reloaded.json()["domains"], 2);
-    assert!(reloaded.json()["pacing_profiles"].as_u64().unwrap() >= 3);
+    assert!(reloaded.json()["pacing_profiles"].as_u64().unwrap() >= 2);
     assert!(reloaded.json()["signature_rules"].as_u64().unwrap() > 0);
     let preview = api
         .get(&admin, "/v1/policies/domains/www.news.example")
@@ -463,7 +471,16 @@ async fn proxies_the_pool_and_the_policies_are_an_admins_to_see_and_to_act_on() 
     assert_eq!(preview["first_render"], "browser");
 
     let events = trail(&api, &admin).await;
-    assert_eq!(last(&events, "admin.proxy.health")["target"], json!(proxy));
+    let probe = events
+        .iter()
+        .find(|event| event["action"] == "admin.proxy.health" && event["outcome"] == "success")
+        .unwrap();
+    assert_eq!(probe["target"], json!(proxy));
+    // A call that failed still says what it was aimed at.
+    let missed = last(&events, "admin.proxy.health");
+    assert_eq!(missed["outcome"], "failure");
+    assert_eq!(missed["target"], "0190a0b0-0000-7000-8000-000000000001");
+    assert_eq!(missed["details"]["code"], "proxy_not_found");
     let replace = events
         .iter()
         .find(|event| event["action"] == "admin.proxy.replace" && event["outcome"] == "success")

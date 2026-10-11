@@ -265,7 +265,9 @@ async fn metrics_expose_the_series_of_the_specification() {
             " 100",
         ],
     );
-    expect(&text, "kage_replacements_total", &["reason=\"operator\""]);
+    // `kage_replacements_total` counts replacements asked of the provider,
+    // and the lab's provider cannot be asked for one: nothing moved it.
+    // (crates/kage-proxy/tests covers it against the mock Webshare API.)
     // The sidecars' own series, merged in from both containers.
     expect(&text, "sidecar_contexts_open", &["engine=\"chromium\""]);
     expect(&text, "sidecar_contexts_open", &["engine=\"firefox\""]);

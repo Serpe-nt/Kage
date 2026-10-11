@@ -334,7 +334,7 @@ if [ "$(grep --count '^domains:' "${policies}/domains.yaml")" -ne 1 ]; then
 fi
 call POST /v1/admin/policies/reload "${admin}"
 expect 200 "POST /v1/admin/policies/reload"
-check "the policies were read again" "${body}" "d.domains >= 1 && d.pacing_profiles >= 3 && d.signature_rules > 0"
+check "the policies were read again" "${body}" "d.domains >= 1 && d.pacing_profiles >= 2 && d.signature_rules > 0"
 call GET /v1/policies/domains/www.reloaded.kage.test "${client}"
 expect 200 "GET /v1/policies/domains/{domain}"
 check "the new rule is in force" "${body}" "d.first_render === 'browser' && d.policy.min_dwell === '3s'"
