@@ -968,13 +968,20 @@ async fn a_fetch_that_outlasts_the_wall_time_is_answered_202_and_its_result_come
             .contains("<h1>Slow</h1>")
     );
     assert_eq!(api.lab.received("/slow").await.len(), 1);
-    // The job ended with its one item, without a job worker having run:
-    // the server that accepted the fetch finished it.
-    let jobs: Vec<(String, String, i32)> =
-        sqlx::query_as("SELECT state, origin, items_succeeded FROM jobs")
+    // The job ends with its one item, without a job worker having run:
+    // the server that accepted the fetch finishes it, a moment after the
+    // result is there to be read.
+    let mut jobs: Vec<(String, String, i32)> = Vec::new();
+    for _ in 0..100 {
+        jobs = sqlx::query_as("SELECT state, origin, items_succeeded FROM jobs")
             .fetch_all(api.lab.store().pool())
             .await
             .unwrap();
+        if jobs.iter().all(|(state, _, _)| state == "succeeded") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     assert_eq!(
         jobs,
         [("succeeded".to_owned(), "sync_overflow".to_owned(), 1)]
