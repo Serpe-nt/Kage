@@ -35,6 +35,13 @@ if [ "${KAGE_LIVE_PERSONAS:-}" = "1" ]; then
     checks+=(tests/live/personas.sh)
 fi
 
+# The jobs check runs `kage serve` against the real pool and reads the two
+# third-party detection pages about a dozen times through the proxies of a
+# few personas: on request only.
+if [ "${KAGE_LIVE_JOBS:-}" = "1" ]; then
+    checks+=(tests/live/jobs.sh)
+fi
+
 for check in "${checks[@]}"; do
     echo "==> ${check}"
     "${check}"
