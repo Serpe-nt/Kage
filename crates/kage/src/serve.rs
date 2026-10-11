@@ -3,6 +3,12 @@
 //! (forwarder, scheduler, bandwidth budget), and serves the API until
 //! shutdown.
 //!
+//! Beside the API run the job worker (spec §16.6), which claims jobs and
+//! works them through the scheduler, and the webhook sender, which posts
+//! their events from this host's own address to the receivers the operator
+//! listed. Both stop with the server: the worker gives its jobs back, so
+//! that they are taken up again after a restart.
+//!
 //! The API listens on `server.bind`, which is loopback unless configured
 //! otherwise, with the limits of spec §19 on every connection
 //! (`kage_api::serve`). With `server.metrics_bind` a second listener
@@ -21,7 +27,7 @@ use axum::Router;
 use chrono::Utc;
 use kage_api::metrics::{MetricsHandle, UPKEEP_EVERY};
 use kage_api::serve::ServeSettings;
-use kage_api::{ApiParts, ApiState, EngineParts};
+use kage_api::{ApiParts, ApiState, DirectTransport, EngineParts};
 use kage_core::alert::AlertSink;
 use kage_core::config::Config;
 use kage_core::policy::PolicyStore;
@@ -177,9 +183,24 @@ async fn serve_api(
         None => None,
     };
 
-    // One signal stops both listeners and the upkeep.
+    // One signal stops both listeners, the upkeep and the work on jobs.
     let (stop, stopped) = watch::channel(false);
     let upkeep = tokio::spawn(upkeep(state.clone(), stopped.clone()));
+    let sender = state
+        .webhook_sender(Arc::new(DirectTransport::system()))
+        .context("cannot set up the webhook sender")?;
+    let background = [
+        tokio::spawn(kage_api::run_worker(
+            state.clone(),
+            wait_for(stopped.clone()),
+        )),
+        tokio::spawn(sender.run(wait_for(stopped.clone()))),
+        tokio::spawn(run_job_retention(
+            state.clone(),
+            config.artifacts.sweep_interval.get(),
+            stopped.clone(),
+        )),
+    ];
     let settings = ServeSettings::from_config(&config.server);
     let metrics_server = metrics_listener.map(|listener| {
         let router = kage_api::metrics_router(state.clone());
@@ -198,6 +219,9 @@ async fn serve_api(
         ended = &mut api => {
             let _ = stop.send(true);
             upkeep.abort();
+            for task in background {
+                let _ = task.await;
+            }
             return ended.context("the API server task failed")?;
         }
     }
@@ -207,6 +231,11 @@ async fn serve_api(
     let served = api.await.context("the API server task failed")?;
     if let Some(server) = metrics_server {
         let _ = server.await;
+    }
+    // Before the engine stops: the worker lets a page that is under way
+    // finish and gives its jobs back, the sender its deliveries.
+    for task in background {
+        let _ = task.await;
     }
     upkeep.abort();
     served
@@ -371,6 +400,33 @@ async fn run_retention(artifacts: ArtifactStore, interval: Duration) {
         }
         if let Err(error) = artifacts.sweep_orphans(now - ORPHAN_GRACE).await {
             tracing::error!(%error, "artifact orphan sweep failed");
+        }
+    }
+}
+
+/// The retention of jobs and results (spec §16.6, §18): one sweep at
+/// startup, then one per interval, until the server stops. What it deletes
+/// leaves its artifacts' blobs to the orphan sweep.
+async fn run_job_retention(state: ApiState, interval: Duration, stopped: watch::Receiver<bool>) {
+    let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let stop = wait_for(stopped);
+    tokio::pin!(stop);
+    loop {
+        tokio::select! {
+            () = &mut stop => break,
+            _ = ticker.tick() => {}
+        }
+        match kage_api::jobs::sweep(&state, Utc::now()).await {
+            Ok((0, 0)) => {}
+            Ok((jobs, requests)) => {
+                tracing::info!(
+                    jobs,
+                    requests,
+                    "jobs and results past their retention are deleted"
+                );
+            }
+            Err(error) => tracing::error!(%error, "the retention sweep of jobs failed"),
         }
     }
 }
