@@ -394,20 +394,24 @@ echo "    ${rows} rows of the operator's key; by action: ${by_action}"
 echo "==> /metrics: the series of the specification, for a key with the admin scope"
 call GET /metrics "${auditor}"
 expect 200 "GET /metrics"
-metrics="${body}"
+# Kept in a file: `grep --quiet` on a pipe ends the writer with SIGPIPE at
+# its first match, which `pipefail` would report as a failed check.
+metrics="${scratch}/metrics"
+printf '%s\n' "${body}" > "${metrics}"
 for series in kage_requests_total kage_attempts_total kage_attempt_duration_seconds_bucket kage_persona_state \
     kage_proxy_state kage_scheduler_wait_seconds_bucket kage_queue_depth kage_scheduler_in_flight \
     kage_scheduler_refusals_total kage_bandwidth_bytes_total kage_bandwidth_budget_ratio kage_selftest_score \
     kage_api_requests_total kage_api_request_duration_seconds_bucket kage_api_refusals_total \
     sidecar_contexts_open sidecar_navigation_duration_seconds_bucket; do
-    printf '%s\n' "${metrics}" | grep --quiet "^${series}[{ ]" || fail "no sample of ${series} in /metrics"
+    grep --quiet "^${series}[{ ]" "${metrics}" || fail "no sample of ${series} in /metrics"
 done
-printf '%s\n' "${metrics}" | grep '^kage_requests_total{' | grep 'domain="fixture.kage.test"' | grep 'outcome="ok"' \
-    | grep --quiet 'render="browser"' \
-    || fail "the fetches of the fixture site are not counted: $(printf '%s\n' "${metrics}" | grep '^kage_requests_total' | head -5)"
-printf '%s\n' "${metrics}" | grep --quiet '^sidecar_contexts_open{.*engine="firefox"' || fail "the firefox sidecar's series are missing"
+# One line with all three labels, in whatever order the exporter writes them.
+awk '/^kage_requests_total\{/ && /domain="fixture.kage.test"/ && /outcome="ok"/ && /render="browser"/ { found = 1 } END { exit !found }' "${metrics}" \
+    || fail "the fetches of the fixture site are not counted: $(grep '^kage_requests_total' "${metrics}" | head -5)"
+grep --quiet '^sidecar_contexts_open{.*engine="firefox"' "${metrics}" || fail "the firefox sidecar's series are missing"
+families="$(grep --count '^# TYPE ' "${metrics}")"
 call GET /metrics
 problem 401 missing_key "/metrics without a key"
-echo "    $(printf '%s\n' "${metrics}" | grep --count '^# TYPE ') families, among them every one of spec §20 that this run could move"
+echo "    ${families} families, among them every one of spec §20 that this run could move"
 
 echo "API test passed"
