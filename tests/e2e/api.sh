@@ -48,6 +48,8 @@ policies="$(mktemp -d)"
 export KAGE_E2E_POLICIES="${policies}"
 cp policies/*.yaml "${policies}/"
 chmod --recursive a+rX "${policies}"
+# What a call to the API answered.
+scratch="$(mktemp -d)"
 
 compose=(docker compose --file deploy/compose.yaml --file deploy/compose.e2e.yaml
     --project-name "${KAGE_E2E_API_PROJECT:-kage-e2e-api}")
@@ -61,7 +63,7 @@ cleanup() {
         "${compose[@]}" logs --no-color --tail 120 kage browser-chromium browser-firefox >&2 || true
     fi
     "${compose[@]}" down --volumes --remove-orphans > /dev/null 2>&1 || true
-    rm -rf "${policies}"
+    rm -rf "${policies}" "${scratch}"
     exit "${status}"
 }
 trap cleanup EXIT
@@ -94,7 +96,7 @@ psql() {
 call() {
     local method="$1" path="$2" token="${3:-}" data="${4:-}"
     local arguments=(--silent --show-error --max-time 200 --request "${method}"
-        --dump-header "${policies}/headers" --output "${policies}/body" --write-out '%{http_code}')
+        --dump-header "${scratch}/headers" --output "${scratch}/body" --write-out '%{http_code}')
     if [ -n "${token}" ]; then
         arguments+=(--header "Authorization: Bearer ${token}")
     fi
@@ -102,8 +104,8 @@ call() {
         arguments+=(--header 'Content-Type: application/json' --data "${data}")
     fi
     status="$(curl "${arguments[@]}" "${base}${path}")"
-    body="$(cat "${policies}/body")"
-    headers="$(tr -d '\r' < "${policies}/headers")"
+    body="$(cat "${scratch}/body")"
+    headers="$(tr -d '\r' < "${scratch}/headers")"
 }
 # expect <status> <what>: the last call ended with that status.
 expect() {
@@ -327,9 +329,8 @@ domains:
     min_dwell: 3s
 EOF
 if [ "$(grep --count '^domains:' "${policies}/domains.yaml")" -ne 1 ]; then
-    grep --invert-match '^domains: {}$' "${policies}/domains.yaml" > "${policies}/domains.tmp"
-    cat "${policies}/domains.tmp" > "${policies}/domains.yaml"
-    rm "${policies}/domains.tmp"
+    grep --invert-match '^domains: {}$' "${policies}/domains.yaml" > "${scratch}/domains.tmp"
+    cat "${scratch}/domains.tmp" > "${policies}/domains.yaml"
 fi
 call POST /v1/admin/policies/reload "${admin}"
 expect 200 "POST /v1/admin/policies/reload"

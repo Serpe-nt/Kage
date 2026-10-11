@@ -1,6 +1,6 @@
-# Overlay for the end-to-end test of the fetch pipeline (tests/e2e/fetch.sh).
-# Never for a deployment: it adds a world for Kage to fetch from that lives
-# entirely on the compose network.
+# Overlay for the end-to-end tests of the fetch pipeline and of the API
+# (tests/e2e/fetch.sh, tests/e2e/api.sh). Never for a deployment: it adds a
+# world for Kage to fetch from that lives entirely on the compose network.
 #
 #   fixture   the fixture site (tests/fixtures/site), reached by names that
 #             only the proxies can resolve: fixture.kage.test, lenient.kage.test
@@ -55,9 +55,12 @@ services:
       KAGE__PROXIES__HEALTH__HOST_IP_URL: http://world:8089/ip
       KAGE__PROXIES__HEALTH__STARTUP_SPREAD: 1s
       KAGE__PROXIES__HEALTH__INTERVAL: 1m
+      # The operator's own pages of the browser self-test: the API test
+      # names the coherence probe of the fixture site; the fetch test none.
+      KAGE__SELFTEST__BROWSER__PAGES: ${KAGE_E2E_SELFTEST_PAGES:-[]}
     volumes:
       # The shipped policies with the domain rules of the test.
-      - ${KAGE_E2E_POLICIES:?tests/e2e/fetch.sh sets this}:/etc/kage/policies:ro
+      - ${KAGE_E2E_POLICIES:?the test that uses this overlay sets it}:/etc/kage/policies:ro
 
   fixture:
     <<: *helper

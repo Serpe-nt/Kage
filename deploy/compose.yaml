@@ -101,7 +101,10 @@ services:
       KAGE__FORWARDER__BIND: 0.0.0.0:8899
       KAGE__FORWARDER__ADVERTISE: http://kage:8899
     ports:
-      # Loopback by default: the API has no authentication until M8.
+      # Loopback by default (spec §19). Every request but /healthz, /readyz
+      # and /openapi.json needs an API key, but the connection is plain
+      # HTTP: to serve other machines, put a TLS-terminating reverse proxy
+      # in front and keep this on loopback (docs/runbooks/api.md).
       - "${KAGE_PUBLISH_ADDR:-127.0.0.1}:${KAGE_PUBLISH_PORT:-8080}:8080"
     volumes:
       # The sidecars keep each persona's browser profile here. kage never
