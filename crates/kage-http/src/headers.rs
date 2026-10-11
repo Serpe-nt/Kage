@@ -390,6 +390,31 @@ pub fn accept_language<L: AsRef<str>>(
     Ok(value)
 }
 
+/// The headers a proxy or a load balancer adds to say whose request it
+/// passes on (follow-up F34). No browser sends one for a page, so a request
+/// that carries one tells the site that it came through a proxy, and names
+/// an address at that.
+pub const FORWARDING_HEADERS: [&str; 6] = [
+    "x-forwarded-for",
+    "forwarded",
+    "x-real-ip",
+    "true-client-ip",
+    "x-client-ip",
+    "cf-connecting-ip",
+];
+
+/// Whether a header, by its lower-case name, is one a proxy adds about the
+/// request it forwards: [`FORWARDING_HEADERS`] and the rest of their
+/// families.
+fn is_forwarding(name: &str) -> bool {
+    FORWARDING_HEADERS.contains(&name)
+        || name.starts_with("x-forwarded-")
+        || matches!(
+            name,
+            "x-forwarded" | "x-originating-ip" | "x-cluster-client-ip" | "fastly-client-ip"
+        )
+}
+
 /// Why a caller may not set a header; `None` when it may.
 ///
 /// The names are spec §9's (`User-Agent`, `Sec-CH-*`, `Sec-Fetch-*`,
@@ -405,6 +430,12 @@ pub fn denied_reason(name: &str) -> Option<&'static str> {
     }
     if name.starts_with("access-control-request-") {
         return Some("it belongs to a preflight request, which only a browser sends");
+    }
+    if is_forwarding(&name) {
+        return Some(
+            "it says that a proxy passed the request on; a browser never sends it, and a \
+             request that carries one shows the proxy it came through",
+        );
     }
     match name.as_str() {
         "user-agent" => Some("it is the persona's identity"),
@@ -1083,9 +1114,9 @@ mod tests {
     use url::Url;
 
     use super::{
-        CallerHeaders, DEFAULT_LANGUAGES, FetchSite, HeaderError, HeaderPlan, Identity,
-        IdentityOverride, MAX_CALLER_HEADERS, RequestKind, accept_language, build, denied_reason,
-        title_case,
+        CallerHeaders, DEFAULT_LANGUAGES, FORWARDING_HEADERS, FetchSite, HeaderError, HeaderPlan,
+        Identity, IdentityOverride, MAX_CALLER_HEADERS, RequestKind, accept_language, build,
+        denied_reason, title_case,
     };
     use crate::profile::{Family, ProfileChoice};
 
@@ -1740,6 +1771,63 @@ mod tests {
             "X-Api-Key",
             "Secret-Token",
             "Security",
+        ] {
+            assert_eq!(denied_reason(name), None, "{name} should be allowed");
+        }
+    }
+
+    /// One test per forwarding header (follow-up F34): it is refused by
+    /// name however it is spelled, and nothing is built with it.
+    macro_rules! forwarding_header_is_denied {
+        ($( $test:ident => $name:literal, )+) => {
+            $(
+                #[test]
+                fn $test() {
+                    assert!(FORWARDING_HEADERS.contains(&$name.to_ascii_lowercase().as_str()));
+                    for spelled in [$name.to_owned(), $name.to_ascii_lowercase(), $name.to_ascii_uppercase()] {
+                        let reason = denied_reason(&spelled).unwrap();
+                        assert!(reason.contains("a browser never sends it"), "{reason}");
+                        let error = CallerHeaders::parse(&[(spelled.as_str(), "203.0.113.7")]).unwrap_err();
+                        assert!(
+                            matches!(&error, HeaderError::Denied { name: found, .. } if *found == spelled),
+                            "{spelled}: {error:?}"
+                        );
+                        assert!(error.to_string().contains(&spelled), "{error}");
+                    }
+                }
+            )+
+        };
+    }
+
+    forwarding_header_is_denied! {
+        x_forwarded_for_is_denied => "X-Forwarded-For",
+        forwarded_is_denied => "Forwarded",
+        x_real_ip_is_denied => "X-Real-IP",
+        true_client_ip_is_denied => "True-Client-IP",
+        x_client_ip_is_denied => "X-Client-IP",
+        cf_connecting_ip_is_denied => "CF-Connecting-IP",
+    }
+
+    #[test]
+    fn the_rest_of_the_forwarding_families_is_denied_too() {
+        for name in [
+            "X-Forwarded-Host",
+            "X-Forwarded-Proto",
+            "X-Forwarded-Port",
+            "X-Forwarded-Server",
+            "X-Forwarded",
+            "X-Originating-IP",
+            "X-Cluster-Client-IP",
+            "Fastly-Client-IP",
+        ] {
+            assert!(denied_reason(name).is_some(), "{name} should be denied");
+        }
+        // A name that only looks alike is a caller's own.
+        for name in [
+            "X-Forward",
+            "Forwarded-By-Me",
+            "X-Real-Name",
+            "X-Client-Version",
         ] {
             assert_eq!(denied_reason(name), None, "{name} should be allowed");
         }

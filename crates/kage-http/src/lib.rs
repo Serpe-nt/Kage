@@ -45,7 +45,7 @@ pub use cookies::{
 };
 pub use error::{HttpError, Stage};
 pub use fetch::{FetchSpec, Fetched, Guard, Hop};
-pub use headers::{CallerHeaders, HeaderError, IdentityOverride, RequestKind};
+pub use headers::{CallerHeaders, FORWARDING_HEADERS, HeaderError, IdentityOverride, RequestKind};
 pub use profile::{Family, ProfileChoice, ProfileError};
 pub use subresources::SubresourceReport;
 
