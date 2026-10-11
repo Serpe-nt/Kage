@@ -3138,7 +3138,7 @@
         "properties": {
           "format": {
             "$ref": "#/components/schemas/ScreenshotFormatField",
-            "description": "The image format."
+            "description": "The image format; WebP unless said. A firefox persona's browser\nencodes PNG and JPEG only, so its WebP is a PNG: the artifact's\n`Content-Type` says what it is."
           },
           "full_page": {
             "type": "boolean",

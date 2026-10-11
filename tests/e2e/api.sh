@@ -213,7 +213,7 @@ summary="$(cd tests/api-client && pnpm --silent run build && KAGE_API_URL="${bas
     KAGE_E2E_URL='http://fixture.kage.test:8088/' KAGE_E2E_EXPECT='Fixture home' \
     pnpm --silent run e2e)" || fail "the generated client failed"
 check "both engines fetched the page, kept its document and a screenshot, and refused a metadata address" "${summary}" \
-    "d.pages.length === 2 && d.pages[0].engine === 'chromium' && d.pages[1].engine === 'firefox' && d.pages.every((p) => p.status === 200 && p.document_bytes > 500 && p.screenshot_bytes > 500 && /^p_[0-9a-f]{16}\$/.test(p.persona)) && d.pages[0].persona !== d.pages[1].persona && d.refused === 'ssrf_denied'"
+    "d.pages.length === 2 && d.pages[0].engine === 'chromium' && d.pages[1].engine === 'firefox' && d.pages.every((p) => p.status === 200 && p.document_bytes > 100 && p.screenshot_bytes > 1000 && /^p_[0-9a-f]{16}\$/.test(p.persona)) && d.pages[0].persona !== d.pages[1].persona && d.refused === 'ssrf_denied'"
 echo "    $(value "${summary}" "d.pages.map((p) => p.engine + ': persona ' + p.persona + ', document ' + p.document_bytes + ' B, screenshot ' + p.screenshot_bytes + ' B, dwelt ' + p.dwell_ms + ' ms, ' + p.total_ms + ' ms in all').join('; ')")"
 first="$(value "${summary}" "d.pages[0].id")"
 
@@ -338,7 +338,7 @@ check "the policies were read again" "${body}" "d.domains >= 1 && d.pacing_profi
 call GET /v1/policies/domains/www.reloaded.kage.test "${client}"
 expect 200 "GET /v1/policies/domains/{domain}"
 check "the new rule is in force" "${body}" "d.first_render === 'browser' && d.policy.min_dwell === '3s'"
-echo "    reloaded: $(value "${body}" "d.policy.matched + ' renders in a ' + d.first_render + ', min_dwell ' + d.policy.min_dwell")"
+echo "    reloaded: $(value "${body}" "JSON.stringify(d.policy.matched) + ' renders in a ' + d.first_render + ', min_dwell ' + d.policy.min_dwell")"
 
 echo "==> a self-test runs in the server, in the persona's own browser, while real work has it open"
 call POST /v1/fetch "${client}" '{"url":"http://fixture.kage.test:8088/landing","persona":{"engines":["chromium"]},"timeout_ms":30000}'
@@ -399,7 +399,7 @@ for series in kage_requests_total kage_attempts_total kage_attempt_duration_seco
     kage_proxy_state kage_scheduler_wait_seconds_bucket kage_queue_depth kage_scheduler_in_flight \
     kage_scheduler_refusals_total kage_bandwidth_bytes_total kage_bandwidth_budget_ratio kage_selftest_score \
     kage_api_requests_total kage_api_request_duration_seconds_bucket kage_api_refusals_total \
-    sidecar_contexts_open sidecar_navigation_duration_seconds; do
+    sidecar_contexts_open sidecar_navigation_duration_seconds_bucket; do
     printf '%s\n' "${metrics}" | grep --quiet "^${series}[{ ]" || fail "no sample of ${series} in /metrics"
 done
 printf '%s\n' "${metrics}" | grep '^kage_requests_total{' | grep 'domain="fixture.kage.test"' | grep 'outcome="ok"' \

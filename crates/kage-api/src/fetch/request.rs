@@ -329,7 +329,8 @@ pub(crate) enum ScreenshotFormatField {
     Png,
     /// JPEG.
     Jpeg,
-    /// WebP.
+    /// WebP. A firefox persona's browser encodes PNG and JPEG only: its
+    /// screenshot is a PNG, and the artifact's `Content-Type` says so.
     #[default]
     Webp,
 }
@@ -343,7 +344,9 @@ pub(crate) struct ScreenshotField {
     /// on chromium; the result names that side effect.
     #[serde(default)]
     pub(crate) full_page: bool,
-    /// The image format.
+    /// The image format; WebP unless said. A firefox persona's browser
+    /// encodes PNG and JPEG only, so its WebP is a PNG: the artifact's
+    /// `Content-Type` says what it is.
     #[serde(default)]
     pub(crate) format: ScreenshotFormatField,
     /// Quality for `jpeg` and `webp`, 1 to 100.

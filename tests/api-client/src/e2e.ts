@@ -77,8 +77,11 @@ async function main(): Promise<unknown> {
     const document = await readArtifact(client, documentId);
     assert.equal(Buffer.from(document.bytes).toString('utf8'), fetched.dom_html);
     const picture = await readArtifact(client, pictureId);
-    assert.equal(picture.contentType, 'image/webp');
-    assert.equal(Buffer.from(picture.bytes.subarray(0, 4)).toString('latin1'), 'RIFF');
+    // WebP unless asked otherwise; Firefox encodes PNG and JPEG only, and
+    // the artifact says which it is.
+    const [type, magic] = engine === 'firefox' ? ['image/png', '\x89PNG'] : ['image/webp', 'RIFF'];
+    assert.equal(picture.contentType, type, `${engine}: the screenshot's type`);
+    assert.equal(Buffer.from(picture.bytes.subarray(0, 4)).toString('latin1'), magic);
 
     // And the result is found again under the request's id.
     const stored = await readResult(client, fetched.id);

@@ -108,7 +108,10 @@ the browser had it), `raw` (the main response's body), `headers`, `xhr`
 (the responses the page's scripts fetched), `screenshot`, `pdf`, `console`.
 Without it a fetch returns `dom` and `headers`. What was asked for is also
 stored as artifacts for `artifacts.retention_days` (14) and named in
-`artifacts`; `GET /v1/artifacts/{id}` streams one.
+`artifacts`; `GET /v1/artifacts/{id}` streams one. A screenshot is WebP
+unless `screenshot.format` says otherwise, except from a firefox persona,
+whose browser encodes PNG and JPEG only: read the artifact's
+`Content-Type`.
 
 ### What a fetch costs, and what a request may shorten
 

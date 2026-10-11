@@ -1361,7 +1361,11 @@ export interface components {
         ScopeField: "fetch" | "jobs" | "crawl" | "sessions" | "admin";
         /** @description How a screenshot is taken. */
         ScreenshotField: {
-            /** @description The image format. */
+            /**
+             * @description The image format; WebP unless said. A firefox persona's browser
+             *     encodes PNG and JPEG only, so its WebP is a PNG: the artifact's
+             *     `Content-Type` says what it is.
+             */
             format?: components["schemas"]["ScreenshotFormatField"];
             /**
              * @description False, the default: the visible viewport, which no page can
