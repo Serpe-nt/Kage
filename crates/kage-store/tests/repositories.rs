@@ -1050,6 +1050,70 @@ fn block() -> Block {
     }
 }
 
+#[tokio::test]
+async fn a_keys_requests_are_counted_since_a_moment() {
+    let db = TestDb::migrated().await;
+    let store = &db.store;
+    let key = common::seed_key(store).await;
+    let other = common::seed_key(store).await;
+    let at = now();
+
+    // Three requests of the key over two days, one of another key, and
+    // one of Kage's own.
+    for (owner, age) in [
+        (Some(key.id), Duration::hours(30)),
+        (Some(key.id), Duration::hours(2)),
+        (Some(key.id), Duration::zero()),
+        (Some(other.id), Duration::hours(1)),
+        (None, Duration::hours(1)),
+    ] {
+        let mut request = common::request(owner);
+        request.created_at = at - age;
+        store.requests().insert(&request).await.unwrap();
+    }
+
+    let requests = store.requests();
+    let since = |hours: i64| at - Duration::hours(hours);
+    assert_eq!(
+        requests
+            .count_for_key_since(key.id, since(48))
+            .await
+            .unwrap(),
+        3
+    );
+    assert_eq!(
+        requests
+            .count_for_key_since(key.id, since(24))
+            .await
+            .unwrap(),
+        2
+    );
+    // The moment itself is inside; the one after it is not.
+    assert_eq!(requests.count_for_key_since(key.id, at).await.unwrap(), 1);
+    assert_eq!(
+        requests
+            .count_for_key_since(key.id, at + Duration::seconds(1))
+            .await
+            .unwrap(),
+        0
+    );
+    // Another key's requests, and Kage's own, are not this key's.
+    assert_eq!(
+        requests
+            .count_for_key_since(other.id, since(48))
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        requests
+            .count_for_key_since(ApiKeyId::new(), since(48))
+            .await
+            .unwrap(),
+        0
+    );
+}
+
 // One request followed from acceptance through three attempts to its result.
 #[allow(clippy::too_many_lines)]
 #[tokio::test]
