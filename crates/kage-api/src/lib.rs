@@ -76,6 +76,13 @@ use crate::auth::Caller;
 /// Name of this crate as recorded in its manifest.
 pub const CRATE_NAME: &str = env!("CARGO_PKG_NAME");
 
+/// A moment as the store keeps it: to the microsecond. What the API says
+/// of a thing it just made is then what it says after reading it back.
+pub(crate) fn stored(at: chrono::DateTime<chrono::Utc>) -> chrono::DateTime<chrono::Utc> {
+    use chrono::SubsecRound as _;
+    at.trunc_subsecs(6)
+}
+
 /// Path of the liveness endpoint (spec §16.1).
 pub const HEALTHZ_PATH: &str = "/healthz";
 
@@ -144,7 +151,25 @@ struct ApiDoc;
 
 /// Asks for the `admin` scope: in front of Swagger UI.
 async fn admins_only(caller: Caller, request: Request, next: Next) -> Response {
-    match caller.require(Scope::Admin) {
+    scoped(Scope::Admin, &caller, request, next).await
+}
+
+/// Asks for the `fetch` scope before the request's body is read.
+async fn fetchers_only(caller: Caller, request: Request, next: Next) -> Response {
+    scoped(Scope::Fetch, &caller, request, next).await
+}
+
+/// Asks for the `sessions` scope before the request's body is read.
+async fn session_holders_only(caller: Caller, request: Request, next: Next) -> Response {
+    scoped(Scope::Sessions, &caller, request, next).await
+}
+
+/// Lets a request through when its key has the scope. The scope is asked
+/// for in front of the handler, so before the body is parsed: a key
+/// without it learns nothing of what the endpoint would have made of its
+/// request.
+async fn scoped(scope: Scope, caller: &Caller, request: Request, next: Next) -> Response {
+    match caller.require(scope) {
         Ok(()) => next.run(request).await,
         Err(error) => error.into_response(),
     }
@@ -192,16 +217,26 @@ fn keyed() -> OpenApiRouter<ApiState> {
         .routes(routes!(admin::check_proxy));
     let admin = admin_quick.merge(admin_slow).layer(from_fn(auth::audit));
 
-    let quick = OpenApiRouter::new()
+    let reading = OpenApiRouter::new()
         .routes(routes!(results::result))
         .routes(routes!(results::artifact))
         .routes(routes!(policies::preview))
+        .layer(from_fn(fetchers_only));
+    let sessions = OpenApiRouter::new()
         .routes(routes!(sessions::open))
         .routes(routes!(sessions::show, sessions::end))
+        .layer(from_fn(session_holders_only));
+    let metrics = OpenApiRouter::new()
         .routes(routes!(ops::metrics))
+        .layer(from_fn(admins_only));
+    let quick = reading
+        .merge(sessions)
+        .merge(metrics)
         .layer(from_fn(deadline));
     // A fetch has its own limit, `scheduler.sync_wall_time`.
-    let fetch = OpenApiRouter::new().routes(routes!(fetch::fetch));
+    let fetch = OpenApiRouter::new()
+        .routes(routes!(fetch::fetch))
+        .layer(from_fn(fetchers_only));
 
     quick
         .merge(fetch)

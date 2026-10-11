@@ -284,6 +284,18 @@ pub(crate) fn action_of(method: &Method, route: &str) -> String {
     format!("admin.{name}")
 }
 
+/// What a request names in the place of its route's `{id}`: the target of
+/// an admin call whose handler left none, because it refused or failed. A
+/// trail that says who tried to retire something should say what.
+pub(crate) fn target_of(route: &str, path: &str) -> Option<String> {
+    route
+        .split('/')
+        .zip(path.split('/'))
+        .find(|(pattern, _)| *pattern == "{id}")
+        .map(|(_, named)| named.to_owned())
+        .filter(|named| !named.is_empty() && named.len() <= 64)
+}
+
 /// The third layer, on the admin endpoints; see the module documentation.
 pub(crate) async fn audit(
     Extension(state): Extension<ApiState>,
@@ -319,7 +331,7 @@ pub(crate) async fn audit(
         at: state.clock().now(),
         actor: AuditActor::ApiKey(caller.key.id),
         action: action_of(&method, &route),
-        target: note.target,
+        target: note.target.or_else(|| target_of(&route, &path)),
         outcome,
         details: json!({
             "request_id": caller.request,
@@ -347,7 +359,7 @@ mod tests {
     use kage_core::domain::{ApiKey, KeyLimits, Scope};
     use kage_core::ids::{ApiKeyId, RequestId};
 
-    use super::{AuditNote, Caller, action_of};
+    use super::{AuditNote, Caller, action_of, target_of};
     use crate::error::ErrorCode;
 
     fn caller(scopes: &[Scope], disabled: bool) -> Caller {
@@ -434,6 +446,32 @@ mod tests {
         assert_eq!(
             action_of(&Method::PUT, "/v1/admin/later"),
             "admin.put /v1/admin/later"
+        );
+    }
+
+    #[test]
+    fn a_call_that_failed_still_names_what_it_was_aimed_at() {
+        assert_eq!(
+            target_of(
+                "/v1/admin/personas/{id}/retire",
+                "/v1/admin/personas/0190a0b0-0000-7000-8000-000000000001/retire"
+            )
+            .as_deref(),
+            Some("0190a0b0-0000-7000-8000-000000000001")
+        );
+        assert_eq!(
+            target_of("/v1/admin/keys/{id}", "/v1/admin/keys/nothing").as_deref(),
+            Some("nothing")
+        );
+        // A route without an id has no target; what is no id is not kept.
+        assert_eq!(target_of("/v1/admin/pool", "/v1/admin/pool"), None);
+        assert_eq!(target_of("unmatched", "/v1/admin/keys/x"), None);
+        assert_eq!(
+            target_of(
+                "/v1/admin/keys/{id}",
+                &format!("/v1/admin/keys/{}", "x".repeat(65))
+            ),
+            None
         );
     }
 

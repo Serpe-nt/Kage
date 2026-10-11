@@ -1244,7 +1244,8 @@ bodies in the artifact store.
   a second listener that serves `/metrics` and `/healthz` without a key,
   for a Prometheus on the same private network.
 - The API listens on `127.0.0.1:8080` unless `server.bind` says otherwise,
-  speaks plain HTTP/1.1 and HTTP/2, and sends no CORS header unless
+  speaks plain HTTP/1.1 (a reverse proxy in front speaks TLS and HTTP/2 to
+  its clients), and sends no CORS header unless
   `server.cors_allowed_origins` names origins (§19).
 
 ### 16.2 Authentication and authorization
@@ -1609,8 +1610,9 @@ are gzip-compressed on disk.
   that arrives within `server.body_read_timeout` (`408`); a head of at
   most `server.max_header_bytes` with at most `server.max_headers` headers
   (`431`, by the HTTP layer) that arrives within
-  `server.header_read_timeout`, which also ends a connection that sends
-  nothing or trickles its headers (slowloris); a request target of at most
+  `server.header_read_timeout`, which runs from the moment a connection is
+  accepted and so also ends one that sends nothing or trickles its headers
+  (slowloris); a request target of at most
   `server.max_uri_bytes` (`414`); at most `server.max_connections`
   connections; `server.request_timeout` for every endpoint that does not
   wait for the network. Items per job (default 10 000) come with M9. A

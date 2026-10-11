@@ -1486,7 +1486,7 @@
       },
       "BehaviorField": {
         "type": "object",
-        "description": "What the persona does on a browser page, where the request wants less\nthan the domain policy's default (see the module documentation). What\nis left out is the policy's. Ignored, and reported as ignored, when the\npolicy sets `behavior_locked`.",
+        "description": "What the persona does on a browser page, where the request wants less\nthan the domain policy's default. What is left out is the policy's.\nIgnored, and reported as ignored, when the policy sets\n`behavior_locked`.\n\nWhat it costs: with the policy's default a page takes about 35 s\n(median), which is about 100 pages an hour per persona. `scroll_depth:\n0.3, dwell_ms: 3000` is about 11 s a page and still looks like someone\nskimming a listing; `scroll_depth: 0, dwell_ms: 3000` is about 5 s.\nThere is no bare load: the pointer always moves, and the dwell never\nfalls below the policy's `min_dwell` (2 s unless a domain says\notherwise).",
         "properties": {
           "dwell_ms": {
             "type": [

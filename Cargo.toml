@@ -61,7 +61,8 @@ utoipa-axum = { version = "=0.3.0" }
 utoipa-swagger-ui = { version = "=10.0.1", default-features = false, features = ["axum", "vendored"] }
 # The API's own accept loop: a limit on the number and size of request
 # headers and a deadline for reading them, which `axum::serve` does not
-# offer. Pinned at the version axum 0.8.9 already locks.
+# offer. Both pinned at the versions axum 0.8.9 already locks.
+hyper = { version = "=1.12.0", default-features = false }
 hyper-util = { version = "=0.1.21", default-features = false }
 
 # --- Storage --------------------------------------------------------------

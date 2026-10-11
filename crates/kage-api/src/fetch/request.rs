@@ -289,9 +289,17 @@ impl From<RefererStrategy> for RefererStrategyField {
 }
 
 /// What the persona does on a browser page, where the request wants less
-/// than the domain policy's default (see the module documentation). What
-/// is left out is the policy's. Ignored, and reported as ignored, when the
-/// policy sets `behavior_locked`.
+/// than the domain policy's default. What is left out is the policy's.
+/// Ignored, and reported as ignored, when the policy sets
+/// `behavior_locked`.
+///
+/// What it costs: with the policy's default a page takes about 35 s
+/// (median), which is about 100 pages an hour per persona. `scroll_depth:
+/// 0.3, dwell_ms: 3000` is about 11 s a page and still looks like someone
+/// skimming a listing; `scroll_depth: 0, dwell_ms: 3000` is about 5 s.
+/// There is no bare load: the pointer always moves, and the dwell never
+/// falls below the policy's `min_dwell` (2 s unless a domain says
+/// otherwise).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct BehaviorField {

@@ -4,9 +4,18 @@
 //! - **The head of a request** is at most `server.max_header_bytes` long
 //!   and has at most `server.max_headers` headers; a longer one is
 //!   answered `431` by the HTTP layer and the connection is closed.
-//! - **A client that trickles its headers** (slowloris) is cut off after
-//!   `server.header_read_timeout`: the deadline covers the whole head of
-//!   every request, and the wait for the next one on a kept connection.
+//! - **A client that trickles its headers** (slowloris), or sends nothing
+//!   at all, is cut off after `server.header_read_timeout`: the deadline
+//!   runs from the moment a connection is accepted, covers the whole head
+//!   of every request, and the wait for the next one on a kept connection.
+//!
+//!   This is why the listener speaks HTTP/1.1 only, through hyper's own
+//!   HTTP/1 server. The server that detects the protocol first
+//!   (`hyper_util::server::conn::auto`) waits for a connection's first
+//!   bytes without any deadline, so a client that connects and stays
+//!   silent holds its connection for ever. A reverse proxy in front, which
+//!   a deployment that serves other machines has anyway (spec §19), speaks
+//!   HTTP/2 to its clients and HTTP/1.1 to Kage.
 //! - **Connections** are counted: past `server.max_connections` a new one
 //!   waits in the accept queue until another ends.
 //! - **Stopping** is graceful: nothing new is accepted, requests in flight
@@ -22,8 +31,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
-use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
-use hyper_util::server::conn::auto::Builder;
+use hyper::server::conn::http1::Builder;
+use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::server::graceful::GracefulShutdown;
 use hyper_util::service::TowerToHyperService;
 use kage_core::config::ServerConfig;
@@ -63,20 +72,13 @@ impl ServeSettings {
 }
 
 /// The HTTP layer of one connection, with the limits applied.
-fn connections(settings: ServeSettings) -> Builder<TokioExecutor> {
-    let mut builder = Builder::new(TokioExecutor::new());
+fn connections(settings: ServeSettings) -> Builder {
+    let mut builder = Builder::new();
     builder
-        .http1()
         .timer(TokioTimer::new())
         .header_read_timeout(settings.header_read_timeout)
         .max_headers(settings.max_headers)
         .max_buf_size(settings.max_header_bytes);
-    builder
-        .http2()
-        .timer(TokioTimer::new())
-        .max_header_list_size(u32::try_from(settings.max_header_bytes).unwrap_or(u32::MAX))
-        .keep_alive_interval(Some(settings.header_read_timeout))
-        .keep_alive_timeout(settings.header_read_timeout);
     builder
 }
 
@@ -122,12 +124,10 @@ pub async fn serve(
         if let Err(error) = stream.set_nodelay(true) {
             tracing::debug!(%peer, %error, "TCP_NODELAY could not be set");
         }
-        let connection = builder
-            .serve_connection(
-                TokioIo::new(stream),
-                TowerToHyperService::new(router.clone()),
-            )
-            .into_owned();
+        let connection = builder.serve_connection(
+            TokioIo::new(stream),
+            TowerToHyperService::new(router.clone()),
+        );
         let connection = graceful.watch(connection);
         tokio::spawn(async move {
             // A client that goes away, sends garbage or runs into a limit

@@ -48,6 +48,7 @@ use crate::fetch::result::ClaimedOsField;
 use crate::keys::{self, DEFAULT_LIMITS, KeyError, NewKey};
 use crate::schema::{AnyJson, FreeForm};
 use crate::state::{ApiState, EngineParts};
+use crate::stored;
 
 /// The most audit events one page holds.
 const MAX_AUDIT_PAGE: u32 = 200;
@@ -194,10 +195,10 @@ fn persona_view(persona: &Persona, open: &[PersonaId], fingerprint: bool) -> Per
             .map(|reason| reason.as_str().to_owned()),
         ready: persona.is_ready(),
         warmup_visits: persona.warmup_visits,
-        warmed_at: persona.warmed_at,
+        warmed_at: persona.warmed_at.map(stored),
         browser_open: open.contains(&persona.id),
-        created_at: persona.created_at,
-        retired_at: persona.retired_at,
+        created_at: stored(persona.created_at),
+        retired_at: persona.retired_at.map(stored),
         retire_reason: persona.retire_reason.clone(),
         fingerprint: fingerprint.then(|| persona.fingerprint.clone()),
     }
@@ -990,9 +991,9 @@ fn key_view(key: &ApiKey) -> KeyView {
         max_concurrent: key.limits.max_concurrent,
         daily_page_budget: key.limits.daily_page_budget,
         active: key.is_active(),
-        disabled_at: key.disabled_at,
-        created_at: key.created_at,
-        last_used_at: key.last_used_at,
+        disabled_at: key.disabled_at.map(stored),
+        created_at: stored(key.created_at),
+        last_used_at: key.last_used_at.map(stored),
     }
 }
 

@@ -29,6 +29,7 @@ use crate::extract::Body;
 use crate::fetch::request::PersonaHints;
 use crate::fetch::result::{PersonaView, Viewer};
 use crate::state::{ApiState, EngineParts};
+use crate::stored;
 
 /// What a new session is to be.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
@@ -80,9 +81,9 @@ fn view(session: &Session, persona: &Persona, viewer: &Viewer<'_>) -> SessionVie
             claimed_os: persona.claimed_os.into(),
             country: persona.country.map(|country| country.to_string()),
         },
-        created_at: session.created_at,
-        last_used_at: session.last_used_at,
-        expires_at: session.expires_at,
+        created_at: stored(session.created_at),
+        last_used_at: stored(session.last_used_at),
+        expires_at: stored(session.expires_at),
     }
 }
 

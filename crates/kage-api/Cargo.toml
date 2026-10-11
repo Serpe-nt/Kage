@@ -27,7 +27,7 @@ kage-scheduler = { workspace = true }
 kage-store = { workspace = true }
 
 async-trait = { workspace = true }
-axum = { workspace = true, features = ["http2"] }
+axum = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
@@ -40,9 +40,10 @@ governor = { workspace = true, features = ["std"] }
 # The handle a non-admin key sees in place of a persona's id.
 hmac = { workspace = true }
 http = { workspace = true }
-# The listener: one connection at a time over hyper, with limits on the
-# head of a request and a deadline for reading it.
-hyper-util = { workspace = true, features = ["http1", "http2", "server-auto", "server-graceful", "service", "tokio"] }
+# The listener: HTTP/1.1 connections over hyper, with limits on the head of
+# a request and a deadline for reading it from the first byte on.
+hyper = { workspace = true, features = ["http1", "server"] }
+hyper-util = { workspace = true, features = ["server-graceful", "service", "tokio"] }
 metrics = { workspace = true }
 # Renders what the `metrics` facade recorded as Prometheus text. Without
 # its default features: no listener and no push gateway of its own.

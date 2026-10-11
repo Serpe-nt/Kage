@@ -558,7 +558,8 @@ fn behavior_of(
             BehaviorSource::Policy
         },
         request_ignored: applied.request_ignored,
-        scroll_depth: applied.scroll_depth,
+        // No scrolling is a depth of 0, as a request asks for it.
+        scroll_depth: Some(applied.scroll_depth.unwrap_or(0.0)),
         // What the sidecar says it dwelt; else what it was asked for.
         dwell_ms: done.map(|done| done.dwell_ms).or_else(|| {
             applied
@@ -651,7 +652,7 @@ pub(crate) fn from_report(
         session_id: session.map(str::to_owned),
         cached: false,
         escalated: report.escalated,
-        created_at: report.finished_at,
+        created_at: crate::stored(report.finished_at),
     }
 }
 
