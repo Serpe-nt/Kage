@@ -429,6 +429,7 @@ impl World {
             engines: policy.engines.clone(),
             countries: policy.countries.clone(),
             prefer_countries: Vec::new(),
+            visitors: None,
             pacing: *policies.pacing.require("human").unwrap(),
             active_hours: policy.active_hours,
             breaker_threshold: rules.threshold,

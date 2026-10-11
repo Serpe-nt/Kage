@@ -17,7 +17,21 @@
 //!
 //! A synchronous fetch that takes longer than its wall time is not
 //! cancelled: [`Pipeline::fetch_sync`] hands back a [`Running`] fetch,
-//! which is the hook for turning it into a job (spec §8.4, milestone M9).
+//! which the API carries on as a job (spec §8.4).
+//!
+//! # Work for a job
+//!
+//! [`Pipeline::fetch_for_job`] is the same fetch with three differences
+//! (spec §16.6). A request that cannot be attempted now (its domain is
+//! paused, the bandwidth budget is used up, egress is unsafe, its persona
+//! is away for longer than the job cares to hold the page in the
+//! scheduler) is not answered with an error: it is [`JobFetch::Deferred`],
+//! nothing is concluded, and the job asks again later under the same
+//! request. A stop signal takes a request that waits for a persona out of
+//! the queue ([`JobFetch::Stopped`]); an attempt in flight is never cut.
+//! And a request can be taken up again after the process that began it
+//! stopped: its earlier attempts stay in the record and count toward the
+//! retry budget.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -34,7 +48,7 @@ use kage_core::ids::{ApiKeyId, AttemptId, JobId, PersonaId, RequestId, ResultId}
 use kage_core::outcome::{Block, Outcome};
 use kage_core::pacing::Lognormal;
 use kage_core::policy::{EffectivePolicy, PacingDecision, PacingRequest};
-use kage_core::schedule::planner::{Completion, Dispatch, Refusal, RetryPause, Work};
+use kage_core::schedule::planner::{Completion, Dispatch, Refusal, RetryPause, Visitors, Work};
 use kage_core::schedule::politeness::Courtesy;
 use kage_core::schedule::queue::Priority;
 use kage_core::schedule::retry::{AttemptVerdict, RequestProgress, Ruling, Step};
@@ -101,6 +115,13 @@ pub struct FetchOrder {
     pub job: Option<JobId>,
     /// The caller's session.
     pub session: Option<SessionId>,
+    /// The personas that read the domain for the job the fetch belongs to,
+    /// and how many it may have there: the fetch goes to one of them while
+    /// they can go on.
+    pub visitors: Option<Visitors>,
+    /// How long the fetch waits for a persona before it would rather be
+    /// told when to come back; `None` waits as long as it takes.
+    pub patience: Option<Duration>,
     /// The request as it was accepted, for the record.
     pub spec: serde_json::Value,
 }
@@ -132,6 +153,8 @@ impl FetchOrder {
             api_key: None,
             job: None,
             session: None,
+            visitors: None,
+            patience: None,
         }
     }
 }
@@ -212,6 +235,54 @@ pub enum Synchronous {
     Finished(Box<FetchReport>),
     /// It did not: it runs on, to be picked up as a job.
     Overflowed(Running),
+}
+
+/// Why a fetch made for a job was not attempted now, and when to ask
+/// again. Nothing was concluded: the request is still open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Deferred {
+    /// What stands in the way.
+    pub reason: Refusal,
+    /// When it would be worth asking again, when the scheduler knows.
+    pub retry_at: Option<DateTime<Utc>>,
+}
+
+/// How a fetch made for a job ended.
+#[derive(Debug)]
+pub enum JobFetch {
+    /// It finished; its result is stored.
+    Finished(Box<FetchReport>),
+    /// It could not be attempted now. Its request stays open and is taken
+    /// up again with [`Pipeline::fetch_for_job`].
+    Deferred(Deferred),
+    /// The stop signal came while it waited for a persona. Its request
+    /// stays open: take it up again, or end it with [`Pipeline::abandon`].
+    Stopped,
+}
+
+/// Tells work for a job to stop waiting: `true` once it should. An attempt
+/// that is under way is not cut by it.
+pub type Stop = tokio::sync::watch::Receiver<bool>;
+
+/// Resolves when the signal says stop; never when its sender is gone.
+async fn stopped(stop: &mut Stop) {
+    if stop.wait_for(|stop| *stop).await.is_err() {
+        std::future::pending::<()>().await;
+    }
+}
+
+/// Whether a refusal is one a job waits out instead of failing its item:
+/// it says nothing about the request, only about now.
+const fn waits(refused: &crate::scheduler::Refused) -> bool {
+    match refused.reason {
+        Refusal::DomainPaused
+        | Refusal::EgressUnsafe
+        | Refusal::BandwidthExhausted
+        | Refusal::ShuttingDown => true,
+        // Nobody can serve it at all, unless the scheduler named the
+        // moment somebody can.
+        Refusal::NoPersona => refused.retry_at.is_some(),
+    }
 }
 
 /// What the pipeline works with besides the scheduler.
@@ -328,6 +399,26 @@ struct Course {
     give_up_at: Option<DateTime<Utc>>,
 }
 
+impl Course {
+    /// What the request has come to when nothing more is attempted: its
+    /// last attempt's outcome, whether this process made it or an earlier
+    /// one did.
+    fn standing(&self) -> (Outcome, Option<String>) {
+        match (&self.last, self.attempts.last()) {
+            (Some(last), _) => (last.outcome(), last.reason.clone()),
+            (None, Some(attempt)) => (attempt.outcome, attempt.reason.clone()),
+            (None, None) => (Outcome::ProviderError, None),
+        }
+    }
+}
+
+/// How a run of the pipeline ended.
+enum Ran {
+    Finished(Box<FetchReport>),
+    Deferred(Deferred),
+    Stopped,
+}
+
 impl Pipeline {
     /// A pipeline over a scheduler and an executor.
     pub fn new(
@@ -435,6 +526,7 @@ impl Pipeline {
         id: RequestId,
         order: FetchOrder,
         give_up_at: Option<DateTime<Utc>>,
+        earlier: Option<Vec<Attempt>>,
     ) -> Result<Course, SchedulerError> {
         let domain = order
             .url
@@ -458,26 +550,46 @@ impl Pipeline {
             finished_at: None,
             outcome: None,
         };
-        self.backend().save_request(&request).await?;
+        // A request that is taken up again was stored when it was accepted.
+        if earlier.is_none() {
+            self.backend().save_request(&request).await?;
+        }
+        let earlier = earlier.unwrap_or_default();
 
         let retries = order.max_retries.unwrap_or(policy.retries);
+        let progress =
+            RequestProgress::new(order.render, first_render(order.render, &policy), retries)
+                .resumed(
+                    earlier
+                        .iter()
+                        .map(|attempt| (attempt.persona_id, attempt.render, attempt.outcome)),
+                );
+        // The networks of the personas that were blocked before the
+        // request changed hands are avoided as if it had not.
+        let avoid = if progress.blocked().is_empty() {
+            Vec::new()
+        } else {
+            self.backend()
+                .personas()
+                .await?
+                .into_iter()
+                .filter(|view| progress.blocked().contains(&view.id))
+                .map(|view| view.network)
+                .collect()
+        };
         Ok(Course {
-            progress: RequestProgress::new(
-                order.render,
-                first_render(order.render, &policy),
-                retries,
-            ),
+            progress,
             order,
             request,
             domain,
             policy,
             pacing,
-            attempts: Vec::new(),
+            attempts: earlier,
             last: None,
             last_persona: None,
             waited: Duration::ZERO,
             follow_up: None,
-            avoid: Vec::new(),
+            avoid,
             retry: None,
             give_up_at,
         })
@@ -489,23 +601,96 @@ impl Pipeline {
         order: FetchOrder,
         give_up_at: Option<DateTime<Utc>>,
     ) -> Result<FetchReport, SchedulerError> {
-        let mut course = self.begin(id, order, give_up_at).await?;
+        let course = self.begin(id, order, give_up_at, None).await?;
+        match self.run(course, None).await? {
+            Ran::Finished(report) => Ok(*report),
+            // Without a stop signal nothing is deferred and nothing stops.
+            Ran::Deferred(_) | Ran::Stopped => Err(SchedulerError::ShuttingDown),
+        }
+    }
 
+    /// Runs a fetch for a job (see the module documentation). `earlier` is
+    /// `None` for a request that is new, and the attempts made so far for
+    /// one that is taken up again under its id: by the process that began
+    /// it or by another after it stopped.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::fetch`].
+    pub async fn fetch_for_job(
+        &self,
+        id: RequestId,
+        order: FetchOrder,
+        earlier: Option<Vec<Attempt>>,
+        stop: Stop,
+    ) -> Result<JobFetch, SchedulerError> {
+        let course = self.begin(id, order, None, earlier).await?;
+        Ok(match self.run(course, Some(stop)).await? {
+            Ran::Finished(report) => JobFetch::Finished(report),
+            Ran::Deferred(deferred) => JobFetch::Deferred(deferred),
+            Ran::Stopped => JobFetch::Stopped,
+        })
+    }
+
+    /// Ends a request that will not be attempted any more (its job was
+    /// cancelled, or waited as long as it may) with `provider_error` and
+    /// the reason, so that whoever asks for its result is told why there is
+    /// none. `earlier` are the attempts it had.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the backend fails.
+    pub async fn abandon(
+        &self,
+        id: RequestId,
+        order: FetchOrder,
+        earlier: Vec<Attempt>,
+        reason: &str,
+    ) -> Result<FetchReport, SchedulerError> {
+        let course = self.begin(id, order, None, Some(earlier)).await?;
+        self.conclude(
+            course,
+            Outcome::ProviderError,
+            Some(reason.to_owned()),
+            None,
+        )
+        .await
+    }
+
+    /// The attempts of a request until it is done, deferred or stopped.
+    async fn run(&self, mut course: Course, mut stop: Option<Stop>) -> Result<Ran, SchedulerError> {
+        let id = course.request.id;
+        let finished = |report| Ok(Ran::Finished(Box::new(report)));
         // The guard looks at the URL before anything is sent anywhere.
         if let Err(denial) = check_url(&course.order.url, self.settings.security) {
             tracing::info!(request = %id, %denial, "the URL is refused");
-            return self
-                .conclude(
+            return finished(
+                self.conclude(
                     course,
                     Outcome::SsrfDenied,
                     Some("ssrf_denied".to_owned()),
                     None,
                 )
-                .await;
+                .await?,
+            );
+        }
+        // A request that was taken up again with nothing left of its
+        // budget ends with what its last attempt reached.
+        if !course.progress.attempts_left() {
+            let (outcome, reason) = course.standing();
+            return finished(self.conclude(course, outcome, reason, None).await?);
         }
 
         loop {
-            let grant = match self.scheduler.acquire(self.work(&course)).await {
+            let acquiring = self.scheduler.acquire(self.work(&course));
+            let granted = match &mut stop {
+                Some(stop) => tokio::select! {
+                    granted = acquiring => granted,
+                    () = stopped(stop) => return Ok(Ran::Stopped),
+                },
+                None => acquiring.await,
+            };
+            let grant = match granted {
                 Ok(grant) => grant,
                 Err(refused) => {
                     // Under `auto` an http attempt nobody can make is a
@@ -529,18 +714,27 @@ impl Pipeline {
                         self.forfeit(&mut course).await?;
                         continue;
                     }
+                    // A job waits out what only says "not now".
+                    if stop.is_some() && waits(&refused) {
+                        return Ok(Ran::Deferred(Deferred {
+                            reason: refused.reason,
+                            retry_at: refused.retry_at,
+                        }));
+                    }
                     // What was reached before stands; a request that never
                     // got an attempt is answered with the reason.
-                    let (outcome, reason) = match &course.last {
-                        Some(last) => (last.outcome(), last.reason.clone()),
-                        None => (
+                    let (outcome, reason) = if course.attempts.is_empty() {
+                        (
                             Outcome::ProviderError,
                             Some(refused.reason.as_str().to_owned()),
-                        ),
+                        )
+                    } else {
+                        course.standing()
                     };
-                    return self
-                        .conclude(course, outcome, reason, refused.retry_at)
-                        .await;
+                    return finished(
+                        self.conclude(course, outcome, reason, refused.retry_at)
+                            .await?,
+                    );
                 }
             };
             let ruling = self.attempt(&mut course, grant).await?;
@@ -557,13 +751,8 @@ impl Pipeline {
                     course.retry = None;
                 }
                 Step::Finish | Step::RetryOtherPersona { .. } => {
-                    let (outcome, reason) = course
-                        .last
-                        .as_ref()
-                        .map_or((Outcome::ProviderError, None), |last| {
-                            (last.outcome(), last.reason.clone())
-                        });
-                    return self.conclude(course, outcome, reason, None).await;
+                    let (outcome, reason) = course.standing();
+                    return finished(self.conclude(course, outcome, reason, None).await?);
                 }
             }
         }
@@ -638,6 +827,13 @@ impl Pipeline {
             engines,
             countries: course.policy.countries.clone(),
             prefer_countries: order.prefer_countries.clone(),
+            // A session's persona and a persona's own second try are not
+            // a matter of visitors.
+            visitors: if course.follow_up.is_some() || order.pin.is_some() {
+                None
+            } else {
+                order.visitors.clone()
+            },
             pacing: course.pacing.profile,
             active_hours: course.policy.active_hours,
             breaker_threshold: rules.threshold,
@@ -645,7 +841,10 @@ impl Pipeline {
             follow_up: course.follow_up.is_some(),
             retry_pause: course.retry,
             not_before: None,
-            give_up_at: course.give_up_at,
+            give_up_at: course.give_up_at.or_else(|| {
+                let patience = chrono::Duration::from_std(order.patience?).ok()?;
+                self.now().checked_add_signed(patience)
+            }),
         }
     }
 
@@ -784,9 +983,13 @@ impl Pipeline {
             claimed_os: persona.claimed_os,
             country: persona.country,
         });
+        // The last attempt as the record has it, when this process made
+        // none: the request was taken up again and went no further.
+        let recorded = course.attempts.last().filter(|_| last.is_none());
         let block = last
             .as_ref()
             .and_then(|last| last.classification.block.clone())
+            .or_else(|| recorded.and_then(|attempt| attempt.block.clone()))
             .filter(|_| outcome.is_block());
         let headers = last.as_ref().map_or_else(Vec::<Header>::new, |last| {
             if self.settings.expose_set_cookie {
@@ -807,9 +1010,15 @@ impl Pipeline {
             id: ResultId::new(),
             request_id: course.request.id,
             outcome,
-            status: last.as_ref().and_then(|last| last.status),
+            status: last
+                .as_ref()
+                .and_then(|last| last.status)
+                .or_else(|| recorded.and_then(|attempt| attempt.status)),
             headers: headers.clone(),
-            final_url: last.as_ref().and_then(|last| last.final_url.clone()),
+            final_url: last
+                .as_ref()
+                .and_then(|last| last.final_url.clone())
+                .or_else(|| recorded.and_then(|attempt| attempt.final_url.clone())),
             redirects: last
                 .as_ref()
                 .map_or_else(Vec::new, |last| last.redirects.clone()),

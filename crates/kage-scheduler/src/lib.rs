@@ -54,7 +54,8 @@ pub use executor::{
 pub use forwarder::{Forwarder, ForwarderEgress, ForwarderSettings, Meter, Routes, Tokens};
 pub use memory::MemoryBackend;
 pub use pipeline::{
-    FetchOrder, FetchReport, PacingReport, Pipeline, PipelineSettings, Running, Synchronous,
+    Deferred, FetchOrder, FetchReport, JobFetch, PacingReport, Pipeline, PipelineSettings, Running,
+    Stop, Synchronous,
 };
 pub use scheduler::{Grant, Refused, Scheduler, SchedulerGate};
 pub use verdicts::Verdicts;
