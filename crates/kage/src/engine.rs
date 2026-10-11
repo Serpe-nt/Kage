@@ -8,7 +8,8 @@
 //! - The scheduler runs over the store and the pool; the persona
 //!   manager's own browser work (warm-up visits, scheduled self-tests)
 //!   asks it first (follow-up F27).
-//! - The pipeline runs one fetch through both paths.
+//! - The pipeline runs one fetch through both paths, and keeps what a
+//!   request asks to keep of its page in the artifact store.
 //! - The bandwidth service keeps the budget of the proxy plan, and its
 //!   hard stop reaches the scheduler, the forwarder and the open browsers.
 //!
@@ -31,11 +32,11 @@ use kage_core::seed::Seed;
 use kage_persona::{BrowserGate, Egress, PersonaManager};
 use kage_proxy::Pool;
 use kage_scheduler::{
-    AttemptExecutor, Backend, Bandwidth, Forwarder, ForwarderSettings, Ledger, PathExecutor,
-    Pipeline, PipelineSettings, PoolRoutes, Routes, Scheduler, SchedulerGate, StoreBackend,
-    StoreLedger, Tokens, Verdicts, cooldown_rules, planner_rules,
+    Archive, AttemptExecutor, Backend, Bandwidth, Forwarder, ForwarderSettings, Ledger,
+    PathExecutor, Pipeline, PipelineSettings, PoolRoutes, Routes, Scheduler, SchedulerGate,
+    StoreArchive, StoreBackend, StoreLedger, Tokens, Verdicts, cooldown_rules, planner_rules,
 };
-use kage_store::Store;
+use kage_store::{ArtifactStore, Store};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
@@ -101,7 +102,7 @@ pub(crate) struct Engine {
     pub(crate) pipeline: Pipeline,
     pub(crate) forwarder: Arc<Forwarder>,
     pub(crate) bandwidth: Arc<Bandwidth>,
-    pool: Arc<Pool>,
+    pub(crate) pool: Arc<Pool>,
     context_idle: Duration,
     flush_interval: Duration,
     stops: Arc<Stops>,
@@ -194,12 +195,19 @@ impl Engine {
             config,
             Some(Arc::clone(&meter)),
         ));
+        // Bodies, screenshots and PDFs a request asks to keep go into the
+        // artifact store, next to where the sidecars write their files.
+        let archive: Arc<dyn Archive> = Arc::new(StoreArchive::new(ArtifactStore::new(
+            store.pool().clone(),
+            &config.artifacts,
+        )));
         let pipeline = Pipeline::new(
             Arc::clone(&scheduler),
             executor,
             verdicts,
             PipelineSettings::from_config(config),
-        );
+        )
+        .with_archive(archive);
         let ledger: Arc<dyn Ledger> = Arc::new(StoreLedger::new(store.clone(), Arc::clone(&pool)));
         let bandwidth = Arc::new(Bandwidth::new(
             meter,

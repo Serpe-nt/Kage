@@ -10,7 +10,10 @@
 //! 4. What the attempt means is settled (cooldown, breaker), and the
 //!    rules of [`kage_core::schedule::retry`] say what follows: done, the
 //!    same persona in its browser, or another persona after a pause.
-//! 5. The request, its attempts and its result are stored.
+//! 5. What the request asked to keep of its page is stored
+//!    ([`crate::archive`]), then the request, its attempts and its result.
+//!    The result's headers show the names of the cookies a site set and
+//!    not their values, unless the configuration says otherwise.
 //!
 //! A synchronous fetch that takes longer than its wall time is not
 //! cancelled: [`Pipeline::fetch_sync`] hands back a [`Running`] fetch,
@@ -24,8 +27,8 @@ use chrono::{DateTime, Utc};
 use kage_browser::contract::{CaptureOptions, Wait};
 use kage_core::config::{Config, MAX_ATTEMPT_TIMEOUT};
 use kage_core::domain::{
-    Attempt, CountryCode, Engine, FetchRecord, Header, Persona, PersonaSummary, Render, RenderMode,
-    RequestRecord, SessionId,
+    ArtifactRef, Attempt, CountryCode, Engine, FetchRecord, Header, Persona, PersonaSummary,
+    Render, RenderMode, RequestRecord, SessionId, redact_set_cookie,
 };
 use kage_core::ids::{ApiKeyId, AttemptId, JobId, PersonaId, RequestId, ResultId};
 use kage_core::outcome::{Block, Outcome};
@@ -38,11 +41,15 @@ use kage_core::schedule::retry::{AttemptVerdict, RequestProgress, Ruling, Step};
 use kage_core::schedule::selection::Network;
 use kage_core::seed::Seed;
 use kage_core::ssrf::{SsrfPolicy, check_url};
+use kage_http::RequestKind;
 use url::Url;
 
 use crate::SchedulerError;
+use crate::archive::{Archive, Archived, Keep};
 use crate::backend::Backend;
-use crate::executor::{AttemptExecutor, AttemptJob, AttemptOutput, default_capture, default_wait};
+use crate::executor::{
+    AttemptExecutor, AttemptJob, AttemptOutput, BehaviorWish, default_capture, default_wait,
+};
 use crate::metrics;
 use crate::scheduler::{Grant, Scheduler};
 use crate::verdicts::Verdicts;
@@ -58,6 +65,9 @@ pub struct FetchOrder {
     pub headers: Vec<(String, String)>,
     /// The request body (http path).
     pub body: Option<Bytes>,
+    /// What the request is on the http path: a navigation, a `fetch()` or
+    /// an `XMLHttpRequest`.
+    pub kind: RequestKind,
     /// The render mode asked for.
     pub render: RenderMode,
     /// Whose work it is.
@@ -78,6 +88,11 @@ pub struct FetchOrder {
     pub capture: CaptureOptions,
     /// What a browser attempt waits for.
     pub wait: Wait,
+    /// What the request asks of the behavior on a browser page; `None`
+    /// leaves all of it to the domain policy.
+    pub behavior: Option<BehaviorWish>,
+    /// Which parts of the page are stored with the result.
+    pub keep: Keep,
     /// The largest body kept.
     pub max_body_bytes: Option<u64>,
     /// The key that asked; `None` for Kage's own.
@@ -100,6 +115,7 @@ impl FetchOrder {
             method: http::Method::GET,
             headers: Vec::new(),
             body: None,
+            kind: RequestKind::Document,
             render: RenderMode::Auto,
             priority,
             pin: None,
@@ -110,6 +126,8 @@ impl FetchOrder {
             max_retries: None,
             capture: default_capture(),
             wait: default_wait(),
+            behavior: None,
+            keep: Keep::default(),
             max_body_bytes: None,
             api_key: None,
             job: None,
@@ -146,6 +164,16 @@ pub struct FetchReport {
     pub attempts: Vec<Attempt>,
     /// What the last attempt came to; `None` when there was none.
     pub last: Option<AttemptOutput>,
+    /// The headers of the last response as the stored result has them:
+    /// with the values of the cookies the site set left out, unless the
+    /// configuration exposes them.
+    pub headers: Vec<Header>,
+    /// The bodies and files that were stored with the result.
+    pub artifacts: Vec<ArtifactRef>,
+    /// The captured XHR and `fetch()` responses that were stored with it.
+    pub xhr: Option<serde_json::Value>,
+    /// When the result was stored.
+    pub finished_at: DateTime<Utc>,
     /// The persona of the last attempt.
     pub persona: Option<PersonaSummary>,
     /// The block report, when the outcome is a block.
@@ -199,6 +227,8 @@ pub struct PipelineSettings {
     pub retry_pause: Lognormal,
     /// The SSRF guard's settings.
     pub security: SsrfPolicy,
+    /// Whether a result shows the values of the cookies a site set.
+    pub expose_set_cookie: bool,
 }
 
 impl PipelineSettings {
@@ -209,7 +239,8 @@ impl PipelineSettings {
             browser_timeout: config.browser.timeout.get(),
             sync_wall_time: config.scheduler.sync_wall_time.get(),
             retry_pause: config.scheduler.retry_pause.distribution(),
-            security: config.security,
+            security: config.security.ssrf(),
+            expose_set_cookie: config.security.expose_set_cookie,
         }
     }
 }
@@ -221,6 +252,7 @@ pub struct Pipeline {
     executor: Arc<dyn AttemptExecutor>,
     verdicts: Arc<Verdicts>,
     settings: PipelineSettings,
+    archive: Option<Arc<dyn Archive>>,
 }
 
 /// Counts an attempt and writes its line in the log.
@@ -309,7 +341,22 @@ impl Pipeline {
             executor,
             verdicts,
             settings,
+            archive: None,
         }
+    }
+
+    /// The same pipeline, keeping what a request asks to keep of its page
+    /// in `archive`. Without one nothing is kept and a stored result has
+    /// no bodies.
+    #[must_use]
+    pub fn with_archive(mut self, archive: Arc<dyn Archive>) -> Self {
+        self.archive = Some(archive);
+        self
+    }
+
+    /// The settings the pipeline works with.
+    pub const fn settings(&self) -> &PipelineSettings {
+        &self.settings
     }
 
     fn backend(&self) -> &Arc<dyn Backend> {
@@ -339,7 +386,20 @@ impl Pipeline {
     ///
     /// As [`Self::fetch`].
     pub async fn fetch_sync(&self, order: FetchOrder) -> Result<Synchronous, SchedulerError> {
-        let request = RequestId::new();
+        self.fetch_sync_as(RequestId::new(), order).await
+    }
+
+    /// [`Self::fetch_sync`] under an id the caller minted: the API answers
+    /// with it before the fetch has one of its own (`X-Request-Id`).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::fetch`].
+    pub async fn fetch_sync_as(
+        &self,
+        request: RequestId,
+        order: FetchOrder,
+    ) -> Result<Synchronous, SchedulerError> {
         let wall = self.settings.sync_wall_time;
         let pipeline = self.clone();
         let mut task = tokio::spawn(async move { pipeline.fetch_as(request, order, None).await });
@@ -693,6 +753,8 @@ impl Pipeline {
             render: dispatch.render,
             url: course.order.url.clone(),
             method: course.order.method.clone(),
+            kind: course.order.kind,
+            behavior: course.order.behavior,
             headers: course.order.headers.clone(),
             body: course.order.body.clone(),
             domain: course.domain.clone(),
@@ -726,21 +788,34 @@ impl Pipeline {
             .as_ref()
             .and_then(|last| last.classification.block.clone())
             .filter(|_| outcome.is_block());
+        let headers = last.as_ref().map_or_else(Vec::<Header>::new, |last| {
+            if self.settings.expose_set_cookie {
+                last.headers.clone()
+            } else {
+                redact_set_cookie(&last.headers)
+            }
+        });
+        let archived = match (&self.archive, &last) {
+            (Some(archive), Some(last)) => {
+                archive
+                    .keep(course.request.id, course.order.keep, last, self.now())
+                    .await
+            }
+            _ => Archived::default(),
+        };
         let record = FetchRecord {
             id: ResultId::new(),
             request_id: course.request.id,
             outcome,
             status: last.as_ref().and_then(|last| last.status),
-            headers: last
-                .as_ref()
-                .map_or_else(Vec::<Header>::new, |last| last.headers.clone()),
+            headers: headers.clone(),
             final_url: last.as_ref().and_then(|last| last.final_url.clone()),
             redirects: last
                 .as_ref()
                 .map_or_else(Vec::new, |last| last.redirects.clone()),
             extract: None,
-            xhr: None,
-            artifacts: Vec::new(),
+            xhr: archived.xhr.clone(),
+            artifacts: archived.artifacts.clone(),
             persona: persona.clone(),
             block: block.clone(),
             robots: None,
@@ -767,6 +842,10 @@ impl Pipeline {
             retry_at,
             attempts: course.attempts,
             last,
+            headers,
+            artifacts: archived.artifacts,
+            xhr: archived.xhr,
+            finished_at: record.created_at,
             persona,
             block,
             pacing: PacingReport {

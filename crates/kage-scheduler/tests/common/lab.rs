@@ -5,9 +5,10 @@
 //! - [`ListProvider`]: a provider whose proxies are [`TestProxy`]s.
 //! - [`MockSidecar`]: a sidecar that answers the contract: it generates
 //!   personas, opens a persona's context once and hands the same one back,
-//!   answers navigations with what a test set for a URL, and keeps the
+//!   answers navigations with what a test set for a URL, keeps the
 //!   cookies a context holds per origin, so that what is imported can be
-//!   exported again.
+//!   exported again, and answers the health, metrics and self-test
+//!   questions of the API.
 //! - [`Lab`]: the pool, the persona manager with the forwarder as its
 //!   egress, the scheduler over the store, the real executor and the
 //!   pipeline, and a site behind the provider's proxies.
@@ -216,6 +217,12 @@ pub struct SidecarState {
     pub navigated: Vec<Value>,
     pub exported: Vec<Value>,
     pub imported: Vec<Value>,
+    /// Self-tests that were asked for.
+    pub selftested: Vec<Value>,
+    /// What a self-test answers, laid over a passing report.
+    pub selftest: Option<Value>,
+    /// Whether the container answers its health question.
+    pub healthy: bool,
 }
 
 struct SidecarResponder {
@@ -340,6 +347,29 @@ impl Respond for SidecarResponder {
             return self.generate(&body);
         }
         let mut state = self.state.lock().unwrap();
+        if method == "GET" && path == "/v1/health" {
+            if !state.healthy {
+                return ResponseTemplate::new(503);
+            }
+            let mut health = example("HealthResponse");
+            health["engine"] = json!(self.engine.as_str());
+            return ResponseTemplate::new(200).set_body_json(health);
+        }
+        if method == "GET" && path == "/v1/metrics" {
+            let engine = self.engine.as_str();
+            return ResponseTemplate::new(200).set_body_string(format!(
+                "# HELP sidecar_contexts_open Open persona contexts\n\
+                 # TYPE sidecar_contexts_open gauge\n\
+                 sidecar_contexts_open{{engine=\"{engine}\"}} {}\n\
+                 # HELP sidecar_navigation_duration_seconds Time a navigation took\n\
+                 # TYPE sidecar_navigation_duration_seconds histogram\n\
+                 sidecar_navigation_duration_seconds_bucket{{engine=\"{engine}\",le=\"+Inf\"}} {navigated}\n\
+                 sidecar_navigation_duration_seconds_sum{{engine=\"{engine}\"}} 1.5\n\
+                 sidecar_navigation_duration_seconds_count{{engine=\"{engine}\"}} {navigated}\n",
+                state.contexts.len(),
+                navigated = state.navigated.len(),
+            ));
+        }
         if method == "POST" && path == "/v1/contexts" {
             return Self::open(&mut state, body);
         }
@@ -358,6 +388,22 @@ impl Respond for SidecarResponder {
                 ResponseTemplate::new(204)
             }
             ("POST", "navigate") => Self::navigate(&mut state, context, body),
+            ("POST", "selftest") => {
+                let mut report = example("SelftestResponse");
+                report["passed"] = json!(true);
+                report["complete"] = json!(true);
+                report["score"] = json!(100);
+                for finding in report["findings"].as_array_mut().into_iter().flatten() {
+                    finding["status"] = json!("pass");
+                }
+                if let Some(Value::Object(over)) = state.selftest.clone() {
+                    for (key, value) in over {
+                        report[key.as_str()] = value;
+                    }
+                }
+                state.selftested.push(body);
+                ResponseTemplate::new(200).set_body_json(report)
+            }
             ("POST", "state/export") => {
                 let origin = body["origin"].as_str().unwrap_or_default().to_owned();
                 let mut answer = example("ExportStateResponse");
@@ -404,6 +450,9 @@ impl MockSidecar {
             navigated: Vec::new(),
             exported: Vec::new(),
             imported: Vec::new(),
+            selftested: Vec::new(),
+            selftest: None,
+            healthy: true,
         }));
         let server = MockServer::start().await;
         Mock::given(any())

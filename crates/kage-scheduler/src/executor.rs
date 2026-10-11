@@ -14,7 +14,11 @@
 //! contexts, the cookies its http jar holds for the origin are handed to
 //! the browser, and the page is loaded with the behavior the domain policy
 //! asks for: a human dwell, a scroll depth drawn from the attempt's seed,
-//! a wandering pointer, and the policy's entry. A detected interstitial is
+//! a wandering pointer, and the policy's entry. A request may shorten that
+//! ([`BehaviorWish`]) inside what the policy allows: less scrolling or
+//! none, and a shorter dwell that is drawn anew for every attempt and
+//! never falls below the policy's `min_dwell`. The pointer always wanders,
+//! and a policy with `behavior_locked` ignores the request altogether. A detected interstitial is
 //! given `browser.challenge_wait_ms` to resolve by itself. The redirect
 //! chain is checked against the SSRF guard afterwards. After a page the
 //! site served, the origin's cookies are handed to the http jar and the
@@ -42,11 +46,12 @@ use kage_core::config::{BrowserConfig, Config};
 use kage_core::domain::{Header, Persona, Render, Timing};
 use kage_core::ids::{PersonaId, RequestId};
 use kage_core::outcome::Outcome;
+use kage_core::pacing::Lognormal;
 use kage_core::policy::{EffectivePolicy, RefererStrategy};
 use kage_core::schedule::politeness::Courtesy;
 use kage_core::seed::Seed;
 use kage_core::ssrf::SsrfPolicy;
-use kage_http::{FetchSpec, Fetched, Guard, HttpError};
+use kage_http::{FetchSpec, Fetched, Guard, HttpError, RequestKind};
 use kage_persona::identity::http_spec;
 use kage_persona::{PersonaError, PersonaManager, Via};
 use url::Url;
@@ -57,6 +62,47 @@ use crate::verdicts::{Verdicts, cookies_set, courtesy_of, page_failure, unanswer
 /// How much longer than its own budget a browser attempt is waited for:
 /// the sidecar answers when the budget ran out, a little after it.
 const BROWSER_GRACE: Duration = Duration::from_secs(20);
+
+/// The longest dwell a request can fix: the contract's own limit.
+const MAX_FIXED_DWELL: Duration = Duration::from_secs(120);
+
+/// What a request asks of a persona's behavior on a browser page (spec
+/// §16.4). What it leaves out is the domain policy's.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct BehaviorWish {
+    /// How far down the page to scroll, from 0 to 1; 0 for no scrolling.
+    pub scroll_depth: Option<f64>,
+    /// The median of the time spent on the page after it loaded.
+    pub dwell: Option<Duration>,
+    /// How the page is arrived at.
+    pub referer_strategy: Option<RefererStrategy>,
+}
+
+impl BehaviorWish {
+    /// Whether the request asks for anything at all.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// The behavior a browser attempt was asked for, and whose it was.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BehaviorApplied {
+    /// Whether any of it was the request's.
+    pub from_request: bool,
+    /// Whether the request asked for behavior that the policy's lock
+    /// overrode.
+    pub request_ignored: bool,
+    /// How far the page is scrolled; `None` for no scrolling.
+    pub scroll_depth: Option<f64>,
+    /// The dwell drawn for this attempt; `None` for the persona's own
+    /// human dwell, which the sidecar draws.
+    pub dwell: Option<Duration>,
+    /// How the page is arrived at.
+    pub referer_strategy: RefererStrategy,
+    /// The seed of the attempt, from which all of it was drawn.
+    pub seed: Seed,
+}
 
 /// What one attempt is asked to do.
 #[derive(Debug, Clone)]
@@ -73,6 +119,11 @@ pub struct AttemptJob {
     pub url: Url,
     /// `GET`, `HEAD` or `POST`; a browser attempt is always a navigation.
     pub method: http::Method,
+    /// What the request is on the http path: a navigation, a `fetch()` or
+    /// an `XMLHttpRequest`.
+    pub kind: RequestKind,
+    /// What the request asks of the behavior on a browser page.
+    pub behavior: Option<BehaviorWish>,
     /// The caller's headers (http path).
     pub headers: Vec<(String, String)>,
     /// The request body (http path).
@@ -125,6 +176,8 @@ pub struct AttemptOutput {
     pub cookies_to_browser: Option<usize>,
     /// Cookies handed from the browser to the http jar after the page.
     pub cookies_to_http: Option<usize>,
+    /// The behavior the browser was asked for (browser path).
+    pub behavior: Option<BehaviorApplied>,
 }
 
 impl AttemptOutput {
@@ -143,6 +196,7 @@ impl AttemptOutput {
             fetched: None,
             cookies_to_browser: None,
             cookies_to_http: None,
+            behavior: None,
         }
     }
 
@@ -167,53 +221,122 @@ pub trait AttemptExecutor: Send + Sync + fmt::Debug {
     async fn run(&self, job: &AttemptJob) -> AttemptOutput;
 }
 
-/// The behavior a domain policy asks of a browser on a page (spec §10.4):
-/// a human dwell, a scroll depth drawn from the attempt's seed inside the
-/// configured range, a wandering pointer, and the policy's entry.
+/// The dwell of one attempt when a request names its median: drawn from
+/// the attempt's seed as a log-normal around that median (its 95th
+/// percentile at twice the median), never below `floor` and never the
+/// same twice. A draw below the floor is drawn again, not raised to it:
+/// a pile of pages left after exactly the floor would be a signature of
+/// its own.
+pub fn draw_dwell(median: Duration, floor: Duration, seed: &Seed) -> Duration {
+    let cap = MAX_FIXED_DWELL.as_secs_f64() * 1000.0;
+    let floor_ms = (floor.as_secs_f64() * 1000.0).min(cap / 2.0);
+    let median_ms = (median.as_secs_f64() * 1000.0)
+        .max(floor_ms)
+        .max(1.0)
+        .min(cap / 2.0);
+    let shape = Lognormal {
+        median: median_ms,
+        p95: 2.0 * median_ms,
+        min: None,
+        max: Some(cap),
+    };
+    let mut rng = seed.child("dwell").rng();
+    // At least half of the draws are above the floor.
+    for _ in 0..64 {
+        let value = shape.sample(&mut rng);
+        if value >= floor_ms {
+            return Duration::from_secs_f64(value / 1000.0);
+        }
+    }
+    floor
+}
+
+/// The behavior of a browser on a page (spec §10.4), as the sidecar is
+/// asked for it and as the result reports it.
+///
+/// Without a request's wish it is the domain policy's: a human dwell, a
+/// scroll depth drawn from the attempt's seed inside the configured range,
+/// a wandering pointer, and the policy's entry. A wish changes the scroll
+/// depth, the dwell ([`draw_dwell`]) and the entry, unless the policy
+/// locks behavior. The pointer wanders either way.
 pub fn behavior_for(
     policy: &EffectivePolicy,
     browser: &BrowserConfig,
     seed: &Seed,
-) -> BehaviorOptions {
-    let depth = seed
-        .child("scroll-depth")
-        .rng()
-        .uniform(browser.scroll_depth.min, browser.scroll_depth.max);
-    BehaviorOptions {
-        dwell: Some(DwellMode::Human),
+    wish: Option<&BehaviorWish>,
+) -> (BehaviorOptions, BehaviorApplied) {
+    let asked = wish.filter(|wish| !wish.is_empty());
+    let wish = asked.filter(|_| !policy.behavior_locked);
+    let scroll_depth = match wish.and_then(|wish| wish.scroll_depth) {
+        Some(depth) if depth <= 0.0 => None,
+        Some(depth) => Some(depth.min(1.0)),
+        None => Some(
+            seed.child("scroll-depth")
+                .rng()
+                .uniform(browser.scroll_depth.min, browser.scroll_depth.max),
+        ),
+    };
+    let dwell = wish
+        .and_then(|wish| wish.dwell)
+        .map(|median| draw_dwell(median, policy.min_dwell.get(), seed));
+    let referer_strategy = wish
+        .and_then(|wish| wish.referer_strategy)
+        .unwrap_or(policy.referer_strategy);
+    let options = BehaviorOptions {
+        dwell: Some(if dwell.is_some() {
+            DwellMode::Fixed
+        } else {
+            DwellMode::Human
+        }),
         entry: Some(Entry {
             fallback: None,
             from_url: None,
-            strategy: match policy.referer_strategy {
+            strategy: match referer_strategy {
                 RefererStrategy::None => EntryStrategy::None,
                 // A search entry needs a results URL built from a
                 // template, and none is configured: a typed navigation.
                 RefererStrategy::Direct | RefererStrategy::SearchEngine => EntryStrategy::Direct,
             },
         }),
-        scroll_depth: Some(depth),
+        scroll_depth,
         seed: Some(seed.to_string()),
         wander: Some(true),
-    }
+    };
+    let applied = BehaviorApplied {
+        from_request: wish.is_some(),
+        request_ignored: asked.is_some() && wish.is_none(),
+        scroll_depth,
+        dwell,
+        referer_strategy,
+        seed: *seed,
+    };
+    (options, applied)
 }
 
-/// The navigation of one browser attempt.
-pub fn navigation_for(job: &AttemptJob, browser: &BrowserConfig) -> NavigateRequest {
-    NavigateRequest {
+/// The navigation of one browser attempt, and the behavior it asks for.
+pub fn navigation_for(
+    job: &AttemptJob,
+    browser: &BrowserConfig,
+) -> (NavigateRequest, BehaviorApplied) {
+    let (behavior, applied) = behavior_for(&job.policy, browser, &job.seed, job.behavior.as_ref());
+    let request = NavigateRequest {
         artifact_prefix: None,
-        behavior: Some(behavior_for(&job.policy, browser, &job.seed)),
+        behavior: Some(behavior),
         capture: CaptureOptions {
             // The classifier reads the document, whatever the caller wants.
             dom: true,
             ..job.capture.clone()
         },
         challenge_wait_ms: Some(browser.challenge_wait_ms),
-        dwell_ms: None,
+        dwell_ms: applied
+            .dwell
+            .and_then(|dwell| u64::try_from(dwell.as_millis()).ok()),
         max_body_bytes: job.max_body_bytes,
         timeout_ms: u64::try_from(job.timeout.as_millis()).ok(),
         url: job.url.to_string(),
         wait: job.wait.clone(),
-    }
+    };
+    (request, applied)
 }
 
 /// What a navigation waits for when the request does not say: the load
@@ -318,7 +441,7 @@ impl PathExecutor {
             manager,
             verdicts,
             browser: config.browser,
-            security: config.security,
+            security: config.security.ssrf(),
             max_redirects: usize::try_from(config.http.max_redirects).unwrap_or(usize::MAX),
             meter,
             last_pages: Mutex::new(HashMap::new()),
@@ -387,6 +510,7 @@ impl PathExecutor {
             method: job.method.clone(),
             headers,
             body: job.body.clone(),
+            kind: job.kind,
             guard: Guard::Target(self.security),
             timeout: Some(job.timeout),
             max_body_bytes: job
@@ -431,6 +555,7 @@ impl PathExecutor {
             fetched: Some(Box::new(fetched)),
             cookies_to_browser: None,
             cookies_to_http: None,
+            behavior: None,
         }
     }
 
@@ -462,7 +587,10 @@ impl PathExecutor {
             HttpError::Header(_)
             | HttpError::InvalidUrl(_)
             | HttpError::InvalidReferer(_)
-            | HttpError::Method(_) => AttemptOutput::failed(
+            | HttpError::Method(_)
+            | HttpError::Kind(_)
+            | HttpError::InitiatorRequired
+            | HttpError::PreflightRequired { .. } => AttemptOutput::failed(
                 Outcome::ProviderError,
                 "invalid_request",
                 Courtesy::NotTheSite,
@@ -482,6 +610,7 @@ impl PathExecutor {
         output
     }
 
+    #[allow(clippy::too_many_lines)] // One attempt in a browser, from its context to its verdict.
     async fn browser(&self, job: &AttemptJob) -> AttemptOutput {
         let persona = &job.persona;
         let (proxy, endpoint) = match self.manager.egress(persona, Via::Browser).await {
@@ -508,7 +637,7 @@ impl PathExecutor {
             }
         }
 
-        let request = navigation_for(job, &self.browser);
+        let (request, behavior) = navigation_for(job, &self.browser);
         let sidecar = self.manager.sidecars().of(persona.engine);
         let navigating =
             sidecar.navigate_checked(context, &request, self.security, self.max_redirects);
@@ -534,6 +663,7 @@ impl PathExecutor {
                 output.final_url = Some(denied.url);
                 output.timing = timing_of(&result);
                 output.page = Some(result);
+                output.behavior = Some(behavior);
                 return output;
             }
         };
@@ -591,6 +721,7 @@ impl PathExecutor {
             fetched: None,
             cookies_to_browser,
             cookies_to_http,
+            behavior: Some(behavior),
         }
     }
 }
@@ -612,16 +743,18 @@ impl AttemptExecutor for PathExecutor {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use kage_browser::contract::{DwellMode, EntryStrategy};
     use kage_core::config::BrowserConfig;
     use kage_core::outcome::Outcome;
-    use kage_core::policy::{DomainPolicies, EffectivePolicy};
+    use kage_core::policy::{DomainPolicies, EffectivePolicy, RefererStrategy};
     use kage_core::schedule::politeness::Courtesy;
     use kage_core::seed::Seed;
     use kage_http::{HttpError, Stage};
     use url::Url;
 
-    use super::{AttemptOutput, PathExecutor, behavior_for, origin_of};
+    use super::{AttemptOutput, BehaviorWish, PathExecutor, behavior_for, draw_dwell, origin_of};
 
     fn policy(yaml: &str) -> EffectivePolicy {
         DomainPolicies::from_yaml(yaml)
@@ -634,7 +767,7 @@ mod tests {
         let browser = BrowserConfig::default();
         let seed = Seed::from_u64(5);
 
-        let behavior = behavior_for(&policy(""), &browser, &seed);
+        let (behavior, applied) = behavior_for(&policy(""), &browser, &seed, None);
 
         assert_eq!(behavior.dwell, Some(DwellMode::Human));
         assert_eq!(behavior.wander, Some(true));
@@ -642,12 +775,19 @@ mod tests {
         let entry = behavior.entry.clone().unwrap();
         assert_eq!(entry.strategy, EntryStrategy::Direct);
         assert_eq!((entry.from_url, entry.fallback), (None, None));
+        // What was asked for is what is reported, and it was the policy's.
+        assert!(!applied.from_request && !applied.request_ignored);
+        assert_eq!(applied.scroll_depth, behavior.scroll_depth);
+        assert_eq!(applied.dwell, None);
+        assert_eq!(applied.referer_strategy, RefererStrategy::Direct);
+        assert_eq!(applied.seed, seed);
         // The same seed scrolls as deep every time; other seeds cover the
         // range and never leave it.
-        assert_eq!(behavior, behavior_for(&policy(""), &browser, &seed));
+        assert_eq!(behavior, behavior_for(&policy(""), &browser, &seed, None).0);
         let depths: Vec<f64> = (0..400)
             .map(|n| {
-                behavior_for(&policy(""), &browser, &Seed::from_u64(n))
+                behavior_for(&policy(""), &browser, &Seed::from_u64(n), None)
+                    .0
                     .scroll_depth
                     .unwrap()
             })
@@ -660,17 +800,142 @@ mod tests {
         // and is a typed navigation.
         let none = policy("defaults:\n  referer_strategy: none\n");
         assert_eq!(
-            behavior_for(&none, &browser, &seed).entry.unwrap().strategy,
+            behavior_for(&none, &browser, &seed, None)
+                .0
+                .entry
+                .unwrap()
+                .strategy,
             EntryStrategy::None
         );
         let search = policy("defaults:\n  referer_strategy: search_engine\n");
         assert_eq!(
-            behavior_for(&search, &browser, &seed)
+            behavior_for(&search, &browser, &seed, None)
+                .0
                 .entry
                 .unwrap()
                 .strategy,
             EntryStrategy::Direct
         );
+        // A wish that asks for nothing is no wish.
+        let (empty, applied) =
+            behavior_for(&policy(""), &browser, &seed, Some(&BehaviorWish::default()));
+        assert_eq!(empty, behavior);
+        assert!(!applied.from_request && !applied.request_ignored);
+    }
+
+    #[test]
+    fn a_request_shortens_the_behavior_but_never_to_a_bare_load() {
+        let browser = BrowserConfig::default();
+        let seed = Seed::from_u64(11);
+        let wish = BehaviorWish {
+            scroll_depth: Some(0.3),
+            dwell: Some(Duration::from_secs(3)),
+            referer_strategy: Some(RefererStrategy::None),
+        };
+
+        let (behavior, applied) = behavior_for(&policy(""), &browser, &seed, Some(&wish));
+
+        assert_eq!(behavior.scroll_depth, Some(0.3));
+        assert_eq!(behavior.dwell, Some(DwellMode::Fixed));
+        assert_eq!(behavior.entry.unwrap().strategy, EntryStrategy::None);
+        // The pointer wanders whatever the request says: there is no way
+        // to ask for a page nobody touches.
+        assert_eq!(behavior.wander, Some(true));
+        assert!(applied.from_request && !applied.request_ignored);
+        let dwell = applied.dwell.unwrap();
+        assert!(dwell >= Duration::from_secs(2), "{dwell:?}");
+        assert_eq!(applied.referer_strategy, RefererStrategy::None);
+
+        // No scrolling is `0`, and is asked of the sidecar as no depth.
+        let still = BehaviorWish {
+            scroll_depth: Some(0.0),
+            ..BehaviorWish::default()
+        };
+        let (behavior, applied) = behavior_for(&policy(""), &browser, &seed, Some(&still));
+        assert_eq!(behavior.scroll_depth, None);
+        assert_eq!(applied.scroll_depth, None);
+        // Only the depth was the request's: the dwell stays the persona's.
+        assert_eq!(behavior.dwell, Some(DwellMode::Human));
+        assert_eq!(applied.dwell, None);
+        assert!(applied.from_request);
+        // More than the whole page is the whole page.
+        let deep = BehaviorWish {
+            scroll_depth: Some(7.0),
+            ..BehaviorWish::default()
+        };
+        assert_eq!(
+            behavior_for(&policy(""), &browser, &seed, Some(&deep))
+                .0
+                .scroll_depth,
+            Some(1.0)
+        );
+    }
+
+    #[test]
+    fn a_dwell_is_drawn_around_the_median_and_never_below_the_floor() {
+        let floor = Duration::from_secs(2);
+        let draw = |median_ms: u64, n: u64| {
+            draw_dwell(Duration::from_millis(median_ms), floor, &Seed::from_u64(n))
+        };
+        // The same attempt dwells as long every time.
+        assert_eq!(draw(3000, 1), draw(3000, 1));
+
+        let mut dwells: Vec<Duration> = (0..2000).map(|n| draw(3000, n)).collect();
+        dwells.sort_unstable();
+        assert!(dwells[0] >= floor, "{:?}", dwells[0]);
+        // No pile at the floor, and no two attempts alike: a draw below
+        // the floor is drawn again, not raised to it.
+        let distinct: std::collections::BTreeSet<Duration> = dwells.iter().copied().collect();
+        assert!(distinct.len() > 1990, "{}", distinct.len());
+        let at_the_floor = dwells
+            .iter()
+            .filter(|dwell| **dwell < floor + Duration::from_millis(20))
+            .count();
+        assert!(at_the_floor < 40, "{at_the_floor}");
+        let median = dwells[dwells.len() / 2];
+        assert!(
+            (Duration::from_millis(3000)..Duration::from_millis(3700)).contains(&median),
+            "{median:?}"
+        );
+        let p95 = dwells[dwells.len() * 95 / 100];
+        assert!(
+            (Duration::from_millis(5200)..Duration::from_millis(7000)).contains(&p95),
+            "{p95:?}"
+        );
+
+        // A median below the floor is the floor's; nothing is ever shorter.
+        let short: Vec<Duration> = (0..500).map(|n| draw(0, n)).collect();
+        assert!(short.iter().all(|dwell| *dwell >= floor));
+        assert!(short.iter().any(|dwell| *dwell > Duration::from_secs(3)));
+        // A very long one stays inside what the contract takes.
+        let long: Vec<Duration> = (0..500).map(|n| draw(600_000, n)).collect();
+        assert!(long.iter().all(|dwell| *dwell <= Duration::from_mins(2)));
+    }
+
+    #[test]
+    fn a_policy_that_locks_behavior_ignores_the_request_and_says_so() {
+        let browser = BrowserConfig::default();
+        let seed = Seed::from_u64(3);
+        let locked = policy("defaults:\n  behavior_locked: true\n  min_dwell: 5s\n");
+        let wish = BehaviorWish {
+            scroll_depth: Some(0.0),
+            dwell: Some(Duration::from_secs(1)),
+            referer_strategy: Some(RefererStrategy::None),
+        };
+
+        let (behavior, applied) = behavior_for(&locked, &browser, &seed, Some(&wish));
+
+        assert_eq!(behavior, behavior_for(&locked, &browser, &seed, None).0);
+        assert_eq!(behavior.dwell, Some(DwellMode::Human));
+        assert!((0.6..0.9).contains(&behavior.scroll_depth.unwrap()));
+        assert!(applied.request_ignored && !applied.from_request);
+        assert_eq!(applied.referer_strategy, RefererStrategy::Direct);
+
+        // Without the lock the policy's own floor holds.
+        let floored = policy("defaults:\n  min_dwell: 5s\n");
+        let (_, applied) = behavior_for(&floored, &browser, &seed, Some(&wish));
+        assert!(applied.dwell.unwrap() >= Duration::from_secs(5));
+        assert!(!applied.request_ignored);
     }
 
     #[test]
@@ -707,7 +972,7 @@ mod tests {
         assert_eq!(
             told(HttpError::Timeout {
                 stage: Stage::ReadingBody,
-                after: std::time::Duration::from_secs(30),
+                after: Duration::from_secs(30),
             }),
             (
                 Outcome::Timeout,

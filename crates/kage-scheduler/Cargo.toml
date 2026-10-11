@@ -27,6 +27,8 @@ kage-proxy = { workspace = true }
 kage-store = { workspace = true }
 
 async-trait = { workspace = true }
+# Bodies the sidecar captured that are not text arrive as base64.
+base64 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 # The token a persona's clients present to the forwarder.

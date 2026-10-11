@@ -394,6 +394,10 @@ mod tests {
                 reason: None,
             }],
             last: Some(last),
+            headers: Vec::new(),
+            artifacts: Vec::new(),
+            xhr: None,
+            finished_at: at,
             persona: Some(PersonaSummary {
                 id: persona,
                 engine: Engine::Chromium,

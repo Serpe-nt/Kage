@@ -15,6 +15,8 @@
 //!   handoff around it.
 //! - [`verdicts`]: the classifier's verdict and what follows from it:
 //!   cooldowns scaled by confidence, the breaker.
+//! - [`archive`]: what a request keeps of its page, stored as artifacts
+//!   with its result.
 //! - [`forwarder`]: the one proxy every persona's traffic leaves through
 //!   (follow-up F10): the provider's credentials stay in this process and
 //!   every byte is counted.
@@ -25,6 +27,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod archive;
 pub mod backend;
 pub mod bandwidth;
 mod error;
@@ -41,10 +44,13 @@ use kage_core::schedule::planner::PlannerRules;
 use kage_core::schedule::politeness::ServerErrorRules;
 use kage_core::schedule::retry::CooldownRules;
 
+pub use archive::{Archive, Archived, Keep, StoreArchive};
 pub use backend::{Backend, PoolRoutes, StoreBackend};
 pub use bandwidth::{Bandwidth, Ledger, StoreLedger, Term};
 pub use error::SchedulerError;
-pub use executor::{AttemptExecutor, AttemptJob, AttemptOutput, PathExecutor};
+pub use executor::{
+    AttemptExecutor, AttemptJob, AttemptOutput, BehaviorApplied, BehaviorWish, PathExecutor,
+};
 pub use forwarder::{Forwarder, ForwarderEgress, ForwarderSettings, Meter, Routes, Tokens};
 pub use memory::MemoryBackend;
 pub use pipeline::{
