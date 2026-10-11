@@ -35,6 +35,7 @@ use kage_browser::{BrowserError, SidecarClient, SidecarSettings};
 use kage_core::config::{Config, SelftestPageConfig};
 use kage_core::domain::{AuditOutcome, Engine, Proxy, ProxyEndpoint};
 use kage_core::ids::ProxyId;
+use kage_core::persona::locale;
 use kage_core::seed::Seed;
 use serde_json::json;
 
@@ -152,19 +153,30 @@ struct StandIn {
 
 /// The place and languages of the stand-in persona of a proxy: what a
 /// persona behind it would get, unless the caller named them.
-fn stand_in(proxy: &Proxy, options: &BrowserSelftestOptions) -> StandIn {
+///
+/// A named first language is the locale. Firefox takes its regional
+/// formats from the locale's region, and its engine refuses a locale
+/// without one, so that is refused here, before a sidecar is asked.
+fn stand_in(proxy: &Proxy, options: &BrowserSelftestOptions) -> anyhow::Result<StandIn> {
     let seed = Seed::derive("selftest-stand-in", &[proxy.id.as_uuid().as_bytes()]);
     let place = kage_persona::lifecycle::place_of(proxy, options.engine, &seed);
     let (locale, languages) = match options.languages.first() {
-        // Named languages: the first one is the locale, as before.
-        Some(first) => (first.clone(), options.languages.clone()),
+        Some(first) => {
+            if options.engine == Engine::Firefox && locale::region_of(first).is_none() {
+                bail!(
+                    "--language {first}: the first language of a firefox persona is its locale \n                     and needs a region, for example {first}-{}; the languages after it may be \n                     bare",
+                    locale::region_of(&place.locale.locale).unwrap_or("DE")
+                );
+            }
+            (first.clone(), options.languages.clone())
+        }
         None => (place.locale.locale, place.locale.languages),
     };
-    StandIn {
+    Ok(StandIn {
         timezone: options.timezone.clone().unwrap_or(place.timezone),
         locale,
         languages,
-    }
+    })
 }
 
 /// The conversation with the sidecar: a persona, a context through the
@@ -268,7 +280,7 @@ async fn browser_in(
         .context("cannot build the sidecar client")?;
 
     let seed = seed_of(proxy.id);
-    let identity = stand_in(&proxy, options);
+    let identity = stand_in(&proxy, options)?;
     let (summary, outcome) =
         converse(&client, config, options, &identity, &endpoint, &seed, pages).await?;
 
@@ -406,8 +418,8 @@ mod tests {
     use kage_core::secret::SealedSecret;
 
     use super::{
-        BrowserSelftestOptions, echo_expectation, pages_of, profile_dir_of, seed_of, stand_in,
-        stand_in_os, write_report,
+        BrowserSelftestOptions, echo_expectation, pages_of, profile_dir_of, seed_of, stand_in_os,
+        write_report,
     };
 
     fn config() -> Config {
@@ -536,6 +548,9 @@ mod tests {
         // the `de-DE, de, en` no stock Firefox sends; Chrome ships
         // `de-DE, de, en-US, en`.
         let german = proxy("DE", Some(("DE", "Europe/Berlin")));
+        let stand_in = |proxy: &Proxy, options: &BrowserSelftestOptions| {
+            super::stand_in(proxy, options).unwrap()
+        };
         let firefox = stand_in(&german, &derived(Engine::Firefox));
         assert_eq!(firefox.languages, ["de", "en-US", "en"]);
         assert_eq!(firefox.locale, "de-DE");
@@ -569,6 +584,36 @@ mod tests {
         );
         assert_eq!(zone_only.timezone, "Europe/Zurich");
         assert_eq!(zone_only.languages, ["de", "en-US", "en"]);
+    }
+
+    #[test]
+    fn a_firefox_stand_in_needs_a_region_in_its_first_language() {
+        let german = proxy("DE", Some(("AT", "Europe/Vienna")));
+        let named = |engine, languages: &[&str]| {
+            super::stand_in(
+                &german,
+                &BrowserSelftestOptions {
+                    engine,
+                    languages: languages.iter().map(|tag| (*tag).to_owned()).collect(),
+                    ..options(false)
+                },
+            )
+        };
+
+        // Refused before any sidecar is asked, with the tag to write.
+        let error = named(Engine::Firefox, &["de", "en-US"])
+            .unwrap_err()
+            .to_string();
+        assert!(error.starts_with("--language de:"), "{error}");
+        assert!(error.contains("de-AT"), "{error}");
+        assert!(named(Engine::Firefox, &["zh-Hant"]).is_err());
+
+        // Only the first language is the locale; the others may be bare.
+        let regional = named(Engine::Firefox, &["de-AT", "de", "en"]).unwrap();
+        assert_eq!(regional.locale, "de-AT");
+        assert_eq!(regional.languages, ["de-AT", "de", "en"]);
+        // Chrome takes a bare language, as it always did.
+        assert_eq!(named(Engine::Chromium, &["de"]).unwrap().locale, "de");
     }
 
     #[test]

@@ -1,7 +1,15 @@
 //! `kage serve`: checks the database, loads the policies, starts the
 //! background jobs, the proxy pool, the personas and the fetch engine
-//! (forwarder, scheduler, bandwidth budget), and runs the API router until
+//! (forwarder, scheduler, bandwidth budget), and serves the API until
 //! shutdown.
+//!
+//! The API listens on `server.bind`, which is loopback unless configured
+//! otherwise, with the limits of spec §19 on every connection
+//! (`kage_api::serve`). With `server.metrics_bind` a second listener
+//! serves `/metrics` without a key for a Prometheus on the same private
+//! network. The metrics exporter is installed here, once per process:
+//! everything the pool, the scheduler and the forwarder recorded through
+//! the `metrics` facade since M2 is scraped from now on.
 
 use std::future::Future;
 use std::net::SocketAddr;
@@ -9,14 +17,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
+use axum::Router;
 use chrono::Utc;
+use kage_api::metrics::{MetricsHandle, UPKEEP_EVERY};
+use kage_api::serve::ServeSettings;
+use kage_api::{ApiParts, ApiState, EngineParts};
 use kage_core::alert::AlertSink;
 use kage_core::config::Config;
 use kage_core::policy::PolicyStore;
 use kage_persona::PersonaProbeClients;
-use kage_proxy::{HealthChecker, Pool};
+use kage_proxy::{HealthChecker, Pool, SystemClock};
 use kage_store::{ArtifactStore, Store};
 use tokio::net::TcpListener;
+use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 
 use crate::engine::Engine;
@@ -29,6 +42,12 @@ const ORPHAN_GRACE: Duration = Duration::from_hours(1);
 /// How often the proxy pool ends backoffs that ran out and follows
 /// replacements in flight.
 const POOL_TICK: Duration = Duration::from_secs(10);
+
+/// What the fetch engine is made of, once it runs.
+struct Started {
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+    engine: Option<(Engine, Arc<HealthChecker>)>,
+}
 
 /// Starts everything `serve` needs and serves until SIGINT or SIGTERM.
 ///
@@ -67,13 +86,22 @@ pub(crate) async fn run(config: Config, bind: Option<SocketAddr>) -> anyhow::Res
         None
     };
 
+    // Before anything records: what is counted from here on is scraped.
+    let metrics = match kage_api::metrics::install() {
+        Ok(handle) => Some(handle),
+        Err(error) => {
+            tracing::warn!(%error, "the metrics exporter could not be installed; /metrics is empty");
+            None
+        }
+    };
+
     let artifacts = ArtifactStore::new(store.pool().clone(), &config.artifacts);
     let retention = tokio::spawn(run_retention(
-        artifacts,
+        artifacts.clone(),
         config.artifacts.sweep_interval.get(),
     ));
 
-    let (proxy_pool, engine) = match start_proxy_pool(&config, &store, alerts, policies).await {
+    let started = match start_proxy_pool(&config, &store, alerts, Arc::clone(&policies)).await {
         Ok(started) => started,
         Err(error) => {
             retention.abort();
@@ -83,23 +111,124 @@ pub(crate) async fn run(config: Config, bind: Option<SocketAddr>) -> anyhow::Res
         }
     };
 
-    let served = match listen(bind.unwrap_or(config.server.bind)).await {
-        Ok(listener) => serve(listener, shutdown_signal()).await,
-        Err(error) => Err(error),
-    };
+    let served = serve_api(
+        &config,
+        bind,
+        &store,
+        artifacts,
+        policies,
+        started.engine.as_ref(),
+        metrics,
+    )
+    .await;
 
-    for task in proxy_pool {
+    for task in started.tasks {
         task.abort();
     }
     // After the manager's own work stopped: what waits is refused, the
     // browsers are closed and the last byte counts are written.
-    if let Some(engine) = engine {
+    if let Some((engine, _)) = started.engine {
         engine.stop().await;
     }
     retention.abort();
     recorder.abort();
     store.close().await;
     served
+}
+
+/// Builds the API over what was started and serves it until a signal.
+async fn serve_api(
+    config: &Config,
+    bind: Option<SocketAddr>,
+    store: &Store,
+    artifacts: ArtifactStore,
+    policies: Arc<PolicyStore>,
+    engine: Option<&(Engine, Arc<HealthChecker>)>,
+    metrics: Option<MetricsHandle>,
+) -> anyhow::Result<()> {
+    let state = ApiState::new(ApiParts {
+        config: Arc::new(config.clone()),
+        store: store.clone(),
+        artifacts,
+        policies,
+        clock: Arc::new(SystemClock),
+        engine: engine.map(|(engine, health)| EngineParts {
+            pipeline: engine.pipeline.clone(),
+            personas: Arc::clone(&engine.personas),
+            pool: Arc::clone(&engine.pool),
+            health: Arc::clone(health),
+            bandwidth: Arc::clone(&engine.bandwidth),
+        }),
+        metrics,
+    })
+    .context("cannot set up the API")?;
+
+    let bind = bind.unwrap_or(config.server.bind);
+    let listener = listen(bind).await?;
+    if !bind.ip().is_loopback() {
+        tracing::warn!(
+            %bind,
+            "the API listens beyond loopback: every request needs a key, but the connection \
+             is plain HTTP. Put a TLS-terminating proxy in front of it"
+        );
+    }
+    let metrics_listener = match config.server.metrics_bind {
+        Some(bind) => Some(listen(bind).await?),
+        None => None,
+    };
+
+    // One signal stops both listeners and the upkeep.
+    let (stop, stopped) = watch::channel(false);
+    let upkeep = tokio::spawn(upkeep(state.clone(), stopped.clone()));
+    let settings = ServeSettings::from_config(&config.server);
+    let metrics_server = metrics_listener.map(|listener| {
+        let router = kage_api::metrics_router(state.clone());
+        tokio::spawn(serve(listener, router, settings, wait_for(stopped.clone())))
+    });
+    let mut api = tokio::spawn(serve(
+        listener,
+        kage_api::router(state.clone()),
+        settings,
+        wait_for(stopped),
+    ));
+
+    tokio::select! {
+        () = shutdown_signal() => {}
+        // The listener gave up by itself: nothing is left to wait for.
+        ended = &mut api => {
+            let _ = stop.send(true);
+            upkeep.abort();
+            return ended.context("the API server task failed")?;
+        }
+    }
+    // Readiness says so at once; the requests in flight finish.
+    state.stop();
+    let _ = stop.send(true);
+    let served = api.await.context("the API server task failed")?;
+    if let Some(server) = metrics_server {
+        let _ = server.await;
+    }
+    upkeep.abort();
+    served
+}
+
+/// Resolves when `stopped` says so, or when its sender is gone.
+async fn wait_for(mut stopped: watch::Receiver<bool>) {
+    let _ = stopped.wait_for(|stop| *stop).await;
+}
+
+/// The API's housekeeping while the server runs.
+async fn upkeep(state: ApiState, stopped: watch::Receiver<bool>) {
+    let mut ticker = tokio::time::interval(UPKEEP_EVERY);
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let stop = wait_for(stopped);
+    tokio::pin!(stop);
+    loop {
+        tokio::select! {
+            () = &mut stop => break,
+            _ = ticker.tick() => state.upkeep(),
+        }
+    }
 }
 
 /// Binds the listening socket.
@@ -109,10 +238,12 @@ async fn listen(bind: SocketAddr) -> anyhow::Result<TcpListener> {
         .with_context(|| format!("failed to bind {bind}"))
 }
 
-/// Serves the API on `listener` until `shutdown` resolves, then drains
+/// Serves `router` on `listener` until `shutdown` resolves, then drains
 /// in-flight requests.
 pub(crate) async fn serve(
     listener: TcpListener,
+    router: Router,
+    settings: ServeSettings,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
     let local_addr = listener
@@ -120,12 +251,11 @@ pub(crate) async fn serve(
         .context("failed to read the listener address")?;
     tracing::info!(%local_addr, "kage listening");
 
-    axum::serve(listener, kage_api::router())
-        .with_graceful_shutdown(shutdown)
+    kage_api::serve::serve(listener, router, settings, shutdown)
         .await
         .context("server terminated with an error")?;
 
-    tracing::info!("kage stopped");
+    tracing::info!(%local_addr, "kage stopped");
     Ok(())
 }
 
@@ -144,7 +274,7 @@ async fn start_proxy_pool(
     store: &Store,
     alerts: Arc<dyn AlertSink>,
     policies: Arc<PolicyStore>,
-) -> anyhow::Result<(Vec<tokio::task::JoinHandle<()>>, Option<Engine>)> {
+) -> anyhow::Result<Started> {
     let pool = Arc::new(
         Pool::from_config(config, store.clone(), Arc::clone(&alerts))
             .context("cannot set up the proxy pool")?,
@@ -160,7 +290,10 @@ async fn start_proxy_pool(
                 "no proxy provider is configured (KAGE__WEBSHARE__API_KEY or \
                  KAGE__PROXIES__STATIC_LIST): the proxy pool is empty and nothing can be fetched"
             );
-            return Ok((Vec::new(), None));
+            return Ok(Started {
+                tasks: Vec::new(),
+                engine: None,
+            });
         }
         // Proxies of an earlier provider are still in the pool and may be
         // used, so they are still checked: a leak must not go unseen because
@@ -218,9 +351,12 @@ async fn start_proxy_pool(
             POOL_TICK.min(config.proxies.sync_interval.get()),
             std::future::pending(),
         )),
-        tokio::spawn(checker.run(std::future::pending())),
+        tokio::spawn(Arc::clone(&checker).run(std::future::pending())),
     ];
-    Ok((tasks, Some(engine)))
+    Ok(Started {
+        tasks,
+        engine: Some((engine, checker)),
+    })
 }
 
 /// The artifact retention job: one sweep at startup, then one per interval.
@@ -275,9 +411,22 @@ pub(crate) async fn shutdown_signal() {
 pub(crate) mod test_support {
     use std::net::SocketAddr;
 
+    use axum::routing::get;
+    use axum::{Json, Router};
+    use kage_api::serve::ServeSettings;
+    use kage_core::config::ServerConfig;
     use tokio::net::TcpListener;
     use tokio::sync::oneshot;
     use tokio::task::JoinHandle;
+
+    /// A router that answers the liveness probe and nothing else: what a
+    /// test of the listener needs, without a database behind it.
+    pub(crate) fn liveness_only() -> Router {
+        Router::new().route(
+            kage_api::HEALTHZ_PATH,
+            get(|| async { Json(serde_json::json!({ "status": "ok" })) }),
+        )
+    }
 
     /// A server on an ephemeral loopback port, stopped with [`RunningServer::stop`].
     pub(crate) struct RunningServer {
@@ -291,10 +440,15 @@ pub(crate) mod test_support {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let addr = listener.local_addr().unwrap();
             let (shutdown, stopped) = oneshot::channel::<()>();
-            let task = tokio::spawn(super::serve(listener, async {
-                // A dropped sender also ends the server, so a failed test cannot leak it.
-                let _ = stopped.await;
-            }));
+            let task = tokio::spawn(super::serve(
+                listener,
+                liveness_only(),
+                ServeSettings::from_config(&ServerConfig::default()),
+                async {
+                    // A dropped sender also ends the server, so a failed test cannot leak it.
+                    let _ = stopped.await;
+                },
+            ));
             Self {
                 addr,
                 shutdown,
@@ -312,9 +466,11 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
+    use kage_api::serve::ServeSettings;
+    use kage_core::config::ServerConfig;
     use tokio::net::TcpListener;
 
-    use super::test_support::RunningServer;
+    use super::test_support::{RunningServer, liveness_only};
     use super::{listen, serve};
 
     #[tokio::test]
@@ -344,6 +500,13 @@ mod tests {
     async fn a_shutdown_that_already_fired_stops_the_server_at_once() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
 
-        serve(listener, async {}).await.unwrap();
+        serve(
+            listener,
+            liveness_only(),
+            ServeSettings::from_config(&ServerConfig::default()),
+            async {},
+        )
+        .await
+        .unwrap();
     }
 }

@@ -102,10 +102,17 @@ pub(crate) fn build(
             })
         })
         .transpose()?;
-    let http = Arc::new(ClientFactory::new(
+    let mut http = ClientFactory::new(
         HttpSettings::from_config(&config.http),
         Arc::new(StoreCookies::new(store.clone())),
-    ));
+    );
+    // The opt-in host-side lookup of the SSRF guard (spec §19): every hop
+    // of the http path is resolved here too, and refused when its name
+    // points into a denied range. Off by default: the proxy resolves.
+    if config.security.resolve_on_host {
+        http = http.with_resolver(Arc::new(kage_api::resolve::HostResolver::system()));
+    }
+    let http = Arc::new(http);
     PersonaManager::new(PersonaParts {
         store: store.clone(),
         pool,

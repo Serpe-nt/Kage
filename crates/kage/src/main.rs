@@ -8,8 +8,8 @@
 //! the whole pipeline, `selftest http` checks the http path's
 //! fingerprint, `selftest browser` runs a browser context against the
 //! self-test pages (both for a proxy with a stand-in, or for a persona),
-//! and `echo serve` runs the fingerprint echo. The remaining command
-//! (`key`) lands with the milestone that owns it (see `docs/02-plan.md`).
+//! `echo serve` runs the fingerprint echo, `key` makes, lists, revokes and
+//! rotates API keys, and `openapi` prints the document of the public API.
 
 mod alerts;
 mod config_cmd;
@@ -17,6 +17,7 @@ mod echo_cmd;
 mod engine;
 mod fetch_cmd;
 mod healthcheck;
+mod key_cmd;
 mod migrate;
 mod persona_cmd;
 mod proxy_cmd;
@@ -30,9 +31,9 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use kage_core::config::process_env;
-use kage_core::domain::{Engine, PersonaState, ProxyState, RenderMode};
+use kage_core::domain::{Engine, PersonaState, ProxyState, RenderMode, Scope};
 use kage_core::duration::HumanDuration;
-use kage_core::ids::{PersonaId, ProxyId};
+use kage_core::ids::{ApiKeyId, PersonaId, ProxyId};
 use tracing_subscriber::EnvFilter;
 
 /// Library crates composed into this binary, reported once at startup.
@@ -149,6 +150,72 @@ enum Command {
     Echo {
         #[command(subcommand)]
         command: EchoCommand,
+    },
+    /// Make, list, revoke and rotate API keys. May run next to the
+    /// server, and before one was ever started: the first admin key of a
+    /// deployment is made here.
+    Key {
+        #[command(subcommand)]
+        command: KeyCommand,
+    },
+    /// Print the OpenAPI document of the public API, as `/openapi.json`
+    /// serves it. Needs no configuration.
+    Openapi,
+}
+
+#[derive(Debug, Subcommand)]
+enum KeyCommand {
+    /// Make a key and print its token. The token is shown this once:
+    /// only a hash of its secret is stored.
+    Create {
+        /// A name for humans.
+        #[arg(long)]
+        name: String,
+        /// What the key may do: fetch, jobs, crawl, sessions or admin.
+        /// Repeat it; scopes are independent, admin implies no other.
+        #[arg(long = "scope", value_name = "SCOPE", required = true)]
+        scopes: Vec<Scope>,
+        /// Requests per minute; 60 when left out.
+        #[arg(long, value_name = "N")]
+        requests_per_minute: Option<u32>,
+        /// Requests in flight at once; 4 when left out.
+        #[arg(long, value_name = "N")]
+        max_concurrent: Option<u32>,
+        /// Pages per day (UTC); no budget when left out.
+        #[arg(long, value_name = "N")]
+        daily_page_budget: Option<u32>,
+        /// Print one JSON document instead of sentences.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List the keys. Never prints a token: Kage does not have them.
+    List {
+        /// Include disabled keys.
+        #[arg(long)]
+        all: bool,
+        /// Print one JSON document instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Disable a key: it stops authenticating at once. Its row and its
+    /// audit trail stay.
+    Revoke {
+        /// The key.
+        #[arg(value_name = "KEY_ID")]
+        id: ApiKeyId,
+        /// Print one JSON document instead of a sentence.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Give a key a new secret and print its new token. The old token
+    /// stops working at once.
+    Rotate {
+        /// The key.
+        #[arg(value_name = "KEY_ID")]
+        id: ApiKeyId,
+        /// Print one JSON document instead of sentences.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -402,6 +469,37 @@ enum ProxyCommand {
     },
 }
 
+/// `kage key`.
+async fn key(
+    config: &kage_core::config::Config,
+    command: KeyCommand,
+    out: &mut Vec<u8>,
+) -> anyhow::Result<()> {
+    match command {
+        KeyCommand::Create {
+            name,
+            scopes,
+            requests_per_minute,
+            max_concurrent,
+            daily_page_budget,
+            json,
+        } => {
+            let options = key_cmd::CreateOptions {
+                name,
+                scopes,
+                requests_per_minute,
+                max_concurrent,
+                daily_page_budget,
+                json,
+            };
+            key_cmd::create(config, &options, out).await
+        }
+        KeyCommand::List { all, json } => key_cmd::list(config, all, json, out).await,
+        KeyCommand::Revoke { id, json } => key_cmd::revoke(config, id, json, out).await,
+        KeyCommand::Rotate { id, json } => key_cmd::rotate(config, id, json, out).await,
+    }
+}
+
 /// Installs the global JSON log subscriber. The level comes from `RUST_LOG`
 /// and defaults to `info`. Commands that print their result on stdout log
 /// to stderr.
@@ -504,6 +602,25 @@ async fn selftest(command: SelftestCommand, config_file: Option<&Path>) -> anyho
     result
 }
 
+/// `kage openapi`: the document of the public API on stdout, as
+/// `/openapi.json` serves it, with a newline at its end.
+fn print_openapi() -> anyhow::Result<()> {
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    serde_json::to_writer_pretty(&mut out, &kage_api::openapi())
+        .context("cannot write the OpenAPI document")?;
+    std::io::Write::write_all(&mut out, b"\n").context("cannot write to stdout")
+}
+
+/// Writes what a command produced to stdout, whatever came of the command:
+/// what was found, or a token that was made, is shown even when the command
+/// then fails.
+fn shown(out: &[u8], result: anyhow::Result<()>) -> anyhow::Result<()> {
+    std::io::Write::write_all(&mut std::io::stdout().lock(), out)
+        .context("cannot write to stdout")?;
+    result
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -519,12 +636,18 @@ async fn main() -> anyhow::Result<()> {
         return config_cmd::check(config_file.as_deref(), process_env(), &mut stdout.lock());
     }
 
+    // The document is the whole output: nothing else may reach stdout.
+    if matches!(cli.command, Command::Openapi) {
+        return print_openapi();
+    }
+
     init_tracing(matches!(
         cli.command,
         Command::Proxy { .. }
             | Command::Persona { .. }
             | Command::Selftest { .. }
             | Command::Fetch { .. }
+            | Command::Key { .. }
     ))?;
     match cli.command {
         // The echo is a tool of its own: it reads no configuration.
@@ -562,10 +685,7 @@ async fn main() -> anyhow::Result<()> {
             };
             let mut out = Vec::new();
             let result = fetch_cmd::fetch(&config, &options, &mut out).await;
-            // What was found is shown even when the page was not fetched.
-            std::io::Write::write_all(&mut std::io::stdout().lock(), &out)
-                .context("cannot write to stdout")?;
-            result
+            shown(&out, result)
         }
         Command::Serve { bind } => {
             let config = config_cmd::load(config_file.as_deref(), process_env())?;
@@ -587,25 +707,26 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Config {
             command: ConfigCommand::Check,
-        } => Ok(()),
+        }
+        | Command::Openapi => Ok(()),
+        Command::Key { command } => {
+            let config = config_cmd::load(config_file.as_deref(), process_env())?;
+            let mut out = Vec::new();
+            let result = key(&config, command, &mut out).await;
+            shown(&out, result)
+        }
         Command::Persona { command } => {
             let config = config_cmd::load(config_file.as_deref(), process_env())?;
             let mut out = Vec::new();
             let result = persona(&config, command, &mut out).await;
-            // What was found is shown even when the command then fails.
-            std::io::Write::write_all(&mut std::io::stdout().lock(), &out)
-                .context("cannot write to stdout")?;
-            result
+            shown(&out, result)
         }
         Command::Proxy { command } => {
             let config = config_cmd::load(config_file.as_deref(), process_env())?;
             // The result is written in one piece once the command is done.
             let mut out = Vec::new();
             let result = proxy(&config, command, &mut out).await;
-            // What was produced is shown even when the command then fails.
-            std::io::Write::write_all(&mut std::io::stdout().lock(), &out)
-                .context("cannot write to stdout")?;
-            result
+            shown(&out, result)
         }
     }
 }
