@@ -722,9 +722,25 @@ request is converted into a job and `202` returned with the job id.
   `Site: same-origin`, `same-site` or `cross-site`, schemeful and decided by
   the Public Suffix List; over a redirect chain the furthest hop decides.
   The `Referer` that goes out follows `strict-origin-when-cross-origin`. A
-  request is a navigation (GET, HEAD or POST) or one of the subresource
-  kinds below; fetch()/XHR as a kind waits for the browser captures of M4
-  and the API field of M8.
+  request is a navigation (GET, HEAD or POST), one of the subresource
+  kinds below, or a script's request.
+- **A script's request** (`request_kind: fetch | xhr` of the API, F6): a
+  `fetch()` or an `XMLHttpRequest` goes out as Chrome 155 and Firefox 152
+  were captured sending one (`tests/fixtures/fingerprints/browser/`): its
+  own header order, `Dest: empty`, `Mode: cors`, the `Accept` of a script
+  (`*/*`), Chrome's `Priority: u=1, i`, Firefox's `u=4` for a fetch and
+  none for an XHR, no `Upgrade-Insecure-Requests` and no `Sec-Fetch-User`.
+  It names the page that makes it as its `Referer`, which the caller must
+  give: Kage never invents the page. `Origin` goes out when the method is
+  not GET or HEAD or the target is another origin, and is `null` after a
+  redirect chain that crossed origins twice. Cookies go to the page's own
+  origin only (credentials `same-origin`, the default of `fetch()`).
+  A request a browser would preflight is refused: preflights are not
+  emulated. Of a caller's headers only those with a captured place are
+  taken (`Referer`, `Accept`, `Content-Type`): Chrome orders the headers
+  a script sets by a hash of their names, so no capture says where an
+  unknown one goes, and a wrong place is a tell. No subresources are
+  emulated after a script's request.
 - **Redirects** are followed by kage-http, at most `http.max_redirects`
   (default 10), every hop through the redirect chain of the SSRF guard
   (§19), which names the hop it refuses and records an `https` to `http`
@@ -1201,44 +1217,97 @@ bodies in the artifact store.
 
 ### 16.1 Conventions
 
-- Base path `/v1`. JSON only. `Content-Type: application/json; charset=utf-8`.
-- Errors follow RFC 9457 problem details with a stable `code`.
-- Every response has `X-Request-Id`; `Idempotency-Key` is honored on
-  `POST /v1/jobs` for 24 h.
-- OpenAPI 3.1 at `/openapi.json`, Swagger UI at `/docs` (admin scope).
-- Liveness `/healthz`, readiness `/readyz` (DB, at least one healthy
-  persona, at least one sidecar), metrics `/metrics` (internal network or
-  admin scope).
+- Base path `/v1`. JSON only: a body is `application/json` or the request
+  is `415 unsupported_media_type`. A field the API does not know is an
+  error (`422 validation_failed`), never ignored.
+- Errors follow RFC 9457 problem details (`application/problem+json`) with
+  a stable `code`, the request's id as `request_id`, and what a client
+  needs to act as further members (`field`, `header`, `retry_after_s`,
+  `constraint`). A problem never carries an address, a persona's id or a
+  sidecar's words. The codes are the `ErrorCode` enumeration of the OpenAPI
+  document.
+- A fetch that was made answers `200` whatever the site did: a block is
+  the result's `outcome`, not an HTTP error. Only a request that cannot be
+  made as asked, or that the API cannot serve, is a problem.
+- Every response has `X-Request-Id` (a UUIDv7 the server makes; one a
+  client sends is not taken over); `Idempotency-Key` is honored on
+  `POST /v1/jobs` for 24 h (M9; no M8 endpoint takes it).
+- OpenAPI 3.1 at `/openapi.json` (no key: it is the same for every
+  deployment), generated from the Rust types and committed as
+  `crates/kage-api/openapi.json`; `kage openapi` prints it. Swagger UI at
+  `/docs` (admin scope; `server.docs: false` removes it).
+- Liveness `/healthz` (no dependency), readiness `/readyz` (the database
+  answers, at least one persona is ready behind a usable proxy, at least
+  one sidecar answers; `503` with the three checks otherwise, and from the
+  moment the server is told to stop), both without a key. Metrics
+  `/metrics` needs the admin scope on the API; `server.metrics_bind` opens
+  a second listener that serves `/metrics` and `/healthz` without a key,
+  for a Prometheus on the same private network.
+- The API listens on `127.0.0.1:8080` unless `server.bind` says otherwise,
+  speaks plain HTTP/1.1 and HTTP/2, and sends no CORS header unless
+  `server.cors_allowed_origins` names origins (§19).
 
 ### 16.2 Authentication and authorization
 
-`Authorization: Bearer kage_<keyid>_<secret>`. Secret is 32 random bytes,
-base64url. Stored as SHA-256 of the secret with the key id as lookup;
-shown once at creation. Scopes: `fetch`, `jobs`, `crawl`, `sessions`,
-`admin`. Per-key limits: requests per minute, concurrent in-flight, daily
-page budget. Keys can be disabled and rotated via admin endpoints or the
-CLI. All admin actions are written to `audit_events`.
+`Authorization: Bearer kage_<keyid>_<secret>`. The key id is the key's
+UUID without hyphens; the secret is 32 random bytes, base64url. Stored as
+SHA-256 of the secret with the key id as lookup, compared in constant
+time; shown once at creation and again only by a rotation. A token that
+does not parse, a key that does not exist and a wrong secret are one
+answer (`401 invalid_key`); only the holder of the secret learns that a
+key was disabled (`401 key_disabled`).
+
+Scopes: `fetch`, `jobs`, `crawl`, `sessions`, `admin`. They are
+independent: `admin` implies no other, and `session_id` in a fetch needs
+`sessions` beside `fetch`. A missing scope is `403 scope_missing` and names
+it.
+
+Per-key limits: requests per minute (a token bucket; default 60),
+requests in flight (default 4; a fetch that outlasts the wall time gives
+its slot back with its `202`), and an optional daily page budget (every
+fetch a key starts is a page, whatever came of it; counted per UTC day
+from the stored requests, so a restart forgets nothing). The API as a
+whole has `server.requests_per_minute` (600), counted before a key is
+looked at, so guessing keys is limited too. All are `429` with
+`Retry-After` and a code that says which (`rate_limited`,
+`concurrency_limited`, `budget_exhausted`).
+
+Keys are made, listed, disabled and rotated through the admin endpoints or
+`kage key create|list|revoke|rotate`, which works on the store and needs no
+running server: the first admin key of a deployment is made there. Every
+admin call through the API, whatever came of it (a refusal for a missing
+scope included), and every change at the command line is written to
+`audit_events` with the key, the action (`admin.persona.retire`,
+`key.create`), its target and its outcome; never a token or a hash.
 
 ### 16.3 Endpoints
 
 | Method and path | Scope | Purpose |
 |---|---|---|
-| `POST /v1/fetch` | fetch | Synchronous fetch (may return 202 + job on wall-time overflow) |
+| `POST /v1/fetch` | fetch | Synchronous fetch. One that outlasts `scheduler.sync_wall_time` (180 s) runs on and is answered `202` with the request's id, `Location` and `Retry-After`; its result is stored when it ends. M9 turns that into a job (`job_id` is null until then) |
 | `POST /v1/jobs` | jobs / crawl | Create `batch`, `flow` or `crawl` job |
 | `GET /v1/jobs/{id}` | jobs | Status, counters, timing |
 | `GET /v1/jobs/{id}/items?cursor=&limit=` | jobs | Paginated results |
 | `POST /v1/jobs/{id}/cancel` | jobs | Cooperative cancel |
-| `GET /v1/results/{id}` | fetch | A stored result by id |
-| `GET /v1/artifacts/{id}` | fetch | Screenshot, PDF, raw body stream |
-| `POST /v1/sessions` | sessions | Mint a session pinned to a persona matching hints |
-| `GET /v1/sessions/{id}` / `DELETE` | sessions | Inspect or end |
-| `GET /v1/policies/domains/{domain}` | fetch | Effective policy preview |
-| `GET /v1/admin/personas`, `POST …/{id}/retire`, `POST …/{id}/selftest` | admin | |
-| `GET /v1/admin/proxies`, `POST …/{id}/replace`, `POST …/{id}/health` | admin | |
+| `GET /v1/results/{id}` | fetch | The result of a fetch by the request's id (the `id` of the result, `X-Request-Id` of the fetch): `200` once it ended, `202` while it runs. A key reads what it fetched; another key's is `404` |
+| `GET /v1/artifacts/{id}` | fetch | What was kept of a page (document, raw body, screenshot, PDF, the body of a captured XHR response), streamed; served with `nosniff` and a sandboxing CSP, gzip passed through to a client that takes it |
+| `POST /v1/sessions` | sessions | Open a session pinned to a persona matching the hints and a `domain`'s policy: `201` new, `200` when the id is open already, `409 no_matching_persona` |
+| `GET /v1/sessions/{id}` / `DELETE` | sessions | Inspect (not a use: the idle time does not start again) or end |
+| `GET /v1/policies/domains/{domain}` | fetch | Effective policy preview: the policy as it resolves, the pacing profile, the first render, a pause in force |
+| `GET /v1/admin/personas[?state=&all=]`, `GET …/{id}[?fingerprint=true]`, `POST …/{id}/retire`, `POST …/{id}/regenerate`, `POST …/{id}/selftest` | admin | The self-test runs in the server: the http path when the persona has one and an echo is configured, the browser path in the persona's own context through the scheduler's gate and the forwarder, so it never meets `context_conflict` with real work (F29) |
+| `GET /v1/admin/proxies[?all=]`, `POST …/{id}/replace`, `POST …/{id}/health` | admin | Never a proxy's user name or password |
 | `GET /v1/admin/pool` | admin | Pool and bandwidth summary |
-| `POST /v1/admin/policies/reload` | admin | Force reload |
-| `GET/POST/DELETE /v1/admin/keys` | admin | Key management |
-| `GET /v1/admin/audit?cursor=` | admin | |
+| `POST /v1/admin/policies/reload` | admin | Force reload; an invalid file changes nothing and is `422` |
+| `GET/POST /v1/admin/keys`, `DELETE …/{id}`, `POST …/{id}/rotate` | admin | Key management; a token is in the answer of a creation and of a rotation only, with `Cache-Control: no-store` |
+| `GET /v1/admin/audit?cursor=&limit=` | admin | Newest first, at most 200 a page |
+| `GET /metrics` | admin | §20 |
+
+Sessions (§5): a session is opened by `POST /v1/sessions` and by nothing
+else. A fetch that names one that is not open is `404 session_not_found`,
+so a caller always knows when the persona behind an id is a new one. A
+session never moves: a fetch whose persona hints, or whose domain's
+policy, exclude the session's persona is `409 session_persona_conflict`
+naming the constraint, and nothing is fetched.
 
 ### 16.4 FetchRequest
 
@@ -1268,9 +1337,46 @@ CLI. All admin actions are written to `audit_events`.
 ```
 
 Validation: `url` http(s) only, ≤ 8 KB, SSRF guard (§19); `headers` ≤ 32
-entries, denylist enforced; `include` ⊆ {`dom`,`raw`,`headers`,`extract`,
-`xhr`,`screenshot`,`pdf`,`console`}; `render: http` with `include: dom`
-is rejected (no DOM without a browser) with code `render_include_conflict`.
+entries, denylist enforced (`header_denied`, naming the header); `include`
+⊆ {`dom`,`raw`,`headers`,`extract`,`xhr`,`screenshot`,`pdf`,`console`},
+by default `dom` and `headers`, or `raw` and `headers` with `render:
+http`; `render: http` with an `include` only a browser produces is
+rejected with code `render_include_conflict`. There is no `locale`: a
+persona's languages are its own.
+
+What only the http path can send is refused elsewhere instead of being
+dropped: a `method` other than `GET` (`GET`, `HEAD`, `POST` exist), a
+`body` and caller `headers` need `render: http`
+(`render_needs_http`); a browser render is a plain navigation. Arriving
+from a page in a browser is `behavior.referer_strategy`, not a header.
+
+`request_kind` (`navigation`, `fetch`, `xhr`; default `navigation`, never
+guessed from the URL) says what kind of request the http path sends
+(§9). A `fetch` or `xhr` needs `render: http` (`render_kind_conflict`)
+and a `Referer` header that names the page making it
+(`request_kind_needs_referer`); `Origin` and the `Sec-Fetch-*` headers are
+derived and cannot be set. Of a caller's headers a script's request takes
+`Referer`, `Accept` and `Content-Type`: another header has no captured
+place in one (`header_not_placeable`). A request a browser would preflight
+(cross-origin with a body type or header that is not simple) is
+`preflight_required` until preflights are emulated (with F30's milestone).
+
+`behavior` is what a request may change of what the persona does on a
+page, in a browser: `scroll_depth` from 0 (no scrolling) to 1, honoured as
+given; `dwell_ms`, the median of a log-normal the attempt's seed draws
+from (p95 at twice the median), never below the domain policy's
+`min_dwell` (2 s unless set) and at most 60 000; `referer_strategy`. A
+policy with `behavior_locked` ignores all three, and the result says so.
+The pointer always wanders; no field turns it off. `timeout_ms` is at
+least 15 000 when a browser may make the attempt and 1 000 with `render:
+http`, at most 300 000; a shorter one is `timeout_too_short`, not clamped:
+a budget that only fits a bare load would make every visit one. `pacing`
+is D9's: a profile's name or a custom profile, ignored and reported when
+the policy locks it.
+
+Until M11, `include: ["extract"]`, `extract`, `cache_ttl_s` above 0 and
+`robots: "enforce"` are `not_available_yet`: refused, not silently
+without effect.
 
 ### 16.5 FetchResult
 
@@ -1296,6 +1402,38 @@ is rejected (no DOM without a browser) with code `render_include_conflict`.
 Blocked example: `outcome: "challenge_failed"`, `block: { vendor, type,
 confidence, evidence }`, `attempts` lists each persona tried, `status` is
 the last status.
+
+As built (the OpenAPI document is the contract):
+
+- `id` is the request's id; `state` is `finished` (a `202` carries `state:
+  "running"`, `job_id` and `result`, the path of the result).
+- `headers` is a list of `{ name, value }` in the order received (a name
+  may repeat). The values of `Set-Cookie` are `[redacted]`, with the
+  cookie's name and attributes kept, unless `security.expose_set_cookie`
+  is on: a session a persona holds with a site is not a caller's to take.
+- `dom_html` and `raw_body` are inline when `include` asks; the http path
+  has no document, so `include: ["dom"]` returns its body as `raw_body`.
+  What `include` asked for is also kept as artifacts, named in `artifacts`
+  by kind (`dom_html`, `raw_body`, `screenshot`, `pdf`) as `art_…` ids.
+- `xhr` is `{ responses, dropped }`; a response's body is inline up to 256
+  kB of text and an artifact (`body_artifact`) beyond.
+- `persona.id` is a handle (`p_` and 16 hex digits) for every key without
+  the admin scope: stable for one key, different for another, an HMAC of
+  the key's and the persona's ids under a key derived from the master key.
+  `engine`, `claimed_os` and `country` are shown. No response to such a key
+  names a proxy, an address or an attempt's seed. A key with the admin
+  scope sees the persona's id and the seeds.
+- `attempts[].persona`, `reason`, `retry_at`, `escalated`, `session_id`,
+  `side_effects`, `created_at`.
+- `pacing` (`applied`, `request_ignored`, `waited_ms`) and `behavior`
+  (`applied`: `policy` or `request`, `request_ignored`, `scroll_depth`,
+  `dwell_ms`, `referer_strategy`, `moves`, `notches`) say what applied.
+  They, `console` and `side_effects` are in the answer of `POST /v1/fetch`
+  only; a stored result has them null.
+- `extract` and `robots` are null and `cached` is false until M11.
+- A result and its artifacts are a key's own: another key gets `404`, a
+  key with the admin scope reads all. Both live for
+  `artifacts.retention_days`.
 
 ### 16.6 Jobs and webhooks
 
@@ -1340,7 +1478,16 @@ verified or recorded as browser-only, or `kage config check` fails;
 `breaker_trial_timeout`, `active_hours`), `browser` (`timeout`,
 `challenge_wait_ms`, `scroll_depth`), `bandwidth` and `forwarder` (§7.5).
 `kage config check` reports the scheduler's caps, the budget and the
-forwarder. `sidecar` holds
+forwarder. `server` holds what the API's listener enforces (§19): `bind`
+(`127.0.0.1:8080`), `metrics_bind` (unset), `max_body_bytes` (1 MiB),
+`max_header_bytes` (16 KiB), `max_headers` (64), `max_uri_bytes` (8 KiB),
+`header_read_timeout` (10 s), `body_read_timeout` (30 s),
+`request_timeout` (30 s, for everything but a fetch, a self-test and a
+proxy probe), `shutdown_grace` (30 s), `max_connections` (1024),
+`requests_per_minute` (600 over all keys; 0 for none),
+`cors_allowed_origins` (none) and `docs` (true). `security` holds
+`allow_ip_targets`, `resolve_on_host` and `expose_set_cookie`, all false.
+`sidecar` holds
 the token, each engine's URL, the timeouts and `connect_retries`;
 every section rejects unknown keys and every non-secret key is listed in
 `deploy/kage.example.yaml` (a test compares them).
@@ -1364,6 +1511,8 @@ domains:
     pacing_locked: false
     robots: enforce
     referer_strategy: search_engine
+    min_dwell: 2s
+    behavior_locked: false
     cooldowns: { rate_limited: 2h, forbidden: 24h }
   "api.lenient.example":
     render: http
@@ -1373,7 +1522,9 @@ domains:
 Resolution cascades per field: exact host, then each parent domain from
 nearest to furthest (suffix on label boundaries), then `defaults`, then the
 built-in defaults; each field takes the value from the first level that sets
-it, and `pacing_locked` and the per-outcome cooldowns cascade the same way.
+it, and `pacing_locked`, `min_dwell` (between 500 ms and 45 s: the floor
+below which a request cannot shorten a persona's stay on a page),
+`behavior_locked` and the per-outcome cooldowns cascade the same way.
 Reloaded on file change with typed validation (unknown keys rejected,
 semantic checks, every named pacing profile must exist); an invalid file
 keeps the last good policy and raises an alert.
@@ -1404,12 +1555,24 @@ are gzip-compressed on disk.
 
 ## 19. Security
 
-- **SSRF guard.** Resolve every target and webhook host before connecting;
-  deny loopback, link-local, RFC 1918, CGNAT, multicast, IPv6 ULA and the
-  cloud metadata ranges; re-check on every redirect hop; deny non-http(s)
-  schemes and literal IP targets unless `security.allow_ip_targets`. The
-  proxy performs the connection, but the guard still runs on the resolved
-  name because the proxy could reach the operator's own networks.
+- **SSRF guard.** Every target, every redirect hop and every webhook URL
+  is checked: non-http(s) schemes, credentials in the URL, port 0, names
+  that never name a public site (`localhost`, `*.local`, `*.internal`, a
+  name of one label, …) and literal addresses in loopback, link-local, RFC
+  1918, CGNAT, multicast, IPv6 ULA and the cloud metadata ranges are
+  denied, as is any literal address unless `security.allow_ip_targets`. A
+  denied target is `422 ssrf_denied` (or `invalid_url`) before anything is
+  fetched or stored; a denied hop ends the fetch with the outcome
+  `ssrf_denied` and nothing read from it is returned or kept.
+
+  By default Kage looks no name up: the proxy resolves every target, and a
+  lookup from the Kage host would show the operator's resolver to the name
+  servers of whatever a consumer asks for. With `security.resolve_on_host`
+  the target of a fetch, the redirect hops of the http path and webhook
+  hosts are also resolved with the system's resolver, and a name with any
+  address in a denied range, or with none, is refused. Turn it on when the
+  proxies could reach the operator's own networks (a static list of
+  self-hosted proxies); a residential provider's exits cannot.
 - **Secrets.** Proxy usernames and passwords both encrypted at rest with
   XChaCha20-Poly1305 under `KAGE__SECRETS__MASTER_KEY` (random 24-byte nonce
   per value; version byte, nonce, ciphertext and tag; associated data binds
@@ -1441,18 +1604,44 @@ are gzip-compressed on disk.
   the SSRF guard refuses (§7.5). It is the one place where a browser's own
   background traffic and a page's redirect to the compose network would
   pass, and it is never published on the host.
-- **Input limits.** Body size limits on all endpoints, header count and
-  size limits, URL length, items per job (default 10 000), artifact size.
-- **Rate limiting.** Per key and global; `429` with `Retry-After`.
+- **Input limits.** A body of at most `server.max_body_bytes` on every
+  endpoint (`413 payload_too_large`, whether it says its length or not)
+  that arrives within `server.body_read_timeout` (`408`); a head of at
+  most `server.max_header_bytes` with at most `server.max_headers` headers
+  (`431`, by the HTTP layer) that arrives within
+  `server.header_read_timeout`, which also ends a connection that sends
+  nothing or trickles its headers (slowloris); a request target of at most
+  `server.max_uri_bytes` (`414`); at most `server.max_connections`
+  connections; `server.request_timeout` for every endpoint that does not
+  wait for the network. Items per job (default 10 000) come with M9. A
+  caller's headers pass a denylist: what is the persona's identity or the
+  transport's (`User-Agent`, `Accept-Language`, `Accept-Encoding`,
+  `Cookie`, `Origin`, `Host`, `Sec-*`, `Proxy-*` and the rest of §9's
+  list) cannot be set.
+- **Rate limiting.** Per key and global; `429` with `Retry-After` (§16.2).
+- **The API's surface.** Loopback by default; plain HTTP, so a deployment
+  that serves other machines puts a TLS-terminating reverse proxy in
+  front. No CORS header unless origins are named, never credentials, never
+  a wildcard. `/metrics` needs the admin scope, or its own listener on a
+  private network. An artifact is served as what a site sent, never as a
+  page of the API's origin (`nosniff`, a sandboxing CSP).
+- **What a consumer sees of the pool.** A key without the admin scope sees
+  a persona as a handle of its own, never a persona's id, a proxy, an
+  address or a seed; the values of the cookies a site set are redacted for
+  every key unless `security.expose_set_cookie` (§16.5). A problem
+  document says what the caller can change and nothing of what failed
+  inside.
 - **Supply chain.** Exact pins, committed lockfiles, `cargo-deny` (licenses,
   advisories, duplicates, sources), `cargo-audit`, `pnpm audit`, SBOM
   (CycloneDX) per image, Trivy on images, gitleaks on every PR, signed
   release tags, images pinned by digest in compose.
 - **Data hygiene.** Results may contain personal data from target pages;
-  retention defaults are short; an admin purge endpoint exists; the README
+  retention defaults are short (`artifacts.retention_days`); an admin purge
+  endpoint comes with the retention work of M9 (follow-up F33); the README
   states responsible-use expectations.
 - **Audit.** Every admin API call and CLI mutation writes an audit event
-  with key id, action, target, and outcome.
+  with key id, action, target, and outcome; an admin call whose event
+  cannot be written is not answered as done.
 
 ---
 
@@ -1469,9 +1658,19 @@ are gzip-compressed on disk.
   `kage_scheduler_refusals_total{reason}`, `kage_breaker_open{domain}`,
   `kage_bandwidth_bytes_total{direction}`, `kage_bandwidth_budget_ratio`
   (the scheduler's are recorded through the `metrics` facade since M7 and
-  exported with the API's in M8),
+  exported with the API's since M8),
   `kage_selftest_score{persona,engine}`, `kage_replacements_total`,
   `sidecar_contexts_open{engine}`, `sidecar_navigation_duration_seconds`.
+  The API adds `kage_api_requests_total{route,method,status}` (the route
+  is the pattern, never the path a client sent),
+  `kage_api_request_duration_seconds{route,method}`,
+  `kage_api_requests_in_flight` and `kage_api_refusals_total{code}`.
+  `/metrics` is one exposition: the process's recorder (histograms of
+  seconds with fixed buckets, so they aggregate), `kage_persona_state` and
+  `kage_selftest_score` read from the store at the scrape, and each
+  sidecar's own `/v1/metrics` merged in by family; a sidecar that does not
+  answer is missing from the scrape. No label is a secret, a token or a
+  proxy's address.
 - Traces: OTLP from both processes; one trace per request spanning API →
   scheduler → attempt → sidecar navigate.
 - Dashboards (optional profile): overview, per-domain block rate, persona

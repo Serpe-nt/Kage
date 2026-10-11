@@ -579,6 +579,47 @@ with M12).
 - Security tests: SSRF cases, header denylist, oversize bodies, slowloris
   timeout.
 
+**Follow-ups closed by M8.** F6 (the request kind of a `fetch()` and an
+`XMLHttpRequest` on the http path and its API field, from the captures of
+M4 and M5), F20 (the stand-in of `kage selftest browser` refuses a firefox
+language without a region), F29 (a persona's self-tests run in the server
+behind the admin API, through the gate and the forwarder, in the context
+real work has open).
+
+**Follow-ups raised by M8**
+- **F31 (evaluate at M13 with field data; build only if the field data
+  wants it):** an in-page `fetch()` made by the browser, for JSON APIs
+  behind a pool that has no http path. Known tell: a request the page did
+  not make shows in the page's own `performance` entries. Until then the
+  way to such data is rendering the page that calls the API with
+  `include: ["xhr"]`.
+- **F32 (with F30's milestone):** emulate the CORS preflight on the http
+  path, so that a script's request a browser would preflight
+  (`preflight_required` today) can be sent; and capture what real Chrome
+  and Camoufox send for a `fetch()` with headers a script sets
+  (`X-Requested-With`, `Authorization`, an `Accept` of its own) to another
+  origin, so that more caller headers get a place in a script's request
+  (`header_not_placeable` today for everything but `Referer`, `Accept` and
+  `Content-Type`).
+- **F33 (M9, with the retention work):** the admin purge endpoint spec §19
+  names (delete a key's results and artifacts before their retention
+  ends). M8 has retention only.
+- **F34 (owner, small):** should a caller's forwarding headers
+  (`X-Forwarded-For`, `Forwarded`, `X-Real-IP`, `True-Client-IP`) join the
+  header denylist of §9? A browser never sends them and a proxy that does
+  is a tell; today only `Via` is denied.
+- **F35 (M9):** a fetch that outlasts the wall time runs on in a task of
+  the server and is lost when the server stops (its result is then
+  `result_not_found` after an hour). M9's job takes it over; `job_id` in
+  the `202` is null until then.
+- **F36 (M11 or M12):** a stored result does not keep `pacing`,
+  `behavior`, `console` and `side_effects`; `GET /v1/results/{id}` returns
+  them null. Store them if consumers of stored results want them.
+- **F37 (M12):** `hickory-resolver` is pinned and unused; decide with the
+  webhook sender of M9 and remove the pin if it stays unused. The API
+  test client is linted by `tsc --strict` and prettier only; give it
+  eslint if it grows.
+
 ---
 
 ## M9 — Jobs: batch and flow, webhooks

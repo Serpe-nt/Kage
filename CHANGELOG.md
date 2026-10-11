@@ -8,6 +8,64 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- M8, the public API v1 and the admin API:
+  - `POST /v1/fetch` over the pipeline of M7: one page fetched while the
+    caller waits, answered `200` with its result whatever the site did (a
+    block is the result's `outcome`), and `202` with the request's id when
+    it outlasts `scheduler.sync_wall_time`; `GET /v1/results/{id}` returns
+    a result again and `GET /v1/artifacts/{id}` streams what was kept of a
+    page (the document, the raw body, a screenshot, a PDF, the bodies of
+    captured XHR responses).
+  - OpenAPI 3.1 generated from the Rust types, served at `/openapi.json`,
+    committed as `crates/kage-api/openapi.json`, printed by `kage openapi`,
+    with Swagger UI at `/docs` for the admin scope. Errors are RFC 9457
+    problem documents with a stable `code`; every answer has
+    `X-Request-Id`.
+  - API keys `kage_<keyid>_<secret>`: 32 random bytes of which only the
+    SHA-256 is stored, five independent scopes, and per key requests per
+    minute, requests in flight and a daily page budget, beside a limit of
+    requests per minute for the whole API. `kage key create | list | revoke
+    | rotate` and the same through `/v1/admin/keys`. Every admin call and
+    every change at the command line is in `audit_events`.
+  - What a request may ask of a persona's behaviour: `behavior.scroll_depth`
+    (0 is no scrolling), `behavior.dwell_ms` (the median of what the
+    persona draws from, never below the policy's new `min_dwell`) and
+    `behavior.referer_strategy`; a policy's new `behavior_locked` ignores
+    them. A `timeout_ms` too short for a visit is refused, not clamped.
+    The result's `behavior` and `pacing` say what applied.
+  - `request_kind: fetch | xhr` on the http path (follow-up F6): a request
+    sent as a page's script sends one, with the header order, `Sec-Fetch-*`
+    values, `Accept` and `Priority` Chrome 155 and Firefox 152 were
+    captured sending, the page that makes it as `Referer`, and an `Origin`
+    where a browser sends one. What a browser would preflight is refused.
+  - Sessions through the API: opened by `POST /v1/sessions` and by nothing
+    else, pinned to one persona that hints and a domain's policy choose,
+    never moved; a fetch whose constraints exclude its session's persona
+    is `409 session_persona_conflict` and nothing is fetched.
+  - The admin endpoints: personas (list, show, retire, regenerate), proxies
+    (list, probe, replace), the pool with the bandwidth budget, a policy
+    reload, the audit trail. A persona's self-tests run in the server,
+    through the scheduler's gate and the forwarder, in the browser context
+    real work has open (follow-up F29).
+  - What a consumer sees: a persona as a handle of the key's own, never a
+    persona's id, a proxy, an address or a seed; the cookies a site set
+    without their values (`security.expose_set_cookie` returns them).
+  - The SSRF guard on every target, with `security.resolve_on_host` for a
+    lookup on the Kage host (off by default: the proxy resolves), and a
+    guard for the webhook URLs of M9.
+  - A listener with the limits `axum::serve` has no switch for: the size
+    and count of headers, a deadline for the head of a request (slowloris),
+    a deadline for its body, a connection cap, a graceful stop; body and
+    request-target limits; CORS off unless origins are named.
+  - `/metrics`: the Prometheus exporter over the series the scheduler and
+    the pool recorded since M7, the API's own, the personas by state, the
+    latest self-test scores, and both sidecars' series merged in; behind
+    the admin scope, or on `server.metrics_bind` without a key.
+    `/readyz` checks the database, a ready persona and a sidecar.
+  - `tests/api-client`: the document checked by an outside validator and a
+    TypeScript client generated from it, which the new compose end-to-end
+    test (`tests/e2e/api.sh`) fetches a page with through both engines.
+  - `docs/runbooks/api.md`.
 - M7, the scheduler, pacing, block handling and escalation:
   - A new crate, `kage-scheduler`, over rules in `kage-core` that take
     time as an argument (`kage_core::schedule`) and are mutation-tested.
@@ -239,6 +297,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `server.bind` is `127.0.0.1:8080` unless set (was `0.0.0.0:8080`): the
+  API listens on loopback by default (spec §19). The compose file sets
+  `0.0.0.0:8080` inside the container and publishes the port on the host's
+  loopback, as before. A `kage serve` outside compose that other machines
+  reach needs `server.bind`, and a reverse proxy that terminates TLS.
+- A stored result names the cookies a site set without their values
+  (`[redacted]`) unless `security.expose_set_cookie` is on; the cookies
+  themselves are in the persona's jar as before.
+- Every request to the API but `/healthz`, `/readyz` and `/openapi.json`
+  needs an API key.
+- `scripts/check-npm-licenses.mjs` takes the project to check as an
+  argument (the sidecar without one) and reads the `license-policy.json`
+  next to it.
 - The sidecars' `SIDECAR_CONTEXT_IDLE_MS` is 6 minutes in compose (was 2):
   Kage closes a persona's context itself, and the sidecar's limit is the
   backstop.

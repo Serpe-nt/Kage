@@ -64,8 +64,24 @@ curl http://127.0.0.1:8080/healthz
 dependencies, the pinned Chrome with Xvfb for the sidecar's browser tests
 (through apt, with sudo; Debian or Ubuntu) and the git hooks, and creates
 `deploy/.env` with random local secrets. The stack applies the database migrations in a one-shot `migrate`
-service before `kage` starts, and publishes one port, on loopback only,
-because the API has no authentication until milestone M8.
+service before `kage` starts, and publishes one port, on loopback only:
+the API speaks plain HTTP, and a deployment that serves other machines
+puts a reverse proxy that terminates TLS in front of it.
+
+The API needs a key. Make the first one at the command line, then fetch:
+
+```bash
+docker compose --file deploy/compose.yaml exec kage \
+    kage key create --name operator --scope admin --scope fetch
+curl http://127.0.0.1:8080/v1/fetch \
+    --header "Authorization: Bearer ${KAGE_KEY}" \
+    --header 'Content-Type: application/json' \
+    --data '{"url": "https://example.org/"}'
+```
+
+[docs/runbooks/api.md](docs/runbooks/api.md) is the guide to keys, limits,
+what a request may ask for, sessions and the admin endpoints; the contract
+is `/openapi.json` ([crates/kage-api/openapi.json](crates/kage-api/openapi.json)).
 
 ## Configuration
 
@@ -83,7 +99,9 @@ kage proxy list     # the proxy pool; also `health`, `replace` and `egress`
 kage persona list   # the personas; also `show`, `selftest`, `regenerate` and `retire`
 kage selftest http  # compare the http path's fingerprint with the recorded one
 kage fetch <url>    # one request through the whole pipeline; see docs/runbooks/fetching.md
-kage serve
+kage key create     # an API key; also `list`, `revoke` and `rotate`
+kage openapi        # print the OpenAPI document of the public API
+kage serve          # the API, the pool, the personas and the scheduler
 ```
 
 Kage fetches only through proxies. Give it a Webshare API key

@@ -72,7 +72,10 @@ just ci           everything a PR runs
 - `policies/` YAML that is data, hot-reloaded: domain policies, block
   signatures, pacing profiles.
 - `deploy/` Dockerfiles and compose. `docs/` spec, plan, ADRs, runbooks.
-- `tests/` fixtures (sanitized recorded pages, fixture site), e2e, live.
+- `tests/` fixtures (sanitized recorded pages, fixture site), e2e, live,
+  and `api-client`: the public API's document validated and a TypeScript
+  client generated from it, a pnpm project of its own so that it never
+  moves the sidecar's lockfile.
 
 ## Conventions
 
