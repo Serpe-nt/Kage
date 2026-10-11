@@ -52,6 +52,8 @@ async fn metrics_expose_the_series_of_the_specification() {
     let rules = "defaults: { render: http, pacing: fast, active_hours: ignore }\n\
                  domains:\n  walled.kage.test: { render: browser, breaker_threshold: 2, breaker_pause: 30m, retries: 1 }\n";
     let mut api = Api::start_with(2, 149, rules, |config| {
+        config.jobs.poll_interval =
+            kage_core::duration::HumanDuration::new(std::time::Duration::from_millis(50));
         config.selftest.browser.pages = vec![SelftestPageConfig {
             id: "probe".to_owned(),
             kind: SelftestPageKind::Probe,
@@ -88,6 +90,45 @@ async fn metrics_expose_the_series_of_the_specification() {
     )
     .await;
     assert_eq!(page.json()["outcome"], "ok", "{:?}", page.json());
+    // A job of two pages, worked to its end by a server's worker.
+    let jobs = api.key(&[Scope::Jobs]).await;
+    let worker = kage_api::ApiState::new({
+        let mut parts = api.parts.clone();
+        parts.metrics = Some(handle.clone());
+        parts
+    })
+    .unwrap();
+    let work = common::Background::worker_only(&worker);
+    let accepted = send(
+        Method::POST,
+        "/v1/jobs",
+        Some(&jobs),
+        Some(json!({
+            "type": "batch",
+            "urls": [Api::url("/page?item=1"), Api::url("/page?item=2")],
+            "defaults": { "render": "http" },
+        })),
+    )
+    .await;
+    assert_eq!(
+        accepted.status,
+        StatusCode::CREATED,
+        "{:?}",
+        accepted.json()
+    );
+    let job = accepted.json()["id"].as_str().unwrap().to_owned();
+    let mut ended = serde_json::Value::Null;
+    for _ in 0..400 {
+        ended = send(Method::GET, &format!("/v1/jobs/{job}"), Some(&jobs), None)
+            .await
+            .json();
+        if ended["state"] == "succeeded" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(ended["state"], "succeeded", "{ended}");
+    work.stop().await;
     let rendered = send(
         Method::POST,
         "/v1/fetch",
@@ -277,6 +318,35 @@ async fn metrics_expose_the_series_of_the_specification() {
         &["engine=\"chromium\""],
     );
 
+    // Jobs: what the store holds at the scrape, and what the worker
+    // counted.
+    expect(
+        &text,
+        "kage_jobs",
+        &["job_type=\"batch\"", "state=\"succeeded\"", " 1"],
+    );
+    expect(&text, "kage_job_items", &["state=\"queued\"", " 0"]);
+    expect(&text, "kage_job_items", &["state=\"running\"", " 0"]);
+    expect(&text, "kage_webhook_deliveries_pending", &[" 0"]);
+    expect(&text, "kage_jobs_accepted_total", &["job_type=\"batch\""]);
+    expect(
+        &text,
+        "kage_jobs_finished_total",
+        &["job_type=\"batch\"", "state=\"succeeded\""],
+    );
+    expect(
+        &text,
+        "kage_job_items_total",
+        &["job_type=\"batch\"", "state=\"succeeded\"", " 2"],
+    );
+    // The job's pages were the scheduler's work like any other, under
+    // their own kind.
+    expect(
+        &text,
+        "kage_scheduler_wait_seconds_bucket",
+        &["kind=\"job\""],
+    );
+
     // The API's own.
     expect(
         &text,
@@ -310,6 +380,8 @@ async fn metrics_expose_the_series_of_the_specification() {
         "kage_requests_total",
         "kage_persona_state",
         "kage_api_requests_total",
+        "kage_jobs",
+        "kage_job_items",
         "sidecar_contexts_open",
     ] {
         let described = text

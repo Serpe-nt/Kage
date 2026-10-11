@@ -639,8 +639,6 @@ impl Runner {
     /// How many more items are over, and the event that reports it when
     /// the job asked for one.
     async fn progressed(&self, job: &Job) -> Result<(), StoreError> {
-        metrics::gauge!("kage_job_items_pending", "job_type" => job.kind.as_str())
-            .set(f64::from(job.items_pending()));
         let every = job
             .spec
             .get("progress_every")

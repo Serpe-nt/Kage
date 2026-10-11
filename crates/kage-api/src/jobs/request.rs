@@ -1070,6 +1070,11 @@ pub(crate) async fn plan_flow(flow: &FlowJob, checks: Checks<'_>) -> ApiResult<P
     let request: FetchRequest = serde_json::from_value(Value::Object(request))
         .map_err(|error| ApiError::new(ErrorCode::ValidationFailed, error.to_string()))?;
     let mut planned = plan(&request, checks.pacing())?;
+    // A flow in a session is its persona's alone: nobody else may run it
+    // again, and the same persona does not walk into the same wall twice.
+    if flow.session_id.is_some() {
+        planned.order.max_retries = Some(0);
+    }
     let site = planned
         .order
         .url
@@ -1078,25 +1083,7 @@ pub(crate) async fn plan_flow(flow: &FlowJob, checks: Checks<'_>) -> ApiResult<P
         .unwrap_or_default();
 
     let (actions, keeps) = steps_of(flow, &first.url, checks).await?;
-    // Driver input is the operator's to allow, per site.
-    if !checks.domains().resolve(&site).driver_input
-        && let Some(index) = flow.actions.iter().position(FlowStepField::by_driver)
-    {
-        return Err(at_step(
-            ApiError::new(
-                ErrorCode::DriverInputDenied,
-                format!(
-                    "step {index} asks to be done by the browser's driver (human: false), which \
-                     a page can tell from a person's input; the policy for {site} does not \
-                     allow it. Leave human out, or have the operator set driver_input for the \
-                     site"
-                ),
-            )
-            .with("field", format!("actions[{index}].human"))
-            .with("site", site.as_str()),
-            index,
-        ));
-    }
+    driver_allowed(flow, &site, checks)?;
     planned.order = FetchOrder {
         flow: Some(FlowPlan {
             actions,
@@ -1112,6 +1099,31 @@ pub(crate) async fn plan_flow(flow: &FlowJob, checks: Checks<'_>) -> ApiResult<P
         keeps,
         site,
     })
+}
+
+/// Driver input is the operator's to allow, per site: refuses a flow with
+/// a step done by the browser's driver on a site whose policy does not say
+/// so.
+fn driver_allowed(flow: &FlowJob, site: &str, checks: Checks<'_>) -> ApiResult<()> {
+    if checks.domains().resolve(site).driver_input {
+        return Ok(());
+    }
+    let Some(index) = flow.actions.iter().position(FlowStepField::by_driver) else {
+        return Ok(());
+    };
+    Err(at_step(
+        ApiError::new(
+            ErrorCode::DriverInputDenied,
+            format!(
+                "step {index} asks to be done by the browser's driver (human: false), which a \
+                 page can tell from a person's input; the policy for {site} does not allow it. \
+                 Leave human out, or have the operator set driver_input for the site"
+            ),
+        )
+        .with("field", format!("actions[{index}].human"))
+        .with("site", site),
+        index,
+    ))
 }
 
 /// A webhook that passed every check.
@@ -1233,6 +1245,7 @@ pub(crate) fn stored_spec(request: &JobRequest, items: usize) -> ApiResult<Value
 mod tests {
     use kage_browser::contract::FlowAction;
     use kage_core::config::Config;
+    use kage_core::domain::SessionId;
     use kage_core::pacing::PacingProfiles;
     use kage_core::policy::{DomainPolicies, PolicySet};
     use serde_json::{Value, json};
@@ -1291,6 +1304,33 @@ mod tests {
             resolver: None,
         };
         plan_batch(&batch, checks).await.map(|items| items.len())
+    }
+
+    #[tokio::test]
+    async fn a_flow_in_a_session_is_never_run_again() {
+        let script = |session: Option<&str>| {
+            let mut body = json!({
+                "type": "flow",
+                "actions": [{ "action": "goto", "url": "https://shop.example/" }],
+                "max_retries": 3,
+            });
+            if let Some(session) = session {
+                body["session_id"] = json!(session);
+            }
+            body
+        };
+
+        // By itself a flow is run again by another persona after a block,
+        // as often as it says.
+        let free = flow(script(None), &policies("")).await.unwrap();
+        assert_eq!(free.planned.order.max_retries, Some(3));
+        // In a session there is no other persona, whatever it says.
+        let bound = flow(script(Some("proj-1")), &policies("")).await.unwrap();
+        assert_eq!(bound.planned.order.max_retries, Some(0));
+        assert_eq!(
+            bound.planned.order.session.as_ref().map(SessionId::as_str),
+            Some("proj-1")
+        );
     }
 
     async fn flow(body: Value, policies: &PolicySet) -> Result<super::PlannedFlow, ApiError> {
