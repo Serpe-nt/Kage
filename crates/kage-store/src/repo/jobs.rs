@@ -152,6 +152,55 @@ pub struct JobCount {
     pub jobs: u64,
 }
 
+/// Inserts the items of a new job, a chunk per statement.
+async fn insert_items(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    job_id: JobId,
+    items: &[JobItem],
+) -> Result<(), StoreError> {
+    for chunk in items.chunks(INSERT_CHUNK) {
+        let mut ids = Vec::with_capacity(chunk.len());
+        let mut seqs = Vec::with_capacity(chunk.len());
+        let mut states = Vec::with_capacity(chunk.len());
+        let mut inputs = Vec::with_capacity(chunk.len());
+        let mut sites = Vec::with_capacity(chunk.len());
+        let mut requests = Vec::with_capacity(chunk.len());
+        let mut created = Vec::with_capacity(chunk.len());
+        let mut started = Vec::with_capacity(chunk.len());
+        for item in chunk {
+            ids.push(item.id.as_uuid());
+            seqs.push(to_i64(("job_items", "seq"), item.seq)?);
+            states.push(item.state.as_str().to_owned());
+            inputs.push(item.input.clone());
+            sites.push(item.site.clone());
+            requests.push(item.request_id.map(|id| id.as_uuid()));
+            created.push(item.created_at);
+            started.push(item.started_at);
+        }
+        sqlx::query!(
+            "INSERT INTO job_items (id, job_id, seq, state, input, site, request_id,
+                                    created_at, started_at)
+             SELECT item.id, $1, item.seq, item.state, item.input, item.site,
+                    item.request_id, item.created_at, item.started_at
+             FROM UNNEST($2::uuid[], $3::bigint[], $4::text[], $5::jsonb[], $6::text[],
+                         $7::uuid[], $8::timestamptz[], $9::timestamptz[])
+                  AS item (id, seq, state, input, site, request_id, created_at, started_at)",
+            job_id.as_uuid(),
+            &ids,
+            &seqs,
+            &states,
+            &inputs,
+            &sites as _,
+            &requests as _,
+            &created,
+            &started as _,
+        )
+        .execute(&mut **transaction)
+        .await?;
+    }
+    Ok(())
+}
+
 impl JobRepo<'_> {
     /// Stores a new job without items.
     ///
@@ -242,46 +291,7 @@ impl JobRepo<'_> {
                 }),
             };
         }
-        for chunk in items.chunks(INSERT_CHUNK) {
-            let mut ids = Vec::with_capacity(chunk.len());
-            let mut seqs = Vec::with_capacity(chunk.len());
-            let mut states = Vec::with_capacity(chunk.len());
-            let mut inputs = Vec::with_capacity(chunk.len());
-            let mut sites = Vec::with_capacity(chunk.len());
-            let mut requests = Vec::with_capacity(chunk.len());
-            let mut created = Vec::with_capacity(chunk.len());
-            let mut started = Vec::with_capacity(chunk.len());
-            for item in chunk {
-                ids.push(item.id.as_uuid());
-                seqs.push(to_i64(("job_items", "seq"), item.seq)?);
-                states.push(item.state.as_str().to_owned());
-                inputs.push(item.input.clone());
-                sites.push(item.site.clone());
-                requests.push(item.request_id.map(|id| id.as_uuid()));
-                created.push(item.created_at);
-                started.push(item.started_at);
-            }
-            sqlx::query!(
-                "INSERT INTO job_items (id, job_id, seq, state, input, site, request_id,
-                                        created_at, started_at)
-                 SELECT item.id, $1, item.seq, item.state, item.input, item.site,
-                        item.request_id, item.created_at, item.started_at
-                 FROM UNNEST($2::uuid[], $3::bigint[], $4::text[], $5::jsonb[], $6::text[],
-                             $7::uuid[], $8::timestamptz[], $9::timestamptz[])
-                      AS item (id, seq, state, input, site, request_id, created_at, started_at)",
-                job.id.as_uuid(),
-                &ids,
-                &seqs,
-                &states,
-                &inputs,
-                &sites as _,
-                &requests as _,
-                &created,
-                &started as _,
-            )
-            .execute(&mut *transaction)
-            .await?;
-        }
+        insert_items(&mut transaction, job.id, items).await?;
         transaction.commit().await?;
         Ok(Created::New)
     }

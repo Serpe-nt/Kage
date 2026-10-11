@@ -4,7 +4,8 @@
 //! move with the items, deliveries that wait their turn, and what the
 //! retention job and the purge delete.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+// Each test follows one job, or one delivery, through its whole life.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::too_many_lines)]
 
 mod common;
 
