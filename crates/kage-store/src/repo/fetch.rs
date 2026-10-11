@@ -102,6 +102,28 @@ impl RequestRepo<'_> {
         .transpose()
     }
 
+    /// How many requests a key has made since `since`: what its daily page
+    /// budget is counted against.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the query fails.
+    pub async fn count_for_key_since(
+        &self,
+        api_key_id: ApiKeyId,
+        since: DateTime<Utc>,
+    ) -> Result<u64, StoreError> {
+        let count = sqlx::query_scalar!(
+            r#"SELECT count(*) AS "count!" FROM requests
+               WHERE api_key_id = $1 AND created_at >= $2"#,
+            api_key_id.as_uuid(),
+            since,
+        )
+        .fetch_one(self.pool)
+        .await?;
+        Ok(u64::try_from(count).unwrap_or(0))
+    }
+
     /// Records the final outcome of a request. Returns whether the request
     /// exists.
     ///
