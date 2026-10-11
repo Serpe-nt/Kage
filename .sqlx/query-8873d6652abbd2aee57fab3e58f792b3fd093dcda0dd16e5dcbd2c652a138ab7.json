@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, api_key_id, kind, state, spec, idempotency_key, webhook_url,\n                    webhook_secret, items_total, items_succeeded, items_failed, cancel_requested,\n                    error, created_at, started_at, finished_at\n             FROM jobs WHERE api_key_id = $1 AND idempotency_key = $2",
+  "query": "UPDATE jobs SET lease_until = $3\n             WHERE id = $1 AND worker = $2 AND finished_at IS NULL\n             RETURNING id, api_key_id, kind, state, spec, idempotency_key, idempotency_hash,\n                       idempotency_until, origin, webhook_url, webhook_secret, items_total,\n                       items_succeeded, items_failed, items_cancelled, cancel_requested, error,\n                       deadline, paused_until, paused_reason, created_at, started_at, finished_at",
   "describe": {
     "columns": [
       {
@@ -71,6 +71,39 @@
       },
       {
         "ordinal": 6,
+        "name": "idempotency_hash",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "jobs",
+            "name": "idempotency_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "idempotency_until",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "jobs",
+            "name": "idempotency_until"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "origin",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "jobs",
+            "name": "origin"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
         "name": "webhook_url",
         "type_info": "Text",
         "origin": {
@@ -81,7 +114,7 @@
         }
       },
       {
-        "ordinal": 7,
+        "ordinal": 10,
         "name": "webhook_secret",
         "type_info": "Bytea",
         "origin": {
@@ -92,7 +125,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 11,
         "name": "items_total",
         "type_info": "Int4",
         "origin": {
@@ -103,7 +136,7 @@
         }
       },
       {
-        "ordinal": 9,
+        "ordinal": 12,
         "name": "items_succeeded",
         "type_info": "Int4",
         "origin": {
@@ -114,7 +147,7 @@
         }
       },
       {
-        "ordinal": 10,
+        "ordinal": 13,
         "name": "items_failed",
         "type_info": "Int4",
         "origin": {
@@ -125,7 +158,18 @@
         }
       },
       {
-        "ordinal": 11,
+        "ordinal": 14,
+        "name": "items_cancelled",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "jobs",
+            "name": "items_cancelled"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
         "name": "cancel_requested",
         "type_info": "Bool",
         "origin": {
@@ -136,7 +180,7 @@
         }
       },
       {
-        "ordinal": 12,
+        "ordinal": 16,
         "name": "error",
         "type_info": "Text",
         "origin": {
@@ -147,7 +191,40 @@
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 17,
+        "name": "deadline",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "jobs",
+            "name": "deadline"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "paused_until",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "jobs",
+            "name": "paused_until"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "paused_reason",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "jobs",
+            "name": "paused_reason"
+          }
+        }
+      },
+      {
+        "ordinal": 20,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -158,7 +235,7 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 21,
         "name": "started_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -169,7 +246,7 @@
         }
       },
       {
-        "ordinal": 15,
+        "ordinal": 22,
         "name": "finished_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -183,7 +260,8 @@
     "parameters": {
       "Left": [
         "Uuid",
-        "Text"
+        "Uuid",
+        "Timestamptz"
       ]
     },
     "nullable": [
@@ -196,14 +274,21 @@
       true,
       true,
       false,
+      true,
+      true,
       false,
       false,
       false,
+      false,
+      false,
+      true,
+      true,
+      true,
       true,
       false,
       true,
       true
     ]
   },
-  "hash": "ad82b98913e18a57cebd75b6dff6186159d5ac0cd4e66c9446ce1c30970c0b5d"
+  "hash": "8873d6652abbd2aee57fab3e58f792b3fd093dcda0dd16e5dcbd2c652a138ab7"
 }

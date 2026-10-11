@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE job_items\n             SET state = 'running', request_id = COALESCE($2, request_id),\n                 started_at = COALESCE(started_at, $3), claims = claims + 1, not_before = NULL\n             WHERE id = $1 AND state IN ('queued', 'running')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bebc2c4c2614461f7f1b52e5e060316803aa11115e35cf9cd0f50e58c6d24b37"
+}

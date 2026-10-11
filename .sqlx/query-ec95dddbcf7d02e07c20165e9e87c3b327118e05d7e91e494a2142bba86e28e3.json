@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM artifacts WHERE request_id IN (\n                     SELECT id FROM requests WHERE job_id = ANY($1))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ec95dddbcf7d02e07c20165e9e87c3b327118e05d7e91e494a2142bba86e28e3"
+}

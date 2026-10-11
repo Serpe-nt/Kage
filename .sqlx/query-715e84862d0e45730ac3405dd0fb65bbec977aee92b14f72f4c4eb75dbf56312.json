@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, api_key_id, kind, state, spec, idempotency_key, webhook_url,\n                    webhook_secret, items_total, items_succeeded, items_failed, cancel_requested,\n                    error, created_at, started_at, finished_at\n             FROM jobs WHERE id = $1",
+  "query": "SELECT id, job_id, seq, state, input, site, request_id, outcome, output, error,\n                    not_before, claims, created_at, started_at, finished_at\n             FROM job_items\n             WHERE job_id = $1 AND state IN ('queued', 'running')\n             ORDER BY seq",
   "describe": {
     "columns": [
       {
@@ -9,30 +9,30 @@
         "type_info": "Uuid",
         "origin": {
           "Table": {
-            "table": "jobs",
+            "table": "job_items",
             "name": "id"
           }
         }
       },
       {
         "ordinal": 1,
-        "name": "api_key_id",
+        "name": "job_id",
         "type_info": "Uuid",
         "origin": {
           "Table": {
-            "table": "jobs",
-            "name": "api_key_id"
+            "table": "job_items",
+            "name": "job_id"
           }
         }
       },
       {
         "ordinal": 2,
-        "name": "kind",
-        "type_info": "Text",
+        "name": "seq",
+        "type_info": "Int8",
         "origin": {
           "Table": {
-            "table": "jobs",
-            "name": "kind"
+            "table": "job_items",
+            "name": "seq"
           }
         }
       },
@@ -42,139 +42,128 @@
         "type_info": "Text",
         "origin": {
           "Table": {
-            "table": "jobs",
+            "table": "job_items",
             "name": "state"
           }
         }
       },
       {
         "ordinal": 4,
-        "name": "spec",
+        "name": "input",
         "type_info": "Jsonb",
         "origin": {
           "Table": {
-            "table": "jobs",
-            "name": "spec"
+            "table": "job_items",
+            "name": "input"
           }
         }
       },
       {
         "ordinal": 5,
-        "name": "idempotency_key",
+        "name": "site",
         "type_info": "Text",
         "origin": {
           "Table": {
-            "table": "jobs",
-            "name": "idempotency_key"
+            "table": "job_items",
+            "name": "site"
           }
         }
       },
       {
         "ordinal": 6,
-        "name": "webhook_url",
-        "type_info": "Text",
+        "name": "request_id",
+        "type_info": "Uuid",
         "origin": {
           "Table": {
-            "table": "jobs",
-            "name": "webhook_url"
+            "table": "job_items",
+            "name": "request_id"
           }
         }
       },
       {
         "ordinal": 7,
-        "name": "webhook_secret",
-        "type_info": "Bytea",
+        "name": "outcome",
+        "type_info": "Text",
         "origin": {
           "Table": {
-            "table": "jobs",
-            "name": "webhook_secret"
+            "table": "job_items",
+            "name": "outcome"
           }
         }
       },
       {
         "ordinal": 8,
-        "name": "items_total",
-        "type_info": "Int4",
+        "name": "output",
+        "type_info": "Jsonb",
         "origin": {
           "Table": {
-            "table": "jobs",
-            "name": "items_total"
+            "table": "job_items",
+            "name": "output"
           }
         }
       },
       {
         "ordinal": 9,
-        "name": "items_succeeded",
-        "type_info": "Int4",
-        "origin": {
-          "Table": {
-            "table": "jobs",
-            "name": "items_succeeded"
-          }
-        }
-      },
-      {
-        "ordinal": 10,
-        "name": "items_failed",
-        "type_info": "Int4",
-        "origin": {
-          "Table": {
-            "table": "jobs",
-            "name": "items_failed"
-          }
-        }
-      },
-      {
-        "ordinal": 11,
-        "name": "cancel_requested",
-        "type_info": "Bool",
-        "origin": {
-          "Table": {
-            "table": "jobs",
-            "name": "cancel_requested"
-          }
-        }
-      },
-      {
-        "ordinal": 12,
         "name": "error",
         "type_info": "Text",
         "origin": {
           "Table": {
-            "table": "jobs",
+            "table": "job_items",
             "name": "error"
           }
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 10,
+        "name": "not_before",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "job_items",
+            "name": "not_before"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "claims",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "job_items",
+            "name": "claims"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
           "Table": {
-            "table": "jobs",
+            "table": "job_items",
             "name": "created_at"
           }
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 13,
         "name": "started_at",
         "type_info": "Timestamptz",
         "origin": {
           "Table": {
-            "table": "jobs",
+            "table": "job_items",
             "name": "started_at"
           }
         }
       },
       {
-        "ordinal": 15,
+        "ordinal": 14,
         "name": "finished_at",
         "type_info": "Timestamptz",
         "origin": {
           "Table": {
-            "table": "jobs",
+            "table": "job_items",
             "name": "finished_at"
           }
         }
@@ -194,15 +183,14 @@
       true,
       true,
       true,
-      false,
-      false,
-      false,
-      false,
       true,
+      true,
+      true,
+      false,
       false,
       true,
       true
     ]
   },
-  "hash": "d959ca4b0e931a663f02014adbf532baf369dda931264ddc3c782151a6173e00"
+  "hash": "715e84862d0e45730ac3405dd0fb65bbec977aee92b14f72f4c4eb75dbf56312"
 }

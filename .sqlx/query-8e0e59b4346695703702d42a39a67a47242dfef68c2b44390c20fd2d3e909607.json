@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE jobs SET idempotency_key = NULL\n                 WHERE api_key_id = $1 AND idempotency_key = $2\n                   AND idempotency_until IS NOT NULL AND idempotency_until <= $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8e0e59b4346695703702d42a39a67a47242dfef68c2b44390c20fd2d3e909607"
+}

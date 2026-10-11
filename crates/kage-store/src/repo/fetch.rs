@@ -146,6 +146,72 @@ impl RequestRepo<'_> {
         .await?;
         Ok(done.rows_affected() == 1)
     }
+
+    /// Makes a request that was accepted by itself part of a job: a
+    /// synchronous fetch that outlasted its wall time and is carried on as
+    /// one (spec §8.4). Returns whether the request exists.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the query fails.
+    pub async fn adopt(&self, id: RequestId, job_id: JobId) -> Result<bool, StoreError> {
+        let done = sqlx::query!(
+            "UPDATE requests SET job_id = $2 WHERE id = $1",
+            id.as_uuid(),
+            job_id.as_uuid(),
+        )
+        .execute(self.pool)
+        .await?;
+        Ok(done.rows_affected() == 1)
+    }
+
+    /// Deletes the requests that are not part of a job and were accepted
+    /// before `before`, of one key or of all, with their attempts, their
+    /// results and the rows of what they kept. The artifact files go with
+    /// the artifact store's next sweep of orphans. Returns how many
+    /// requests and how many artifact rows were deleted.
+    ///
+    /// # Errors
+    ///
+    /// Fails when a statement fails.
+    pub async fn delete_before(
+        &self,
+        before: DateTime<Utc>,
+        api_key_id: Option<ApiKeyId>,
+    ) -> Result<(u64, u64), StoreError> {
+        let key = api_key_id.map(|id| id.as_uuid());
+        let (mut requests, mut artifacts) = (0, 0);
+        loop {
+            let mut transaction = self.pool.begin().await?;
+            let ids: Vec<Uuid> = sqlx::query_scalar!(
+                "SELECT id FROM requests
+                 WHERE job_id IS NULL AND created_at < $1
+                   AND ($2::uuid IS NULL OR api_key_id = $2)
+                 ORDER BY created_at
+                 LIMIT 500
+                 FOR UPDATE SKIP LOCKED",
+                before,
+                key,
+            )
+            .fetch_all(&mut *transaction)
+            .await?;
+            if ids.is_empty() {
+                transaction.rollback().await?;
+                return Ok((requests, artifacts));
+            }
+            // Artifact rows point at their request with SET NULL: they are
+            // removed by name, or nobody could read or purge them later.
+            artifacts += sqlx::query!("DELETE FROM artifacts WHERE request_id = ANY($1)", &ids)
+                .execute(&mut *transaction)
+                .await?
+                .rows_affected();
+            requests += sqlx::query!("DELETE FROM requests WHERE id = ANY($1)", &ids)
+                .execute(&mut *transaction)
+                .await?
+                .rows_affected();
+            transaction.commit().await?;
+        }
+    }
 }
 
 repository!(

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE job_items SET state = 'queued', not_before = $2\n             WHERE id = $1 AND state IN ('queued', 'running')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "cd80c070d9fdccd9b87dda33548b63c7d029b642e28f18c53d0e80e521bdc2c5"
+}

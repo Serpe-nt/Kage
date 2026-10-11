@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE job_items\n             SET state = $2, request_id = $3, error = $4, started_at = $5, finished_at = $6,\n                 outcome = $7, output = $8, not_before = $9\n             WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Text",
+        "Jsonb",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "31f684407c3f797ad443be46940a480187981ac0c0a5395a6327296dd6f5dc1e"
+}

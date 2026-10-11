@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE webhook_deliveries\n             SET state = 'superseded', next_attempt_at = NULL, finished_at = $2\n             WHERE job_id = $1 AND event = 'job.progress' AND state = 'pending'\n               AND (lease_until IS NULL OR lease_until <= $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "693428a9842851411e63794aa74b99b1d9cd27d1667fab26af7f391f6a98c86f"
+}

@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE jobs\n             SET state = $2, items_total = $3, items_succeeded = $4, items_failed = $5,\n                 items_cancelled = $6, cancel_requested = $7, error = $8, started_at = $9,\n                 finished_at = $10, paused_until = $11, paused_reason = $12\n             WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Bool",
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8495fa0058506165d7b228e0d51c3f4eab9ddd7e3b3c3e800e30376e66fe6f84"
+}

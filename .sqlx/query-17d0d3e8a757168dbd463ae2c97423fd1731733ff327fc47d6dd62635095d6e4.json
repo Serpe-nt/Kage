@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE jobs\n             SET lease_until = NULL, worker = NULL, paused_until = $3, paused_reason = $4,\n                 state = CASE WHEN $3::timestamptz IS NULL THEN 'running' ELSE 'paused' END\n             WHERE id = $1 AND worker = $2 AND finished_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "17d0d3e8a757168dbd463ae2c97423fd1731733ff327fc47d6dd62635095d6e4"
+}

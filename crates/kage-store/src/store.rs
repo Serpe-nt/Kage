@@ -10,7 +10,7 @@ use crate::repo::{
     ApiKeyRepo, ArtifactRepo, AttemptRepo, AuditRepo, BandwidthRepo, BreakerRepo, FrontierRepo,
     HealthEventRepo, HttpCookieRepo, JobItemRepo, JobRepo, PersonaDomainStateRepo, PersonaRepo,
     ProxyRepo, RequestRepo, ResponseCacheRepo, ResultRepo, RobotsCacheRepo, SelftestRepo,
-    SessionRepo,
+    SessionRepo, WebhookRepo,
 };
 
 /// The migrations in `crates/kage-store/migrations`, embedded at compile time.
@@ -216,6 +216,11 @@ impl Store {
     /// Jobs.
     pub const fn jobs(&self) -> JobRepo<'_> {
         JobRepo::new(&self.pool)
+    }
+
+    /// Webhook deliveries and the log of their attempts.
+    pub const fn webhooks(&self) -> WebhookRepo<'_> {
+        WebhookRepo::new(&self.pool)
     }
 
     /// Job items.

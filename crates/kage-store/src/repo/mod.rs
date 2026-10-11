@@ -11,6 +11,7 @@ mod fetch;
 mod jobs;
 mod personas;
 mod proxies;
+mod webhooks;
 
 pub use access::{ApiKeyRepo, AuditRepo, SessionRepo};
 pub use artifacts::ArtifactRepo;
@@ -19,9 +20,10 @@ pub use caches::{ResponseCacheEntry, ResponseCacheRepo, RobotsCacheEntry, Robots
 pub use cookies::HttpCookieRepo;
 pub use events::{BreakerRepo, HealthEventRepo, SelftestRepo};
 pub use fetch::{AttemptRepo, RequestRepo, ResultRepo};
-pub use jobs::{FrontierRepo, JobItemRepo, JobRepo};
+pub use jobs::{Created, FrontierRepo, JobCount, JobItemRepo, JobRepo, Tally};
 pub use personas::{PersonaDomainStateRepo, PersonaRepo};
 pub use proxies::ProxyRepo;
+pub use webhooks::{AttemptEnd, WebhookRepo};
 
 /// Declares a repository: a named borrow of the pool.
 macro_rules! repository {

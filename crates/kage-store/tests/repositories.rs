@@ -12,9 +12,10 @@ use kage_core::domain::{
     ArtifactKind, ArtifactRef, Attempt, AuditActor, AuditEvent, AuditOutcome, BreakerState,
     ClaimedOs, CookieSameSite, CoolingReason, DomainBreaker, Engine, FetchRecord, FrontierEntry,
     FrontierState, GeoRecord, Header, HealthEvent, HealthFailure, HttpCookie, Job, JobItem,
-    JobItemState, JobKind, JobState, Persona, PersonaDomainState, PersonaState, PersonaSummary,
-    ProxyHealth, ProxyProviderKind, ProxyReplacement, ProxyState, Render, ReplaceReason,
-    RobotsVerdict, Scope, SelftestRun, Session, SessionId, SessionLimits, SubjectKind, Timing,
+    JobItemState, JobKind, JobOrigin, JobState, Persona, PersonaDomainState, PersonaState,
+    PersonaSummary, ProxyHealth, ProxyProviderKind, ProxyReplacement, ProxyState, Render,
+    ReplaceReason, RobotsVerdict, Scope, SelftestRun, Session, SessionId, SessionLimits,
+    SubjectKind, Timing,
 };
 use kage_core::ids::{
     ApiKeyId, ArtifactId, AttemptId, AuditEventId, FrontierId, HealthEventId, JobId, JobItemId,
@@ -1356,13 +1357,20 @@ fn job(api_key_id: ApiKeyId, idempotency_key: Option<&str>) -> Job {
         state: JobState::Queued,
         spec: serde_json::json!({ "urls": ["https://example.org/a", "https://example.org/b"] }),
         idempotency_key: idempotency_key.map(str::to_owned),
+        idempotency_hash: None,
+        idempotency_until: None,
+        origin: JobOrigin::Api,
         webhook_url: None,
         webhook_secret: None,
         items_total: 2,
         items_succeeded: 0,
         items_failed: 0,
+        items_cancelled: 0,
         cancel_requested: false,
         error: None,
+        deadline: None,
+        paused_until: None,
+        paused_reason: None,
         created_at: now(),
         started_at: None,
         finished_at: None,
@@ -1453,8 +1461,13 @@ async fn job_items_page_in_position_order() {
         seq,
         state: JobItemState::Queued,
         input: serde_json::json!({ "url": format!("https://example.org/{seq}") }),
+        site: Some("example.org".to_owned()),
         request_id: None,
+        outcome: None,
+        output: None,
         error: None,
+        not_before: None,
+        claims: 0,
         created_at: now(),
         started_at: None,
         finished_at: None,
@@ -1479,6 +1492,8 @@ async fn job_items_page_in_position_order() {
     finished.state = JobItemState::Failed;
     finished.request_id = Some(request.id);
     finished.error = Some("challenge_failed".to_owned());
+    finished.outcome = Some(Outcome::ChallengeFailed);
+    finished.output = Some(serde_json::json!({ "action": "goto", "duration_ms": 1200 }));
     finished.started_at = Some(now());
     finished.finished_at = Some(now());
     assert!(items.update(&finished).await.unwrap());
