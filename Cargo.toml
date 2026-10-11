@@ -59,6 +59,10 @@ webpki-root-certs = { version = "=1.0.9" }
 utoipa = { version = "=6.0.0" }
 utoipa-axum = { version = "=0.3.0" }
 utoipa-swagger-ui = { version = "=10.0.1", default-features = false, features = ["axum", "vendored"] }
+# The API's own accept loop: a limit on the number and size of request
+# headers and a deadline for reading them, which `axum::serve` does not
+# offer. Pinned at the version axum 0.8.9 already locks.
+hyper-util = { version = "=0.1.21", default-features = false }
 
 # --- Storage --------------------------------------------------------------
 # rustls only. `tls-native-tls` would link OpenSSL and is banned in deny.toml.
@@ -95,7 +99,7 @@ metrics-exporter-prometheus = { version = "=0.18.3", default-features = false }
 
 # --- Configuration, policy, limits ----------------------------------------
 figment = { version = "=0.10.19", default-features = false }
-governor = { version = "=0.10.4" }
+governor = { version = "=0.10.4", default-features = false }
 notify = { version = "=8.2.0" }
 # Block signature matchers. Linear-time matching, so a signature file cannot
 # make the classifier hang on a hostile page.
@@ -119,6 +123,12 @@ tokio-rustls = { version = "=0.26.6", default-features = false, features = ["rin
 # --- Crypto, ids, time ----------------------------------------------------
 sha2 = { version = "=0.11.0" }
 hmac = { version = "=0.13.0" }
+# API keys: the secret is 32 bytes from the operating system, written as
+# base64url; its hash is compared in constant time. All three at the
+# versions already in the lockfile.
+getrandom = { version = "=0.4.3" }
+base64 = { version = "=0.23.1" }
+subtle = { version = "=2.6.1" }
 # Proxy credentials at rest (spec §19): XChaCha20-Poly1305. `getrandom`
 # supplies the nonces from the operating system.
 chacha20poly1305 = { version = "=0.11.0", default-features = false, features = ["alloc", "getrandom", "zeroize"] }
