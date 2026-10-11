@@ -565,7 +565,7 @@ async fn a_request_that_cannot_be_made_as_asked_is_refused_and_nothing_is_fetche
             "header_denied",
         ),
         (
-            json!({ "url": page, "render": "http", "headers": { "X-Forwarded-For": "1.2.3.4" } }),
+            json!({ "url": page, "render": "http", "headers": { "Via": "1.1 squid" } }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "header_denied",
         ),
