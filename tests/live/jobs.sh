@@ -36,6 +36,9 @@
 #                                 pool's countries the batch and the flows
 #                                 wait for the morning unless this is set.
 #                                 The pace itself stays the shipped one.
+#   KAGE_LIVE_JOBS_ONLY           `flows`: only the two flows and the event
+#                                 of one (four page loads in all), to look
+#                                 at a flow again without the rest.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -332,6 +335,14 @@ export KAGE_LIVE_HOOK_URL="${hook_origin}/kage"
 node tests/live/check-jobs.mjs snapshot "${workdir}" before
 node tests/live/check-jobs.mjs run "${workdir}"
 node tests/live/check-jobs.mjs snapshot "${workdir}" after
+
+if [ "${KAGE_LIVE_JOBS_ONLY:-}" = "flows" ]; then
+    stop_server
+    node tests/live/check-jobs.mjs judge "${workdir}" ${KAGE_LIVE_EVIDENCE_DIR:+"${KAGE_LIVE_EVIDENCE_DIR}"} \
+        || fail "the live check of the flows did not pass"
+    echo "    a flow ran in each engine against the real pool at the shipped pace"
+    exit 0
+fi
 
 # (e) The same server with a wall time no page can make (a persona stays
 # at least the policy's `min_dwell` of two seconds on a page): the fetch is

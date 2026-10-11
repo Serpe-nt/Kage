@@ -17,6 +17,8 @@
 //   KAGE_ADMIN_KEY          a key with the admin scope (snapshot)
 //   KAGE_LIVE_HOOK_URL      the receiver the events are posted to
 //   KAGE_LIVE_HOOK_SECRET   what they are signed with
+//   KAGE_LIVE_JOBS_ONLY     `flows`: only the two flows and the event of one
+//                           (four page loads), to look at a flow again
 //
 // `judge` reads what the other modes saved, prints what was measured and a
 // verdict per step, and with an evidence directory writes there what the
@@ -43,6 +45,13 @@ const SETTLE_A_MS = rehearsal ? 500 : 4000;
 const SETTLE_B_MS = rehearsal ? 500 : 12_000;
 // The policy's floor under a persona's stay on a page.
 const MIN_DWELL_MS = 2000;
+// Only the flows: the fetches, the batch and the restart are left out.
+const ONLY_FLOWS = process.env.KAGE_LIVE_JOBS_ONLY === "flows";
+// A rehearsal may give the scroll a time it cannot make, to see it end
+// inside it. The check itself gives a step the API's own default.
+const SCROLL_TIMEOUT_MS = rehearsal && process.env.KAGE_LIVE_JOBS_SCROLL_TIMEOUT_MS
+  ? { timeout_ms: Number(process.env.KAGE_LIVE_JOBS_SCROLL_TIMEOUT_MS) }
+  : {};
 
 const env = (name) => {
   const value = process.env[name];
@@ -142,7 +151,7 @@ function flowOf(engine, withWebhook) {
     actions: [
       { action: "goto", url: PAGE_A },
       { action: "wait_for", ms: SETTLE_A_MS },
-      { action: "scroll", depth: 0.6 },
+      { action: "scroll", depth: 0.6, ...SCROLL_TIMEOUT_MS },
       { action: "screenshot" },
       { action: "goto", url: PAGE_B },
       { action: "wait_for", ms: SETTLE_B_MS },
@@ -160,7 +169,7 @@ function flowOf(engine, withWebhook) {
 
 async function run() {
   // (a) one page in the browser of a persona of each engine, while the caller waits.
-  for (const engine of ENGINES) {
+  for (const engine of ONLY_FLOWS ? [] : ENGINES) {
     console.log(`==> a synchronous fetch of ${PAGE_A} in ${engine}`);
     const began = Date.now();
     const answer = await api("POST", "/v1/fetch", {
@@ -182,16 +191,19 @@ async function run() {
   }
 
   // (b) a batch of the two pages, each twice, with the default one visitor per site.
-  console.log("==> a batch of the two pages, each twice, one visitor per site");
-  const batch = await createJob("batch", {
-    type: "batch",
-    urls: [PAGE_A, PAGE_B, PAGE_A, PAGE_B],
-    defaults: { include: ["dom", "headers"], timeout_ms: 150_000 },
-    webhook: webhook(),
-  });
-  save("batch-accepted.json", batch);
-  await waitForJob("the batch", batch.id, 45 * 60_000);
-  save("batch-items.json", await itemsOf(batch.id));
+  let batch = null;
+  if (!ONLY_FLOWS) {
+    console.log("==> a batch of the two pages, each twice, one visitor per site");
+    batch = await createJob("batch", {
+      type: "batch",
+      urls: [PAGE_A, PAGE_B, PAGE_A, PAGE_B],
+      defaults: { include: ["dom", "headers"], timeout_ms: 150_000 },
+      webhook: webhook(),
+    });
+    save("batch-accepted.json", batch);
+    await waitForJob("the batch", batch.id, 45 * 60_000);
+    save("batch-items.json", await itemsOf(batch.id));
+  }
 
   // (c) a flow in the browser of a persona of each engine.
   const flows = {};
@@ -205,7 +217,7 @@ async function run() {
 
   // (d) the events of the batch and of one flow, at the receiver.
   console.log("==> the events at the receiver");
-  const wanted = [batch.id, flows.chromium];
+  const wanted = [...(batch ? [batch.id] : []), flows.chromium];
   const deadline = Date.now() + 5 * 60_000;
   let deliveries = [];
   for (;;) {
@@ -219,7 +231,7 @@ async function run() {
   save("deliveries.json", deliveries);
   console.log(`    ${deliveries.map((d) => `${d.event} ${d.answered}`).join(", ") || "none"}`);
   // The jobs as their key sees them at the end, with their delivery logs.
-  save("batch.json", (await api("GET", `/v1/jobs/${batch.id}`)).json);
+  if (batch) save("batch.json", (await api("GET", `/v1/jobs/${batch.id}`)).json);
   for (const engine of ENGINES) {
     save(`flow-${engine}.json`, (await api("GET", `/v1/jobs/${flows[engine]}`)).json);
   }
@@ -233,7 +245,7 @@ async function run() {
     sizes[name] = { status: response.status, bytes, content_type: response.headers.get("content-type") };
   };
   for (const engine of ENGINES) {
-    await measure(`fetch-${engine}`, load(`fetch-${engine}.json`).artifacts?.screenshot);
+    if (!ONLY_FLOWS) await measure(`fetch-${engine}`, load(`fetch-${engine}.json`).artifacts?.screenshot);
     for (const item of load(`flow-${engine}-items.json`)) {
       await measure(`flow-${engine}-step-${item.seq}`, item.result?.artifacts?.screenshot);
     }
@@ -398,7 +410,11 @@ function judge(evidenceDir) {
   const problems = [];
   const verdicts = [];
   const measured = {};
-  const step = (name, check) => {
+  const step = (name, check, needs = []) => {
+    if (needs.some((file) => !existsSync(join(workdir, file)))) {
+      verdicts.push([name, "NOT RUN"]);
+      return;
+    }
     const before = problems.length;
     try {
       check((condition, message) => {
@@ -444,7 +460,7 @@ function judge(evidenceDir) {
         screenshot: shot ? { bytes: shot.bytes, content_type: shot.content_type } : null,
       };
     }
-  });
+  }, ["fetch-chromium.json"]);
 
   // (b) the batch.
   step("b. a batch of four items with one visitor per site", (check) => {
@@ -488,7 +504,7 @@ function judge(evidenceDir) {
         pause_between_the_two_pages_s: second ? seconds(first.finished_at, began(second)) : null,
       };
     }
-  });
+  }, ["batch.json"]);
 
   // (c) the flows.
   measured.flows = {};
@@ -539,9 +555,9 @@ function judge(evidenceDir) {
   // (d) the webhooks.
   step("d. the events of the batch and of one flow, signed, at the receiver", (check) => {
     const deliveries = load("deliveries.json");
-    const batch = load("batch.json");
+    const batch = existsSync(join(workdir, "batch.json")) ? load("batch.json") : null;
     const flow = load("flow-chromium.json");
-    check(deliveries.length >= 3, `${deliveries.length} deliveries`);
+    check(deliveries.length >= (batch ? 3 : 2), `${deliveries.length} deliveries`);
     for (const d of deliveries) {
       check(d.verified, `a delivery of ${d.event} did not verify`);
       check(d.from_loopback && d.forwarding_headers.length === 0, "a delivery did not come straight from this host");
@@ -558,7 +574,7 @@ function judge(evidenceDir) {
     const wait = again.length === 2 ? seconds(again[0].at, again[1].at) : null;
     // The first retry: 30 s, moved by up to a fifth.
     check(wait !== null && wait >= 23 && wait <= 40, `the retry came after ${wait} s`);
-    for (const [name, job] of [["batch", batch], ["chromium flow", flow]]) {
+    for (const [name, job] of [...(batch ? [["batch", batch]] : []), ["chromium flow", flow]]) {
       const completed = deliveries.filter((d) => d.event === "job.completed" && d.body?.job?.id === job.id && d.answered === 204);
       check(completed.length === 1, `${completed.length} delivered job.completed for the ${name}`);
       check(completed[0]?.body?.job?.state === "succeeded", `the ${name}'s event says ${completed[0]?.body?.job?.state}`);
@@ -605,7 +621,7 @@ function judge(evidenceDir) {
       engine: result.persona?.engine,
       job_seconds: seconds(job.created_at, job.finished_at),
     };
-  });
+  }, ["overflow-accepted.json"]);
 
   // What was counted, for the record: no assertion (the provider's counter lags).
   const snapshots = ["before", "after", "end"].map((name) => [name, seriesOf(name), poolOf(name)]);
@@ -627,6 +643,7 @@ function judge(evidenceDir) {
   console.log("==> the verdict, step by step");
   for (const [name, verdict] of verdicts) console.log(`    ${verdict}  ${name}`);
   for (const problem of problems) console.error(`error: ${problem}`);
+  if (verdicts.every(([, verdict]) => verdict !== "PASSED")) problems.push("no step ran");
 
   if (evidenceDir) {
     mkdirSync(evidenceDir, { recursive: true });
