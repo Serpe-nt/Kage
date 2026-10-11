@@ -239,7 +239,8 @@ export class Human {
    * takes this persona to skim, and now and then scrolling back a little.
    *
    * @param depth where to end, as a share of the scrollable height.
-   * @param deadline a time of the clock after which no further flick starts.
+   * @param deadline a time of the clock after which no further flick starts
+   *   and no rest goes on: the scrolling ends at most one flick after it.
    */
   async scrollTo(depth: number, deadline = Number.POSITIVE_INFINITY): Promise<void> {
     const { surface, profile, random } = this.parts;
@@ -260,10 +261,16 @@ export class Human {
         return;
       }
       this.notchPx = Math.max(20, moved / notches);
-      await this.clock.sleep(readingPause(await surface.visibleWords(), profile, random));
+      // A rest never outlasts the time the scrolling was given: whoever set
+      // the deadline has something to do after it. (The draws are the same
+      // either way, so a page replays.)
+      const left = () => Math.max(0, deadline - this.clock.now());
+      const rest = readingPause(await surface.visibleWords(), profile, random);
+      await this.clock.sleep(Math.min(rest, left()));
       if (scrollsBack(profile, random) && this.clock.now() < deadline) {
         await this.flick('up', this.notchPx * random.uniform(0.5, 2));
-        await this.clock.sleep(random.uniform(350, 1100));
+        const settle = random.uniform(350, 1100);
+        await this.clock.sleep(Math.min(settle, left()));
         metrics = await surface.metrics();
       }
     }

@@ -1043,6 +1043,9 @@ network_idle | ms), `select`, `hover`, `back`, `extract` (capture point),
 `screenshot`, `pdf`, `assert` (selector exists | text contains). Every
 action has an optional `human: true|false` (default true) and `timeout_ms`.
 Each step reports success, duration and a capture when requested. A human
+`scroll` goes on as long as its step has time, less two seconds for the
+flick that is under way: a page too long for the step is scrolled as far as
+that and the step succeeds (a longer `timeout_ms` scrolls further). A human
 step is done by the behavior engine through the display: a `select` is
 opened with a click and chosen with the arrow keys and `Enter`, `back` is
 `Alt` and the left arrow. A step with `human: false` is done by the

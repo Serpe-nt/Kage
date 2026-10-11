@@ -315,6 +315,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A human `scroll` step of a flow on a page too long for the step's time
+  scrolled until that time, finished the flick and the rest it was in, and
+  was then failed by the same time ("scroll did not finish within 30000
+  ms"), found by the live check of jobs on bot.sannysoft.com. It now stops
+  two seconds before its step's time and sits out no rest past it: the
+  page is scrolled as far as the time allows and the step succeeds. Give
+  the step a longer `timeout_ms` to scroll further.
 - One Firefox persona in thirty that claims Windows had no
   `navigator.oscpu` in its generated configuration and showed the engine
   host's `Linux x86_64` in its window. The generator now writes the stock

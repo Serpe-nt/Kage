@@ -17,6 +17,7 @@ import { SeededRandom } from '../seeded-random.js';
 import {
   CAPTURE_RESERVE_MS,
   DEFAULT_STEP_TIMEOUT_MS,
+  SCROLL_RESERVE_MS,
   NAVIGATION_WATCH_MS,
   FlowStepError,
   runFlow,
@@ -44,6 +45,8 @@ function rig(
   } = {},
 ) {
   const calls: string[] = [];
+  /** Until when each human scroll was told it may go on. */
+  const scrollDeadlines: number[] = [];
   const note =
     (name: string) =>
     (...parameters: unknown[]) => {
@@ -56,7 +59,10 @@ function rig(
     type: note('human.type'),
     press: note('human.press'),
     chord: (modifiers: string[], key: string) => note('human.chord')(modifiers.join('+'), key),
-    scrollTo: (depth: number) => note('human.scroll')(depth),
+    scrollTo: (depth: number, deadline?: number) => {
+      scrollDeadlines.push(deadline ?? Number.POSITIVE_INFINITY);
+      return note('human.scroll')(depth);
+    },
     // What only a paced flow asks for: written down like everything else,
     // so that a flow without a pace shows that it asked for none of it.
     dwell: (ms: number, how: { wander: boolean }) => note('human.dwell')(ms, how.wander),
@@ -123,7 +129,7 @@ function rig(
   /** Runs a flow and says whether every step succeeded. */
   const run = async (actions: FlowAction[], timeout?: number, now?: () => number) =>
     (await outcome(actions, timeout, now)).ok;
-  return { calls, events, run, outcome, host };
+  return { calls, events, run, outcome, host, scrollDeadlines };
 }
 
 describe('the flow executor', () => {
@@ -306,6 +312,28 @@ describe('the flow executor', () => {
       capture: null,
     });
     expect(calls.some((call) => call.startsWith('goto'))).toBe(false);
+  });
+
+  it('lets a human scroll go on only as long as its step has time, less a reserve for the last flick', async () => {
+    const { run, scrollDeadlines } = rig();
+    const before = performance.now();
+    expect(
+      await run([
+        { action: 'scroll', depth: 0.6 },
+        { action: 'scroll', depth: 0.6, timeout_ms: 9000 },
+        // Less time than the reserve: no flick is begun at all.
+        { action: 'scroll', depth: 0.6, timeout_ms: 500 },
+      ]),
+    ).toBe(true);
+    const after = performance.now();
+    const [byDefault, given, none] = scrollDeadlines;
+    // A page too long for the step is scrolled until then, and the step
+    // ends inside its budget: it is not failed by the time it was given.
+    expect(byDefault).toBeGreaterThanOrEqual(before + DEFAULT_STEP_TIMEOUT_MS - SCROLL_RESERVE_MS);
+    expect(byDefault).toBeLessThanOrEqual(after + DEFAULT_STEP_TIMEOUT_MS - SCROLL_RESERVE_MS);
+    expect(given).toBeLessThanOrEqual(after + 9000 - SCROLL_RESERVE_MS);
+    expect(given).toBeLessThan(byDefault ?? 0);
+    expect(none).toBeLessThanOrEqual(after);
   });
 
   it('ends a step that takes longer than its budget, and a flow that takes longer than its own', async () => {

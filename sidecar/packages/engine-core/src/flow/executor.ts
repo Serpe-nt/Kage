@@ -17,6 +17,13 @@ export const DEFAULT_STEP_TIMEOUT_MS = 30_000;
 export const DEFAULT_FLOW_TIMEOUT_MS = 180_000;
 /** Budget kept back for the captures when behavior fills the time: of a navigation, and of a flow. */
 export const CAPTURE_RESERVE_MS = 4000;
+/**
+ * What a human scroll keeps back of its step's time. A page too long for
+ * the step is scrolled as far as the time allows; the flick that began just
+ * before the scrolling's deadline is finished after it, and the step must
+ * still end inside its own budget instead of being failed by it.
+ */
+export const SCROLL_RESERVE_MS = 2000;
 /** How long a click or a key is watched for a navigation it may have started. */
 export const NAVIGATION_WATCH_MS = 1200;
 
@@ -236,7 +243,9 @@ async function perform(
     }
     case 'scroll':
       if (humanly) {
-        await (await host.human()).scrollTo(action.depth, performance.now() + timeout);
+        await (
+          await host.human()
+        ).scrollTo(action.depth, performance.now() + Math.max(0, timeout - SCROLL_RESERVE_MS));
       } else {
         await host.driver.scroll(action.depth);
       }

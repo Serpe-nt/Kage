@@ -647,6 +647,15 @@ describe('a persona at its mouse and keyboard', () => {
     const limited = rig({ scrollHeight: 30_000 });
     await limited.human.scrollTo(1, 1000 + 4000);
     expect(limited.scrollY()).toBeLessThan(6000);
+    // It ends at the deadline, give or take the flick that was under way:
+    // a rest of several seconds is not sat out after it.
+    expect(limited.elapsed()).toBeGreaterThan(3000);
+    expect(limited.elapsed()).toBeLessThan(4000 + 1500);
+    // The same hand, given more time, scrolls further.
+    const longer = rig({ scrollHeight: 30_000 });
+    await longer.human.scrollTo(1, 1000 + 12_000);
+    expect(longer.scrollY()).toBeGreaterThan(limited.scrollY());
+    expect(longer.elapsed()).toBeLessThan(12_000 + 1500);
     const short = rig({ scrollHeight: 800 });
     await short.human.scrollTo(1);
     expect(short.human.counts.notches).toBe(0);
