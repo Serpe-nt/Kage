@@ -19,7 +19,7 @@ use kage_core::outcome::Outcome;
 use kage_core::policy::PacingRequest;
 use kage_core::schedule::queue::Priority;
 use kage_scheduler::pipeline::attempt_seed;
-use kage_scheduler::{FetchOrder, SchedulerError, Synchronous};
+use kage_scheduler::{FetchOrder, JobFetch, SchedulerError, Synchronous};
 use url::Url;
 
 /// Every request goes to the http path first.
@@ -750,7 +750,9 @@ async fn a_synchronous_fetch_that_outlasts_its_wall_time_runs_on() {
     assert_eq!(stored.outcome, None);
     let request = running.request;
 
-    let report = running.wait().await.unwrap();
+    let JobFetch::Finished(report) = running.wait().await.unwrap() else {
+        panic!("the fetch that ran on finishes");
+    };
 
     assert_eq!(report.request, request);
     assert_eq!(report.outcome, Outcome::Ok);

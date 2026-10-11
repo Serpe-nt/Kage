@@ -5,10 +5,10 @@
 //! - [`ListProvider`]: a provider whose proxies are [`TestProxy`]s.
 //! - [`MockSidecar`]: a sidecar that answers the contract: it generates
 //!   personas, opens a persona's context once and hands the same one back,
-//!   answers navigations with what a test set for a URL, keeps the
-//!   cookies a context holds per origin, so that what is imported can be
-//!   exported again, and answers the health, metrics and self-test
-//!   questions of the API.
+//!   answers navigations with what a test set for a URL, walks a flow
+//!   step by step over the same pages, keeps the cookies a context holds
+//!   per origin, so that what is imported can be exported again, and
+//!   answers the health, metrics and self-test questions of the API.
 //! - [`Lab`]: the pool, the persona manager with the forwarder as its
 //!   egress, the scheduler over the store, the real executor and the
 //!   pipeline, and a site behind the provider's proxies.
@@ -215,6 +215,16 @@ pub struct SidecarState {
     pub opened: Vec<Value>,
     pub closed: Vec<String>,
     pub navigated: Vec<Value>,
+    /// The flows that were asked for, each with its context.
+    pub flows: Vec<Value>,
+    /// What the next flows do other than succeed, one entry per flow:
+    /// `fail: { index, error }` ends it at a step, `captures: { "<index>":
+    /// page }` is laid over a step's capture, `final: page` over the page
+    /// it ends on, and `interrupted: true` ends the answer without its
+    /// final event.
+    pub next_flows: VecDeque<Value>,
+    /// How long the next flows take to answer.
+    pub flow_delay: Option<Duration>,
     pub exported: Vec<Value>,
     pub imported: Vec<Value>,
     /// Self-tests that were asked for.
@@ -304,8 +314,9 @@ impl SidecarResponder {
         ResponseTemplate::new(200).set_body_json(answer)
     }
 
-    fn navigate(state: &mut SidecarState, context: &str, body: Value) -> ResponseTemplate {
-        let url = body["url"].as_str().unwrap_or_default().to_owned();
+    /// A page of `url` as a browser brings it back, before anything a
+    /// test laid over it.
+    fn served(url: &str) -> Value {
         let mut page = example("PageResult");
         page["url"] = json!(url);
         page["final_url"] = json!(url);
@@ -322,19 +333,116 @@ impl SidecarResponder {
             "vendors": [], "script_hosts": [], "iframe_hosts": [],
             "interstitial": false, "marker": null, "resolved": null, "waited_ms": 0,
         });
-        let over = state
-            .next_pages
-            .pop_front()
-            .or_else(|| state.pages.get(&url).cloned());
+        page["screenshot"] = Value::Null;
+        page["pdf"] = Value::Null;
+        page
+    }
+
+    fn lay(page: &mut Value, over: Option<Value>) {
         if let Some(Value::Object(over)) = over {
             for (key, value) in over {
                 page[key.as_str()] = value;
             }
         }
+    }
+
+    fn navigate(state: &mut SidecarState, context: &str, body: Value) -> ResponseTemplate {
+        let url = body["url"].as_str().unwrap_or_default().to_owned();
+        let mut page = Self::served(&url);
+        let over = state
+            .next_pages
+            .pop_front()
+            .or_else(|| state.pages.get(&url).cloned());
+        Self::lay(&mut page, over);
         let mut asked = body;
         asked["context_id"] = json!(context);
         state.navigated.push(asked);
         ResponseTemplate::new(200).set_body_json(page)
+    }
+
+    /// Walks a flow: a `goto` moves to its URL, a `back` to the page
+    /// before, every other step stays; `extract`, `screenshot` and `pdf`
+    /// capture the page the flow is on. One line per step, then the final
+    /// one.
+    fn flow(state: &mut SidecarState, context: &str, body: Value) -> ResponseTemplate {
+        let script = state.next_flows.pop_front().unwrap_or(Value::Null);
+        let fail_at = script["fail"]["index"].as_u64();
+        let paced = !body["behavior"]["pace"].is_null();
+        let mut url = String::from("about:blank");
+        let mut history: Vec<String> = Vec::new();
+        let mut lines: Vec<String> = Vec::new();
+        let mut ok = true;
+        let actions = body["actions"].as_array().cloned().unwrap_or_default();
+        for (index, action) in actions
+            .iter()
+            .zip(0_u64..)
+            .map(|(action, index)| (index, action))
+        {
+            let name = action["action"].as_str().unwrap_or_default();
+            let failed = fail_at == Some(index);
+            if !failed {
+                match name {
+                    "goto" => {
+                        history.push(std::mem::take(&mut url));
+                        action["url"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .clone_into(&mut url);
+                    }
+                    "back" => {
+                        if let Some(before) = history.pop() {
+                            url = before;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let capture =
+                (!failed && matches!(name, "extract" | "screenshot" | "pdf")).then(|| {
+                    let mut page = Self::served(&url);
+                    Self::lay(&mut page, state.pages.get(&url).cloned());
+                    Self::lay(
+                        &mut page,
+                        script["captures"].get(index.to_string()).cloned(),
+                    );
+                    page
+                });
+            lines.push(
+                json!({
+                    "type": "step",
+                    "index": index,
+                    "action": name,
+                    "ok": !failed,
+                    "duration_ms": 12 + index,
+                    "paced_ms": paced.then_some(7),
+                    "error": failed.then(|| script["fail"]["error"].clone()),
+                    "capture": capture,
+                })
+                .to_string(),
+            );
+            if failed {
+                ok = false;
+                break;
+            }
+        }
+        if script["interrupted"].as_bool() != Some(true) {
+            let mut result = Self::served(&url);
+            Self::lay(&mut result, state.pages.get(&url).cloned());
+            Self::lay(&mut result, script.get("final").cloned());
+            lines.push(
+                json!({ "type": "final", "ok": ok, "result": result, "behavior": null })
+                    .to_string(),
+            );
+        }
+        let mut asked = body;
+        asked["context_id"] = json!(context);
+        state.flows.push(asked);
+        let mut answer = ResponseTemplate::new(200)
+            .set_body_raw(lines.join("\n") + "\n", "application/x-ndjson");
+        if let Some(delay) = state.flow_delay {
+            answer = answer.set_delay(delay);
+        }
+        answer
     }
 }
 
@@ -388,6 +496,7 @@ impl Respond for SidecarResponder {
                 ResponseTemplate::new(204)
             }
             ("POST", "navigate") => Self::navigate(&mut state, context, body),
+            ("POST", "flow") => Self::flow(&mut state, context, body),
             ("POST", "selftest") => {
                 let mut report = example("SelftestResponse");
                 report["passed"] = json!(true);
@@ -448,6 +557,9 @@ impl MockSidecar {
             opened: Vec::new(),
             closed: Vec::new(),
             navigated: Vec::new(),
+            flows: Vec::new(),
+            next_flows: VecDeque::new(),
+            flow_delay: None,
             exported: Vec::new(),
             imported: Vec::new(),
             selftested: Vec::new(),

@@ -49,13 +49,14 @@ pub use backend::{Backend, PoolRoutes, StoreBackend};
 pub use bandwidth::{Bandwidth, Ledger, StoreLedger, Term};
 pub use error::SchedulerError;
 pub use executor::{
-    AttemptExecutor, AttemptJob, AttemptOutput, BehaviorApplied, BehaviorWish, PathExecutor,
+    AttemptExecutor, AttemptJob, AttemptOutput, BehaviorApplied, BehaviorWish, FlowPlan, FlowRun,
+    FlowStep, PathExecutor,
 };
 pub use forwarder::{Forwarder, ForwarderEgress, ForwarderSettings, Meter, Routes, Tokens};
 pub use memory::MemoryBackend;
 pub use pipeline::{
-    Deferred, FetchOrder, FetchReport, JobFetch, PacingReport, Pipeline, PipelineSettings, Running,
-    Stop, Synchronous,
+    Capture, Deferred, FetchOrder, FetchReport, JobFetch, Kept, PacingReport, Pipeline,
+    PipelineSettings, Running, Stop, Synchronous,
 };
 pub use scheduler::{Grant, Refused, Scheduler, SchedulerGate};
 pub use verdicts::Verdicts;

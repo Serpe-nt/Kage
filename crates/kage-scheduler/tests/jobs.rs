@@ -22,7 +22,7 @@ use kage_core::ids::RequestId;
 use kage_core::outcome::Outcome;
 use kage_core::schedule::planner::{Refusal, Visitors};
 use kage_core::schedule::queue::Priority;
-use kage_scheduler::{Deferred, FetchOrder, FetchReport, JobFetch, Stop};
+use kage_scheduler::{Deferred, FetchOrder, FetchReport, JobFetch, Stop, Synchronous};
 use tokio::sync::watch;
 use url::Url;
 
@@ -447,4 +447,104 @@ async fn a_request_that_is_taken_up_again_keeps_its_attempts_and_its_budget() {
     assert_eq!(record.status, last.status);
     assert_eq!(record.block, last.block);
     world.shut_down().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_synchronous_fetch_that_outlasted_its_wall_time_waits_like_a_job() {
+    // One persona, so that the retry after its block has nobody to go to
+    // until the breaker says when.
+    let rules = "defaults: { breaker_threshold: 1, breaker_pause: 30m, retries: 1 }\ndomains: {}\n";
+    let mut world = World::with(2, false, rules, &[]);
+    world.script.takes(Duration::from_secs(200));
+    world.script.then(blocked(Outcome::Forbidden, 1.0));
+    let order = FetchOrder {
+        render: RenderMode::Browser,
+        ..FetchOrder::get(
+            Url::parse("https://wall.example/a").unwrap(),
+            Priority::Sync,
+        )
+    };
+
+    let Synchronous::Overflowed(running) = world.pipeline.fetch_sync(order).await.unwrap() else {
+        panic!("a fetch of 200 s outlasts the wall time");
+    };
+    let request = running.request;
+
+    // Its first attempt is blocked and opens the breaker; the retry is
+    // not answered with an error any more: the fetch is a job's now, and
+    // a job waits out a paused domain.
+    let waiting = deferred(running.wait().await.unwrap());
+    assert_eq!(waiting.reason, Refusal::DomainPaused);
+    let breaker = world.backend.breaker("wall.example").unwrap();
+    assert_eq!(waiting.retry_at, breaker.paused_until);
+    assert_eq!(world.backend.attempts().len(), 1);
+    assert!(
+        world
+            .backend
+            .records()
+            .iter()
+            .all(|record| record.request_id != request)
+    );
+
+    // Whoever carries it on takes it up again under its request, with
+    // the blocked attempt in the record.
+    tokio::time::sleep(Duration::from_mins(31)).await;
+    world.script.takes(Duration::from_secs(20));
+    let (_keep, stop) = never();
+    let report = finished(
+        world
+            .pipeline
+            .fetch_for_job(
+                request,
+                page("https://wall.example/a"),
+                Some(world.backend.attempts()),
+                stop,
+            )
+            .await
+            .unwrap(),
+    );
+    assert_eq!(report.request, request);
+    assert_eq!(report.outcome, Outcome::Ok);
+    assert_eq!(report.attempts.len(), 2);
+
+    // A server that stops while such a fetch waits for a persona defers
+    // it too, instead of storing an error nobody asked for.
+    world.script.takes(Duration::from_secs(400));
+    let busy = FetchOrder {
+        pin: Some(common::id(0)),
+        ..FetchOrder::get(
+            Url::parse("https://slow.example/a").unwrap(),
+            Priority::Sync,
+        )
+    };
+    let holder = {
+        let pipeline = world.pipeline.clone();
+        tokio::spawn(async move { pipeline.fetch(busy).await })
+    };
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let behind = FetchOrder {
+        pin: Some(common::id(0)),
+        ..FetchOrder::get(
+            Url::parse("https://slow.example/b").unwrap(),
+            Priority::Sync,
+        )
+    };
+    let Synchronous::Overflowed(running) = world.pipeline.fetch_sync(behind).await.unwrap() else {
+        panic!("it waits for its persona past the wall time");
+    };
+    let second = running.request;
+    world.shut_down().await;
+    let stopped = deferred(running.wait().await.unwrap());
+    assert_eq!(
+        (stopped.reason, stopped.retry_at),
+        (Refusal::ShuttingDown, None)
+    );
+    assert!(
+        world
+            .backend
+            .records()
+            .iter()
+            .all(|record| record.request_id != second)
+    );
+    holder.abort();
 }

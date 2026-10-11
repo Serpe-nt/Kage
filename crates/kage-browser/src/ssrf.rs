@@ -16,6 +16,11 @@
 //!   and [`drop_captures`] removes what the navigation captured, so nothing
 //!   read from a refused address travels any further.
 //!
+//! A flow is guarded the same way: every page one of its steps captured
+//! and the page it ended on go through [`check_capture`], which is
+//! [`check_chain`] for a page that names the address it had when it was
+//! read instead of an address that was asked for.
+//!
 //! The check is by URL: scheme, credentials, port, host name, literal
 //! address. The proxy resolves host names, as on the http path, so no
 //! resolved address is known here.
@@ -66,15 +71,57 @@ pub fn check_chain(
     policy: SsrfPolicy,
     max_redirects: usize,
 ) -> Result<(), DeniedHop> {
-    let first = Url::parse(&result.url).map_err(|_| DeniedHop {
+    check_from(&result.url, result, policy, max_redirects)
+}
+
+/// Whether a URL is a document a browser shows without asking the network.
+fn is_local(url: &str) -> bool {
+    Url::parse(url).is_ok_and(|url| LOCAL_SCHEMES.contains(&url.scheme()))
+}
+
+/// Checks a page a flow captured against the SSRF guard: like
+/// [`check_chain`], but `url` is the address the page had when it was read,
+/// not one that was asked for. That is a local document when nothing has
+/// loaded: a `goto` that did not arrive leaves `about:blank` or the
+/// browser's own error page, and such a page has not been anywhere. The
+/// check starts at the first address of the page that is not local.
+///
+/// # Errors
+///
+/// The first refused hop.
+pub fn check_capture(
+    result: &PageResult,
+    policy: SsrfPolicy,
+    max_redirects: usize,
+) -> Result<(), DeniedHop> {
+    let first = std::iter::once(result.url.as_str())
+        .chain(result.redirects.iter().flat_map(|redirect| {
+            std::iter::once(redirect.url.as_str()).chain(redirect.location.as_deref())
+        }))
+        .chain(std::iter::once(result.final_url.as_str()))
+        .find(|url| !is_local(url));
+    match first {
+        Some(first) => check_from(first, result, policy, max_redirects),
+        None => Ok(()),
+    }
+}
+
+/// The check of a page's chain, begun at `start`.
+fn check_from(
+    start: &str,
+    result: &PageResult,
+    policy: SsrfPolicy,
+    max_redirects: usize,
+) -> Result<(), DeniedHop> {
+    let first = Url::parse(start).map_err(|_| DeniedHop {
         hop: 0,
-        url: result.url.clone(),
-        reason: SsrfDenial::InvalidUrl(result.url.clone()),
+        url: start.to_owned(),
+        reason: SsrfDenial::InvalidUrl(start.to_owned()),
     })?;
     let mut chain =
         RedirectChain::start(&first, policy, max_redirects).map_err(|reason| DeniedHop {
             hop: 0,
-            url: result.url.clone(),
+            url: start.to_owned(),
             reason,
         })?;
     let mut hop = 0;
@@ -131,7 +178,7 @@ pub fn drop_captures(result: &mut PageResult) {
 mod tests {
     use kage_core::ssrf::{DEFAULT_MAX_REDIRECTS, DeniedRange, SsrfDenial, SsrfPolicy};
 
-    use super::{check_chain, drop_captures};
+    use super::{check_capture, check_chain, drop_captures};
     use crate::contract::{PageResult, RedirectHop};
 
     fn result(url: &str, redirects: &[(&str, &str)], final_url: &str) -> PageResult {
@@ -162,6 +209,56 @@ mod tests {
             SsrfPolicy::default(),
             DEFAULT_MAX_REDIRECTS,
         )
+    }
+
+    #[test]
+    fn a_page_that_was_captured_where_nothing_loaded_has_not_been_anywhere() {
+        let capture = |url: &str, redirects: &[(&str, &str)], final_url: &str| {
+            check_capture(
+                &result(url, redirects, final_url),
+                SsrfPolicy::default(),
+                DEFAULT_MAX_REDIRECTS,
+            )
+        };
+
+        // A flow whose first page did not arrive: the tab is still empty,
+        // or shows the browser's own error page.
+        assert_eq!(capture("about:blank", &[], "about:blank"), Ok(()));
+        assert_eq!(
+            capture(
+                "chrome-error://chromewebdata/",
+                &[],
+                "chrome-error://chromewebdata/"
+            ),
+            Ok(())
+        );
+        // As a navigation's page it is refused: nobody asks for one.
+        assert!(check("about:blank", &[], "about:blank").is_err());
+
+        // A page with an address is checked like any other,
+        assert_eq!(
+            capture("https://example.org/list", &[], "https://example.org/list"),
+            Ok(())
+        );
+        let denied = capture("http://10.0.0.5/admin", &[], "http://10.0.0.5/admin").unwrap_err();
+        assert_eq!(
+            (denied.hop, denied.url.as_str()),
+            (0, "http://10.0.0.5/admin")
+        );
+        let denied = capture(
+            "https://example.org/a",
+            &[("https://example.org/a", "http://169.254.169.254/x")],
+            "http://169.254.169.254/x",
+        )
+        .unwrap_err();
+        assert_eq!(denied.hop, 1);
+        // also when the address it was read at had not caught up with the
+        // one it was on a moment later.
+        let denied = capture("about:blank", &[], "http://192.168.1.1/").unwrap_err();
+        assert_eq!(denied.url, "http://192.168.1.1/");
+        assert_eq!(capture("about:blank", &[], "https://example.org/"), Ok(()));
+        // What is no URL at all is refused, as everywhere.
+        assert!(capture("not a url", &[], "not a url").is_err());
     }
 
     #[test]

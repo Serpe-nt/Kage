@@ -25,6 +25,16 @@
 //! browser stays open; after a block nothing is handed over and the
 //! browser is closed: the persona leaves.
 //!
+//! **A flow** (spec §10.5) is a browser attempt that runs a script of steps
+//! instead of loading one page: one visit by one persona, in its context,
+//! under one grant. The sidecar is asked to pace it like a person (a dwell
+//! with a wandering pointer after every page it arrives at, never below the
+//! policy's `min_dwell`, and a drawn pause between its actions). Every
+//! capture the flow brings back is checked against the SSRF guard like a
+//! navigation's chain. The page it ends on is classified like any page: a
+//! wall is a blocked attempt; a step that failed on a page that is no wall
+//! is the script's failure, which no other persona would change.
+//!
 //! Both paths end at the classifier with the signatures in force. A
 //! success postpones the next health probe of the persona's proxy.
 
@@ -36,11 +46,11 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use kage_browser::Navigation;
 use kage_browser::contract::{
-    BehaviorOptions, CaptureOptions, DwellMode, Entry, EntryStrategy, NavigateRequest, PageResult,
-    Wait, WaitUntil,
+    BehaviorOptions, CaptureOptions, DwellMode, Entry, EntryStrategy, FlowAction, FlowBehavior,
+    FlowEvent, FlowPace, FlowRequest, NavigateRequest, PageResult, Wait, WaitUntil,
 };
+use kage_browser::{Navigation, ssrf};
 use kage_core::classifier::{Classification, Observation};
 use kage_core::config::{BrowserConfig, Config};
 use kage_core::domain::{Header, Persona, Render, Timing};
@@ -58,6 +68,98 @@ use url::Url;
 
 use crate::forwarder::Meter;
 use crate::verdicts::{Verdicts, cookies_set, courtesy_of, page_failure, unanswered};
+
+/// A scripted flow a browser attempt runs in place of loading one page
+/// (spec §10.5).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FlowPlan {
+    /// The steps, as the sidecar takes them. The first is a `goto`.
+    pub actions: Vec<FlowAction>,
+    /// Whether typed text gets the occasional typo.
+    pub typos: bool,
+}
+
+/// One finished step of a flow.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FlowStep {
+    /// Its position in the script.
+    pub index: u32,
+    /// Its action's name.
+    pub action: String,
+    /// Whether it succeeded.
+    pub ok: bool,
+    /// How long it took, its pacing included.
+    pub duration_ms: u64,
+    /// How much of that was the persona's dwell and thinking time.
+    pub paced_ms: Option<u64>,
+    /// Why it failed.
+    pub error: Option<String>,
+    /// What an `extract`, `screenshot` or `pdf` step captured.
+    pub capture: Option<Box<PageResult>>,
+}
+
+/// What a flow came to: the steps that ran, in order. The page it ended on
+/// is the attempt's page.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct FlowRun {
+    /// The steps that ran; a flow ends at the first that fails.
+    pub steps: Vec<FlowStep>,
+    /// Whether every step succeeded.
+    pub ok: bool,
+}
+
+impl FlowRun {
+    /// The step that ended the flow, when one failed.
+    pub fn failed(&self) -> Option<&FlowStep> {
+        self.steps.iter().find(|step| !step.ok)
+    }
+}
+
+/// What a failed step of a flow means for the attempt.
+struct StepFailure {
+    outcome: Outcome,
+    reason: &'static str,
+    courtesy: Courtesy,
+    retryable: bool,
+}
+
+/// Reads what a failed step means from its error. A `goto` that did not
+/// arrive names the navigation error the sidecar classified; everything
+/// else (a selector that is not there, an assertion, the step's own time)
+/// is the script's, and another persona would not change it.
+fn step_failure(error: &str) -> StepFailure {
+    let code = error.split(':').next().unwrap_or_default();
+    match code {
+        "timeout" => StepFailure {
+            outcome: Outcome::Timeout,
+            reason: "timeout",
+            courtesy: Courtesy::ServerError,
+            retryable: true,
+        },
+        "proxy_failed" => StepFailure {
+            outcome: Outcome::ProviderError,
+            reason: "proxy_failed",
+            courtesy: Courtesy::NotTheSite,
+            retryable: true,
+        },
+        "navigation_failed" => StepFailure {
+            outcome: Outcome::ProviderError,
+            reason: "connection_failed",
+            courtesy: Courtesy::ServerError,
+            retryable: true,
+        },
+        _ => StepFailure {
+            outcome: Outcome::ProviderError,
+            reason: "flow_step_failed",
+            courtesy: Courtesy::Answered,
+            retryable: false,
+        },
+    }
+}
+
+/// A browser attempt that did not come to a page: what it ended with. Its
+/// context is closed.
+type Failed = Box<AttemptOutput>;
 
 /// How much longer than its own budget a browser attempt is waited for:
 /// the sidecar answers when the budget ran out, a little after it.
@@ -147,6 +249,9 @@ pub struct AttemptJob {
     pub wait: Wait,
     /// The largest body kept.
     pub max_body_bytes: Option<u64>,
+    /// The flow a browser attempt runs in place of loading `url`, which
+    /// is then where the flow starts.
+    pub flow: Option<FlowPlan>,
 }
 
 /// What an attempt came to.
@@ -178,6 +283,8 @@ pub struct AttemptOutput {
     pub cookies_to_http: Option<usize>,
     /// The behavior the browser was asked for (browser path).
     pub behavior: Option<BehaviorApplied>,
+    /// The steps of the flow, when the attempt ran one.
+    pub flow: Option<FlowRun>,
 }
 
 impl AttemptOutput {
@@ -197,6 +304,37 @@ impl AttemptOutput {
             cookies_to_browser: None,
             cookies_to_http: None,
             behavior: None,
+            flow: None,
+        }
+    }
+
+    /// What a page a browser returned came to, as the classifier judged
+    /// it: for a capture that is no attempt of its own (a flow's capture
+    /// point).
+    pub fn of_page(page: Box<PageResult>, classification: Classification) -> Self {
+        let status = page.status.and_then(|status| u16::try_from(status).ok());
+        Self {
+            courtesy: courtesy_of(classification.outcome, status),
+            classification,
+            reason: None,
+            status,
+            final_url: Some(page.final_url.clone()),
+            headers: page
+                .headers
+                .iter()
+                .map(|header| Header {
+                    name: header.name.clone(),
+                    value: header.value.clone(),
+                })
+                .collect(),
+            redirects: page.redirects.iter().map(|hop| hop.url.clone()).collect(),
+            timing: timing_of(&page),
+            page: Some(page),
+            fetched: None,
+            cookies_to_browser: None,
+            cookies_to_http: None,
+            behavior: None,
+            flow: None,
         }
     }
 
@@ -335,6 +473,53 @@ pub fn navigation_for(
         timeout_ms: u64::try_from(job.timeout.as_millis()).ok(),
         url: job.url.to_string(),
         wait: job.wait.clone(),
+    };
+    (request, applied)
+}
+
+/// The flow of one browser attempt as the sidecar is asked for it, and the
+/// behavior it asks for. The sidecar paces the flow like a person: the
+/// persona's own dwell after every page it arrives at, or one around the
+/// median a request names, never below the policy's `min_dwell`; a policy
+/// that locks behavior ignores the request. The page the flow ends on is
+/// always captured with its document, which the classifier reads.
+pub fn flow_for(
+    job: &AttemptJob,
+    plan: &FlowPlan,
+    browser: &BrowserConfig,
+) -> (FlowRequest, BehaviorApplied) {
+    let asked = job.behavior.as_ref().filter(|wish| !wish.is_empty());
+    let wish = asked.filter(|_| !job.policy.behavior_locked);
+    let millis = |duration: Duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+    let floor = job.policy.min_dwell.get();
+    let dwell = wish
+        .and_then(|wish| wish.dwell)
+        .map(|median| median.max(floor));
+    let request = FlowRequest {
+        actions: plan.actions.clone(),
+        behavior: Some(FlowBehavior {
+            pace: Some(FlowPace {
+                dwell_ms: dwell.map(millis),
+                min_dwell_ms: Some(millis(floor)),
+            }),
+            seed: Some(job.seed.to_string()),
+            typos: Some(plan.typos),
+        }),
+        capture: CaptureOptions {
+            dom: true,
+            ..job.capture.clone()
+        },
+        timeout_ms: Some(millis(job.timeout)),
+    };
+    // A flow scrolls where its steps say; the entry is a typed navigation.
+    let _ = browser;
+    let applied = BehaviorApplied {
+        from_request: dwell.is_some(),
+        request_ignored: asked.is_some() && wish.is_none(),
+        scroll_depth: None,
+        dwell,
+        referer_strategy: RefererStrategy::Direct,
+        seed: job.seed,
     };
     (request, applied)
 }
@@ -556,6 +741,7 @@ impl PathExecutor {
             cookies_to_browser: None,
             cookies_to_http: None,
             behavior: None,
+            flow: None,
         }
     }
 
@@ -610,6 +796,92 @@ impl PathExecutor {
         output
     }
 
+    /// The flow of a browser attempt, run in the persona's context: the
+    /// steps as the sidecar reported them and the page the flow ended on,
+    /// every capture checked against the SSRF guard.
+    async fn flow(
+        &self,
+        job: &AttemptJob,
+        plan: &FlowPlan,
+        context: uuid::Uuid,
+    ) -> Result<(Box<PageResult>, BehaviorApplied, FlowRun), Failed> {
+        let (request, behavior) = flow_for(job, plan, &self.browser);
+        let sidecar = self.manager.sidecars().of(job.persona.engine);
+        let running = sidecar.flow(context, &request);
+        let events = match tokio::time::timeout(job.timeout + BROWSER_GRACE, running).await {
+            Ok(Ok(events)) => events,
+            Ok(Err(error)) => {
+                return Err(Box::new(Self::unavailable(&PersonaError::Browser(error))));
+            }
+            Err(_) => {
+                return Err(Box::new(AttemptOutput::failed(
+                    Outcome::Timeout,
+                    "timeout",
+                    Courtesy::ServerError,
+                )));
+            }
+        };
+        let mut steps = Vec::new();
+        let mut last = None;
+        for event in events {
+            match event {
+                FlowEvent::Step {
+                    action,
+                    capture,
+                    duration_ms,
+                    error,
+                    index,
+                    ok,
+                    paced_ms,
+                } => steps.push(FlowStep {
+                    index: u32::try_from(index).unwrap_or(u32::MAX),
+                    action,
+                    ok,
+                    duration_ms,
+                    paced_ms,
+                    error,
+                    capture: capture.map(Box::new),
+                }),
+                FlowEvent::Final { ok, result, .. } => last = Some((ok, Box::new(result))),
+            }
+        }
+        let Some((ok, mut page)) = last else {
+            // The client returns no events without the final one.
+            return Err(Box::new(AttemptOutput::failed(
+                Outcome::ProviderError,
+                "sidecar_error",
+                Courtesy::NotTheSite,
+            )));
+        };
+        // Everything the flow brought back is checked like a navigation's
+        // chain; one refused hop and nothing of the flow is kept. (A page
+        // that is still the empty tab, after a `goto` that did not arrive,
+        // has not been anywhere.)
+        let denied = steps
+            .iter()
+            .filter_map(|step| step.capture.as_deref())
+            .chain(std::iter::once(page.as_ref()))
+            .find_map(|seen| ssrf::check_capture(seen, self.security, self.max_redirects).err());
+        if let Some(denied) = denied {
+            tracing::warn!(
+                context = %context,
+                hop = denied.hop,
+                reason = %denied.reason,
+                "a flow visited what the SSRF guard refuses"
+            );
+            ssrf::drop_captures(&mut page);
+            let mut output =
+                AttemptOutput::failed(Outcome::SsrfDenied, "ssrf_denied", Courtesy::NotTheSite);
+            output.classification.evidence.push(denied.evidence());
+            output.final_url = Some(denied.url);
+            output.timing = timing_of(&page);
+            output.page = Some(page);
+            output.behavior = Some(behavior);
+            return Err(Box::new(output));
+        }
+        Ok((page, behavior, FlowRun { steps, ok }))
+    }
+
     #[allow(clippy::too_many_lines)] // One attempt in a browser, from its context to its verdict.
     async fn browser(&self, job: &AttemptJob) -> AttemptOutput {
         let persona = &job.persona;
@@ -637,45 +909,53 @@ impl PathExecutor {
             }
         }
 
-        let (request, behavior) = navigation_for(job, &self.browser);
-        let sidecar = self.manager.sidecars().of(persona.engine);
-        let navigating =
-            sidecar.navigate_checked(context, &request, self.security, self.max_redirects);
-        let navigation = match tokio::time::timeout(job.timeout + BROWSER_GRACE, navigating).await {
-            Ok(Ok(navigation)) => navigation,
-            Ok(Err(error)) => {
-                // The browser is in a state nobody knows: it is closed.
-                lease.close().await;
-                return Self::unavailable(&PersonaError::Browser(error));
-            }
-            Err(_) => {
-                lease.close().await;
-                return AttemptOutput::failed(Outcome::Timeout, "timeout", Courtesy::ServerError);
-            }
+        let loaded = match &job.flow {
+            Some(plan) => self.flow(job, plan, context).await,
+            None => self
+                .navigate(job, context)
+                .await
+                .map(|(page, behavior)| (page, behavior, FlowRun::default())),
         };
-        let page = match navigation {
-            Navigation::Page(page) => page,
-            Navigation::SsrfDenied { denied, result } => {
+        let (page, behavior, flow) = match loaded {
+            Ok(loaded) => loaded,
+            // The browser is in a state nobody knows, or was somewhere it
+            // must not be: it is closed.
+            Err(output) => {
                 lease.close().await;
-                let mut output =
-                    AttemptOutput::failed(Outcome::SsrfDenied, "ssrf_denied", Courtesy::NotTheSite);
-                output.classification.evidence.push(denied.evidence());
-                output.final_url = Some(denied.url);
-                output.timing = timing_of(&result);
-                output.page = Some(result);
-                output.behavior = Some(behavior);
-                return output;
+                return *output;
             }
         };
 
         let failure = page_failure(&page);
-        let classification = self.verdicts.judge_page(&page);
-        let outcome = classification.outcome;
+        let mut classification = self.verdicts.judge_page(&page);
+        let mut reason = failure
+            .as_ref()
+            .filter(|_| !classification.outcome.is_block())
+            .map(|failure| failure.reason.to_owned());
         let status = page.status.and_then(|status| u16::try_from(status).ok());
-        let courtesy = match &failure {
-            Some(failure) if !outcome.is_block() => failure.courtesy,
-            _ => courtesy_of(outcome, status),
+        let mut courtesy = match &failure {
+            Some(failure) if !classification.outcome.is_block() => failure.courtesy,
+            _ => courtesy_of(classification.outcome, status),
         };
+        // A flow whose step failed on a page that is no wall did not do
+        // what was asked, whatever the page it stopped on looks like.
+        if job.flow.is_some()
+            && !flow.ok
+            && !classification.outcome.is_block()
+            && let Some(failed) = flow.failed()
+        {
+            let stopped = step_failure(failed.error.as_deref().unwrap_or_default());
+            classification = unanswered(stopped.outcome, stopped.reason);
+            classification.retryable = stopped.retryable;
+            classification.evidence.push(format!(
+                "step:{}:{}",
+                failed.index,
+                failed.error.as_deref().unwrap_or_default()
+            ));
+            reason = Some(stopped.reason.to_owned());
+            courtesy = stopped.courtesy;
+        }
+        let outcome = classification.outcome;
 
         let mut cookies_to_http = None;
         if outcome.is_success() {
@@ -701,9 +981,7 @@ impl PathExecutor {
 
         AttemptOutput {
             courtesy,
-            reason: failure
-                .filter(|_| !outcome.is_block())
-                .map(|failure| failure.reason.to_owned()),
+            reason,
             classification,
             status,
             final_url: Some(page.final_url.clone()),
@@ -722,6 +1000,45 @@ impl PathExecutor {
             cookies_to_browser,
             cookies_to_http,
             behavior: Some(behavior),
+            flow: job.flow.is_some().then_some(flow),
+        }
+    }
+
+    /// The one page of a browser attempt, with its redirect chain checked.
+    async fn navigate(
+        &self,
+        job: &AttemptJob,
+        context: uuid::Uuid,
+    ) -> Result<(Box<PageResult>, BehaviorApplied), Failed> {
+        let (request, behavior) = navigation_for(job, &self.browser);
+        let sidecar = self.manager.sidecars().of(job.persona.engine);
+        let navigating =
+            sidecar.navigate_checked(context, &request, self.security, self.max_redirects);
+        let navigation = match tokio::time::timeout(job.timeout + BROWSER_GRACE, navigating).await {
+            Ok(Ok(navigation)) => navigation,
+            Ok(Err(error)) => {
+                return Err(Box::new(Self::unavailable(&PersonaError::Browser(error))));
+            }
+            Err(_) => {
+                return Err(Box::new(AttemptOutput::failed(
+                    Outcome::Timeout,
+                    "timeout",
+                    Courtesy::ServerError,
+                )));
+            }
+        };
+        match navigation {
+            Navigation::Page(page) => Ok((page, behavior)),
+            Navigation::SsrfDenied { denied, result } => {
+                let mut output =
+                    AttemptOutput::failed(Outcome::SsrfDenied, "ssrf_denied", Courtesy::NotTheSite);
+                output.classification.evidence.push(denied.evidence());
+                output.final_url = Some(denied.url);
+                output.timing = timing_of(&result);
+                output.page = Some(result);
+                output.behavior = Some(behavior);
+                Err(Box::new(output))
+            }
         }
     }
 }

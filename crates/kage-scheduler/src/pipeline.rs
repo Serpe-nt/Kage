@@ -34,11 +34,12 @@
 //! retry budget.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use kage_browser::contract::{CaptureOptions, Wait};
+use kage_browser::contract::{CaptureOptions, PageResult, Wait};
 use kage_core::config::{Config, MAX_ATTEMPT_TIMEOUT};
 use kage_core::domain::{
     ArtifactRef, Attempt, CountryCode, Engine, FetchRecord, Header, Persona, PersonaSummary,
@@ -62,7 +63,8 @@ use crate::SchedulerError;
 use crate::archive::{Archive, Archived, Keep};
 use crate::backend::Backend;
 use crate::executor::{
-    AttemptExecutor, AttemptJob, AttemptOutput, BehaviorWish, default_capture, default_wait,
+    AttemptExecutor, AttemptJob, AttemptOutput, BehaviorWish, FlowPlan, default_capture,
+    default_wait,
 };
 use crate::metrics;
 use crate::scheduler::{Grant, Scheduler};
@@ -122,6 +124,9 @@ pub struct FetchOrder {
     /// How long the fetch waits for a persona before it would rather be
     /// told when to come back; `None` waits as long as it takes.
     pub patience: Option<Duration>,
+    /// A flow to run in a browser in place of loading `url`, which is
+    /// then the page the flow starts on.
+    pub flow: Option<FlowPlan>,
     /// The request as it was accepted, for the record.
     pub spec: serde_json::Value,
 }
@@ -155,6 +160,7 @@ impl FetchOrder {
             session: None,
             visitors: None,
             patience: None,
+            flow: None,
         }
     }
 }
@@ -208,23 +214,36 @@ pub struct FetchReport {
 }
 
 /// A synchronous fetch that outlasted its wall time. It keeps running;
-/// its request is stored and its result will be.
+/// its request is stored and its result will be. From here on it is a
+/// job's fetch: what only says "not now" (a paused domain, a server that
+/// is stopping) defers it instead of ending it, so that whoever carries it
+/// on as a job can take it up again under its request.
 #[derive(Debug)]
 pub struct Running {
     /// The request, by which the result will be found.
     pub request: RequestId,
-    task: tokio::task::JoinHandle<Result<FetchReport, SchedulerError>>,
+    task: tokio::task::JoinHandle<Result<Ran, SchedulerError>>,
 }
 
 impl Running {
-    /// Waits for the fetch to end.
+    /// Waits for the fetch to end, or to be deferred.
     ///
     /// # Errors
     ///
     /// What the fetch failed with; [`SchedulerError::ShuttingDown`] when
     /// its task was stopped.
-    pub async fn wait(self) -> Result<FetchReport, SchedulerError> {
-        self.task.await.unwrap_or(Err(SchedulerError::ShuttingDown))
+    pub async fn wait(self) -> Result<JobFetch, SchedulerError> {
+        Ok(
+            match self
+                .task
+                .await
+                .unwrap_or(Err(SchedulerError::ShuttingDown))?
+            {
+                Ran::Finished(report) => JobFetch::Finished(report),
+                Ran::Deferred(deferred) => JobFetch::Deferred(deferred),
+                Ran::Stopped => JobFetch::Stopped,
+            },
+        )
     }
 }
 
@@ -258,6 +277,39 @@ pub enum JobFetch {
     /// The stop signal came while it waited for a persona. Its request
     /// stays open: take it up again, or end it with [`Pipeline::abandon`].
     Stopped,
+}
+
+/// One capture point of a flow (an `extract`, `screenshot` or `pdf`
+/// step), to be stored as a result of its own with what it kept.
+#[derive(Debug, Clone)]
+pub struct Capture<'a> {
+    /// The page as the step captured it.
+    pub page: &'a PageResult,
+    /// Which parts of it are kept.
+    pub keep: Keep,
+    /// The key the flow belongs to.
+    pub api_key: Option<ApiKeyId>,
+    /// The job the flow belongs to.
+    pub job: Option<JobId>,
+    /// The caller's session.
+    pub session: Option<SessionId>,
+    /// The persona that ran the flow.
+    pub persona: Option<PersonaSummary>,
+    /// What is recorded as the request: which step of which flow.
+    pub spec: serde_json::Value,
+}
+
+/// A stored capture point.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Kept {
+    /// The request the capture is stored under.
+    pub request: RequestId,
+    /// What the classifier makes of the captured page.
+    pub outcome: Outcome,
+    /// The status of the page's main response.
+    pub status: Option<u16>,
+    /// The bodies and files that were stored.
+    pub artifacts: Vec<ArtifactRef>,
 }
 
 /// Tells work for a job to stop waiting: `true` once it should. An attempt
@@ -397,12 +449,25 @@ struct Course {
     /// The pause before the next attempt, when it is another persona's.
     retry: Option<RetryPause>,
     give_up_at: Option<DateTime<Utc>>,
+    /// Set once a synchronous fetch outlasted its wall time: it is carried
+    /// on as a job and waits where a job waits.
+    overflowed: Option<Arc<AtomicBool>>,
 }
 
 impl Course {
     /// What the request has come to when nothing more is attempted: its
     /// last attempt's outcome, whether this process made it or an earlier
     /// one did.
+    /// Whether the fetch is a job's by now: made for one, or a
+    /// synchronous fetch that outlasted its wall time.
+    fn waits_like_a_job(&self, has_stop: bool) -> bool {
+        has_stop
+            || self
+                .overflowed
+                .as_ref()
+                .is_some_and(|flag| flag.load(Ordering::Relaxed))
+    }
+
     fn standing(&self) -> (Outcome, Option<String>) {
         match (&self.last, self.attempts.last()) {
             (Some(last), _) => (last.outcome(), last.reason.clone()),
@@ -413,6 +478,7 @@ impl Course {
 }
 
 /// How a run of the pipeline ended.
+#[derive(Debug)]
 enum Ran {
     Finished(Box<FetchReport>),
     Deferred(Deferred),
@@ -493,12 +559,22 @@ impl Pipeline {
     ) -> Result<Synchronous, SchedulerError> {
         let wall = self.settings.sync_wall_time;
         let pipeline = self.clone();
-        let mut task = tokio::spawn(async move { pipeline.fetch_as(request, order, None).await });
-        match tokio::time::timeout(wall, &mut task).await {
-            Ok(finished) => finished
-                .unwrap_or(Err(SchedulerError::ShuttingDown))
-                .map(|report| Synchronous::Finished(Box::new(report))),
-            Err(_) => Ok(Synchronous::Overflowed(Running { request, task })),
+        let overflowed = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&overflowed);
+        let mut task = tokio::spawn(async move {
+            let mut course = pipeline.begin(request, order, None, None).await?;
+            course.overflowed = Some(flag);
+            pipeline.run(course, None).await
+        });
+        let Ok(finished) = tokio::time::timeout(wall, &mut task).await else {
+            // From here on the fetch is a job's.
+            overflowed.store(true, Ordering::Relaxed);
+            return Ok(Synchronous::Overflowed(Running { request, task }));
+        };
+        match finished.unwrap_or(Err(SchedulerError::ShuttingDown))? {
+            Ran::Finished(report) => Ok(Synchronous::Finished(report)),
+            // Nothing is deferred or stopped inside the wall time.
+            Ran::Deferred(_) | Ran::Stopped => Err(SchedulerError::ShuttingDown),
         }
     }
 
@@ -592,6 +668,7 @@ impl Pipeline {
             avoid,
             retry: None,
             give_up_at,
+            overflowed: None,
         })
     }
 
@@ -657,6 +734,77 @@ impl Pipeline {
         .await
     }
 
+    /// Stores one capture point of a flow as a request and a result of its
+    /// own, so that it is read, kept and deleted like any other result.
+    /// The flow's attempts stay with the flow's own request.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the backend fails.
+    pub async fn keep_capture(&self, capture: Capture<'_>) -> Result<Kept, SchedulerError> {
+        let page = capture.page;
+        let id = RequestId::new();
+        let now = self.now();
+        let domain = Url::parse(&page.final_url)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+            .unwrap_or_else(|| "(none)".to_owned());
+        let request = RequestRecord {
+            id,
+            api_key_id: capture.api_key,
+            job_id: capture.job,
+            session_id: capture.session,
+            url: page.final_url.clone(),
+            method: http::Method::GET.to_string(),
+            domain,
+            render: RenderMode::Browser,
+            spec: capture.spec,
+            created_at: now,
+            finished_at: None,
+            outcome: None,
+        };
+        self.backend().save_request(&request).await?;
+
+        let classification = self.verdicts.judge_page(page);
+        let outcome = classification.outcome;
+        let block = classification.block.clone().filter(|_| outcome.is_block());
+        let output = AttemptOutput::of_page(Box::new(page.clone()), classification);
+        let headers = if self.settings.expose_set_cookie {
+            output.headers.clone()
+        } else {
+            redact_set_cookie(&output.headers)
+        };
+        let archived = match &self.archive {
+            Some(archive) => archive.keep(id, capture.keep, &output, now).await,
+            None => Archived::default(),
+        };
+        let record = FetchRecord {
+            id: ResultId::new(),
+            request_id: id,
+            outcome,
+            status: output.status,
+            headers,
+            final_url: output.final_url.clone(),
+            redirects: output.redirects.clone(),
+            extract: None,
+            xhr: archived.xhr,
+            artifacts: archived.artifacts.clone(),
+            persona: capture.persona,
+            block,
+            robots: None,
+            cached: false,
+            reason: output.reason.clone(),
+            created_at: now,
+        };
+        self.backend().finish(&record).await?;
+        Ok(Kept {
+            request: id,
+            outcome,
+            status: record.status,
+            artifacts: archived.artifacts,
+        })
+    }
+
     /// The attempts of a request until it is done, deferred or stopped.
     async fn run(&self, mut course: Course, mut stop: Option<Stop>) -> Result<Ran, SchedulerError> {
         let id = course.request.id;
@@ -715,7 +863,7 @@ impl Pipeline {
                         continue;
                     }
                     // A job waits out what only says "not now".
-                    if stop.is_some() && waits(&refused) {
+                    if course.waits_like_a_job(stop.is_some()) && waits(&refused) {
                         return Ok(Ran::Deferred(Deferred {
                             reason: refused.reason,
                             retry_at: refused.retry_at,
@@ -965,6 +1113,7 @@ impl Pipeline {
             capture: course.order.capture.clone(),
             wait: course.order.wait.clone(),
             max_body_bytes: course.order.max_body_bytes,
+            flow: course.order.flow.clone(),
         }
     }
 
