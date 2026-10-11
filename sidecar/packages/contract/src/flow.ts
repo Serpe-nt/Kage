@@ -165,18 +165,58 @@ export const FlowActionSchema = z
   .meta({ id: 'FlowAction', description: 'One step of a flow, chosen by `action`.' });
 export type FlowAction = z.infer<typeof FlowActionSchema>;
 
+/** Longest median a caller may give the dwell of a paced flow. */
+export const MAX_PACE_DWELL_MS = 120_000;
+/** Highest floor a caller may put under the dwells of a paced flow: the cap of a persona's own dwell. */
+export const MAX_PACE_MIN_DWELL_MS = 45_000;
+
+/** How a flow paces itself (spec §10.5). */
+export const FlowPaceSchema = z
+  .strictObject({
+    dwell_ms: z
+      .number()
+      .int()
+      .min(0)
+      .max(MAX_PACE_DWELL_MS)
+      .optional()
+      .describe(
+        "Median of the time the persona stays on a page after arriving on it, before the next step. Each dwell is drawn from a log-normal with this median whose 95th percentile is twice the median. Absent: the persona's own human dwell (log-normal, median about 6 s, at most 45 s).",
+      ),
+    min_dwell_ms: z
+      .number()
+      .int()
+      .min(0)
+      .max(MAX_PACE_MIN_DWELL_MS)
+      .optional()
+      .describe(
+        'No dwell is shorter than this; default 0. A shorter draw is drawn again, never raised to the floor, so that dwells do not pile up at it.',
+      ),
+  })
+  .meta({
+    id: 'FlowPace',
+    description:
+      "How a flow paces itself. Present, even empty: after every step that arrived on a page (a `goto`; a `click`, `press` or `back` after which a new document or another address was seen) the persona dwells there, its idle hand wandering, before the next step. And before every step other than the five that only read (`wait_for`, `assert`, `extract`, `screenshot`, `pdf`) it takes a thinking time of its own (log-normal, median 0.4 to 0.9 s by persona, 80 ms to 5 s), unless it has just dwelled or the step is the flow's first. So no two actions are a constant time apart and none follows a read at machine speed. The reading steps are never delayed and send no input. A click or a key of the driver (`human: false`) is then watched for a navigation as a person's is (1.2 s). Every time is drawn from the stream of the flow's seed, so the same flow replays. A pause never outlasts the flow's budget less a reserve for the captures; it counts in the `duration_ms` and `paced_ms` of its step, not against the step's `timeout_ms`. Absent: the flow runs its steps one right after the other.",
+  });
+export type FlowPace = z.infer<typeof FlowPaceSchema>;
+
 /** How the human steps of a flow are performed. */
 export const FlowBehaviorSchema = z
   .strictObject({
     seed: SeedSchema.optional().describe(
-      "Seed of this flow. With the persona's own seed it decides every movement and key; absent: the sidecar draws one and returns it.",
+      "Seed of this flow. With the persona's own seed it decides every movement, key and pause; absent: the sidecar draws one and returns it.",
     ),
     typos: z
       .boolean()
       .optional()
       .describe('Now and then type a neighbouring key, notice, delete and retype; default false.'),
+    pace: FlowPaceSchema.optional().describe(
+      'Makes the flow pace itself like a person: a dwell on every page it arrives on, a thinking time between actions. Absent: no pacing.',
+    ),
   })
-  .meta({ id: 'FlowBehavior', description: 'How the human steps of a flow are performed.' });
+  .meta({
+    id: 'FlowBehavior',
+    description: 'How the human steps of a flow are performed, and whether the flow paces itself.',
+  });
 export type FlowBehavior = z.infer<typeof FlowBehaviorSchema>;
 
 /** Body of `POST /v1/contexts/{id}/flow`. */
@@ -203,7 +243,19 @@ export const FlowStepEventSchema = z
     index: z.number().int().nonnegative().describe('Position of the step in `actions`.'),
     action: z.string().describe("The step's action name."),
     ok: z.boolean().describe('Whether the step succeeded.'),
-    duration_ms: z.number().int().nonnegative().describe('How long the step took.'),
+    duration_ms: z
+      .number()
+      .int()
+      .nonnegative()
+      .describe('How long the step took, its pacing included.'),
+    paced_ms: z
+      .number()
+      .int()
+      .nonnegative()
+      .nullable()
+      .describe(
+        'The part of `duration_ms` that was pacing: the thinking time before the step and the dwell after it. Null when the flow is not paced (`behavior.pace` absent).',
+      ),
     error: z.string().nullable().describe('Why the step failed; null when it did not.'),
     capture: PageResultSchema.nullable().describe(
       'What an `extract`, `screenshot` or `pdf` step captured; null otherwise.',
@@ -218,7 +270,7 @@ export const FlowFinalEventSchema = z
     ok: z.boolean().describe('Whether every step succeeded.'),
     result: PageResultSchema.describe('The page as the flow left it.'),
     behavior: BehaviorReportSchema.nullable().describe(
-      'What the behavior engine did over the whole flow; null when no step was a human one.',
+      'What the behavior engine did over the whole flow; null when no step was a human one and the flow was not paced. Its `dwell_ms` is the sum of the dwells of a paced flow, 0 otherwise.',
     ),
   })
   .meta({ id: 'FlowFinalEvent', description: 'The end of a flow.' });

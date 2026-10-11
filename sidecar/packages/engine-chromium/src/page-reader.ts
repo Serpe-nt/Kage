@@ -289,7 +289,6 @@ export function pageWithReader(page: Page, reader: PageReader): DriverPage {
     goto: (url, options) => driver.goto(url, options),
     goBack: (options) => driver.goBack(options),
     waitForLoadState: (state, options) => driver.waitForLoadState(state, options),
-    waitForURL: (url, options) => driver.waitForURL(url, options),
     click: (selector, options) => driver.click(selector, options),
     hover: (selector, options) => driver.hover(selector, options),
     fill: (selector, value, options) => driver.fill(selector, value, options),

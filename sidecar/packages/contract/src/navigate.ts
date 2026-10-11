@@ -482,7 +482,9 @@ export const BehaviorReportSchema = z
     entry: EntryReportSchema.nullable().describe(
       'What the entry did; null when the request named none.',
     ),
-    dwell_ms: count('Time spent dwelling on the page.'),
+    dwell_ms: count(
+      'Time spent dwelling: on the page of a navigation, or on all the pages a paced flow arrived on together.',
+    ),
     moves: count('Movements of the pointer.'),
     positions: count('Positions the mouse reported during them.'),
     overshoots: count('Movements that went past their target and came back.'),

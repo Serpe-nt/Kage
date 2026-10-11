@@ -13,9 +13,14 @@ import {
   EngineNameSchema,
   ErrorCodeSchema,
   FlowActionSchema,
+  FlowEventSchema,
+  FlowPaceSchema,
+  FlowRequestSchema,
   GeneratePersonaRequestSchema,
   HEALTH_PATH,
   HealthResponseSchema,
+  MAX_PACE_DWELL_MS,
+  MAX_PACE_MIN_DWELL_MS,
   METRICS_PATH,
   NavigateRequestSchema,
   OpenContextRequestSchema,
@@ -49,6 +54,8 @@ describe('contract basics', () => {
   it('serves everything under the versioned prefix', () => {
     expect(CONTRACT_VERSION).toBe('v1');
     expect(CONTRACT_SEMVER.startsWith('1.')).toBe(true);
+    // 1.2.0 added the pace of a flow (M9): optional in the request, additional in the answer.
+    expect(CONTRACT_SEMVER).toBe('1.2.0');
     expect(HEALTH_PATH).toBe('/v1/health');
     expect(METRICS_PATH).toBe('/v1/metrics');
     for (const endpoint of Object.values<Endpoint>(ENDPOINTS)) {
@@ -292,6 +299,53 @@ describe('requests are strict', () => {
       FlowActionSchema.safeParse({ action: 'goto', url: 'https://x.test/', selector: 'a' }).success,
     ).toBe(false);
     expect(FlowActionSchema.safeParse({ action: 'teleport' }).success).toBe(false);
+  });
+
+  it('takes the pace of a flow, with or without its two times, and nothing else in it', () => {
+    const base = first('FlowRequest');
+    const paced = (pace: unknown) =>
+      FlowRequestSchema.safeParse({ ...base, behavior: { seed: '5f'.repeat(32), pace } }).success;
+    // Present and empty already asks for pacing: the persona's own dwell, no floor.
+    expect(paced({})).toBe(true);
+    expect(paced({ dwell_ms: 4000 })).toBe(true);
+    expect(paced({ min_dwell_ms: 1500 })).toBe(true);
+    expect(paced({ dwell_ms: 0, min_dwell_ms: 0 })).toBe(true);
+    expect(paced({ dwell_ms: MAX_PACE_DWELL_MS, min_dwell_ms: MAX_PACE_MIN_DWELL_MS })).toBe(true);
+    expect([MAX_PACE_DWELL_MS, MAX_PACE_MIN_DWELL_MS]).toEqual([120_000, 45_000]);
+    // A flow without it, and one without any behavior, stay what they were.
+    expect(FlowRequestSchema.safeParse({ ...base, behavior: { typos: true } }).success).toBe(true);
+    expect(
+      FlowRequestSchema.safeParse({ actions: base['actions'], capture: base['capture'] }).success,
+    ).toBe(true);
+    for (const refused of [
+      { dwell: 4000 },
+      { dwell_ms: 4000, wander: true },
+      { dwell_ms: -1 },
+      { dwell_ms: MAX_PACE_DWELL_MS + 1 },
+      { dwell_ms: 1500.5 },
+      { dwell_ms: null },
+      { min_dwell_ms: -1 },
+      { min_dwell_ms: MAX_PACE_MIN_DWELL_MS + 1 },
+      { min_dwell_ms: '1500' },
+      null,
+      true,
+    ]) {
+      expect(paced(refused), JSON.stringify(refused)).toBe(false);
+    }
+    expect(FlowPaceSchema.parse({ dwell_ms: 4000 })).toEqual({ dwell_ms: 4000 });
+  });
+
+  it('says of every step of a flow how much of it was pacing, or null', () => {
+    const [step] = (EXAMPLES['FlowEvent'] ?? []) as Record<string, unknown>[];
+    expect(step).toMatchObject({ type: 'step', paced_ms: null });
+    expect(FlowEventSchema.safeParse({ ...step, paced_ms: 0 }).success).toBe(true);
+    expect(FlowEventSchema.safeParse({ ...step, paced_ms: 6120 }).success).toBe(true);
+    expect(FlowEventSchema.safeParse({ ...step, paced_ms: -1 }).success).toBe(false);
+    expect(FlowEventSchema.safeParse({ ...step, paced_ms: 12.5 }).success).toBe(false);
+    // The field is always there: a client reads null, never nothing.
+    const without = { ...step };
+    delete without['paced_ms'];
+    expect(FlowEventSchema.safeParse(without).success).toBe(false);
   });
 
   it('keeps a cookie to the fields of an http_cookies row', () => {

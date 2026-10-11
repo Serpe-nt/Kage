@@ -300,7 +300,19 @@ export const EXAMPLES: Readonly<Record<string, readonly unknown[]>> = {
       ],
       capture,
       timeout_ms: 180_000,
-      behavior: { seed: SEED, typos: true },
+      behavior: { seed: SEED, typos: true, pace: { dwell_ms: 5000, min_dwell_ms: 1500 } },
+    },
+    {
+      actions: [
+        { action: 'goto', url: 'https://example.org/listing?page=2' },
+        { action: 'click', selector: 'a.next' },
+        { action: 'back', human: false },
+        { action: 'wait_for', url: '**/listing?page=2' },
+        { action: 'extract', capture },
+      ],
+      capture,
+      // An empty `pace`: the persona's own dwell, no floor.
+      behavior: { pace: {} },
     },
   ],
   FlowEvent: [
@@ -310,6 +322,7 @@ export const EXAMPLES: Readonly<Record<string, readonly unknown[]>> = {
       action: 'goto',
       ok: true,
       duration_ms: 1840,
+      paced_ms: null,
       error: null,
       capture: null,
     },
@@ -319,11 +332,34 @@ export const EXAMPLES: Readonly<Record<string, readonly unknown[]>> = {
       action: 'wait_for',
       ok: false,
       duration_ms: 15_000,
+      paced_ms: null,
       error: 'no element matched #results within 15000 ms',
       capture: null,
     },
     { type: 'final', ok: true, result: pageResult, behavior: pageResult.behavior },
     { type: 'final', ok: false, result: failedPageResult, behavior: null },
+    {
+      // A step of a paced flow: a click that left the page, and the dwell on the page it led to.
+      type: 'step',
+      index: 5,
+      action: 'click',
+      ok: true,
+      duration_ms: 8470,
+      paced_ms: 6930,
+      error: null,
+      capture: null,
+    },
+    {
+      // A step of a paced flow that only reads is never delayed.
+      type: 'step',
+      index: 6,
+      action: 'wait_for',
+      ok: true,
+      duration_ms: 212,
+      paced_ms: 0,
+      error: null,
+      capture: null,
+    },
   ],
   ExportStateRequest: [
     { origin: 'https://example.org' },

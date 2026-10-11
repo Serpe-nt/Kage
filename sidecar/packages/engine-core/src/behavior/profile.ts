@@ -94,6 +94,13 @@ export const HUMAN_BOUNDS = {
   keyIntervalMedian: [105, 185],
   keyHold: [55, 115],
   typoRate: [0.008, 0.035],
+  /** Median thinking time between two actions on one page, before a persona's own factor. */
+  thinkingBaseMs: 600,
+  /** The factor a persona scales that median by (`pace.ts`): quick ones and slow ones. */
+  thinkingFactor: [0.7, 1.5],
+  thinkingSigma: 0.5,
+  /** Every thinking time lies in it. */
+  thinkingMs: [80, 5000],
 } as const;
 
 const round = (value: number, digits: number) => {

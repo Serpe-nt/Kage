@@ -1023,6 +1023,296 @@ export function defineParitySuite(subject: ParitySubject): void {
       expect(timed.final.ok).toBe(false);
     });
 
+    it('paces a flow when asked: stays on a page before it acts, and never as long between two clicks', async () => {
+      const floor = 2200;
+      const run = await withContext('flow-paced', (context) =>
+        flow(context, {
+          behavior: { seed: SEEDS.other, pace: { dwell_ms: 3000, min_dwell_ms: floor } },
+          timeout_ms: 200_000,
+          actions: [
+            { action: 'goto', url: named('/input/') },
+            { action: 'click', selector: '#target' },
+            { action: 'click', selector: '#second' },
+            { action: 'click', selector: '#target' },
+            { action: 'click', selector: '#second' },
+            { action: 'wait_for', ms: 400 },
+            { action: 'extract', capture: DOM },
+          ],
+        }),
+      );
+      expect(run.steps.map((step) => [step.action, step.ok, step.error])).toEqual(
+        ['goto', 'click', 'click', 'click', 'click', 'wait_for', 'extract'].map((action) => [
+          action,
+          true,
+          null,
+        ]),
+      );
+      const report = inputReportOf(run.steps.at(-1)?.capture?.dom_html ?? null);
+      expect(inputStatistics(report).untrusted).toBe(0);
+      // The recorder counts from the moment its script ran. An unpaced flow
+      // clicks about a second after that (measured: 0.95 to 1.19 s).
+      const clicks = report.events
+        .filter((event) => event.type === 'click')
+        .map((event) => event.t);
+      expect(clicks).toHaveLength(4);
+      const [first] = clicks;
+      expect(first).toBeGreaterThan(floor);
+      // The hand was seen on its way there: no click out of nowhere.
+      const moves = report.events.filter((event) => event.type === 'mousemove');
+      expect(moves.filter((event) => event.t < (first ?? 0)).length).toBeGreaterThan(5);
+      // And it did not set out the moment the page was there: while the
+      // persona dwelled, the pointer rested. (Chrome itself tells a page
+      // that has just loaded where a resting pointer is, with one
+      // `mousemove` about 100 ms in; that one is the browser's, as it is on
+      // a person's machine. An unpaced flow has a whole path there.)
+      expect(moves.filter((event) => event.t < floor).length).toBeLessThanOrEqual(2);
+      // What a page measures most easily is how long nothing happens after
+      // a click. Without a pace that was the watch for a navigation, the
+      // same 1207 to 1218 ms every time (measured); now a thinking time of
+      // the persona's own follows the watch.
+      const [shortest] = HUMAN_BOUNDS.thinkingMs;
+      const quiet = clicks.slice(0, -1).map((at) => {
+        const next = report.events.find((event) => event.type === 'mousemove' && event.t > at);
+        return (next?.t ?? Number.NaN) - at;
+      });
+      expect(quiet).toHaveLength(3);
+      for (const time of quiet) {
+        expect(time).toBeGreaterThan(1200 + shortest);
+      }
+      expect(
+        Math.max(...quiet) - Math.min(...quiet),
+        `quiet for ${quiet.join(', ')}`,
+      ).toBeGreaterThan(30);
+      // And so from one click to the next: never a constant.
+      const gaps = clicks.slice(1).map((at, index) => at - (clicks[index] ?? 0));
+      expect(Math.max(...gaps) - Math.min(...gaps), `the gaps ${gaps.join(', ')}`).toBeGreaterThan(
+        30,
+      );
+      // Each step says what of its time was pacing: the dwell after the
+      // page loaded, the thinking time before every click but the first,
+      // nothing for the steps that only read.
+      const paced = run.steps.map((step) => step.paced_ms ?? Number.NaN);
+      expect(paced[0]).toBeGreaterThanOrEqual(floor);
+      expect(paced[1]).toBe(0);
+      for (const thinking of paced.slice(2, 5)) {
+        expect(thinking).toBeGreaterThanOrEqual(HUMAN_BOUNDS.thinkingMs[0]);
+        expect(thinking).toBeLessThanOrEqual(HUMAN_BOUNDS.thinkingMs[1] + 250);
+      }
+      expect(paced.slice(5)).toEqual([0, 0]);
+      for (const step of run.steps) {
+        expect(step.duration_ms).toBeGreaterThanOrEqual(step.paced_ms ?? Number.NaN);
+      }
+      expect(run.final.behavior).toMatchObject({ seed: SEEDS.other, clicks: 4 });
+      expect(run.final.behavior?.dwell_ms).toBeGreaterThanOrEqual(floor);
+      expect(Math.abs((run.final.behavior?.dwell_ms ?? 0) - (paced[0] ?? 0))).toBeLessThan(250);
+
+      // The same flow without a pace is what it was: no dwell, nothing reported.
+      const bare = await withContext('flow-unpaced', (context) =>
+        flow(context, {
+          behavior: { seed: SEEDS.first },
+          actions: [
+            { action: 'goto', url: named('/input/') },
+            { action: 'click', selector: '#target' },
+            { action: 'wait_for', ms: 400 },
+            { action: 'extract', capture: DOM },
+          ],
+        }),
+      );
+      expect(bare.steps.map((step) => step.paced_ms)).toEqual([null, null, null, null]);
+      expect(bare.final.behavior).toMatchObject({ dwell_ms: 0, clicks: 1 });
+      const hasty = inputReportOf(bare.steps.at(-1)?.capture?.dom_html ?? null).events;
+      // On its way at once, and there long before the paced one has set out.
+      expect(hasty.find((event) => event.type === 'click')?.t).toBeLessThan(floor);
+      expect(
+        hasty.filter((event) => event.type === 'mousemove' && event.t < floor).length,
+      ).toBeGreaterThan(5);
+    });
+
+    it('goes back to a page the browser kept, by the driver and by the keyboard, and captures that page', async () => {
+      const listing = named('/listing?page=2');
+      for (const human of [false, true]) {
+        const run = await withContext(`back-${human ? 'keyboard' : 'driver'}`, (context) =>
+          flow(context, {
+            timeout_ms: 120_000,
+            actions: [
+              { action: 'goto', url: listing },
+              // Left for a page that came by two redirects, with a header the listing has not.
+              { action: 'goto', url: named('/redirect/a') },
+              { action: 'extract', capture: DOM },
+              { action: 'back', human, timeout_ms: 10_000 },
+              { action: 'wait_for', url: '**/listing?page=2', timeout_ms: 5000 },
+              { action: 'extract', capture: DOM },
+            ],
+          }),
+        );
+        const how = human ? 'by the keyboard' : 'by the driver';
+        expect(
+          run.steps.filter((step) => !step.ok),
+          how,
+        ).toEqual([]);
+        const [left, back] = run.steps
+          .filter((step) => step.action === 'extract')
+          .map((step) => step.capture);
+        expect(left, how).toMatchObject({
+          final_url: named('/landing?from=redirect'),
+          status: 200,
+          title: 'Landing',
+        });
+        expect(left?.redirects, how).toHaveLength(2);
+        // Well inside its budget: a page out of the back/forward cache
+        // fires no `load`, and nothing here waits for one.
+        const went = run.steps.find((step) => step.action === 'back');
+        expect(went?.duration_ms, how).toBeLessThan(3000);
+        expect(run.steps.find((step) => step.action === 'wait_for')?.duration_ms, how).toBeLessThan(
+          2000,
+        );
+        // The page that came back, with its own answer: not the status,
+        // the headers and the redirects of the page that was left.
+        expect(back, how).toMatchObject({
+          url: listing,
+          final_url: listing,
+          status: 200,
+          title: 'Listing, page 2',
+          redirects: [],
+          error: null,
+        });
+        expect(back?.dom_html, how).toContain('<h1>Listing</h1>');
+        expect(
+          back?.headers.map((header) => header.name),
+          how,
+        ).toContain('content-type');
+        expect(
+          back?.headers.find((header) => header.name === 'x-fixture'),
+          how,
+        ).toBeUndefined();
+        expect(run.final.result, how).toMatchObject({ final_url: listing, status: 200 });
+      }
+    });
+
+    it('goes back to a page with a status of its own, to one from before the flow, and nowhere when there is none', async () => {
+      await withContext('back-more', async (context) => {
+        // A page that answered 404, left for one that answered 200.
+        const missing = await flow(context, {
+          timeout_ms: 60_000,
+          actions: [
+            { action: 'goto', url: named('/status/404') },
+            { action: 'goto', url: named('/landing') },
+            { action: 'back', human: false, timeout_ms: 10_000 },
+            { action: 'extract', capture: DOM },
+          ],
+        });
+        expect(missing.steps.filter((step) => !step.ok)).toEqual([]);
+        expect(missing.steps.at(-1)?.capture).toMatchObject({
+          final_url: named('/status/404'),
+          status: 404,
+          title: 'Not found',
+        });
+
+        // A page a navigation loaded before the flow began is remembered
+        // from the moment the flow leaves it.
+        await go(context, named('/listing?page=2'));
+        const earlier = await flow(context, {
+          timeout_ms: 60_000,
+          actions: [
+            { action: 'goto', url: named('/landing') },
+            { action: 'back', human: false, timeout_ms: 10_000 },
+            { action: 'extract', capture: DOM },
+          ],
+        });
+        expect(earlier.steps.filter((step) => !step.ok)).toEqual([]);
+        expect(earlier.steps.at(-1)?.capture).toMatchObject({
+          final_url: named('/listing?page=2'),
+          status: 200,
+          title: 'Listing, page 2',
+          redirects: [],
+        });
+
+        // A page the flow never saw arrive: its document is captured all
+        // the same. What it was answered with is known only where the
+        // browser asked again; never is it the answer of the page left.
+        await go(context, named('/landing'));
+        const unseen = await flow(context, {
+          timeout_ms: 60_000,
+          actions: [
+            { action: 'back', human: false, timeout_ms: 10_000 },
+            { action: 'extract', capture: DOM },
+          ],
+        });
+        expect(unseen.steps.filter((step) => !step.ok)).toEqual([]);
+        const capture = unseen.steps.at(-1)?.capture;
+        expect(capture).toMatchObject({
+          final_url: named('/listing?page=2'),
+          title: 'Listing, page 2',
+          redirects: [],
+          error: null,
+        });
+        expect(capture?.dom_html).toContain('<h1>Listing</h1>');
+        expect([200, null]).toContain(capture?.status);
+        expect(capture?.headers.find((header) => header.name === 'x-fixture')).toBeUndefined();
+      });
+
+      // No entry to go back to: the step says so, soon, and the flow ends.
+      // (The first of the two may still find the blank page the tab began with.)
+      const nowhere = await withContext('back-nowhere', (context) =>
+        flow(context, {
+          timeout_ms: 60_000,
+          actions: [
+            { action: 'goto', url: named('/landing') },
+            { action: 'back', human: false, timeout_ms: 10_000 },
+            { action: 'back', human: false, timeout_ms: 10_000 },
+            { action: 'extract', capture: DOM },
+          ],
+        }),
+      );
+      const failed = nowhere.steps.find((step) => !step.ok);
+      expect(failed).toMatchObject({ action: 'back', capture: null });
+      expect(failed?.error).toMatch(/^there is no page to go back to/);
+      expect(failed?.duration_ms).toBeLessThan(4000);
+      expect(nowhere.steps.at(-1)).toBe(failed);
+      expect(nowhere.final.ok).toBe(false);
+    });
+
+    it('keeps the document of a page that only changes its address', async () => {
+      const run = await withContext('single-page', (context) =>
+        flow(context, {
+          behavior: { seed: SEEDS.first },
+          timeout_ms: 120_000,
+          actions: [
+            { action: 'goto', url: named('/spa') },
+            // The page gives itself another address and loads nothing.
+            { action: 'click', selector: '#push' },
+            { action: 'wait_for', url: '/spa/second?view=2', timeout_ms: 5000 },
+            { action: 'extract', capture: DOM },
+            // Back is the same document again, under its first address.
+            { action: 'back', timeout_ms: 10_000 },
+            { action: 'wait_for', url: '**/spa', timeout_ms: 5000 },
+            { action: 'extract', capture: DOM },
+            { action: 'click', selector: '#push' },
+            { action: 'back', human: false, timeout_ms: 10_000 },
+            { action: 'extract', capture: DOM },
+          ],
+        }),
+      );
+      expect(run.steps.filter((step) => !step.ok)).toEqual([]);
+      const [second, first, again] = run.steps
+        .filter((step) => step.action === 'extract')
+        .map((step) => step.capture);
+      const own = { status: 200, title: 'Single page', redirects: [], error: null };
+      expect(second).toMatchObject({ ...own, final_url: named('/spa/second?view=2') });
+      expect(second?.dom_html).toContain('<h1 id="view">second view</h1>');
+      for (const capture of [first, again]) {
+        expect(capture).toMatchObject({ ...own, final_url: named('/spa') });
+        expect(capture?.dom_html).toContain('<h1 id="view">first view</h1>');
+      }
+      // One document all along: the answer it came with is reported every time.
+      for (const capture of [second, first, again]) {
+        expect(capture?.headers.find((header) => header.name === 'x-fixture')?.value).toBe('spa');
+      }
+      for (const step of run.steps.filter((each) => each.action === 'back')) {
+        expect(step.duration_ms).toBeLessThan(3000);
+      }
+    });
+
     it('tests itself against its own probe, and fails nothing for a page it cannot reach', async () => {
       const result = await withContext('selftest', (context) =>
         context.selftest(

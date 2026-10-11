@@ -146,6 +146,27 @@ const WEBRTC_PAGE = page(
 </script>`,
 );
 
+// A page that changes its address without loading another document, as a
+// single-page application does: one document under two addresses, and the
+// browser's way back leads from one to the other without a request.
+const SPA_PAGE = page(
+  'Single page',
+  `<h1 id="view">first view</h1>
+<p><button id="push" type="button">second view</button></p>
+<script>
+(() => {
+  const show = () => {
+    document.getElementById('view').textContent = location.pathname === '/spa' ? 'first view' : 'second view';
+  };
+  document.getElementById('push').addEventListener('click', () => {
+    history.pushState({ view: 2 }, '', '/spa/second?view=2');
+    show();
+  });
+  addEventListener('popstate', show);
+})();
+</script>`,
+);
+
 // The 1x1 transparent PNG.
 const PIXEL = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
@@ -208,6 +229,7 @@ const routes = {
       ? html(res, page('Behind the challenge', '<h1 id="content">Content behind the challenge</h1>'))
       : html(res, CHALLENGE_PAGE, {}, 403),
   '/challenge/stuck': (_req, res) => html(res, STUCK_CHALLENGE_PAGE, {}, 403),
+  '/spa': (_req, res) => html(res, SPA_PAGE, { 'x-fixture': 'spa' }),
   '/storage.html': (_req, res) => html(res, STORAGE_PAGE),
   '/console.html': (_req, res) => html(res, CONSOLE_PAGE),
   '/webrtc.html': (_req, res) => html(res, WEBRTC_PAGE),

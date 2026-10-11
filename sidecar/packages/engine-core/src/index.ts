@@ -21,6 +21,7 @@ export * from './engine.js';
 export * from './fingerprint.js';
 export * from './identity.js';
 export * from './flow/executor.js';
+export * from './flow/url-glob.js';
 export * from './seeded-random.js';
 export * from './session.js';
 export * from './selftest/findings.js';

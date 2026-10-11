@@ -37,6 +37,7 @@ import {
 import {
   Human,
   motorProfile,
+  tempo,
   type BehaviorCounts,
   type Box,
   type InputDevice,
@@ -44,6 +45,7 @@ import {
   type PageSurface,
   type Point,
   type SurfaceMetrics,
+  type Tempo,
 } from './behavior/index.js';
 import {
   XhrCollector,
@@ -68,7 +70,14 @@ import {
 } from './cookies.js';
 import type { ConsoleLog } from './console-log.js';
 import { EngineError, type EngineLog, type OperationEnv } from './engine.js';
-import { runFlow, type FlowHost } from './flow/executor.js';
+import {
+  CAPTURE_RESERVE_MS,
+  FlowStepError,
+  runFlow,
+  type FlowHost,
+  type PageMark,
+} from './flow/executor.js';
+import { urlMatcher } from './flow/url-glob.js';
 import { SeededRandom } from './seeded-random.js';
 import type { TableRow } from './selftest/pages.js';
 import { runSelftest, type LoadedPage } from './selftest/run.js';
@@ -126,6 +135,11 @@ export interface DriverPage {
     url: string,
     options: { waitUntil: LoadState; timeout: number },
   ): Promise<DriverResponse | null>;
+  /**
+   * Goes back one history entry. The session asks for the commit only: a
+   * page that comes back out of the browser's back/forward cache fires no
+   * `load`, and a wait for one never ends (follow-up F21).
+   */
   goBack(options: { waitUntil: LoadState; timeout: number }): Promise<DriverResponse | null>;
   waitForSelector(
     selector: string,
@@ -135,7 +149,6 @@ export interface DriverPage {
     state: 'domcontentloaded' | 'load' | 'networkidle',
     options: { timeout: number },
   ): Promise<void>;
-  waitForURL(url: string, options: { timeout: number }): Promise<void>;
   /** Runs an expression where the page cannot observe it: an isolated world, no user gesture. */
   evaluate<T>(expression: string): Promise<T>;
   click(selector: string, options: { timeout: number }): Promise<void>;
@@ -191,10 +204,19 @@ export interface SessionParts {
 const TEXT_LIMIT = 200_000;
 /** How long bodies of XHR responses are waited for once the page settled. */
 const BODY_WAIT_MS = 5000;
-/** Budget kept back for the captures when behavior fills the time. */
-const CAPTURE_RESERVE_MS = 4000;
 /** How long a click is given to start a navigation. */
 const CLICK_NAVIGATION_MS = 15_000;
+/**
+ * How long an address that changed is given to show its response. A
+ * response comes before its document, so an address without one is a
+ * document the browser kept or one a script renamed; the moment is for a
+ * driver that reports the two the other way round.
+ */
+const RESPONSE_GRACE_MS = 200;
+/** How long the driver's way back is given to show another page once the driver has answered. */
+const BACK_SETTLE_MS = 1000;
+/** How long a page is given to finish loading after a click or a key led to it. */
+const ARRIVAL_LOAD_MS = 4000;
 
 const WAIT_UNTIL: Readonly<Record<WaitUntil, LoadState>> = {
   commit: 'commit',
@@ -218,6 +240,17 @@ const READ_METRICS = `({
   iw: innerWidth, ih: innerHeight, ow: outerWidth, oh: outerHeight,
   sy: Math.round(scrollY), sh: document.documentElement.scrollHeight,
 })`;
+/**
+ * Which document a page shows: the address it was loaded from, which no
+ * script can change afterwards (`history.pushState` changes the address of
+ * a page and makes no other document of it), and the moment it began,
+ * which no two documents share.
+ */
+const READ_SHOWN = `(() => {
+  const entry = performance.getEntriesByType('navigation')[0];
+  const from = entry && typeof entry.name === 'string' && entry.name !== '' ? entry.name : null;
+  return { from, born: performance.timeOrigin };
+})()`;
 /** Words of the text nodes inside the viewport; a few thousand nodes at most are looked at. */
 const READ_WORDS = `(() => {
   if (!document.body) return 0;
@@ -283,6 +316,12 @@ interface RecordedXhr {
 /** What is known about the document a page shows, filled in by listeners while it loads. */
 interface DocumentState {
   response: DriverResponse | null;
+  /**
+   * The address of a document that is shown although no response of this
+   * flow came with it: the browser kept it from before the flow and
+   * brought it back. `null` for every other document.
+   */
+  restored: string | null;
   started: number;
   ttfb: number | null;
   domContentLoaded: number | null;
@@ -294,8 +333,9 @@ interface DocumentState {
   proxyChallenged: boolean;
 }
 
-const newDocument = (): DocumentState => ({
+const newDocument = (restored: string | null = null): DocumentState => ({
   response: null,
+  restored,
   started: Date.now(),
   ttfb: null,
   domContentLoaded: null,
@@ -305,6 +345,12 @@ const newDocument = (): DocumentState => ({
   bodies: [],
   proxyChallenged: false,
 });
+
+const withoutFragment = (url: string) => url.split('#')[0] ?? '';
+
+/** The address a state's document was loaded from, without its fragment; `null` for a state without a document. */
+const loadedFrom = (state: DocumentState): string | null =>
+  state.response !== null ? withoutFragment(state.response.url()) : state.restored;
 
 const emptyObservation: PageObservation = {
   title: null,
@@ -334,6 +380,16 @@ export class PageSession {
   private filters: readonly XhrCapture[] = [];
   private input: InputDevice | null = null;
   private profile: MotorProfile | null = null;
+  private tempo: Tempo | null = null;
+  /**
+   * The documents a flow has left, by the address each was loaded from
+   * (without its fragment); `null` outside a flow. A page the browser
+   * brings back out of its back/forward cache comes without a response:
+   * its state is found here, so that a capture reports its own status,
+   * headers and requests and not those of the page that was left
+   * (follow-up F21).
+   */
+  private remembered: Map<string, DocumentState> | null = null;
   /**
    * Whether the next document replaces what was collected. A plain
    * navigation keeps collecting across the documents it passes through (a
@@ -384,9 +440,10 @@ export class PageSession {
       if (
         this.freshOnNavigation !== 'never' &&
         asked.redirectedFrom() === null &&
-        this.document.response !== null
+        loadedFrom(this.document) !== null
       ) {
         // A new document after a click: what was collected belongs to the page that was left.
+        this.leave(this.document);
         this.document = newDocument();
         if (this.freshOnNavigation === 'once') {
           this.freshOnNavigation = 'never';
@@ -432,6 +489,108 @@ export class PageSession {
 
   private read<T>(expression: string): Promise<T> {
     return this.page.evaluate<T>(expression);
+  }
+
+  // --- the document a flow is on (follow-up F21) --------------------------
+
+  /** Keeps the state of a document a flow leaves, for the day the browser brings the page back. */
+  private leave(state: DocumentState): void {
+    const from = loadedFrom(state);
+    if (from !== null) {
+      this.remembered?.set(from, state);
+    }
+  }
+
+  /**
+   * Waits until the page shows another document than at the mark.
+   *
+   * @returns `answered` when a response came with it, `unanswered` when
+   * only the address changed (a page the browser kept, or one a script
+   * gave another address), `null` when the page was still the same at the
+   * limit.
+   */
+  private async departed(
+    since: PageMark,
+    limit: number,
+  ): Promise<'answered' | 'unanswered' | null> {
+    const answered = () => this.document.response !== since.response;
+    while (!answered() && this.page.url() === since.address) {
+      if (Date.now() > limit) {
+        return null;
+      }
+      await sleep(40);
+    }
+    const grace = Date.now() + RESPONSE_GRACE_MS;
+    while (!answered() && Date.now() < grace) {
+      await sleep(20);
+    }
+    return answered() ? 'answered' : 'unanswered';
+  }
+
+  /**
+   * Makes the state of the document the page shows the current one, when
+   * the page shows another document than the current state describes and
+   * no response announced it: the remembered state of a page the flow has
+   * been on, or a state without a response for one it has not.
+   *
+   * The page says which document it is by the address it was loaded from.
+   * The address of the page does not: a script can change it without
+   * making another document (`history.pushState`).
+   */
+  private async adoptShown(): Promise<void> {
+    const state = this.document;
+    const memory = this.remembered;
+    if (memory === null) {
+      return;
+    }
+    const shown = await this.read<{ from: string | null }>(READ_SHOWN).catch(() => null);
+    if (this.document !== state) {
+      // A response arrived meanwhile: the page is a new document after all.
+      return;
+    }
+    const from = withoutFragment(shown?.from ?? this.page.url());
+    if (from === loadedFrom(state)) {
+      return;
+    }
+    this.leave(state);
+    // Only a web page counts as a document that came back: the browser's
+    // own pages (a blank one, an error) are nothing a capture describes.
+    this.document = memory.get(from) ?? newDocument(/^https?:\/\//i.test(from) ? from : null);
+  }
+
+  /**
+   * Waits until the document the page shows has loaded, by asking the page
+   * itself. A driver's wait for `load` does not do: a page that comes back
+   * out of the back/forward cache fires none.
+   *
+   * @returns whether it had loaded by the deadline.
+   */
+  private async loaded(deadline: number): Promise<boolean> {
+    for (;;) {
+      let timer: NodeJS.Timeout | undefined;
+      // A page whose script never yields answers no read: the wait still ends.
+      const late = new Promise<null>((resolve) => {
+        timer = setTimeout(
+          () => {
+            resolve(null);
+          },
+          Math.max(250, deadline - Date.now()),
+        );
+      });
+      const state = await Promise.race([
+        this.read<string>('document.readyState').catch(() => null),
+        late,
+      ]).finally(() => {
+        clearTimeout(timer);
+      });
+      if (state === 'complete') {
+        return true;
+      }
+      if (Date.now() >= deadline) {
+        return false;
+      }
+      await sleep(40);
+    }
   }
 
   private async observe(): Promise<PageObservation> {
@@ -508,12 +667,14 @@ export class PageSession {
     const requestSeed = seed ?? randomBytes(32).toString('hex');
     this.input ??= await this.parts.driver.openInput();
     this.profile ??= motorProfile(this.parts.personaSeed);
+    this.tempo ??= tempo(this.parts.personaSeed);
     return {
       seed: requestSeed,
       human: new Human({
         device: this.input,
         surface: this.surface,
         profile: this.profile,
+        tempo: this.tempo,
         random: new SeededRandom(this.parts.personaSeed, `behavior:${requestSeed}`),
       }),
     };
@@ -632,7 +793,9 @@ export class PageSession {
     const page = this.page;
     const state = this.document;
     const response = state.response;
-    const loaded = response !== null;
+    // A page the browser brought back from before the flow is a document
+    // too, though nothing is known of the response it once came with.
+    const loaded = response !== null || state.restored !== null;
     let domHtml: string | null = null;
     let domTruncated = false;
     if (options.dom && loaded) {
@@ -881,7 +1044,17 @@ export class PageSession {
     ];
     this.filters = filters.filter((filter): filter is XhrCapture => filter !== null);
     this.freshOnNavigation = 'always';
+    this.remembered = new Map();
     const snapshot = async (options: CaptureOptions, error: NavigationError | null) => {
+      if (
+        loadedFrom(this.document) !== null &&
+        withoutFragment(page.url()) !== loadedFrom(this.document)
+      ) {
+        // The address is not the one this document was loaded from: a
+        // script gave the page another, or the browser brought back a page
+        // it had kept without a step of the flow asking for it.
+        await this.adoptShown();
+      }
       await Promise.race([Promise.allSettled(this.document.bodies), sleep(BODY_WAIT_MS)]);
       captures += 1;
       return this.capture(
@@ -908,6 +1081,7 @@ export class PageSession {
       screenshot: null,
       pdf: null,
     };
+    const mark = (): PageMark => ({ response: this.document.response, address: page.url() });
     const host: FlowHost = {
       human: async () => {
         acting.current ??= await this.human(request.behavior?.seed);
@@ -915,6 +1089,7 @@ export class PageSession {
       },
       typos: request.behavior?.typos ?? false,
       goto: async (url, timeout) => {
+        this.leave(this.document);
         this.document = newDocument();
         try {
           await page.goto(url, { waitUntil: 'load', timeout });
@@ -925,29 +1100,79 @@ export class PageSession {
         }
       },
       back: async (timeout) => {
-        await page.goBack({ waitUntil: 'load', timeout });
+        const deadline = Date.now() + timeout;
+        const since = mark();
+        const before = await this.read<{ born: number }>(READ_SHOWN).catch(() => null);
+        // The driver is asked for the commit only, and the page itself for
+        // the rest: a page that comes back out of the back/forward cache
+        // fires no `load`, and the driver's wait for one never ends.
+        await page.goBack({ waitUntil: 'commit', timeout });
+        let how = await this.departed(since, Math.min(deadline, Date.now() + BACK_SETTLE_MS));
+        if (how === null) {
+          // Neither a response nor another address. The entry before may
+          // still be another document at this very address; the page knows.
+          const after = await this.read<{ born: number }>(READ_SHOWN).catch(() => null);
+          if (before === null || after === null || after.born === before.born) {
+            throw new FlowStepError(
+              `there is no page to go back to: the history of the tab ends at ${page.url()}`,
+            );
+          }
+          how = 'unanswered';
+        }
+        if (how === 'unanswered') {
+          await this.adoptShown();
+        }
+        if (!(await this.loaded(deadline))) {
+          throw new FlowStepError(`the page before did not finish loading within ${timeout} ms`);
+        }
       },
       waitForSelector: async (selector, timeout) => {
         await page.waitForSelector(selector, { state: 'attached', timeout });
       },
-      waitForUrl: (glob, timeout) => page.waitForURL(glob, { timeout }),
-      waitForNetworkIdle: (timeout) => page.waitForLoadState('networkidle', { timeout }),
-      waitForNavigation: async (timeout) => {
-        // A click or a key may leave the page: by a request for a new
-        // document, or, going back, by a page the browser kept. Either
-        // shows as a new response or as another address.
-        const previous = this.document.response;
-        const address = page.url();
-        const limit = Date.now() + timeout;
-        while (this.document.response === previous && page.url() === address) {
-          if (Date.now() > limit) {
-            return;
+      waitForUrl: async (glob, timeout) => {
+        // The address is compared here, and the page asked whether it has
+        // loaded: the driver's own wait for an address waits for a `load`
+        // event as well, which a page out of the back/forward cache never fires.
+        const matches = urlMatcher(glob);
+        const deadline = Date.now() + timeout;
+        while (!matches(page.url())) {
+          if (Date.now() >= deadline) {
+            throw new Error(`the address ${page.url()} does not match ${glob}`);
           }
           await sleep(40);
         }
-        await page
-          .waitForLoadState('load', { timeout: Math.max(1, limit + 4000 - Date.now()) })
-          .catch(() => undefined);
+        if (!(await this.loaded(deadline))) {
+          throw new FlowStepError(
+            `the URL matched ${glob}, and its page did not finish loading within ${timeout} ms`,
+          );
+        }
+      },
+      waitForNetworkIdle: (timeout) => page.waitForLoadState('networkidle', { timeout }),
+      mark,
+      waitForNavigation: async (since, timeout) => {
+        // A click or a key may leave the page: by a request for a new
+        // document, or, going back, by a page the browser kept. Either
+        // shows as a new response or as another address.
+        const limit = Date.now() + timeout;
+        const how = await this.departed(since, limit);
+        if (how === null) {
+          return false;
+        }
+        if (how === 'answered') {
+          await page
+            .waitForLoadState('load', {
+              timeout: Math.max(1, limit + ARRIVAL_LOAD_MS - Date.now()),
+            })
+            .catch(() => undefined);
+        } else {
+          // No response came with it, so no `load` will either (measured on
+          // Chrome 155: the driver's wait for one runs into its timeout
+          // after a page came back out of the back/forward cache). The page
+          // says itself when it is ready.
+          await this.adoptShown();
+          await this.loaded(limit + ARRIVAL_LOAD_MS);
+        }
+        return true;
       },
       exists: (selector) =>
         this.read<boolean>(`document.querySelector(${JSON.stringify(selector)}) !== null`),
@@ -977,17 +1202,22 @@ export class PageSession {
       screenshot: (options) => snapshot({ ...nothing, screenshot: options }, null),
       pdf: (options) => snapshot({ ...nothing, pdf: options }, null),
     };
-    const ok = await runFlow(request, host, emit).finally(() => {
-      this.freshOnNavigation = 'never';
-    });
-    const result = await snapshot(request.capture, null);
-    const done = acting.current;
-    emit({
-      type: 'final',
-      ok,
-      result,
-      behavior: done === null ? null : this.report(done.seed, done.human.counts, 0, null),
-    });
+    try {
+      const outcome = await runFlow(request, host, emit).finally(() => {
+        this.freshOnNavigation = 'never';
+      });
+      const result = await snapshot(request.capture, null);
+      const done = acting.current;
+      emit({
+        type: 'final',
+        ok: outcome.ok,
+        result,
+        behavior:
+          done === null ? null : this.report(done.seed, done.human.counts, outcome.dwellMs, null),
+      });
+    } finally {
+      this.remembered = null;
+    }
   }
 
   // --- state ------------------------------------------------------------

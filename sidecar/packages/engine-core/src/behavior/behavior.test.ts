@@ -21,6 +21,15 @@ import {
   planWander,
   progress,
 } from './mouse.js';
+import {
+  DEFAULT_TEMPO,
+  MAX_REDRAWS,
+  PACED_DWELL_SIGMA,
+  TEMPO_LABEL,
+  drawPacedDwell,
+  drawThinking,
+  tempo,
+} from './pace.js';
 import { HUMAN_BOUNDS, MOTOR_PROFILE_LABEL, motorProfile, profileVector } from './profile.js';
 import { drawDwell, planFlick, readingPause, scrollsBack } from './scroll.js';
 import { keyIntervals, planTyping } from './typing.js';
@@ -411,6 +420,80 @@ describe('scrolling and dwelling', () => {
       // A long tail to the right, as a log-normal has.
       expect((dwells[3600] ?? 0) - median).toBeGreaterThan(median - (dwells[400] ?? 0));
     }
+  });
+});
+
+describe('the pace of a flow', () => {
+  it('gives every persona a tempo of its own, always the same, and leaves its hand alone', () => {
+    const [quickest, slowest] = HUMAN_BOUNDS.thinkingFactor;
+    const medians = SEEDS.map((each) => tempo(each).thinking.median);
+    for (const [index, each] of SEEDS.entries()) {
+      expect(tempo(each)).toEqual(tempo(each));
+      expect(medians[index]).toBeGreaterThanOrEqual(HUMAN_BOUNDS.thinkingBaseMs * quickest);
+      expect(medians[index]).toBeLessThanOrEqual(HUMAN_BOUNDS.thinkingBaseMs * slowest);
+    }
+    // Quick ones and slow ones: the twenty are spread over most of the range.
+    expect(new Set(medians).size).toBeGreaterThan(15);
+    expect(Math.max(...medians) - Math.min(...medians)).toBeGreaterThan(
+      HUMAN_BOUNDS.thinkingBaseMs * (slowest - quickest) * 0.6,
+    );
+    // The tempo has a stream of its own: the motor profile and its id stay what they were.
+    expect(TEMPO_LABEL).toBe('tempo-v1');
+    expect(TEMPO_LABEL).not.toBe(MOTOR_PROFILE_LABEL);
+    expect(DEFAULT_TEMPO.thinking.median).toBe(HUMAN_BOUNDS.thinkingBaseMs);
+  });
+
+  it('thinks around its own median, never outside the bounds, and hardly ever as long as the time before', () => {
+    const [shortest, longest] = HUMAN_BOUNDS.thinkingMs;
+    for (const each of SEEDS.slice(0, 6)) {
+      const own = tempo(each);
+      const random = stream('thinking', each);
+      const drawn = Array.from({ length: 4000 }, () => drawThinking(own, random));
+      const times = [...drawn].sort((a, b) => a - b);
+      expect(times[0]).toBeGreaterThanOrEqual(shortest);
+      expect(times.at(-1)).toBeLessThanOrEqual(longest);
+      expect(Math.abs((times[2000] ?? 0) - own.thinking.median) / own.thinking.median).toBeLessThan(
+        0.08,
+      );
+      // A long tail to the right, and nothing piled up at either bound.
+      expect((times[3600] ?? 0) - (times[2000] ?? 0)).toBeGreaterThan(
+        (times[2000] ?? 0) - (times[400] ?? 0),
+      );
+      expect(times.filter((time) => time === shortest || time === longest).length).toBeLessThan(4);
+      expect(drawn.filter((time, index) => time === drawn[index - 1]).length).toBeLessThan(40);
+    }
+    // Bounds no draw can meet end in the nearest bound, not in a loop.
+    const impossible = { thinking: { median: 1_000_000, sigma: 0.01 } };
+    expect(drawThinking(impossible, stream('thinking'))).toBe(longest);
+    expect(drawThinking({ thinking: { median: 1, sigma: 0.01 } }, stream('thinking'))).toBe(
+      shortest,
+    );
+  });
+
+  it('draws a dwell around the median it is given, and again when it falls below the floor', () => {
+    const hand = motorProfile(seed);
+    const draw = (pace: { median: number | null; floor: number }, count = 4000) => {
+      const random = stream('paced-dwell');
+      return Array.from({ length: count }, () => drawPacedDwell(pace, hand, random)).sort(
+        (a, b) => a - b,
+      );
+    };
+    const free = draw({ median: 5000, floor: 0 });
+    expect(Math.abs((free[2000] ?? 0) - 5000) / 5000).toBeLessThan(0.05);
+    // The 95th percentile is twice the median.
+    expect(Math.abs((free[3800] ?? 0) - 10_000) / 10_000).toBeLessThan(0.08);
+    expect(PACED_DWELL_SIGMA).toBeCloseTo(0.4214, 3);
+    const floored = draw({ median: 5000, floor: 4000 });
+    expect(floored[0]).toBeGreaterThanOrEqual(4000);
+    expect(floored.filter((dwell) => dwell === 4000).length).toBeLessThan(8);
+    // Without a median it is the persona's own dwell, capped as ever.
+    const own = draw({ median: null, floor: 0 });
+    expect(Math.abs((own[2000] ?? 0) - hand.dwell.median) / hand.dwell.median).toBeLessThan(0.08);
+    expect(own.at(-1)).toBeLessThanOrEqual(HUMAN_BOUNDS.dwellCapMs);
+    // A floor above the cap is never reached by a draw: it is used itself.
+    expect(new Set(draw({ median: null, floor: 60_000 }, 5))).toEqual(new Set([60_000]));
+    expect(new Set(draw({ median: 0, floor: 0 }, 5))).toEqual(new Set([0]));
+    expect(MAX_REDRAWS).toBe(64);
   });
 });
 

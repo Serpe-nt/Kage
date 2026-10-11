@@ -377,6 +377,35 @@ describe('findBreakingChanges', () => {
     expect(changed(edit)).toEqual([]);
   });
 
+  it('takes the pace of a flow (1.2.0) as an addition, and its removal as a break', () => {
+    const now = buildOpenApiDocument();
+    // The document as it was at 1.1.0: no `pace` in the request, no `paced_ms` in a step.
+    const before = structuredClone(now);
+    const schemas = before.components['schemas'] as Record<string, JsonObject>;
+    delete schemas['FlowPace'];
+    delete properties(schemas['FlowBehavior'])['pace'];
+    const step = named(schemas, 'FlowStepEvent');
+    delete properties(step)['paced_ms'];
+    step['required'] = (step['required'] as string[]).filter((name) => name !== 'paced_ms');
+    before.info['version'] = '1.1.0';
+    expect(now.info['version']).toBe('1.2.0');
+    expect(JSON.stringify(now)).toContain('"paced_ms"');
+    expect(
+      properties(named(now.components['schemas'] as Record<string, JsonObject>, 'FlowPace')),
+    ).toMatchObject({
+      dwell_ms: { type: 'integer', minimum: 0, maximum: 120_000 },
+      min_dwell_ms: { type: 'integer', minimum: 0, maximum: 45_000 },
+    });
+    expect(checkBreaking(before, now)).toEqual({ changes: [], majorBumped: false, ok: true });
+    // The other way round it is what the check is for.
+    expect(
+      findBreakingChanges(now, before).map((change) => `${change.where}: ${change.what}`),
+    ).toEqual([
+      'POST /v1/contexts/{id}/flow request.behavior.pace: is no longer accepted',
+      'POST /v1/contexts/{id}/flow response 200<step>.paced_ms: is no longer returned',
+    ]);
+  });
+
   it('compares a schema used twice only once per direction', () => {
     const found = changed((schemas) => {
       delete properties(schemas['Thing'])['sizes'];

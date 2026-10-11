@@ -533,7 +533,6 @@ describe('pageWithReader', () => {
       goto: note('goto', Promise.resolve(null)),
       goBack: note('goBack', Promise.resolve(null)),
       waitForLoadState: note('waitForLoadState', Promise.resolve()),
-      waitForURL: note('waitForURL', Promise.resolve()),
       click: note('click', Promise.resolve()),
       hover: note('hover', Promise.resolve()),
       fill: note('fill', Promise.resolve()),
@@ -581,9 +580,8 @@ describe('pageWithReader', () => {
     expect(page.mainFrame()).toBe(driver.mainFrame);
     expect(page.frames()).toEqual([driver.mainFrame]);
     await page.goto('http://fixture.kage.test/a', { waitUntil: 'load', timeout: 1000 });
-    await page.goBack({ waitUntil: 'load', timeout: 2000 });
+    await page.goBack({ waitUntil: 'commit', timeout: 2000 });
     await page.waitForLoadState('networkidle', { timeout: 3000 });
-    await page.waitForURL('**/a', { timeout: 4000 });
     await page.click('#a', { timeout: 5 });
     await page.hover('#b', { timeout: 6 });
     await page.fill('#c', 'text', { timeout: 7 });
@@ -592,9 +590,8 @@ describe('pageWithReader', () => {
     await page.mouse.wheel(0, 240);
     expect(driver.asked).toEqual([
       ['goto', 'http://fixture.kage.test/a', { waitUntil: 'load', timeout: 1000 }],
-      ['goBack', { waitUntil: 'load', timeout: 2000 }],
+      ['goBack', { waitUntil: 'commit', timeout: 2000 }],
       ['waitForLoadState', 'networkidle', { timeout: 3000 }],
-      ['waitForURL', '**/a', { timeout: 4000 }],
       ['click', '#a', { timeout: 5 }],
       ['hover', '#b', { timeout: 6 }],
       ['fill', '#c', 'text', { timeout: 7 }],

@@ -10,6 +10,7 @@ import {
   type SurfaceMetrics,
 } from './device.js';
 import { planClickPoint, planMove, planWander, type PointerPath } from './mouse.js';
+import { DEFAULT_TEMPO, drawPacedDwell, drawThinking, type DwellPace, type Tempo } from './pace.js';
 import type { MotorProfile } from './profile.js';
 import { ASSUMED_NOTCH_PX, drawDwell, planFlick, readingPause, scrollsBack } from './scroll.js';
 import { planTyping } from './typing.js';
@@ -49,6 +50,8 @@ export interface HumanParts {
   readonly surface: PageSurface;
   /** The persona's hand. */
   readonly profile: MotorProfile;
+  /** How quickly the persona goes from one action to the next; the middle of the population when absent. */
+  readonly tempo?: Tempo;
   /** The stream of this request. */
   readonly random: SeededRandom;
   readonly clock?: Clock;
@@ -317,6 +320,21 @@ export class Human {
   /** How long this persona would stay on a page when nobody says. */
   drawDwell(): number {
     return drawDwell(this.parts.profile, this.parts.random);
+  }
+
+  /**
+   * How long this persona stays on a page a paced flow arrived on (spec
+   * §10.5): around the flow's median or the persona's own, never below the
+   * flow's floor. Drawn from the stream of the request, so the same seeds
+   * give the same flow.
+   */
+  drawPacedDwell(pace: DwellPace): number {
+    return drawPacedDwell(pace, this.parts.profile, this.parts.random);
+  }
+
+  /** How long this persona takes before its next action on the page it is on. */
+  drawThinking(): number {
+    return drawThinking(this.parts.tempo ?? DEFAULT_TEMPO, this.parts.random);
   }
 
   /**
