@@ -579,6 +579,18 @@ with M12).
 - Security tests: SSRF cases, header denylist, oversize bodies, slowloris
   timeout.
 
+**Status.** Merged as eighteen commits ending `e1a3871` (`m8-handover.md`).
+The public API v1 with 25 operations and a committed OpenAPI 3.1 document
+validated by an outside validator and exercised by a generated TypeScript
+client; keys, scopes, limits and the audit trail; sync fetch with the
+behaviour floors, request kinds and refusals of D40; sessions that never
+move; admin endpoints with self-tests in the server; the SSRF guard on
+targets, hops and webhook URLs with the host-side lookup off by default;
+`/metrics` finally exported; a listener that cuts silent connections. The
+first clean-clone gate failed on a shell race in the new e2e script, fixed;
+the second passed every gate. F34 is decided (deny the forwarding headers,
+M9 does it); F31 to F37 stand as listed.
+
 **Follow-ups closed by M8.** F6 (the request kind of a `fetch()` and an
 `XMLHttpRequest` on the http path and its API field, from the captures of
 M4 and M5), F20 (the stand-in of `kage selftest browser` refuses a firefox
@@ -604,10 +616,10 @@ real work has open).
 - **F33 (M9, with the retention work):** the admin purge endpoint spec §19
   names (delete a key's results and artifacts before their retention
   ends). M8 has retention only.
-- **F34 (owner, small):** should a caller's forwarding headers
-  (`X-Forwarded-For`, `Forwarded`, `X-Real-IP`, `True-Client-IP`) join the
-  header denylist of §9? A browser never sends them and a proxy that does
-  is a tell; today only `Via` is denied.
+- **F34 (decided, M9 does it):** the forwarding headers
+  (`X-Forwarded-For`, `Forwarded`, `X-Real-IP`, `True-Client-IP`,
+  `X-Client-IP`, `CF-Connecting-IP`) join the header denylist of §9 with a
+  test each; a browser never sends them and a proxy that does is a tell.
 - **F35 (M9):** a fetch that outlasts the wall time runs on in a task of
   the server and is lost when the server stops (its result is then
   `result_not_found` after an hour). M9's job takes it over; `job_id` in

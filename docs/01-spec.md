@@ -1316,9 +1316,10 @@ naming the constraint, and nothing is fetched.
 {
   "url": "https://example.org/listing?page=2",
   "method": "GET",
-  "headers": { "Referer": "https://example.org/" },
+  "headers": {},
   "body": null,
   "render": "auto",
+  "request_kind": "navigation",
   "include": ["dom", "raw", "headers", "extract", "xhr", "screenshot"],
   "session_id": "proj-a-42",
   "persona": { "countries": ["DE", "AT"], "engines": ["chromium"] },
@@ -1336,6 +1337,16 @@ naming the constraint, and nothing is fetched.
   "max_body_bytes": 10000000
 }
 ```
+
+A `Referer`, caller headers, a method other than `GET`, a body or a
+`request_kind` other than `navigation` need `render: http` and are refused
+under `browser` or `auto` (`render_needs_http`, `render_kind_conflict`);
+arriving from a page in a browser is `behavior` (a click on a link, F28),
+never a header. `behavior.dwell_ms` is a median Kage draws around per
+attempt, never below the policy's `min_dwell`; `timeout_ms` is at least
+15 000 on a browser render (`timeout_too_short`). The forwarding headers
+`X-Forwarded-For`, `Forwarded`, `X-Real-IP` and `True-Client-IP` join the
+denylist (F34, M9).
 
 Validation: `url` http(s) only, ≤ 8 KB, SSRF guard (§19); `headers` ≤ 32
 entries, denylist enforced (`header_denied`, naming the header); `include`
