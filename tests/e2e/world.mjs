@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-// The world outside Kage for the compose end-to-end test of the fetch
-// pipeline (tests/e2e/fetch.sh). It has no dependencies and never reaches
-// the internet. Two roles:
+// The world outside Kage for the compose end-to-end tests (tests/e2e/). It
+// has no dependencies and never reaches the internet. Three roles:
 //
 //   node world.mjs proxy --port 3128 --user U --pass P --allow host:port,host:port
 //     A residential proxy as a provider runs one: Basic authentication,
@@ -14,6 +13,15 @@
 //   node world.mjs echo --port 8089
 //     What the proxy health probe asks: /ip answers with the address the
 //     request came from, /geo places that address in Berlin.
+//
+//   node world.mjs hooks --port 8090 --secret S --fail-first N
+//     A receiver of a job's webhooks (spec §16.6), as an operator would
+//     write one: it recomputes the signature of every delivery over the
+//     timestamp it was sent and the body it received, compares in constant
+//     time, and refuses a timestamp older than five minutes. The first N
+//     deliveries are answered 503, to be tried again. GET /__deliveries
+//     returns what arrived, in order.
+import crypto from 'node:crypto';
 import http from 'node:http';
 import net from 'node:net';
 
@@ -138,8 +146,60 @@ if (role === 'echo') {
     socket.on('error', () => {});
   });
   server.listen(port, '0.0.0.0');
+} else if (role === 'hooks') {
+  const secret = option('secret', '');
+  let failures = Number(option('fail-first', '0'));
+  /** Every delivery that arrived, in order. */
+  const deliveries = [];
+  http
+    .createServer((req, res) => {
+      const path = new URL(req.url ?? '/', 'http://hooks.invalid').pathname;
+      if (req.method === 'GET' && path === '/__deliveries') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(deliveries));
+        return;
+      }
+      const chunks = [];
+      req.on('data', (chunk) => chunks.push(chunk));
+      req.on('end', () => {
+        const body = Buffer.concat(chunks).toString('utf8');
+        const timestamp = String(req.headers['x-kage-timestamp'] ?? '');
+        const signed = String(req.headers['x-kage-signature'] ?? '');
+        const expected = `sha256=${crypto.createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex')}`;
+        const age = Math.abs(Date.now() / 1000 - Number(timestamp));
+        const verified =
+          signed.length === expected.length &&
+          crypto.timingSafeEqual(Buffer.from(signed), Buffer.from(expected)) &&
+          age <= 300;
+        let event = null;
+        try {
+          event = JSON.parse(body);
+        } catch {
+          // Recorded as it is: not JSON.
+        }
+        const status = !verified ? 401 : failures > 0 ? 503 : 204;
+        if (verified && failures > 0) failures -= 1;
+        deliveries.push({
+          path,
+          method: req.method,
+          event: req.headers['x-kage-event'] ?? null,
+          delivery: req.headers['x-kage-delivery'] ?? null,
+          user_agent: req.headers['user-agent'] ?? null,
+          content_type: req.headers['content-type'] ?? null,
+          forwarded: ['x-forwarded-for', 'forwarded', 'via', 'x-real-ip'].filter((name) => name in req.headers),
+          from: remote(req.socket),
+          verified,
+          age_s: Math.round(age),
+          answered: status,
+          body: event,
+        });
+        res.writeHead(status);
+        res.end();
+      });
+    })
+    .listen(port, '0.0.0.0');
 } else {
-  process.stderr.write('usage: world.mjs proxy|echo --port N ...\n');
+  process.stderr.write('usage: world.mjs proxy|echo|hooks --port N ...\n');
   process.exit(2);
 }
 

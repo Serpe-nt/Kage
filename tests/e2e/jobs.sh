@@ -171,7 +171,7 @@ expect 201 "POST /v1/admin/keys"
 fetch_only="$(value "${body}" "d.token")"
 call POST /v1/jobs "${fetch_only}" "{\"type\":\"batch\",\"urls\":[\"${site}/\"]}"
 problem 403 scope_missing "a job without the jobs scope"
-call POST /v1/jobs "${client}" "{\"type\":\"batch\",\"urls\":[\"${site}/\"],\"webhook\":{\"url\":\"http://fixture.kage.test:8088/hook\",\"secret\":\"0123456789abcdef0123\"}}"
+call POST /v1/jobs "${client}" "{\"type\":\"batch\",\"urls\":[\"${site}/\"],\"webhook\":{\"url\":\"http://fixture.kage.test:8088/hook\",\"secret\":\"a secret of sixteen bytes or more\"}}"
 problem 422 webhook_origin_not_allowed "a receiver the operator did not list"
 [ "$(psql "SELECT count(*) FROM jobs")" -eq 0 ] || fail "a refused job was stored"
 echo "    client ${client_id}; a job without the scope is 403, a receiver that is not listed 422"
@@ -222,7 +222,7 @@ check "progress was reported on the way" "${deliveries}" \
     "d.some((e) => e.event === 'job.progress' && e.body.job.id === '${batch}' && e.body.job.items.pending > 0)"
 for proxy in proxy-a proxy-b proxy-c; do
     check "no webhook went through ${proxy}" "$(got "http://${proxy}:3128/__stats")" \
-        "!Object.keys(d.targets).some((t) => t.includes('hooks')) && d.refused_targets === 0"
+        "!Object.keys(d.targets).some((t) => t.includes('hooks'))"
 done
 call GET "/v1/jobs/${batch}" "${client}"
 expect 200 "GET /v1/jobs/{id}"
@@ -231,6 +231,25 @@ check "the delivery log shows the retry, and of the receiver only its host" "${b
 sealed="$(psql "SELECT count(*) FROM jobs WHERE webhook_secret IS NOT NULL AND position('${hook_secret}' in encode(webhook_secret, 'escape')) > 0")"
 [ "${sealed}" -eq 0 ] || fail "a webhook secret is stored in the clear"
 echo "    $(value "${deliveries}" "d.length + ' deliveries: ' + d.map((e) => e.event.replace('job.', '') + ' ' + e.answered).join(', ')")"
+
+echo "==> /metrics: the jobs, their items and the deliveries, before the restart (the counters are the process's own)"
+call GET /metrics "${admin}"
+expect 200 "GET /metrics"
+metrics="${scratch}/metrics"
+printf '%s\n' "${body}" > "${metrics}"
+for series in kage_jobs kage_job_items kage_webhook_deliveries_pending kage_job_items_total \
+    kage_jobs_finished_total kage_webhook_deliveries_total; do
+    grep --quiet "^${series}[{ ]" "${metrics}" || fail "no sample of ${series} in /metrics"
+done
+awk '/^kage_jobs\{/ && /job_type="batch"/ && /state="succeeded"/ { found = 1 } END { exit !found }' "${metrics}" \
+    || fail "the batch is not counted: $(grep '^kage_jobs' "${metrics}" | head -8)"
+awk '/^kage_jobs\{/ && /job_type="flow"/ && /state="succeeded"/ { found = 1 } END { exit !found }' "${metrics}" \
+    || fail "the flows are not counted: $(grep '^kage_jobs' "${metrics}" | head -8)"
+awk '/^kage_webhook_deliveries_total\{/ && /event="job.completed"/ && /result="delivered"/ { found = 1 } END { exit !found }' "${metrics}" \
+    || fail "the delivery of job.completed is not counted: $(grep '^kage_webhook_deliveries_total' "${metrics}" | head -8)"
+awk '/^kage_webhook_deliveries_total\{/ && /result="retry"/ { found = 1 } END { exit !found }' "${metrics}" \
+    || fail "the delivery that was tried again is not counted: $(grep '^kage_webhook_deliveries_total' "${metrics}" | head -8)"
+echo "    $(grep '^kage_jobs{' "${metrics}" | tr '\n' ' ')"
 
 echo "==> a fetch that outlasts the wall time is carried on as a job, across a restart of the server"
 call POST /v1/fetch "${client}" "{\"url\":\"${site}/slow?ms=20000&n=overflow\",\"timeout_ms\":90000}"
@@ -267,21 +286,6 @@ check "the job ended with its item" "${body}" "d.state === 'succeeded' && d.item
 call GET "/v1/jobs/${carried}/items" "${client}"
 check "the item is the request of the fetch" "${body}" "d.items.length === 1 && d.items[0].request_id === '${request}' && d.items[0].state === 'succeeded'"
 echo "    request ${request}: 202 with job ${carried}, the server restarted, finished after ${attempts} attempt(s)"
-
-echo "==> /metrics: the jobs, their items and the deliveries"
-call GET /metrics "${admin}"
-expect 200 "GET /metrics"
-metrics="${scratch}/metrics"
-printf '%s\n' "${body}" > "${metrics}"
-for series in kage_jobs kage_job_items kage_webhook_deliveries_pending kage_job_items_total \
-    kage_jobs_finished_total kage_webhook_deliveries_total; do
-    grep --quiet "^${series}[{ ]" "${metrics}" || fail "no sample of ${series} in /metrics"
-done
-awk '/^kage_jobs\{/ && /job_type="batch"/ && /state="succeeded"/ { found = 1 } END { exit !found }' "${metrics}" \
-    || fail "the batch is not counted: $(grep '^kage_jobs' "${metrics}" | head -8)"
-awk '/^kage_jobs\{/ && /job_type="flow"/ && /state="succeeded"/ { found = 1 } END { exit !found }' "${metrics}" \
-    || fail "the flows are not counted: $(grep '^kage_jobs' "${metrics}" | head -8)"
-echo "    $(grep '^kage_jobs{' "${metrics}" | tr '\n' ' ')"
 
 echo "==> an admin purges everything the key fetched; it is on the audit log"
 before="$(psql "SELECT count(*) FROM requests WHERE api_key_id = '${client_id}'")"

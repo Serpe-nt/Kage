@@ -10,6 +10,9 @@ import type { components, paths } from './schema.js';
 export type FetchRequest = components['schemas']['FetchRequest'];
 export type FetchResult = components['schemas']['FetchResult'];
 export type FetchAccepted = components['schemas']['FetchAccepted'];
+export type JobRequest = components['schemas']['JobRequest'];
+export type Job = components['schemas']['JobView'];
+export type JobItem = components['schemas']['JobItemView'];
 export type Problem = components['schemas']['Problem'];
 export type KageClient = Client<paths>;
 
@@ -99,4 +102,133 @@ export async function readArtifact(
     contentType: response.headers.get('content-type') ?? 'application/octet-stream',
     bytes: new Uint8Array(data),
   };
+}
+
+/** A job that was submitted, and whether it is the one an earlier request made. */
+export interface SubmittedJob {
+  readonly job: Job;
+  /** True when the `Idempotency-Key` named a job that existed already. */
+  readonly replayed: boolean;
+}
+
+/**
+ * Submits a job (`POST /v1/jobs`). With an idempotency key the same
+ * request within a day is answered with the job it made the first time.
+ *
+ * @throws KageProblemError when the job is refused; nothing of it is stored then.
+ */
+export async function createJob(
+  client: KageClient,
+  request: JobRequest,
+  idempotencyKey?: string,
+): Promise<SubmittedJob> {
+  const { data, error, response } = await client.POST('/v1/jobs', {
+    body: request,
+    params: { header: idempotencyKey === undefined ? {} : { 'Idempotency-Key': idempotencyKey } },
+  });
+  if (data === undefined) {
+    throw new KageProblemError(response.status, error);
+  }
+  return { job: data, replayed: response.headers.get('idempotency-replayed') === 'true' };
+}
+
+/**
+ * A job as it stands (`GET /v1/jobs/{id}`).
+ *
+ * @throws KageProblemError when there is no such job of this key.
+ */
+export async function readJob(client: KageClient, id: string): Promise<Job> {
+  const { data, error, response } = await client.GET('/v1/jobs/{id}', {
+    params: { path: { id } },
+  });
+  if (data === undefined) {
+    throw new KageProblemError(response.status, error);
+  }
+  return data;
+}
+
+/**
+ * Every item of a job, in the job's order, read page by page
+ * (`GET /v1/jobs/{id}/items`).
+ *
+ * @throws KageProblemError when there is no such job of this key.
+ */
+export async function readJobItems(
+  client: KageClient,
+  id: string,
+  options: { readonly results?: boolean; readonly pageSize?: number } = {},
+): Promise<JobItem[]> {
+  const items: JobItem[] = [];
+  let cursor: string | undefined;
+  for (;;) {
+    const { data, error, response } = await client.GET('/v1/jobs/{id}/items', {
+      params: {
+        path: { id },
+        query: {
+          limit: options.pageSize ?? 50,
+          ...(options.results === undefined ? {} : { results: options.results }),
+          ...(cursor === undefined ? {} : { cursor }),
+        },
+      },
+    });
+    if (data === undefined) {
+      throw new KageProblemError(response.status, error);
+    }
+    items.push(...data.items);
+    if (data.next_cursor === undefined || data.next_cursor === null) {
+      return items;
+    }
+    cursor = data.next_cursor;
+  }
+}
+
+/**
+ * Asks a job to stop (`POST /v1/jobs/{id}/cancel`); the answer is the job
+ * as it stands, which is `cancelled` once what was under way is over.
+ *
+ * @throws KageProblemError when there is no such job of this key.
+ */
+export async function cancelJob(client: KageClient, id: string): Promise<Job> {
+  const { data, error, response } = await client.POST('/v1/jobs/{id}/cancel', {
+    params: { path: { id } },
+  });
+  if (data === undefined) {
+    throw new KageProblemError(response.status, error);
+  }
+  return data;
+}
+
+/** Whether a job has ended. */
+export function hasEnded(job: Job): boolean {
+  return ['succeeded', 'partial', 'failed', 'cancelled'].includes(job.state);
+}
+
+/**
+ * Reads a job until `done` says so, and returns it as it was then.
+ *
+ * @throws Error when it did not get there within the time.
+ */
+export async function waitForJob(
+  client: KageClient,
+  id: string,
+  options: {
+    readonly timeoutMs: number;
+    readonly everyMs?: number;
+    readonly done?: (job: Job) => boolean;
+  },
+): Promise<Job> {
+  const done = options.done ?? hasEnded;
+  const deadline = Date.now() + options.timeoutMs;
+  for (;;) {
+    const job = await readJob(client, id);
+    if (done(job)) {
+      return job;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `job ${id} is ${job.state} after ${options.timeoutMs} ms: ${JSON.stringify(job.items)}`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, options.everyMs ?? 1000));
+  }
 }

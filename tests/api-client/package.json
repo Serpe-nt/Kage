@@ -2,7 +2,7 @@
   "name": "@kage/api-client",
   "version": "0.1.0",
   "private": true,
-  "description": "The public API's OpenAPI document checked by a validator that is not Kage's, and a TypeScript client generated from it: the client the compose end-to-end test calls /v1/fetch with.",
+  "description": "The public API's OpenAPI document checked by a validator that is not Kage's, and a TypeScript client generated from it: the client the compose end-to-end tests call /v1/fetch and /v1/jobs with.",
   "license": "MIT OR Apache-2.0",
   "type": "module",
   "packageManager": "pnpm@10.34.6+sha512.7e1ae66a83a9143c118cc1944f37cc4f2b8acddeda4b001cfa78908f6e46e45e15292739ca6c9d026426cc757e9318cc98c5551d6a16c165097b0028ba87b4e6",
@@ -20,7 +20,8 @@
     "validate": "node dist/bin.js validate ../../crates/kage-api/openapi.json",
     "generate": "node dist/bin.js generate ../../crates/kage-api/openapi.json src/schema.ts",
     "check": "node dist/bin.js check ../../crates/kage-api/openapi.json src/schema.ts",
-    "e2e": "node dist/e2e.js"
+    "e2e": "node dist/e2e.js",
+    "e2e:jobs": "node dist/e2e-jobs.js"
   },
   "dependencies": {
     "openapi-fetch": "0.17.0"

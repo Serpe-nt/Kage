@@ -1,6 +1,7 @@
-# Overlay for the end-to-end tests of the fetch pipeline and of the API
-# (tests/e2e/fetch.sh, tests/e2e/api.sh). Never for a deployment: it adds a
-# world for Kage to fetch from that lives entirely on the compose network.
+# Overlay for the end-to-end tests of the fetch pipeline, of the API and of
+# jobs (tests/e2e/fetch.sh, tests/e2e/api.sh, tests/e2e/jobs.sh). Never for
+# a deployment: it adds a world for Kage to fetch from that lives entirely
+# on the compose network.
 #
 #   fixture   the fixture site (tests/fixtures/site), reached by names that
 #             only the proxies can resolve: fixture.kage.test, lenient.kage.test
@@ -8,6 +9,8 @@
 #             credential, relaying to the fixture and the echo only
 #   world     the echo the proxy health probe asks for its exit address and
 #             its place
+#   hooks     a receiver of webhooks that verifies their signatures, the
+#             one origin the operator of this stack listed
 #
 # Kage runs on a static proxy list of the three proxies, with the health
 # probe pointed at the echo, so nothing here needs or reaches the internet.
@@ -41,6 +44,8 @@ services:
         condition: service_healthy
       proxy-c:
         condition: service_healthy
+      hooks:
+        condition: service_healthy
     environment:
       # host:port:username:password:country, one proxy per line. Not
       # secrets: they open three containers of this test and nothing else.
@@ -58,6 +63,17 @@ services:
       # The operator's own pages of the browser self-test: the API test
       # names the coherence probe of the fixture site; the fetch test none.
       KAGE__SELFTEST__BROWSER__PAGES: ${KAGE_E2E_SELFTEST_PAGES:-[]}
+      # The one receiver a job may name: the operator's own, on this
+      # network, so it resolves to a private address.
+      KAGE__WEBHOOKS__ALLOWED_ORIGINS: '["http://hooks.kage.test:8090"]'
+      KAGE__WEBHOOKS__PRIVATE_ORIGINS: '["http://hooks.kage.test:8090"]'
+      # A retry within the time of a test; the schedule itself is observed
+      # with a clock of its own one layer down (crates/kage-api/tests/jobs.rs).
+      KAGE__WEBHOOKS__FIRST_RETRY: 2s
+      # A job whose worker died is taken up again after this long.
+      KAGE__JOBS__LEASE: 10s
+      # The jobs test shortens the wall time to see a fetch outlast it.
+      KAGE__SCHEDULER__SYNC_WALL_TIME: ${KAGE_E2E_SYNC_WALL_TIME:-180s}
     volumes:
       # The shipped policies with the domain rules of the test.
       - ${KAGE_E2E_POLICIES:?the test that uses this overlay sets it}:/etc/kage/policies:ro
@@ -82,6 +98,19 @@ services:
         aliases: [world.kage.test]
     healthcheck:
       test: [CMD, node, -e, "fetch('http://127.0.0.1:8089/ip').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  hooks:
+    <<: *helper
+    # Not a secret: it signs the events of this test and nothing else.
+    command: [/e2e/world.mjs, hooks, --port, "8090", --secret, e2e-only-webhook-secret, --fail-first, "1"]
+    networks:
+      default:
+        aliases: [hooks.kage.test]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8090/__deliveries').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
       interval: 3s
       timeout: 3s
       retries: 10
