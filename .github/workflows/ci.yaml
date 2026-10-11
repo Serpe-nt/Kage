@@ -140,7 +140,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: ./.github/actions/setup-just
+      # The API's end-to-end test calls it with the generated TypeScript
+      # client (tests/api-client), which pnpm builds.
+      - uses: ./.github/actions/setup-node
       - name: Let Chrome's sandbox create user namespaces
         # The smoke test opens a browser context in the hardened container.
         run: sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
@@ -149,7 +151,7 @@ jobs:
         run: just scan-images
       - name: CycloneDX SBOM per image
         run: just sbom-images
-      - name: Stack smoke test
+      - name: Stack smoke test, the fetch pipeline and the API, end to end
         run: just test-e2e
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

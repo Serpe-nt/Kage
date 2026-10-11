@@ -9,3 +9,6 @@
 
 Cargo.lock linguist-generated=true
 sidecar/pnpm-lock.yaml linguist-generated=true
+tests/api-client/pnpm-lock.yaml linguist-generated=true
+tests/api-client/src/schema.ts linguist-generated=true
+crates/kage-api/openapi.json linguist-generated=true

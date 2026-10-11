@@ -1,5 +1,5 @@
 name: Set up Node
-description: Installs the Node version from sidecar/.nvmrc, the pnpm version from sidecar/package.json, just, and the sidecar dependencies.
+description: Installs the Node version from sidecar/.nvmrc, the pnpm version from sidecar/package.json, just, and the dependencies of the sidecar and of the API test client.
 
 runs:
   using: composite
@@ -12,10 +12,12 @@ runs:
       with:
         node-version-file: sidecar/.nvmrc
         cache: pnpm
-        cache-dependency-path: sidecar/pnpm-lock.yaml
+        cache-dependency-path: |
+          sidecar/pnpm-lock.yaml
+          tests/api-client/pnpm-lock.yaml
 
     - uses: ./.github/actions/setup-just
 
-    - name: Install the sidecar dependencies
+    - name: Install the dependencies of the sidecar and of the API test client
       shell: bash
       run: just setup-node

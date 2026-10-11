@@ -37,7 +37,7 @@ images := "kage:dev kage-browser-chromium:dev kage-browser-firefox:dev"
 # kage-persona in M6 and kage-scheduler in M7
 # (docs/02-plan.md, acceptance of each). The sidecar gates (contract,
 # engine-core, engine-chromium, server) live in sidecar/vitest.config.ts.
-cov_gated_crates := "kage-core,kage-store,kage-proxy,kage-http,kage-browser,kage-persona,kage-scheduler,kage-crawl,kage-extract"
+cov_gated_crates := "kage-core,kage-store,kage-proxy,kage-http,kage-browser,kage-persona,kage-scheduler,kage-api,kage-crawl,kage-extract"
 cov_min_lines := "80"
 
 # sqlx checks every query at compile time against the committed data in
@@ -85,10 +85,12 @@ setup-sqlx:
             --no-default-features --features rustls,postgres
     fi
 
-# Install the pinned pnpm and the sidecar dependencies.
+# Install the pinned pnpm, the sidecar dependencies, and those of the API
+# test client (a project of its own: tests/api-client/pnpm-workspace.yaml).
 setup-node:
     command -v pnpm > /dev/null || corepack enable pnpm
     cd sidecar && pnpm install --frozen-lockfile
+    cd tests/api-client && pnpm install --frozen-lockfile
 
 # Install the pinned Chrome, Xvfb and Mesa: what the Chromium engine's tests
 # start. The version is the one the chromium image is built with. Uses sudo
@@ -119,6 +121,7 @@ setup-env:
 fmt:
     cargo fmt --all
     cd sidecar && pnpm run format
+    cd tests/api-client && pnpm run format
 
 # Check formatting without changing files.
 fmt-check: fmt-check-rust fmt-check-node
@@ -128,6 +131,7 @@ fmt-check-rust:
 
 fmt-check-node:
     cd sidecar && pnpm run format:check
+    cd tests/api-client && pnpm run format:check
 
 # --- Lint --------------------------------------------------------------------
 
@@ -140,10 +144,16 @@ lint-rust:
 # Builds first: packages type-check against each other's emitted declarations.
 lint-node:
     cd sidecar && pnpm run build && pnpm run typecheck && pnpm run lint
+    cd tests/api-client && pnpm run typecheck
 
 # The sidecar contract: the committed OpenAPI document is what the zod
 # schemas emit, and it breaks no client of the document on the base branch
 # unless the contract's major version moved (spec §10.2, §21).
+#
+# The public API (spec §16, §21): its committed document
+# (crates/kage-api/openapi.json) is valid OpenAPI 3.1 by a validator that is
+# not Kage's, and the TypeScript client generated from it is current. That
+# the document is the one the server serves is a test of kage-api.
 contract-check:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -158,6 +168,7 @@ contract-check:
         rm -f "${previous}"
     fi
     node sidecar/packages/contract/dist/bin.js breaking "${previous}" "${document}"
+    (cd tests/api-client && pnpm run build && pnpm run check)
 
 # --- Test --------------------------------------------------------------------
 
@@ -182,6 +193,7 @@ sqlx-prepare:
 # Chrome refuses to sandbox itself there.
 test-node:
     cd sidecar && pnpm run build && pnpm run test
+    cd tests/api-client && pnpm run build && pnpm run test
 
 # Compose-based end-to-end suite: the stack smoke test, which also opens a
 # browser context in each sidecar and checks the hardening of both
@@ -189,6 +201,7 @@ test-node:
 test-e2e: setup-env
     tests/e2e/smoke.sh
     tests/e2e/fetch.sh
+    tests/e2e/api.sh
 
 # Gated live suite: needs KAGE_LIVE=1 and secrets, never runs in PR CI.
 test-live:
@@ -222,16 +235,19 @@ cov-node:
 
 # --- Supply chain ------------------------------------------------------------
 
-# cargo-deny, cargo-audit, pnpm audit, sidecar license policy, openssl-sys check.
+# cargo-deny, cargo-audit, pnpm audit, the license policies of the sidecar
+# and of the API test client, openssl-sys check.
 deny: audit
     cargo deny --all-features --locked check
     scripts/check-no-openssl.sh
     node scripts/check-npm-licenses.mjs
+    node scripts/check-npm-licenses.mjs tests/api-client
 
 # cargo-audit and pnpm audit.
 audit:
     cargo audit
     cd sidecar && pnpm audit --audit-level high
+    cd tests/api-client && pnpm audit --audit-level high
 
 # Secret scan with gitleaks: git history when available, else the working tree.
 secrets:
@@ -313,9 +329,19 @@ config-check: setup-env
 
 # Regenerate the OpenAPI files. The sidecar contract is emitted from its zod
 # schemas; kage-browser generates its Rust types from the result at build
-# time. The public API's document joins in M8.
+# time. The public API's document is what `kage openapi` prints, from the
+# Rust types of kage-api; the types of the API test client are generated
+# from it.
 openapi:
-    cd sidecar && pnpm --filter @kage/contract run build && pnpm --filter @kage/contract run emit
+    #!/usr/bin/env bash
+    set -euo pipefail
+    (cd sidecar && pnpm --filter @kage/contract run build && pnpm --filter @kage/contract run emit)
+    # Written in one piece: a build that fails leaves the document alone.
+    document="$(mktemp)"
+    trap 'rm -f "${document}"' EXIT
+    cargo run --quiet --locked --package kage -- openapi > "${document}"
+    cp "${document}" crates/kage-api/openapi.json
+    (cd tests/api-client && pnpm run build && pnpm run generate)
 
 # Record what an engine's real browser shows the in-repo fingerprint echo
 # (tests/fixtures/fingerprints/browser/): `just capture-browser-fingerprint
