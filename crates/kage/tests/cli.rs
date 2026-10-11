@@ -72,7 +72,8 @@ fn config_check_prints_the_effective_configuration_without_secrets() {
     assert_eq!(report["config"]["database"]["url"], "[redacted]");
     assert_eq!(report["config"]["sidecar"]["token"], "[redacted]");
     assert_eq!(report["config"]["secrets"]["master_key"], "[redacted]");
-    assert_eq!(report["config"]["server"]["bind"], "0.0.0.0:8080");
+    // Loopback unless told otherwise (spec §19).
+    assert_eq!(report["config"]["server"]["bind"], "127.0.0.1:8080");
     assert_eq!(
         report["policies"]["pacing_profiles"],
         serde_json::json!(["fast", "human"])
