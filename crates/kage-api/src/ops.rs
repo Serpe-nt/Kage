@@ -233,6 +233,53 @@ async fn stored_gauges(state: &ApiState) -> String {
         "Score of the latest browser self-test of each live persona",
         &samples,
     ));
+    text.push_str(&job_gauges(state).await);
+    text
+}
+
+/// The queues of the job worker and of the webhook sender, as the store
+/// has them at this moment (spec §20).
+async fn job_gauges(state: &ApiState) -> String {
+    // A count of rows is exact as a float far beyond what a store holds.
+    #[allow(clippy::cast_precision_loss)]
+    let float = |count: u64| count as f64;
+    let mut text = String::new();
+    if let Ok(counts) = state.store().jobs().counts().await {
+        let samples: Vec<(Vec<(&str, &str)>, f64)> = counts
+            .iter()
+            .map(|count| {
+                (
+                    vec![
+                        ("job_type", count.kind.as_str()),
+                        ("state", count.state.as_str()),
+                    ],
+                    float(count.jobs),
+                )
+            })
+            .collect();
+        text.push_str(&gauge_family(
+            "kage_jobs",
+            "Jobs by type and state",
+            &samples,
+        ));
+    }
+    if let Ok((queued, running)) = state.store().job_items().backlog().await {
+        text.push_str(&gauge_family(
+            "kage_job_items",
+            "Items of jobs that wait their turn, and items that are with the scheduler",
+            &[
+                (vec![("state", "queued")], float(queued)),
+                (vec![("state", "running")], float(running)),
+            ],
+        ));
+    }
+    if let Ok((pending, _)) = state.store().webhooks().pending().await {
+        text.push_str(&gauge_family(
+            "kage_webhook_deliveries_pending",
+            "Events of jobs that wait to be delivered to their webhook",
+            &[(Vec::new(), float(pending))],
+        ));
+    }
     text
 }
 

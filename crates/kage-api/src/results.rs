@@ -148,14 +148,31 @@ pub(crate) async fn result(
         .await
         .map_err(|error| ApiError::internal(&error))?;
     let Some(record) = record else {
+        // A request a job has still to finish is running however long it
+        // takes: the job waits for a paused site, for its visitor, for a
+        // restart of the server.
+        let item = match request.job_id {
+            Some(_) => state
+                .store()
+                .job_items()
+                .find_by_request(id)
+                .await
+                .map_err(|error| ApiError::internal(&error))?,
+            None => None,
+        };
+        let carried = item.as_ref().filter(|item| !item.state.is_terminal());
         let age = state.clock().now() - request.created_at;
-        if age > Span::minutes(LOST_AFTER_MINUTES) {
+        if carried.is_none() && age > Span::minutes(LOST_AFTER_MINUTES) {
             return Err(ApiError::new(
                 ErrorCode::ResultNotFound,
                 "the fetch never finished: the server stopped while it ran",
             ));
         }
-        let mut response = (StatusCode::ACCEPTED, Json(FetchAccepted::running(id))).into_response();
+        let accepted = match carried {
+            Some(item) => FetchAccepted::carried(id, item.job_id),
+            None => FetchAccepted::running(id),
+        };
+        let mut response = (StatusCode::ACCEPTED, Json(accepted)).into_response();
         response
             .headers_mut()
             .insert(RETRY_AFTER, HeaderValue::from(5_u64));

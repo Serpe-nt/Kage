@@ -903,6 +903,7 @@ async fn a_fetch_that_outlasts_the_wall_time_is_answered_202_and_its_result_come
     })
     .await;
     let token = api.key(&[Scope::Fetch]).await;
+    let reader = api.key(&[Scope::Fetch, Scope::Jobs]).await;
     serve(
         &api,
         "/slow",
@@ -922,8 +923,9 @@ async fn a_fetch_that_outlasts_the_wall_time_is_answered_202_and_its_result_come
     let accepted = reply.json();
     let id = accepted["id"].as_str().unwrap().to_owned();
     assert_eq!(accepted["state"], "running");
-    // The job that would carry it on arrives with milestone M9.
-    assert_eq!(accepted["job_id"], Value::Null);
+    // A job carries it on from here (spec §8.4): were the server to stop,
+    // the fetch would be taken up again under this request.
+    let job = accepted["job_id"].as_str().unwrap().to_owned();
     assert_eq!(accepted["result"], format!("/v1/results/{id}"));
     assert_eq!(
         reply.header("location"),
@@ -936,7 +938,16 @@ async fn a_fetch_that_outlasts_the_wall_time_is_answered_202_and_its_result_come
     let waiting = api.get(&token, &format!("/v1/results/{id}")).await;
     assert_eq!(waiting.status, StatusCode::ACCEPTED);
     assert_eq!(waiting.json()["state"], "running");
+    assert_eq!(waiting.json()["job_id"], job);
     assert_eq!(waiting.header("retry-after"), Some("5"));
+    // The job is read with the `jobs` scope like any other, and by its
+    // own key only; the result needs no more than the fetch did.
+    api.get(&token, &format!("/v1/jobs/{job}"))
+        .await
+        .problem(StatusCode::FORBIDDEN, "scope_missing");
+    api.get(&reader, &format!("/v1/jobs/{job}"))
+        .await
+        .problem(StatusCode::NOT_FOUND, "job_not_found");
 
     // It ran on, and its result was stored.
     let mut result = Value::Null;
@@ -957,6 +968,17 @@ async fn a_fetch_that_outlasts_the_wall_time_is_answered_202_and_its_result_come
             .contains("<h1>Slow</h1>")
     );
     assert_eq!(api.lab.received("/slow").await.len(), 1);
+    // The job ended with its one item, without a job worker having run:
+    // the server that accepted the fetch finished it.
+    let jobs: Vec<(String, String, i32)> =
+        sqlx::query_as("SELECT state, origin, items_succeeded FROM jobs")
+            .fetch_all(api.lab.store().pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        jobs,
+        [("succeeded".to_owned(), "sync_overflow".to_owned(), 1)]
+    );
     api.shut_down().await;
 }
 

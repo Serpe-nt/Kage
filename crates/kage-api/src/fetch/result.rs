@@ -408,8 +408,10 @@ pub(crate) struct FetchAccepted {
     pub(crate) id: RequestId,
     /// Always `running`.
     pub(crate) state: ResultState,
-    /// The job that carries the fetch on. Null until milestone M9: the
-    /// fetch runs on by itself and its result is stored.
+    /// The job that carries the fetch on: `GET /v1/jobs/{id}` says where
+    /// it stands (it may be `paused`, for a site or for its persona), and
+    /// `POST /v1/jobs/{id}/cancel` stops it. Null for a result that is
+    /// asked for while a job's item is still being fetched.
     #[schema(value_type = Option<String>, format = Uuid)]
     pub(crate) job_id: Option<uuid::Uuid>,
     /// Where the result will be: `GET` it until it is `finished`.
@@ -424,6 +426,14 @@ impl FetchAccepted {
             state: ResultState::Running,
             job_id: None,
             result: format!("/v1/results/{id}"),
+        }
+    }
+
+    /// A fetch that a job carries on.
+    pub(crate) fn carried(id: RequestId, job: kage_core::ids::JobId) -> Self {
+        Self {
+            job_id: Some(job.as_uuid()),
+            ..Self::running(id)
         }
     }
 }

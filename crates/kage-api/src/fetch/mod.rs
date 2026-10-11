@@ -11,9 +11,10 @@
 //! 3. The page counts against the key's daily budget.
 //! 4. The pipeline fetches. A block is a result (`200` with its outcome),
 //!    not an error.
-//! 5. A fetch that outlasts `scheduler.sync_wall_time` runs on: the answer
-//!    is `202` with the request's id, under which the result will be
-//!    found. Milestone M9 turns that into a job.
+//! 5. A fetch that outlasts `scheduler.sync_wall_time` runs on as a job:
+//!    the answer is `202` with the request's id, under which the result
+//!    will be found, and the id of the job that carries it on. From then
+//!    on it waits where a job waits and survives a stop of the server.
 
 pub(crate) mod request;
 pub(crate) mod result;
@@ -26,7 +27,7 @@ use axum::response::{IntoResponse, Response};
 use kage_core::domain::{Persona, RenderMode, Scope, SessionId};
 use kage_core::policy::EffectivePolicy;
 use kage_persona::identity::http_spec;
-use kage_scheduler::{FetchReport, SchedulerError, Synchronous};
+use kage_scheduler::{SchedulerError, Synchronous};
 
 use self::request::{FetchRequest, Planned, plan, url_refused};
 use self::result::{FetchAccepted, Viewer, from_report};
@@ -41,7 +42,7 @@ use crate::state::{ApiState, EngineParts};
 const POLL_AFTER_SECONDS: u64 = 5;
 
 /// What a session's persona fails, when it is not one a request may use.
-fn conflict_of(
+pub(crate) fn conflict_of(
     persona: &Persona,
     planned: &Planned,
     policy: &EffectivePolicy,
@@ -70,7 +71,7 @@ fn conflict_of(
 }
 
 /// The persona of the session a request names.
-async fn pinned(
+pub(crate) async fn pinned(
     state: &ApiState,
     engine: &EngineParts,
     caller: &Caller,
@@ -139,37 +140,15 @@ fn failed(error: &SchedulerError) -> ApiError {
     }
 }
 
-/// Looks after a fetch that outlasted its wall time: it runs on, and its
-/// result is stored by the pipeline when it ends.
-fn carry_on(running: kage_scheduler::Running) {
-    let request = running.request;
-    tokio::spawn(async move {
-        match running.wait().await {
-            Ok(report) => log_finished(&report),
-            Err(error) => {
-                tracing::warn!(%request, %error, "a fetch that outlasted its wall time failed");
-            }
-        }
-    });
-}
-
-fn log_finished(report: &FetchReport) {
-    tracing::info!(
-        request = %report.request,
-        outcome = report.outcome.as_str(),
-        attempts = report.attempts.len(),
-        "a fetch that outlasted its wall time has ended; its result is stored"
-    );
-}
-
 /// Fetch one page.
 ///
 /// The answer is `200` with the result whenever a fetch was made, whatever
 /// the site did: a block is `outcome`, with `block` saying who and how. A
 /// request that cannot be made as asked is a problem document with a
 /// stable `code`. A fetch that takes longer than the server's wall time
-/// (180 s unless configured) is answered `202`; `GET /v1/results/{id}`
-/// has its result when it ends.
+/// (180 s unless configured) is answered `202` and carried on as a job
+/// (`job_id`); `GET /v1/results/{id}` has its result when it ends, also
+/// after a restart of the server.
 #[utoipa::path(
     post,
     path = "/v1/fetch",
@@ -239,6 +218,12 @@ pub(crate) async fn fetch(
     // The request as it was accepted, for the record. It holds no secret:
     // a caller cannot send one (cookies and credentials are refused).
     order.spec = serde_json::to_value(&request).map_err(|error| ApiError::internal(&error))?;
+    let spec = order.spec.clone();
+    let site = order
+        .url
+        .host_str()
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
 
     let viewer = Viewer {
         key: caller.key.id,
@@ -261,8 +246,13 @@ pub(crate) async fn fetch(
             Ok(Json(result).into_response())
         }
         Synchronous::Overflowed(running) => {
-            let accepted = FetchAccepted::running(running.request);
-            carry_on(running);
+            // It is a job's from here on: it waits where a job waits, and
+            // is taken up again after a stop of the server.
+            let request = running.request;
+            let job = crate::jobs::worker::carry_on(&state, &caller.key, running, spec, site)
+                .await
+                .map_err(|error| ApiError::internal(&error))?;
+            let accepted = FetchAccepted::carried(request, job);
             let mut response = (StatusCode::ACCEPTED, Json(&accepted)).into_response();
             if let Ok(location) = HeaderValue::from_str(&accepted.result) {
                 response.headers_mut().insert(LOCATION, location);

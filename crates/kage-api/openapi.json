@@ -860,6 +860,64 @@
         ]
       }
     },
+    "/v1/admin/purge": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Delete a key's stored results before their retention ends (spec §19):\nits fetches with their results and attempts, its finished jobs with\ntheir items, and the rows of everything they kept (documents, bodies,\nscreenshots, PDFs), whose files go with the artifact store's next\nsweep. A job that is still being worked is left alone: cancel it first.\nThe key itself, its sessions and its audit trail stay.",
+        "operationId": "purge",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PurgeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What was deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Purged"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`key_not_found`.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`before` lies in the future.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": [
+              "admin"
+            ]
+          }
+        ]
+      }
+    },
     "/v1/artifacts/{id}": {
       "get": {
         "tags": [
@@ -921,7 +979,7 @@
           "fetch"
         ],
         "summary": "Fetch one page.",
-        "description": "The answer is `200` with the result whenever a fetch was made, whatever\nthe site did: a block is `outcome`, with `block` saying who and how. A\nrequest that cannot be made as asked is a problem document with a\nstable `code`. A fetch that takes longer than the server's wall time\n(180 s unless configured) is answered `202`; `GET /v1/results/{id}`\nhas its result when it ends.",
+        "description": "The answer is `200` with the result whenever a fetch was made, whatever\nthe site did: a block is `outcome`, with `block` saying who and how. A\nrequest that cannot be made as asked is a problem document with a\nstable `code`. A fetch that takes longer than the server's wall time\n(180 s unless configured) is answered `202` and carried on as a job\n(`job_id`); `GET /v1/results/{id}` has its result when it ends, also\nafter a restart of the server.",
         "operationId": "fetch",
         "requestBody": {
           "content": {
@@ -1055,6 +1113,357 @@
           {
             "api_key": [
               "fetch"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/jobs": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Accept a job.",
+        "description": "`201` with the job, which then runs in the background: read it with\n`GET /v1/jobs/{id}` and its items with `GET /v1/jobs/{id}/items`, or\nname a `webhook` to be told. With an `Idempotency-Key` header the same\nrequest within a day is answered `200` with the job it made the first\ntime (`Idempotency-Replayed: true`), and another request under that key\nis `409 idempotency_key_reused`. Nothing is stored for a job that is\nrefused.",
+        "operationId": "create_job",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Names the job this request makes for a day: 1 to 255 visible ASCII characters.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The job this Idempotency-Key made before.",
+            "headers": {
+              "Idempotency-Replayed": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Always `true`."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobView"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The job was accepted.",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Where the job is read."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No key, or not a valid one.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key lacks the `jobs` scope, or `sessions` for `session_id`.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`session_not_found`.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`idempotency_key_reused`, `session_persona_conflict`.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The job cannot be accepted as asked; `code` says why, `item` or `step` which part.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "A limit of the key or of the API.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Nothing can be fetched: no proxy pool, or the server stops.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": [
+              "jobs"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/jobs/{id}": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "A job: its state, how far it has come, and how the deliveries of its\nwebhook stand.",
+        "operationId": "get_job",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The job's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The job.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`job_not_found`: no such job of this key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": [
+              "jobs"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/jobs/{id}/cancel": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Stop a job.",
+        "description": "What waits is cancelled at once; an item that waits for its persona is\ntaken out of the queue; a page that is being fetched at this moment is\nfinished, so at most one more item per visitor ends after the cancel.\nThe answer is the job as it stands; it is `cancelled` once what was\nunder way is over. A job that has ended is answered as it ended.",
+        "operationId": "cancel_job",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The job's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The job as it stands.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`job_not_found`.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": [
+              "jobs"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/jobs/{id}/items": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "The items of a job, in the job's order, each with its stored result.",
+        "description": "A result here is what `GET /v1/results/{request_id}` returns without\nthe document and the body, which are artifacts (named in `artifacts`).\nAn item of a flow is one of its steps; the last item is the page the\nflow ended on.",
+        "operationId": "list_job_items",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The job's id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the page before; left out for the first page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Items per page: 50 unless said, at most 200.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "results",
+            "in": "query",
+            "description": "False leaves every item's `result` out: states and outcomes only.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of items.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobItemsPage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`job_not_found`.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The cursor or the limit is not one.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": [
+              "jobs"
             ]
           }
         ]
@@ -1345,6 +1754,40 @@
       "AnyJson": {
         "description": "Any JSON value."
       },
+      "AssertStep": {
+        "type": "object",
+        "description": "End the flow unless a condition holds: exactly one of the two is given.",
+        "properties": {
+          "selector": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "This CSS selector must match an element.",
+            "maxLength": 1000,
+            "minLength": 1
+          },
+          "text_contains": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The page's text must contain this.",
+            "maxLength": 2000
+          },
+          "timeout_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The step's own budget in milliseconds; 30000 unless said.",
+            "maximum": 300000,
+            "minimum": 100
+          }
+        },
+        "additionalProperties": false
+      },
       "AttemptView": {
         "type": "object",
         "description": "One try at a request by one persona.",
@@ -1481,6 +1924,117 @@
               "null"
             ],
             "description": "What it was done to."
+          }
+        }
+      },
+      "BackStep": {
+        "type": "object",
+        "description": "Go back one page in the tab's history.",
+        "properties": {
+          "human": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "See `click`."
+          },
+          "timeout_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The step's own budget in milliseconds; 30000 unless said.",
+            "maximum": 300000,
+            "minimum": 100
+          }
+        },
+        "additionalProperties": false
+      },
+      "BatchJob": {
+        "type": "object",
+        "description": "A batch: pages fetched one after another the way a visitor reads them.\n\nPer site a batch has one visitor: one persona reads its pages of that\nsite in the order given, in sittings, with the pauses a person makes,\nand comes back after its breaks; another persona takes over only when\nthat one cannot go on (it was blocked there, reached its daily cap, or\nis gone). A site therefore sees one household reading, not a list being\ndealt out to several addresses. That costs time: under the `human`\npacing about an hour for 50 pages of one site and a day for 300, which\nis the daily cap of one persona, and a batch that meets the night ends\nin the morning. `visitors` trades that for speed (about 20 minutes for\n50 pages with three), and a faster `pacing` does where the policy does\nnot lock it. Sites of one batch are independent and are read side by\nside.",
+        "properties": {
+          "defaults": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FreeForm",
+                "description": "What every item is fetched with unless it says otherwise: any field\nof a fetch request but `url` and `session_id`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FetchRequest"
+            },
+            "description": "Pages that differ from `defaults`: each a fetch request of its own,\nwith whatever it sets taking the place of the default. They come\nafter `urls`."
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An open session of this key: every item is fetched by the\nsession's persona and by no other, with a fetch's rules (the\n`sessions` scope, `session_not_found`, `session_persona_conflict`).\nThe job counts as use of the session while it has items left.",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9_.-]{1,64}$"
+          },
+          "urls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Pages fetched as `defaults` says, in this order.",
+            "example": [
+              "https://example.org/listing?page=1"
+            ]
+          },
+          "visitors": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How many personas read one site for the batch at a time; 1 unless\nsaid, at most the `domain_concurrency` of the pacing in force for\nthe site (3 under `human`). More is refused, not reduced.",
+            "example": 1,
+            "minimum": 1
+          },
+          "webhook": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WebhookField",
+                "description": "Where the job's events are posted."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "example": {
+          "defaults": {
+            "behavior": {
+              "dwell_ms": 3000,
+              "scroll_depth": 0.3
+            },
+            "include": [
+              "dom",
+              "headers"
+            ]
+          },
+          "type": "batch",
+          "urls": [
+            "https://example.org/listing?page=1",
+            "https://example.org/listing?page=2"
+          ],
+          "webhook": {
+            "progress_every": 10,
+            "secret": "a secret of sixteen bytes or more",
+            "url": "https://hooks.example.org/kage"
           }
         }
       },
@@ -1691,6 +2245,112 @@
           }
         }
       },
+      "Counters": {
+        "type": "object",
+        "description": "How far a job has come.",
+        "required": [
+          "total",
+          "succeeded",
+          "failed",
+          "cancelled",
+          "pending"
+        ],
+        "properties": {
+          "cancelled": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Items that never ran because the job was cancelled.",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Items that failed.",
+            "minimum": 0
+          },
+          "pending": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Items that are not over yet.",
+            "minimum": 0
+          },
+          "succeeded": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Items that succeeded.",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Items the job consists of.",
+            "minimum": 0
+          }
+        }
+      },
+      "DeliveryView": {
+        "type": "object",
+        "description": "One event on its way to the job's webhook.",
+        "required": [
+          "id",
+          "type",
+          "state",
+          "attempts",
+          "created_at"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Attempts made so far.",
+            "minimum": 0
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the event happened."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The event's id, which the receiver sees as `X-Kage-Delivery`."
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the last attempt failed when the receiver did not answer:\n`timeout`, `connect`, `unresolved`, `address_denied`, …"
+          },
+          "last_status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The status of the last attempt, when the receiver answered.",
+            "minimum": 0
+          },
+          "next_attempt_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the next attempt is due, while pending."
+          },
+          "state": {
+            "type": "string",
+            "description": "`pending`, `delivered`, `failed`, or `superseded` (a progress event\nthat a later one overtook).",
+            "example": "delivered"
+          },
+          "type": {
+            "type": "string",
+            "description": "`job.completed`, `job.failed` or `job.progress`.",
+            "example": "job.completed"
+          }
+        }
+      },
       "EngineField": {
         "type": "string",
         "description": "A browser engine.",
@@ -1736,6 +2396,10 @@
           "persona_not_found",
           "proxy_not_found",
           "key_not_found",
+          "job_not_found",
+          "idempotency_key_reused",
+          "webhook_origin_not_allowed",
+          "driver_input_denied",
           "conflict",
           "payload_too_large",
           "uri_too_long",
@@ -1744,6 +2408,44 @@
           "unavailable",
           "internal"
         ]
+      },
+      "ExtractStep": {
+        "type": "object",
+        "description": "Capture the page as it is at this point of the flow.",
+        "properties": {
+          "include": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/Include"
+            },
+            "description": "What to capture: `dom`, `raw`, `headers`, `xhr`, `console`. `dom`\nand `headers` unless said."
+          },
+          "timeout_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The step's own budget in milliseconds; 30000 unless said.",
+            "maximum": 300000,
+            "minimum": 100
+          },
+          "xhr": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/XhrField",
+                "description": "Which responses of the page's scripts are kept; with `xhr`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
       },
       "FetchAccepted": {
         "type": "object",
@@ -1765,7 +2467,7 @@
               "null"
             ],
             "format": "uuid",
-            "description": "The job that carries the fetch on. Null until milestone M9: the\nfetch runs on by itself and its result is stored."
+            "description": "The job that carries the fetch on: `GET /v1/jobs/{id}` says where\nit stands (it may be `paused`, for a site or for its persona), and\n`POST /v1/jobs/{id}/cancel` stops it. Null for a result that is\nasked for while a job's item is still being fetched."
           },
           "result": {
             "type": "string",
@@ -2227,10 +2929,534 @@
           }
         }
       },
+      "FlowBehaviorField": {
+        "type": "object",
+        "description": "What a flow may change of how its persona behaves.",
+        "properties": {
+          "dwell_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The median of the time the persona stays on a page after arriving\nthere, before the next step, in milliseconds. Left out: the\npersona's own. Never below the policy's `min_dwell` (2 s unless\nset), and ignored where the policy locks behavior. A flow always\ndwells after it arrives and always pauses between its actions:\nnothing turns that off.",
+            "maximum": 60000,
+            "minimum": 0
+          },
+          "typos": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Now and then type a neighbouring key, notice, delete and retype."
+          }
+        },
+        "additionalProperties": false
+      },
+      "FlowJob": {
+        "type": "object",
+        "description": "A flow: a script of steps one persona performs in its browser, as one\nvisit.\n\nThe persona arrives by a typed navigation, stays on every page it comes\nto for a while with its pointer moving, and pauses between its actions\nas a person does, so a flow takes longer than its steps: plan about ten\nseconds for every page it visits. A flow whose page turns out to be a\nwall is a blocked attempt: the persona leaves, and another one runs the\nflow again from its first step, inside the policy's retry budget (never\nin a session). A step that fails on a page that is no wall is the\nscript's failure and is not retried. The job's items are the steps, in\norder, and one last item for the page the flow ended on.",
+        "required": [
+          "actions"
+        ],
+        "properties": {
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FlowStepField"
+            },
+            "description": "The steps, at most 100. The first is a `goto`.",
+            "maxItems": 100,
+            "minItems": 1
+          },
+          "behavior": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FlowBehaviorField",
+                "description": "What the flow may change of how its persona behaves."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "include": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/Include"
+            },
+            "description": "What is returned and kept of the page the flow ends on: `dom` and\n`headers` unless said."
+          },
+          "max_body_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The largest body and document kept, in bytes.",
+            "maximum": 100000000,
+            "minimum": 1
+          },
+          "max_retries": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How often the flow is run again by another persona after a block.\nDefault: the policy's (2).",
+            "maximum": 10,
+            "minimum": 0
+          },
+          "pacing": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PacingField",
+                "description": "The pacing of the persona's arrival at the flow's site; ignored\nwhere the policy locks it."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pdf": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PdfField",
+                "description": "How the last page's PDF is printed; with `include: [\"pdf\"]`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "persona": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PersonaHints",
+                "description": "Which personas the flow would have."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "screenshot": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ScreenshotField",
+                "description": "How the last page's screenshot is taken; with `include:\n[\"screenshot\"]`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An open session of this key: its persona runs the flow, and no\nother; a flow in a session is never run again after a block.",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9_.-]{1,64}$"
+          },
+          "timeout_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The whole time one run of the flow may take, in milliseconds:\n180000 unless said, at least 15000, at most 300000.",
+            "maximum": 300000,
+            "minimum": 15000
+          },
+          "webhook": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WebhookField",
+                "description": "Where the job's events are posted."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "xhr": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/XhrField",
+                "description": "Which responses of the last page's scripts are kept; with\n`include: [\"xhr\"]`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "example": {
+          "actions": [
+            {
+              "action": "goto",
+              "url": "https://example.org/"
+            },
+            {
+              "action": "click",
+              "selector": "#next"
+            },
+            {
+              "action": "wait_for",
+              "selector": "#items"
+            },
+            {
+              "action": "extract",
+              "include": [
+                "dom"
+              ]
+            }
+          ],
+          "include": [
+            "dom",
+            "headers"
+          ],
+          "type": "flow"
+        }
+      },
+      "FlowStepField": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GotoStep",
+                "description": "Load a page."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "action"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "goto"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Load a page."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TargetStep",
+                "description": "Click an element."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "action"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "click"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Click an element."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TypeStep",
+                "description": "Type text into an element."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "action"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "type"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Type text into an element."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PressStep",
+                "description": "Press one key."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "action"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "press"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Press one key."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ScrollStep",
+                "description": "Scroll the page."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "action"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "scroll"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Scroll the page."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WaitForStep",
+                "description": "Wait for a condition."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "action"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "wait_for"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Wait for a condition."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SelectStep",
+                "description": "Choose an option of a select element."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "action"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "select"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Choose an option of a select element."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TargetStep",
+                "description": "Move the pointer over an element."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "action"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "hover"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Move the pointer over an element."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BackStep",
+                "description": "Go back one page."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "action"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "back"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Go back one page."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ExtractStep",
+                "description": "Capture the page."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "action"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "extract"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Capture the page."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ScreenshotStep",
+                "description": "Take a screenshot."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "action"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "screenshot"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Take a screenshot."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PdfStep",
+                "description": "Print a PDF."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "action"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "pdf"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Print a PDF."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AssertStep",
+                "description": "End the flow unless a condition holds."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "action"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "assert"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "End the flow unless a condition holds."
+          }
+        ],
+        "description": "One step of a flow, chosen by `action` (spec §10.5).\n\nThe steps that touch the page (`click`, `type`, `press`, `scroll`,\n`select`, `hover`, `back`) are done with the persona's own mouse and\nkeyboard. The first step that fails ends the flow."
+      },
       "FreeForm": {
         "type": "object",
         "description": "A JSON object with any members; what they are is said where it is used.",
         "additionalProperties": true
+      },
+      "GotoStep": {
+        "type": "object",
+        "description": "Load a page. The first step of every flow.",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "timeout_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The step's own budget in milliseconds; 30000 unless said.",
+            "maximum": 300000,
+            "minimum": 100
+          },
+          "url": {
+            "type": "string",
+            "description": "The page: an `http` or `https` URL that passes the SSRF guard."
+          }
+        },
+        "additionalProperties": false
       },
       "HeaderView": {
         "type": "object",
@@ -2263,6 +3489,333 @@
           "pdf",
           "console"
         ]
+      },
+      "ItemStateField": {
+        "type": "string",
+        "description": "Where an item stands.",
+        "enum": [
+          "queued",
+          "running",
+          "succeeded",
+          "failed",
+          "cancelled"
+        ]
+      },
+      "JobItemView": {
+        "type": "object",
+        "description": "One item of a job: a page of a batch, or a step of a flow.",
+        "required": [
+          "seq",
+          "state"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it failed, or was not attempted: an outcome's name, a reason\nsuch as `domain_paused` or `cancelled`, or a step's own error."
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it ended."
+          },
+          "not_before": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Not taken up before this moment: what it waits for is not over."
+          },
+          "outcome": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OutcomeField",
+                "description": "How its fetch or its capture ended."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The id its result is stored under: `GET /v1/results/{id}` returns\nit with the document and the body."
+          },
+          "result": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FetchResult",
+                "description": "The stored result, without the document and the body (they are\nartifacts, named in `artifacts`). Null while there is none, and\nwhen the page was asked for with `results=false`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its position in the job, from 0.",
+            "minimum": 0
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was first taken up."
+          },
+          "state": {
+            "$ref": "#/components/schemas/ItemStateField",
+            "description": "Where it stands."
+          },
+          "step": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StepView",
+                "description": "The step, for an item of a flow."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The page, for an item of a batch."
+          }
+        }
+      },
+      "JobItemsPage": {
+        "type": "object",
+        "description": "A page of a job's items.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JobItemView"
+            },
+            "description": "The items, in the job's order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What to pass as `cursor` for the next page; null on the last."
+          }
+        }
+      },
+      "JobRequest": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BatchJob",
+                "description": "Pages fetched one after another."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "batch"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Pages fetched one after another."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FlowJob",
+                "description": "A script of steps in one browser."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "flow"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "A script of steps in one browser."
+          }
+        ],
+        "description": "A job, chosen by `type`."
+      },
+      "JobStateField": {
+        "type": "string",
+        "description": "Where a job stands (spec §16.6).",
+        "enum": [
+          "queued",
+          "running",
+          "paused",
+          "succeeded",
+          "partial",
+          "failed",
+          "cancelled"
+        ]
+      },
+      "JobTypeField": {
+        "type": "string",
+        "description": "The kind of a job.",
+        "enum": [
+          "batch",
+          "flow",
+          "crawl"
+        ]
+      },
+      "JobView": {
+        "type": "object",
+        "description": "A job (spec §16.6).",
+        "required": [
+          "id",
+          "type",
+          "state",
+          "items",
+          "cancel_requested",
+          "origin",
+          "created_at",
+          "items_url"
+        ],
+        "properties": {
+          "cancel_requested": {
+            "type": "boolean",
+            "description": "Whether a cancel was asked for."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the job was accepted."
+          },
+          "deadline": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it stops waiting for what holds its items: the items left then\nfail with what they were waiting for."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the job failed as a whole, when it did."
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it ended."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The job's id."
+          },
+          "items": {
+            "$ref": "#/components/schemas/Counters",
+            "description": "How far it has come."
+          },
+          "items_url": {
+            "type": "string",
+            "description": "Where its items are read, page by page.",
+            "example": "/v1/jobs/0199c1f2-6b7a-7c3e-9d41-2f8a5b6c7d8e/items"
+          },
+          "origin": {
+            "type": "string",
+            "description": "`api` for a job that was submitted, `sync_overflow` for a fetch\nthat outlasted its wall time and is carried on as a job.",
+            "example": "api"
+          },
+          "paused": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PausedView",
+                "description": "What a paused job waits for."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The session the job runs in, when it names one."
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When work on it began."
+          },
+          "state": {
+            "$ref": "#/components/schemas/JobStateField",
+            "description": "Where it stands."
+          },
+          "type": {
+            "$ref": "#/components/schemas/JobTypeField",
+            "description": "What kind of job it is."
+          },
+          "visitors": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How many personas read one site for a batch at a time.",
+            "minimum": 0
+          },
+          "webhook": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WebhookView",
+                "description": "The job's webhook."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
       },
       "KeyCreated": {
         "type": "object",
@@ -2524,6 +4077,28 @@
           "letter"
         ]
       },
+      "PausedView": {
+        "type": "object",
+        "description": "What a paused job waits for.",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "What stands in the way: `domain_paused`, `bandwidth_exhausted`,\n`egress_unsafe`, `budget_exhausted`, or `no_persona` (its visitor\nis on a break or asleep).",
+            "example": "domain_paused"
+          },
+          "until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the job looks again."
+          }
+        }
+      },
       "PdfField": {
         "type": "object",
         "description": "How a PDF is printed. Printing fires `beforeprint` and `afterprint` in\nthe page, as printing by hand does; the result names both.",
@@ -2539,6 +4114,34 @@
           "print_background": {
             "type": "boolean",
             "description": "Print background graphics."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PdfStep": {
+        "type": "object",
+        "description": "Print a PDF at this point of the flow.",
+        "properties": {
+          "options": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PdfField",
+                "description": "How it is printed."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "timeout_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The step's own budget in milliseconds; 30000 unless said.",
+            "maximum": 300000,
+            "minimum": 100
           }
         },
         "additionalProperties": false
@@ -2851,6 +4454,39 @@
           }
         }
       },
+      "PressStep": {
+        "type": "object",
+        "description": "Press one key.",
+        "required": [
+          "key"
+        ],
+        "properties": {
+          "human": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "See `click`."
+          },
+          "key": {
+            "type": "string",
+            "description": "The key as `KeyboardEvent.key` names it, for example `Enter`.",
+            "maxLength": 40,
+            "minLength": 1
+          },
+          "timeout_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The step's own budget in milliseconds; 30000 unless said.",
+            "maximum": 300000,
+            "minimum": 100
+          }
+        },
+        "additionalProperties": false
+      },
       "Problem": {
         "allOf": [
           {
@@ -3023,6 +4659,58 @@
           }
         }
       },
+      "PurgeRequest": {
+        "type": "object",
+        "description": "Whose stored results to delete, and up to when.",
+        "required": [
+          "key_id"
+        ],
+        "properties": {
+          "before": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Delete what was fetched before this moment; left out: everything\nthe key has fetched until now."
+          },
+          "key_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The key whose results are deleted."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Purged": {
+        "type": "object",
+        "description": "What a purge deleted.",
+        "required": [
+          "requests",
+          "jobs",
+          "artifacts"
+        ],
+        "properties": {
+          "artifacts": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bodies, documents, screenshots and PDFs whose rows were deleted.\nTheir files go with the artifact store's next sweep.",
+            "minimum": 0
+          },
+          "jobs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Finished jobs, with their items and their items' results.",
+            "minimum": 0
+          },
+          "requests": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Fetches that were not part of a job, with their results.",
+            "minimum": 0
+          }
+        }
+      },
       "ReadyReport": {
         "type": "object",
         "description": "Body of a readiness response.",
@@ -3165,6 +4853,107 @@
           "jpeg",
           "webp"
         ]
+      },
+      "ScreenshotStep": {
+        "type": "object",
+        "description": "Take a screenshot at this point of the flow.",
+        "properties": {
+          "options": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ScreenshotField",
+                "description": "How it is taken."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "timeout_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The step's own budget in milliseconds; 30000 unless said.",
+            "maximum": 300000,
+            "minimum": 100
+          }
+        },
+        "additionalProperties": false
+      },
+      "ScrollStep": {
+        "type": "object",
+        "description": "Scroll the page.",
+        "required": [
+          "depth"
+        ],
+        "properties": {
+          "depth": {
+            "type": "number",
+            "format": "double",
+            "description": "How far down to end, as a share of the document's height.",
+            "maximum": 1,
+            "minimum": 0
+          },
+          "human": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "See `click`."
+          },
+          "timeout_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The step's own budget in milliseconds; 30000 unless said.",
+            "maximum": 300000,
+            "minimum": 100
+          }
+        },
+        "additionalProperties": false
+      },
+      "SelectStep": {
+        "type": "object",
+        "description": "Choose an option of a select element.",
+        "required": [
+          "selector",
+          "value"
+        ],
+        "properties": {
+          "human": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "See `click`."
+          },
+          "selector": {
+            "type": "string",
+            "description": "The CSS selector of the select element.",
+            "maxLength": 1000,
+            "minLength": 1
+          },
+          "timeout_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The step's own budget in milliseconds; 30000 unless said.",
+            "maximum": 300000,
+            "minimum": 100
+          },
+          "value": {
+            "type": "string",
+            "description": "The value of the option.",
+            "maxLength": 1000
+          }
+        },
+        "additionalProperties": false
       },
       "SelftestPart": {
         "type": "object",
@@ -3318,6 +5107,85 @@
           }
         }
       },
+      "StepView": {
+        "type": "object",
+        "description": "What a step of a flow reports.",
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "The step's action; `final` for the page the flow ended on.",
+            "example": "click"
+          },
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How long it took, in milliseconds, the persona's own time on the\npage included.",
+            "minimum": 0
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it failed."
+          },
+          "ok": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the step succeeded; null while it has not run."
+          },
+          "paced_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How much of that was the persona's dwell and thinking time.",
+            "minimum": 0
+          }
+        }
+      },
+      "TargetStep": {
+        "type": "object",
+        "description": "A step that acts on one element: `click` or `hover`.",
+        "required": [
+          "selector"
+        ],
+        "properties": {
+          "human": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "False: done by the browser's driver instead of the persona's mouse\nand keyboard, which a page can tell apart. Refused\n(`driver_input_denied`) unless the policy of the flow's site has\n`driver_input: true`."
+          },
+          "selector": {
+            "type": "string",
+            "description": "The CSS selector of the element.",
+            "maxLength": 1000,
+            "minLength": 1
+          },
+          "timeout_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The step's own budget in milliseconds; 30000 unless said.",
+            "maximum": 300000,
+            "minimum": 100
+          }
+        },
+        "additionalProperties": false
+      },
       "TimingView": {
         "type": "object",
         "description": "Time per phase of the last attempt, in milliseconds; null for a phase\nthat did not happen on the path taken.",
@@ -3378,6 +5246,45 @@
           }
         }
       },
+      "TypeStep": {
+        "type": "object",
+        "description": "Type text into an element.",
+        "required": [
+          "selector",
+          "text"
+        ],
+        "properties": {
+          "human": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "See `click`."
+          },
+          "selector": {
+            "type": "string",
+            "description": "The CSS selector of the input.",
+            "maxLength": 1000,
+            "minLength": 1
+          },
+          "text": {
+            "type": "string",
+            "description": "The text.",
+            "maxLength": 10000
+          },
+          "timeout_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The step's own budget in milliseconds; 30000 unless said.",
+            "maximum": 300000,
+            "minimum": 100
+          }
+        },
+        "additionalProperties": false
+      },
       "WaitField": {
         "type": "object",
         "description": "What a browser waits for before the page is captured.",
@@ -3404,6 +5311,57 @@
         },
         "additionalProperties": false
       },
+      "WaitForStep": {
+        "type": "object",
+        "description": "Wait for one condition: exactly one of the four is given.",
+        "properties": {
+          "ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "For this long, in milliseconds.",
+            "maximum": 120000,
+            "minimum": 0
+          },
+          "network_idle": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Until no request ran for half a second."
+          },
+          "selector": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Until this CSS selector matches.",
+            "maxLength": 1000,
+            "minLength": 1
+          },
+          "timeout_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The step's own budget in milliseconds; 30000 unless said.",
+            "maximum": 300000,
+            "minimum": 100
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Until the page's address matches this pattern: `**` is anything,\n`*` anything but a `/`, everything else is itself.",
+            "maxLength": 2000
+          }
+        },
+        "additionalProperties": false
+      },
       "WaitUntilField": {
         "type": "string",
         "description": "The lifecycle point a browser waits for.",
@@ -3413,6 +5371,68 @@
           "load",
           "network_idle"
         ]
+      },
+      "WebhookField": {
+        "type": "object",
+        "description": "Where a job's events are posted (spec §16.6).",
+        "required": [
+          "url",
+          "secret"
+        ],
+        "properties": {
+          "progress_every": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Post `job.progress` whenever this many more items are over. Left\nout: only the end of the job is reported.",
+            "minimum": 1
+          },
+          "secret": {
+            "type": "string",
+            "description": "The secret every delivery is signed with: 16 to 256 bytes. Kept\nencrypted and never returned. `X-Kage-Signature` is `sha256=` and\nthe hexadecimal HMAC-SHA-256 of `<X-Kage-Timestamp>.<body>` under\nit.",
+            "maxLength": 256,
+            "minLength": 16
+          },
+          "url": {
+            "type": "string",
+            "description": "The receiver: an `http` or `https` URL whose origin the operator\nlisted in `webhooks.allowed_origins`\n(`webhook_origin_not_allowed` otherwise). Kage posts from its own\naddress, follows no redirect, and shows of this URL only the host\nafterwards.",
+            "example": "https://hooks.example.org/kage"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WebhookView": {
+        "type": "object",
+        "description": "A job's webhook, as far as it is shown.",
+        "required": [
+          "host",
+          "deliveries"
+        ],
+        "properties": {
+          "deliveries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeliveryView"
+            },
+            "description": "The newest events and how their delivery stands; empty in a\nwebhook's own body."
+          },
+          "host": {
+            "type": "string",
+            "description": "The receiver's host. The rest of its URL is not shown again: a\npath or a query often is a token.",
+            "example": "hooks.example.org"
+          },
+          "progress_every": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "`job.progress` every so many items; null for none.",
+            "minimum": 0
+          }
+        }
       },
       "XhrField": {
         "type": "object",
@@ -3487,6 +5507,10 @@
     {
       "name": "sessions",
       "description": "Pin requests to one persona."
+    },
+    {
+      "name": "jobs",
+      "description": "Batches and flows worked in the background, and the webhooks that report them."
     },
     {
       "name": "admin",

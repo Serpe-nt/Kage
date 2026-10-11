@@ -2077,6 +2077,7 @@ dependencies = [
  "utoipa-swagger-ui",
  "uuid",
  "wiremock",
+ "wreq",
 ]
 
 [[package]]

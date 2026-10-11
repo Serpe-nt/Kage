@@ -8,12 +8,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use kage_core::config::Config;
 use kage_core::policy::PolicyStore;
 use kage_persona::PersonaManager;
-use kage_proxy::{Clock, HealthChecker, Pool};
+use kage_proxy::{Clock, CredentialCipher, HealthChecker, Pool};
 use kage_scheduler::{Bandwidth, Pipeline};
 use kage_store::{ArtifactStore, Store};
 use tokio::sync::Mutex;
 
 use crate::handle::Handles;
+use crate::jobs::worker::JobsHub;
 use crate::limits::Limits;
 use crate::metrics::MetricsHandle;
 use crate::ops::Readiness;
@@ -74,6 +75,7 @@ pub(crate) struct Inner {
     pub(crate) parts: ApiParts,
     pub(crate) limits: Limits,
     pub(crate) handles: Handles,
+    pub(crate) jobs: JobsHub,
     pub(crate) resolver: Option<HostResolver>,
     pub(crate) readiness: Mutex<Option<Readiness>>,
     pub(crate) stopping: AtomicBool,
@@ -120,6 +122,11 @@ impl ApiState {
         Ok(Self(Arc::new(Inner {
             limits: Limits::new(parts.config.server.requests_per_minute),
             handles: Handles::new(&key),
+            jobs: JobsHub::new(
+                CredentialCipher::new(&key),
+                &key,
+                parts.config.jobs.max_items_in_flight,
+            ),
             resolver,
             readiness: Mutex::new(None),
             stopping: AtomicBool::new(false),
@@ -165,6 +172,38 @@ impl ApiState {
 
     pub(crate) fn resolver(&self) -> Option<&HostResolver> {
         self.0.resolver.as_ref()
+    }
+
+    pub(crate) fn jobs(&self) -> &JobsHub {
+        &self.0.jobs
+    }
+
+    /// A sender for the events of jobs over `transport`: `kage serve` runs
+    /// it beside the job worker. The worker wakes it when it queued an
+    /// event.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the master key of the configuration cannot be read; a
+    /// loaded configuration always has a valid one.
+    pub fn webhook_sender(
+        &self,
+        transport: Arc<dyn crate::jobs::webhook::Transport>,
+    ) -> Result<Arc<crate::jobs::webhook::WebhookSender>, StateError> {
+        let key = self
+            .config()
+            .secrets
+            .master_key_bytes()
+            .ok_or(StateError::MasterKey)?;
+        let sender = crate::jobs::webhook::WebhookSender::new(
+            self.store().clone(),
+            self.config().webhooks.clone(),
+            CredentialCipher::new(&key),
+            Arc::clone(self.clock()),
+            transport,
+        );
+        self.0.jobs.set_sender(Arc::clone(&sender));
+        Ok(sender)
     }
 
     /// Tells the API that the server is stopping: `/readyz` says so at

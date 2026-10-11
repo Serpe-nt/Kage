@@ -313,7 +313,7 @@ async fn what_is_not_served_is_a_problem_document_too() {
     for at in [
         "/",
         "/v1",
-        "/v1/jobs",
+        "/v1/crawls",
         "/v2/fetch",
         "/admin",
         "/v1/admin/nothing",
@@ -328,6 +328,8 @@ async fn what_is_not_served_is_a_problem_document_too() {
     // A path that is served, with a method that is not.
     for (verb, at) in [
         (Method::GET, "/v1/fetch"),
+        // Jobs are read one by one: there is no list of them.
+        (Method::GET, "/v1/jobs"),
         (Method::PUT, "/v1/sessions"),
         (Method::DELETE, "/healthz"),
         (Method::POST, "/openapi.json"),

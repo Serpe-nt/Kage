@@ -278,6 +278,7 @@ pub(crate) fn action_of(method: &Method, route: &str) -> String {
         ("POST", "keys") => "key.create",
         ("DELETE", "keys/{id}") => "key.revoke",
         ("POST", "keys/{id}/rotate") => "key.rotate",
+        ("POST", "purge") => "data.purge",
         ("GET", "audit") => "audit.list",
         _ => return format!("admin.{} {route}", method.as_str().to_ascii_lowercase()),
     };

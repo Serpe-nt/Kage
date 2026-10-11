@@ -141,6 +141,15 @@ error_codes! {
     ProxyNotFound => ("proxy_not_found", NOT_FOUND, "No such proxy"),
     /// No such API key.
     KeyNotFound => ("key_not_found", NOT_FOUND, "No such API key"),
+    /// No such job, or it is another key's.
+    JobNotFound => ("job_not_found", NOT_FOUND, "No such job"),
+    /// The `Idempotency-Key` named another request before.
+    IdempotencyKeyReused => ("idempotency_key_reused", CONFLICT, "The Idempotency-Key was used for another request"),
+    /// The job's webhook names a receiver the operator did not list.
+    WebhookOriginNotAllowed => ("webhook_origin_not_allowed", UNPROCESSABLE_ENTITY, "The webhook's receiver is not one the operator listed"),
+    /// A flow asks for a step done by the browser's driver where the
+    /// domain's policy does not allow it.
+    DriverInputDenied => ("driver_input_denied", UNPROCESSABLE_ENTITY, "The domain's policy does not allow steps done by the driver"),
     /// The thing is not in a state the action applies to.
     Conflict => ("conflict", CONFLICT, "The action does not apply to the current state"),
     /// The request body is larger than the server takes.

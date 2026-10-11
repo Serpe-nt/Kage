@@ -41,7 +41,7 @@ use chrono::Utc;
 use http_body_util::BodyExt;
 use kage_api::keys::{NewKey, mint};
 use kage_api::serve::{ServeSettings, serve};
-use kage_api::{ApiParts, ApiState, EngineParts};
+use kage_api::{ApiParts, ApiState, DirectTransport, EngineParts, Transport};
 use kage_core::alert::AlertSink;
 use kage_core::config::Config;
 use kage_core::domain::{KeyLimits, Scope};
@@ -54,7 +54,7 @@ use serde_json::Value;
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 use tower::ServiceExt;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -227,6 +227,49 @@ pub async fn read_all(stream: &mut TcpStream, patience: Duration) -> String {
     String::from_utf8_lossy(&answer).into_owned()
 }
 
+/// What `kage serve` runs beside the API: the job worker and the webhook
+/// sender of one server.
+pub struct Background {
+    stop: watch::Sender<bool>,
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+}
+
+impl Background {
+    /// The worker of `state`, and its webhook sender over `transport`.
+    pub fn start(state: &ApiState, transport: Arc<dyn Transport>) -> Self {
+        let (stop, stopped) = watch::channel(false);
+        let wait = |mut stopped: watch::Receiver<bool>| async move {
+            let _ = stopped.wait_for(|stop| *stop).await;
+        };
+        let sender = state.webhook_sender(transport).unwrap();
+        let tasks = vec![
+            tokio::spawn(kage_api::run_worker(state.clone(), wait(stopped.clone()))),
+            tokio::spawn(sender.run(wait(stopped))),
+        ];
+        Self { stop, tasks }
+    }
+
+    /// Only the worker of `state`: its events stay queued.
+    pub fn worker_only(state: &ApiState) -> Self {
+        let (stop, mut stopped) = watch::channel(false);
+        let tasks = vec![tokio::spawn(kage_api::run_worker(
+            state.clone(),
+            async move {
+                let _ = stopped.wait_for(|stop| *stop).await;
+            },
+        ))];
+        Self { stop, tasks }
+    }
+
+    /// Stops both the way a server stops them, and waits until they have.
+    pub async fn stop(self) {
+        let _ = self.stop.send(true);
+        for task in self.tasks {
+            let _ = task.await;
+        }
+    }
+}
+
 /// See the module documentation.
 pub struct Api {
     pub lab: Lab,
@@ -349,7 +392,53 @@ impl Api {
     /// The router of a server that starts again over the same services:
     /// what the API keeps in memory is new, what the store keeps is not.
     pub fn restarted(&self) -> Router {
-        kage_api::router(ApiState::new(self.parts.clone()).unwrap())
+        kage_api::router(self.restarted_state())
+    }
+
+    /// The state of a server that starts again over the same services: a
+    /// worker of its own, with nothing in memory.
+    pub fn restarted_state(&self) -> ApiState {
+        ApiState::new(self.parts.clone()).unwrap()
+    }
+
+    /// Runs the job worker and the webhook sender of this server.
+    pub fn work(&self) -> Background {
+        Background::start(&self.state, Arc::new(DirectTransport::system()))
+    }
+
+    /// Asks for a job until `done` says so, and returns it as it was then.
+    pub async fn job_until(&self, token: &str, id: &str, done: impl Fn(&Value) -> bool) -> Value {
+        let mut seen = Value::Null;
+        for _ in 0..600 {
+            let reply = self.get(token, &format!("/v1/jobs/{id}")).await;
+            assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.json());
+            seen = reply.json();
+            if done(&seen) {
+                return seen;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("the job did not get there in 30 s: {seen}");
+    }
+
+    /// Every item of a job, page by page.
+    pub async fn job_items(&self, token: &str, id: &str) -> Vec<Value> {
+        let mut items = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let path = match &cursor {
+                Some(cursor) => format!("/v1/jobs/{id}/items?limit=200&cursor={cursor}"),
+                None => format!("/v1/jobs/{id}/items?limit=200"),
+            };
+            let reply = self.get(token, &path).await;
+            assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.json());
+            let page = reply.json();
+            items.extend(page["items"].as_array().cloned().unwrap_or_default());
+            match page["next_cursor"].as_str() {
+                Some(next) => cursor = Some(next.to_owned()),
+                None => return items,
+            }
+        }
     }
 
     /// The router of a server with other parts.

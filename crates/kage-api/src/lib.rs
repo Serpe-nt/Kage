@@ -21,11 +21,13 @@
 //! | `GET /v1/results/{id}`, `GET /v1/artifacts/{id}` | `fetch` | a stored result, what was kept of a page |
 //! | `GET /v1/policies/domains/{domain}` | `fetch` | the policy in force for a host |
 //! | `POST /v1/sessions`, `GET`/`DELETE /v1/sessions/{id}` | `sessions` | sessions |
+//! | `POST /v1/jobs`, `GET /v1/jobs/{id}`, `GET /v1/jobs/{id}/items`, `POST /v1/jobs/{id}/cancel` | `jobs` | batches and flows worked in the background |
 //! | `/v1/admin/...` | `admin` | personas, proxies, the pool, policies, keys, the audit trail |
 //! | `GET /metrics`, `GET /docs` | `admin` | Prometheus metrics, Swagger UI |
 //!
-//! Jobs (`/v1/jobs`) arrive with milestone M9. No CORS header is sent
-//! unless `server.cors_allowed_origins` names an origin.
+//! [`run_worker`] works the jobs, and a [`WebhookSender`] delivers their
+//! events; `kage serve` runs both beside the listener. No CORS header is
+//! sent unless `server.cors_allowed_origins` names an origin.
 
 #![forbid(unsafe_code)]
 
@@ -35,6 +37,7 @@ pub mod error;
 mod extract;
 mod fetch;
 pub mod handle;
+pub mod jobs;
 pub mod keys;
 mod limits;
 pub mod metrics;
@@ -68,6 +71,8 @@ use utoipa_swagger_ui::SwaggerUi;
 
 pub use auth::REQUEST_ID_HEADER;
 pub use error::{ApiError, ErrorCode, Problem};
+pub use jobs::webhook::{DirectTransport, Transport, WebhookSender};
+pub use jobs::worker::run_worker;
 pub use ops::{Liveness, LivenessStatus};
 pub use state::{ApiParts, ApiState, EngineParts, StateError};
 
@@ -141,6 +146,7 @@ impl Modify for Security {
     tags(
         (name = "fetch", description = "Fetch a page, read its result and what was kept of it."),
         (name = "sessions", description = "Pin requests to one persona."),
+        (name = "jobs", description = "Batches and flows worked in the background, and the webhooks that report them."),
         (name = "admin", description = "Personas, proxies, the pool, policies, keys and the audit trail. Every call is audited."),
         (name = "ops", description = "Liveness, readiness, metrics."),
     ),
@@ -157,6 +163,11 @@ async fn admins_only(caller: Caller, request: Request, next: Next) -> Response {
 /// Asks for the `fetch` scope before the request's body is read.
 async fn fetchers_only(caller: Caller, request: Request, next: Next) -> Response {
     scoped(Scope::Fetch, &caller, request, next).await
+}
+
+/// Asks for the `jobs` scope before the request's body is read.
+async fn job_holders_only(caller: Caller, request: Request, next: Next) -> Response {
+    scoped(Scope::Jobs, &caller, request, next).await
 }
 
 /// Asks for the `sessions` scope before the request's body is read.
@@ -209,6 +220,7 @@ fn keyed() -> OpenApiRouter<ApiState> {
         .routes(routes!(admin::list_keys, admin::create_key))
         .routes(routes!(admin::revoke_key))
         .routes(routes!(admin::rotate_key))
+        .routes(routes!(admin::purge))
         .routes(routes!(admin::list_audit))
         .layer(from_fn(deadline));
     // A probe and a self-test take as long as the network takes.
@@ -229,8 +241,17 @@ fn keyed() -> OpenApiRouter<ApiState> {
     let metrics = OpenApiRouter::new()
         .routes(routes!(ops::metrics))
         .layer(from_fn(admins_only));
+    // Accepting a job checks every item of it, which is quick; working it
+    // is the worker's.
+    let jobs = OpenApiRouter::new()
+        .routes(routes!(jobs::create))
+        .routes(routes!(jobs::show))
+        .routes(routes!(jobs::items))
+        .routes(routes!(jobs::cancel))
+        .layer(from_fn(job_holders_only));
     let quick = reading
         .merge(sessions)
+        .merge(jobs)
         .merge(metrics)
         .layer(from_fn(deadline));
     // A fetch has its own limit, `scheduler.sync_wall_time`.
@@ -394,6 +415,11 @@ mod tests {
             "POST /v1/sessions",
             "GET /v1/sessions/{id}",
             "DELETE /v1/sessions/{id}",
+            "POST /v1/jobs",
+            "GET /v1/jobs/{id}",
+            "GET /v1/jobs/{id}/items",
+            "POST /v1/jobs/{id}/cancel",
+            "POST /v1/admin/purge",
             "GET /v1/admin/personas",
             "GET /v1/admin/personas/{id}",
             "POST /v1/admin/personas/{id}/retire",
@@ -442,6 +468,8 @@ mod tests {
                     assert_eq!(scopes, ["admin"], "{method} {path}");
                 } else if path.starts_with("/v1/sessions") {
                     assert_eq!(scopes, ["sessions"], "{method} {path}");
+                } else if path.starts_with("/v1/jobs") {
+                    assert_eq!(scopes, ["jobs"], "{method} {path}");
                 } else {
                     assert_eq!(scopes, ["fetch"], "{method} {path}");
                 }
@@ -479,6 +507,15 @@ mod tests {
             "KeyCreated",
             "AuditPage",
             "PoolView",
+            "JobRequest",
+            "BatchJob",
+            "FlowJob",
+            "FlowStepField",
+            "WebhookField",
+            "JobView",
+            "JobItemsPage",
+            "PurgeRequest",
+            "Purged",
         ] {
             assert!(
                 schemas[schema].is_object(),

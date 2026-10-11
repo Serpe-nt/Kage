@@ -53,6 +53,82 @@ use crate::stored;
 /// The most audit events one page holds.
 const MAX_AUDIT_PAGE: u32 = 200;
 
+/// Whose stored results to delete, and up to when.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PurgeRequest {
+    /// The key whose results are deleted.
+    #[schema(value_type = String, format = Uuid)]
+    pub(crate) key_id: String,
+    /// Delete what was fetched before this moment; left out: everything
+    /// the key has fetched until now.
+    #[serde(default)]
+    pub(crate) before: Option<DateTime<Utc>>,
+}
+
+/// Delete a key's stored results before their retention ends (spec §19):
+/// its fetches with their results and attempts, its finished jobs with
+/// their items, and the rows of everything they kept (documents, bodies,
+/// screenshots, PDFs), whose files go with the artifact store's next
+/// sweep. A job that is still being worked is left alone: cancel it first.
+/// The key itself, its sessions and its audit trail stay.
+#[utoipa::path(
+    post,
+    path = "/v1/admin/purge",
+    tag = "admin",
+    operation_id = "purge",
+    request_body = PurgeRequest,
+    responses(
+        (status = 200, description = "What was deleted.", body = crate::jobs::view::Purged),
+        (status = 404, description = "`key_not_found`.", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "`before` lies in the future.", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(("api_key" = ["admin"]))
+)]
+pub(crate) async fn purge(
+    State(state): State<ApiState>,
+    Body(request): Body<PurgeRequest>,
+) -> ApiResult<Response> {
+    let id: ApiKeyId = parse_id(&request.key_id, ErrorCode::KeyNotFound)?;
+    let key = known_key(&state, id).await?;
+    let now = state.clock().now();
+    let before = request.before.unwrap_or(now);
+    if before > now {
+        return Err(ApiError::field("before", "a moment that has passed"));
+    }
+    let store = state.store();
+    // The jobs that have ended go whole; of those that have not, and of
+    // the fetches that are no job's, every result there is.
+    let ended = store
+        .jobs()
+        .delete_finished(before, Some(id))
+        .await
+        .map_err(|error| ApiError::internal(&error))?;
+    let (requests, artifacts) = store
+        .requests()
+        .delete_before(before, Some(id), true)
+        .await
+        .map_err(|error| ApiError::internal(&error))?;
+    let (requests, jobs, artifacts) = (
+        ended.requests + requests,
+        ended.jobs,
+        ended.artifacts + artifacts,
+    );
+    let purged = crate::jobs::view::Purged {
+        requests,
+        jobs,
+        artifacts,
+    };
+    let note = AuditNote::about(id).with(json!({
+        "name": key.name,
+        "before": before,
+        "requests": requests,
+        "jobs": jobs,
+        "artifacts": artifacts,
+    }));
+    Ok(noted(Json(purged), note))
+}
+
 /// A response with what its audit event should say about it.
 fn noted(response: impl IntoResponse, note: AuditNote) -> Response {
     let mut response = response.into_response();

@@ -63,6 +63,9 @@ utoipa = { workspace = true, features = ["chrono", "uuid"] }
 utoipa-axum = { workspace = true }
 utoipa-swagger-ui = { workspace = true }
 uuid = { workspace = true }
+# The webhook sender: plain wreq without emulation, from this host's own
+# address, never through a proxy. The one outbound request of the API.
+wreq = { workspace = true }
 
 [dev-dependencies]
 http-body-util = { workspace = true }

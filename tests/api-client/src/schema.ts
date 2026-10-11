@@ -335,6 +335,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/purge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete a key's stored results before their retention ends (spec §19):
+         *     its fetches with their results and attempts, its finished jobs with
+         *     their items, and the rows of everything they kept (documents, bodies,
+         *     screenshots, PDFs), whose files go with the artifact store's next
+         *     sweep. A job that is still being worked is left alone: cancel it first.
+         *     The key itself, its sessions and its audit trail stay.
+         */
+        post: operations["purge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/artifacts/{id}": {
         parameters: {
             query?: never;
@@ -372,10 +396,104 @@ export interface paths {
          *     the site did: a block is `outcome`, with `block` saying who and how. A
          *     request that cannot be made as asked is a problem document with a
          *     stable `code`. A fetch that takes longer than the server's wall time
-         *     (180 s unless configured) is answered `202`; `GET /v1/results/{id}`
-         *     has its result when it ends.
+         *     (180 s unless configured) is answered `202` and carried on as a job
+         *     (`job_id`); `GET /v1/results/{id}` has its result when it ends, also
+         *     after a restart of the server.
          */
         post: operations["fetch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept a job.
+         * @description `201` with the job, which then runs in the background: read it with
+         *     `GET /v1/jobs/{id}` and its items with `GET /v1/jobs/{id}/items`, or
+         *     name a `webhook` to be told. With an `Idempotency-Key` header the same
+         *     request within a day is answered `200` with the job it made the first
+         *     time (`Idempotency-Replayed: true`), and another request under that key
+         *     is `409 idempotency_key_reused`. Nothing is stored for a job that is
+         *     refused.
+         */
+        post: operations["create_job"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/jobs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A job: its state, how far it has come, and how the deliveries of its
+         *     webhook stand.
+         */
+        get: operations["get_job"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/jobs/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop a job.
+         * @description What waits is cancelled at once; an item that waits for its persona is
+         *     taken out of the queue; a page that is being fetched at this moment is
+         *     finished, so at most one more item per visitor ends after the cancel.
+         *     The answer is the job as it stands; it is `cancelled` once what was
+         *     under way is over. A job that has ended is answered as it ended.
+         */
+        post: operations["cancel_job"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/jobs/{id}/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The items of a job, in the job's order, each with its stored result.
+         * @description A result here is what `GET /v1/results/{request_id}` returns without
+         *     the document and the body, which are artifacts (named in `artifacts`).
+         *     An item of a flow is one of its steps; the last item is the page the
+         *     flow ended on.
+         */
+        get: operations["list_job_items"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -475,6 +593,18 @@ export interface components {
     schemas: {
         /** @description Any JSON value. */
         AnyJson: unknown;
+        /** @description End the flow unless a condition holds: exactly one of the two is given. */
+        AssertStep: {
+            /** @description This CSS selector must match an element. */
+            selector?: string | null;
+            /** @description The page's text must contain this. */
+            text_contains?: string | null;
+            /**
+             * Format: int64
+             * @description The step's own budget in milliseconds; 30000 unless said.
+             */
+            timeout_ms?: number | null;
+        };
         /** @description One try at a request by one persona. */
         AttemptView: {
             /**
@@ -543,6 +673,86 @@ export interface components {
             outcome: string;
             /** @description What it was done to. */
             target?: string | null;
+        };
+        /** @description Go back one page in the tab's history. */
+        BackStep: {
+            /** @description See `click`. */
+            human?: boolean | null;
+            /**
+             * Format: int64
+             * @description The step's own budget in milliseconds; 30000 unless said.
+             */
+            timeout_ms?: number | null;
+        };
+        /**
+         * @description A batch: pages fetched one after another the way a visitor reads them.
+         *
+         *     Per site a batch has one visitor: one persona reads its pages of that
+         *     site in the order given, in sittings, with the pauses a person makes,
+         *     and comes back after its breaks; another persona takes over only when
+         *     that one cannot go on (it was blocked there, reached its daily cap, or
+         *     is gone). A site therefore sees one household reading, not a list being
+         *     dealt out to several addresses. That costs time: under the `human`
+         *     pacing about an hour for 50 pages of one site and a day for 300, which
+         *     is the daily cap of one persona, and a batch that meets the night ends
+         *     in the morning. `visitors` trades that for speed (about 20 minutes for
+         *     50 pages with three), and a faster `pacing` does where the policy does
+         *     not lock it. Sites of one batch are independent and are read side by
+         *     side.
+         * @example {
+         *       "defaults": {
+         *         "behavior": {
+         *           "dwell_ms": 3000,
+         *           "scroll_depth": 0.3
+         *         },
+         *         "include": [
+         *           "dom",
+         *           "headers"
+         *         ]
+         *       },
+         *       "type": "batch",
+         *       "urls": [
+         *         "https://example.org/listing?page=1",
+         *         "https://example.org/listing?page=2"
+         *       ],
+         *       "webhook": {
+         *         "progress_every": 10,
+         *         "secret": "a secret of sixteen bytes or more",
+         *         "url": "https://hooks.example.org/kage"
+         *       }
+         *     }
+         */
+        BatchJob: {
+            defaults?: components["schemas"]["FreeForm"] | null;
+            /**
+             * @description Pages that differ from `defaults`: each a fetch request of its own,
+             *     with whatever it sets taking the place of the default. They come
+             *     after `urls`.
+             */
+            items?: components["schemas"]["FetchRequest"][];
+            /**
+             * @description An open session of this key: every item is fetched by the
+             *     session's persona and by no other, with a fetch's rules (the
+             *     `sessions` scope, `session_not_found`, `session_persona_conflict`).
+             *     The job counts as use of the session while it has items left.
+             */
+            session_id?: string | null;
+            /**
+             * @description Pages fetched as `defaults` says, in this order.
+             * @example [
+             *       "https://example.org/listing?page=1"
+             *     ]
+             */
+            urls?: string[];
+            /**
+             * Format: int32
+             * @description How many personas read one site for the batch at a time; 1 unless
+             *     said, at most the `domain_concurrency` of the pacing in force for
+             *     the site (3 under `human`). More is refused, not reduced.
+             * @example 1
+             */
+            visitors?: number | null;
+            webhook?: components["schemas"]["WebhookField"] | null;
         };
         /**
          * @description What the persona does on a browser page, where the request wants less
@@ -659,6 +869,78 @@ export interface components {
             /** @description The URL it names, if any. */
             url?: string | null;
         };
+        /** @description How far a job has come. */
+        Counters: {
+            /**
+             * Format: int32
+             * @description Items that never ran because the job was cancelled.
+             */
+            cancelled: number;
+            /**
+             * Format: int32
+             * @description Items that failed.
+             */
+            failed: number;
+            /**
+             * Format: int32
+             * @description Items that are not over yet.
+             */
+            pending: number;
+            /**
+             * Format: int32
+             * @description Items that succeeded.
+             */
+            succeeded: number;
+            /**
+             * Format: int32
+             * @description Items the job consists of.
+             */
+            total: number;
+        };
+        /** @description One event on its way to the job's webhook. */
+        DeliveryView: {
+            /**
+             * Format: int32
+             * @description Attempts made so far.
+             */
+            attempts: number;
+            /**
+             * Format: date-time
+             * @description When the event happened.
+             */
+            created_at: string;
+            /**
+             * Format: uuid
+             * @description The event's id, which the receiver sees as `X-Kage-Delivery`.
+             */
+            id: string;
+            /**
+             * @description Why the last attempt failed when the receiver did not answer:
+             *     `timeout`, `connect`, `unresolved`, `address_denied`, …
+             */
+            last_error?: string | null;
+            /**
+             * Format: int32
+             * @description The status of the last attempt, when the receiver answered.
+             */
+            last_status?: number | null;
+            /**
+             * Format: date-time
+             * @description When the next attempt is due, while pending.
+             */
+            next_attempt_at?: string | null;
+            /**
+             * @description `pending`, `delivered`, `failed`, or `superseded` (a progress event
+             *     that a later one overtook).
+             * @example delivered
+             */
+            state: string;
+            /**
+             * @description `job.completed`, `job.failed` or `job.progress`.
+             * @example job.completed
+             */
+            type: string;
+        };
         /**
          * @description A browser engine.
          * @enum {string}
@@ -669,7 +951,21 @@ export interface components {
          *     what a problem document carries as `code`.
          * @enum {string}
          */
-        ErrorCode: "missing_key" | "invalid_key" | "key_disabled" | "scope_missing" | "rate_limited" | "concurrency_limited" | "budget_exhausted" | "invalid_request" | "validation_failed" | "invalid_url" | "ssrf_denied" | "header_denied" | "header_invalid" | "header_not_placeable" | "render_include_conflict" | "render_kind_conflict" | "render_needs_http" | "request_kind_needs_referer" | "preflight_required" | "timeout_too_short" | "not_available_yet" | "invalid_pacing" | "invalid_session_id" | "session_not_found" | "session_persona_conflict" | "no_matching_persona" | "not_found" | "method_not_allowed" | "result_not_found" | "artifact_not_found" | "persona_not_found" | "proxy_not_found" | "key_not_found" | "conflict" | "payload_too_large" | "uri_too_long" | "unsupported_media_type" | "request_timeout" | "unavailable" | "internal";
+        ErrorCode: "missing_key" | "invalid_key" | "key_disabled" | "scope_missing" | "rate_limited" | "concurrency_limited" | "budget_exhausted" | "invalid_request" | "validation_failed" | "invalid_url" | "ssrf_denied" | "header_denied" | "header_invalid" | "header_not_placeable" | "render_include_conflict" | "render_kind_conflict" | "render_needs_http" | "request_kind_needs_referer" | "preflight_required" | "timeout_too_short" | "not_available_yet" | "invalid_pacing" | "invalid_session_id" | "session_not_found" | "session_persona_conflict" | "no_matching_persona" | "not_found" | "method_not_allowed" | "result_not_found" | "artifact_not_found" | "persona_not_found" | "proxy_not_found" | "key_not_found" | "job_not_found" | "idempotency_key_reused" | "webhook_origin_not_allowed" | "driver_input_denied" | "conflict" | "payload_too_large" | "uri_too_long" | "unsupported_media_type" | "request_timeout" | "unavailable" | "internal";
+        /** @description Capture the page as it is at this point of the flow. */
+        ExtractStep: {
+            /**
+             * @description What to capture: `dom`, `raw`, `headers`, `xhr`, `console`. `dom`
+             *     and `headers` unless said.
+             */
+            include?: components["schemas"]["Include"][] | null;
+            /**
+             * Format: int64
+             * @description The step's own budget in milliseconds; 30000 unless said.
+             */
+            timeout_ms?: number | null;
+            xhr?: components["schemas"]["XhrField"] | null;
+        };
         /** @description The answer to a fetch that is not finished: `202`. */
         FetchAccepted: {
             /**
@@ -679,8 +975,10 @@ export interface components {
             id: string;
             /**
              * Format: uuid
-             * @description The job that carries the fetch on. Null until milestone M9: the
-             *     fetch runs on by itself and its result is stored.
+             * @description The job that carries the fetch on: `GET /v1/jobs/{id}` says where
+             *     it stands (it may be `paused`, for a site or for its persona), and
+             *     `POST /v1/jobs/{id}/cancel` stops it. Null for a result that is
+             *     asked for while a job's item is still being fetched.
              */
             job_id?: string | null;
             /**
@@ -898,9 +1196,160 @@ export interface components {
             timing: components["schemas"]["TimingView"];
             xhr?: components["schemas"]["XhrView"] | null;
         };
+        /** @description What a flow may change of how its persona behaves. */
+        FlowBehaviorField: {
+            /**
+             * Format: int64
+             * @description The median of the time the persona stays on a page after arriving
+             *     there, before the next step, in milliseconds. Left out: the
+             *     persona's own. Never below the policy's `min_dwell` (2 s unless
+             *     set), and ignored where the policy locks behavior. A flow always
+             *     dwells after it arrives and always pauses between its actions:
+             *     nothing turns that off.
+             */
+            dwell_ms?: number | null;
+            /** @description Now and then type a neighbouring key, notice, delete and retype. */
+            typos?: boolean | null;
+        };
+        /**
+         * @description A flow: a script of steps one persona performs in its browser, as one
+         *     visit.
+         *
+         *     The persona arrives by a typed navigation, stays on every page it comes
+         *     to for a while with its pointer moving, and pauses between its actions
+         *     as a person does, so a flow takes longer than its steps: plan about ten
+         *     seconds for every page it visits. A flow whose page turns out to be a
+         *     wall is a blocked attempt: the persona leaves, and another one runs the
+         *     flow again from its first step, inside the policy's retry budget (never
+         *     in a session). A step that fails on a page that is no wall is the
+         *     script's failure and is not retried. The job's items are the steps, in
+         *     order, and one last item for the page the flow ended on.
+         * @example {
+         *       "actions": [
+         *         {
+         *           "action": "goto",
+         *           "url": "https://example.org/"
+         *         },
+         *         {
+         *           "action": "click",
+         *           "selector": "#next"
+         *         },
+         *         {
+         *           "action": "wait_for",
+         *           "selector": "#items"
+         *         },
+         *         {
+         *           "action": "extract",
+         *           "include": [
+         *             "dom"
+         *           ]
+         *         }
+         *       ],
+         *       "include": [
+         *         "dom",
+         *         "headers"
+         *       ],
+         *       "type": "flow"
+         *     }
+         */
+        FlowJob: {
+            /** @description The steps, at most 100. The first is a `goto`. */
+            actions: components["schemas"]["FlowStepField"][];
+            behavior?: components["schemas"]["FlowBehaviorField"] | null;
+            /**
+             * @description What is returned and kept of the page the flow ends on: `dom` and
+             *     `headers` unless said.
+             */
+            include?: components["schemas"]["Include"][] | null;
+            /**
+             * Format: int64
+             * @description The largest body and document kept, in bytes.
+             */
+            max_body_bytes?: number | null;
+            /**
+             * Format: int32
+             * @description How often the flow is run again by another persona after a block.
+             *     Default: the policy's (2).
+             */
+            max_retries?: number | null;
+            pacing?: components["schemas"]["PacingField"] | null;
+            pdf?: components["schemas"]["PdfField"] | null;
+            persona?: components["schemas"]["PersonaHints"] | null;
+            screenshot?: components["schemas"]["ScreenshotField"] | null;
+            /**
+             * @description An open session of this key: its persona runs the flow, and no
+             *     other; a flow in a session is never run again after a block.
+             */
+            session_id?: string | null;
+            /**
+             * Format: int64
+             * @description The whole time one run of the flow may take, in milliseconds:
+             *     180000 unless said, at least 15000, at most 300000.
+             */
+            timeout_ms?: number | null;
+            webhook?: components["schemas"]["WebhookField"] | null;
+            xhr?: components["schemas"]["XhrField"] | null;
+        };
+        /**
+         * @description One step of a flow, chosen by `action` (spec §10.5).
+         *
+         *     The steps that touch the page (`click`, `type`, `press`, `scroll`,
+         *     `select`, `hover`, `back`) are done with the persona's own mouse and
+         *     keyboard. The first step that fails ends the flow.
+         */
+        FlowStepField: (components["schemas"]["GotoStep"] & {
+            /** @enum {string} */
+            action: "goto";
+        }) | (components["schemas"]["TargetStep"] & {
+            /** @enum {string} */
+            action: "click";
+        }) | (components["schemas"]["TypeStep"] & {
+            /** @enum {string} */
+            action: "type";
+        }) | (components["schemas"]["PressStep"] & {
+            /** @enum {string} */
+            action: "press";
+        }) | (components["schemas"]["ScrollStep"] & {
+            /** @enum {string} */
+            action: "scroll";
+        }) | (components["schemas"]["WaitForStep"] & {
+            /** @enum {string} */
+            action: "wait_for";
+        }) | (components["schemas"]["SelectStep"] & {
+            /** @enum {string} */
+            action: "select";
+        }) | (components["schemas"]["TargetStep"] & {
+            /** @enum {string} */
+            action: "hover";
+        }) | (components["schemas"]["BackStep"] & {
+            /** @enum {string} */
+            action: "back";
+        }) | (components["schemas"]["ExtractStep"] & {
+            /** @enum {string} */
+            action: "extract";
+        }) | (components["schemas"]["ScreenshotStep"] & {
+            /** @enum {string} */
+            action: "screenshot";
+        }) | (components["schemas"]["PdfStep"] & {
+            /** @enum {string} */
+            action: "pdf";
+        }) | (components["schemas"]["AssertStep"] & {
+            /** @enum {string} */
+            action: "assert";
+        });
         /** @description A JSON object with any members; what they are is said where it is used. */
         FreeForm: {
             [key: string]: unknown;
+        };
+        /** @description Load a page. The first step of every flow. */
+        GotoStep: {
+            /**
+             * Format: int64
+             * @description The step's own budget in milliseconds; 30000 unless said.
+             */
+            timeout_ms?: number | null;
+            /** @description The page: an `http` or `https` URL that passes the SSRF guard. */
+            url: string;
         };
         /** @description One response header. A list keeps the order and repeated names. */
         HeaderView: {
@@ -917,6 +1366,136 @@ export interface components {
          * @enum {string}
          */
         Include: "dom" | "raw" | "headers" | "extract" | "xhr" | "screenshot" | "pdf" | "console";
+        /**
+         * @description Where an item stands.
+         * @enum {string}
+         */
+        ItemStateField: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+        /** @description One item of a job: a page of a batch, or a step of a flow. */
+        JobItemView: {
+            /**
+             * @description Why it failed, or was not attempted: an outcome's name, a reason
+             *     such as `domain_paused` or `cancelled`, or a step's own error.
+             */
+            error?: string | null;
+            /**
+             * Format: date-time
+             * @description When it ended.
+             */
+            finished_at?: string | null;
+            /**
+             * Format: date-time
+             * @description Not taken up before this moment: what it waits for is not over.
+             */
+            not_before?: string | null;
+            outcome?: components["schemas"]["OutcomeField"] | null;
+            /**
+             * Format: uuid
+             * @description The id its result is stored under: `GET /v1/results/{id}` returns
+             *     it with the document and the body.
+             */
+            request_id?: string | null;
+            result?: components["schemas"]["FetchResult"] | null;
+            /**
+             * Format: int64
+             * @description Its position in the job, from 0.
+             */
+            seq: number;
+            /**
+             * Format: date-time
+             * @description When it was first taken up.
+             */
+            started_at?: string | null;
+            /** @description Where it stands. */
+            state: components["schemas"]["ItemStateField"];
+            step?: components["schemas"]["StepView"] | null;
+            /** @description The page, for an item of a batch. */
+            url?: string | null;
+        };
+        /** @description A page of a job's items. */
+        JobItemsPage: {
+            /** @description The items, in the job's order. */
+            items: components["schemas"]["JobItemView"][];
+            /** @description What to pass as `cursor` for the next page; null on the last. */
+            next_cursor?: string | null;
+        };
+        /** @description A job, chosen by `type`. */
+        JobRequest: (components["schemas"]["BatchJob"] & {
+            /** @enum {string} */
+            type: "batch";
+        }) | (components["schemas"]["FlowJob"] & {
+            /** @enum {string} */
+            type: "flow";
+        });
+        /**
+         * @description Where a job stands (spec §16.6).
+         * @enum {string}
+         */
+        JobStateField: "queued" | "running" | "paused" | "succeeded" | "partial" | "failed" | "cancelled";
+        /**
+         * @description The kind of a job.
+         * @enum {string}
+         */
+        JobTypeField: "batch" | "flow" | "crawl";
+        /** @description A job (spec §16.6). */
+        JobView: {
+            /** @description Whether a cancel was asked for. */
+            cancel_requested: boolean;
+            /**
+             * Format: date-time
+             * @description When the job was accepted.
+             */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description When it stops waiting for what holds its items: the items left then
+             *     fail with what they were waiting for.
+             */
+            deadline?: string | null;
+            /** @description Why the job failed as a whole, when it did. */
+            error?: string | null;
+            /**
+             * Format: date-time
+             * @description When it ended.
+             */
+            finished_at?: string | null;
+            /**
+             * Format: uuid
+             * @description The job's id.
+             */
+            id: string;
+            /** @description How far it has come. */
+            items: components["schemas"]["Counters"];
+            /**
+             * @description Where its items are read, page by page.
+             * @example /v1/jobs/0199c1f2-6b7a-7c3e-9d41-2f8a5b6c7d8e/items
+             */
+            items_url: string;
+            /**
+             * @description `api` for a job that was submitted, `sync_overflow` for a fetch
+             *     that outlasted its wall time and is carried on as a job.
+             * @example api
+             */
+            origin: string;
+            paused?: components["schemas"]["PausedView"] | null;
+            /** @description The session the job runs in, when it names one. */
+            session_id?: string | null;
+            /**
+             * Format: date-time
+             * @description When work on it began.
+             */
+            started_at?: string | null;
+            /** @description Where it stands. */
+            state: components["schemas"]["JobStateField"];
+            /** @description What kind of job it is. */
+            type: components["schemas"]["JobTypeField"];
+            /**
+             * Format: int32
+             * @description How many personas read one site for a batch at a time.
+             */
+            visitors?: number | null;
+            webhook?: components["schemas"]["WebhookView"] | null;
+        };
         /** @description A key with its token, which is shown this once. */
         KeyCreated: {
             /** @description The key. */
@@ -1046,6 +1625,21 @@ export interface components {
          * @enum {string}
          */
         PaperFormatField: "a4" | "letter";
+        /** @description What a paused job waits for. */
+        PausedView: {
+            /**
+             * @description What stands in the way: `domain_paused`, `bandwidth_exhausted`,
+             *     `egress_unsafe`, `budget_exhausted`, or `no_persona` (its visitor
+             *     is on a break or asleep).
+             * @example domain_paused
+             */
+            reason: string;
+            /**
+             * Format: date-time
+             * @description When the job looks again.
+             */
+            until?: string | null;
+        };
         /**
          * @description How a PDF is printed. Printing fires `beforeprint` and `afterprint` in
          *     the page, as printing by hand does; the result names both.
@@ -1057,6 +1651,15 @@ export interface components {
             landscape?: boolean;
             /** @description Print background graphics. */
             print_background?: boolean;
+        };
+        /** @description Print a PDF at this point of the flow. */
+        PdfStep: {
+            options?: components["schemas"]["PdfField"] | null;
+            /**
+             * Format: int64
+             * @description The step's own budget in milliseconds; 30000 unless said.
+             */
+            timeout_ms?: number | null;
         };
         /** @description A persona, as an operator sees it. */
         PersonaAdminView: {
@@ -1220,6 +1823,18 @@ export interface components {
              */
             proxies: components["schemas"]["FreeForm"];
         };
+        /** @description Press one key. */
+        PressStep: {
+            /** @description See `click`. */
+            human?: boolean | null;
+            /** @description The key as `KeyboardEvent.key` names it, for example `Enter`. */
+            key: string;
+            /**
+             * Format: int64
+             * @description The step's own budget in milliseconds; 30000 unless said.
+             */
+            timeout_ms?: number | null;
+        };
         /** @description A problem document (RFC 9457). */
         Problem: components["schemas"]["FreeForm"] & {
             /** @description The stable code clients branch on. */
@@ -1299,6 +1914,39 @@ export interface components {
         ProxyList: {
             /** @description The proxies, oldest first. */
             proxies: components["schemas"]["ProxyAdminView"][];
+        };
+        /** @description Whose stored results to delete, and up to when. */
+        PurgeRequest: {
+            /**
+             * Format: date-time
+             * @description Delete what was fetched before this moment; left out: everything
+             *     the key has fetched until now.
+             */
+            before?: string | null;
+            /**
+             * Format: uuid
+             * @description The key whose results are deleted.
+             */
+            key_id: string;
+        };
+        /** @description What a purge deleted. */
+        Purged: {
+            /**
+             * Format: int64
+             * @description Bodies, documents, screenshots and PDFs whose rows were deleted.
+             *     Their files go with the artifact store's next sweep.
+             */
+            artifacts: number;
+            /**
+             * Format: int64
+             * @description Finished jobs, with their items and their items' results.
+             */
+            jobs: number;
+            /**
+             * Format: int64
+             * @description Fetches that were not part of a job, with their results.
+             */
+            requests: number;
         };
         /** @description Body of a readiness response. */
         ReadyReport: {
@@ -1384,6 +2032,44 @@ export interface components {
          * @enum {string}
          */
         ScreenshotFormatField: "png" | "jpeg" | "webp";
+        /** @description Take a screenshot at this point of the flow. */
+        ScreenshotStep: {
+            options?: components["schemas"]["ScreenshotField"] | null;
+            /**
+             * Format: int64
+             * @description The step's own budget in milliseconds; 30000 unless said.
+             */
+            timeout_ms?: number | null;
+        };
+        /** @description Scroll the page. */
+        ScrollStep: {
+            /**
+             * Format: double
+             * @description How far down to end, as a share of the document's height.
+             */
+            depth: number;
+            /** @description See `click`. */
+            human?: boolean | null;
+            /**
+             * Format: int64
+             * @description The step's own budget in milliseconds; 30000 unless said.
+             */
+            timeout_ms?: number | null;
+        };
+        /** @description Choose an option of a select element. */
+        SelectStep: {
+            /** @description See `click`. */
+            human?: boolean | null;
+            /** @description The CSS selector of the select element. */
+            selector: string;
+            /**
+             * Format: int64
+             * @description The step's own budget in milliseconds; 30000 unless said.
+             */
+            timeout_ms?: number | null;
+            /** @description The value of the option. */
+            value: string;
+        };
         /** @description One path of a self-test. */
         SelftestPart: {
             /**
@@ -1473,6 +2159,46 @@ export interface components {
             /** @description The persona every request of the session is made by. */
             persona: components["schemas"]["PersonaView"];
         };
+        /** @description What a step of a flow reports. */
+        StepView: {
+            /**
+             * @description The step's action; `final` for the page the flow ended on.
+             * @example click
+             */
+            action: string;
+            /**
+             * Format: int64
+             * @description How long it took, in milliseconds, the persona's own time on the
+             *     page included.
+             */
+            duration_ms?: number | null;
+            /** @description Why it failed. */
+            error?: string | null;
+            /** @description Whether the step succeeded; null while it has not run. */
+            ok?: boolean | null;
+            /**
+             * Format: int64
+             * @description How much of that was the persona's dwell and thinking time.
+             */
+            paced_ms?: number | null;
+        };
+        /** @description A step that acts on one element: `click` or `hover`. */
+        TargetStep: {
+            /**
+             * @description False: done by the browser's driver instead of the persona's mouse
+             *     and keyboard, which a page can tell apart. Refused
+             *     (`driver_input_denied`) unless the policy of the flow's site has
+             *     `driver_input: true`.
+             */
+            human?: boolean | null;
+            /** @description The CSS selector of the element. */
+            selector: string;
+            /**
+             * Format: int64
+             * @description The step's own budget in milliseconds; 30000 unless said.
+             */
+            timeout_ms?: number | null;
+        };
         /**
          * @description Time per phase of the last attempt, in milliseconds; null for a phase
          *     that did not happen on the path taken.
@@ -1510,6 +2236,20 @@ export interface components {
              */
             ttfb_ms?: number | null;
         };
+        /** @description Type text into an element. */
+        TypeStep: {
+            /** @description See `click`. */
+            human?: boolean | null;
+            /** @description The CSS selector of the input. */
+            selector: string;
+            /** @description The text. */
+            text: string;
+            /**
+             * Format: int64
+             * @description The step's own budget in milliseconds; 30000 unless said.
+             */
+            timeout_ms?: number | null;
+        };
         /** @description What a browser waits for before the page is captured. */
         WaitField: {
             /**
@@ -1522,11 +2262,77 @@ export interface components {
             /** @description The lifecycle point. */
             until?: components["schemas"]["WaitUntilField"];
         };
+        /** @description Wait for one condition: exactly one of the four is given. */
+        WaitForStep: {
+            /**
+             * Format: int64
+             * @description For this long, in milliseconds.
+             */
+            ms?: number | null;
+            /** @description Until no request ran for half a second. */
+            network_idle?: boolean | null;
+            /** @description Until this CSS selector matches. */
+            selector?: string | null;
+            /**
+             * Format: int64
+             * @description The step's own budget in milliseconds; 30000 unless said.
+             */
+            timeout_ms?: number | null;
+            /**
+             * @description Until the page's address matches this pattern: `**` is anything,
+             *     `*` anything but a `/`, everything else is itself.
+             */
+            url?: string | null;
+        };
         /**
          * @description The lifecycle point a browser waits for.
          * @enum {string}
          */
         WaitUntilField: "commit" | "dom_content_loaded" | "load" | "network_idle";
+        /** @description Where a job's events are posted (spec §16.6). */
+        WebhookField: {
+            /**
+             * Format: int32
+             * @description Post `job.progress` whenever this many more items are over. Left
+             *     out: only the end of the job is reported.
+             */
+            progress_every?: number | null;
+            /**
+             * @description The secret every delivery is signed with: 16 to 256 bytes. Kept
+             *     encrypted and never returned. `X-Kage-Signature` is `sha256=` and
+             *     the hexadecimal HMAC-SHA-256 of `<X-Kage-Timestamp>.<body>` under
+             *     it.
+             */
+            secret: string;
+            /**
+             * @description The receiver: an `http` or `https` URL whose origin the operator
+             *     listed in `webhooks.allowed_origins`
+             *     (`webhook_origin_not_allowed` otherwise). Kage posts from its own
+             *     address, follows no redirect, and shows of this URL only the host
+             *     afterwards.
+             * @example https://hooks.example.org/kage
+             */
+            url: string;
+        };
+        /** @description A job's webhook, as far as it is shown. */
+        WebhookView: {
+            /**
+             * @description The newest events and how their delivery stands; empty in a
+             *     webhook's own body.
+             */
+            deliveries: components["schemas"]["DeliveryView"][];
+            /**
+             * @description The receiver's host. The rest of its URL is not shown again: a
+             *     path or a query often is a token.
+             * @example hooks.example.org
+             */
+            host: string;
+            /**
+             * Format: int32
+             * @description `job.progress` every so many items; null for none.
+             */
+            progress_every?: number | null;
+        };
         /** @description Which responses of the page's scripts are kept. */
         XhrField: {
             /** @description Media types to keep, for example `application/json`. */
@@ -2141,6 +2947,48 @@ export interface operations {
             };
         };
     };
+    purge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PurgeRequest"];
+            };
+        };
+        responses: {
+            /** @description What was deleted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Purged"];
+                };
+            };
+            /** @description `key_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description `before` lies in the future. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     get_artifact: {
         parameters: {
             query?: never;
@@ -2273,6 +3121,230 @@ export interface operations {
             };
             /** @description Nothing can be fetched: no proxy pool, or the server stops. */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_job: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Names the job this request makes for a day: 1 to 255 visible ASCII characters. */
+                "Idempotency-Key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JobRequest"];
+            };
+        };
+        responses: {
+            /** @description The job this Idempotency-Key made before. */
+            200: {
+                headers: {
+                    /** @description Always `true`. */
+                    "Idempotency-Replayed"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobView"];
+                };
+            };
+            /** @description The job was accepted. */
+            201: {
+                headers: {
+                    /** @description Where the job is read. */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobView"];
+                };
+            };
+            /** @description The body is not JSON. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No key, or not a valid one. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The key lacks the `jobs` scope, or `sessions` for `session_id`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description `session_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description `idempotency_key_reused`, `session_persona_conflict`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The job cannot be accepted as asked; `code` says why, `item` or `step` which part. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A limit of the key or of the API. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Nothing can be fetched: no proxy pool, or the server stops. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_job: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The job's id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The job. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobView"];
+                };
+            };
+            /** @description `job_not_found`: no such job of this key. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    cancel_job: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The job's id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The job as it stands. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobView"];
+                };
+            };
+            /** @description `job_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_job_items: {
+        parameters: {
+            query?: {
+                /** @description `next_cursor` of the page before; left out for the first page. */
+                cursor?: string;
+                /** @description Items per page: 50 unless said, at most 200. */
+                limit?: number;
+                /** @description False leaves every item's `result` out: states and outcomes only. */
+                results?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description The job's id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of items. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobItemsPage"];
+                };
+            };
+            /** @description `job_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The cursor or the limit is not one. */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
