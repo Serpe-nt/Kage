@@ -651,11 +651,80 @@ real work has open).
 - Webhook signature verified by a test receiver; retry schedule observed
   with fake clock.
 
+**Status.** Merged as fifteen commits ending `68ab0e9` (`m9-handover.md`).
+Jobs under a worker lease (`SELECT … FOR UPDATE SKIP LOCKED`, counters
+moved with the item), `batch` and `flow` with idempotency keys, cancel,
+paginated items with their results, a deadline and a pause (D41); flows as
+one paced browser attempt under contract 1.2.0 with the F21 `back` fix
+(D42); webhooks to listed origins only, signed per attempt, five retries on
+the jittered schedule, a delivery log (D43); the overflowed sync fetch
+carried on as a one-item job under its own request id across a restart
+(F35); the audited admin purge and the retention of jobs and of results
+that are no job's (F33); the forwarding-header family on the denylist
+(F34). `crawl` answers `not_available_yet` until M10. The gate passed on
+the fourth clean-clone run: the first failed on an M8 test that is flaky
+(F42), the second on example webhook secrets gitleaks took for real ones
+(made plain words), the third on the smoke test's table count (22 now).
+Coverage: kage-api 93.2 %, kage-scheduler 93.7 %, kage-store 98.6 %.
+Measured: 50 pages of the fixture site dealt out freely take 10 min on
+3 to 5 addresses with 44 changes of address; one visitor takes about an
+hour on one address, 300 pages a day; so one visitor per site is the
+default and `visitors` is the caller's trade. Real Chrome clicks 0.95 to
+1.19 s after a load and a constant 1.2 s after every click without
+pacing; paced, the first click comes about 6 s after the load and the
+quiet time after a click is 1.8 to 2.4 s and never the same. `goBack`
+with `load` hangs 8 s on Chrome; with `commit` it returns in 11 ms. No
+live check was run and no real site was touched.
+
+**Follow-ups closed by M9.** F21 (`goBack` on commit, the sidecar's own
+look at the address, `wait_for url` with its own matcher), F33 (the purge),
+F34 (the whole forwarding family, not only the six named), F35 (the
+overflow as a job).
+
+**Follow-ups raised by M9**
+- **F38 (M10, in the sidecar):** a human `back` with no history still
+  reports success after its 5 s watch while the driver's `back` fails
+  after 1 s; and a human `back` to a history entry with the same URL,
+  served from the cache, is not detected as having left the page. Make
+  both report what happened.
+- **F39 (M12):** a carried fetch's attempt that is under way when the
+  server stops is cut and not recorded; the job is taken up after its
+  lease (`jobs.lease`, 1 min) and the page is fetched again, so the site
+  sees it twice. Record the cut attempt, or wait for it on shutdown.
+- **F40 (when a consumer asks):** no `GET /v1/jobs` (a key's jobs) and no
+  `kage job` at the command line; the API is the only way and a job is
+  found by its id. `GET /v1/jobs/{id}/items` reads each item's result with
+  three queries (a page of 200 items is 600); a join when it matters.
+- **F41 (M13, measure):** Chrome sends one `mousemove` of its own about
+  110 ms after a load in a paced flow (the pointer resting over a fresh
+  page); Kage sends nothing before the dwell ends. Compare with a person's
+  trace before deciding whether the first wander should start earlier.
+- **F42 (M10, first commit):** the M8 test
+  `keys_are_made_rotated_and_revoked_and_their_tokens_shown_once` in
+  `crates/kage-api/tests/admin.rs` takes `token.rsplit('_').next()` as
+  the secret; a base64url secret may contain or end in `_`, so about 3 %
+  of runs fail. Take everything after the second underscore
+  (`token.splitn(3, '_').nth(2)`).
+- **F37 stands** (M12): the webhook sender uses the system resolver;
+  `hickory-resolver` is still pinned and unused.
+
 ---
 
 ## M10 — Crawler
 
 **Scope.** §13.
+
+**Starting point (after M9).** A job already has its lease, items,
+counters, visitors, cancel, pause, deadline, retention and webhooks
+(`crates/kage-api/src/jobs/`, `crates/kage-store/src/repo/jobs.rs`); the
+planner already holds a job to its visitors (`Work.visitors`, D41); a
+`crawl` job is refused with `not_available_yet`. M10 adds the frontier
+(`crawl_frontier`, §18), discovery and dedupe in `kage-crawl` with URL
+normalization in `kage-core`, and the `crawl` job type on top of what M9
+built; it does not build a second worker. F28 (a click on a link of the
+open page as the way from one page to the next in the browser, so that a
+crawl looks like reading; its contract addition is 1.3.0 now that M9 took
+1.2.0) is M10's. F38 and F42 are M10's first commits.
 
 **Deliverables**
 - Frontier, sitemap discovery and parsing, allow/deny, depth, caps,
