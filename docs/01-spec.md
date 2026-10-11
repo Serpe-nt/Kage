@@ -682,7 +682,15 @@ self-tests never do.
 
 Per attempt: `timeout_ms` default 60 000 for browser, 30 000 for http; hard
 cap 300 000. Sync `/v1/fetch` total wall time default 180 s, after which the
-request is converted into a job and `202` returned with the job id.
+request is carried on as a job and `202` returned with the job id: a batch
+of one item under the request's own id (`origin: sync_overflow`), held by
+the server that accepted the fetch while it runs. From then on the fetch
+waits where a job waits (a paused site, a persona that sleeps, the
+bandwidth term) instead of ending with an error, and a server that stops
+gives the job back: after a restart the job worker takes the request up
+again under the same id, with the attempts that were made in its record
+and counted against its retries. The result is at `GET /v1/results/{id}`
+either way (F35).
 
 ---
 
@@ -868,8 +876,12 @@ and Chrome let an `AudioContext` run. Since M5.1:
   gesture flag. The world is marked by a script registered for every new
   document, and every expression checks the mark and the top frame first,
   because an execution context id is reused by the next renderer process.
-  The driver keeps the launch, navigation, the waits for a load state and
-  a URL, network events, and the input of `human: false` steps.
+  The driver keeps the launch, navigation, network events, and the input
+  of `human: false` steps. Its `goBack` is asked to wait for the commit
+  only, and neither its wait for a load state after a restore from the
+  cache nor its `waitForURL` is used: both hang there (F21). `back` and
+  `wait_for url` look at the address and at `document.readyState`
+  themselves.
 - On firefox the pinned build runs with upstream's fix of its Juggler
   backported into `omni.ja` (ADR 0010); the engine refuses a build without
   it and clears a profile's startup cache when the profile last started
@@ -912,8 +924,9 @@ with NDJSON: one `step` line per finished step as it finishes, then one
 before its first step is an ordinary error answer; a flow that breaks
 after lines were sent ends without its final line.
 
-The contract is at 1.1.0: everything M5 added is optional in requests and
-additional in responses.
+The contract is at 1.2.0: everything M5 added (1.1.0) is optional in
+requests and additional in responses, and so is what M9 added: a flow's
+`behavior.pace` and the `paced_ms` of a step (§10.5).
 
 A breaking change of the contract needs a new major of the contract
 version; `just contract-check` compares the committed document with the
@@ -1036,6 +1049,53 @@ opened with a click and chosen with the arrow keys and `Enter`, `back` is
 driver and is visible to a page as such. The first step that fails ends
 the flow; a flow's `behavior` gives the seed and whether typing makes
 typos.
+
+**Pacing (contract 1.2.0).** With `behavior.pace` a flow paces itself the
+way a person does. After every step that arrived on a page (a `goto`, or a
+`click`, `press` or `back` after which a new document or another address
+was seen) the persona dwells there with a wandering pointer: around the
+median `pace.dwell_ms` when it is given (log-normal, the 95th percentile
+at twice the median), the persona's own human dwell otherwise, and never
+below `pace.min_dwell_ms` (a shorter draw is drawn again, so nothing piles
+up at the floor). Before every step that acts on a page the persona is
+already on it takes a thinking time of its own (log-normal, a median of
+0.4 to 0.9 s that is the persona's, 80 ms to 5 s). The five steps that only
+read (`wait_for`, `assert`, `extract`, `screenshot`, `pdf`) are never
+delayed and send no input. Every time comes from the flow's seed, so a
+flow replays; a pause never outlasts the flow's budget less a reserve for
+the captures, and counts in its step's `duration_ms` and `paced_ms`, not
+against the step's `timeout_ms`. Measured on Chrome 155 and Camoufox 152:
+without pacing the first click came 0.95 to 1.19 s after the load and
+every click was followed by a constant 1.2 s; with it the first click
+comes about 6 s after the load and no two gaps are alike. Without `pace` a
+flow runs its steps one right after the other; that is for the sidecar's
+own tests. **Kage always sends `pace`** for a flow of the API, with the
+policy's `min_dwell` as the floor and the request's `behavior.dwell_ms`
+(never below that floor, ignored where the policy locks behavior) as the
+median.
+
+**Going back (F21).** `back` by the driver waits for the commit and then
+for the address, the response or the document to change; with no history
+it fails after a second instead of reporting success. `wait_for url`
+matches the address with a matcher of its own (`**` anything, `*`
+anything but a `/`; the fragment only when the pattern names one) and
+then waits for the document to be complete. A capture after `back`
+reports the document that came back, with the status and headers it was
+first loaded with when the flow saw it arrive.
+
+**A flow in Kage** is one browser attempt of one persona under one grant
+of the scheduler (`POST /v1/jobs` with `type: flow`, §16.6). It starts
+with a `goto`; every `goto` passes the SSRF guard when the job is
+accepted, and every page a step captured and the page the flow ended on
+pass the redirect-chain check of §19 afterwards: one refused hop and
+nothing of the flow is kept. A `human: false` step is refused
+(`driver_input_denied`) unless the site's policy has `driver_input: true`.
+A wall met inside a flow is judged as a wall: the persona cools down, its
+window is closed, and another persona runs the script again from its first
+step inside the retry budget. A step that failed on a page that is no wall
+is the script's failure (`flow_step_failed`) and is not tried again,
+unless the page did not arrive at all (a timeout, a failed connection). A
+flow in a session is never moved to another persona.
 
 ### 10.6 Resource rules
 
@@ -1231,7 +1291,7 @@ bodies in the artifact store.
   made as asked, or that the API cannot serve, is a problem.
 - Every response has `X-Request-Id` (a UUIDv7 the server makes; one a
   client sends is not taken over); `Idempotency-Key` is honored on
-  `POST /v1/jobs` for 24 h (M9; no M8 endpoint takes it).
+  `POST /v1/jobs` for 24 h (`jobs.idempotency_ttl`; §16.6).
 - OpenAPI 3.1 at `/openapi.json` (no key: it is the same for every
   deployment), generated from the Rust types and committed as
   `crates/kage-api/openapi.json`; `kage openapi` prints it. Swagger UI at
@@ -1285,11 +1345,11 @@ scope included), and every change at the command line is written to
 
 | Method and path | Scope | Purpose |
 |---|---|---|
-| `POST /v1/fetch` | fetch | Synchronous fetch. One that outlasts `scheduler.sync_wall_time` (180 s) runs on and is answered `202` with the request's id, `Location` and `Retry-After`; its result is stored when it ends. M9 turns that into a job (`job_id` is null until then) |
-| `POST /v1/jobs` | jobs / crawl | Create `batch`, `flow` or `crawl` job |
-| `GET /v1/jobs/{id}` | jobs | Status, counters, timing |
-| `GET /v1/jobs/{id}/items?cursor=&limit=` | jobs | Paginated results |
-| `POST /v1/jobs/{id}/cancel` | jobs | Cooperative cancel |
+| `POST /v1/fetch` | fetch | Synchronous fetch. One that outlasts `scheduler.sync_wall_time` (180 s) is carried on as a job (§8.4) and is answered `202` with the request's id, the job's id (`job_id`), `Location` and `Retry-After`; its result is stored when it ends |
+| `POST /v1/jobs` | jobs / crawl | Create a `batch` or a `flow` job (`crawl` with M10): `201` with the job, `200` with `Idempotency-Replayed: true` for the job an `Idempotency-Key` made before, `409 idempotency_key_reused` for another request under that key. A job is accepted whole or refused whole (§16.6) |
+| `GET /v1/jobs/{id}` | jobs | State, counters, why and until when it is paused, its deadline, and the delivery log of its webhook. A key reads the jobs it made; another key's is `404 job_not_found` |
+| `GET /v1/jobs/{id}/items?cursor=&limit=&results=` | jobs | The items in the job's order, 50 a page unless said and at most 200, each with its stored result as `GET /v1/results/{id}` shows it without the document and the body (which are artifacts); `results=false` leaves the results out |
+| `POST /v1/jobs/{id}/cancel` | jobs | Cooperative cancel: what waits is cancelled at once, a page that is being fetched is finished, so at most one more item per visitor ends. A job that has ended is answered as it ended |
 | `GET /v1/results/{id}` | fetch | The result of a fetch by the request's id (the `id` of the result, `X-Request-Id` of the fetch): `200` once it ended, `202` while it runs. A key reads what it fetched; another key's is `404` |
 | `GET /v1/artifacts/{id}` | fetch | What was kept of a page (document, raw body, screenshot, PDF, the body of a captured XHR response), streamed; served with `nosniff` and a sandboxing CSP, gzip passed through to a client that takes it |
 | `POST /v1/sessions` | sessions | Open a session pinned to a persona matching the hints and a `domain`'s policy: `201` new, `200` when the id is open already, `409 no_matching_persona` |
@@ -1301,6 +1361,7 @@ scope included), and every change at the command line is written to
 | `POST /v1/admin/policies/reload` | admin | Force reload; an invalid file changes nothing and is `422` |
 | `GET/POST /v1/admin/keys`, `DELETE …/{id}`, `POST …/{id}/rotate` | admin | Key management; a token is in the answer of a creation and of a rotation only, with `Cache-Control: no-store` |
 | `GET /v1/admin/audit?cursor=&limit=` | admin | Newest first, at most 200 a page |
+| `POST /v1/admin/purge` | admin | `{ key_id, before? }`: deletes what a key fetched before a moment (now unless said): its finished jobs with everything of theirs, and every other result, its attempts and its artifacts, before their retention ends. What is still somebody's work stays: a request that has not ended, and the request an open item of a job waits on. Answers with how many requests, jobs and artifacts went; on the audit log as `admin.data.purge` (F33) |
 | `GET /metrics` | admin | §20 |
 
 Sessions (§5): a session is opened by `POST /v1/sessions` and by nothing
@@ -1345,8 +1406,11 @@ arriving from a page in a browser is `behavior` (a click on a link, F28),
 never a header. `behavior.dwell_ms` is a median Kage draws around per
 attempt, never below the policy's `min_dwell`; `timeout_ms` is at least
 15 000 on a browser render (`timeout_too_short`). The forwarding headers
-`X-Forwarded-For`, `Forwarded`, `X-Real-IP` and `True-Client-IP` join the
-denylist (F34, M9).
+are on the denylist (F34): `X-Forwarded-For`, `Forwarded`, `X-Real-IP`,
+`True-Client-IP`, `X-Client-IP`, `CF-Connecting-IP`, and the rest of the
+family (every `X-Forwarded-*`, `X-Originating-IP`, `X-Cluster-Client-IP`,
+`Fastly-Client-IP`). A browser never sends them, and a request that does
+says that a proxy is in the way.
 
 Validation: `url` http(s) only, ≤ 8 KB, SSRF guard (§19); `headers` ≤ 32
 entries, denylist enforced (`header_denied`, naming the header); `include`
@@ -1450,11 +1514,120 @@ As built (the OpenAPI document is the contract):
 ### 16.6 Jobs and webhooks
 
 Job states: `queued`, `running`, `paused`, `succeeded`, `partial`,
-`failed`, `cancelled`. Webhook: `webhook: { url, secret }` on job creation;
-events `job.completed`, `job.failed`, `job.progress` (every N items);
-body signed with `X-Kage-Signature: sha256=<hmac>` over timestamp + body;
-retries with exponential backoff up to 5. Webhook URLs pass the same SSRF
-guard as targets.
+`failed`, `cancelled`. A job ends `succeeded` when every item succeeded,
+`failed` when none did, `partial` otherwise, and `cancelled` when a cancel
+ended it before every item ran.
+
+**Acceptance.** `POST /v1/jobs` takes `{ "type": "batch", ... }` or
+`{ "type": "flow", ... }`. A job is accepted whole or refused whole, and
+nothing is stored for one that is refused: every item of a batch passes
+the checks of a synchronous fetch (the problem names it as `item`), every
+`goto` of a flow passes the SSRF guard (`step`), a `session_id` must be
+open and its persona one every item may use, and a webhook's receiver must
+be one the operator listed. At most `jobs.max_items` items (10 000), at
+most 100 steps. An `Idempotency-Key` (1 to 255 visible ASCII characters)
+names the job it made for `jobs.idempotency_ttl` (a day) per API key: the
+same request again, whatever the order of its members, is answered with
+that job; another request under the key is `409 idempotency_key_reused`.
+What is compared is a keyed fingerprint of the body, because the body
+holds the webhook's secret.
+
+**A batch** is `urls` (fetched as `defaults` says) and `items` (fetch
+requests of their own, with whatever they set in place of the default), in
+that order. Its items are worked site by site, sites side by side. Per
+site a batch has **one visitor**: one persona reads its pages of that site
+in the order given, in sittings, with the pauses a person makes, and comes
+back after its breaks and its nights; another persona takes over only when
+that one cannot go on (blocked there, at its daily cap, retired, its proxy
+unusable), and whoever gets through is the visitor from then on. A site
+therefore sees one household reading, not a list dealt out to several
+addresses. Measured with the planner under the `human` profile: 50 pages
+of one site take about an hour on one address (a median of 61 minutes) and
+300 pages a working day, which is the daily cap of one persona; with three
+visitors 50 pages take about 20 minutes on three to four addresses, and
+dealing them out freely (three at a time, any persona) took 10 minutes
+with 44 changes of address. `visitors` asks for more than one, up to the
+`domain_concurrency` of the pacing in force for the site; more is refused,
+never reduced. That is the way to trade stealth for time. A job-level
+`session_id` pins every item to the session's persona under a fetch's
+session rules, and the job counts as use of the session while it has items
+left. A batch is planned by the same planner as everything else (D37): it
+never wakes a sleeper and has the priority of a job.
+
+**An item that cannot be attempted now is not failed.** A paused site, a
+visitor that sleeps or is on a break, the bandwidth term, the key's daily
+page budget: the item goes back into the queue with the time to come back,
+its site is left alone until then, and a job whose every remaining item
+waits is `paused` in the store (`paused.reason`, `paused.until`) and in
+nobody's hands until that time. A job may wait `jobs.max_age` (7 days)
+from its acceptance; past that deadline it ends with what it has, and the
+items left fail with `expired: <what they waited for>`.
+
+**A flow** (§10.5) is one unit: one browser attempt of one persona. Its
+items are its steps, in order, and one last item for the page it ended on.
+A step's item says whether it ran and succeeded, how long it took and how
+much of that was pacing; a step that captured the page (`extract`,
+`screenshot`, `pdf`) names a result of its own, read, kept and deleted
+like any other; the last item is the flow's own request with its attempts.
+Steps after one that failed are `failed` with `not_run`.
+
+**The worker.** Jobs are claimed with `SELECT ... FOR UPDATE SKIP LOCKED`
+under a lease (`jobs.lease`, renewed while the job is worked), at most
+`jobs.max_running` at once and `jobs.max_items_in_flight` items of all
+jobs in the scheduler. A job whose worker stopped is claimed again when
+its lease ran out, by the same server after a restart or by another one,
+and goes on where its items stand. An item names the request that carries
+it out before that request is written, so a request is never begun twice.
+A cancel is read with every renewal of the lease and at once on the server
+that works the job: what waits is cancelled, an item that waits for its
+persona is taken out of the scheduler's queue, and an attempt that is
+under way is finished, never cut.
+
+**Webhooks.** `webhook: { url, secret, progress_every? }` on a job. The
+receiver must be an origin the operator listed in
+`webhooks.allowed_origins` (none by default: no job may have a webhook
+then); another one is `422 webhook_origin_not_allowed`. A webhook is the
+one request Kage makes from its own address, and under any other rule a
+key with the `jobs` scope could make that address post a signed request at
+any public site, a target among them (D17). A listed origin passes the
+SSRF guard like a target, unless it is also in `webhooks.private_origins`:
+those are the operator's own (the compose network, the LAN, the host) and
+may resolve to a private or loopback address; link-local, metadata and
+multicast addresses are refused for everyone.
+
+Events: `job.completed` or `job.failed` when the job ends, and
+`job.progress` whenever `progress_every` more items are over. The body is
+thin: `{ id, type, created_at, job }` with the job as `GET /v1/jobs/{id}`
+shows it to its key, and nothing of items, URLs, personas or proxies.
+`X-Kage-Signature: sha256=<hex>` is the HMAC-SHA-256, under the job's
+secret, of `<X-Kage-Timestamp>.<body>` (the timestamp in Unix seconds, the
+body exactly as sent); `X-Kage-Event` names the event and
+`X-Kage-Delivery` its id, the same on every attempt, so a receiver drops a
+repeat. Every attempt is signed anew. A receiver recomputes the signature,
+compares in constant time and refuses a timestamp older than a few
+minutes. The secret is 16 to 256 bytes, sealed at rest bound to its job,
+and never returned; a job shows only its receiver's host.
+
+Delivery: plain wreq without emulation and with an honest `User-Agent`
+(`kage/<version>`), never through a proxy and never one named in the
+environment. The sender resolves the receiver's name itself, refuses a
+name any of whose addresses it may not post to, connects to the addresses
+it checked and to no other, and follows no redirect; all of that again on
+every attempt. Anything but a `2xx` is a failure: one attempt and five
+retries (`webhooks.max_retries`) after 30 s, 2 min, 8 min, 32 min and
+2 h 8 min, each moved by up to a fifth either way by the event's own seed;
+a `Retry-After` is honoured up to an hour; `410` ends the retries; 10 s
+per attempt. One delivery is in flight per receiver, and while a
+receiver's last attempt failed its other events wait behind the next probe
+without spending attempts of their own. A `job.progress` that still waits
+when a newer event of its job is queued is dropped (`superseded`). Every
+attempt is a row of the delivery log (`webhook.deliveries` on the job),
+and what waits survives a restart.
+
+**Retention.** A finished job, its items, their requests, results and
+artifacts are deleted `jobs.retention_days` (14) after it ended; a result
+that is no job's goes when it is as old as `artifacts.retention_days`. The
+admin purge (§16.3) does the same for one key before that time.
 
 ---
 
@@ -1499,6 +1672,13 @@ proxy probe), `shutdown_grace` (30 s), `max_connections` (1024),
 `requests_per_minute` (600 over all keys; 0 for none),
 `cors_allowed_origins` (none) and `docs` (true). `security` holds
 `allow_ip_targets`, `resolve_on_host` and `expose_set_cookie`, all false.
+`jobs` holds `max_items` (10 000), `max_running` (8), `max_items_in_flight`
+(24), `max_age` (7 d), `retention_days` (14), `lease` (1 m),
+`poll_interval` (2 s) and `idempotency_ttl` (1 d). `webhooks` holds
+`allowed_origins` and `private_origins` (both empty: no job may have a
+webhook; a private origin must also be an allowed one), `timeout` (10 s),
+`max_retries` (5), `first_retry` (30 s), `backoff_factor` (4), `jitter`
+(0.2), `max_retry_after` (1 h) and `poll_interval` (1 s) (§16.6).
 `sidecar` holds
 the token, each engine's URL, the timeouts and `connect_retries`;
 every section rejects unknown keys and every non-secret key is listed in
@@ -1553,7 +1733,16 @@ Tables: `proxies`, `personas`, `persona_domain_state`, `sessions`,
 `trips`, and when its one trial was let through, `trial_started_at`),
 `http_cookies` (one row per cookie, keyed by proxy and persona; rows die
 with the persona and with the proxy), `bandwidth_usage` (bytes up and down
-through the forwarder per hour, persona and domain; §7.5). An attempt
+through the forwarder per hour, persona and domain; §7.5),
+`webhook_deliveries` and `webhook_attempts` (one row per event of a job on
+its way to the job's webhook, and one per attempt at it; §16.6). A job
+keeps its lease (`worker`, `lease_until`), its deadline, why and until
+when it is paused, the keyed fingerprint of the request its
+`Idempotency-Key` named and the visitors of each of its sites; an item its
+site, the time before which it is not to be taken up, how often it was
+taken up, its outcome and what a flow's step reported. `job_items.request_id`
+is not a foreign key: an item names its request before the request is
+written (§16.6). An attempt
 stores its seed (`attempts.seed`: the persona's, the request's id and the
 attempt's number, from which its behavior and its pauses are drawn) and,
 like a result, the `reason` of an outcome the site did not give.
@@ -1567,8 +1756,8 @@ are gzip-compressed on disk.
 
 ## 19. Security
 
-- **SSRF guard.** Every target, every redirect hop and every webhook URL
-  is checked: non-http(s) schemes, credentials in the URL, port 0, names
+- **SSRF guard.** Every target, every redirect hop, every page a flow
+  visited and every webhook URL is checked: non-http(s) schemes, credentials in the URL, port 0, names
   that never name a public site (`localhost`, `*.local`, `*.internal`, a
   name of one label, …) and literal addresses in loopback, link-local, RFC
   1918, CGNAT, multicast, IPv6 ULA and the cloud metadata ranges are
@@ -1585,6 +1774,15 @@ are gzip-compressed on disk.
   address in a denied range, or with none, is refused. Turn it on when the
   proxies could reach the operator's own networks (a static list of
   self-hosted proxies); a residential provider's exits cannot.
+
+  A webhook is the one request that leaves from the host's own address, so
+  the guard alone is not its rule: it goes only to an origin the operator
+  listed (`webhooks.allowed_origins`), and its sender always resolves the
+  name itself, checks every address, connects to a checked address and to
+  no other, and follows no redirect (§16.6). An origin that is also in
+  `webhooks.private_origins` may resolve to a private or loopback address;
+  `kage config check` refuses a private origin that is not listed as
+  allowed.
 - **Secrets.** Proxy usernames and passwords both encrypted at rest with
   XChaCha20-Poly1305 under `KAGE__SECRETS__MASTER_KEY` (random 24-byte nonce
   per value; version byte, nonce, ciphertext and tag; associated data binds
@@ -1626,8 +1824,8 @@ are gzip-compressed on disk.
   (slowloris); a request target of at most
   `server.max_uri_bytes` (`414`); at most `server.max_connections`
   connections; `server.request_timeout` for every endpoint that does not
-  wait for the network. Items per job (default 10 000) come with M9. A
-  caller's headers pass a denylist: what is the persona's identity or the
+  wait for the network. At most `jobs.max_items` items per job (10 000)
+  and 100 steps per flow. A caller's headers pass a denylist: what is the persona's identity or the
   transport's (`User-Agent`, `Accept-Language`, `Accept-Encoding`,
   `Cookie`, `Origin`, `Host`, `Sec-*`, `Proxy-*` and the rest of §9's
   list) cannot be set.
@@ -1649,8 +1847,9 @@ are gzip-compressed on disk.
   (CycloneDX) per image, Trivy on images, gitleaks on every PR, signed
   release tags, images pinned by digest in compose.
 - **Data hygiene.** Results may contain personal data from target pages;
-  retention defaults are short (`artifacts.retention_days`); an admin purge
-  endpoint comes with the retention work of M9 (follow-up F33); the README
+  retention defaults are short (`artifacts.retention_days`,
+  `jobs.retention_days`); `POST /v1/admin/purge` deletes what a key
+  fetched before that time, with an audit event (§16.3); the README
   states responsible-use expectations.
 - **Audit.** Every admin API call and CLI mutation writes an audit event
   with key id, action, target, and outcome; an admin call whose event
@@ -1678,6 +1877,15 @@ are gzip-compressed on disk.
   is the pattern, never the path a client sent),
   `kage_api_request_duration_seconds{route,method}`,
   `kage_api_requests_in_flight` and `kage_api_refusals_total{code}`.
+  Jobs add `kage_jobs{job_type,state}`, `kage_job_items{state}` (what
+  waits and what is being worked) and `kage_webhook_deliveries_pending`,
+  read from the store at the scrape, and `kage_jobs_accepted_total{job_type}`,
+  `kage_jobs_finished_total{job_type,state}`,
+  `kage_job_items_total{job_type,state}` and
+  `kage_webhook_deliveries_total{event,result}` (`delivered`, `retry`,
+  `failed`) from the process. The scheduler's `kage_queue_depth{kind}` and
+  `kage_scheduler_wait_seconds{kind}` have a `job` kind for what jobs have
+  in the queue.
   `/metrics` is one exposition: the process's recorder (histograms of
   seconds with fixed buckets, so they aggregate), `kage_persona_state` and
   `kage_selftest_score` read from the store at the scrape, and each

@@ -156,6 +156,18 @@ For a listing that is paged through, `scroll_depth: 0.3, dwell_ms: 3000`
 is the setting that still looks like someone skimming. Keep the default
 for a site that watches.
 
+### When a fetch takes longer than the server waits
+
+A fetch that outlasts `scheduler.sync_wall_time` (180 s) is answered `202`
+with the request's id and a `job_id`: from then on a job of one item
+carries it on (`origin: sync_overflow`). Poll `GET /v1/results/{id}`; that
+needs no more than the `fetch` scope. With the `jobs` scope the job itself
+can be read (`GET /v1/jobs/{job_id}` says when it is `paused` and for
+what) and cancelled. Such a fetch no longer ends with an error because its
+site was paused or its persona asleep: it waits, as a job waits, for up to
+`jobs.max_age`. If the server is stopped while it runs, the job worker of
+the next start takes it up again under the same request id.
+
 ### JSON endpoints
 
 When the data is what a page's own scripts fetch, fetch the page and ask
@@ -185,6 +197,177 @@ Headers that are the persona's identity or the transport's cannot be set
 `Accept-Encoding`, `Cookie`, `Origin`, `Host`, every `Sec-*` and `Proxy-*`,
 and the rest of spec §9's list. To speak another language, ask for a
 persona of another country (`persona.countries`).
+
+## Jobs
+
+`POST /v1/jobs` accepts work and answers at once; the work is done in the
+background and read with `GET /v1/jobs/{id}` and
+`GET /v1/jobs/{id}/items`. It needs the `jobs` scope.
+
+```json
+{ "type": "batch",
+  "urls": ["https://example.org/listing?page=1", "https://example.org/listing?page=2"],
+  "defaults": { "include": ["dom"], "behavior": { "scroll_depth": 0.3, "dwell_ms": 3000 } } }
+```
+
+A job is accepted whole or not at all: one item the API would refuse as a
+fetch refuses the job (`item` in the problem says which), and nothing is
+stored. Send an `Idempotency-Key` header with every submission you might
+repeat: the same request under the same key within a day is answered
+`200` with the job it made the first time (`Idempotency-Replayed: true`),
+so a client that lost the answer does not start the batch twice.
+
+### What a batch costs
+
+Per site a batch has **one visitor**: one persona reads the site's pages
+in the order given, in sittings, with a person's pauses, and comes back
+after its breaks and its nights. Another persona takes over only when that
+one is blocked there, reaches its daily cap or is gone. The site sees one
+household reading. That is slow on purpose:
+
+| Batch, one site, `human` pacing | Takes | Addresses the site sees |
+|---|---|---|
+| 50 pages, one visitor (the default) | about an hour (median 61 min) | 1 |
+| 300 pages, one visitor | a working day (about 8 h): the daily cap of one persona | 1 |
+| 50 pages, `"visitors": 3` | about 20 minutes | 3 to 4 |
+
+(Simulated with the scheduler's own planner over 30 seeds; a batch that
+meets the night ends in the morning.)
+
+`visitors` is the way to trade stealth for time: up to the
+`domain_concurrency` of the pacing in force for the site (3 under
+`human`), refused beyond it and never reduced. Sites of one batch are
+independent and are read side by side, each by its own visitor. A faster
+`pacing` does the rest where the policy does not lock it. Every page
+counts against the key's daily page budget when it is begun.
+
+A job-level `session_id` pins every item to an open session's persona
+(the `sessions` scope and a fetch's session rules apply); the job counts
+as use of the session while it has items left.
+
+### A job that waits
+
+An item that cannot be attempted now is not failed. When the site is
+paused by its breaker, the visitor sleeps, the bandwidth term is used up
+or the key's daily page budget is spent, the item goes back into the
+queue, and a job whose every remaining item waits is `paused`:
+
+```json
+{ "state": "paused", "paused": { "reason": "domain_paused", "until": "2026-10-12T06:40:00Z" },
+  "items": { "total": 50, "succeeded": 31, "failed": 0, "cancelled": 0, "pending": 19 } }
+```
+
+It is taken up again by itself at that time. A job waits at most
+`jobs.max_age` (7 days) from its acceptance (`deadline`); past it the
+items left fail with `expired: <reason>` and the job ends `partial`.
+`POST /v1/jobs/{id}/cancel` ends it earlier: what waits is cancelled at
+once, the page that is being fetched is finished, and nothing more is
+begun.
+
+### Flows
+
+A flow is a script of steps in one browser, by one persona:
+
+```json
+{ "type": "flow",
+  "actions": [
+    { "action": "goto", "url": "https://example.org/" },
+    { "action": "type", "selector": "input[name=q]", "text": "lamp" },
+    { "action": "press", "key": "Enter" },
+    { "action": "wait_for", "selector": "#results" },
+    { "action": "extract", "include": ["dom"] } ] }
+```
+
+- It starts with a `goto`. Every `goto` is checked by the SSRF guard when
+  the job is accepted, and every page the flow visited is checked again
+  afterwards; one refused address and nothing of the flow is kept.
+- It is always paced: the persona stays on every page it arrives on
+  (around `behavior.dwell_ms` when given, its own dwell of about 6 s
+  otherwise, never below the policy's `min_dwell`) and pauses before every
+  action. Nothing turns that off. Budget for it: `timeout_ms` is the
+  whole flow's (3 minutes unless said, at most 5), and a flow with ten
+  page loads at the persona's own dwell needs more than a minute for the
+  dwells alone.
+- Steps are done by the persona's own mouse and keyboard. `human: false`
+  (the browser's driver, which a page can tell apart) is refused with
+  `driver_input_denied` unless the site's policy says
+  `driver_input: true`. Say so only for a site that does not look.
+- A wall met on the way is retried by another persona from the first
+  step; a step that fails otherwise (a selector that is not there, an
+  assertion) ends the flow and is not tried again.
+- The items of the job are the steps, each with `step.ok`,
+  `step.duration_ms` and `step.paced_ms`; an `extract`, `screenshot` or
+  `pdf` step names a result of its own; the last item is the page the
+  flow ended on.
+
+### Webhooks
+
+A job may name a receiver for its events:
+
+```json
+"webhook": { "url": "https://hooks.example.org/kage", "secret": "<16 to 256 bytes>", "progress_every": 10 }
+```
+
+**No job may have a webhook until you list its receiver.** A webhook is
+the one request Kage makes from this host's own address, so it goes only
+where the operator said:
+
+```yaml
+webhooks:
+  allowed_origins: ["https://hooks.example.org", "http://app:3000"]
+  # Those of them on your own network: the compose network, the LAN, this host.
+  private_origins: ["http://app:3000"]
+```
+
+An origin is `scheme://host[:port]` and nothing else. A receiver that is
+not listed is `422 webhook_origin_not_allowed`. A listed one must be a
+public address unless it is also in `private_origins`; a private origin
+is your own network by definition, so list there only what you run
+yourself. Link-local and metadata addresses are refused whatever is
+listed, and `kage config check` refuses a private origin that is not also
+an allowed one.
+
+What arrives: `POST` with a JSON body `{ "id", "type", "created_at",
+"job" }`, where `job` is what `GET /v1/jobs/{id}` shows. The body names no
+page and no persona: read the items with your key. Verify every delivery:
+
+```js
+const expected = 'sha256=' + crypto.createHmac('sha256', secret)
+  .update(req.headers['x-kage-timestamp'] + '.' + rawBody).digest('hex');
+const fresh = Math.abs(Date.now() / 1000 - Number(req.headers['x-kage-timestamp'])) <= 300;
+const ok = fresh && crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(req.headers['x-kage-signature']));
+```
+
+(Compare lengths first; `timingSafeEqual` throws on unequal ones.) Use the
+body exactly as it arrived, before any JSON parser touched it.
+`X-Kage-Delivery` is the event's id and is the same on every attempt:
+drop a repeat. Answer `2xx` within 10 s; anything else is tried again
+after 30 s, 2 min, 8 min, 32 min and 2 h 8 min (each moved by up to a
+fifth), then given up. `Retry-After` is honoured up to an hour; `410`
+ends the retries at once. A redirect is a failure and is never followed.
+While a receiver fails, its other events wait behind the next probe: a
+receiver that is down gets one request per step, not one per job. The log
+of every attempt is on the job (`webhook.deliveries`), and
+`kage_webhook_deliveries_total{event,result}` counts them.
+
+### Retention and the purge
+
+A finished job goes `jobs.retention_days` (14) after it ended, with its
+items, their results and their artifacts; a result that is no job's goes
+with `artifacts.retention_days`. To delete what a key fetched before
+that, for example on a deletion request:
+
+```sh
+curl -X POST -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
+  -d '{"key_id":"<the key's id>"}' http://127.0.0.1:8080/v1/admin/purge
+```
+
+`before` (a time) limits it to what is older; without it everything to
+this moment goes. Work that is still under way is left: a request that
+has not ended, and the request an open item of a job waits on (cancel the
+job first to purge all of it). The answer counts the requests, jobs and
+artifacts that went, and the call is on the audit log as
+`admin.data.purge`. The files of deleted artifacts go with the next sweep.
 
 ## Sessions
 
@@ -297,6 +480,15 @@ and `kage_api_refusals_total{code}`, which counts what was refused before a
 handler ran: a rise of `invalid_key` is someone guessing, a rise of
 `rate_limited` a consumer that needs a larger allowance or a slower loop.
 
+For jobs: `kage_jobs{job_type,state}` (a growing `paused` is sites that
+are closed or personas that sleep; a growing `queued` is more work than
+`jobs.max_running` takes), `kage_job_items{state}` for what waits and what
+is being worked, `kage_job_items_total{job_type,state}` and
+`kage_jobs_finished_total{job_type,state}` for what ended and how, and
+`kage_webhook_deliveries_pending` with
+`kage_webhook_deliveries_total{event,result}`: deliveries that stay
+pending, or a rise of `failed`, is a receiver to look at.
+
 ## Input limits
 
 | Setting | Default | Answer |
@@ -339,7 +531,11 @@ off behind a residential provider.
 | `render_needs_http`, `render_kind_conflict`, `render_include_conflict` | What was asked does not fit the render mode. |
 | `request_kind_needs_referer`, `preflight_required` | A script's request without its page, or one a browser would preflight. |
 | `timeout_too_short`, `invalid_pacing` | `minimum_ms` says the least; a pacing profile that does not exist or leaves D9's bounds. |
-| `not_available_yet` | `extract`, the cache and `robots: enforce` arrive with M11. |
+| `not_available_yet` | `extract`, the cache and `robots: enforce` arrive with M11; `crawl` jobs with M10. |
+| `job_not_found` | `404`: no such job among those this key made. |
+| `idempotency_key_reused` | `409`: the `Idempotency-Key` made another job within the last day; `job_id` names it. |
+| `webhook_origin_not_allowed` | `422`: the webhook's receiver is not in `webhooks.allowed_origins`. |
+| `driver_input_denied` | `422`: a flow step with `human: false` on a site whose policy does not have `driver_input: true`. |
 | `session_not_found`, `session_persona_conflict`, `no_matching_persona` | Sessions (above). |
 | `unavailable` | `503`: no proxy pool is configured, or the server is stopping. |
 | `internal` | `500`. The cause is in the log under `request_id`, never in the answer. |

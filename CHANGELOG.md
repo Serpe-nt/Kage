@@ -8,6 +8,44 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- M9, jobs and webhooks:
+  - `POST /v1/jobs` with `batch` and `flow` jobs, accepted whole or not at
+    all, with `Idempotency-Key` for a day; `GET /v1/jobs/{id}`,
+    `GET /v1/jobs/{id}/items` (paginated, each item with its result) and
+    `POST /v1/jobs/{id}/cancel` (cooperative: the page under way is
+    finished, nothing more is begun). A worker claims jobs with
+    `SELECT ... FOR UPDATE SKIP LOCKED` under a lease, and a job whose
+    worker stopped is taken up again where its items stand.
+  - A batch has one visitor per site: one persona reads the site's pages
+    in order and another takes over only when it cannot go on. `visitors`
+    asks for more, up to the pacing's `domain_concurrency`. An item that
+    cannot be attempted now waits instead of failing, and a job whose
+    every remaining item waits is `paused` until the time the scheduler
+    named, for at most `jobs.max_age`.
+  - A flow is one browser attempt of one persona, always paced like a
+    person (sidecar contract 1.2.0: a dwell on every page it arrives on, a
+    thinking time before every action). Its steps are items, each capture
+    a result of its own. Every `goto` passes the SSRF guard at acceptance
+    and everything a flow visited is checked afterwards. `human: false`
+    steps need the site policy's new `driver_input`.
+  - Webhooks: `job.completed`, `job.failed` and `job.progress` as thin
+    events signed with HMAC-SHA-256 over `<timestamp>.<body>`
+    (`X-Kage-Signature`), to receivers the operator listed
+    (`webhooks.allowed_origins`, none by default; `webhooks.private_origins`
+    for those on the operator's own network), tried again five times on a
+    jittered schedule, with a delivery log on the job.
+  - A synchronous fetch that outlasts its wall time is carried on as a job
+    of one item under its own request id (F35): the `202` has a `job_id`,
+    and the result is reachable after a restart of the server.
+  - `POST /v1/admin/purge` deletes what a key fetched before its retention
+    ends, on the audit log (F33); finished jobs are deleted after
+    `jobs.retention_days`.
+  - Metrics for jobs, their items and webhook deliveries (spec §20).
+  - `tests/e2e/jobs.sh`: a batch of 50 pages, a flow in each engine, a
+    cancel, the webhook's signature at a receiver, a fetch carried across
+    a restart, and the purge, on the compose stack; the TypeScript test
+    client drives the jobs.
+
 - M8, the public API v1 and the admin API:
   - `POST /v1/fetch` over the pipeline of M7: one page fetched while the
     caller waits, answered `200` with its result whatever the site did (a
@@ -297,6 +335,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The forwarding headers (`X-Forwarded-For`, `Forwarded`, `X-Real-IP`,
+  `True-Client-IP`, `X-Client-IP`, `CF-Connecting-IP` and the rest of the
+  family) are on the caller-header denylist (F34).
+- A flow's `back` and `wait_for url` no longer hang when the page comes
+  back from the browser's cache, and a capture after `back` reports the
+  page that came back (F21). A driver `back` with no history fails.
+- `job_items.request_id` is no longer a foreign key (migration 0013).
 - `server.bind` is `127.0.0.1:8080` unless set (was `0.0.0.0:8080`): the
   API listens on loopback by default (spec §19). The compose file sets
   `0.0.0.0:8080` inside the container and publishes the port on the host's
