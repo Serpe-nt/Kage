@@ -107,6 +107,11 @@ define_id!(
     FrontierId
 );
 define_id!(
+    /// Identifies a [`WebhookDelivery`](crate::domain::WebhookDelivery): one
+    /// event of a job on its way to the webhook the job names.
+    WebhookDeliveryId
+);
+define_id!(
     /// Identifies an [`AuditEvent`](crate::domain::AuditEvent).
     AuditEventId
 );

@@ -30,6 +30,7 @@ use crate::secret::Secret;
 use crate::urlnorm::NormalizeOptions;
 
 mod http;
+mod jobs;
 mod personas;
 mod proxies;
 mod scheduler;
@@ -40,6 +41,7 @@ pub use http::{
     HttpSelftestConfig, MAX_REDIRECTS_LIMIT, MAX_SELFTEST_PAGES, MAX_SUBRESOURCE_CONCURRENCY,
     SelftestConfig, SelftestPageConfig, SelftestPageKind, SubresourceScope, SubresourcesConfig,
 };
+pub use jobs::{JobsConfig, MAX_JOB_ITEMS, MAX_WEBHOOK_RETRIES, WebhooksConfig, origin_of};
 pub use personas::{
     ActiveHoursConfig, ClockTime, DelayRange, GapConfig, InvalidClockTime, LANGUAGE_PLACEHOLDER,
     MAX_WARMUP_SITES, MAX_WARMUP_VISITS, PersonasConfig, SessionsConfig, VisitRange, WarmupConfig,
@@ -414,6 +416,12 @@ pub struct Config {
     /// The forwarder every persona's traffic leaves through.
     #[serde(default)]
     pub forwarder: ForwarderConfig,
+    /// Jobs: batches and flows worked in the background.
+    #[serde(default)]
+    pub jobs: JobsConfig,
+    /// Webhooks: where and how a job's events are delivered.
+    #[serde(default)]
+    pub webhooks: WebhooksConfig,
     /// The policy files.
     #[serde(default)]
     pub policies: PoliciesConfig,
@@ -587,6 +595,7 @@ impl Config {
             self.sidecar.timeout.get(),
         )
         .map_err(ConfigError::Invalid)?;
+        jobs::validate(&self.jobs, &self.webhooks).map_err(ConfigError::Invalid)?;
         match self.proxies.provider {
             ProviderChoice::Webshare if self.webshare.api_key.is_none() => {
                 return Err(ConfigError::MissingSecrets(vec!["KAGE__WEBSHARE__API_KEY"]));

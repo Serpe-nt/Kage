@@ -27,7 +27,10 @@ pub use fetch::{
     Timing, redact_set_cookie,
 };
 pub use health::{BreakerState, DomainBreaker, HealthEvent, SelftestRun, SubjectKind};
-pub use job::{FrontierEntry, FrontierState, Job, JobItem, JobItemState, JobKind, JobState};
+pub use job::{
+    DeliveryState, FrontierEntry, FrontierState, Job, JobItem, JobItemState, JobKind, JobOrigin,
+    JobState, WebhookAttempt, WebhookDelivery, WebhookEvent,
+};
 pub use persona::{CoolingReason, Geolocation, Persona, PersonaDomainState, PersonaState, Screen};
 pub use proxy::{
     GeoRecord, HealthFailure, Proxy, ProxyEndpoint, ProxyHealth, ProxyProviderKind,

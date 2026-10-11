@@ -468,6 +468,54 @@ forwarder:
   idle_timeout: 10m
   max_connections: 4096
 
+# Jobs (spec §16.6): batches and flows worked in the background.
+jobs:
+  # Most items one job may have.
+  max_items: 10000
+  # Jobs worked at once; the others wait in the order they came.
+  max_running: 8
+  # Items of all jobs that wait in the scheduler or are being fetched at
+  # once. The scheduler's own caps still decide what leaves.
+  max_items_in_flight: 24
+  # How long after it was accepted a job stops waiting for a paused site,
+  # a sleeping persona or the bandwidth term: the items left then fail with
+  # what they were waiting for.
+  max_age: 7d
+  # Days a finished job, its items and their results are kept.
+  retention_days: 14
+  # How long a worker's claim on a job holds without being renewed. A job
+  # whose worker stopped is taken up again after this long.
+  lease: 1m
+  # How often the worker looks for jobs to take up.
+  poll_interval: 2s
+  # How long an Idempotency-Key names the job it made.
+  idempotency_ttl: 1d
+
+# Webhooks (spec §16.6): a job's events, posted to the receiver it names.
+# They leave from this host's own address, never through a proxy.
+webhooks:
+  # The only receivers a job may name, each an origin (scheme://host[:port]).
+  # Empty: no job may have a webhook. The host's own address posts to nothing
+  # that is not listed here.
+  allowed_origins: []
+  # Those of allowed_origins that sit on your own network (the compose
+  # network, the LAN, this host) and may resolve to a private or loopback
+  # address, which the SSRF guard refuses for every other receiver.
+  private_origins: []
+  # How long one delivery attempt may take.
+  timeout: 10s
+  # Retries after the first attempt, each wait backoff_factor times the one
+  # before: 30s, 2m, 8m, 32m, 2h 8m.
+  max_retries: 5
+  first_retry: 30s
+  backoff_factor: 4
+  # The share by which a wait is moved either way.
+  jitter: 0.2
+  # The longest a receiver's Retry-After is honoured for.
+  max_retry_after: 1h
+  # How often the sender looks for events that are due.
+  poll_interval: 1s
+
 policies:
   # Directory with domains.yaml, block-signatures.yaml, pacing-profiles.yaml.
   dir: policies
