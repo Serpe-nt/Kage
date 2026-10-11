@@ -673,8 +673,38 @@ default and `visitors` is the caller's trade. Real Chrome clicks 0.95 to
 1.19 s after a load and a constant 1.2 s after every click without
 pacing; paced, the first click comes about 6 s after the load and the
 quiet time after a click is 1.8 to 2.4 s and never the same. `goBack`
-with `load` hangs 8 s on Chrome; with `commit` it returns in 11 ms. No
-live check was run and no real site was touched.
+with `load` hangs 8 s on Chrome; with `commit` it returns in 11 ms.
+
+**Live check (2026-10-11, `m9-live-handover.md`, merged as four commits
+ending `47f7738`).** Jobs ran against the real pool for the first time,
+against the two allowed detection pages only, with the shipped `human`
+profile and `active_hours: ignore` for those two hosts (it was 23:00 in
+the pool's countries and a job never wakes a persona). Four of five steps
+passed: a sync fetch per engine, a batch of four read by one visitor per
+site in 171 s, three webhooks signed and verified at a loopback receiver
+with the first retry after 33.1 s, and an overflowed fetch carried across
+a server restart under its request id (the cut attempt unrecorded and the
+page fetched twice: F39, seen live). The Firefox flow failed at its human
+`scroll`: a scroll on a page too long for its step time was failed by
+that time after finishing its flick and rest (Chrome passed by 74 ms,
+Firefox missed by 2 ms). Fixed in the sidecar without a contract change:
+the scrolling ends two seconds before the step's time and sits out no
+rest past it, so a tall page is scrolled as far as the time allows and
+the step succeeds (spec §10.5). The fix is verified in both real browsers
+without keys; **the two flows have not been rerun against the real pages
+yet** (a smaller keyed run, `KAGE_LIVE_JOBS_ONLY=flows`, waits for the
+owner's word in the M9 session). Measured: a tall page takes 46 to 107 s
+under the shipped behaviour (53 wheel notches, dwell 5 to 7 s), so the
+default 60 s attempt budget would have cut the Chrome fetch (F44); the
+next page of a sitting begins 0.1 s after the persona left the one before,
+because the profile's gap is start-to-start and a minute's read uses it
+up (F43); eleven page loads cost 1.59 MB through the forwarder, about
+145 kB a page, and Webshare's own counter moved 1.79 MB because the
+health probes and geo lookups of twenty proxies do not pass the
+forwarder; four of twenty personas were used, because the scheduler kept
+each page with the persona that had read its site. Still never exercised
+live: a replacement, a blocked page inside a job, a job paused for a
+closed site, a webhook to a public receiver, the http path (F30).
 
 **Follow-ups closed by M9.** F21 (`goBack` on commit, the sidecar's own
 look at the address, `wait_for url` with its own matcher), F33 (the purge),
@@ -705,6 +735,24 @@ overflow as a job).
   the secret; a base64url secret may contain or end in `_`, so about 3 %
   of runs fail. Take everything after the second underscore
   (`token.splitn(3, '_').nth(2)`).
+- **F43 (M10, with F28, consult first):** a hand's rest between leaving a
+  page and asking for the next one of the same sitting. The profile's gap
+  (median 4.5 s, floor 1.5 s) is start-to-start, so after a long read the
+  next typed navigation leaves 0.1 s after the last; a person who has
+  finished reading still takes a moment to type or to find the link. A
+  seeded thinking time after the dwell (the flow pacer already draws one
+  between steps), never counted against the gap. F28's click on the open
+  page gets the same thinking time before the click.
+- **F44 (M10, consult first):** the attempt budget against the shipped
+  behaviour. `timeout_ms` (60 s by default) covers the load and the whole
+  visit of the page, and a tall page under `human` takes up to 107 s, so
+  the default cuts it with `timeout`, the retry goes to another persona
+  and the site sees the page twice for nothing. Options to weigh: the
+  behaviour's time separate from the load's (`timeout_ms` for the load, a
+  policy `max_dwell` for the visit); or the budget derived from the depth
+  asked; or a higher default with the runbook saying that a tall page
+  takes far longer than the table's median. A crawl of a real site meets
+  tall pages constantly, so M10 decides this before its first crawl.
 - **F37 stands** (M12): the webhook sender uses the system resolver;
   `hickory-resolver` is still pinned and unused.
 
@@ -724,7 +772,11 @@ normalization in `kage-core`, and the `crawl` job type on top of what M9
 built; it does not build a second worker. F28 (a click on a link of the
 open page as the way from one page to the next in the browser, so that a
 crawl looks like reading; its contract addition is 1.3.0 now that M9 took
-1.2.0) is M10's. F38 and F42 are M10's first commits.
+1.2.0) is M10's, and so are F43 (the rest before the next page) and F44
+(the attempt budget on a tall page), both decided with the planner before
+the crawler is built, because a crawl of a real site is a long sitting of
+typed or clicked pages, many of them tall. F38 and F42 are M10's first
+commits. Read `m9-live-handover.md` for what the real pool showed.
 
 **Deliverables**
 - Frontier, sitemap discovery and parsing, allow/deny, depth, caps,
