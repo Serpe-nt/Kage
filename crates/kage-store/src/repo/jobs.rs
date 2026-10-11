@@ -230,6 +230,36 @@ impl JobRepo<'_> {
         items: &[JobItem],
         now: DateTime<Utc>,
     ) -> Result<Created, StoreError> {
+        self.create_with(job, items, now, None).await
+    }
+
+    /// Stores a new job that a worker holds from its first moment, under a
+    /// lease until `lease_until`: a fetch that is under way in that worker
+    /// and is carried on as a job. No other worker claims it while the
+    /// lease is renewed.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::create`].
+    pub async fn create_leased(
+        &self,
+        job: &Job,
+        items: &[JobItem],
+        now: DateTime<Utc>,
+        worker: Uuid,
+        lease_until: DateTime<Utc>,
+    ) -> Result<Created, StoreError> {
+        self.create_with(job, items, now, Some((worker, lease_until)))
+            .await
+    }
+
+    async fn create_with(
+        &self,
+        job: &Job,
+        items: &[JobItem],
+        now: DateTime<Utc>,
+        lease: Option<(Uuid, DateTime<Utc>)>,
+    ) -> Result<Created, StoreError> {
         const TABLE: &str = "jobs";
         let mut transaction = self.pool.begin().await?;
         if let Some(key) = &job.idempotency_key {
@@ -250,9 +280,10 @@ impl JobRepo<'_> {
                                idempotency_hash, idempotency_until, origin, webhook_url,
                                webhook_secret, items_total, items_succeeded, items_failed,
                                items_cancelled, cancel_requested, error, deadline, paused_until,
-                               paused_reason, created_at, started_at, finished_at)
+                               paused_reason, created_at, started_at, finished_at, worker,
+                               lease_until)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-                     $18, $19, $20, $21, $22, $23)
+                     $18, $19, $20, $21, $22, $23, $24, $25)
              ON CONFLICT (api_key_id, idempotency_key) DO NOTHING",
             job.id.as_uuid(),
             job.api_key_id.as_uuid(),
@@ -277,6 +308,8 @@ impl JobRepo<'_> {
             job.created_at,
             job.started_at,
             job.finished_at,
+            lease.map(|(worker, _)| worker),
+            lease.map(|(_, until)| until),
         )
         .execute(&mut *transaction)
         .await?;
@@ -636,7 +669,7 @@ impl JobRepo<'_> {
     /// with their items, the requests of their items and what those kept:
     /// results, attempts, artifact rows and deliveries. The artifact files
     /// go with the artifact store's next sweep of orphans. Returns how many
-    /// jobs were deleted.
+    /// jobs, requests and artifact rows were deleted.
     ///
     /// # Errors
     ///
@@ -645,9 +678,9 @@ impl JobRepo<'_> {
         &self,
         before: DateTime<Utc>,
         api_key_id: Option<ApiKeyId>,
-    ) -> Result<u64, StoreError> {
+    ) -> Result<Deleted, StoreError> {
         let key = api_key_id.map(|id| id.as_uuid());
-        let mut deleted = 0;
+        let mut deleted = Deleted::default();
         loop {
             let mut transaction = self.pool.begin().await?;
             let ids: Vec<Uuid> = sqlx::query_scalar!(
@@ -669,20 +702,38 @@ impl JobRepo<'_> {
             }
             // The artifact rows point at requests with SET NULL: they are
             // removed by name, or nobody could read or purge them later.
-            sqlx::query!(
+            deleted.artifacts += sqlx::query!(
                 "DELETE FROM artifacts WHERE request_id IN (
                      SELECT id FROM requests WHERE job_id = ANY($1))",
                 &ids,
             )
             .execute(&mut *transaction)
-            .await?;
-            let done = sqlx::query!("DELETE FROM jobs WHERE id = ANY($1)", &ids)
+            .await?
+            .rows_affected();
+            // The requests go with their job; they are deleted by name so
+            // that they are counted.
+            deleted.requests += sqlx::query!("DELETE FROM requests WHERE job_id = ANY($1)", &ids)
                 .execute(&mut *transaction)
-                .await?;
+                .await?
+                .rows_affected();
+            deleted.jobs += sqlx::query!("DELETE FROM jobs WHERE id = ANY($1)", &ids)
+                .execute(&mut *transaction)
+                .await?
+                .rows_affected();
             transaction.commit().await?;
-            deleted += done.rows_affected();
         }
     }
+}
+
+/// What a deletion removed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Deleted {
+    /// Jobs, with their items and deliveries.
+    pub jobs: u64,
+    /// Requests, with their attempts and results.
+    pub requests: u64,
+    /// Rows of artifacts; their files go with the next sweep of orphans.
+    pub artifacts: u64,
 }
 
 repository!(

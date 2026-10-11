@@ -18,7 +18,7 @@ use kage_core::domain::{
 use kage_core::ids::{ApiKeyId, ArtifactId, JobId, JobItemId, ResultId, WebhookDeliveryId};
 use kage_core::outcome::Outcome;
 use kage_store::Store;
-use kage_store::repo::{AttemptEnd, Created, Tally};
+use kage_store::repo::{AttemptEnd, Created, Deleted, Tally};
 use uuid::Uuid;
 
 fn job(api_key_id: ApiKeyId, created_at: DateTime<Utc>, items: u32) -> Job {
@@ -903,7 +903,7 @@ async fn retention_and_the_purge_delete_a_keys_results_with_what_they_kept() {
     assert_eq!(
         db.store
             .requests()
-            .delete_before(cutoff, Some(key.id))
+            .delete_before(cutoff, Some(key.id), false)
             .await
             .unwrap(),
         (1, 1)
@@ -920,9 +920,14 @@ async fn retention_and_the_purge_delete_a_keys_results_with_what_they_kept() {
 
     // Finished jobs before the moment go with everything of theirs; a job
     // that still runs stays, however old.
+    let one_job = Deleted {
+        jobs: 1,
+        requests: 1,
+        artifacts: 1,
+    };
     assert_eq!(
         db.store.jobs().delete_finished(cutoff, None).await.unwrap(),
-        1
+        one_job
     );
     assert_eq!(db.store.jobs().get(ended_old.id).await.unwrap(), None);
     assert!(db.store.jobs().get(ended_new.id).await.unwrap().is_some());
@@ -937,7 +942,7 @@ async fn retention_and_the_purge_delete_a_keys_results_with_what_they_kept() {
     assert_eq!(
         db.store
             .requests()
-            .delete_before(cutoff, None)
+            .delete_before(cutoff, None, false)
             .await
             .unwrap(),
         (1, 1)
@@ -951,7 +956,7 @@ async fn retention_and_the_purge_delete_a_keys_results_with_what_they_kept() {
             .delete_finished(everything, Some(other.id))
             .await
             .unwrap(),
-        0
+        Deleted::default()
     );
     assert_eq!(
         db.store
@@ -959,12 +964,12 @@ async fn retention_and_the_purge_delete_a_keys_results_with_what_they_kept() {
             .delete_finished(everything, Some(key.id))
             .await
             .unwrap(),
-        1
+        one_job
     );
     assert_eq!(
         db.store
             .requests()
-            .delete_before(everything, Some(key.id))
+            .delete_before(everything, Some(key.id), false)
             .await
             .unwrap(),
         (1, 1)
@@ -973,6 +978,80 @@ async fn retention_and_the_purge_delete_a_keys_results_with_what_they_kept() {
     assert_eq!(count(&db.store, "jobs").await, 1);
     assert_eq!(count(&db.store, "requests").await, 1);
     assert_eq!(count(&db.store, "artifacts").await, 1);
+
+    // A purge takes the results a running job has so far as well, but
+    // never the request one of its items waits on, and never one that has
+    // not ended: both are still somebody's work.
+    let open = db
+        .store
+        .job_items()
+        .open(running.id)
+        .await
+        .unwrap()
+        .remove(0);
+    let mut waited_on = common::request(Some(key.id));
+    waited_on.created_at = old;
+    waited_on.job_id = Some(running.id);
+    db.store.requests().insert(&waited_on).await.unwrap();
+    assert!(
+        db.store
+            .job_items()
+            .start(open.id, Some(waited_on.id), start)
+            .await
+            .unwrap()
+    );
+    let mut under_way = common::request(Some(key.id));
+    under_way.created_at = start;
+    db.store.requests().insert(&under_way).await.unwrap();
+    assert_eq!(
+        db.store
+            .requests()
+            .delete_before(everything, Some(key.id), true)
+            .await
+            .unwrap(),
+        (1, 1)
+    );
+    assert!(db.store.jobs().get(running.id).await.unwrap().is_some());
+    for kept in [waited_on.id, under_way.id] {
+        assert!(db.store.requests().get(kept).await.unwrap().is_some());
+    }
+    // A request that never ended is nobody's a day later; the one an item
+    // waits on stays as long as the item is open.
+    assert_eq!(
+        db.store
+            .requests()
+            .delete_before(everything + Duration::days(2), Some(key.id), true)
+            .await
+            .unwrap(),
+        (1, 0)
+    );
+    assert_eq!(db.store.requests().get(under_way.id).await.unwrap(), None);
+    assert!(
+        db.store
+            .requests()
+            .get(waited_on.id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    // An item may name a request that is not there (yet, or any more).
+    let gone = kage_core::ids::RequestId::new();
+    assert!(
+        db.store
+            .job_items()
+            .start(open.id, Some(gone), start)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        db.store
+            .job_items()
+            .find_by_request(gone)
+            .await
+            .unwrap()
+            .map(|item| item.id),
+        Some(open.id)
+    );
 }
 
 #[tokio::test]

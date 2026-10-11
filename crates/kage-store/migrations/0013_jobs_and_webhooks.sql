@@ -47,6 +47,14 @@ ALTER TABLE job_items
 
 CREATE INDEX job_items_running_idx ON job_items (job_id) WHERE state = 'running';
 
+-- An item names the request that carries it out before that request is
+-- written: a worker that stops between the two finds the item again and
+-- begins the request under the id it wrote down, instead of a second one.
+-- The id is therefore no reference any more; a request that was deleted
+-- (retention, a purge) leaves an item whose result is gone.
+ALTER TABLE job_items DROP CONSTRAINT job_items_request_id_fkey;
+CREATE INDEX job_items_request_idx ON job_items (request_id) WHERE request_id IS NOT NULL;
+
 -- One row per event of a job on its way to the job's webhook. Pending
 -- rows are claimed with SELECT ... FOR UPDATE SKIP LOCKED and survive a
 -- restart.

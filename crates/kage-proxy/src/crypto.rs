@@ -16,6 +16,11 @@
 //! the field it holds, so a ciphertext copied into another row, or from the
 //! password column into the user name column, does not open.
 //!
+//! The same cipher seals other secrets Kage keeps for somebody (the secret
+//! a job's webhook is signed with): [`CredentialCipher::seal_bound`] takes
+//! the associated data from its caller, who names what the value belongs
+//! to.
+//!
 //! Losing the master key makes the stored credentials unreadable. The pool
 //! recovers by itself: the next sync with the provider finds that the stored
 //! values no longer open and seals the provider's credentials again under
@@ -131,15 +136,27 @@ impl CredentialCipher {
         field: CredentialField,
         plaintext: &str,
     ) -> Result<SealedSecret, CryptoError> {
+        self.seal_bound(&associated_data(proxy, field), plaintext)
+    }
+
+    /// Encrypts a secret that belongs to whatever `binding` names: the
+    /// associated data, which the value will only open under again. A
+    /// caller writes it as a label of its own and the id of the row, for
+    /// example `kage:webhook-secret:v1:` and a job's id.
+    ///
+    /// # Errors
+    ///
+    /// [`CryptoError::Random`] when no nonce could be drawn.
+    pub fn seal_bound(&self, binding: &[u8], plaintext: &str) -> Result<SealedSecret, CryptoError> {
         let nonce = XNonce::try_generate().map_err(|_| CryptoError::Random)?;
-        let aad = associated_data(proxy, field);
+        let aad = binding;
         let ciphertext = self
             .cipher
             .encrypt(
                 &nonce,
                 Payload {
                     msg: plaintext.as_bytes(),
-                    aad: &aad,
+                    aad,
                 },
             )
             // Encryption fails only for inputs beyond the cipher's length
@@ -165,6 +182,17 @@ impl CredentialCipher {
         field: CredentialField,
         sealed: &SealedSecret,
     ) -> Result<Secret, CryptoError> {
+        self.open_bound(&associated_data(proxy, field), sealed)
+    }
+
+    /// Decrypts a secret sealed with [`Self::seal_bound`] under the same
+    /// `binding`.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the value is malformed, was sealed under another key, was
+    /// altered, or belongs to something else.
+    pub fn open_bound(&self, binding: &[u8], sealed: &SealedSecret) -> Result<Secret, CryptoError> {
         let bytes = sealed.as_bytes();
         let (&version, rest) = bytes.split_first().ok_or(CryptoError::Malformed)?;
         if version != VERSION {
@@ -175,14 +203,13 @@ impl CredentialCipher {
         }
         let (nonce, ciphertext) = rest.split_at(NONCE_BYTES);
         let nonce = XNonce::try_from(nonce).map_err(|_| CryptoError::Malformed)?;
-        let aad = associated_data(proxy, field);
         let plaintext = Zeroizing::new(
             self.cipher
                 .decrypt(
                     &nonce,
                     Payload {
                         msg: ciphertext,
-                        aad: &aad,
+                        aad: binding,
                     },
                 )
                 .map_err(|_| CryptoError::Rejected)?,
@@ -212,6 +239,53 @@ mod tests {
 
     fn cipher() -> CredentialCipher {
         CredentialCipher::new(&KEY)
+    }
+
+    #[test]
+    fn a_secret_bound_to_something_else_opens_only_under_that_binding() {
+        let cipher = cipher();
+        let job = b"kage:webhook-secret:v1:0199c1f2-6b7a-7c3e-9d41-2f8a5b6c7d8e";
+
+        let sealed = cipher.seal_bound(job, "whsec-0123456789abcdef").unwrap();
+
+        assert_eq!(
+            cipher.open_bound(job, &sealed).unwrap().expose(),
+            "whsec-0123456789abcdef"
+        );
+        // Another row, another label, another key: none opens it.
+        let other = b"kage:webhook-secret:v1:0199c1f2-6b7a-7c3e-9d41-000000000000";
+        assert_eq!(
+            cipher.open_bound(other, &sealed).unwrap_err(),
+            CryptoError::Rejected
+        );
+        assert_eq!(
+            cipher
+                .open(ProxyId::new(), CredentialField::Password, &sealed)
+                .unwrap_err(),
+            CryptoError::Rejected
+        );
+        assert_eq!(
+            CredentialCipher::new(&[8; 32])
+                .open_bound(job, &sealed)
+                .unwrap_err(),
+            CryptoError::Rejected
+        );
+        // And a proxy's credential does not open as something else.
+        let proxy = ProxyId::new();
+        let credential = cipher
+            .seal(proxy, CredentialField::Password, "hunter2")
+            .unwrap();
+        assert_eq!(
+            cipher.open_bound(job, &credential).unwrap_err(),
+            CryptoError::Rejected
+        );
+        assert_eq!(
+            cipher
+                .open(proxy, CredentialField::Password, &credential)
+                .unwrap()
+                .expose(),
+            "hunter2"
+        );
     }
 
     #[test]

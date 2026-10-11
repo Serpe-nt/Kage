@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id FROM requests\n                 WHERE created_at < $1\n                   AND ($2::uuid IS NULL OR api_key_id = $2)\n                   AND ($3 OR job_id IS NULL)\n                   AND (finished_at IS NOT NULL OR created_at < $1 - interval '1 day')\n                   AND NOT EXISTS (\n                       SELECT 1 FROM job_items\n                       WHERE job_items.request_id = requests.id\n                         AND job_items.state IN ('queued', 'running'))\n                 ORDER BY created_at\n                 LIMIT 500\n                 FOR UPDATE SKIP LOCKED",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "requests",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Uuid",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a96695c732004b94d350fa4c48a8f578f334a742b4a0de68f120e378df550e9d"
+}

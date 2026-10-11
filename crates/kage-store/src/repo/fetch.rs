@@ -165,11 +165,15 @@ impl RequestRepo<'_> {
         Ok(done.rows_affected() == 1)
     }
 
-    /// Deletes the requests that are not part of a job and were accepted
-    /// before `before`, of one key or of all, with their attempts, their
-    /// results and the rows of what they kept. The artifact files go with
-    /// the artifact store's next sweep of orphans. Returns how many
-    /// requests and how many artifact rows were deleted.
+    /// Deletes the requests that were accepted before `before`, of one key
+    /// or of all, with their attempts, their results and the rows of what
+    /// they kept: those that are no job's, and with `of_jobs` also those
+    /// of jobs that have not been deleted (a job that goes takes its
+    /// requests along). A request that has not ended is left unless it is
+    /// a day older than `before`, and the request an open item of a job
+    /// waits on is always left: both are still somebody's work. The
+    /// artifact files go with the artifact store's next sweep of orphans.
+    /// Returns how many requests and how many artifact rows were deleted.
     ///
     /// # Errors
     ///
@@ -178,6 +182,7 @@ impl RequestRepo<'_> {
         &self,
         before: DateTime<Utc>,
         api_key_id: Option<ApiKeyId>,
+        of_jobs: bool,
     ) -> Result<(u64, u64), StoreError> {
         let key = api_key_id.map(|id| id.as_uuid());
         let (mut requests, mut artifacts) = (0, 0);
@@ -185,13 +190,20 @@ impl RequestRepo<'_> {
             let mut transaction = self.pool.begin().await?;
             let ids: Vec<Uuid> = sqlx::query_scalar!(
                 "SELECT id FROM requests
-                 WHERE job_id IS NULL AND created_at < $1
+                 WHERE created_at < $1
                    AND ($2::uuid IS NULL OR api_key_id = $2)
+                   AND ($3 OR job_id IS NULL)
+                   AND (finished_at IS NOT NULL OR created_at < $1 - interval '1 day')
+                   AND NOT EXISTS (
+                       SELECT 1 FROM job_items
+                       WHERE job_items.request_id = requests.id
+                         AND job_items.state IN ('queued', 'running'))
                  ORDER BY created_at
                  LIMIT 500
                  FOR UPDATE SKIP LOCKED",
                 before,
                 key,
+                of_jobs,
             )
             .fetch_all(&mut *transaction)
             .await?;
