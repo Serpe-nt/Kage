@@ -277,6 +277,10 @@ pub struct DomainRule {
     /// When true, a request cannot choose its own behavior on a page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub behavior_locked: Option<bool>,
+    /// When true, a flow may ask for steps done by the browser's driver
+    /// (`human: false`), which a page can tell from a person's input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub driver_input: Option<bool>,
     /// Retries after the first attempt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retries: Option<u32>,
@@ -425,6 +429,10 @@ pub struct EffectivePolicy {
     pub min_dwell: HumanDuration,
     /// Whether requests may not choose their own behavior on a page.
     pub behavior_locked: bool,
+    /// Whether a flow may ask for steps done by the browser's driver
+    /// instead of the persona's mouse and keyboard. Off unless the
+    /// operator says that the site does not look.
+    pub driver_input: bool,
     /// Retries after the first attempt.
     pub retries: u32,
     /// Blocks per hour that pause the domain.
@@ -656,6 +664,7 @@ impl DomainPolicies {
                 .unwrap_or(HumanDuration::new(DEFAULT_MIN_DWELL)),
             behavior_locked: inherited(&rules, defaults, |rule| rule.behavior_locked)
                 .unwrap_or(false),
+            driver_input: inherited(&rules, defaults, |rule| rule.driver_input).unwrap_or(false),
             retries: inherited(&rules, defaults, |rule| rule.retries).unwrap_or(2),
             breaker_threshold: inherited(&rules, defaults, |rule| rule.breaker_threshold)
                 .unwrap_or(5),
@@ -1646,6 +1655,33 @@ defaults:
         let json = serde_json::to_value(&shop).unwrap();
         assert_eq!(json["min_dwell"], "6s");
         assert_eq!(json["behavior_locked"], true);
+    }
+
+    #[test]
+    fn driver_input_is_off_unless_a_policy_turns_it_on() {
+        assert!(
+            !DomainPolicies::default()
+                .resolve("example.org")
+                .driver_input
+        );
+
+        let policies = DomainPolicies::from_yaml(
+            "domains:\n  lenient.example:\n    driver_input: true\n  \
+             strict.lenient.example:\n    driver_input: false\n",
+        )
+        .unwrap();
+        assert!(policies.resolve("lenient.example").driver_input);
+        // It cascades like every field: a subdomain inherits it, and the
+        // nearest entry that sets it decides.
+        assert!(policies.resolve("api.lenient.example").driver_input);
+        assert!(!policies.resolve("strict.lenient.example").driver_input);
+        assert!(!policies.resolve("other.example").driver_input);
+        let everywhere = DomainPolicies::from_yaml("defaults:\n  driver_input: true\n").unwrap();
+        assert!(everywhere.resolve("example.org").driver_input);
+        assert_eq!(
+            serde_json::to_value(everywhere.resolve("example.org")).unwrap()["driver_input"],
+            true
+        );
     }
 
     #[test]

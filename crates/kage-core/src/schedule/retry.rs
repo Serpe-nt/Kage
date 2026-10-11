@@ -142,6 +142,37 @@ impl RequestProgress {
         }
     }
 
+    /// The same request taken up again after its attempts so far were
+    /// made by a process that stopped: every earlier attempt counts toward
+    /// the retry budget, the personas that made them are not asked again,
+    /// the ones that were blocked stay blocked, and a request that had
+    /// moved to the browser stays there.
+    #[must_use]
+    pub fn resumed(
+        mut self,
+        earlier: impl IntoIterator<Item = (PersonaId, Render, Outcome)>,
+    ) -> Self {
+        for (persona, render, outcome) in earlier {
+            self.attempts = self.attempts.saturating_add(1);
+            if !self.used.contains(&persona) {
+                self.used.push(persona);
+            }
+            if outcome.is_block() && !self.blocked.contains(&persona) {
+                self.blocked.push(persona);
+            }
+            if render == Render::Browser && self.render == Render::Http {
+                self.escalated = true;
+                self.render = Render::Browser;
+            }
+        }
+        self
+    }
+
+    /// Whether another attempt may be made.
+    pub const fn attempts_left(&self) -> bool {
+        self.attempts < self.max_attempts
+    }
+
     /// The path of the next attempt.
     pub const fn render(&self) -> Render {
         self.render
@@ -429,6 +460,50 @@ mod tests {
         assert_eq!(request.used(), [a, b, c]);
         assert_eq!(request.blocked(), [a, b, c]);
         assert!(!request.escalated());
+    }
+
+    #[test]
+    fn a_request_that_is_taken_up_again_keeps_what_its_earlier_attempts_cost() {
+        let (first, second, third) = (PersonaId::new(), PersonaId::new(), PersonaId::new());
+        // Three attempts in all; two were made before the server stopped,
+        // the first of them blocked.
+        let progress = RequestProgress::new(RenderMode::Browser, Render::Browser, 2).resumed([
+            (first, Render::Browser, Outcome::Forbidden),
+            (second, Render::Browser, Outcome::Timeout),
+        ]);
+
+        assert_eq!(progress.attempts(), 2);
+        assert_eq!(progress.used(), [first, second]);
+        assert_eq!(progress.blocked(), [first]);
+        assert!(progress.attempts_left());
+        assert!(!progress.escalated());
+
+        // The one attempt that is left is the last.
+        let mut progress = progress;
+        let ruling = progress.record(third, verdict(Outcome::Forbidden));
+        assert_eq!(ruling.step, Step::Finish);
+        assert!(ruling.penalty.is_some());
+        assert!(!progress.attempts_left());
+
+        // A request that had moved to the browser stays there.
+        let moved = RequestProgress::new(RenderMode::Auto, Render::Http, 2).resumed([
+            (first, Render::Http, Outcome::ChallengeFailed),
+            (first, Render::Browser, Outcome::Timeout),
+        ]);
+        assert_eq!(moved.render(), Render::Browser);
+        assert!(moved.escalated());
+        assert_eq!(moved.used(), [first]);
+        assert_eq!(moved.blocked(), [first]);
+        // Nothing before: nothing changes.
+        let fresh = RequestProgress::new(RenderMode::Auto, Render::Http, 2);
+        assert_eq!(fresh.clone().resumed([]), fresh);
+        // A budget that is used up is used up.
+        let spent = RequestProgress::new(RenderMode::Browser, Render::Browser, 0).resumed([(
+            first,
+            Render::Browser,
+            Outcome::Timeout,
+        )]);
+        assert!(!spent.attempts_left());
     }
 
     #[test]

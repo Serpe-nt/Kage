@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use super::{
     Completion, Decision, Dispatch, DomainFacts, Held, PersonaView, Planner, PlannerRules, Refusal,
-    RetryPause, Work,
+    RetryPause, Visitors, Work,
 };
 use crate::domain::{BreakerState, CountryCode, DomainBreaker, Engine, PersonaDomainState, Render};
 use crate::ids::PersonaId;
@@ -153,6 +153,7 @@ fn work(domain: &str) -> Work {
         engines: Engine::ALL.to_vec(),
         countries: None,
         prefer_countries: Vec::new(),
+        visitors: None,
         pacing: brisk(),
         active_hours: ActiveHoursMode::Ignore,
         breaker_threshold: 5,
@@ -2379,4 +2380,268 @@ fn work_that_would_rather_be_refused_is_told_when_to_come_back() {
         }]
     );
     assert_eq!(planner.depth(Priority::Sync), 3);
+}
+
+// --- A job's visitors (spec §16.6, milestone M9) -------------------------
+
+/// A batch of `total` pages of one domain, worked the way the job worker
+/// works one: at most `max` of its pages wait in the scheduler at a time,
+/// and each names the personas that read the domain for the batch so far
+/// (the last `max` that got a page through).
+fn run_batch(sim: &mut Sim, domain: &str, total: usize, max: u32, until: DateTime<Utc>) {
+    let mut submitted = 0_usize;
+    sim.run_fed(until, Duration::minutes(10), |sim| {
+        let mut known: Vec<PersonaId> = Vec::new();
+        for (_, dispatch, outcome) in &sim.ended {
+            known.retain(|persona| *persona != dispatch.persona);
+            if dispatch.domain == domain && outcome.is_success() {
+                known.push(dispatch.persona);
+            }
+        }
+        let keep = usize::try_from(max).unwrap();
+        if known.len() > keep {
+            known.drain(..known.len() - keep);
+        }
+        let waiting = sim
+            .log
+            .len()
+            .saturating_sub(sim.ended.len())
+            .saturating_add(sim.planner.depth(Priority::Job));
+        if submitted < total && waiting < keep {
+            sim.submit(Work {
+                pacing: human(),
+                active_hours: ActiveHoursMode::Prefer,
+                visitors: Some(Visitors { known, max }),
+                ..work(domain)
+            });
+            submitted += 1;
+        }
+    });
+}
+
+#[test]
+fn a_batch_of_fifty_pages_of_one_site_is_one_visitor_reading_in_sittings() {
+    let mut sim = Sim::new(personas(20));
+    sim.takes = Box::new(browsing);
+    let start = noon();
+
+    run_batch(&mut sim, "example.org", 50, 1, start + Duration::hours(24));
+
+    // Every page was read, by one address, one at a time.
+    assert_eq!(sim.ended.len(), 50);
+    let readers: BTreeSet<PersonaId> = sim.log.iter().map(|(_, d)| d.persona).collect();
+    assert_eq!(readers.len(), 1);
+    for pair in sim.log.windows(2) {
+        assert!(pair[1].0 >= pair[0].0 + browsing(&pair[0].1));
+        // Each page waits for the slot the one before left it.
+        assert!(pair[1].0 >= pair[0].1.next_slot);
+    }
+    // In sittings: more than one visit, each ended by the long break, and
+    // the batch waited that break out instead of sending another address.
+    let visits = sim.log.iter().filter(|(_, d)| d.starts_visit).count();
+    assert!((2..=6).contains(&visits), "{visits} visits");
+    let longest = sim
+        .log
+        .windows(2)
+        .map(|pair| pair[1].0 - pair[0].0)
+        .max()
+        .unwrap();
+    assert!(longest > Duration::minutes(5), "{longest}");
+    // An hour or two, not ten minutes and not a day.
+    let took = sim.ended.last().unwrap().0 - start;
+    assert!(
+        took > Duration::minutes(25) && took < Duration::hours(8),
+        "{took}"
+    );
+}
+
+#[test]
+fn without_visitors_the_same_batch_is_dealt_out_to_several_addresses() {
+    // The planner as it was: what the visitors rule is there to prevent.
+    let mut sim = Sim::new(personas(20));
+    sim.takes = Box::new(browsing);
+    let mut submitted = 0;
+    sim.run_fed(noon() + Duration::hours(24), Duration::minutes(10), |sim| {
+        let waiting = sim.log.len() - sim.ended.len() + sim.planner.depth(Priority::Job);
+        if submitted < 50 && waiting < 1 {
+            sim.submit(Work {
+                pacing: human(),
+                active_hours: ActiveHoursMode::Prefer,
+                ..work("example.org")
+            });
+            submitted += 1;
+        }
+    });
+
+    assert_eq!(sim.ended.len(), 50);
+    let readers: BTreeSet<PersonaId> = sim.log.iter().map(|(_, d)| d.persona).collect();
+    assert!(readers.len() >= 2, "{}", readers.len());
+}
+
+#[test]
+fn a_batch_that_may_have_three_visitors_has_three_and_no_more() {
+    let mut sim = Sim::new(personas(20));
+    sim.takes = Box::new(browsing);
+    let start = noon();
+
+    run_batch(&mut sim, "example.org", 90, 3, start + Duration::hours(24));
+
+    assert_eq!(sim.ended.len(), 90);
+    let mut pages: BTreeMap<PersonaId, usize> = BTreeMap::new();
+    for (_, dispatch) in &sim.log {
+        *pages.entry(dispatch.persona).or_default() += 1;
+    }
+    // Three addresses share the list; a fourth may have read a page or two
+    // while the batch was still finding out who its visitors were.
+    let regulars = pages.values().filter(|count| **count >= 5).count();
+    assert_eq!(regulars, 3, "{pages:?}");
+    assert!(pages.len() <= 4, "{pages:?}");
+    // And it is quicker than one visitor would be.
+    let took = sim.ended.last().unwrap().0 - start;
+    assert!(took < Duration::hours(3), "{took}");
+}
+
+#[test]
+fn a_batch_takes_another_visitor_only_when_its_own_cannot_go_on() {
+    let mut sim = Sim::new(personas(20));
+    sim.takes = Box::new(browsing);
+    // The site turns the batch's first visitor away at its twelfth page.
+    let mut seen = 0;
+    sim.ends = Box::new(move |_, _| {
+        seen += 1;
+        if seen == 12 {
+            Outcome::Forbidden
+        } else {
+            Outcome::Ok
+        }
+    });
+    let start = noon();
+
+    run_batch(&mut sim, "example.org", 40, 1, start + Duration::hours(24));
+
+    // The blocked page was not retried here (the pipeline does that), so
+    // 39 pages were read and one was refused.
+    assert_eq!(sim.ended.len(), 40);
+    let first = sim.log[0].1.persona;
+    let blocked_at = sim.ended[11].0;
+    assert_eq!(sim.ended[11].1.persona, first);
+    assert!(sim.log[..12].iter().all(|(_, d)| d.persona == first));
+    // From then on another address reads, the same one to the end: the
+    // first is cooling for a day and is not waited for.
+    let second = sim.log[12].1.persona;
+    assert_ne!(second, first);
+    assert!(sim.log[12..].iter().all(|(_, d)| d.persona == second));
+    assert!(sim.log[12].1.starts_visit);
+    assert!(sim.log[12].0 - blocked_at < Duration::minutes(5));
+}
+
+#[test]
+fn a_visitor_at_its_daily_cap_is_replaced_and_a_sleeping_one_is_waited_for() {
+    // A cap of ten pages a day: the batch's visitor reads ten, another
+    // takes over, and nobody reads more than ten.
+    let mut sim = Sim::new(personas(20));
+    sim.takes = Box::new(|_| secs(20));
+    let capped = PacingProfile {
+        daily_cap_per_persona_per_domain: 10,
+        ..brisk()
+    };
+    let mut submitted = 0;
+    sim.run_fed(noon() + Duration::hours(6), Duration::minutes(10), |sim| {
+        let mut known: Vec<PersonaId> = Vec::new();
+        for (_, dispatch, _) in &sim.ended {
+            known.retain(|persona| *persona != dispatch.persona);
+            known.push(dispatch.persona);
+        }
+        if known.len() > 1 {
+            known.drain(..known.len() - 1);
+        }
+        let waiting = sim.log.len() - sim.ended.len() + sim.planner.depth(Priority::Job);
+        if submitted < 25 && waiting < 1 {
+            sim.submit(Work {
+                pacing: capped,
+                visitors: Some(Visitors { known, max: 1 }),
+                ..work("example.org")
+            });
+            submitted += 1;
+        }
+    });
+    assert_eq!(sim.ended.len(), 25);
+    let order: Vec<PersonaId> = sim.log.iter().map(|(_, d)| d.persona).collect();
+    assert!(order[..10].iter().all(|persona| *persona == order[0]));
+    assert!(order[10..20].iter().all(|persona| *persona == order[10]));
+    assert!(order[20..].iter().all(|persona| *persona == order[20]));
+    assert_eq!(
+        [order[0], order[10], order[20]]
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+            .len(),
+        3
+    );
+
+    // A batch that meets the night waits for its own visitor's morning.
+    let mut sim = Sim::new(personas(20));
+    sim.takes = Box::new(browsing);
+    // 21:30 in Berlin, and four hours of reading: longer than anybody
+    // stays up.
+    sim.now = Utc.with_ymd_and_hms(2026, 7, 14, 19, 30, 0).unwrap();
+    let evening = sim.now;
+    run_batch(
+        &mut sim,
+        "example.org",
+        160,
+        1,
+        evening + Duration::hours(40),
+    );
+    assert_eq!(sim.ended.len(), 160);
+    let readers: BTreeSet<PersonaId> = sim.log.iter().map(|(_, d)| d.persona).collect();
+    assert_eq!(readers.len(), 1);
+    // Nothing between its bedtime and its getting up.
+    let night = sim
+        .log
+        .windows(2)
+        .map(|pair| pair[1].0 - pair[0].0)
+        .max()
+        .unwrap();
+    assert!(night > Duration::hours(5), "{night}");
+    assert!(sim.log.iter().all(|(_, d)| !d.woken));
+}
+
+#[test]
+fn work_that_would_rather_be_refused_is_told_when_its_visitor_is_back() {
+    // The job worker does not hold a page in the scheduler for an hour: it
+    // asks to be refused past a few minutes, and is told when to come back.
+    let mut sim = Sim::new(personas(5));
+    sim.takes = Box::new(|_| secs(15));
+    run_batch(
+        &mut sim,
+        "example.org",
+        3,
+        1,
+        noon() + Duration::minutes(30),
+    );
+    let visitor = sim.log[0].1.persona;
+    // Its visitor cools for another reason than this batch? No: it sleeps.
+    // Put the clock at night and ask with a give-up time.
+    sim.now = Utc.with_ymd_and_hms(2026, 7, 15, 1, 0, 0).unwrap();
+    let ticket = sim.submit(Work {
+        pacing: human(),
+        active_hours: ActiveHoursMode::Prefer,
+        visitors: Some(Visitors {
+            known: vec![visitor],
+            max: 1,
+        }),
+        give_up_at: Some(sim.now + Duration::minutes(5)),
+        ..work("example.org")
+    });
+    sim.settle();
+
+    let (_, refused, reason, retry_at) = sim.refused.last().copied().unwrap();
+    assert_eq!((refused, reason), (ticket, Refusal::NoPersona));
+    // In the morning, when its own visitor is up: not before five o'clock
+    // and not after nine in Berlin.
+    let back = retry_at.unwrap();
+    assert!(back > sim.now + Duration::hours(3), "{back}");
+    assert!(back < sim.now + Duration::hours(8), "{back}");
+    // Nobody else was sent in its place.
+    assert_eq!(sim.log.len(), 3);
 }

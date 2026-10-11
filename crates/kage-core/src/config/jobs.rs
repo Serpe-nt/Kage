@@ -287,9 +287,7 @@ pub(super) fn validate(jobs: &JobsConfig, webhooks: &WebhooksConfig) -> Result<(
         }
     }
     for origin in &webhooks.private_origins {
-        let listed = Url::parse(origin)
-            .ok()
-            .is_some_and(|url| webhooks.allows(&url));
+        let listed = Url::parse(origin).is_ok_and(|url| webhooks.allows(&url));
         if !listed {
             return Err(format!(
                 "webhooks.private_origins: {origin:?} is not in webhooks.allowed_origins"
@@ -394,6 +392,8 @@ mod tests {
         assert_eq!(origin_of(&Url::parse("data:text/plain,x").unwrap()), None);
     }
 
+    // Every key of both sections, one refusal each.
+    #[allow(clippy::too_many_lines)]
     #[test]
     fn what_cannot_work_is_refused() {
         let jobs = JobsConfig::default();

@@ -43,6 +43,11 @@
 #   behavior_locked    true: requests cannot choose their own behavior; every
 #                      page gets the default (scroll to 0.6 to 0.9 of the
 #                      page, a human dwell)
+#   driver_input       true: a flow may ask for steps done by the driver of
+#                      the browser (human: false) instead of the mouse and
+#                      keyboard of the persona. A page can tell the two
+#                      apart, so this stays false unless the site is known
+#                      not to look.
 #   retries            retries after the first attempt, each on another persona
 #   breaker_threshold  blocks per hour, over all personas, that pause the domain
 #   breaker_pause      how long the domain stays paused
@@ -77,6 +82,7 @@ defaults:
   active_hours: prefer
   min_dwell: 2s
   behavior_locked: false
+  driver_input: false
   engines: [chromium, firefox]
   retries: 2
   breaker_threshold: 5

@@ -154,6 +154,17 @@ pub struct RetryPause {
     pub seed: Seed,
 }
 
+/// The personas that read a domain for one job, and how many it may have
+/// there (spec §16.6): a batch looks like one visitor per site unless its
+/// caller asked for more.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Visitors {
+    /// The personas that have been reading the domain for the job.
+    pub known: Vec<PersonaId>,
+    /// How many personas may read the domain for the job; at least one.
+    pub max: u32,
+}
+
 /// One attempt that waits for a persona.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Work {
@@ -176,6 +187,13 @@ pub struct Work {
     pub countries: Option<Vec<CountryCode>>,
     /// Countries the request would rather have.
     pub prefer_countries: Vec<CountryCode>,
+    /// The visitors of the job the work belongs to. While the job has as
+    /// many as it may have and they can go on, only they take its work,
+    /// and the work waits for them: through their gaps, their breaks and
+    /// their nights. A persona that is cooling for the domain, at its
+    /// daily cap or no longer ready does not count, and another takes its
+    /// place.
+    pub visitors: Option<Visitors>,
     /// The pacing profile in force, before a persona's own pace.
     pub pacing: PacingProfile,
     /// What the personas' days mean for the domain.
@@ -349,7 +367,8 @@ struct Flags {
 }
 
 /// A persona that could serve a request, and when.
-#[allow(clippy::struct_excessive_bools)] // Four independent facts.
+#[allow(clippy::struct_excessive_bools)] // Five independent facts.
+#[derive(Clone, Copy)]
 struct Possible<'a> {
     view: &'a PersonaView,
     /// When it could start; `None` while that hangs on something in flight.
@@ -362,6 +381,10 @@ struct Possible<'a> {
     /// Whether its slot on the domain opens just now: a start now is timed
     /// by its own pacing.
     paced: bool,
+    /// Whether it is kept from the domain for now: it cools after a block,
+    /// or reached its daily cap. A job's visitor that is barred is no
+    /// longer one the job waits for.
+    barred: bool,
 }
 
 /// See the module documentation.
@@ -725,6 +748,21 @@ impl Planner {
             return self.wait_or_give_up(work, only.at);
         }
 
+        // A job that has the visitors it may have on the domain stays with
+        // them; another persona comes only for one that cannot go on.
+        let possible = match &work.visitors {
+            Some(visitors) if !work.follow_up => {
+                let staying: Vec<Possible<'_>> = possible
+                    .iter()
+                    .filter(|one| visitors.known.contains(&one.view.id) && !one.barred)
+                    .copied()
+                    .collect();
+                let full = staying.len() >= usize::try_from(visitors.max.max(1)).unwrap_or(1);
+                if full { staying } else { possible }
+            }
+            _ => possible,
+        };
+
         // A persona that is visiting takes the work when its slot is open.
         let visitor = possible
             .iter()
@@ -861,13 +899,16 @@ impl Planner {
                 continue;
             }
             let mut at = now;
+            let mut barred = false;
             if let Some(state) = facts.states.get(&view.id) {
                 if let Some(until) = state.cooldown_until.filter(|until| *until > now) {
                     at = at.max(until);
+                    barred = true;
                 }
                 let today = place::local_day(now, &view.timezone);
                 if state.cap_reached(today, work.pacing.daily_cap_per_persona_per_domain) {
                     at = at.max(place::next_local_midnight(now, &view.timezone));
+                    barred = true;
                 }
             }
             if work.follow_up {
@@ -918,6 +959,7 @@ impl Planner {
                         let open_for = now.signed_duration_since(cadence.next_at);
                         open_for >= Duration::zero() && open_for < PACED_TOLERANCE
                     }),
+                barred: barred && !work.follow_up,
             });
         }
         possible
