@@ -1,0 +1,12 @@
+# A project of its own, on purpose: the sidecar's lockfile pins what the
+# browser engines run with, and a test client's tooling must not move it.
+packages:
+  - .
+
+# Exact pins everywhere: `pnpm add` writes the resolved version, no range.
+savePrefix: ''
+autoInstallPeers: false
+strictPeerDependencies: true
+
+# Refuse to resolve a version published less than a day ago.
+minimumReleaseAge: 1440

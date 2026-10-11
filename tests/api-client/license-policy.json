@@ -1,0 +1,22 @@
+{
+  "description": "License policy for every package in the dependency tree of the API test client. Checked by scripts/check-npm-licenses.mjs as part of `just deny`. Nothing of this tree is shipped: it is what CI validates the public API's OpenAPI document and generates its TypeScript client with.",
+  "allow": [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "0BSD",
+    "ISC",
+    "MPL-2.0",
+    "BlueOak-1.0.0",
+    "CC0-1.0",
+    "CC-BY-4.0",
+    "Python-2.0"
+  ],
+  "notes": {
+    "MIT ... CC-BY-4.0": "The allowlist of sidecar/license-policy.json.",
+    "Python-2.0": "Permissive (PSF license, OSI approved). argparse, reached from openapi-typescript through @redocly/openapi-core and js-yaml. A build-time tool of the test client only; in no image.",
+    "exceptions": "None."
+  },
+  "exceptions": []
+}

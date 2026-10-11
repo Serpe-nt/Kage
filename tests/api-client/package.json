@@ -1,0 +1,35 @@
+{
+  "name": "@kage/api-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The public API's OpenAPI document checked by a validator that is not Kage's, and a TypeScript client generated from it: the client the compose end-to-end test calls /v1/fetch with.",
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "packageManager": "pnpm@10.34.6+sha512.7e1ae66a83a9143c118cc1944f37cc4f2b8acddeda4b001cfa78908f6e46e45e15292739ca6c9d026426cc757e9318cc98c5551d6a16c165097b0028ba87b4e6",
+  "engines": {
+    "node": "24.x",
+    "pnpm": "10.x"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "typecheck": "tsc -p tsconfig.json",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "node --test \"dist/**/*.test.js\"",
+    "validate": "node dist/bin.js validate ../../crates/kage-api/openapi.json",
+    "generate": "node dist/bin.js generate ../../crates/kage-api/openapi.json src/schema.ts",
+    "check": "node dist/bin.js check ../../crates/kage-api/openapi.json src/schema.ts",
+    "e2e": "node dist/e2e.js"
+  },
+  "dependencies": {
+    "openapi-fetch": "0.17.0"
+  },
+  "devDependencies": {
+    "@seriousme/openapi-schema-validator": "2.11.0",
+    "@types/node": "24.19.1",
+    "openapi-typescript": "7.13.0",
+    "prettier": "3.9.9",
+    "typescript": "5.9.3"
+  }
+}

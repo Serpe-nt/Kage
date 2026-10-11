@@ -1,6 +1,11 @@
 #!/usr/bin/env node
-// Checks the license of every package in the sidecar dependency tree against
-// sidecar/license-policy.json. Needs installed dependencies (`just setup-node`).
+// Checks the license of every package in the dependency tree of a pnpm
+// project against the license-policy.json next to it. The project is the
+// sidecar unless a directory is named:
+//
+//   node scripts/check-npm-licenses.mjs [directory]
+//
+// Needs installed dependencies (`just setup-node`).
 //
 // A package passes when its SPDX expression is satisfied by the allowlist, or
 // when an exception names exactly that package with exactly that license. An
@@ -9,7 +14,9 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
-const policy = JSON.parse(readFileSync('sidecar/license-policy.json', 'utf8'));
+const project = process.argv[2] ?? 'sidecar';
+const policyFile = `${project}/license-policy.json`;
+const policy = JSON.parse(readFileSync(policyFile, 'utf8'));
 const allowed = new Set(policy.allow);
 
 /** True when the SPDX expression is satisfied using allowed licenses only. */
@@ -68,13 +75,13 @@ let listing;
 try {
   listing = JSON.parse(
     execFileSync('pnpm', ['licenses', 'list', '--json'], {
-      cwd: 'sidecar',
+      cwd: project,
       encoding: 'utf8',
       maxBuffer: 64 * 1024 * 1024,
     }),
   );
 } catch (error) {
-  console.error(`error: cannot list sidecar licenses: ${error.message}`);
+  console.error(`error: cannot list the licenses of ${project}: ${error.message}`);
   console.error('       Install the dependencies first: just setup-node');
   process.exit(2);
 }
@@ -83,7 +90,7 @@ const packages = Object.entries(listing).flatMap(([license, entries]) =>
   entries.map((entry) => ({ name: entry.name, versions: entry.versions ?? [], license })),
 );
 if (packages.length === 0) {
-  console.error('error: no installed sidecar packages found. Run: just setup-node');
+  console.error(`error: no installed packages found in ${project}. Run: just setup-node`);
   process.exit(2);
 }
 
@@ -119,14 +126,14 @@ for (const exception of usedExceptions) {
 const stale = policy.exceptions.filter((exception) => !usedExceptions.has(exception));
 for (const exception of stale) {
   console.error(
-    `error: stale exception for ${exception.package} (${exception.license}): nothing matches it. Remove it from sidecar/license-policy.json.`,
+    `error: stale exception for ${exception.package} (${exception.license}): nothing matches it. Remove it from ${policyFile}.`,
   );
 }
 
 if (violations.length > 0) {
-  console.error('error: packages with a license outside sidecar/license-policy.json:');
+  console.error(`error: packages with a license outside ${policyFile}:`);
   for (const violation of violations) console.error(`  ${violation}`);
 }
 
 if (violations.length > 0 || stale.length > 0) process.exit(1);
-console.log('ok: every sidecar package license is allowed');
+console.log(`ok: every package license of ${project} is allowed`);
