@@ -7,7 +7,9 @@
 #   - the reading room of the fixture site (/site/) crawled by a persona of
 #     each engine: the pages inside the depth and no others, each at its
 #     depth; the seed typed and the pages after it reached by a click on a
-#     link of the open page or of a page the persona went back to; five
+#     link of the open page or of a page the persona went back to (the
+#     articles of the listing each from the listing), at most 5 of the 21
+#     addresses typed; five
 #     links nobody can see left alone; copies and near-copies flagged; the
 #     long page left when the persona's patience with it was used up, at
 #     the depth the page itself reports;
@@ -201,8 +203,8 @@ check "a crawl that cannot be accepted is refused whole" "${summary}" \
     "JSON.stringify(d.refusals) === JSON.stringify(['validation_failed', 'ssrf_denied', 'validation_failed', 'validation_failed'])"
 check "the reading room was read in both engines, by a persona of each" "${summary}" \
     "d.rooms.length === 2 && d.rooms[0].engine === 'chromium' && d.rooms[1].engine === 'firefox' && d.rooms.every((r) => r.pages === 21) && d.rooms[0].persona !== d.rooms[1].persona"
-check "typed, click and back_click all occur in both engines" "${summary}" \
-    "d.rooms.every((r) => r.reached.typed >= 1 && r.reached.click >= 4 && r.reached.back_click >= 1)"
+check "typed, click and back_click all occur in both engines, and few addresses are typed" "${summary}" \
+    "d.rooms.every((r) => r.reached.typed >= 1 && r.reached.typed <= 5 && r.reached.click >= 4 && r.reached.back_click >= 8)"
 check "the long page was left by the persona's patience" "${summary}" \
     "d.rooms.every((r) => r.tall.ended_by === 'patience' && r.tall.reached < 0.6)"
 for room in 0 1; do

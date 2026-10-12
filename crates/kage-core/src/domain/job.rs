@@ -345,8 +345,10 @@ pub struct FrontierEntry {
     /// Whether its link stood in what the site repeats on every page.
     pub furniture: bool,
     /// The positions of the entries the page links to, in the order a
-    /// reader meets them.
+    /// reader meets them: the links of its text, then those of its menu.
     pub links: Vec<u64>,
+    /// How many of `links`, from the first, are links of the text.
+    pub text_links: u32,
     /// The links of the page that spell their target otherwise than the
     /// crawl first met it: the target's position and the address as this
     /// page has it, which is what a click on the link asks for.

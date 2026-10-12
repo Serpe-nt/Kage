@@ -7,15 +7,25 @@
 //! from one page to the next is then a click on a link the open page shows
 //! and not an address typed out of nowhere. The next page of a visitor is
 //!
-//! 1. a link of the page that is open that the crawl has not read; else
-//! 2. a link of a page the visitor's tab can go back to, the nearest
-//!    first, at most [`Limits::back_limit`] entries back; else
-//! 3. the waiting address of the least depth, the oldest first: a seed, an
+//! 1. a link in the text of the page that is open that the crawl has not
+//!    read; else
+//! 2. a link in the text of a page the visitor's tab can go back to, the
+//!    nearest first, at most [`Limits::back_limit`] entries back; else
+//! 3. a link of the open page's menu (what the site repeats on every page:
+//!    its navigation, header, footer, side bar); else
+//! 4. a link of the menu of a page within those entries back; else
+//! 5. the waiting address of the least depth, the oldest first: a seed, an
 //!    address a sitemap named, or a link whose page is out of reach. It is
 //!    reached by a typed address.
 //!
-//! On one page the links of the text come before the links of what the site
-//! repeats on every page, each in the order of the document.
+//! A reader who has finished an article goes back to the listing and picks
+//! the next one; the menu is where a reader goes when the listing is
+//! exhausted. Taking a menu link of the open page before going back (the
+//! first version of this order) leaves the listing behind: measured on a
+//! listing of ten articles with a menu on every page, eleven of eighteen
+//! addresses were typed that way and one this way
+//! (`examples/reader_order.rs`). Within a page the links are followed in
+//! the order of the document.
 //!
 //! # Depth
 //!
@@ -152,7 +162,13 @@ pub struct Entry {
     /// The pages it links to that a reader can follow, the links of the
     /// text first; empty until it is read.
     pub links: Vec<EntryId>,
-    /// The address it ended on, when a redirect led elsewhere.
+    /// How many of `links`, from the first, are links of the text; the
+    /// rest are links of the menu only.
+    pub text_links: usize,
+    /// The address the page was read at, when that is not the address the
+    /// crawl first met: where a redirect led, or the page's address as the
+    /// link that was followed spelled it. It is the address a browser shows
+    /// for the page, and so the one a link of the page is clicked from.
     pub final_url: Option<Url>,
     /// Whether it ended on another site than the crawl stays on.
     pub left_site: bool,
@@ -409,6 +425,7 @@ impl Frontier {
             found_on,
             furniture,
             links: Vec::new(),
+            text_links: 0,
             final_url: None,
             left_site: false,
             content_hash: None,
@@ -496,12 +513,37 @@ impl Frontier {
         sites
     }
 
-    /// The first link of a page that waits to be read on `site`.
-    fn waiting_link(&self, page: EntryId, site: &str) -> Option<EntryId> {
-        self.entries.get(page)?.links.iter().copied().find(|link| {
+    /// The first link of a page that waits to be read on `site`: among the
+    /// links of its text, or among those of its menu.
+    fn waiting_link(&self, page: EntryId, site: &str, menu: bool) -> Option<EntryId> {
+        let holder = self.entries.get(page)?;
+        let text = holder.text_links.min(holder.links.len());
+        let part = if menu {
+            &holder.links[text..]
+        } else {
+            &holder.links[..text]
+        };
+        part.iter().copied().find(|link| {
             self.entries
                 .get(*link)
                 .is_some_and(|entry| entry.state == State::Waiting && entry.site == site)
+        })
+    }
+
+    /// The link a visitor follows next from what its tab holds: a link of
+    /// the text of the open page, else of a page within reach, the nearest
+    /// first; then, in the same order, a link of a menu. With the page that
+    /// holds it and how many entries back that page is.
+    fn link_in_reach(&self, site: &str, tab: &[EntryId]) -> Option<(EntryId, EntryId, usize)> {
+        let reach = usize::try_from(self.limits.back_limit).unwrap_or(usize::MAX);
+        [false, true].into_iter().find_map(|menu| {
+            tab.iter()
+                .rev()
+                .take(reach.saturating_add(1))
+                .enumerate()
+                .find_map(|(backs, page)| {
+                    Some((self.waiting_link(*page, site, menu)?, *page, backs))
+                })
         })
     }
 
@@ -513,14 +555,9 @@ impl Frontier {
         if !self.may_begin() {
             return None;
         }
-        let reach = usize::try_from(self.limits.back_limit).unwrap_or(usize::MAX);
-        for (backs, page) in tab.iter().rev().take(reach.saturating_add(1)).enumerate() {
-            let Some(link) = self.waiting_link(*page, site) else {
-                continue;
-            };
-            let Some(holder) = self.entries.get(*page) else {
-                continue;
-            };
+        if let Some((link, page, backs)) = self.link_in_reach(site, tab)
+            && let Some(holder) = self.entries.get(page)
+        {
             return Some(Pick {
                 entry: link,
                 url: holder
@@ -609,11 +646,15 @@ impl Frontier {
     /// Notes where a page ended when a redirect led elsewhere. Returns the
     /// page it is, when that page was read under its own address already.
     fn note_landing(&mut self, id: EntryId, landed: &Url) -> Option<EntryId> {
+        // The address the browser shows for the page from here on: the
+        // same page may have been asked for under another spelling than
+        // the one the crawl first met.
+        let shown = request_url(landed);
+        self.entries[id].final_url = (shown != self.entries[id].url).then_some(shown);
         let final_key = self.key_of(landed).as_str().to_owned();
         if final_key == self.entries[id].key {
             return None;
         }
-        self.entries[id].final_url = Some(request_url(landed));
         self.entries[id].left_site = !self.scope.on_site(landed);
         let Some(other) = self.by_key.get(&final_key).copied() else {
             // Nobody asks for the end of the redirect a second time.
@@ -756,12 +797,18 @@ impl Frontier {
         let depth = self.entries[id].depth.saturating_add(1);
         let mut links: Vec<EntryId> = Vec::new();
         let mut spellings: Vec<(EntryId, Url)> = Vec::new();
+        let mut text_links: Option<usize> = None;
         let ordered = page
             .links
             .iter()
             .filter(|link| !link.furniture)
             .chain(page.links.iter().filter(|link| link.furniture));
         for link in ordered {
+            if link.furniture && text_links.is_none() {
+                // Everything taken so far is a link of the text; a page
+                // the menu names too is followed from the text.
+                text_links = Some(links.len());
+            }
             let (target, new) = self.follow(id, link, depth);
             if new {
                 recorded.links_new += 1;
@@ -779,6 +826,7 @@ impl Frontier {
             }
         }
         recorded.links_found = u32::try_from(links.len()).unwrap_or(u32::MAX);
+        self.entries[id].text_links = text_links.unwrap_or(links.len());
         self.entries[id].links = links;
         self.entries[id].spellings = spellings;
         recorded

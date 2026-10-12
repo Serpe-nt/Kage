@@ -1214,6 +1214,7 @@ struct FrontierRow {
     discovered_from: Option<String>,
     furniture: bool,
     links: serde_json::Value,
+    text_links: i32,
     spellings: serde_json::Value,
     final_url: Option<String>,
     left_site: bool,
@@ -1258,6 +1259,7 @@ impl TryFrom<FrontierRow> for FrontierEntry {
             discovered_from: row.discovered_from,
             furniture: row.furniture,
             links: from_json((TABLE, "links"), row.links)?,
+            text_links: to_u32((TABLE, "text_links"), row.text_links)?,
             spellings: from_json((TABLE, "spellings"), row.spellings)?,
             final_url: row.final_url,
             left_site: row.left_site,
@@ -1301,14 +1303,15 @@ impl FrontierRepo<'_> {
                                              furniture, links, final_url, left_site, content_hash,
                                              simhash, duplicate_of, near_duplicate_of,
                                              near_duplicate_bits, lastmod, item_id, created_at,
-                                             fetched_at, spellings)
+                                             fetched_at, spellings, text_links)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
-                         $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
+                         $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
                  ON CONFLICT (job_id, seq) DO UPDATE
                  SET depth = EXCLUDED.depth, state = EXCLUDED.state,
                      skip_reason = EXCLUDED.skip_reason, found_on = EXCLUDED.found_on,
                      discovered_from = EXCLUDED.discovered_from, furniture = EXCLUDED.furniture,
-                     links = EXCLUDED.links, spellings = EXCLUDED.spellings,
+                     links = EXCLUDED.links, text_links = EXCLUDED.text_links,
+                     spellings = EXCLUDED.spellings,
                      final_url = EXCLUDED.final_url,
                      left_site = EXCLUDED.left_site, content_hash = EXCLUDED.content_hash,
                      simhash = EXCLUDED.simhash, duplicate_of = EXCLUDED.duplicate_of,
@@ -1351,6 +1354,7 @@ impl FrontierRepo<'_> {
                 entry.created_at,
                 entry.fetched_at,
                 to_json((TABLE, "spellings"), &entry.spellings)?,
+                to_i32((TABLE, "text_links"), entry.text_links)?,
             )
             .execute(&mut *transaction)
             .await?;
@@ -1368,7 +1372,7 @@ impl FrontierRepo<'_> {
         sqlx::query_as!(
             FrontierRow,
             "SELECT id, job_id, seq, url, url_key, site, depth, state, skip_reason, source,
-                    found_on, discovered_from, furniture, links, spellings, final_url,
+                    found_on, discovered_from, furniture, links, text_links, spellings, final_url,
                     left_site,
                     content_hash, simhash, duplicate_of, near_duplicate_of, near_duplicate_bits,
                     lastmod, item_id, created_at, fetched_at
@@ -1399,7 +1403,7 @@ impl FrontierRepo<'_> {
         sqlx::query_as!(
             FrontierRow,
             "SELECT id, job_id, seq, url, url_key, site, depth, state, skip_reason, source,
-                    found_on, discovered_from, furniture, links, spellings, final_url,
+                    found_on, discovered_from, furniture, links, text_links, spellings, final_url,
                     left_site,
                     content_hash, simhash, duplicate_of, near_duplicate_of, near_duplicate_bits,
                     lastmod, item_id, created_at, fetched_at

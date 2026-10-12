@@ -169,7 +169,17 @@ async function readingRoom(client: KageClient, site: string, engine: EngineName)
   assert.equal(page('/site/').page.found_by, 'seed');
   const reached = count(pages.map((one) => one.page.reached));
   assert.ok((reached['click'] ?? 0) >= 4, JSON.stringify(reached));
-  assert.ok((reached['back_click'] ?? 0) >= 1, JSON.stringify(reached));
+  // The articles of the listing are each a click on the listing, which
+  // the persona goes back to: the reader's order.
+  assert.ok((reached['back_click'] ?? 0) >= 8, JSON.stringify(reached));
+  for (const article of ['/site/b', '/site/c', '/site/dup-1', '/site/near-1', '/site/deep/1']) {
+    assert.equal(page(article).page.reached, 'back_click', article);
+  }
+  // Typed are the seed and the three pages of the other host, whose only
+  // links stood in the menu of a page the reader had left: 4 of 21. Under
+  // the first version of the order, which took a menu link of the open
+  // page before going back, 12 were.
+  assert.ok((reached['typed'] ?? 0) <= 5, JSON.stringify(reached));
   assert.equal(reached['referer'] ?? 0, 0);
   for (const one of pages) {
     const backs = one.page.backs ?? null;
@@ -191,6 +201,10 @@ async function readingRoom(client: KageClient, site: string, engine: EngineName)
   assert.ok(first.page.found_on?.endsWith('/site/'), JSON.stringify(first.page));
   assert.equal(first.page.reached, 'click');
   assert.equal(first.url, `${site}/site/a`);
+  // And that is the address its tab shows: the link it holds is clicked
+  // there, not typed.
+  assert.equal(page('/site/a/notes').page.reached, 'click');
+  assert.equal(page('/site/a/notes').page.backs, 0);
 
   // What nobody can see was not followed: five links of the home page,
   // two the markup hides and three only a browser knows of.

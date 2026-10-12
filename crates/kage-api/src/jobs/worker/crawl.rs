@@ -144,6 +144,7 @@ fn entry_of(row: &FrontierEntry) -> Result<Entry, WorkError> {
         found_on: row.found_on.map(entry_at),
         furniture: row.furniture,
         links: row.links.iter().copied().map(entry_at).collect(),
+        text_links: usize::try_from(row.text_links).unwrap_or(usize::MAX),
         spellings: row
             .spellings
             .iter()
@@ -403,6 +404,7 @@ impl Crawl {
             discovered_from: entry.found_on.and_then(|on| self.shown(on)),
             furniture: entry.furniture,
             links: entry.links.iter().copied().map(position).collect(),
+            text_links: u32::try_from(entry.text_links).unwrap_or(u32::MAX),
             spellings: entry
                 .spellings
                 .iter()
@@ -423,9 +425,16 @@ impl Crawl {
         })
     }
 
-    /// The address of a page as it was asked for.
+    /// The address an item names another page of the crawl by: the one
+    /// the page was read at when that is the same page under another
+    /// spelling (it is what that page's own item is listed under), else
+    /// the one the crawl first met. The end of a redirect is another page.
     fn shown(&self, id: EntryId) -> Option<String> {
-        self.frontier.entry(id).map(|entry| entry.url.to_string())
+        let entry = self.frontier.entry(id)?;
+        let read_at = entry.final_url.as_ref().filter(|landed| {
+            kage_core::urlnorm::normalize(landed, &self.rules.normalize).as_str() == entry.key
+        });
+        Some(read_at.unwrap_or(&entry.url).to_string())
     }
 
     /// The address a browser shows for a page that was read: where it
@@ -1134,9 +1143,16 @@ impl Crawl {
                 .and_then(|on| self.shown(on)),
             reached: reached.map(|(reached, _)| reached),
             backs: reached.and_then(|(_, backs)| backs),
+            // Where a redirect led: another page than the one asked for.
+            // (The same page under another spelling is the item's own
+            // address.)
             final_url: page
-                .and_then(|page| page.final_url.as_ref())
-                .map(Url::to_string),
+                .and_then(|page| page.final_url.as_ref().map(|landed| (page, landed)))
+                .filter(|(page, landed)| {
+                    kage_core::urlnorm::normalize(landed, &self.rules.normalize).as_str()
+                        != page.key
+                })
+                .map(|(_, landed)| landed.to_string()),
             content_hash: page.and_then(|page| page.content_hash.clone()),
             duplicate_of: page
                 .and_then(|page| page.duplicate_of)
@@ -1597,6 +1613,7 @@ mod tests {
             discovered_from: Some("https://example.org/".to_owned()),
             furniture: true,
             links: vec![5, 6],
+            text_links: 1,
             spellings: vec![(6, "https://example.org/b?ref=a".to_owned())],
             final_url: Some("https://example.org/a/".to_owned()),
             left_site: false,
@@ -1628,7 +1645,10 @@ mod tests {
         assert_eq!((entry.depth, entry.state), (2, State::Read));
         assert_eq!(entry.source, Source::Link);
         assert_eq!((entry.found_on, entry.furniture), (Some(1), true));
-        assert_eq!(entry.links, [5, 6]);
+        assert_eq!(
+            (entry.links.as_slice(), entry.text_links),
+            ([5, 6].as_slice(), 1)
+        );
         assert_eq!(entry.spellings[0].0, 6);
         assert_eq!(entry.spellings[0].1.as_str(), "https://example.org/b?ref=a");
         assert_eq!(

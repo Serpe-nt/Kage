@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, job_id, seq, url, url_key, site, depth, state, skip_reason, source,\n                    found_on, discovered_from, furniture, links, spellings, final_url,\n                    left_site,\n                    content_hash, simhash, duplicate_of, near_duplicate_of, near_duplicate_bits,\n                    lastmod, item_id, created_at, fetched_at\n             FROM crawl_frontier\n             WHERE job_id = $1 AND seq = ANY($2)\n             ORDER BY seq",
+  "query": "SELECT id, job_id, seq, url, url_key, site, depth, state, skip_reason, source,\n                    found_on, discovered_from, furniture, links, text_links, spellings, final_url,\n                    left_site,\n                    content_hash, simhash, duplicate_of, near_duplicate_of, near_duplicate_bits,\n                    lastmod, item_id, created_at, fetched_at\n             FROM crawl_frontier\n             WHERE job_id = $1 AND seq = ANY($2)\n             ORDER BY seq",
   "describe": {
     "columns": [
       {
@@ -159,6 +159,17 @@
       },
       {
         "ordinal": 14,
+        "name": "text_links",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "crawl_frontier",
+            "name": "text_links"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
         "name": "spellings",
         "type_info": "Jsonb",
         "origin": {
@@ -169,7 +180,7 @@
         }
       },
       {
-        "ordinal": 15,
+        "ordinal": 16,
         "name": "final_url",
         "type_info": "Text",
         "origin": {
@@ -180,7 +191,7 @@
         }
       },
       {
-        "ordinal": 16,
+        "ordinal": 17,
         "name": "left_site",
         "type_info": "Bool",
         "origin": {
@@ -191,7 +202,7 @@
         }
       },
       {
-        "ordinal": 17,
+        "ordinal": 18,
         "name": "content_hash",
         "type_info": "Text",
         "origin": {
@@ -202,7 +213,7 @@
         }
       },
       {
-        "ordinal": 18,
+        "ordinal": 19,
         "name": "simhash",
         "type_info": "Int8",
         "origin": {
@@ -213,7 +224,7 @@
         }
       },
       {
-        "ordinal": 19,
+        "ordinal": 20,
         "name": "duplicate_of",
         "type_info": "Int8",
         "origin": {
@@ -224,7 +235,7 @@
         }
       },
       {
-        "ordinal": 20,
+        "ordinal": 21,
         "name": "near_duplicate_of",
         "type_info": "Int8",
         "origin": {
@@ -235,7 +246,7 @@
         }
       },
       {
-        "ordinal": 21,
+        "ordinal": 22,
         "name": "near_duplicate_bits",
         "type_info": "Int4",
         "origin": {
@@ -246,7 +257,7 @@
         }
       },
       {
-        "ordinal": 22,
+        "ordinal": 23,
         "name": "lastmod",
         "type_info": "Timestamptz",
         "origin": {
@@ -257,7 +268,7 @@
         }
       },
       {
-        "ordinal": 23,
+        "ordinal": 24,
         "name": "item_id",
         "type_info": "Uuid",
         "origin": {
@@ -268,7 +279,7 @@
         }
       },
       {
-        "ordinal": 24,
+        "ordinal": 25,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -279,7 +290,7 @@
         }
       },
       {
-        "ordinal": 25,
+        "ordinal": 26,
         "name": "fetched_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -312,6 +323,7 @@
       false,
       false,
       false,
+      false,
       true,
       false,
       true,
@@ -325,5 +337,5 @@
       true
     ]
   },
-  "hash": "e8a2145f23daaf5b29a29e53ea3681d48004c09281aa34945a5c9df5e0123f39"
+  "hash": "62b9f0ee6c981d5e4c5f8fdde2992ef155d794ca197499f5559d40d87bbd36d5"
 }

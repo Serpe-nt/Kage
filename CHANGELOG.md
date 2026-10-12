@@ -20,14 +20,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     repeats, and the job shows how far the crawl has come and why it
     stopped reading.
   - A crawl reads like a reader, not breadth-first: the next page is a
-    link of the page that is open (the text before the menu), else of a
-    page up to three entries back in the tab, and an address is typed
-    only when the tab leads nowhere new. In a browser the persona clicks
+    link in the text of the page that is open, else in the text of a page
+    up to three entries back in the tab (a reader goes back to the
+    listing for the next article), else a link of a menu within the same
+    reach, and an address is typed only when the tab leads nowhere new. In a browser the persona clicks
     its way (sidecar contract 1.3.0: an entry by a link of a page it has
     been reading, with the keyboard's way back; F28); on the http path
-    the page that holds the link is the `Referer`. Simulated on a shop and
-    a blog, breadth-first types 80 to 91 % of all addresses and this order
-    10 to 14 %.
+    the page that holds the link is the `Referer`. Measured with the
+    frontier itself (`cargo run -p kage-crawl --example reader_order`):
+    breadth-first types 96 % of the addresses of a shop and 79 % of a
+    blog's, this order 8 % and one address of 344; on the fixture's
+    listing of ten articles it types 1 of 18 where taking the open page's
+    menu first typed 11.
   - One persona reads one site (its registrable domain) through the
     scheduler like every other fetch: pacing, visits, waking hours,
     breaker and cooldowns are the same. `visitors` asks for more, up to

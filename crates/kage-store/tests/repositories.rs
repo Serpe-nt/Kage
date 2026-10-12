@@ -1547,6 +1547,7 @@ async fn the_crawl_frontier_holds_one_entry_per_url_key_and_is_claimed_once() {
         discovered_from: (seq > 0).then(|| "https://example.org/".to_owned()),
         furniture: false,
         links: Vec::new(),
+        text_links: 0,
         spellings: Vec::new(),
         final_url: None,
         left_site: false,
@@ -1734,6 +1735,7 @@ async fn the_crawl_frontier_holds_one_entry_per_url_key_and_is_claimed_once() {
     // A SimHash uses all 64 bits, the sign bit included.
     read.simhash = Some(0xF000_0000_0000_000F);
     read.links = vec![1, 2, 3];
+    read.text_links = 2;
     read.spellings = vec![(2, "https://example.org/b?utm_source=home".to_owned())];
     read.final_url = Some("https://example.org/home".to_owned());
     read.fetched_at = Some(now());

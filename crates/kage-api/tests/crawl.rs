@@ -127,7 +127,9 @@ fn small_site() -> Vec<Leaf> {
         "/",
         &[
             "/a",
-            "/b",
+            // The home page names it with a campaign tag; the page it is
+            // clicked on names it without.
+            "/b?utm_campaign=x",
             "/files/report.pdf",
             "http://elsewhere.test/x",
             "/a#top",

@@ -355,10 +355,11 @@ scope besides `jobs`.
 | `session_id` | | An open session: its persona reads every page. |
 
 **It reads like a reader, and takes a reader's time.** The first page is
-typed. After that the persona follows a link of the page it has open (the
-links of the text before those of the menu), goes back up to three pages
-for one when the open page has none left, and types an address only when
-its tab leads nowhere new. In a browser every page is scrolled and dwelt
+typed. After that the persona follows a link in the text of the page it
+has open, goes back up to three pages for one when the open page has none
+left (as a reader goes back to a listing for the next article), takes a
+link of the menu when the text within reach is exhausted, and types an
+address only when its tab leads nowhere new. In a browser every page is scrolled and dwelt
 on like any other and the persona rests before the next one. A crawl
 therefore costs what a batch of as many pages of one site costs (see
 "What a batch costs"), and a crawl that meets its visitor's night goes on

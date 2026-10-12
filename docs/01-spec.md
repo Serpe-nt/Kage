@@ -1305,20 +1305,30 @@ batch. No request names a persona.)
 
 **The reader.** A crawl reads a site the way a reader goes through it,
 not breadth-first. Its first page is typed. From then on the next page is
-a link of the page that is open, the links of the text before those of
-the navigation, in document order; when the open page has none left, a
-link of a page at most `crawl.back_limit` (3) entries back in the tab,
-which the persona goes back to and clicks there; and only when the tab
-holds nothing more an address is typed: the oldest that waits, of the
-least depth. On the http path, which has no tab, the page that holds the
+(1) a link in the text of the page that is open, in document order; (2)
+when it has none left, a link in the text of a page at most
+`crawl.back_limit` (3) entries back in the tab, the nearest first, which
+the persona goes back to and clicks there: a reader who has finished an
+article goes back to the listing for the next one; (3) a link of the open
+page's menu (what the site repeats on every page: navigation, header,
+footer, side bar); (4) a link of a menu within those entries back; and (5)
+only when the tab holds nothing more an address is typed: the oldest that
+waits, of the least depth. On the http path, which has no tab, the page that holds the
 link is the request's `Referer`, as the click would make it, and a typed
 address names none. A link is followed under the address its own page
 gives: a page is one entry however it is spelled, and the crawl keeps how
 each page spells the links it holds, so the browser finds the link it is
-told to click and the site is asked for what its own page says. Simulated on the shapes of a shop and a blog,
-breadth-first types 80 to 91 % of all addresses, each a navigation
-without a `Referer` and with `Sec-Fetch-Site: none`; this order types 10
-to 14 % (4 to 8 % under `max_pages` 100). A link no reader can see
+told to click and the site is asked for what its own page says. Measured
+with the frontier itself on tables of links, inside three links of the
+home page (`cargo run -p kage-crawl --example reader_order`):
+breadth-first types 96 % of the addresses of a shop and 79 % of a blog's,
+each a navigation without a `Referer` and with `Sec-Fetch-Site: none`;
+this order types 8 % of the shop, one address of the blog's 344, and one
+of the first hundred pages of either. Taking a menu link of the open page
+before going back (the first version of the order) typed 9 % and 7 %
+there, and 11 of the 18 pages of a listing of ten articles with a menu on
+every page, where this order types one: the menu leads away from the
+listing before it is exhausted. A link no reader can see
 (§10.4: not rendered, transparent, off the page; on the http path what
 the markup itself hides) is never followed and is counted as `hidden`:
 the trap for crawlers. In a browser every page is scrolled and dwelt on

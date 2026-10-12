@@ -33,6 +33,10 @@ ALTER TABLE crawl_frontier
     -- and those of its links that spell their target otherwise than the
     -- crawl first met it: pairs of a position and the address as written.
     ADD COLUMN links                jsonb NOT NULL DEFAULT '[]'::jsonb,
+    -- How many of them, from the first, are links of the text; the rest
+    -- are links of the menu only (a reader goes back for a link of the
+    -- text before it takes one of the menu).
+    ADD COLUMN text_links           integer NOT NULL DEFAULT 0 CHECK (text_links >= 0),
     ADD COLUMN spellings            jsonb NOT NULL DEFAULT '[]'::jsonb,
     -- Where the page ended when a redirect led elsewhere, and whether that
     -- is off the crawl's sites.

@@ -255,18 +255,20 @@ fn small_site() -> Site {
 fn a_site_is_read_in_the_order_a_reader_goes() {
     let read = Reader::new(frontier(5)).run(&small_site());
 
-    // The seed is typed. From there every page is a click: on the open
-    // page while it has a link the crawl has not read, the links of the
-    // text before the navigation's (on /a1 the navigation's is all there
-    // is); else on the nearest page the tab can go back to that has one.
+    // The seed is typed. From there every page is a click on a link of
+    // the text: of the open page while it has one the crawl has not read,
+    // else of the nearest page the tab can go back to that has one (from
+    // /a1 back to /a for /a2, from /a2 back to the home page for /b). The
+    // menu, which every page has, is where the reader goes last: /about
+    // is read when nothing in reach has a link of its text left.
     assert_eq!(
         read.order(),
-        ["/", "/a", "/a1", "/about", "/a2", "/b", "/b1"]
+        ["/", "/a", "/a1", "/a2", "/b", "/b1", "/about"]
     );
     assert_eq!(
         read.ways(),
         [
-            "typed", "click", "click", "click", "back 2", "back 2", "click"
+            "typed", "click", "click", "back 1", "back 2", "click", "click"
         ]
     );
     let depths: Vec<u32> = ["/", "/a", "/b", "/about", "/a1", "/a2", "/b1"]
@@ -1214,17 +1216,102 @@ fn a_link_is_followed_under_the_address_its_page_gives() {
     );
     assert_eq!(frontier.entry(home.entry).unwrap().spellings, Vec::new());
 
+    // Read under the listing's spelling, that is the address the browser
+    // shows for the article: a link of the article is clicked from there,
+    // not from the address with the tag, which no tab holds. It is one
+    // page all the same, and no redirect.
+    frontier.begin(article);
+    let recorded = frontier.record_read(
+        article,
+        &PageRead {
+            final_url: url("/a?a=1&b=2#top"),
+            links: vec![link("/a/notes")],
+            links_truncated: false,
+            text: text_of("article"),
+        },
+    );
+    assert_eq!(recorded.duplicate_of, None);
+    let read = frontier.entry(article).unwrap();
+    assert_eq!(read.final_url, Some(url("/a?a=1&b=2")));
+    assert!(!read.left_site);
+    let notes = frontier
+        .next(&site, &[home.entry, list.entry, article])
+        .unwrap();
+    assert_eq!(
+        notes.way,
+        Way::Link {
+            from: url("/a?a=1&b=2"),
+            backs: 0
+        }
+    );
+    assert_eq!(notes.url, url("/a/notes"));
+    // A page read at the address the crawl first met shows that address.
+    assert_eq!(frontier.entry(list.entry).unwrap().final_url, None);
+
     // A frontier that is restored follows the same spellings.
     let restored = Frontier::restore(
         Scope::new(&request(5), &[url("/")]).unwrap(),
         limits(),
         NormalizeOptions::default(),
         frontier.entries().to_vec(),
-        2,
+        3,
         0,
     );
     assert_eq!(
-        restored.next(&site, &[home.entry, list.entry]).unwrap().url,
-        url("/a?a=1&b=2")
+        restored
+            .next(&site, &[home.entry, list.entry, article])
+            .unwrap()
+            .way,
+        Way::Link {
+            from: url("/a?a=1&b=2"),
+            backs: 0
+        }
     );
+}
+
+#[test]
+fn a_reader_goes_back_to_the_listing_before_it_takes_the_menu() {
+    // A listing of four articles, a menu on every page that leads away.
+    let site = Site::of(&[
+        ("/", &["~/list", "~/contact", "/list"]),
+        (
+            "/list",
+            &["~/list", "~/contact", "/p1", "/p2", "/p3", "/p4"],
+        ),
+        ("/p1", &["~/list", "~/contact"]),
+        ("/p2", &["~/list", "~/contact", "/p2/more"]),
+        ("/p2/more", &["~/list", "~/contact"]),
+        ("/p3", &["~/list", "~/contact"]),
+        ("/p4", &["~/list", "~/contact"]),
+        ("/contact", &["~/list", "~/contact"]),
+    ]);
+
+    let read = Reader::new(frontier(5)).run(&site);
+
+    // Every article is a click on the listing: after each one the reader
+    // goes back, however many pages the article led on to (two back from
+    // /p2/more). The menu's link, which was on every page all along, is
+    // taken when the listing has nothing left, and nothing but the seed is
+    // typed. Taking the menu's link first would have left the listing
+    // behind after the first article.
+    assert_eq!(
+        read.order(),
+        [
+            "/", "/list", "/p1", "/p2", "/p2/more", "/p3", "/p4", "/contact"
+        ]
+    );
+    assert_eq!(
+        read.ways(),
+        [
+            "typed", "click", "click", "back 1", "click", "back 2", "back 1", "click"
+        ]
+    );
+    // Where the text ends and the menu begins is the page's own: the
+    // listing is a link of the home page's text, and of every menu.
+    let home = read.entry("/");
+    assert_eq!((home.links.len(), home.text_links), (2, 1));
+    let article = read.entry("/p1");
+    assert_eq!((article.links.len(), article.text_links), (2, 0));
+    let listing = read.entry("/list");
+    assert_eq!((listing.links.len(), listing.text_links), (5, 4));
 }
