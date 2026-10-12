@@ -34,6 +34,8 @@ const ACTIVATION_PAGE = file('./activation/index.html');
 const requests = [];
 /** Everything pages posted to /__kage/report, oldest first. */
 const reports = [];
+/** How often /twice was served since the last reset. */
+let twice = 0;
 
 const page = (title, body, head = '') =>
   `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${title}</title>${head}</head><body>${body}</body></html>`;
@@ -230,6 +232,24 @@ const routes = {
       : html(res, CHALLENGE_PAGE, {}, 403),
   '/challenge/stuck': (_req, res) => html(res, STUCK_CHALLENGE_PAGE, {}, 403),
   '/spa': (_req, res) => html(res, SPA_PAGE, { 'x-fixture': 'spa' }),
+  // One address, two documents: the page links to itself with a campaign
+  // tag, and the document that arrives takes the tag out of its address,
+  // as many sites' scripts do. The history of the tab then holds two
+  // entries with the same address, and the way back to the first document,
+  // which the browser kept, changes neither the address nor anything on
+  // the wire. Each answer says which one it is.
+  '/twice': (_req, res) => {
+    twice += 1;
+    html(
+      res,
+      page(
+        'Twice',
+        `<h1 id="view">served ${twice}</h1><p><a id="tagged" href="/twice?utm_source=fixture">again</a></p>
+<script>if (location.search) history.replaceState(null, '', location.pathname);</script>`,
+      ),
+      { 'x-fixture': `twice-${twice}` },
+    );
+  },
   '/storage.html': (_req, res) => html(res, STORAGE_PAGE),
   '/console.html': (_req, res) => html(res, CONSOLE_PAGE),
   '/webrtc.html': (_req, res) => html(res, WEBRTC_PAGE),
@@ -279,6 +299,7 @@ const routes = {
   '/__kage/reset': (_req, res) => {
     requests.length = 0;
     reports.length = 0;
+    twice = 0;
     json(res, { ok: true });
   },
 };

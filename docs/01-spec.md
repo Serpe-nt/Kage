@@ -1077,9 +1077,13 @@ policy's `min_dwell` as the floor and the request's `behavior.dwell_ms`
 (never below that floor, ignored where the policy locks behavior) as the
 median.
 
-**Going back (F21).** `back` by the driver waits for the commit and then
-for the address, the response or the document to change; with no history
-it fails after a second instead of reporting success. `wait_for url`
+**Going back (F21, F38).** `back` waits for the address, the response or
+the document to change, whoever went back: the driver, after its commit,
+or the persona's keys. The page itself says which document it shows, so a
+way back to an entry with the address of the page that was left is seen as
+one. With no history the step fails after a second ("there is no page to
+go back to") instead of reporting success; keys that made the browser ask
+for the page before are waited for as long as the step has. `wait_for url`
 matches the address with a matcher of its own (`**` anything, `*`
 anything but a `/`; the fragment only when the pattern names one) and
 then waits for the document to be complete. A capture after `back`

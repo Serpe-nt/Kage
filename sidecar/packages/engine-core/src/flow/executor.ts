@@ -51,11 +51,14 @@ export interface FlowHost {
   readonly typos: boolean;
   goto(url: string, timeoutMs: number): Promise<void>;
   /**
-   * Goes back one history entry by the driver.
+   * Goes back one history entry and waits for the page before: by the
+   * driver, or by `by` when it is given (the persona's keys). Either way
+   * reports the same thing, because the session looks at the page itself.
    *
+   * @param by what asks the browser to go back in place of the driver.
    * @throws when there is no entry to go back to, or the page before did not come in time.
    */
-  back(timeoutMs: number): Promise<void>;
+  back(timeoutMs: number, by?: () => Promise<void>): Promise<void>;
   waitForSelector(selector: string, timeoutMs: number): Promise<void>;
   /**
    * Waits until the address matches a pattern (see `url-glob.ts`) and its document has loaded.
@@ -261,11 +264,14 @@ async function perform(
     case 'back': {
       if (humanly) {
         // The keyboard's way back, as the browser itself offers it. The
-        // page before is often there before the keys are up again.
+        // host watches what came of it as it does for the driver's (F38):
+        // keys that led nowhere are a step that failed, not one that
+        // stayed where it was.
         const human = await host.human();
-        return leaving(host, Math.min(timeout, 5000), () => human.chord(['Alt'], 'ArrowLeft'));
+        await host.back(timeout, () => human.chord(['Alt'], 'ArrowLeft'));
+      } else {
+        await host.back(timeout);
       }
-      await host.back(timeout);
       return arrived;
     }
     case 'wait_for': {

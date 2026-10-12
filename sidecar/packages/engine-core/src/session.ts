@@ -397,12 +397,25 @@ export class PageSession {
    * leaves a page starts anew.
    */
   private freshOnNavigation: 'never' | 'once' | 'always' = 'never';
+  /**
+   * How many documents the tab has asked for. A way back that is not the
+   * driver's returns before the browser has an answer; a request that went
+   * out since says that one is on its way (follow-up F38).
+   */
+  private documentsAsked = 0;
 
   constructor(private readonly parts: SessionParts) {
     const { page } = parts.driver;
     page.on('request', (asked) => {
       if (asked.resourceType() === 'script') {
         this.document.scriptUrls.add(asked.url());
+      }
+      try {
+        if (asked.isNavigationRequest() && asked.frame() === this.page.mainFrame()) {
+          this.documentsAsked += 1;
+        }
+      } catch {
+        // A request without a frame (a service worker's) is no navigation of the page.
       }
     });
     page.on('response', (response) => {
@@ -1099,15 +1112,30 @@ export class PageSession {
           throw new Error(`${error.code}: ${error.message}`, { cause: thrown });
         }
       },
-      back: async (timeout) => {
+      back: async (timeout, by) => {
         const deadline = Date.now() + timeout;
         const since = mark();
         const before = await this.read<{ born: number }>(READ_SHOWN).catch(() => null);
-        // The driver is asked for the commit only, and the page itself for
-        // the rest: a page that comes back out of the back/forward cache
-        // fires no `load`, and the driver's wait for one never ends.
-        await page.goBack({ waitUntil: 'commit', timeout });
+        const asked = this.documentsAsked;
+        if (by === undefined) {
+          // The driver is asked for the commit only, and the page itself for
+          // the rest: a page that comes back out of the back/forward cache
+          // fires no `load`, and the driver's wait for one never ends.
+          await page.goBack({ waitUntil: 'commit', timeout });
+        } else {
+          // The persona's keys. Nothing answers for them, so what follows
+          // is all that is known about where they led (follow-up F38).
+          await by();
+        }
         let how = await this.departed(since, Math.min(deadline, Date.now() + BACK_SETTLE_MS));
+        if (how === null && this.documentsAsked !== asked) {
+          // The browser has asked for the page before and holds no answer
+          // yet: keys return at once, where the driver waits for the commit.
+          how = await this.departed(since, deadline);
+          if (how === null) {
+            throw new FlowStepError(`the page before did not answer within ${timeout} ms`);
+          }
+        }
         if (how === null) {
           // Neither a response nor another address. The entry before may
           // still be another document at this very address; the page knows.

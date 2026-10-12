@@ -315,6 +315,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A human `back` step of a flow (the keyboard's `Alt` and left arrow)
+  reported success when the tab had no page to go back to, after watching
+  five seconds of nothing, where the driver's `back` failed after one; and
+  it did not see that it had left the page when the entry before had the
+  address of the page it left and the browser had kept that document
+  (measured on Chrome 155: a page that takes a campaign tag out of its own
+  address). Both ways back now go through one watch that asks the page
+  itself which document it shows: keys that led nowhere fail the step with
+  "there is no page to go back to" within about a second, and a page that
+  came back is arrived on, whatever its address (F38).
 - A human `scroll` step of a flow on a page too long for the step's time
   scrolled until that time, finished the flick and the rest it was in, and
   was then failed by the same time ("scroll did not finish within 30000

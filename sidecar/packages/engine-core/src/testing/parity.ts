@@ -1251,25 +1251,94 @@ export function defineParitySuite(subject: ParitySubject): void {
         expect(capture?.headers.find((header) => header.name === 'x-fixture')).toBeUndefined();
       });
 
-      // No entry to go back to: the step says so, soon, and the flow ends.
+      // No entry to go back to: the step says so, soon, and the flow ends,
+      // by the keyboard as by the driver (F38: the keys used to report
+      // success after watching five seconds of nothing).
       // (The first of the two may still find the blank page the tab began with.)
-      const nowhere = await withContext('back-nowhere', (context) =>
-        flow(context, {
-          timeout_ms: 60_000,
-          actions: [
-            { action: 'goto', url: named('/landing') },
-            { action: 'back', human: false, timeout_ms: 10_000 },
-            { action: 'back', human: false, timeout_ms: 10_000 },
-            { action: 'extract', capture: DOM },
-          ],
-        }),
-      );
-      const failed = nowhere.steps.find((step) => !step.ok);
-      expect(failed).toMatchObject({ action: 'back', capture: null });
-      expect(failed?.error).toMatch(/^there is no page to go back to/);
-      expect(failed?.duration_ms).toBeLessThan(4000);
-      expect(nowhere.steps.at(-1)).toBe(failed);
-      expect(nowhere.final.ok).toBe(false);
+      for (const human of [false, true]) {
+        const how = human ? 'by the keyboard' : 'by the driver';
+        const nowhere = await withContext(
+          `back-nowhere-${human ? 'keyboard' : 'driver'}`,
+          (context) =>
+            flow(context, {
+              timeout_ms: 60_000,
+              actions: [
+                { action: 'goto', url: named('/landing') },
+                { action: 'back', human, timeout_ms: 10_000 },
+                { action: 'back', human, timeout_ms: 10_000 },
+                { action: 'extract', capture: DOM },
+              ],
+            }),
+        );
+        const failed = nowhere.steps.find((step) => !step.ok);
+        expect(failed, how).toMatchObject({ action: 'back', capture: null });
+        expect(failed?.error, how).toMatch(/^there is no page to go back to/);
+        expect(failed?.duration_ms, how).toBeLessThan(4000);
+        expect(nowhere.steps.at(-1), how).toBe(failed);
+        expect(nowhere.final.ok, how).toBe(false);
+      }
+    });
+
+    it('goes back to an entry with the address of the page it leaves, and knows that it left', async () => {
+      // A page that links to itself with a campaign tag, which the
+      // document that arrives takes out of its address again: two history
+      // entries, one address. The browser kept the first document, so the
+      // way back changes no address and asks for nothing; only the page
+      // can say that it is another document (F38: the keys used to watch
+      // five seconds of that and report that the page was never left).
+      for (const human of [false, true]) {
+        const how = human ? 'by the keyboard' : 'by the driver';
+        await site.reset();
+        const run = await withContext(
+          `back-same-address-${human ? 'keyboard' : 'driver'}`,
+          (context) =>
+            flow(context, {
+              timeout_ms: 120_000,
+              actions: [
+                { action: 'goto', url: named('/twice') },
+                { action: 'click', selector: '#tagged' },
+                { action: 'wait_for', url: '**/twice', timeout_ms: 5000 },
+                { action: 'assert', text_contains: 'served 2' },
+                { action: 'extract', capture: DOM },
+                { action: 'back', human, timeout_ms: 10_000 },
+                { action: 'extract', capture: DOM },
+              ],
+            }),
+        );
+        expect(
+          run.steps.filter((step) => !step.ok),
+          how,
+        ).toEqual([]);
+        const [second, first] = run.steps
+          .filter((step) => step.action === 'extract')
+          .map((step) => step.capture);
+        const fixture = (capture: typeof second) =>
+          capture?.headers.find((header) => header.name === 'x-fixture')?.value;
+        expect(second, how).toMatchObject({ final_url: named('/twice'), status: 200 });
+        expect(fixture(second), how).toBe('twice-2');
+        // The page that came back is the first document, as the browser
+        // kept it, with the answer it came with and not the one of the
+        // page that was left at the same address.
+        expect(first, how).toMatchObject({
+          final_url: named('/twice'),
+          status: 200,
+          redirects: [],
+          error: null,
+        });
+        expect(first?.dom_html, how).toContain('<h1 id="view">served 1</h1>');
+        expect(fixture(first), how).toBe('twice-1');
+        expect(run.steps.find((step) => step.action === 'back')?.duration_ms, how).toBeLessThan(
+          3000,
+        );
+        expect(run.final.result, how).toMatchObject({ final_url: named('/twice'), status: 200 });
+        // Nothing went over the wire for the way back.
+        expect(
+          (await site.requests())
+            .map((request) => request.path)
+            .filter((asked) => asked.startsWith('/twice')),
+          how,
+        ).toEqual(['/twice', '/twice?utm_source=fixture']);
+      }
     });
 
     it('keeps the document of a page that only changes its address', async () => {

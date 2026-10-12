@@ -42,6 +42,8 @@ function rig(
     missing?: string[];
     text?: string;
     select?: { index: number; wanted: number } | null;
+    /** The tab has no page to go back to. */
+    nowhere?: boolean;
   } = {},
 ) {
   const calls: string[] = [];
@@ -80,7 +82,14 @@ function rig(
     human: () => Promise.resolve(human),
     typos: true,
     goto: note('goto'),
-    back: note('back'),
+    back: async (timeout, by) => {
+      // The keys go first, as in a session; the watch for the page before is the host's.
+      await by?.();
+      if (options.nowhere === true) {
+        throw new FlowStepError('there is no page to go back to: the history of the tab ends here');
+      }
+      await note('back')(timeout);
+    },
     waitForSelector: (selector, timeout) =>
       missing.has(selector)
         ? Promise.reject(new Error('Timeout'))
@@ -165,8 +174,9 @@ describe('the flow executor', () => {
       'human.press ArrowDown',
       'human.press ArrowDown',
       'human.press Enter',
+      // The keyboard's way back is watched by the host like the driver's.
       'human.chord Alt ArrowLeft',
-      'waitForNavigation 5000',
+      `back ${DEFAULT_STEP_TIMEOUT_MS}`,
     ]);
     expect(
       events.map((event) =>
@@ -299,6 +309,20 @@ describe('the flow executor', () => {
       { action: 'select', selector: '#s', value: 'v' },
       '#s has no option with the value "v"',
       { select: { index: 0, wanted: -1 } },
+    ],
+    // Keys that led nowhere are a failed step like the driver's (F38): a
+    // way back that reports success moved nothing and says it did.
+    [
+      'a way back by the keyboard that leads nowhere',
+      { action: 'back' },
+      'there is no page to go back to: the history of the tab ends here',
+      { nowhere: true },
+    ],
+    [
+      'a way back by the driver that leads nowhere',
+      { action: 'back', human: false },
+      'there is no page to go back to: the history of the tab ends here',
+      { nowhere: true },
     ],
   ])('fails a step for %s and runs nothing after it', async (_name, action, message, options) => {
     const { calls, events, run } = rig(options);
@@ -495,7 +519,10 @@ function pacedRig(options: { seed?: string; persona?: string; leaves?: readonly 
     ...base,
     human: () => Promise.resolve(human),
     goto: (url) => act('goto', url),
-    back: () => act('back', 'history'),
+    back: async (_timeout, by) => {
+      // By the keys when the step is the persona's, else by the driver.
+      await (by === undefined ? act('back', 'history') : by());
+    },
     mark: (): PageMark => ({ response: null, address: `https://example.org/${acted}` }),
     waitForNavigation: (_since, timeout) => {
       calls.push(`waitForNavigation ${timeout}`);
@@ -551,10 +578,15 @@ describe('a flow that paces itself', () => {
       ]),
     ).toEqual({ ok: true, dwellMs: 0 });
     expect(calls.filter((call) => /dwell|draw/i.test(call))).toEqual([]);
-    // What the driver clicks and presses is not watched: nothing depends on where it led.
+    // What the driver clicks and presses is not watched: nothing depends on
+    // where it led. Going back is the host's to watch, whoever went.
     expect(calls.filter((call) => call.startsWith('waitForNavigation'))).toEqual([
       `waitForNavigation ${NAVIGATION_WATCH_MS}`,
-      'waitForNavigation 5000',
+    ]);
+    expect(calls.filter((call) => /^back|chord/.test(call))).toEqual([
+      'human.chord Alt ArrowLeft',
+      `back ${DEFAULT_STEP_TIMEOUT_MS}`,
+      `back ${DEFAULT_STEP_TIMEOUT_MS}`,
     ]);
     expect(events).toHaveLength(7);
     expect(events.every((event) => event.type === 'step' && event.paced_ms === null)).toBe(true);
@@ -636,7 +668,11 @@ describe('a flow that paces itself', () => {
     expect(
       calls.filter((call) => call === `waitForNavigation ${NAVIGATION_WATCH_MS}`),
     ).toHaveLength(6);
-    expect(calls.filter((call) => call === 'waitForNavigation 5000')).toHaveLength(1);
+    // Going back is watched by the host, by the keys as by the driver.
+    expect(calls.filter((call) => /^back |ArrowLeft/.test(call))).toEqual([
+      'human.chord Alt+ArrowLeft',
+      'back history',
+    ]);
     expect(calls.slice(-2)).toEqual([
       'driver.press Tab',
       `waitForNavigation ${NAVIGATION_WATCH_MS}`,
