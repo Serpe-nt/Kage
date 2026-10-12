@@ -690,10 +690,14 @@ that time after finishing its flick and rest (Chrome passed by 74 ms,
 Firefox missed by 2 ms). Fixed in the sidecar without a contract change:
 the scrolling ends two seconds before the step's time and sits out no
 rest past it, so a tall page is scrolled as far as the time allows and
-the step succeeds (spec §10.5). The fix is verified in both real browsers
-without keys; **the two flows have not been rerun against the real pages
-yet** (a smaller keyed run, `KAGE_LIVE_JOBS_ONLY=flows`, waits for the
-owner's word in the M9 session). Measured: a tall page takes 46 to 107 s
+the step succeeds (spec §10.5). The fix was verified in both real browsers
+without keys, then on 2026-10-12 against the real pages on the owner's
+word (`KAGE_LIVE_JOBS_ONLY=flows`, midday in the pool's countries, shipped
+policies untouched): both flows succeeded 10 of 10 steps in one attempt,
+70 s in Chrome and 69 s in Firefox, the scroll ending inside its 30 s
+(about 28 s of scrolling in each), the human `back` 0.4 s beside its dwell,
+the flow's webhook delivered on its retry after 26.1 s. Every step of the
+live check has passed (`m9-evidence/live/run-2/`). Measured: a tall page takes 46 to 107 s
 under the shipped behaviour (53 wheel notches, dwell 5 to 7 s), so the
 default 60 s attempt budget would have cut the Chrome fetch (F44); the
 next page of a sitting begins 0.1 s after the persona left the one before,
