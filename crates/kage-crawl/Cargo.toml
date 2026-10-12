@@ -12,3 +12,21 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[dependencies]
+chrono = { workspace = true }
+kage-core = { workspace = true }
+# Gzipped sitemaps.
+flate2 = { workspace = true }
+# What a site is: the Public Suffix List, compiled in, at the version
+# kage-http uses.
+psl = { workspace = true }
+# Sitemaps.
+quick-xml = { workspace = true }
+# The allow and deny patterns of a crawl: matching in linear time.
+regex = { workspace = true }
+# The tree of a page: its links and its text.
+scraper = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+url = { workspace = true }
+
