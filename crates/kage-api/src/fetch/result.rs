@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use kage_browser::contract::{BodyEncoding, PageResult};
+use kage_browser::contract::{BodyEncoding, PageResult, ScrollEnd};
 use kage_core::domain::{
     ArtifactKind, ArtifactRef, Attempt, ClaimedOs, FetchRecord, Header, PersonaSummary, Render,
     Timing,
@@ -264,6 +264,41 @@ pub(crate) enum BehaviorSource {
     Request,
 }
 
+/// Why the scrolling of a page ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ScrollEndField {
+    /// The persona came as far as it meant to.
+    Depth,
+    /// Its patience with the page ended first.
+    Patience,
+    /// The page does not scroll, or not any further.
+    Page,
+}
+
+impl ScrollEndField {
+    /// What a browser says ended the scrolling, as a result shows it.
+    /// Kage gives every page a patience, so the time to reach the page
+    /// (`budget`) never ends it.
+    pub(crate) const fn of(end: ScrollEnd) -> Option<Self> {
+        match end {
+            ScrollEnd::Depth => Some(Self::Depth),
+            ScrollEnd::Patience => Some(Self::Patience),
+            ScrollEnd::Page => Some(Self::Page),
+            ScrollEnd::Budget => None,
+        }
+    }
+
+    /// Its name.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Depth => "depth",
+            Self::Patience => "patience",
+            Self::Page => "page",
+        }
+    }
+}
+
 /// What the persona did on the page of the last browser attempt.
 #[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub(crate) struct BehaviorView {
@@ -272,8 +307,22 @@ pub(crate) struct BehaviorView {
     /// Whether the request asked for behavior that the policy's lock
     /// overrode.
     pub(crate) request_ignored: bool,
-    /// How far the page was scrolled; null for no scrolling.
+    /// How far the persona meant to scroll the page, from 0 to 1; 0 for
+    /// no scrolling.
     pub(crate) scroll_depth: Option<f64>,
+    /// How far down the document it came, from 0 to 1; null when the page
+    /// was not scrolled or the browser did not say.
+    pub(crate) scroll_reached: Option<f64>,
+    /// Why the scrolling ended: `depth` (as far as it meant to go),
+    /// `patience` (its patience with the page ended first) or `page` (the
+    /// page does not go further); null when the page was not scrolled.
+    #[schema(example = "depth")]
+    pub(crate) scroll_ended_by: Option<ScrollEndField>,
+    /// The patience the persona had with this page, in milliseconds: how
+    /// long it would have gone on scrolling at most. Kage draws it anew
+    /// for every page; `timeout_ms` bounds reaching the page and nothing
+    /// after it. Null for a flow, which scrolls where its steps say.
+    pub(crate) patience_ms: Option<u64>,
     /// The time spent on the page after it loaded, in milliseconds.
     pub(crate) dwell_ms: Option<u64>,
     /// How the page was arrived at.
@@ -570,6 +619,14 @@ fn behavior_of(
         request_ignored: applied.request_ignored,
         // No scrolling is a depth of 0, as a request asks for it.
         scroll_depth: Some(applied.scroll_depth.unwrap_or(0.0)),
+        scroll_reached: done.and_then(|done| done.scroll_reached),
+        scroll_ended_by: done
+            .and_then(|done| done.scroll_ended_by)
+            .and_then(ScrollEndField::of),
+        // What the page was given; a browser that reports it says the same.
+        patience_ms: applied
+            .patience
+            .and_then(|patience| u64::try_from(patience.as_millis()).ok()),
         // What the sidecar says it dwelt; else what it was asked for.
         dwell_ms: done.map(|done| done.dwell_ms).or_else(|| {
             applied

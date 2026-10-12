@@ -16,6 +16,8 @@ workspace = true
 # The sidecar contract: what a browser attempt waits for and captures.
 kage-browser = { workspace = true }
 kage-core = { workspace = true }
+# What a crawl reads next, what a page links to and says, sitemaps.
+kage-crawl = { workspace = true }
 # The caller-header denylist and the kinds of request the http path sends.
 kage-http = { workspace = true }
 # Sessions, self-tests and the personas the admin endpoints operate.

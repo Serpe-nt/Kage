@@ -27,6 +27,14 @@
 //! written when the flow is over, each capture stored as a result of its
 //! own.
 //!
+//! # A crawl
+//!
+//! A crawl has no items when it begins: its runner keeps the crawl's
+//! frontier and adds an item for every page it asks a site for, one page
+//! per visitor at a time, each through the scheduler like an item of a
+//! batch. Which page comes next and how it is reached is the frontier's
+//! (`kage-crawl`); the loop is in [`crawl`].
+//!
 //! # A cancel, a stop, a deadline
 //!
 //! A cancel ends what waits at once, takes an item that waits for its
@@ -51,7 +59,9 @@ use kage_core::outcome::Outcome;
 use kage_core::schedule::planner::{Refusal, Visitors};
 use kage_core::schedule::queue::Priority;
 use kage_proxy::CredentialCipher;
-use kage_scheduler::{Capture, FetchOrder, FetchReport, JobFetch, Running, SchedulerError, Stop};
+use kage_scheduler::{
+    Arrival, Capture, FetchOrder, FetchReport, JobFetch, Running, SchedulerError, Stop,
+};
 use kage_store::StoreError;
 use serde_json::{Value, json};
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, watch};
@@ -64,6 +74,8 @@ use crate::error::ErrorCode;
 use crate::fetch::conflict_of;
 use crate::fetch::request::{FetchRequest, Planned, plan};
 use crate::state::{ApiState, EngineParts};
+
+mod crawl;
 
 /// How long a page waits in the scheduler for its persona before the job
 /// would rather be told when to come back: longer than a gap or a break
@@ -271,6 +283,18 @@ fn error_of(outcome: Outcome, reason: Option<&str>) -> Option<String> {
     (!outcome.is_success()).then(|| reason.unwrap_or(outcome.as_str()).to_owned())
 }
 
+/// What a page of a crawl asks of its order beyond what an item of a
+/// batch asks.
+#[derive(Debug, Clone, Default)]
+struct Tune {
+    /// How the persona arrives at the page.
+    arrival: Option<Arrival>,
+    /// Personas that may not read the page.
+    exclude: Vec<PersonaId>,
+    /// Whether the links of the page are brought back.
+    links: bool,
+}
+
 /// What working one job needs.
 #[derive(Clone)]
 struct Work {
@@ -428,8 +452,9 @@ impl Work {
         visitors: Option<Visitors>,
         stop: Stop,
         _place: OwnedSemaphorePermit,
+        tune: Tune,
     ) -> Ended {
-        let end = self.run_item(&mut item, visitors, stop).await;
+        let end = Box::pin(self.run_item(&mut item, visitors, stop, tune)).await;
         Ended { item, site, end }
     }
 
@@ -438,6 +463,7 @@ impl Work {
         item: &mut JobItem,
         visitors: Option<Visitors>,
         stop: Stop,
+        tune: Tune,
     ) -> ItemEnd {
         let failed = |error: String| ItemEnd::Failed {
             error,
@@ -485,15 +511,20 @@ impl Work {
         item.request_id = Some(request);
         item.started_at.get_or_insert(crate::stored(now));
         item.state = JobItemState::Running;
-        let order = FetchOrder {
+        let mut order = FetchOrder {
             priority: Priority::Job,
             api_key: Some(self.key.id),
             job: Some(self.job),
             spec: item.input.clone(),
             visitors,
             patience: Some(PATIENCE),
+            arrival: tune.arrival,
+            exclude: tune.exclude,
             ..planned.order
         };
+        if tune.links {
+            order.capture.links = Some(true);
+        }
         self.fetch(request, order, earlier, stop).await
     }
 
@@ -683,10 +714,23 @@ impl Runner {
 
     /// Ends the job as its items ended, and reports it.
     async fn finalize(&self, error: Option<&str>) -> Result<(), StoreError> {
+        self.finalize_as(None, error).await
+    }
+
+    /// Ends the job and reports it: in `forced` when its items do not say
+    /// how it ended (a crawl that was cancelled between two pages has no
+    /// item that was), else as its items ended.
+    async fn finalize_as(
+        &self,
+        forced: Option<JobState>,
+        error: Option<&str>,
+    ) -> Result<(), StoreError> {
         let Some(job) = self.store().jobs().get(self.job.id).await? else {
             return Ok(());
         };
-        let state = if error.is_some() && job.items_succeeded == 0 {
+        let state = if let Some(forced) = forced {
+            forced
+        } else if error.is_some() && job.items_succeeded == 0 {
             JobState::Failed
         } else {
             job.final_state()
@@ -748,7 +792,7 @@ impl Runner {
         let worked = match self.job.kind {
             JobKind::Batch => self.batch().await,
             JobKind::Flow => Box::pin(self.flow()).await,
-            JobKind::Crawl => self.fail_all("not_available_yet").await,
+            JobKind::Crawl => Box::pin(self.crawl()).await,
         };
         if let Err(error) = worked {
             tracing::error!(job = %self.job.id, %error, "a job could not be worked; it is tried again later");
@@ -879,6 +923,7 @@ impl Runner {
                         known,
                         stop.clone(),
                         place,
+                        Tune::default(),
                     ));
                 }
             }

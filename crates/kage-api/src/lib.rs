@@ -511,9 +511,12 @@ mod tests {
             "BatchJob",
             "FlowJob",
             "FlowStepField",
+            "CrawlJob",
             "WebhookField",
             "JobView",
+            "CrawlView",
             "JobItemsPage",
+            "CrawlItemView",
             "PurgeRequest",
             "Purged",
         ] {

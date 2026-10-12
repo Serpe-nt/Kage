@@ -418,7 +418,11 @@ export interface paths {
         put?: never;
         /**
          * Accept a job.
-         * @description `201` with the job, which then runs in the background: read it with
+         * @description A `batch` (pages fetched one after another), a `flow` (a script of
+         *     steps in one browser) or a `crawl` (a site read from its seeds along
+         *     its links; it needs the `crawl` scope besides `jobs`).
+         *
+         *     `201` with the job, which then runs in the background: read it with
          *     `GET /v1/jobs/{id}` and its items with `GET /v1/jobs/{id}/items`, or
          *     name a `webhook` to be told. With an `Idempotency-Key` header the same
          *     request within a day is answered `200` with the job it made the first
@@ -489,7 +493,9 @@ export interface paths {
          * @description A result here is what `GET /v1/results/{request_id}` returns without
          *     the document and the body, which are artifacts (named in `artifacts`).
          *     An item of a flow is one of its steps; the last item is the page the
-         *     flow ended on.
+         *     flow ended on. An item of a crawl is a page the crawl asked for, in
+         *     the order it asked, with what the page was to the crawl in `crawl`;
+         *     the list grows while the crawl reads.
          */
         get: operations["list_job_items"];
         put?: never;
@@ -812,6 +818,14 @@ export interface components {
              * @description Notches of the wheel.
              */
             notches?: number | null;
+            /**
+             * Format: int64
+             * @description The patience the persona had with this page, in milliseconds: how
+             *     long it would have gone on scrolling at most. Kage draws it anew
+             *     for every page; `timeout_ms` bounds reaching the page and nothing
+             *     after it. Null for a flow, which scrolls where its steps say.
+             */
+            patience_ms?: number | null;
             /** @description How the page was arrived at. */
             referer_strategy: components["schemas"]["RefererStrategyField"];
             /**
@@ -821,9 +835,17 @@ export interface components {
             request_ignored: boolean;
             /**
              * Format: double
-             * @description How far the page was scrolled; null for no scrolling.
+             * @description How far the persona meant to scroll the page, from 0 to 1; 0 for
+             *     no scrolling.
              */
             scroll_depth?: number | null;
+            scroll_ended_by?: components["schemas"]["ScrollEndField"] | null;
+            /**
+             * Format: double
+             * @description How far down the document it came, from 0 to 1; null when the page
+             *     was not scrolled or the browser did not say.
+             */
+            scroll_reached?: number | null;
             /** @description The seed all of it was drawn from. Admin keys only. */
             seed?: string | null;
         };
@@ -896,6 +918,242 @@ export interface components {
              * @description Items the job consists of.
              */
             total: number;
+        };
+        /** @description What a page of a crawl was to the crawl. */
+        CrawlItemView: {
+            /**
+             * Format: int32
+             * @description How many pages back in its tab the persona went before the click.
+             */
+            backs?: number | null;
+            /**
+             * @description The SHA-256 of what the page says, without what the site repeats on
+             *     every page, as hexadecimal.
+             */
+            content_hash?: string | null;
+            /**
+             * Format: int32
+             * @description The least number of links from a seed the crawl knew when it asked
+             *     for the page.
+             */
+            depth: number;
+            /**
+             * @description The page read before it that says the same word for word. Its own
+             *     links were not followed from here: they are that page's.
+             */
+            duplicate_of?: string | null;
+            /** @description Where the page ended when a redirect led elsewhere. */
+            final_url?: string | null;
+            /**
+             * @description How the crawl came to know the address: `seed`, `sitemap` or `link`.
+             * @example link
+             */
+            found_by: string;
+            /** @description The page its link was first seen on. */
+            found_on?: string | null;
+            /**
+             * Format: date-time
+             * @description When the site's sitemap says the page last changed.
+             */
+            lastmod?: string | null;
+            links?: components["schemas"]["LinksView"] | null;
+            near_duplicate_of?: components["schemas"]["NearDuplicateView"] | null;
+            reached?: components["schemas"]["ReachedField"] | null;
+            scroll?: components["schemas"]["ScrollView"] | null;
+        };
+        /**
+         * @description A crawl: a site read from its seeds along its links, the way a reader
+         *     goes through it.
+         *
+         *     One persona reads one site. Its first page is typed; every later page
+         *     is reached by a click on a link of the page that is open or of one a few
+         *     steps back in its tab, and only when the tab holds nothing more an
+         *     address is typed. It rests between pages, takes its breaks and sleeps
+         *     like every other visit, so a crawl takes the time a reader takes: under
+         *     the `human` pacing about an hour for 50 pages of one site. `visitors`
+         *     and a faster `pacing` in `defaults` trade that for speed, as in a batch.
+         *
+         *     Every page the crawl asks for is an item of the job, in the order it was
+         *     asked for, with its depth, where its link was found, how it was reached
+         *     and what it repeats.
+         * @example {
+         *       "defaults": {
+         *         "include": [
+         *           "dom",
+         *           "headers"
+         *         ]
+         *       },
+         *       "deny": [
+         *         "/login",
+         *         "\\?sort="
+         *       ],
+         *       "max_depth": 3,
+         *       "max_pages": 50,
+         *       "seeds": [
+         *         "https://example.org/"
+         *       ],
+         *       "type": "crawl"
+         *     }
+         */
+        CrawlJob: {
+            /**
+             * @description Regular expressions on the normalized address (spec §13). With any,
+             *     a page is read only when one of them matches. At most 32, each at
+             *     most 512 bytes.
+             * @example [
+             *       "^https://example\\.org/articles/"
+             *     ]
+             */
+            allow?: string[];
+            defaults?: components["schemas"]["FreeForm"] | null;
+            /**
+             * @description Regular expressions on the normalized address: a page one of them
+             *     matches is never read, whatever `allow` says.
+             * @example [
+             *       "/login"
+             *     ]
+             */
+            deny?: string[];
+            /**
+             * Format: int32
+             * @description How many links from a seed a page may be, by the shortest way the
+             *     crawl finds: `crawl.default_max_depth` (3) unless said, at most 32.
+             *     0 reads the seeds only.
+             * @example 3
+             */
+            max_depth?: number | null;
+            /**
+             * Format: int32
+             * @description How many pages the crawl asks the sites for at most, a page that
+             *     failed included: `crawl.default_max_pages` (100, or `jobs.max_items`
+             *     where that is fewer) unless said, at most `jobs.max_items`.
+             * @example 100
+             */
+            max_pages?: number | null;
+            /**
+             * @description Whether the crawl stays on the sites of its seeds (their registrable
+             *     domains); true unless said. With false it follows a link to any
+             *     site, each with a visitor of its own, inside the same limits; every
+             *     address passes the guard against private networks before it is
+             *     asked for.
+             */
+            same_site_only?: boolean | null;
+            /**
+             * @description Where the crawl starts: 1 to `crawl.max_seeds` (100) addresses. A
+             *     seed is read whatever `allow` says; one that `deny` matches is
+             *     refused.
+             * @example [
+             *       "https://example.org/"
+             *     ]
+             */
+            seeds: string[];
+            /**
+             * @description An open session of this key: its persona reads every page, and no
+             *     other, with a fetch's rules.
+             */
+            session_id?: string | null;
+            /**
+             * @description Whether the sitemaps of the seeds' sites are read first and the
+             *     pages they name become places to start from; false unless said. A
+             *     reader does not ask for `/sitemap.xml`: a site that watches for the
+             *     request sees it. It is therefore made by another persona than the
+             *     one that reads the site (a scout), and never when there is none.
+             */
+            use_sitemaps?: boolean | null;
+            /**
+             * Format: int32
+             * @description How many personas read one site for the crawl at a time; 1 unless
+             *     said, at most the `domain_concurrency` of the pacing in force for
+             *     the site. More is refused, not reduced.
+             * @example 1
+             */
+            visitors?: number | null;
+            webhook?: components["schemas"]["WebhookField"] | null;
+        };
+        /** @description How far a crawl has come (spec §13). */
+        CrawlView: {
+            /**
+             * Format: int32
+             * @description The depth of the deepest page read.
+             */
+            depth_reached: number;
+            /**
+             * Format: int64
+             * @description Addresses the crawl knows: its seeds, what sitemaps named and what
+             *     pages linked to, each once however often and however spelled.
+             */
+            discovered: number;
+            /**
+             * Format: int64
+             * @description Addresses found after the crawl knew `crawl.max_frontier` of them:
+             *     counted and forgotten.
+             */
+            dropped: number;
+            /**
+             * Format: int64
+             * @description Pages that say word for word what a page read before them says.
+             */
+            duplicates: number;
+            /**
+             * @description Why the crawl stopped reading: `completed` (nothing inside its
+             *     scope is left), `max_pages`, `cancelled` or `expired`; null while it
+             *     goes on.
+             * @example completed
+             */
+            ended?: string | null;
+            /**
+             * Format: int64
+             * @description Pages that could not be read: the fetch failed, or the site
+             *     answered with an error status (its item is then a fetch that
+             *     succeeded, with the status in its result).
+             */
+            failed: number;
+            /**
+             * Format: int64
+             * @description Pages read.
+             */
+            fetched: number;
+            /**
+             * Format: int64
+             * @description Pages being read now.
+             */
+            fetching: number;
+            /**
+             * Format: int32
+             * @description The furthest a page may be from a seed.
+             */
+            max_depth: number;
+            /**
+             * Format: int32
+             * @description The most pages the crawl asks for.
+             */
+            max_pages: number;
+            /**
+             * Format: int64
+             * @description Pages that say nearly what a page read before them says.
+             */
+            near_duplicates: number;
+            /**
+             * Format: int32
+             * @description Pages asked of the sites so far: what `max_pages` counts.
+             */
+            pages: number;
+            /** @description How the pages were reached. */
+            reached: components["schemas"]["ReachedCounts"];
+            /** @description The sitemaps of a crawl with `use_sitemaps`. */
+            sitemaps: components["schemas"]["SitemapView"][];
+            /**
+             * @description Addresses the crawl knows and does not read, by reason: `off_site`,
+             *     `too_deep`, `denied`, `not_allowed`, `not_a_page` (a file),
+             *     `hidden` (no reader can see the link), `already_read` (another
+             *     address redirected there), `ssrf_denied`.
+             */
+            skipped: components["schemas"]["FreeForm"];
+            /**
+             * Format: int64
+             * @description Of them, pages that wait to be read.
+             */
+            waiting: number;
         };
         /** @description One event on its way to the job's webhook. */
         DeliveryView: {
@@ -1371,8 +1629,12 @@ export interface components {
          * @enum {string}
          */
         ItemStateField: "queued" | "running" | "succeeded" | "failed" | "cancelled";
-        /** @description One item of a job: a page of a batch, or a step of a flow. */
+        /**
+         * @description One item of a job: a page of a batch or of a crawl, or a step of a
+         *     flow.
+         */
         JobItemView: {
+            crawl?: components["schemas"]["CrawlItemView"] | null;
             /**
              * @description Why it failed, or was not attempted: an outcome's name, a reason
              *     such as `domain_paused` or `cancelled`, or a step's own error.
@@ -1409,7 +1671,7 @@ export interface components {
             /** @description Where it stands. */
             state: components["schemas"]["ItemStateField"];
             step?: components["schemas"]["StepView"] | null;
-            /** @description The page, for an item of a batch. */
+            /** @description The page, for an item of a batch or of a crawl. */
             url?: string | null;
         };
         /** @description A page of a job's items. */
@@ -1426,6 +1688,9 @@ export interface components {
         }) | (components["schemas"]["FlowJob"] & {
             /** @enum {string} */
             type: "flow";
+        }) | (components["schemas"]["CrawlJob"] & {
+            /** @enum {string} */
+            type: "crawl";
         });
         /**
          * @description Where a job stands (spec §16.6).
@@ -1441,6 +1706,7 @@ export interface components {
         JobView: {
             /** @description Whether a cancel was asked for. */
             cancel_requested: boolean;
+            crawl?: components["schemas"]["CrawlView"] | null;
             /**
              * Format: date-time
              * @description When the job was accepted.
@@ -1491,7 +1757,7 @@ export interface components {
             type: components["schemas"]["JobTypeField"];
             /**
              * Format: int32
-             * @description How many personas read one site for a batch at a time.
+             * @description How many personas read one site for a batch or a crawl at a time.
              */
             visitors?: number | null;
             webhook?: components["schemas"]["WebhookView"] | null;
@@ -1581,6 +1847,19 @@ export interface components {
             /** @description What it may do. */
             scopes: components["schemas"]["ScopeField"][];
         };
+        /** @description The links of a page as the crawl took them. */
+        LinksView: {
+            /**
+             * Format: int32
+             * @description Links a reader can follow, each address once.
+             */
+            found: number;
+            /**
+             * Format: int32
+             * @description Of those, the addresses the crawl did not know before this page.
+             */
+            new: number;
+        };
         /** @description Body of a liveness response. */
         Liveness: {
             /** @description Current liveness status. */
@@ -1591,6 +1870,16 @@ export interface components {
          * @enum {string}
          */
         LivenessStatus: "ok";
+        /** @description The page a page nearly repeats. */
+        NearDuplicateView: {
+            /**
+             * Format: int32
+             * @description In how many of the 64 bits of their fingerprints the two differ.
+             */
+            bits: number;
+            /** @description The page read before it that says nearly the same. */
+            url: string;
+        };
         /**
          * @description How an attempt or a request ended (spec §2).
          * @enum {string}
@@ -1948,6 +2237,34 @@ export interface components {
              */
             requests: number;
         };
+        /** @description How the pages of a crawl were reached, in numbers. */
+        ReachedCounts: {
+            /**
+             * Format: int64
+             * @description Links clicked after going back.
+             */
+            back_click?: number;
+            /**
+             * Format: int64
+             * @description Links clicked on the open page.
+             */
+            click?: number;
+            /**
+             * Format: int64
+             * @description Pages of the http path that named the page before them.
+             */
+            referer?: number;
+            /**
+             * Format: int64
+             * @description Addresses typed.
+             */
+            typed?: number;
+        };
+        /**
+         * @description How a page of a crawl was reached.
+         * @enum {string}
+         */
+        ReachedField: "typed" | "click" | "back_click" | "referer";
         /** @description Body of a readiness response. */
         ReadyReport: {
             /** @description What was checked. */
@@ -2041,6 +2358,11 @@ export interface components {
              */
             timeout_ms?: number | null;
         };
+        /**
+         * @description Why the scrolling of a page ended.
+         * @enum {string}
+         */
+        ScrollEndField: "depth" | "patience" | "page";
         /** @description Scroll the page. */
         ScrollStep: {
             /**
@@ -2055,6 +2377,26 @@ export interface components {
              * @description The step's own budget in milliseconds; 30000 unless said.
              */
             timeout_ms?: number | null;
+        };
+        /** @description How the scrolling of a page ended (spec §10.4). */
+        ScrollView: {
+            /**
+             * @description `depth` (as far as it meant to go), `patience` (its patience ended
+             *     first) or `page` (the page does not go further).
+             * @example depth
+             */
+            ended_by?: string | null;
+            /**
+             * Format: int64
+             * @description The patience the persona had with this page, in milliseconds: how
+             *     long it would have gone on scrolling at most.
+             */
+            patience_ms?: number | null;
+            /**
+             * Format: double
+             * @description How far down the document it came, from 0 to 1.
+             */
+            reached?: number | null;
         };
         /** @description Choose an option of a select element. */
         SelectStep: {
@@ -2158,6 +2500,35 @@ export interface components {
             last_used_at: string;
             /** @description The persona every request of the session is made by. */
             persona: components["schemas"]["PersonaView"];
+        };
+        /** @description How reading one sitemap file went. */
+        SitemapView: {
+            /**
+             * @description The site it belongs to.
+             * @example example.org
+             */
+            site: string;
+            /**
+             * @description `waiting`, `read` (a list of pages), `index` (a list of sitemaps),
+             *     `missing` (the site has none there), `sitemap_unreadable` (the
+             *     scout's browser cannot show what it is: a gzipped file in Chrome,
+             *     or no sitemap at all), `failed` (the request did not get through),
+             *     `no_scout` (no persona but the site's reader could have asked: it
+             *     was not asked for), or `not_read` (the crawl ended first, or the
+             *     site has more files than `crawl.max_sitemaps`).
+             * @example read
+             */
+            state: string;
+            /**
+             * @description The file.
+             * @example https://example.org/sitemap.xml
+             */
+            url: string;
+            /**
+             * Format: int64
+             * @description The addresses it named that the crawl took in.
+             */
+            urls: number;
         };
         /** @description What a step of a flow reports. */
         StepView: {
@@ -3186,7 +3557,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key lacks the `jobs` scope, or `sessions` for `session_id`. */
+            /** @description The key lacks the `jobs` scope, `crawl` for a crawl, or `sessions` for `session_id`. */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -3213,7 +3584,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The job cannot be accepted as asked; `code` says why, `item` or `step` which part. */
+            /** @description The job cannot be accepted as asked; `code` says why, `item` (a batch's item, a crawl's seed) or `step` which part. */
             422: {
                 headers: {
                     [name: string]: unknown;

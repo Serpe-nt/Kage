@@ -183,7 +183,13 @@ pub(crate) async fn enqueue(
         return Ok(false);
     };
     let id = WebhookDeliveryId::new();
-    let view = JobView::of(job, &[]);
+    // A crawl's events say how far it has come, like its job does.
+    let crawl = if job.kind == kage_core::domain::JobKind::Crawl {
+        Some(super::crawl::Kept::view(store.jobs().crawl(job.id).await?).unwrap_or_default())
+    } else {
+        None
+    };
+    let view = JobView::of(job, &[], crawl);
     let at = crate::stored(at);
     let body = serde_json::to_string(&Payload {
         id,

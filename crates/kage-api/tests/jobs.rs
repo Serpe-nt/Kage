@@ -402,15 +402,14 @@ async fn a_job_is_accepted_whole_or_not_at_all() {
             assert_eq!(problem[name], value, "{body}: {problem}");
         }
     }
-    // A crawl is M10's.
-    let crawler = api.key(&[Scope::Jobs, Scope::Crawl]).await;
+    // A crawl needs a scope of its own (`tests/crawl.rs` has the rest).
     api.post(
-        &crawler,
+        &token,
         "/v1/jobs",
-        &json!({ "type": "crawl", "seeds": [] }),
+        &json!({ "type": "crawl", "seeds": [Api::url("/")] }),
     )
     .await
-    .problem(StatusCode::UNPROCESSABLE_ENTITY, "not_available_yet");
+    .problem(StatusCode::FORBIDDEN, "scope_missing");
     // Nothing of any of them was stored.
     assert_eq!(count(&api, "jobs").await, 0);
     assert_eq!(count(&api, "job_items").await, 0);

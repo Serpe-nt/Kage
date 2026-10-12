@@ -115,6 +115,18 @@ fn describe() {
         "kage_api_refusals_total",
         "Requests refused before a handler ran, by error code"
     );
+    metrics::describe_counter!(
+        "kage_crawl_pages_total",
+        "Pages crawls read, by how they were reached: typed, click, back_click, referer"
+    );
+    metrics::describe_counter!(
+        "kage_crawl_skipped_total",
+        "Addresses crawls came to know and did not read, by reason"
+    );
+    metrics::describe_counter!(
+        "kage_crawl_duplicates_total",
+        "Pages crawls read that repeat a page read before, by kind: exact, near"
+    );
     metrics::describe_gauge!("kage_persona_state", "Personas by state");
     metrics::describe_gauge!(
         "kage_selftest_score",

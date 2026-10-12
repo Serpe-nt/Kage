@@ -344,6 +344,12 @@ async fn a_page_is_fetched_in_a_browser_with_what_was_asked_for() {
     assert_eq!(behavior["scroll_depth"], 0.0);
     assert_eq!(behavior["referer_strategy"], "none");
     assert!(behavior.get("seed").is_none());
+    // A page that is not scrolled has no end of its scrolling; it has a
+    // patience all the same, which no request sets.
+    assert_eq!(behavior["scroll_reached"], Value::Null);
+    assert_eq!(behavior["scroll_ended_by"], Value::Null);
+    let patience = behavior["patience_ms"].as_u64().unwrap();
+    assert!((6_000..=240_000).contains(&patience), "{patience}");
     // The sidecar was told so: no scrolling, a dwell drawn around three
     // seconds and never below the policy's floor, and the wait as given.
     let navigated = api.lab.chromium.with(|sidecar| sidecar.navigated.clone());
@@ -407,6 +413,18 @@ async fn a_page_is_fetched_in_a_browser_with_what_was_asked_for() {
     );
     assert_eq!(plain["behavior"]["applied"], "policy");
     assert!(plain["behavior"]["seed"].is_string());
+    // The policy's page is scrolled: the result says how far the persona
+    // meant to go, how far it came and what ended it, and the patience it
+    // had, which is the one the browser was given.
+    let scrolled = &plain["behavior"];
+    assert_eq!(scrolled["scroll_ended_by"], "depth");
+    assert_eq!(scrolled["scroll_reached"], scrolled["scroll_depth"]);
+    let given = api
+        .lab
+        .chromium
+        .with(|sidecar| sidecar.navigated.last().unwrap()["behavior"]["patience_ms"].clone());
+    assert_eq!(scrolled["patience_ms"], given);
+    assert_ne!(scrolled["patience_ms"], behavior["patience_ms"]);
     assert!(plain["attempts"][0]["seed"].is_string());
     api.shut_down().await;
 }

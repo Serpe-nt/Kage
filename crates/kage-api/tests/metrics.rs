@@ -128,6 +128,67 @@ async fn metrics_expose_the_series_of_the_specification() {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     assert_eq!(ended["state"], "succeeded", "{ended}");
+    // A crawl of two pages that say the same: the seed typed, the second
+    // reached from it, a link nobody sees left alone.
+    let words = (0..60)
+        .map(|n| format!("word{n}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    for (at, links) in [
+        (
+            "/crawl/",
+            "<a href=\"/crawl/copy\">on</a><a href=\"/crawl/trap\" hidden>no</a>",
+        ),
+        ("/crawl/copy", "<a href=\"/crawl/\">on</a>"),
+    ] {
+        Mock::given(method("GET"))
+            .and(path(at))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/html; charset=utf-8")
+                    .set_body_string(format!(
+                        "<html><body><main><p>{words}</p></main><nav>{links}</nav></body></html>"
+                    )),
+            )
+            .mount(&api.lab.site)
+            .await;
+    }
+    let crawler = api.key(&[Scope::Jobs, Scope::Crawl]).await;
+    let accepted = send(
+        Method::POST,
+        "/v1/jobs",
+        Some(&crawler),
+        Some(json!({
+            "type": "crawl",
+            "seeds": [Api::url("/crawl/")],
+            "defaults": { "render": "http" },
+        })),
+    )
+    .await;
+    assert_eq!(
+        accepted.status,
+        StatusCode::CREATED,
+        "{:?}",
+        accepted.json()
+    );
+    let crawl = accepted.json()["id"].as_str().unwrap().to_owned();
+    let mut read = serde_json::Value::Null;
+    for _ in 0..400 {
+        read = send(
+            Method::GET,
+            &format!("/v1/jobs/{crawl}"),
+            Some(&crawler),
+            None,
+        )
+        .await
+        .json();
+        if read["state"] == "succeeded" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(read["state"], "succeeded", "{read}");
+    assert_eq!(read["crawl"]["duplicates"], 1, "{read}");
     work.stop().await;
     let rendered = send(
         Method::POST,
@@ -338,6 +399,38 @@ async fn metrics_expose_the_series_of_the_specification() {
         &text,
         "kage_job_items_total",
         &["job_type=\"batch\"", "state=\"succeeded\"", " 2"],
+    );
+    // A crawl is a job, and says how its pages were reached, what it
+    // left alone and what repeated.
+    expect(
+        &text,
+        "kage_jobs_finished_total",
+        &["job_type=\"crawl\"", "state=\"succeeded\""],
+    );
+    expect(
+        &text,
+        "kage_job_items_total",
+        &["job_type=\"crawl\"", "state=\"succeeded\"", " 2"],
+    );
+    expect(
+        &text,
+        "kage_crawl_pages_total",
+        &["reached=\"typed\"", " 1"],
+    );
+    expect(
+        &text,
+        "kage_crawl_pages_total",
+        &["reached=\"referer\"", " 1"],
+    );
+    expect(
+        &text,
+        "kage_crawl_skipped_total",
+        &["reason=\"hidden\"", " 1"],
+    );
+    expect(
+        &text,
+        "kage_crawl_duplicates_total",
+        &["kind=\"exact\"", " 1"],
     );
     // The job's pages were the scheduler's work like any other, under
     // their own kind.

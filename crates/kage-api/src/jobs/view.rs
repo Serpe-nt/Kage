@@ -16,6 +16,7 @@ use serde_json::Value;
 use url::Url;
 use utoipa::ToSchema;
 
+use super::crawl::{CrawlItemView, CrawlView};
 use crate::fetch::result::{FetchResult, OutcomeField};
 
 /// The kind of a job.
@@ -26,7 +27,7 @@ pub(crate) enum JobTypeField {
     Batch,
     /// A script of steps in one browser.
     Flow,
-    /// A crawl (milestone M10).
+    /// A site read from its seeds along its links.
     Crawl,
 }
 
@@ -210,8 +211,10 @@ pub(crate) struct JobView {
     /// that outlasted its wall time and is carried on as a job.
     #[schema(example = "api")]
     pub(crate) origin: String,
-    /// How many personas read one site for a batch at a time.
+    /// How many personas read one site for a batch or a crawl at a time.
     pub(crate) visitors: Option<u32>,
+    /// How far a crawl has come; null for every other job.
+    pub(crate) crawl: Option<CrawlView>,
     /// The session the job runs in, when it names one.
     pub(crate) session_id: Option<String>,
     /// The job's webhook.
@@ -231,8 +234,9 @@ pub(crate) struct JobView {
 }
 
 impl JobView {
-    /// The job as its key sees it, with the deliveries given.
-    pub(crate) fn of(job: &Job, deliveries: &[DeliveryView]) -> Self {
+    /// The job as its key sees it, with the deliveries given and, for a
+    /// crawl, how far it has come.
+    pub(crate) fn of(job: &Job, deliveries: &[DeliveryView], crawl: Option<CrawlView>) -> Self {
         let spec = |name: &str| job.spec.get(name);
         let number = |name: &str| {
             spec(name)
@@ -270,8 +274,9 @@ impl JobView {
             }),
             error: job.error.clone(),
             origin: JobOrigin::as_str(job.origin).to_owned(),
-            visitors: (job.kind == JobKind::Batch && job.origin == JobOrigin::Api)
+            visitors: (job.kind != JobKind::Flow && job.origin == JobOrigin::Api)
                 .then(|| number("visitors").unwrap_or(1)),
+            crawl,
             session_id: spec("session_id")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
@@ -302,17 +307,21 @@ pub(crate) struct StepView {
     pub(crate) error: Option<String>,
 }
 
-/// One item of a job: a page of a batch, or a step of a flow.
+/// One item of a job: a page of a batch or of a crawl, or a step of a
+/// flow.
 #[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub(crate) struct JobItemView {
     /// Its position in the job, from 0.
     pub(crate) seq: u64,
     /// Where it stands.
     pub(crate) state: ItemStateField,
-    /// The page, for an item of a batch.
+    /// The page, for an item of a batch or of a crawl.
     pub(crate) url: Option<String>,
     /// The step, for an item of a flow.
     pub(crate) step: Option<StepView>,
+    /// What the page was to the crawl, for an item of a crawl: its depth,
+    /// where its link was found, how it was reached, what it repeats.
+    pub(crate) crawl: Option<CrawlItemView>,
     /// How its fetch or its capture ended.
     pub(crate) outcome: Option<OutcomeField>,
     /// Why it failed, or was not attempted: an outcome's name, a reason
@@ -353,11 +362,14 @@ impl JobItemView {
         Self {
             seq: item.seq,
             state: item.state.into(),
-            url: (kind == JobKind::Batch)
+            url: (kind != JobKind::Flow)
                 .then(|| item.input.get("url").and_then(Value::as_str))
                 .flatten()
                 .map(str::to_owned),
             step,
+            crawl: (kind == JobKind::Crawl)
+                .then(|| CrawlItemView::of(item.output.as_ref()))
+                .flatten(),
             outcome: item.outcome.map(Into::into),
             error: item.error.clone(),
             not_before: item.not_before,
@@ -457,7 +469,7 @@ mod tests {
             error: Some("timeout".to_owned()),
         };
 
-        let view = JobView::of(&job, &[DeliveryView::of(&delivery, Some(&failed))]);
+        let view = JobView::of(&job, &[DeliveryView::of(&delivery, Some(&failed))], None);
         let text = serde_json::to_string(&view).unwrap();
         let value: serde_json::Value = serde_json::from_str(&text).unwrap();
 
@@ -495,7 +507,7 @@ mod tests {
         running.state = JobState::Running;
         running.webhook_url = None;
         running.origin = JobOrigin::SyncOverflow;
-        let view = JobView::of(&running, &[]);
+        let view = JobView::of(&running, &[], None);
         assert_eq!(view.paused, None);
         assert_eq!(view.webhook, None);
         assert_eq!(view.visitors, None);

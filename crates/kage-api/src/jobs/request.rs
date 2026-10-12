@@ -11,6 +11,9 @@
 //! driver instead of the persona's hands (`human: false`) is refused unless
 //! the policy of the flow's site allows it.
 //!
+//! A **crawl** is a site read from its seeds along its links; what it
+//! takes and what it is checked for is in [`super::crawl`].
+//!
 //! A job is accepted whole or not at all: nothing is stored for a job one
 //! of whose items is refused.
 
@@ -26,6 +29,7 @@ use serde_json::{Map, Value, json};
 use url::Url;
 use utoipa::ToSchema;
 
+use super::crawl::CrawlJob;
 use crate::error::{ApiError, ApiResult, ErrorCode};
 use crate::fetch::request::{
     FetchRequest, Include, PacingField, PdfField, PersonaHints, Planned, ScreenshotField, XhrField,
@@ -507,6 +511,8 @@ pub(crate) enum JobRequest {
     Batch(BatchJob),
     /// A script of steps in one browser.
     Flow(Box<FlowJob>),
+    /// A site read from its seeds along its links.
+    Crawl(Box<CrawlJob>),
 }
 
 impl JobRequest {
@@ -515,6 +521,7 @@ impl JobRequest {
         match self {
             Self::Batch(batch) => batch.webhook.as_ref(),
             Self::Flow(flow) => flow.webhook.as_ref(),
+            Self::Crawl(crawl) => crawl.webhook.as_ref(),
         }
     }
 
@@ -523,6 +530,7 @@ impl JobRequest {
         match self {
             Self::Batch(batch) => batch.session_id.as_deref(),
             Self::Flow(flow) => flow.session_id.as_deref(),
+            Self::Crawl(crawl) => crawl.session_id.as_deref(),
         }
     }
 }

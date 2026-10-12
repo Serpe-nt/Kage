@@ -26,6 +26,7 @@
 // its trait, with the span of the name given here.
 #![allow(unused_qualifications)]
 
+pub(crate) mod crawl;
 pub(crate) mod request;
 pub(crate) mod view;
 pub mod webhook;
@@ -48,6 +49,7 @@ use serde_json::{Value, json};
 use sha2::Sha256;
 use utoipa::IntoParams;
 
+use self::crawl::plan_crawl;
 use self::request::{
     Checks, JobRequest, MAX_IDEMPOTENCY_KEY, PlannedWebhook, canonical, plan_batch, plan_flow,
     plan_webhook, stored_spec,
@@ -119,7 +121,18 @@ async fn view_of(state: &ApiState, job: &Job) -> ApiResult<JobView> {
             deliveries.push(DeliveryView::of(&delivery, attempts.last()));
         }
     }
-    Ok(JobView::of(job, &deliveries))
+    let crawl = if job.kind == JobKind::Crawl {
+        let kept = state
+            .store()
+            .jobs()
+            .crawl(job.id)
+            .await
+            .map_err(|error| ApiError::internal(&error))?;
+        Some(crawl::Kept::view(kept).unwrap_or_default())
+    } else {
+        None
+    };
+    Ok(JobView::of(job, &deliveries, crawl))
 }
 
 /// The `Idempotency-Key` of a request, when it carries one that can be
@@ -221,6 +234,10 @@ async fn check_session(
 
 /// Accept a job.
 ///
+/// A `batch` (pages fetched one after another), a `flow` (a script of
+/// steps in one browser) or a `crawl` (a site read from its seeds along
+/// its links; it needs the `crawl` scope besides `jobs`).
+///
 /// `201` with the job, which then runs in the background: read it with
 /// `GET /v1/jobs/{id}` and its items with `GET /v1/jobs/{id}/items`, or
 /// name a `webhook` to be told. With an `Idempotency-Key` header the same
@@ -242,10 +259,10 @@ async fn check_session(
             headers(("Idempotency-Replayed" = String, description = "Always `true`."))),
         (status = 400, description = "The body is not JSON.", body = Problem, content_type = "application/problem+json"),
         (status = 401, description = "No key, or not a valid one.", body = Problem, content_type = "application/problem+json"),
-        (status = 403, description = "The key lacks the `jobs` scope, or `sessions` for `session_id`.", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "The key lacks the `jobs` scope, `crawl` for a crawl, or `sessions` for `session_id`.", body = Problem, content_type = "application/problem+json"),
         (status = 404, description = "`session_not_found`.", body = Problem, content_type = "application/problem+json"),
         (status = 409, description = "`idempotency_key_reused`, `session_persona_conflict`.", body = Problem, content_type = "application/problem+json"),
-        (status = 422, description = "The job cannot be accepted as asked; `code` says why, `item` or `step` which part.", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "The job cannot be accepted as asked; `code` says why, `item` (a batch's item, a crawl's seed) or `step` which part.", body = Problem, content_type = "application/problem+json"),
         (status = 429, description = "A limit of the key or of the API.", body = Problem, content_type = "application/problem+json"),
         (status = 503, description = "Nothing can be fetched: no proxy pool, or the server stops.", body = Problem, content_type = "application/problem+json"),
     ),
@@ -261,12 +278,8 @@ pub(crate) async fn create(
 ) -> ApiResult<Response> {
     caller.require(Scope::Jobs)?;
     if body.get("type").and_then(Value::as_str) == Some("crawl") {
+        // A crawl asks a site for pages nobody named: a scope of its own.
         caller.require(Scope::Crawl)?;
-        return Err(ApiError::new(
-            ErrorCode::NotAvailableYet,
-            "crawl jobs arrive with milestone M10; batch and flow jobs exist",
-        )
-        .with("field", "type"));
     }
     if state.engine().is_none() || state.is_stopping() {
         return Err(ApiError::new(
@@ -330,6 +343,7 @@ pub(crate) async fn create(
         started_at: None,
         finished_at: None,
     };
+    let mut crawl_start = None;
     let (kind, items) = match &request {
         JobRequest::Batch(batch) => {
             let planned = plan_batch(batch, checks).await?;
@@ -355,6 +369,15 @@ pub(crate) async fn create(
             let last = u64::try_from(items.len()).unwrap_or(u64::MAX);
             items.push(item(last, json!({ "final": true }), Some(planned.site)));
             (JobKind::Flow, items)
+        }
+        JobRequest::Crawl(crawl) => {
+            let planned = plan_crawl(crawl, checks).await?;
+            let seeds: Vec<&Planned> = planned.seeds.iter().collect();
+            check_session(&state, &caller, session.as_ref(), &seeds).await?;
+            crawl_start = Some(planned.start);
+            // A crawl has no items yet: one is added for every page it
+            // asks a site for.
+            (JobKind::Crawl, Vec::new())
         }
     };
 
@@ -410,6 +433,16 @@ pub(crate) async fn create(
     if let Created::Existing(existing) = created {
         // The same key came twice at the same moment: the first one won.
         return replayed(&state, &existing, hash).await;
+    }
+    if let Some(start) = crawl_start {
+        // What the crawl shows until its worker has begun.
+        let start = serde_json::to_value(start).map_err(|error| ApiError::internal(&error))?;
+        state
+            .store()
+            .jobs()
+            .set_crawl(id, &start)
+            .await
+            .map_err(|error| ApiError::internal(&error))?;
     }
     metrics::counter!("kage_jobs_accepted_total", "job_type" => kind.as_str()).increment(1);
     state.jobs().wake();
@@ -514,7 +547,9 @@ async fn result_of(
 /// A result here is what `GET /v1/results/{request_id}` returns without
 /// the document and the body, which are artifacts (named in `artifacts`).
 /// An item of a flow is one of its steps; the last item is the page the
-/// flow ended on.
+/// flow ended on. An item of a crawl is a page the crawl asked for, in
+/// the order it asked, with what the page was to the crawl in `crawl`;
+/// the list grows while the crawl reads.
 #[utoipa::path(
     get,
     path = "/v1/jobs/{id}/items",
