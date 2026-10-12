@@ -681,7 +681,14 @@ self-tests never do.
 ### 8.4 Timeouts
 
 Per attempt: `timeout_ms` default 60 000 for browser, 30 000 for http; hard
-cap 300 000. Sync `/v1/fetch` total wall time default 180 s, after which the
+cap 300 000. On the browser path it is the time to **reach** the page (the
+navigation, its waits, the challenge wait) and bounds nothing after it: how
+long the persona stays is the patience drawn for the page and its dwell
+(§10.4, F44), and the attempt is waited for as long as those three and a
+margin of 30 s add up to, a bound of its own for every page. Before M10 the
+scrolling shared `timeout_ms`, and every page longer than that was left at
+the same instant: 56.0 s after it was asked for, six times of six, in both
+browsers. Sync `/v1/fetch` total wall time default 180 s, after which the
 request is carried on as a job and `202` returned with the job id: a batch
 of one item under the request's own id (`origin: sync_overflow`), held by
 the server that accepted the fetch while it runs. From then on the fetch
@@ -924,9 +931,16 @@ with NDJSON: one `step` line per finished step as it finishes, then one
 before its first step is an ordinary error answer; a flow that breaks
 after lines were sent ends without its final line.
 
-The contract is at 1.2.0: everything M5 added (1.1.0) is optional in
-requests and additional in responses, and so is what M9 added: a flow's
-`behavior.pace` and the `paced_ms` of a step (§10.5).
+The contract is at 1.3.0: everything M5 added (1.1.0) is optional in
+requests and additional in responses, and so is what M9 added (1.2.0: a
+flow's `behavior.pace` and the `paced_ms` of a step, §10.5) and what M10
+added: `behavior.patience_ms` and what the scrolling came to
+(`behavior.patience_ms`, `scroll_reached`, `scroll_ended_by` in the
+result), an entry by a link of a page the persona has been reading
+(`entry.from_open_page`, `entry.max_backs`, and `backs` in the entry's
+report), and the links of the document (`capture.links`, `links` and
+`links_truncated` in the result), each with whether a reader can see it
+and whether it stands in what the site repeats on every page (§10.4).
 
 A breaking change of the contract needs a new major of the contract
 version; `just contract-check` compares the committed document with the
@@ -1014,7 +1028,18 @@ persona's seed and the request's seed, which the result records.
 - Mouse: Bezier curves with overshoot and correction, variable velocity,
   micro-jitter, occasional idle wander; click after a short hover.
 - Scroll: wheel events in chunks with reading pauses proportional to visible
-  text density; sometimes scroll back up; reach `behavior.scroll_depth`.
+  text density; sometimes scroll back up; reach `behavior.scroll_depth`, or
+  stop when `behavior.patience_ms` is used up, whichever comes first. The
+  result says how far down the document the page was and which of the two
+  ended it (`depth`, `patience`, or `page` for a page that does not go
+  further). Kage draws the patience anew for every page from the attempt's
+  seed (`browser.patience`: a shifted log-normal, floor 6 s, median 38 s,
+  p95 110 s, redrawn above 4 min, scaled by the persona's pace) and sends
+  it with every navigation it makes: a fetch, an item of a batch, a page of
+  a crawl, a warm-up visit. With it, `timeout_ms` bounds reaching the page
+  only and the dwell follows in full. Nobody's request sets it (F44): a
+  consumer that needs the bottom of a tall page uses a flow's `scroll`
+  step.
 - Dwell: `behavior.dwell_ms` drawn from a log-normal (median 6 s, cap 45 s)
   unless the caller fixes it.
 - Typing: per-key delay 60–220 ms, occasional typo plus backspace when
@@ -1029,7 +1054,22 @@ persona's seed and the request's seed, which the result records.
   A `Referer` is never forged: it is what the browser sends for the click.
   Without a link or result the outcome says so and nothing else is loaded,
   unless the request asks for the fallback to a typed navigation. No
-  search template is enabled by default.
+  search template is enabled by default. With `entry.from_open_page` the
+  page to start from is one the persona has been reading and nothing is
+  loaded for it: its link is clicked on the page that is open, or after
+  the persona went back to it with the keyboard, at most `max_backs`
+  entries of its tab (the browser's own way back: no request when the
+  browser kept the page); the report says how many (`backs`). A tab that
+  does not hold the page, or a page without the link, and `fallback`
+  decides. This is how a crawl reaches its next page (§13, F28).
+- Links: with `capture.links` the result lists the links of the document
+  to `http` and `https` addresses in document order, read in the isolated
+  world like the document, each with `visible` (rendered, with a box, on
+  the canvas of the document: not `display: none`, not `visibility:
+  hidden`, not fully transparent, nor inside anything that is, nor moved
+  off the page) and `furniture` (inside `nav`, `header`, `footer` or
+  `aside`, or an element with the ARIA role of one). A link that is not
+  visible is one nobody can click.
 - All randomness seeded per persona and request for reproducibility in tests.
 - The sidecar does nothing unless asked: a navigation without `behavior`
   is a bare page load. Kage's domain policy for a browser render MUST ask
@@ -1139,6 +1179,7 @@ Pacing profiles live in `policies/pacing-profiles.yaml`:
 ```yaml
 human:
   gap_ms:        { dist: lognormal, median: 4500, p95: 15000, min: 1500 }
+  rest_ms:       { dist: lognormal, median: 2200, p95: 7000, min: 700 }
   burst_pages:   { min: 4, max: 14 }
   burst_break_ms: { dist: lognormal, median: 60000, p95: 240000 }
   daily_cap_per_persona_per_domain: 300
@@ -1185,6 +1226,17 @@ floor under the behaviour engine's own time on the page; a page is dwelt on
 once. A persona's browser stays open for its whole visit, breaks included,
 and `scheduler.context_idle` (5 min) after its last page; Kage closes it
 (the sidecar's idle limit, a minute behind, is the backstop).
+
+**The rest between two pages (F43).** The gap counts from the start of a
+page, so a page that was read for longer than the gap would be followed by
+the next one the instant the persona is done: measured at 1 to 3 ms after
+the result came back, in both browsers. A profile with `rest_ms` puts a
+seeded pause between the end of a page and the request for the next one
+of the same sitting (`human`: floor 700 ms, median 2.2 s, p95 7 s, scaled
+by the persona's pace; `fast` has none): the next page is not asked for
+before the later of the gap from the start and the rest from the end. It
+is the planner's (`kage_core::schedule`), drawn from a stream of its own,
+so the gaps of a persona are the same with and without it.
 
 **A persona's day.** Each persona has its own waking hours from its seed
 (up 06:30 to 08:30, to bed 22:30 to 00:30 local time, drifting up to 20
@@ -1242,18 +1294,122 @@ running; if the page proceeds, outcome is `challenge_passed`.
 
 ## 13. Crawler
 
-Job type `crawl`: `seeds[]`, `allow[]`/`deny[]` (regex on normalized URL),
-`max_depth`, `max_pages`, `same_site_only`, `use_sitemaps`, `include[]` per
-page, `pacing`, `personas` (count or explicit ids). Frontier rows in
-Postgres with `SELECT … FOR UPDATE SKIP LOCKED` workers. URL normalization:
-scheme/host lowercase, default ports removed, fragment removed, tracking
-params removed by configurable list, trailing-slash policy, sorted query.
-Dedupe by normalized URL and by content hash (SimHash near-duplicate flag).
-Politeness uses the same pacing as everything else; a crawl SHOULD stay on
-one persona per site to look like one visitor, with `personas` > 1 only
-when the caller asks. Discovered links come from the rendered DOM (browser
-path) or the raw HTML (http path). Results stream into `job_items` and are
-paginated through the API.
+Job type `crawl`: `seeds[]`, `allow[]`/`deny[]` (regex on the normalized
+URL), `max_depth`, `max_pages`, `same_site_only`, `use_sitemaps`,
+`defaults` (what every page is fetched with: any field of a fetch request
+but `url`, `session_id`, `method`, `body` and `request_kind`, so `include`,
+`pacing`, `render` and `behavior` are a crawl's as they are a fetch's),
+`visitors`, `session_id`, `webhook`. It needs the `crawl` scope besides
+`jobs`. (`personas` of the first draft is `visitors`: a count, as in a
+batch. No request names a persona.)
+
+**The reader.** A crawl reads a site the way a reader goes through it,
+not breadth-first. Its first page is typed. From then on the next page is
+a link of the page that is open, the links of the text before those of
+the navigation, in document order; when the open page has none left, a
+link of a page at most `crawl.back_limit` (3) entries back in the tab,
+which the persona goes back to and clicks there; and only when the tab
+holds nothing more an address is typed: the oldest that waits, of the
+least depth. On the http path, which has no tab, the page that holds the
+link is the request's `Referer`, as the click would make it, and a typed
+address names none. A link is followed under the address its own page
+gives: a page is one entry however it is spelled, and the crawl keeps how
+each page spells the links it holds, so the browser finds the link it is
+told to click and the site is asked for what its own page says. Simulated on the shapes of a shop and a blog,
+breadth-first types 80 to 91 % of all addresses, each a navigation
+without a `Referer` and with `Sec-Fetch-Site: none`; this order types 10
+to 14 % (4 to 8 % under `max_pages` 100). A link no reader can see
+(§10.4: not rendered, transparent, off the page; on the http path what
+the markup itself hides) is never followed and is counted as `hidden`:
+the trap for crawlers. In a browser every page is scrolled and dwelt on
+like any other, for as long as the persona's patience with it lasts, and
+the persona rests before the next one (§11).
+
+**One visitor per site.** A site is a registrable domain (the public
+suffix list that `kage-http` pins). One persona reads it, and every page
+goes through the scheduler like any other fetch: the same pacing, visits,
+breaks, waking hours, breaker and cooldowns, and another persona takes
+over only when that one cannot go on. `visitors` asks for more, up to the
+`domain_concurrency` of the pacing in force, refused beyond; each has a
+tab of its own. A job-level `session_id` pins every page to the session's
+persona. With `same_site_only: false` a link to any site is followed
+inside the same limits, each site with a visitor of its own; every address
+passes the SSRF guard before it is asked for, and one it refuses is
+counted (`ssrf_denied`) and never requested.
+
+**Scope.** `max_depth` (default `crawl.default_max_depth`, 3, at most 32)
+is the least number of links from a seed by the shortest way the crawl
+finds: a page found deep and later linked from nearer is lifted, with what
+it links to, and read if that brings it inside. `max_pages` (default 100,
+at most `jobs.max_items`) counts pages asked of the sites, a page that
+failed included. `allow` and `deny` (at most 32 patterns of at most 512
+bytes each) match the normalized URL; a seed is read whatever `allow`
+says, and `deny` wins everywhere: a seed it matches is refused with the
+job. An address that ends like a file (`crawl.skipped_extensions`) is not
+a page. The crawl keeps at most `crawl.max_frontier` (50 000) addresses;
+what it finds beyond is counted (`dropped`) and forgotten.
+
+**URL normalization** (`kage_core::urlnorm`, pure, property-tested):
+scheme and host lower-cased, default ports removed, the fragment removed,
+tracking parameters removed by a configurable list (36 by default), the
+query sorted, the trailing slash kept as written. `www.` is not folded and
+`http` and `https` are two keys: they are two addresses to a site.
+
+**Duplicates.** A crawl holds one entry per normalized URL and never asks
+for one twice; the end of a redirect counts, so a page that another
+address redirected to is not asked for again under its own (`already_read`).
+What a page says is its text without what the site repeats on every page
+(`nav`, `header`, `footer`, `aside` and their ARIA roles), white space
+collapsed: its SHA-256 is the content hash, and a 64-bit SimHash over
+three-word shingles is its fingerprint (none under 24 words). A page with
+the hash of a page read before is a duplicate (`duplicate_of`); its own
+links are not followed from there, they are the original's. A page whose
+fingerprint differs from an earlier one's in at most
+`crawl.near_duplicate_bits` (6) of 64 bits is flagged
+(`near_duplicate_of`, with the bits) and read on from. Both are fetched
+and stored like any page. On the fixture site the near pair is 5 bits
+apart and the closest unrelated pair 22 (median 31); a page with 1 % of
+its words changed is within 6 bits 95 times of 100.
+
+**Sitemaps.** Off unless `use_sitemaps`: a reader does not ask for
+`/sitemap.xml`, and a site that watches for the request sees it. When on,
+the sitemaps of the seeds' sites are read before the first page of each
+site by a **scout**: a persona that is not the site's reader and never
+becomes it, a Firefox persona when one is free (Chrome saves a gzipped
+sitemap as a file and shows nothing of it: `sitemap_unreadable`). Each
+file is a typed navigation through the scheduler in the scout's browser,
+`/sitemap.xml` and what an index names of the same site, at most
+`crawl.max_sitemaps` (10) files per site and `crawl.max_sitemap_urls`
+(50 000) addresses per file, in the scout's own window (the sidecar
+returns the file as the server sent it, `capture.raw`). What they name are places to start from at
+depth 0, inside the scope and `max_pages`; `lastmod` is kept and shown
+and orders nothing. Where no persona but the reader could ask (`no_scout`)
+nobody asks. `robots.txt` is M11's; a crawl does not read it.
+
+**The job.** A crawl has no items when it is accepted; an item is added
+for every page it asks for, in the order it asks, and paginated like a
+batch's. An item's `crawl` says the page's depth, how the crawl came to
+know it (`seed`, `sitemap`, `link`) and on which page, how it was reached
+(`typed`, `click`, `back_click` with how many entries back, or `referer`
+on the http path), where a redirect ended, its content hash, what it
+repeats, how many links it held and how many were new, and for a browser
+page how its scrolling ended. A page the site answers with an error
+status is a fetch that was made, stored like any other, and no page of
+the crawl: nothing is taken from what an error page says, and the crawl
+counts it as `failed`. The job's `crawl` counts what it discovered,
+fetched, failed, skipped by reason, found repeated, how its pages were
+reached, its sitemaps, and why it stopped reading (`completed`,
+`max_pages`, `cancelled`, `expired`). Cancel, pause, deadline and
+idempotency are a batch's (§16.6); a cancel finishes the page that is
+being read and asks for no other.
+
+**Storage.** The frontier is `crawl_frontier`, one row per address, kept
+in memory by the one worker that holds the job's lease and written
+through before it acts. A page is claimed for its item with `SELECT …
+FOR UPDATE SKIP LOCKED` before the item is added, so no page is asked for
+twice even when a job changed hands, and a crawl that changes hands goes
+on where it stands. There is no second worker: the job worker of §16.6
+works crawls.
 
 ---
 
@@ -1450,7 +1606,11 @@ given; `dwell_ms`, the median of a log-normal the attempt's seed draws
 from (p95 at twice the median), never below the domain policy's
 `min_dwell` (2 s unless set) and at most 60 000; `referer_strategy`. A
 policy with `behavior_locked` ignores all three, and the result says so.
-The pointer always wanders; no field turns it off. `timeout_ms` is at
+The pointer always wanders; no field turns it off. How long the persona
+goes on scrolling a page is no field either: it is the patience Kage
+draws for every page (§10.4), and the result says what it was. `timeout_ms`
+is the time to reach the page, and in a browser bounds nothing after it;
+it is at
 least 15 000 when a browser may make the attempt and 1 000 with `render:
 http`, at most 300 000; a shorter one is `timeout_too_short`, not clamped:
 a budget that only fits a bare load would make every visit one. `pacing`
@@ -1510,7 +1670,9 @@ As built (the OpenAPI document is the contract):
   `side_effects`, `created_at`.
 - `pacing` (`applied`, `request_ignored`, `waited_ms`) and `behavior`
   (`applied`: `policy` or `request`, `request_ignored`, `scroll_depth`,
-  `dwell_ms`, `referer_strategy`, `moves`, `notches`) say what applied.
+  `scroll_reached`, `scroll_ended_by`: `depth`, `patience` or `page`,
+  `patience_ms`, `dwell_ms`, `referer_strategy`, `moves`, `notches`) say
+  what applied.
   They, `console` and `side_effects` are in the answer of `POST /v1/fetch`
   only; a stored result has them null.
 - `extract` and `robots` are null and `cached` is false until M11.
@@ -1525,8 +1687,10 @@ Job states: `queued`, `running`, `paused`, `succeeded`, `partial`,
 `failed` when none did, `partial` otherwise, and `cancelled` when a cancel
 ended it before every item ran.
 
-**Acceptance.** `POST /v1/jobs` takes `{ "type": "batch", ... }` or
-`{ "type": "flow", ... }`. A job is accepted whole or refused whole, and
+**Acceptance.** `POST /v1/jobs` takes `{ "type": "batch", ... }`,
+`{ "type": "flow", ... }` or `{ "type": "crawl", ... }` (§13; every seed
+passes the checks of a fetch, the problem names it as `item`). A job is
+accepted whole or refused whole, and
 nothing is stored for one that is refused: every item of a batch passes
 the checks of a synchronous fetch (the problem names it as `item`), every
 `goto` of a flow passes the SSRF guard (`step`), a `session_id` must be
@@ -1668,7 +1832,12 @@ verified or recorded as browser-only, or `kage config check` fails;
 `visit_start_spacing`, `retry_pause`, `cooldown_floor`,
 `cooldown_jitter`, `server_errors`, `breaker_max_pause`,
 `breaker_trial_timeout`, `active_hours`), `browser` (`timeout`,
-`challenge_wait_ms`, `scroll_depth`), `bandwidth` and `forwarder` (§7.5).
+`challenge_wait_ms`, `scroll_depth`, and `patience`: `min` 6 s, `median`
+38 s, `p95` 110 s, `max` 4 min, the distribution a page's patience is
+drawn from, §10.4), `crawl` (`default_max_depth` 3, `default_max_pages`
+100, `max_seeds` 100, `max_frontier` 50 000, `back_limit` 3,
+`near_duplicate_bits` 6, `max_sitemaps` 10, `max_sitemap_urls` 50 000,
+`skipped_extensions`; §13), `bandwidth` and `forwarder` (§7.5).
 `kage config check` reports the scheduler's caps, the budget and the
 forwarder. `server` holds what the API's listener enforces (§19): `bind`
 (`127.0.0.1:8080`), `metrics_bind` (unset), `max_body_bytes` (1 MiB),
@@ -1751,8 +1920,16 @@ taken up, its outcome and what a flow's step reported. `job_items.request_id`
 is not a foreign key: an item names its request before the request is
 written (§16.6). An attempt
 stores its seed (`attempts.seed`: the persona's, the request's id and the
-attempt's number, from which its behavior and its pauses are drawn) and,
-like a result, the `reason` of an outcome the site did not give.
+attempt's number, from which its behavior and its pauses are drawn), the
+patience it had with its page (`patience_ms`, so that a visit replays
+whatever the configuration says by then) and,
+like a result, the `reason` of an outcome the site did not give. A crawl
+keeps its frontier in `crawl_frontier` (per address: its position in the
+crawl, site, depth, state and why it is not read, how and on which page it
+was found, the positions it links to, where a redirect ended, content hash
+and SimHash, what it repeats, a sitemap's `lastmod`, and the item that
+carries its page) and, in `jobs.crawl`, its counters, its sitemaps and the
+tab of each of its visitors; nothing of who reads is ever returned.
 Migrations in `crates/kage-store/migrations`, applied by `kage migrate` and
 checked in CI (`sqlx migrate info`, offline query data committed). Bodies and
 artifacts live on disk under `artifacts/` keyed by content hash with a
@@ -1890,7 +2067,10 @@ are gzip-compressed on disk.
   `kage_jobs_finished_total{job_type,state}`,
   `kage_job_items_total{job_type,state}` and
   `kage_webhook_deliveries_total{event,result}` (`delivered`, `retry`,
-  `failed`) from the process. The scheduler's `kage_queue_depth{kind}` and
+  `failed`) from the process. A crawl is a job (`job_type="crawl"`) and
+  adds `kage_crawl_pages_total{reached}` (`typed`, `click`, `back_click`,
+  `referer`), `kage_crawl_skipped_total{reason}` and
+  `kage_crawl_duplicates_total{kind}` (`exact`, `near`). The scheduler's `kage_queue_depth{kind}` and
   `kage_scheduler_wait_seconds{kind}` have a `job` kind for what jobs have
   in the queue.
   `/metrics` is one exposition: the process's recorder (histograms of

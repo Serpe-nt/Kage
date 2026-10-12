@@ -116,9 +116,29 @@ whose browser encodes PNG and JPEG only: read the artifact's
 ### What a fetch costs, and what a request may shorten
 
 A persona in a browser does what a person does: it arrives, reads, moves
-the pointer, scrolls, and leaves. With the shipped policy one page takes
-about 35 s (median), which is about 100 pages an hour per persona, and one
-in five visits is cut by the 60 s budget of an attempt.
+the pointer, scrolls, and leaves. With the shipped policy a page of three
+screens takes about 33 s (median), which is about 100 pages an hour per
+persona.
+
+How long it stays is its own. It scrolls to the depth the policy or the
+request names, or until its **patience** with the page is used up,
+whichever comes first, and then dwells. Kage draws the patience anew for
+every page (`browser.patience`: at least 6 s, 38 s in the middle, 110 s
+for one page in twenty, never more than 4 min) and no request sets it. A
+page of a screen and a half takes about 16 s, one of three screens 33 s,
+one of six 45 s; a page of ten screens or of a hundred takes about 45 s
+too (one in twenty over 100 s) and is left partway, at another moment
+every time. The result's `behavior` says what the patience was
+(`patience_ms`), how far down the page was when the scrolling ended
+(`scroll_reached`) and what ended it (`scroll_ended_by`: `depth`,
+`patience`, or `page` for a page that does not go further).
+
+`timeout_ms` is the time to **reach** the page: the navigation, its waits
+and a challenge's time to resolve. It bounds nothing after that. Until M10
+the scrolling shared it, and every page longer than a minute's reading was
+left at the same instant, 56 s after it was asked for: a signature. If you
+need the bottom of a tall page, do not look for a longer timeout: use a
+flow with a `scroll` step (see Flows), which goes where it says.
 
 A request may ask for less, within the policy's bounds:
 
@@ -129,14 +149,17 @@ A request may ask for less, within the policy's bounds:
 
 | `behavior` | A page takes (median, p95) | Pages an hour per persona |
 |---|---|---|
-| none: the policy's (scroll 0.6 to 0.9, a person's dwell) | 35 s, 60 s | about 100 |
+| none: the policy's (scroll 0.6 to 0.9, a person's dwell) | 33 s, 59 s | about 100 |
 | `scroll_depth: 0.3` | 15 s, 42 s | about 200 |
 | `scroll_depth: 0.3, dwell_ms: 3000` | 11 s, 35 s | about 260 |
 | `scroll_depth: 0, dwell_ms: 3000` | 5 s, 8 s | about 700 |
 
-(Simulated with the behavior model of the sidecar; a site's own load time
-comes on top. The pacing profile's gaps between a persona's pages are the
-larger part of an hour's count on most sites.)
+(Simulated with the behavior model of the sidecar on a page of three
+screens, 800 visits each; a site's own load time comes on top. The pacing
+profile's gaps between a persona's pages, and since M10 its rest between
+leaving a page and asking for the next (0.7 s at least, 2.2 s in the
+middle under `human`), are the larger part of an hour's count on most
+sites.)
 
 - `scroll_depth` is taken as given; `0` is no scrolling.
 - `dwell_ms` is the middle of what the persona draws from, not a fixed
@@ -146,8 +169,11 @@ larger part of an hour's count on most sites.)
   and left within a second and a half is what a script does, and a site
   that sees one learns the persona.
 - `timeout_ms` below 15 000 is refused (`timeout_too_short`) when a browser
-  may make the attempt: a budget that only fits a bare load would turn
-  every visit into one. With `render: "http"` it may be as low as 1 000.
+  may make the attempt: a page that is slow to arrive needs that much.
+  With `render: "http"` it may be as low as 1 000.
+- A fetch may therefore take longer than its `timeout_ms`: reaching the
+  page, then up to the patience, then the dwell. One that outlasts the
+  server's wall time is carried on as a job (below), as before.
 - A policy with `behavior_locked: true` ignores `behavior`, and one with
   `pacing_locked: true` ignores `pacing`; the result's `behavior` and
   `pacing` say what applied and whether the request's wish was ignored.
@@ -202,7 +228,9 @@ persona of another country (`persona.countries`).
 
 `POST /v1/jobs` accepts work and answers at once; the work is done in the
 background and read with `GET /v1/jobs/{id}` and
-`GET /v1/jobs/{id}/items`. It needs the `jobs` scope.
+`GET /v1/jobs/{id}/items`. It needs the `jobs` scope. A job is a `batch`
+(pages you name), a `flow` (steps in one browser) or a `crawl` (a site
+read along its links).
 
 ```json
 { "type": "batch",
@@ -299,6 +327,119 @@ A flow is a script of steps in one browser, by one persona:
   `step.duration_ms` and `step.paced_ms`; an `extract`, `screenshot` or
   `pdf` step names a result of its own; the last item is the page the
   flow ended on.
+
+### Crawls
+
+A crawl reads a site from its seeds along its links. It needs the `crawl`
+scope besides `jobs`.
+
+```json
+{ "type": "crawl",
+  "seeds": ["https://example.org/"],
+  "deny": ["/login", "\\?sort="],
+  "max_depth": 3,
+  "max_pages": 50,
+  "defaults": { "include": ["dom", "headers"] } }
+```
+
+| Field | Default | |
+|---|---|---|
+| `seeds` | | 1 to 100 addresses. A seed is read whatever `allow` says. |
+| `allow`, `deny` | none | Regular expressions on the normalized address, at most 32 each. `deny` wins; a seed it matches refuses the job. |
+| `max_depth` | 3 | Links from a seed, by the shortest way the crawl finds; at most 32; 0 reads the seeds only. |
+| `max_pages` | 100 | Pages asked of the sites, a failed one included; at most `jobs.max_items`. |
+| `same_site_only` | true | A site is a registrable domain: `shop.example.org` and `www.example.org` are one. |
+| `use_sitemaps` | false | See below: a sitemap request is a tell. |
+| `defaults` | | What every page is fetched with: `include`, `render`, `pacing`, `behavior`, `persona`, … Not `url`, `session_id`, `method`, `body`, `request_kind`. |
+| `visitors` | 1 | Personas that read one site at a time; at most the `domain_concurrency` of the pacing in force, refused beyond. |
+| `session_id` | | An open session: its persona reads every page. |
+
+**It reads like a reader, and takes a reader's time.** The first page is
+typed. After that the persona follows a link of the page it has open (the
+links of the text before those of the menu), goes back up to three pages
+for one when the open page has none left, and types an address only when
+its tab leads nowhere new. In a browser every page is scrolled and dwelt
+on like any other and the persona rests before the next one. A crawl
+therefore costs what a batch of as many pages of one site costs (see
+"What a batch costs"), and a crawl that meets its visitor's night goes on
+in the morning: it is `paused` meanwhile, with the reason and the time. A
+faster `pacing` in `defaults` and more `visitors` buy time with stealth,
+as in a batch. A crawl has no breadth-first mode: on a shop or a blog that
+order types four addresses of five, each arriving from nowhere, which no
+reader does.
+
+**What a job shows.** A crawl has no items when it is accepted; one is
+added for every page it asks for, in that order, so `items.total` grows
+to at most `max_pages`. The job's `crawl` counts what it discovered,
+fetched, failed and skipped by reason (`off_site`, `too_deep`, `denied`,
+`not_allowed`, `not_a_page`, `hidden`, `already_read`, `ssrf_denied`),
+its duplicates, how its pages were reached, and `ended`: `completed`
+(nothing inside its scope is left), `max_pages`, `cancelled` or `expired`.
+An item's `crawl` says the page's depth, where its link was first seen,
+how it was reached (`typed`, `click`, `back_click`, or `referer` on the
+http path), its content hash, and what it repeats:
+
+```json
+{ "seq": 7, "state": "succeeded", "url": "https://example.org/articles/b?utm_source=feed",
+  "crawl": { "depth": 2, "found_by": "link", "found_on": "https://example.org/articles",
+             "reached": "click", "backs": 0,
+             "content_hash": "9f2c…", "duplicate_of": null,
+             "near_duplicate_of": { "url": "https://example.org/articles/b-print", "bits": 4 },
+             "links": { "found": 12, "new": 3 },
+             "scroll": { "patience_ms": 41200, "reached": 0.62, "ended_by": "depth" } } }
+```
+
+- A page that says word for word what an earlier one says is a duplicate
+  (`duplicate_of`); it is fetched and stored, and its own links are not
+  followed, they are the original's. A page that says nearly the same
+  (`near_duplicate_of`, at most 6 of 64 bits apart) is flagged and read on
+  from. What is compared is the text without what the site repeats on
+  every page.
+- A page is one address however it is spelled: tracking parameters, the
+  order of the query and the fragment do not make a second one, and the
+  end of a redirect is not asked for again under its own address. `www.`
+  and `http`/`https` are not folded.
+- A page the site answers with an error status (a `404`) is an item that
+  succeeded as a fetch, with the status in its result, and is counted as
+  `failed` by the crawl: nothing is taken from what an error page links
+  to.
+- A page reached by a click is asked for under the address the page it
+  was clicked on gives, so an item's `url` may carry another campaign tag
+  than the address the crawl first met.
+- A cancel finishes the page that is being read and asks for no other.
+
+**Links nobody can see are not followed.** In a browser the crawl takes
+only links a reader can see: rendered, with a box, on the page, not
+transparent. The others are counted as `hidden` and never asked for; a
+link that only a script would find is the oldest trap there is. On the
+http path nothing is rendered, so only what the markup itself hides is
+known (`hidden`, an inline `display: none` or `visibility: hidden`); a
+link hidden by a stylesheet or moved off the page is followed there. Crawl
+a site that sets traps with a browser.
+
+**A sitemap request is a tell.** No reader opens `/sitemap.xml`. With
+`use_sitemaps` Kage asks for it anyway, so it is not the site's reader
+that does: another persona (a scout) reads the sitemaps first, in its own
+browser, from its own address, and never reads a page for the crawl. The
+site still sees that somebody asked. Use it when the pages you need are
+linked from nowhere, not as a habit.
+
+- A scout is a Firefox persona when one is free: Chrome saves a gzipped
+  sitemap (`.xml.gz`) as a file and shows nothing of it, and such a file
+  is then `sitemap_unreadable`. Keep a Firefox persona in the mix if you
+  rely on gzipped sitemaps.
+- With a single usable persona nothing is asked (`no_scout`): the reader
+  never fetches a sitemap.
+- What a sitemap names are places to start from, inside `allow`, `deny`,
+  `same_site_only` and `max_pages`; `lastmod` is shown and orders nothing.
+  At most `crawl.max_sitemaps` (10) files per site.
+- `robots.txt` is not read by a crawl yet (M11).
+
+**Limits an operator sets** (`crawl` in `kage.yaml`): `default_max_depth`,
+`default_max_pages`, `max_seeds`, `max_frontier` (addresses a crawl keeps,
+50 000; what it finds beyond is counted as `dropped`), `back_limit`,
+`near_duplicate_bits`, `max_sitemaps`, `max_sitemap_urls` and
+`skipped_extensions` (endings that are files, not pages).
 
 ### Webhooks
 
@@ -489,6 +630,13 @@ is being worked, `kage_job_items_total{job_type,state}` and
 `kage_webhook_deliveries_total{event,result}`: deliveries that stay
 pending, or a rise of `failed`, is a receiver to look at.
 
+For crawls (a crawl is a job with `job_type="crawl"`):
+`kage_crawl_pages_total{reached}` says how pages were reached (a share of
+`typed` that grows is sites whose pages do not link to each other, or
+browsers that are closed between pages), `kage_crawl_skipped_total{reason}`
+what was known and not read (a rise of `hidden` is a site that sets
+traps), and `kage_crawl_duplicates_total{kind}` what repeated.
+
 ## Input limits
 
 | Setting | Default | Answer |
@@ -531,7 +679,7 @@ off behind a residential provider.
 | `render_needs_http`, `render_kind_conflict`, `render_include_conflict` | What was asked does not fit the render mode. |
 | `request_kind_needs_referer`, `preflight_required` | A script's request without its page, or one a browser would preflight. |
 | `timeout_too_short`, `invalid_pacing` | `minimum_ms` says the least; a pacing profile that does not exist or leaves D9's bounds. |
-| `not_available_yet` | `extract`, the cache and `robots: enforce` arrive with M11; `crawl` jobs with M10. |
+| `not_available_yet` | `extract`, the cache and `robots: enforce` arrive with M11. |
 | `job_not_found` | `404`: no such job among those this key made. |
 | `idempotency_key_reused` | `409`: the `Idempotency-Key` made another job within the last day; `job_id` names it. |
 | `webhook_origin_not_allowed` | `422`: the webhook's receiver is not in `webhooks.allowed_origins`. |

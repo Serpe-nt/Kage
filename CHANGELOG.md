@@ -8,6 +8,70 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- M10, the crawler:
+  - `POST /v1/jobs` takes `type: "crawl"` (the `crawl` scope besides
+    `jobs`): `seeds`, `allow` and `deny` patterns on the normalized
+    address, `max_depth`, `max_pages`, `same_site_only`, `use_sitemaps`,
+    `defaults` for every page, `visitors`, `session_id` and `webhook`. A
+    crawl is accepted whole or not at all, with `Idempotency-Key`, cancel,
+    pause and deadline as a batch has them. It has no items when it is
+    accepted: one is added for every page it asks for, with the page's
+    depth, where its link was found, how it was reached and what it
+    repeats, and the job shows how far the crawl has come and why it
+    stopped reading.
+  - A crawl reads like a reader, not breadth-first: the next page is a
+    link of the page that is open (the text before the menu), else of a
+    page up to three entries back in the tab, and an address is typed
+    only when the tab leads nowhere new. In a browser the persona clicks
+    its way (sidecar contract 1.3.0: an entry by a link of a page it has
+    been reading, with the keyboard's way back; F28); on the http path
+    the page that holds the link is the `Referer`. Simulated on a shop and
+    a blog, breadth-first types 80 to 91 % of all addresses and this order
+    10 to 14 %.
+  - One persona reads one site (its registrable domain) through the
+    scheduler like every other fetch: pacing, visits, waking hours,
+    breaker and cooldowns are the same. `visitors` asks for more, up to
+    the pacing's `domain_concurrency`.
+  - Links no reader can see are never followed (`capture.links` of
+    contract 1.3.0 says of every link whether it is rendered, has a box,
+    is on the page and is not transparent; on the http path what the
+    markup itself hides) and are counted as `hidden`.
+  - Duplicates: one entry per normalized URL, the end of a redirect
+    included; a page with the content hash of an earlier one is flagged
+    and its links are not followed from there; a page whose 64-bit SimHash
+    is at most 6 bits from an earlier one's is flagged as a near-duplicate
+    and read on from. What is compared is the text without what the site
+    repeats on every page.
+  - Sitemaps are off by default: no reader asks for `/sitemap.xml`. With
+    `use_sitemaps` a scout reads them first: a persona that is not the
+    site's reader and never becomes it, a Firefox persona when one is free
+    (Chrome saves a gzipped sitemap as a file). Where nobody but the
+    reader could ask, nobody asks.
+  - `kage-crawl`: the frontier (the reader's order, depth by the shortest
+    way with lifting, the page cap, duplicates), the page reader (links
+    with whether the markup hides them and whether they stand in the
+    site's furniture, the main text), SimHash, sitemaps (index, gzip,
+    `lastmod`), and the scope of a crawl. URL normalization in `kage-core`
+    is property-tested, with twelve more tracking parameters.
+  - A crawl section in the configuration (`crawl`), the frontier in
+    `crawl_frontier` (migration 0014), a page claimed for its item with
+    `SELECT ... FOR UPDATE SKIP LOCKED`, and a crawl that changes hands
+    goes on where it stands. Metrics `kage_crawl_pages_total{reached}`,
+    `kage_crawl_skipped_total{reason}` and
+    `kage_crawl_duplicates_total{kind}`.
+  - The TypeScript test client drives a crawl (`createCrawl`,
+    `crawlProgress`, `readCrawlPages`); `tests/e2e/crawl.sh` reads the
+    fixture site with real personas of both engines.
+- A persona rests between leaving a page and asking for the next one of
+  the same sitting (F43): `rest_ms` of a pacing profile (`human`: floor
+  700 ms, median 2.2 s, p95 7 s; `fast`: none), applied by the planner.
+  Before, a page that was read for longer than the gap was followed by the
+  next one 1 to 3 ms after it was left, in both browsers.
+- A fetch's `behavior` says the patience the persona had with the page
+  (`patience_ms`), how far down it came (`scroll_reached`) and what ended
+  its scrolling (`scroll_ended_by`: `depth`, `patience` or `page`); the
+  patience is kept with the attempt (`attempts.patience_ms`).
+
 - M9, jobs and webhooks:
   - `POST /v1/jobs` with `batch` and `flow` jobs, accepted whole or not at
     all, with `Idempotency-Key` for a day; `GET /v1/jobs/{id}`,
@@ -351,6 +415,22 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   spread and the assertions are per address.
 
 ### Changed
+
+- `timeout_ms` of a browser attempt is the time to reach the page (the
+  navigation, its waits, the challenge wait) and bounds nothing after it
+  (F44). How long a persona goes on scrolling is a patience Kage draws
+  anew for every page from the attempt's seed (`browser.patience`: floor
+  6 s, median 38 s, p95 110 s, redrawn above 4 min, at the persona's pace)
+  and sends with every navigation it makes: a fetch, an item of a batch, a
+  page of a crawl, a warm-up visit (sidecar contract 1.3.0,
+  `behavior.patience_ms`). The dwell follows in full, and the attempt is
+  waited for as long as the three and a margin add up to. Before, the
+  scrolling shared `timeout_ms`, and every page longer than that was left
+  at the same instant: 56.0 s after it was asked for, six times of six, in
+  both browsers. A consumer that needs the bottom of a tall page uses a
+  flow's `scroll` step.
+- The sidecar client waits for a navigation as long as that navigation may
+  take and not as long as every call may (`navigation_bound`).
 
 - `cargo deny` ignores RUSTSEC-2024-0449 (`unsafe-libyaml` is unmaintained)
   until 2026-12-31: the crate comes in through `figment` and `serde_yaml`
