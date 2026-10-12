@@ -88,7 +88,7 @@ the comparison.
 | tracing-opentelemetry | 0.34.0 | pinned | |
 | opentelemetry, opentelemetry_sdk, opentelemetry-otlp | 0.33.0 | pinned | Default features off: the OTLP transport is chosen in M12 and must use rustls, never OpenSSL. |
 | metrics, metrics-exporter-prometheus | 0.24.6, 0.18.3 | locked (metrics: `kage-proxy`, `kage-scheduler`, `kage-api`; exporter: `kage-api`, first use in M8) | The exporter has default features off: no HTTP listener and no push gateway of its own, so no second HTTP stack; `kage-api` renders its handle at `/metrics`. Brings `metrics-util` 0.20.4, `quanta` 0.12.6, `sketches-ddsketch` 0.3.1, `evmap` 11.0.0 with `left-right` 0.11.8 and `hashbag` 0.1.13, `crossbeam-epoch` 0.9.21, `raw-cpuid` 11.6.0, and, in the lockfile only (they build under `cfg(loom)` or for wasm), `loom` 0.7.2, `generator` 0.8.10 and `web-sys`. |
-| figment | 0.10.19 | locked (`kage-core`) | Features `yaml` and `env`: `kage.yaml`, the policy files and `KAGE__SECTION__KEY` layering. Its YAML parser is `serde_yaml` 0.9.34+deprecated (no longer developed upstream, no advisory); it only reads operator-controlled files. |
+| figment | 0.10.19 | locked (`kage-core`) | Features `yaml` and `env`: `kage.yaml`, the policy files and `KAGE__SECTION__KEY` layering. Its YAML parser is `serde_yaml` 0.9.34+deprecated (no longer developed upstream) over `unsafe-libyaml` 0.2.11, which RUSTSEC-2024-0449 names as unmaintained since October 2026; both only read operator-controlled files. The advisory is ignored in `deny.toml` with that reason and a review date of 2026-12-31 (M10, decided with the planning session); follow-up F45 (M12) moves the YAML reading to a maintained parser. |
 | clap | 4.6.7 | locked | `derive`, `env`. |
 | thiserror, anyhow | 2.0.21, 1.0.104 | locked | `anyhow` only in the binary crate. |
 | async-trait | 0.1.92 | locked (`kage-proxy`, `kage-http`) | The provider, prober and reputation traits are used as trait objects; so are the cookie backend and the hop resolver of `kage-http`. |
@@ -133,6 +133,13 @@ M0 resolved all 44 external pins together in a scratch workspace: 492
 packages, one version of every HTTP-stack crate, TLS through `ring`, `rustls`
 and `btls-sys` only, and no `openssl-sys`, `openssl`, `native-tls` or
 `reqwest`. That check caught the two held-back pins above.
+
+Advisories: `cargo deny` fails on every advisory against the lockfile,
+"unmaintained" included. One is ignored, with its reason and a review date
+in `deny.toml`: RUSTSEC-2024-0449 (`unsafe-libyaml`, through `figment` and
+`serde_yaml`; review by 2026-12-31; follow-up F45 for M12). An ignore is a
+decision recorded there and here, never a way to get a gate past a
+vulnerability.
 
 Hard rule: `cargo tree -i openssl-sys` must be empty. `just deny` enforces it
 three ways: `scripts/check-no-openssl.sh` (lockfile and `cargo tree`), and a

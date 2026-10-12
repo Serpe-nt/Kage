@@ -342,6 +342,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `cargo deny` ignores RUSTSEC-2024-0449 (`unsafe-libyaml` is unmaintained)
+  until 2026-12-31: the crate comes in through `figment` and `serde_yaml`
+  and reads the operator's own configuration and policy files only. The
+  advisory was published in October 2026 and failed the gate for every
+  checkout. Moving the YAML reading to a maintained parser is follow-up
+  F45 (M12).
 - The forwarding headers (`X-Forwarded-For`, `Forwarded`, `X-Real-IP`,
   `True-Client-IP`, `X-Client-IP`, `CF-Connecting-IP` and the rest of the
   family) are on the caller-header denylist (F34).

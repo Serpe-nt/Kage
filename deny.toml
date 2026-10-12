@@ -9,7 +9,15 @@ all-features = true
 [advisories]
 yanked = "deny"
 # Each ignored advisory needs a comment with the reason and a review date.
-ignore = []
+ignore = [
+    # `unsafe-libyaml` is unmaintained (its repository was archived in 2024;
+    # the advisory was published in October 2026). It comes in through
+    # `figment` and `serde_yaml`, which read `kage.yaml` and the policy
+    # files: the operator's own files, never anything a consumer or a site
+    # sends. No fixed version exists; the way out is another YAML parser
+    # (follow-up F45, milestone M12). Review by 2026-12-31.
+    { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml reads the operator's own files only; replacing the YAML parser is F45 (M12); review by 2026-12-31" },
+]
 
 [licenses]
 confidence-threshold = 0.9
