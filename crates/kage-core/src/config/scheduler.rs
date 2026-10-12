@@ -335,12 +335,112 @@ pub struct DepthRange {
     pub max: f64,
 }
 
+/// How long a persona goes on scrolling one page (spec §10.4, follow-up
+/// F44): a shifted log-normal that every attempt draws from anew, at its
+/// persona's own pace, so that no two long pages are left after the same
+/// time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PatienceConfig {
+    /// No patience is this short or shorter.
+    #[serde(default = "default_patience_min")]
+    pub min: HumanDuration,
+    /// Half of the pages are given up sooner than this.
+    #[serde(default = "default_patience_median")]
+    pub median: HumanDuration,
+    /// Nineteen pages in twenty are given up sooner than this.
+    #[serde(default = "default_patience_p95")]
+    pub p95: HumanDuration,
+    /// No patience is longer than this: a longer draw is drawn again.
+    #[serde(default = "default_patience_max")]
+    pub max: HumanDuration,
+}
+
+/// The shortest patience the sidecar contract takes.
+pub const MIN_PATIENCE: Duration = Duration::from_secs(1);
+
+/// The longest patience the sidecar contract takes.
+pub const MAX_PATIENCE: Duration = Duration::from_mins(10);
+
+const fn default_patience_min() -> HumanDuration {
+    HumanDuration::from_secs(6)
+}
+
+const fn default_patience_median() -> HumanDuration {
+    HumanDuration::from_secs(38)
+}
+
+const fn default_patience_p95() -> HumanDuration {
+    HumanDuration::from_secs(110)
+}
+
+const fn default_patience_max() -> HumanDuration {
+    HumanDuration::from_mins(4)
+}
+
+impl Default for PatienceConfig {
+    fn default() -> Self {
+        Self {
+            min: default_patience_min(),
+            median: default_patience_median(),
+            p95: default_patience_p95(),
+            max: default_patience_max(),
+        }
+    }
+}
+
+impl PatienceConfig {
+    /// The patience as the distribution an attempt draws from, in
+    /// milliseconds.
+    pub fn distribution(&self) -> Lognormal {
+        let millis = |duration: HumanDuration| duration.get().as_secs_f64() * 1000.0;
+        Lognormal {
+            median: millis(self.median),
+            p95: millis(self.p95),
+            min: Some(millis(self.min)),
+            max: Some(millis(self.max)),
+        }
+    }
+
+    /// Checks the four values against each other and the contract.
+    ///
+    /// # Errors
+    ///
+    /// A sentence that names what is out of order.
+    pub fn validate(&self) -> Result<(), String> {
+        let (min, median, p95, max) = (
+            self.min.get(),
+            self.median.get(),
+            self.p95.get(),
+            self.max.get(),
+        );
+        if min < MIN_PATIENCE {
+            return Err("browser.patience.min must be at least 1s".to_owned());
+        }
+        if max > MAX_PATIENCE {
+            return Err("browser.patience.max must be at most 10m".to_owned());
+        }
+        if !(min < median && median < p95 && p95 <= max) {
+            return Err(
+                "browser.patience must have min below median, median below p95 and p95 no \
+                 longer than max"
+                    .to_owned(),
+            );
+        }
+        self.distribution()
+            .validate()
+            .map_err(|reason| format!("browser.patience: {reason}"))
+    }
+}
+
 /// A browser attempt (spec §8.4, §10.4, §12).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BrowserConfig {
-    /// Longest one browser attempt may take when the request does not say:
-    /// the load, the behavior and the captures together.
+    /// Longest reaching a page may take in a browser when the request does
+    /// not say: the navigation, its waits and the challenge wait. What the
+    /// persona then does on the page has its own time (`patience`, and the
+    /// dwell).
     #[serde(default = "default_browser_timeout")]
     pub timeout: HumanDuration,
     /// How long a detected interstitial is given to resolve by itself.
@@ -350,6 +450,10 @@ pub struct BrowserConfig {
     /// depth of each page is drawn from the request's seed.
     #[serde(default = "default_scroll_depth")]
     pub scroll_depth: DepthRange,
+    /// How long a persona goes on scrolling one page, at most: drawn for
+    /// every attempt.
+    #[serde(default)]
+    pub patience: PatienceConfig,
 }
 
 const fn default_browser_timeout() -> HumanDuration {
@@ -370,6 +474,7 @@ impl Default for BrowserConfig {
             timeout: default_browser_timeout(),
             challenge_wait_ms: default_challenge_wait_ms(),
             scroll_depth: default_scroll_depth(),
+            patience: PatienceConfig::default(),
         }
     }
 }
@@ -583,6 +688,7 @@ pub(super) fn validate(
     if browser.scroll_depth.min > browser.scroll_depth.max {
         return Err("browser.scroll_depth: min is greater than max".to_owned());
     }
+    browser.patience.validate()?;
 
     if bandwidth.monthly_cap_gb == 0 {
         return Err("bandwidth.monthly_cap_gb must be at least 1".to_owned());
@@ -758,6 +864,76 @@ mod tests {
             Ok(())
         );
         assert_eq!(check(|s, _, _, _| s.cooldown_jitter = 0.0), Ok(()));
+    }
+
+    #[test]
+    fn the_patience_is_a_shifted_log_normal_inside_what_the_sidecar_takes() {
+        use crate::duration::HumanDuration;
+        use crate::seed::Seed;
+        type Change = fn(&mut BrowserConfig);
+
+        let patience = BrowserConfig::default().patience;
+        assert_eq!(
+            (
+                patience.min.get(),
+                patience.median.get(),
+                patience.p95.get(),
+                patience.max.get()
+            ),
+            (
+                Duration::from_secs(6),
+                Duration::from_secs(38),
+                Duration::from_secs(110),
+                Duration::from_mins(4)
+            )
+        );
+        let shape = patience.distribution();
+        assert_eq!(
+            (shape.median, shape.p95, shape.min, shape.max),
+            (38_000.0, 110_000.0, Some(6_000.0), Some(240_000.0))
+        );
+        // What is drawn from it: never at or below the floor, never above
+        // the ceiling, the median where the configuration says.
+        let mut rng = Seed::from_u64(7).rng();
+        let mut drawn: Vec<f64> = (0..20_000).map(|_| shape.sample(&mut rng)).collect();
+        drawn.sort_by(f64::total_cmp);
+        assert!(drawn[0] > 6_000.0, "{}", drawn[0]);
+        assert!(drawn[drawn.len() - 1] <= 240_000.0);
+        let median = drawn[drawn.len() / 2];
+        assert!((median - 38_000.0).abs() < 1_900.0, "{median}");
+
+        let secs = HumanDuration::from_secs;
+        let cases: [(Change, &str); 5] = [
+            (
+                |b| b.patience.min = HumanDuration::new(Duration::from_millis(999)),
+                "browser.patience.min must be at least 1s",
+            ),
+            (
+                |b| b.patience.max = HumanDuration::from_secs(601),
+                "browser.patience.max must be at most 10m",
+            ),
+            (
+                |b| b.patience.median = HumanDuration::from_secs(6),
+                "browser.patience must have min below median",
+            ),
+            (
+                |b| b.patience.p95 = HumanDuration::from_secs(38),
+                "browser.patience must have min below median",
+            ),
+            (
+                |b| b.patience.max = HumanDuration::from_secs(109),
+                "browser.patience must have min below median",
+            ),
+        ];
+        for (change, said) in cases {
+            let error = refused(|_, b, _, _| change(b));
+            assert!(error.starts_with(said), "{error}");
+        }
+        // The edges are inside: the contract's own bounds, and a p95 that
+        // is the ceiling.
+        assert_eq!(check(|_, b, _, _| b.patience.min = secs(1)), Ok(()));
+        assert_eq!(check(|_, b, _, _| b.patience.max = secs(600)), Ok(()));
+        assert_eq!(check(|_, b, _, _| b.patience.max = secs(110)), Ok(()));
     }
 
     #[test]

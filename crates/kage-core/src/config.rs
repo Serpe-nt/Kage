@@ -29,6 +29,7 @@ use crate::duration::HumanDuration;
 use crate::secret::Secret;
 use crate::urlnorm::NormalizeOptions;
 
+mod crawl;
 mod http;
 mod jobs;
 mod personas;
@@ -36,6 +37,10 @@ mod proxies;
 mod scheduler;
 mod server;
 
+pub use crawl::{
+    CrawlConfig, DEFAULT_SKIPPED_EXTENSIONS, MAX_BACK_LIMIT, MAX_CRAWL_DEPTH, MAX_CRAWL_SEEDS,
+    MAX_NEAR_DUPLICATE_BITS,
+};
 pub use http::{
     BrowserSelftestConfig, ChromiumEngineConfig, EngineConfig, EnginesConfig, HttpConfig,
     HttpSelftestConfig, MAX_REDIRECTS_LIMIT, MAX_SELFTEST_PAGES, MAX_SUBRESOURCE_CONCURRENCY,
@@ -54,7 +59,8 @@ pub use proxies::{
 };
 pub use scheduler::{
     BandwidthConfig, BrowserConfig, ClockRange, DepthRange, ForwarderConfig, MAX_ATTEMPT_TIMEOUT,
-    MAX_INFLIGHT, PauseConfig, PersonaDayConfig, SchedulerConfig, ServerErrorsConfig,
+    MAX_INFLIGHT, MAX_PATIENCE, MIN_PATIENCE, PatienceConfig, PauseConfig, PersonaDayConfig,
+    SchedulerConfig, ServerErrorsConfig,
 };
 pub use server::{
     MAX_API_BODY_BYTES, MAX_HEADER_BYTES, MIN_HEADER_BYTES, SecurityConfig, ServerConfig,
@@ -422,6 +428,9 @@ pub struct Config {
     /// Webhooks: where and how a job's events are delivered.
     #[serde(default)]
     pub webhooks: WebhooksConfig,
+    /// Crawls: jobs that read a site by following its links.
+    #[serde(default)]
+    pub crawl: CrawlConfig,
     /// The policy files.
     #[serde(default)]
     pub policies: PoliciesConfig,
@@ -596,6 +605,7 @@ impl Config {
         )
         .map_err(ConfigError::Invalid)?;
         jobs::validate(&self.jobs, &self.webhooks).map_err(ConfigError::Invalid)?;
+        crawl::validate(&self.crawl, self.jobs.max_items).map_err(ConfigError::Invalid)?;
         match self.proxies.provider {
             ProviderChoice::Webshare if self.webshare.api_key.is_none() => {
                 return Err(ConfigError::MissingSecrets(vec!["KAGE__WEBSHARE__API_KEY"]));

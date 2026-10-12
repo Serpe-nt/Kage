@@ -37,7 +37,7 @@ string_enum! {
 /// Query parameters removed by default: campaign tags and click ids that
 /// identify a visit, not a page. Names that select content on many sites
 /// (`ref`, `source`, `id`, session ids) are deliberately absent.
-pub const DEFAULT_TRACKING_PARAMS: [&str; 24] = [
+pub const DEFAULT_TRACKING_PARAMS: [&str; 36] = [
     "utm_*",
     "gclid",
     "gclsrc",
@@ -62,6 +62,21 @@ pub const DEFAULT_TRACKING_PARAMS: [&str; 24] = [
     "oly_anon_id",
     "oly_enc_id",
     "s_kwcid",
+    // Added in M10: click ids of shopping results, of Yandex, Pinterest,
+    // Impact, Facebook's in-app browser, Rambler and Snapchat, and the
+    // visitor cookies HubSpot carries from one of its sites to another.
+    "srsltid",
+    "ysclid",
+    "_openstat",
+    "epik",
+    "irclickid",
+    "mibextid",
+    "rb_clickid",
+    "sccid",
+    "__hsfp",
+    "__hssc",
+    "__hstc",
+    "hsctatracking",
 ];
 
 /// How URLs are normalized. Lives in the `urls` section of the
@@ -304,6 +319,28 @@ mod tests {
             key("https://example.org/p?fbclid=x&msclkid=y&_ga=z"),
             "https://example.org/p"
         );
+        // The click ids added in M10, each by itself and all together.
+        for name in [
+            "srsltid",
+            "ysclid",
+            "_openstat",
+            "epik",
+            "irclickid",
+            "mibextid",
+            "rb_clickid",
+            "ScCid",
+            "__hsfp",
+            "__hssc",
+            "__hstc",
+            "hsCtaTracking",
+        ] {
+            assert_eq!(
+                key(&format!("https://example.org/p?id=7&{name}=x")),
+                "https://example.org/p?id=7",
+                "{name}"
+            );
+        }
+        assert_eq!(super::DEFAULT_TRACKING_PARAMS.len(), 36);
         // Matching ignores case; the prefix rule covers every utm_ tag.
         assert_eq!(
             key("https://example.org/p?UTM_Campaign=a&Gclid=b&utm_anything_new=c"),

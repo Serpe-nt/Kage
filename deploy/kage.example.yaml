@@ -431,8 +431,9 @@ scheduler:
 
 # A browser attempt (spec §8.4, §10.4, §12).
 browser:
-  # Longest one attempt may take when the request does not say: the load,
-  # the persona's behavior on the page and the captures together. At most
+  # Longest reaching a page may take when the request does not say: the
+  # navigation, its waits and the challenge wait. What the persona then
+  # does on the page has its own time (patience, and the dwell). At most
   # 300s, and below sidecar.timeout.
   timeout: 1m
   # How long a detected interstitial is given to resolve by itself.
@@ -442,6 +443,17 @@ browser:
   scroll_depth:
     min: 0.6
     max: 0.9
+  # How long a persona goes on scrolling one page, at most: drawn for every
+  # attempt from a shifted log-normal, at the persona's own pace, so that no
+  # two long pages are left after the same time. The scrolling ends at the
+  # depth asked or when the patience is used up; the dwell follows. min
+  # below median below p95, p95 no longer than max; a draw above max is
+  # drawn again. Between 1s and 10m.
+  patience:
+    min: 6s
+    median: 38s
+    p95: 110s
+    max: 4m
 
 # The bandwidth budget of the proxy plan (decision D5).
 bandwidth:
@@ -576,5 +588,53 @@ urls:
     - oly_anon_id
     - oly_enc_id
     - s_kwcid
+    - srsltid
+    - ysclid
+    - _openstat
+    - epik
+    - irclickid
+    - mibextid
+    - rb_clickid
+    - sccid
+    - __hsfp
+    - __hssc
+    - __hstc
+    - hsctatracking
   # keep | strip | add
   trailing_slash: keep
+
+# Crawls (spec §13): jobs that read a site by following its links, the way
+# a reader goes through it.
+crawl:
+  # How far from its seeds a crawl goes, and how many pages it asks for,
+  # when it does not say. A crawl may ask for up to jobs.max_items pages
+  # and go at most 32 links deep.
+  default_max_depth: 3
+  default_max_pages: 100
+  # Most seeds one crawl may have.
+  max_seeds: 100
+  # Most addresses one crawl keeps in its frontier. What it finds beyond
+  # them is counted and forgotten.
+  max_frontier: 50000
+  # How many entries of its tab a visitor goes back, at most, to click a
+  # link on a page it read earlier (the browser's own way back, from its
+  # cache); 0 for the open page only. A page out of reach is asked for by a
+  # typed address.
+  back_limit: 3
+  # Two pages whose fingerprints differ in at most this many of their 64
+  # bits are flagged as near-duplicates. 6 flags 95 in 100 pages with one
+  # word in a hundred changed and no two unrelated pages; 3 is stricter.
+  near_duplicate_bits: 6
+  # With use_sitemaps: most sitemap files read per site (the one at
+  # /sitemap.xml and those an index names) and most addresses read from
+  # one file.
+  max_sitemaps: 10
+  max_sitemap_urls: 50000
+  # Endings of addresses that are files and not pages, without the dot. A
+  # link to one is counted as not_a_page and never asked for: a browser
+  # would download it.
+  skipped_extensions:
+    [7z, apk, avi, bin, bmp, bz2, css, csv, dmg, doc, docx, epub, exe, gif,
+     gz, ico, iso, jpeg, jpg, js, json, mov, mp3, mp4, mpeg, msi, ods, odt,
+     ogg, pdf, png, ppt, pptx, rar, svg, tar, tgz, wav, webm, webp, xls,
+     xlsx, xml, zip]
