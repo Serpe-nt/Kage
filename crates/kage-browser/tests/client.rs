@@ -13,7 +13,9 @@ use kage_browser::contract::{
     self, ErrorCode, ExportStateRequest, FlowEvent, FlowRequest, GeneratePersonaRequest,
     ImportStateRequest, NavigateRequest, OpenContextRequest, PageResult, SelftestRequest,
 };
-use kage_browser::{BrowserError, Closed, Navigation, SidecarClient, SidecarSettings};
+use kage_browser::{
+    BrowserError, Closed, Navigation, SidecarClient, SidecarSettings, navigation_bound,
+};
 use kage_core::config::Config;
 use kage_core::domain::Engine;
 use kage_core::secret::Secret;
@@ -652,13 +654,13 @@ async fn a_sidecar_that_comes_up_between_attempts_is_reached() {
 #[tokio::test]
 async fn a_request_that_reached_the_sidecar_is_never_sent_twice() {
     let server = MockServer::start().await;
-    // The sidecar takes longer than the client waits: the navigation may be
+    // The sidecar takes longer than the client waits: the import may be
     // running, so the client must not start it again.
     Mock::given(method("POST"))
-        .and(path(format!("/v1/contexts/{CONTEXT}/navigate")))
+        .and(path(format!("/v1/contexts/{CONTEXT}/state/import")))
         .respond_with(
             ResponseTemplate::new(200)
-                .set_body_json(example_json("PageResult", 0))
+                .set_body_json(example_json("ImportStateResponse", 0))
                 .set_delay(Duration::from_secs(3)),
         )
         .expect(1)
@@ -671,20 +673,105 @@ async fn a_request_that_reached_the_sidecar_is_never_sent_twice() {
     })
     .unwrap();
     let error = client
-        .navigate(context(), &example::<NavigateRequest>("NavigateRequest", 0))
+        .import_state(
+            context(),
+            &example::<ImportStateRequest>("ImportStateRequest", 0),
+        )
         .await
         .unwrap_err();
     assert!(
         matches!(
             error,
             BrowserError::Timeout {
-                operation: "navigate"
+                operation: "import_state"
             }
         ),
         "{error:?}"
     );
     assert!(!error.is_unreachable());
     // `expect(1)` verifies on drop that there was exactly one request.
+}
+
+#[test]
+fn a_navigation_may_take_what_reaching_the_page_the_patience_and_the_dwell_take() {
+    let secs = Duration::from_secs;
+    let with = |change: &dyn Fn(&mut Value)| {
+        let mut request = example_json("NavigateRequest", 0);
+        change(&mut request);
+        navigation_bound(&serde_json::from_value::<NavigateRequest>(request).unwrap())
+    };
+    // A bare load: the contract's own time to reach the page, and a margin.
+    assert_eq!(with(&|_| {}), secs(60 + 30));
+    assert_eq!(
+        with(&|request| request["timeout_ms"] = json!(15_000)),
+        secs(15 + 30)
+    );
+    // A bare load that stays for a fixed time stays that long.
+    assert_eq!(
+        with(&|request| {
+            request["timeout_ms"] = json!(15_000);
+            request["dwell_ms"] = json!(4_000);
+        }),
+        secs(15 + 4 + 30)
+    );
+    // A persona on the page: its patience with the scrolling and its own
+    // dwell, which the sidecar draws and caps at 45 s.
+    assert_eq!(
+        with(&|request| {
+            request["timeout_ms"] = json!(20_000);
+            request["behavior"] = json!({ "dwell": "human", "patience_ms": 110_000 });
+        }),
+        secs(20 + 110 + 45 + 30)
+    );
+    // A dwell the request fixed is that dwell, not the persona's.
+    assert_eq!(
+        with(&|request| {
+            request["timeout_ms"] = json!(20_000);
+            request["dwell_ms"] = json!(7_500);
+            request["behavior"] = json!({ "dwell": "fixed", "patience_ms": 38_000 });
+        }),
+        Duration::from_millis(20_000 + 38_000 + 7_500 + 30_000)
+    );
+    // No two pages with another patience are waited for as long: the bound
+    // is the page's own and never a constant.
+    let bound = |patience: u64| {
+        with(&|request| request["behavior"] = json!({ "dwell": "human", "patience_ms": patience }))
+    };
+    assert_eq!(bound(240_000), bound(6_000) + secs(234));
+    // Without a patience (a sidecar of 1.2.0 is asked like this) the
+    // scrolling shares the time to reach the page, as before.
+    assert_eq!(
+        with(&|request| request["behavior"] = json!({ "dwell": "human" })),
+        secs(60 + 45 + 30)
+    );
+}
+
+#[tokio::test]
+async fn a_navigation_is_waited_for_as_long_as_it_may_take_and_not_as_long_as_every_call() {
+    let server = MockServer::start().await;
+    // The page takes longer than the client waits for any other call: a
+    // page that is read for a while is not cut off at the client's own
+    // timeout, which would leave every long page after the same time.
+    Mock::given(method("POST"))
+        .and(path(format!("/v1/contexts/{CONTEXT}/navigate")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(example_json("PageResult", 0))
+                .set_delay(Duration::from_millis(1500)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = SidecarClient::new(&SidecarSettings {
+        timeout: Duration::from_millis(400),
+        ..settings(&server.uri())
+    })
+    .unwrap();
+    let page = client
+        .navigate(context(), &example::<NavigateRequest>("NavigateRequest", 0))
+        .await
+        .unwrap();
+    assert_eq!(page, example::<PageResult>("PageResult", 0));
 }
 
 #[tokio::test]

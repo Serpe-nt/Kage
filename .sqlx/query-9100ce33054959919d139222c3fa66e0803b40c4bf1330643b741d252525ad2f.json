@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, request_id, n, persona_id, engine, render, started_at, finished_at, status,\n                    final_url, outcome, block, timing, seed, reason\n             FROM attempts WHERE request_id = $1 ORDER BY n",
+  "query": "SELECT id, request_id, n, persona_id, engine, render, started_at, finished_at, status,\n                    final_url, outcome, block, timing, seed, reason, patience_ms\n             FROM attempts WHERE request_id = $1 ORDER BY n",
   "describe": {
     "columns": [
       {
@@ -167,6 +167,17 @@
             "name": "reason"
           }
         }
+      },
+      {
+        "ordinal": 15,
+        "name": "patience_ms",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "attempts",
+            "name": "patience_ms"
+          }
+        }
       }
     ],
     "parameters": {
@@ -189,8 +200,9 @@
       true,
       false,
       true,
+      true,
       true
     ]
   },
-  "hash": "7291ba03c8d8fa4d6614ff9cfd9a962b57435d232924e4306c4c4ddd51cdcd23"
+  "hash": "9100ce33054959919d139222c3fa66e0803b40c4bf1330643b741d252525ad2f"
 }

@@ -224,6 +224,7 @@ fn answered(outcome: Outcome, block: Option<Block>, status: u16) -> AttemptOutpu
         cookies_to_http: None,
         behavior: None,
         flow: None,
+        reached: None,
     }
 }
 

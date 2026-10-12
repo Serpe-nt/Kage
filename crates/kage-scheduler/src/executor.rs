@@ -47,16 +47,18 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use kage_browser::contract::{
-    BehaviorOptions, CaptureOptions, DwellMode, Entry, EntryStrategy, FlowAction, FlowBehavior,
-    FlowEvent, FlowPace, FlowRequest, NavigateRequest, PageResult, Wait, WaitUntil,
+    BehaviorOptions, CaptureOptions, DwellMode, Entry, EntryFallback, EntryOutcome, EntryStrategy,
+    FlowAction, FlowBehavior, FlowEvent, FlowPace, FlowRequest, NavigateRequest, PageResult, Wait,
+    WaitUntil,
 };
-use kage_browser::{Navigation, ssrf};
+use kage_browser::{Navigation, navigation_bound, ssrf};
 use kage_core::classifier::{Classification, Observation};
 use kage_core::config::{BrowserConfig, Config};
 use kage_core::domain::{Header, Persona, Render, Timing};
 use kage_core::ids::{PersonaId, RequestId};
 use kage_core::outcome::Outcome;
 use kage_core::pacing::Lognormal;
+use kage_core::persona::pacing_factor;
 use kage_core::policy::{EffectivePolicy, RefererStrategy};
 use kage_core::schedule::politeness::Courtesy;
 use kage_core::seed::Seed;
@@ -161,9 +163,14 @@ fn step_failure(error: &str) -> StepFailure {
 /// context is closed.
 type Failed = Box<AttemptOutput>;
 
-/// How much longer than its own budget a browser attempt is waited for:
-/// the sidecar answers when the budget ran out, a little after it.
+/// How much longer than its own budget a flow is waited for: the sidecar
+/// answers when the budget ran out, a little after it.
 const BROWSER_GRACE: Duration = Duration::from_secs(20);
+
+/// How much longer a navigation is waited for than the sidecar's client
+/// waits for it ([`navigation_bound`]): the client gives up first and says
+/// why.
+const NAVIGATION_GRACE: Duration = Duration::from_secs(5);
 
 /// The longest dwell a request can fix: the contract's own limit.
 const MAX_FIXED_DWELL: Duration = Duration::from_secs(120);
@@ -187,6 +194,47 @@ impl BehaviorWish {
     }
 }
 
+/// How a persona arrives at a page when whoever asks knows what it has
+/// been reading (a crawl's next page, spec §13).
+///
+/// Nothing of it is forged: a link is followed only from a page that
+/// holds it, and a policy whose `referer_strategy` is `none` types every
+/// address.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Arrival {
+    /// Nothing the persona has been reading leads to the page: its address
+    /// is typed, and on neither path the request names a page it came
+    /// from.
+    Typed,
+    /// A page the persona has been reading holds a link to it. In a
+    /// browser the persona clicks that link: on the page that is open, or
+    /// after going back to it. A tab that does not hold the page, or a
+    /// page that does not hold the link, and the address is typed instead.
+    /// On the http path, which has no tab, the request carries the page as
+    /// its `Referer`, as the click would.
+    Link {
+        /// The page that holds the link.
+        from: Url,
+        /// How many entries of its tab the browser goes back at most to
+        /// find that page; 0 for the open page only.
+        max_backs: u32,
+    },
+}
+
+/// How an attempt reached its page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reached {
+    /// The address was typed: no `Referer`, `Sec-Fetch-Site: none`.
+    Typed,
+    /// A link on a page the persona had been reading was followed.
+    Link {
+        /// How many entries of its tab the browser went back before the
+        /// click, 0 when the open page held the link; `None` on the http
+        /// path, which has no tab to go back in.
+        backs: Option<u32>,
+    },
+}
+
 /// The behavior a browser attempt was asked for, and whose it was.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BehaviorApplied {
@@ -200,6 +248,10 @@ pub struct BehaviorApplied {
     /// The dwell drawn for this attempt; `None` for the persona's own
     /// human dwell, which the sidecar draws.
     pub dwell: Option<Duration>,
+    /// How long the persona goes on scrolling this page at most: drawn for
+    /// this attempt from its seed, at the persona's pace (follow-up F44).
+    /// `None` for a flow, which scrolls where its steps say.
+    pub patience: Option<Duration>,
     /// How the page is arrived at.
     pub referer_strategy: RefererStrategy,
     /// The seed of the attempt, from which all of it was drawn.
@@ -252,6 +304,10 @@ pub struct AttemptJob {
     /// The flow a browser attempt runs in place of loading `url`, which
     /// is then where the flow starts.
     pub flow: Option<FlowPlan>,
+    /// How the persona arrives, when whoever asks knows what it has been
+    /// reading; `None` leaves it to the path: a typed address in a
+    /// browser, the page before as `Referer` on the http path.
+    pub arrival: Option<Arrival>,
 }
 
 /// What an attempt came to.
@@ -285,6 +341,9 @@ pub struct AttemptOutput {
     pub behavior: Option<BehaviorApplied>,
     /// The steps of the flow, when the attempt ran one.
     pub flow: Option<FlowRun>,
+    /// How the page was reached; `None` when the attempt asked the site
+    /// for nothing, and for a flow.
+    pub reached: Option<Reached>,
 }
 
 impl AttemptOutput {
@@ -305,6 +364,7 @@ impl AttemptOutput {
             cookies_to_http: None,
             behavior: None,
             flow: None,
+            reached: None,
         }
     }
 
@@ -335,6 +395,7 @@ impl AttemptOutput {
             cookies_to_http: None,
             behavior: None,
             flow: None,
+            reached: None,
         }
     }
 
@@ -397,10 +458,16 @@ pub fn draw_dwell(median: Duration, floor: Duration, seed: &Seed) -> Duration {
 /// a wandering pointer, and the policy's entry. A wish changes the scroll
 /// depth, the dwell ([`draw_dwell`]) and the entry, unless the policy
 /// locks behavior. The pointer wanders either way.
+///
+/// How long the scrolling goes on at most is nobody's wish: a patience
+/// drawn for this attempt from its seed (`browser.patience`), at the pace
+/// of the persona (`pace`, [`pacing_factor`]). No request and no policy
+/// bounds a visit by a time that is the same for every page.
 pub fn behavior_for(
     policy: &EffectivePolicy,
     browser: &BrowserConfig,
     seed: &Seed,
+    pace: f64,
     wish: Option<&BehaviorWish>,
 ) -> (BehaviorOptions, BehaviorApplied) {
     let asked = wish.filter(|wish| !wish.is_empty());
@@ -420,6 +487,7 @@ pub fn behavior_for(
     let referer_strategy = wish
         .and_then(|wish| wish.referer_strategy)
         .unwrap_or(policy.referer_strategy);
+    let patience = browser.patience.draw(pace, seed);
     let options = BehaviorOptions {
         dwell: Some(if dwell.is_some() {
             DwellMode::Fixed
@@ -428,7 +496,9 @@ pub fn behavior_for(
         }),
         entry: Some(Entry {
             fallback: None,
+            from_open_page: None,
             from_url: None,
+            max_backs: None,
             strategy: match referer_strategy {
                 RefererStrategy::None => EntryStrategy::None,
                 // A search entry needs a results URL built from a
@@ -436,6 +506,7 @@ pub fn behavior_for(
                 RefererStrategy::Direct | RefererStrategy::SearchEngine => EntryStrategy::Direct,
             },
         }),
+        patience_ms: u64::try_from(patience.as_millis()).ok(),
         scroll_depth,
         seed: Some(seed.to_string()),
         wander: Some(true),
@@ -445,18 +516,76 @@ pub fn behavior_for(
         request_ignored: asked.is_some() && wish.is_none(),
         scroll_depth,
         dwell,
+        patience: Some(patience),
         referer_strategy,
         seed: *seed,
     };
     (options, applied)
 }
 
+/// The entry of a navigation that arrives from a page the persona has been
+/// reading (`from`): the link there is clicked, on the open page or after
+/// going back to it, at most `max_backs` entries; when the tab does not
+/// hold the page or the page does not hold the link, the address is typed.
+fn entry_from(from: &Url, max_backs: u32) -> Entry {
+    Entry {
+        fallback: Some(EntryFallback::None),
+        from_open_page: Some(true),
+        from_url: Some(from.to_string()),
+        max_backs: Some(u64::from(max_backs)),
+        strategy: EntryStrategy::Link,
+    }
+}
+
+/// How a page the browser returned was reached, as its entry reports it.
+fn reached_of(page: &PageResult) -> Reached {
+    let entry = page
+        .behavior
+        .as_ref()
+        .and_then(|behavior| behavior.entry.as_ref());
+    match entry {
+        Some(entry)
+            if entry.outcome == EntryOutcome::Arrived
+                && matches!(
+                    entry.strategy,
+                    EntryStrategy::Link | EntryStrategy::SearchEngine
+                ) =>
+        {
+            Reached::Link {
+                backs: Some(
+                    entry
+                        .backs
+                        .and_then(|backs| u32::try_from(backs).ok())
+                        .unwrap_or(0),
+                ),
+            }
+        }
+        _ => Reached::Typed,
+    }
+}
+
 /// The navigation of one browser attempt, and the behavior it asks for.
+///
+/// `timeout_ms` is what the attempt has to reach its page; how long it
+/// stays there is the patience and the dwell of [`behavior_for`]. An
+/// attempt with an [`Arrival`] clicks its way there, unless the entry in
+/// force is `none`.
 pub fn navigation_for(
     job: &AttemptJob,
     browser: &BrowserConfig,
 ) -> (NavigateRequest, BehaviorApplied) {
-    let (behavior, applied) = behavior_for(&job.policy, browser, &job.seed, job.behavior.as_ref());
+    let (mut behavior, applied) = behavior_for(
+        &job.policy,
+        browser,
+        &job.seed,
+        pacing_factor(&job.persona.seed),
+        job.behavior.as_ref(),
+    );
+    if let Some(Arrival::Link { from, max_backs }) = &job.arrival
+        && applied.referer_strategy != RefererStrategy::None
+    {
+        behavior.entry = Some(entry_from(from, *max_backs));
+    }
     let request = NavigateRequest {
         artifact_prefix: None,
         behavior: Some(behavior),
@@ -518,6 +647,7 @@ pub fn flow_for(
         request_ignored: asked.is_some() && wish.is_none(),
         scroll_depth: None,
         dwell,
+        patience: None,
         referer_strategy: RefererStrategy::Direct,
         seed: job.seed,
     };
@@ -539,6 +669,7 @@ pub const fn default_capture() -> CaptureOptions {
     CaptureOptions {
         console: false,
         dom: true,
+        links: None,
         pdf: None,
         raw: false,
         screenshot: None,
@@ -682,13 +813,24 @@ impl PathExecutor {
         let has_referer = headers
             .iter()
             .any(|(name, _)| name.eq_ignore_ascii_case("referer"));
+        let mut reached = Reached::Typed;
         if !job.starts_visit
             && !has_referer
             && job.policy.referer_strategy == RefererStrategy::Direct
-            && let Some(previous) = self.last_page(persona.id, &job.domain)
         {
-            // A later page of a visit arrives from the page before it.
-            headers.push(("Referer".to_owned(), previous.to_string()));
+            // A later page of a visit arrives from a page before it: the
+            // one that holds the link to it when the attempt names one,
+            // else the last one read.
+            let from = match &job.arrival {
+                Some(Arrival::Link { from, .. }) => Some(from.clone()),
+                // Nothing it read leads here: it comes from nowhere.
+                Some(Arrival::Typed) => None,
+                None => self.last_page(persona.id, &job.domain),
+            };
+            if let Some(previous) = from {
+                headers.push(("Referer".to_owned(), previous.to_string()));
+                reached = Reached::Link { backs: None };
+            }
         }
         let fetch = FetchSpec {
             url: job.url.clone(),
@@ -742,6 +884,7 @@ impl PathExecutor {
             cookies_to_http: None,
             behavior: None,
             flow: None,
+            reached: Some(reached),
         }
     }
 
@@ -995,6 +1138,7 @@ impl PathExecutor {
                 .collect(),
             redirects: page.redirects.iter().map(|hop| hop.url.clone()).collect(),
             timing: timing_of(&page),
+            reached: job.flow.is_none().then(|| reached_of(&page)),
             page: Some(page),
             fetched: None,
             cookies_to_browser,
@@ -1014,7 +1158,11 @@ impl PathExecutor {
         let sidecar = self.manager.sidecars().of(job.persona.engine);
         let navigating =
             sidecar.navigate_checked(context, &request, self.security, self.max_redirects);
-        let navigation = match tokio::time::timeout(job.timeout + BROWSER_GRACE, navigating).await {
+        // The attempt is waited for as long as this page may take: the time
+        // to reach it, the patience drawn for it and its dwell. No page is
+        // left after a time that is the same for every page.
+        let wall = navigation_bound(&request) + NAVIGATION_GRACE;
+        let navigation = match tokio::time::timeout(wall, navigating).await {
             Ok(Ok(navigation)) => navigation,
             Ok(Err(error)) => {
                 return Err(Box::new(Self::unavailable(&PersonaError::Browser(error))));
@@ -1062,7 +1210,9 @@ impl AttemptExecutor for PathExecutor {
 mod tests {
     use std::time::Duration;
 
-    use kage_browser::contract::{DwellMode, EntryStrategy};
+    use kage_browser::contract::{
+        DwellMode, EXAMPLES_JSON, EntryFallback, EntryStrategy, PageResult,
+    };
     use kage_core::config::BrowserConfig;
     use kage_core::outcome::Outcome;
     use kage_core::policy::{DomainPolicies, EffectivePolicy, RefererStrategy};
@@ -1071,7 +1221,10 @@ mod tests {
     use kage_http::{HttpError, Stage};
     use url::Url;
 
-    use super::{AttemptOutput, BehaviorWish, PathExecutor, behavior_for, draw_dwell, origin_of};
+    use super::{
+        AttemptOutput, BehaviorWish, PathExecutor, Reached, behavior_for, draw_dwell, entry_from,
+        origin_of, reached_of,
+    };
 
     fn policy(yaml: &str) -> EffectivePolicy {
         DomainPolicies::from_yaml(yaml)
@@ -1084,7 +1237,7 @@ mod tests {
         let browser = BrowserConfig::default();
         let seed = Seed::from_u64(5);
 
-        let (behavior, applied) = behavior_for(&policy(""), &browser, &seed, None);
+        let (behavior, applied) = behavior_for(&policy(""), &browser, &seed, 1.0, None);
 
         assert_eq!(behavior.dwell, Some(DwellMode::Human));
         assert_eq!(behavior.wander, Some(true));
@@ -1092,6 +1245,7 @@ mod tests {
         let entry = behavior.entry.clone().unwrap();
         assert_eq!(entry.strategy, EntryStrategy::Direct);
         assert_eq!((entry.from_url, entry.fallback), (None, None));
+        assert_eq!((entry.from_open_page, entry.max_backs), (None, None));
         // What was asked for is what is reported, and it was the policy's.
         assert!(!applied.from_request && !applied.request_ignored);
         assert_eq!(applied.scroll_depth, behavior.scroll_depth);
@@ -1100,10 +1254,13 @@ mod tests {
         assert_eq!(applied.seed, seed);
         // The same seed scrolls as deep every time; other seeds cover the
         // range and never leave it.
-        assert_eq!(behavior, behavior_for(&policy(""), &browser, &seed, None).0);
+        assert_eq!(
+            behavior,
+            behavior_for(&policy(""), &browser, &seed, 1.0, None).0
+        );
         let depths: Vec<f64> = (0..400)
             .map(|n| {
-                behavior_for(&policy(""), &browser, &Seed::from_u64(n), None)
+                behavior_for(&policy(""), &browser, &Seed::from_u64(n), 1.0, None)
                     .0
                     .scroll_depth
                     .unwrap()
@@ -1117,7 +1274,7 @@ mod tests {
         // and is a typed navigation.
         let none = policy("defaults:\n  referer_strategy: none\n");
         assert_eq!(
-            behavior_for(&none, &browser, &seed, None)
+            behavior_for(&none, &browser, &seed, 1.0, None)
                 .0
                 .entry
                 .unwrap()
@@ -1126,7 +1283,7 @@ mod tests {
         );
         let search = policy("defaults:\n  referer_strategy: search_engine\n");
         assert_eq!(
-            behavior_for(&search, &browser, &seed, None)
+            behavior_for(&search, &browser, &seed, 1.0, None)
                 .0
                 .entry
                 .unwrap()
@@ -1134,8 +1291,13 @@ mod tests {
             EntryStrategy::Direct
         );
         // A wish that asks for nothing is no wish.
-        let (empty, applied) =
-            behavior_for(&policy(""), &browser, &seed, Some(&BehaviorWish::default()));
+        let (empty, applied) = behavior_for(
+            &policy(""),
+            &browser,
+            &seed,
+            1.0,
+            Some(&BehaviorWish::default()),
+        );
         assert_eq!(empty, behavior);
         assert!(!applied.from_request && !applied.request_ignored);
     }
@@ -1150,7 +1312,7 @@ mod tests {
             referer_strategy: Some(RefererStrategy::None),
         };
 
-        let (behavior, applied) = behavior_for(&policy(""), &browser, &seed, Some(&wish));
+        let (behavior, applied) = behavior_for(&policy(""), &browser, &seed, 1.0, Some(&wish));
 
         assert_eq!(behavior.scroll_depth, Some(0.3));
         assert_eq!(behavior.dwell, Some(DwellMode::Fixed));
@@ -1168,7 +1330,7 @@ mod tests {
             scroll_depth: Some(0.0),
             ..BehaviorWish::default()
         };
-        let (behavior, applied) = behavior_for(&policy(""), &browser, &seed, Some(&still));
+        let (behavior, applied) = behavior_for(&policy(""), &browser, &seed, 1.0, Some(&still));
         assert_eq!(behavior.scroll_depth, None);
         assert_eq!(applied.scroll_depth, None);
         // Only the depth was the request's: the dwell stays the persona's.
@@ -1181,7 +1343,7 @@ mod tests {
             ..BehaviorWish::default()
         };
         assert_eq!(
-            behavior_for(&policy(""), &browser, &seed, Some(&deep))
+            behavior_for(&policy(""), &browser, &seed, 1.0, Some(&deep))
                 .0
                 .scroll_depth,
             Some(1.0)
@@ -1240,9 +1402,12 @@ mod tests {
             referer_strategy: Some(RefererStrategy::None),
         };
 
-        let (behavior, applied) = behavior_for(&locked, &browser, &seed, Some(&wish));
+        let (behavior, applied) = behavior_for(&locked, &browser, &seed, 1.0, Some(&wish));
 
-        assert_eq!(behavior, behavior_for(&locked, &browser, &seed, None).0);
+        assert_eq!(
+            behavior,
+            behavior_for(&locked, &browser, &seed, 1.0, None).0
+        );
         assert_eq!(behavior.dwell, Some(DwellMode::Human));
         assert!((0.6..0.9).contains(&behavior.scroll_depth.unwrap()));
         assert!(applied.request_ignored && !applied.from_request);
@@ -1250,9 +1415,137 @@ mod tests {
 
         // Without the lock the policy's own floor holds.
         let floored = policy("defaults:\n  min_dwell: 5s\n");
-        let (_, applied) = behavior_for(&floored, &browser, &seed, Some(&wish));
+        let (_, applied) = behavior_for(&floored, &browser, &seed, 1.0, Some(&wish));
         assert!(applied.dwell.unwrap() >= Duration::from_secs(5));
         assert!(!applied.request_ignored);
+    }
+
+    #[test]
+    fn every_page_is_given_a_patience_of_its_own_at_the_personas_pace() {
+        let browser = BrowserConfig::default();
+        let seed = Seed::from_u64(5);
+
+        let (behavior, applied) = behavior_for(&policy(""), &browser, &seed, 1.0, None);
+
+        // What the sidecar is asked for is what is recorded with the
+        // attempt, and it is the draw of the attempt's seed: the visit
+        // replays.
+        let patience = applied.patience.unwrap();
+        assert_eq!(
+            behavior.patience_ms,
+            u64::try_from(patience.as_millis()).ok()
+        );
+        assert_eq!(patience, browser.patience.draw(1.0, &seed));
+        assert_eq!(
+            applied,
+            behavior_for(&policy(""), &browser, &seed, 1.0, None).1
+        );
+        // A slower persona has more patience with the same page.
+        let slower = behavior_for(&policy(""), &browser, &seed, 1.25, None).1;
+        assert!(slower.patience.unwrap() > patience);
+        // It is nobody's wish: a request that asks for the whole page and
+        // a short dwell has the same patience, and so has a locked policy.
+        let wish = BehaviorWish {
+            scroll_depth: Some(1.0),
+            dwell: Some(Duration::from_secs(1)),
+            referer_strategy: None,
+        };
+        let wished = behavior_for(&policy(""), &browser, &seed, 1.0, Some(&wish)).1;
+        assert_eq!(wished.patience, Some(patience));
+        let locked = policy("defaults:\n  behavior_locked: true\n");
+        let kept = behavior_for(&locked, &browser, &seed, 1.0, Some(&wish)).1;
+        assert_eq!(kept.patience, Some(patience));
+        // Even a page that is not scrolled has one: with it, the time to
+        // reach the page bounds nothing else.
+        let still = BehaviorWish {
+            scroll_depth: Some(0.0),
+            ..BehaviorWish::default()
+        };
+        let (unscrolled, _) = behavior_for(&policy(""), &browser, &seed, 1.0, Some(&still));
+        assert_eq!(unscrolled.scroll_depth, None);
+        assert_eq!(unscrolled.patience_ms, behavior.patience_ms);
+
+        // Pages are not given up after the same time (two of three hundred
+        // may share a millisecond by chance; there is no pile anywhere), and
+        // none outside what the configuration allows.
+        let mut drawn: Vec<Duration> = (0..300)
+            .map(|n| {
+                behavior_for(&policy(""), &browser, &Seed::from_u64(n), 1.0, None)
+                    .1
+                    .patience
+                    .unwrap()
+            })
+            .collect();
+        drawn.sort_unstable();
+        assert!(drawn[0] > Duration::from_secs(6), "{:?}", drawn[0]);
+        assert!(drawn[299] <= Duration::from_mins(4), "{:?}", drawn[299]);
+        drawn.dedup();
+        assert!(drawn.len() >= 297, "{}", drawn.len());
+    }
+
+    #[test]
+    fn a_page_the_persona_has_been_reading_is_left_by_a_click_on_its_link() {
+        let entry = entry_from(&Url::parse("https://example.org/list?page=2").unwrap(), 3);
+
+        assert_eq!(entry.strategy, EntryStrategy::Link);
+        assert_eq!(
+            entry.from_url.as_deref(),
+            Some("https://example.org/list?page=2")
+        );
+        // Nothing is loaded to start from: the tab holds the page or it
+        // does not, and then the address is typed. A crawl never stops at
+        // a link that is gone.
+        assert_eq!(
+            (entry.from_open_page, entry.max_backs),
+            (Some(true), Some(3))
+        );
+        assert_eq!(entry.fallback, Some(EntryFallback::None));
+    }
+
+    #[test]
+    fn how_a_page_was_reached_is_what_the_browser_says_it_did() {
+        let examples: serde_json::Value = serde_json::from_str(EXAMPLES_JSON).unwrap();
+        let reached = |entry: serde_json::Value| {
+            let mut page = examples["PageResult"][0].clone();
+            page["behavior"]["entry"] = entry;
+            reached_of(&serde_json::from_value::<PageResult>(page).unwrap())
+        };
+        let entry = |strategy: &str, outcome: &str, backs: Option<u64>| {
+            serde_json::json!({
+                "strategy": strategy,
+                "outcome": outcome,
+                "from_url": "https://example.org/list",
+                "referer": "https://example.org/list",
+                "backs": backs,
+            })
+        };
+
+        // A click on the open page, and one after going back twice.
+        assert_eq!(
+            reached(entry("link", "arrived", Some(0))),
+            Reached::Link { backs: Some(0) }
+        );
+        assert_eq!(
+            reached(entry("link", "arrived", Some(2))),
+            Reached::Link { backs: Some(2) }
+        );
+        // A link on a page that was loaded to start from: no going back.
+        assert_eq!(
+            reached(entry("link", "arrived", None)),
+            Reached::Link { backs: Some(0) }
+        );
+        // The link was not there and the address was typed; so it was for
+        // an entry that never asked for a click, and for no entry at all.
+        assert_eq!(reached(entry("link", "fell_back", None)), Reached::Typed);
+        assert_eq!(reached(entry("direct", "arrived", None)), Reached::Typed);
+        assert_eq!(reached(entry("none", "arrived", None)), Reached::Typed);
+        assert_eq!(reached(serde_json::Value::Null), Reached::Typed);
+        let mut bare = examples["PageResult"][0].clone();
+        bare["behavior"] = serde_json::Value::Null;
+        assert_eq!(
+            reached_of(&serde_json::from_value::<PageResult>(bare).unwrap()),
+            Reached::Typed
+        );
     }
 
     #[test]

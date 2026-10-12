@@ -11,6 +11,7 @@ use super::personas::ClockTime;
 use crate::duration::HumanDuration;
 use crate::pacing::Lognormal;
 use crate::schedule::day::DayRules;
+use crate::seed::Seed;
 
 /// The longest one attempt may ever take (spec §8.4).
 pub const MAX_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(300);
@@ -400,6 +401,24 @@ impl PatienceConfig {
             min: Some(millis(self.min)),
             max: Some(millis(self.max)),
         }
+    }
+
+    /// The patience of one attempt: a draw from the distribution at the
+    /// persona's own pace (`factor`, [`crate::persona::pacing_factor`]),
+    /// from the attempt's seed and from nothing else, in whole
+    /// milliseconds. The same attempt has the same patience every time it
+    /// is asked, so a visit replays; no two attempts share one, so no two
+    /// long pages are left after the same time.
+    pub fn draw(&self, factor: f64, seed: &Seed) -> Duration {
+        let drawn = self
+            .distribution()
+            .scaled(factor)
+            .sample(&mut seed.child("patience").rng());
+        // Float-to-integer `as` saturates; the value is rounded and inside
+        // the distribution's own bounds first.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let millis = drawn.max(0.0).round() as u64;
+        Duration::from_millis(millis).clamp(MIN_PATIENCE, MAX_PATIENCE)
     }
 
     /// Checks the four values against each other and the contract.
@@ -929,6 +948,39 @@ mod tests {
             let error = refused(|_, b, _, _| change(b));
             assert!(error.starts_with(said), "{error}");
         }
+        // One attempt's patience: from its seed alone, in whole
+        // milliseconds, at the persona's pace, inside the floor and the
+        // ceiling whatever the pace.
+        let seed = Seed::from_u64(42);
+        let once = patience.draw(1.0, &seed);
+        assert_eq!(once, patience.draw(1.0, &seed));
+        assert_eq!(once.subsec_nanos() % 1_000_000, 0);
+        assert_ne!(once, patience.draw(1.0, &Seed::from_u64(43)));
+        let many = |factor: f64| -> Vec<Duration> {
+            (0..4000)
+                .map(|index| patience.draw(factor, &Seed::from_u64(index)))
+                .collect()
+        };
+        let median = |mut all: Vec<Duration>| {
+            all.sort_unstable();
+            all[all.len() / 2]
+        };
+        for factor in [0.8, 1.0, 1.25] {
+            let all = many(factor);
+            assert!(all.iter().all(|one| *one > Duration::from_secs(6)));
+            assert!(all.iter().all(|one| *one <= Duration::from_mins(4)));
+            let middle = median(all).as_secs_f64();
+            assert!(
+                (middle / (38.0 * factor) - 1.0).abs() < 0.08,
+                "{middle} at {factor}"
+            );
+        }
+        // No two pages of a hundred are given up after the same time.
+        let mut hundred = many(1.0)[..100].to_vec();
+        hundred.sort_unstable();
+        hundred.dedup();
+        assert_eq!(hundred.len(), 100);
+
         // The edges are inside: the contract's own bounds, and a p95 that
         // is the ceiling.
         assert_eq!(check(|_, b, _, _| b.patience.min = secs(1)), Ok(()));

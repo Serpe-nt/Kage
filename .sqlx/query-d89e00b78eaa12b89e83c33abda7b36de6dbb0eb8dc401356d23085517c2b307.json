@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE crawl_frontier\n             SET state = 'fetching', item_id = $3\n             WHERE id = (\n                 SELECT id FROM crawl_frontier\n                 WHERE job_id = $1 AND seq = $2 AND state = 'queued'\n                 FOR UPDATE SKIP LOCKED\n             )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d89e00b78eaa12b89e83c33abda7b36de6dbb0eb8dc401356d23085517c2b307"
+}

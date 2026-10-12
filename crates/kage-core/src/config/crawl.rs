@@ -33,8 +33,9 @@ pub struct CrawlConfig {
     /// How far from its seeds a crawl goes when it does not say.
     #[serde(default = "default_max_depth")]
     pub default_max_depth: u32,
-    /// How many pages a crawl asks for when it does not say. A crawl may
-    /// ask for as many as a job has items (`jobs.max_items`).
+    /// How many pages a crawl asks for when it does not say: this many,
+    /// or as many as a job may have items (`jobs.max_items`) where that
+    /// is fewer. A crawl may ask for as many as a job has items.
     #[serde(default = "default_max_pages")]
     pub default_max_pages: u32,
     /// Most seeds one crawl may have.
@@ -120,21 +121,19 @@ impl Default for CrawlConfig {
     }
 }
 
-/// Checks the crawl section against the job limits it lives inside.
+/// Checks the crawl section.
 ///
 /// # Errors
 ///
 /// A sentence that names the first key that is out of range.
-pub(super) fn validate(crawl: &CrawlConfig, max_items: u32) -> Result<(), String> {
+pub(super) fn validate(crawl: &CrawlConfig) -> Result<(), String> {
     if crawl.default_max_depth > MAX_CRAWL_DEPTH {
         return Err(format!(
             "crawl.default_max_depth must be at most {MAX_CRAWL_DEPTH}"
         ));
     }
-    if crawl.default_max_pages == 0 || crawl.default_max_pages > max_items {
-        return Err(format!(
-            "crawl.default_max_pages must be between 1 and jobs.max_items ({max_items})"
-        ));
+    if crawl.default_max_pages == 0 {
+        return Err("crawl.default_max_pages must be at least 1".to_owned());
     }
     if crawl.max_seeds == 0 || crawl.max_seeds > MAX_CRAWL_SEEDS {
         return Err(format!(
@@ -200,7 +199,7 @@ mod tests {
         );
         assert_eq!((crawl.max_sitemaps, crawl.max_sitemap_urls), (10, 50_000));
         assert_eq!(crawl.skipped_extensions, DEFAULT_SKIPPED_EXTENSIONS);
-        assert_eq!(validate(&crawl, 10_000), Ok(()));
+        assert_eq!(validate(&crawl), Ok(()));
         // An empty section is the defaults, and an unknown key is refused.
         let empty: CrawlConfig = serde_json::from_str("{}").unwrap();
         assert_eq!(empty, crawl);
@@ -218,19 +217,15 @@ mod tests {
         let with = |change: fn(&mut CrawlConfig)| {
             let mut crawl = CrawlConfig::default();
             change(&mut crawl);
-            validate(&crawl, 10_000).unwrap_err()
+            validate(&crawl).unwrap_err()
         };
-        let cases: [(Change, &str); 13] = [
+        let cases: [(Change, &str); 12] = [
             (
                 |crawl| crawl.default_max_depth = 33,
                 "crawl.default_max_depth",
             ),
             (
                 |crawl| crawl.default_max_pages = 0,
-                "crawl.default_max_pages",
-            ),
-            (
-                |crawl| crawl.default_max_pages = 10_001,
                 "crawl.default_max_pages",
             ),
             (|crawl| crawl.max_seeds = 0, "crawl.max_seeds"),
@@ -264,11 +259,11 @@ mod tests {
         let edge = |change: fn(&mut CrawlConfig)| {
             let mut crawl = CrawlConfig::default();
             change(&mut crawl);
-            validate(&crawl, 10_000)
+            validate(&crawl)
         };
         assert_eq!(edge(|crawl| crawl.default_max_depth = 32), Ok(()));
         assert_eq!(edge(|crawl| crawl.default_max_depth = 0), Ok(()));
-        assert_eq!(edge(|crawl| crawl.default_max_pages = 10_000), Ok(()));
+        assert_eq!(edge(|crawl| crawl.default_max_pages = 1), Ok(()));
         assert_eq!(edge(|crawl| crawl.max_seeds = 1000), Ok(()));
         assert_eq!(edge(|crawl| crawl.max_frontier = 100), Ok(()));
         assert_eq!(edge(|crawl| crawl.back_limit = 10), Ok(()));

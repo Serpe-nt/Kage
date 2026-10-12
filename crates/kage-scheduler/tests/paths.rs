@@ -19,11 +19,12 @@ use kage_core::domain::{
 };
 use kage_core::ids::PersonaId;
 use kage_core::outcome::Outcome;
+use kage_core::persona::pacing_factor;
 use kage_core::schedule::budget::{BudgetLevel, BudgetRules};
 use kage_core::schedule::queue::Priority;
 use kage_proxy::machine::{ExitObservation, ProbeReport};
 use kage_scheduler::pipeline::attempt_seed;
-use kage_scheduler::{Backend, Bandwidth, FetchOrder, Ledger, StoreLedger};
+use kage_scheduler::{Arrival, Backend, Bandwidth, FetchOrder, Ledger, Reached, StoreLedger};
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -37,6 +38,17 @@ const BROWSER_FAST: &str =
 
 fn get(path: &str) -> FetchOrder {
     FetchOrder::get(Lab::url(path), Priority::Sync)
+}
+
+/// A page the persona reaches from `holder`, a page it has been reading.
+fn get_from(path: &str, holder: &str) -> FetchOrder {
+    FetchOrder {
+        arrival: Some(Arrival::Link {
+            from: Lab::url(holder),
+            max_backs: 3,
+        }),
+        ..get(path)
+    }
 }
 
 fn page(title: &str) -> ResponseTemplate {
@@ -67,6 +79,11 @@ fn header(request: &wiremock::Request, name: &str) -> Option<String> {
         .get(name)
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned)
+}
+
+/// The `Referer` the site received with the first request for `at`.
+async fn referer_at(lab: &Lab, at: &str) -> Option<String> {
+    header(&lab.received(at).await[0], "referer")
 }
 
 /// A page a Cloudflare WAF answers with.
@@ -291,6 +308,21 @@ async fn a_challenge_on_the_http_path_is_answered_in_the_same_personas_browser_a
     assert_eq!(behavior["entry"]["strategy"], "direct");
     let depth = behavior["scroll_depth"].as_f64().unwrap();
     assert!((0.6..=0.9).contains(&depth), "{depth}");
+    // How long it goes on scrolling is a patience drawn for this attempt
+    // from its seed at the persona's pace, and recorded with it: the time
+    // to reach the page bounds nothing else (follow-up F44).
+    let patience = lab
+        .config
+        .browser
+        .patience
+        .draw(pacing_factor(&persona.seed), &seed);
+    assert_eq!(
+        behavior["patience_ms"].as_u64(),
+        u64::try_from(patience.as_millis()).ok()
+    );
+    let applied = last.behavior.as_ref().unwrap();
+    assert_eq!(applied.patience, Some(patience));
+    assert_eq!(last.reached, Some(Reached::Typed));
     assert_eq!(asked["challenge_wait_ms"], 15_000);
     assert_eq!(asked["capture"]["dom"], true);
     assert_eq!(
@@ -316,6 +348,140 @@ async fn a_challenge_on_the_http_path_is_answered_in_the_same_personas_browser_a
     let sent = header(&received[0], "cookie").unwrap();
     assert!(sent.contains("cf_clearance=xyz"), "{sent}");
     assert!(sent.contains("pre=1"), "{sent}");
+    lab.shut_down().await;
+}
+
+#[tokio::test]
+async fn the_next_page_of_a_reader_is_a_click_on_the_page_that_holds_its_link() {
+    let mut lab = Lab::start(1, 149, BROWSER_FAST).await;
+    let url = |path: &str| format!("http://{SITE}{path}");
+    let asked = |lab: &Lab, index: usize| {
+        lab.chromium
+            .with(|sidecar| sidecar.navigated[index]["behavior"]["entry"].clone())
+    };
+    let reached = |report: &kage_scheduler::FetchReport| report.last.as_ref().unwrap().reached;
+
+    // The first page: the tab holds nothing, whatever the caller believes
+    // the persona has been reading, and the address is typed.
+    let first = lab
+        .pipeline
+        .fetch(get_from("/list", "/home"))
+        .await
+        .unwrap();
+    assert_eq!(first.outcome, Outcome::Ok, "{:?}", first.reason);
+    assert_eq!(
+        asked(&lab, 0),
+        json!({
+            "strategy": "link", "from_url": url("/home"), "from_open_page": true,
+            "max_backs": 3, "fallback": "none",
+        })
+    );
+    assert_eq!(reached(&first), Some(Reached::Typed));
+
+    // A link of the open page is clicked there.
+    let a = lab.pipeline.fetch(get_from("/a", "/list")).await.unwrap();
+    assert_eq!(reached(&a), Some(Reached::Link { backs: Some(0) }));
+    let deeper = lab
+        .pipeline
+        .fetch(get_from("/a/notes", "/a"))
+        .await
+        .unwrap();
+    assert_eq!(reached(&deeper), Some(Reached::Link { backs: Some(0) }));
+    // A link of a page it read before: it goes back to it, as far as it
+    // may, and clicks there.
+    let b = lab.pipeline.fetch(get_from("/b", "/list")).await.unwrap();
+    assert_eq!(asked(&lab, 3)["from_url"], url("/list"));
+    assert_eq!(reached(&b), Some(Reached::Link { backs: Some(2) }));
+    // A page the tab no longer holds (the click on /list dropped what
+    // came after it): the address is typed, and nothing is said to be a
+    // click that was none.
+    let gone = lab
+        .pipeline
+        .fetch(get_from("/c", "/a/notes"))
+        .await
+        .unwrap();
+    assert_eq!(reached(&gone), Some(Reached::Typed));
+    // Without a page to arrive from the address is typed, as ever, and
+    // so it is when the caller says that nothing leads there.
+    let plain = lab.pipeline.fetch(get("/d")).await.unwrap();
+    assert_eq!(asked(&lab, 5)["strategy"], "direct");
+    assert_eq!(asked(&lab, 5).get("from_open_page"), None);
+    assert_eq!(reached(&plain), Some(Reached::Typed));
+    let typed = FetchOrder {
+        arrival: Some(Arrival::Typed),
+        ..get("/e")
+    };
+    let typed = lab.pipeline.fetch(typed).await.unwrap();
+    assert_eq!(asked(&lab, 6), json!({ "strategy": "direct" }));
+    assert_eq!(reached(&typed), Some(Reached::Typed));
+    // All of it was one persona in one window.
+    assert_eq!(lab.chromium.with(|sidecar| sidecar.contexts.len()), 1);
+    assert_eq!(lab.chromium.with(|sidecar| sidecar.closed.len()), 0);
+    lab.shut_down().await;
+
+    // A policy without an entry strategy types every address.
+    let mut lab = Lab::start(
+        1,
+        149,
+        "defaults: { render: browser, pacing: fast, active_hours: ignore, referer_strategy: none }\ndomains: {}\n",
+    )
+    .await;
+    lab.pipeline.fetch(get("/list")).await.unwrap();
+    let typed = lab.pipeline.fetch(get_from("/a", "/list")).await.unwrap();
+    assert_eq!(asked(&lab, 1), json!({ "strategy": "none" }));
+    assert_eq!(reached(&typed), Some(Reached::Typed));
+    lab.shut_down().await;
+}
+
+#[tokio::test]
+async fn on_the_http_path_the_page_that_holds_the_link_is_the_referer() {
+    let mut lab = Lab::start(1, 149, LENIENT_FAST).await;
+    for at in ["/list", "/a", "/b", "/c", "/d"] {
+        serve(&lab, at, page(at)).await;
+    }
+    let reached = |report: &kage_scheduler::FetchReport| report.last.as_ref().unwrap().reached;
+
+    // The first page of a visit is typed: a reader that comes to a site
+    // comes from nowhere, whatever the caller names.
+    let first = lab
+        .pipeline
+        .fetch(get_from("/list", "/home"))
+        .await
+        .unwrap();
+    assert_eq!(first.outcome, Outcome::Ok, "{:?}", first.reason);
+    assert_eq!(referer_at(&lab, "/list").await, None);
+    assert_eq!(reached(&first), Some(Reached::Typed));
+
+    // A later page arrives from the page that holds its link: here the
+    // one before it, and then one read earlier, which is not the last.
+    let a = lab.pipeline.fetch(get_from("/a", "/list")).await.unwrap();
+    assert_eq!(
+        referer_at(&lab, "/a").await,
+        Some(format!("http://{SITE}/list"))
+    );
+    assert_eq!(reached(&a), Some(Reached::Link { backs: None }));
+    let b = lab.pipeline.fetch(get_from("/b", "/list")).await.unwrap();
+    assert_eq!(
+        referer_at(&lab, "/b").await,
+        Some(format!("http://{SITE}/list"))
+    );
+    assert_eq!(reached(&b), Some(Reached::Link { backs: None }));
+    // Without one it is the page before it, as it was.
+    let c = lab.pipeline.fetch(get("/c")).await.unwrap();
+    assert_eq!(
+        referer_at(&lab, "/c").await,
+        Some(format!("http://{SITE}/b"))
+    );
+    assert_eq!(reached(&c), Some(Reached::Link { backs: None }));
+    // A page nothing it read leads to comes from nowhere: no page is
+    // named that does not hold its link.
+    let typed = FetchOrder {
+        arrival: Some(Arrival::Typed),
+        ..get("/d")
+    };
+    let d = lab.pipeline.fetch(typed).await.unwrap();
+    assert_eq!(referer_at(&lab, "/d").await, None);
+    assert_eq!(reached(&d), Some(Reached::Typed));
     lab.shut_down().await;
 }
 

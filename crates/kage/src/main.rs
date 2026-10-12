@@ -684,7 +684,7 @@ async fn main() -> anyhow::Result<()> {
                 json,
             };
             let mut out = Vec::new();
-            let result = fetch_cmd::fetch(&config, &options, &mut out).await;
+            let result = Box::pin(fetch_cmd::fetch(&config, &options, &mut out)).await;
             shown(&out, result)
         }
         Command::Serve { bind } => {

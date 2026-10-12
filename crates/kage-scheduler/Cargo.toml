@@ -45,6 +45,8 @@ url = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+# The frontier of a crawl, for the test of a crawl's politeness.
+kage-crawl = { workspace = true }
 sqlx = { workspace = true }
 tempfile = { workspace = true }
 testcontainers = { workspace = true }

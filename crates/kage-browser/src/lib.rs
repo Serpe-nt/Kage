@@ -55,7 +55,9 @@ pub mod contract {
     include!(concat!(env!("OUT_DIR"), "/contract.rs"));
 }
 
-pub use client::{Closed, IMPLEMENTED_OPERATIONS, Navigation, SidecarClient, SidecarSettings};
+pub use client::{
+    Closed, IMPLEMENTED_OPERATIONS, Navigation, SidecarClient, SidecarSettings, navigation_bound,
+};
 pub use error::BrowserError;
 
 /// Name of this crate as recorded in its manifest.

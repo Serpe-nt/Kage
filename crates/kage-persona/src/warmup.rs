@@ -34,8 +34,10 @@ use kage_browser::contract::{
     NavigationErrorCode, Wait, WaitUntil,
 };
 use kage_core::alert::AlertSeverity;
+use kage_core::config::PatienceConfig;
 use kage_core::domain::{Persona, PersonaState};
 use kage_core::outcome::Outcome;
+use kage_core::persona::pacing_factor;
 use kage_core::persona::warmup::{self, PlannedVisit};
 use kage_core::policy::Cooldowns;
 use kage_core::seed::Seed;
@@ -79,16 +81,19 @@ fn classify(navigation: &Navigation) -> (Outcome, Option<i64>) {
 }
 
 /// The navigation of one warm-up visit: typed into the address bar, read
-/// like a person reads, nothing captured.
+/// like a person reads for as long as the persona's patience with this
+/// page lasts, nothing captured.
 fn visit_request(
     persona: &Persona,
     visit: &PlannedVisit,
     timeout_ms: Option<u64>,
+    patience: &PatienceConfig,
 ) -> NavigateRequest {
     let seed = Seed::derive(
         "warmup-visit",
         &[persona.seed.as_bytes(), &visit.number.to_le_bytes()],
     );
+    let patience = patience.draw(pacing_factor(&persona.seed), &seed);
     let (shallow, deep) = SCROLL_DEPTH;
     NavigateRequest {
         artifact_prefix: None,
@@ -96,9 +101,12 @@ fn visit_request(
             dwell: Some(DwellMode::Human),
             entry: Some(Entry {
                 fallback: None,
+                from_open_page: None,
                 from_url: None,
+                max_backs: None,
                 strategy: EntryStrategy::Direct,
             }),
+            patience_ms: u64::try_from(patience.as_millis()).ok(),
             scroll_depth: Some(seed.child("scroll").rng().uniform(shallow, deep)),
             seed: Some(seed.to_string()),
             wander: Some(true),
@@ -106,6 +114,7 @@ fn visit_request(
         capture: CaptureOptions {
             console: false,
             dom: false,
+            links: None,
             pdf: None,
             raw: false,
             screenshot: None,
@@ -272,7 +281,7 @@ impl PersonaManager {
         let navigation = sidecar
             .navigate_checked(
                 context,
-                &visit_request(persona, visit, timeout_ms),
+                &visit_request(persona, visit, timeout_ms, &self.config.browser.patience),
                 self.config.security.ssrf(),
                 usize::try_from(self.config.http.max_redirects).unwrap_or(usize::MAX),
             )
@@ -353,6 +362,7 @@ mod tests {
     use kage_browser::contract::{
         DwellMode, EXAMPLES_JSON, EntryStrategy, NavigationError, NavigationErrorCode, PageResult,
     };
+    use kage_core::config::PatienceConfig;
     use kage_core::domain::Engine;
     use kage_core::outcome::Outcome;
     use kage_core::persona::warmup::PlannedVisit;
@@ -447,11 +457,34 @@ mod tests {
             due_at: Utc::now(),
         };
 
-        let request = visit_request(&persona, &visit(2), Some(45_000));
+        let patience = PatienceConfig::default();
+        let request = visit_request(&persona, &visit(2), Some(45_000), &patience);
 
         assert_eq!(request.url, "https://de.wikipedia.org/wiki/Special:Random");
         assert_eq!(request.timeout_ms, Some(45_000));
         let behavior = request.behavior.clone().unwrap();
+        // A warm-up page is read as long as the persona's patience with it
+        // lasts, like any page: drawn for this visit, at this persona's
+        // pace, and never the same for the next.
+        let drawn = behavior.patience_ms.unwrap();
+        assert!((6_000..=240_000).contains(&drawn), "{drawn}");
+        assert_eq!(
+            drawn,
+            u64::try_from(
+                patience
+                    .draw(
+                        kage_core::persona::pacing_factor(&persona.seed),
+                        &behavior
+                            .seed
+                            .as_deref()
+                            .unwrap()
+                            .parse::<kage_core::seed::Seed>()
+                            .unwrap()
+                    )
+                    .as_millis()
+            )
+            .unwrap()
+        );
         assert_eq!(behavior.dwell, Some(DwellMode::Human));
         assert_eq!(behavior.entry.unwrap().strategy, EntryStrategy::Direct);
         assert_eq!(behavior.wander, Some(true));
@@ -464,11 +497,17 @@ mod tests {
 
         // The same visit is the same every time; another visit, and
         // another persona, behave differently.
-        assert_eq!(request, visit_request(&persona, &visit(2), Some(45_000)));
-        let other_visit = visit_request(&persona, &visit(3), Some(45_000));
-        assert_ne!(other_visit.behavior.unwrap().seed, behavior.seed);
+        assert_eq!(
+            request,
+            visit_request(&persona, &visit(2), Some(45_000), &patience)
+        );
+        let other_visit = visit_request(&persona, &visit(3), Some(45_000), &patience)
+            .behavior
+            .unwrap();
+        assert_ne!(other_visit.seed, behavior.seed);
+        assert_ne!(other_visit.patience_ms, behavior.patience_ms);
         let other = self::persona(Engine::Firefox, 152);
-        let other_persona = visit_request(&other, &visit(2), Some(45_000));
+        let other_persona = visit_request(&other, &visit(2), Some(45_000), &patience);
         assert_ne!(other_persona.behavior.unwrap().seed, behavior.seed);
     }
 }

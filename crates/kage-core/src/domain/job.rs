@@ -297,29 +297,77 @@ string_enum! {
     }
 }
 
-/// One URL discovered by a crawl.
+string_enum! {
+    /// How a crawl came to know an address.
+    pub enum FrontierSource {
+        /// The caller named it.
+        Seed => "seed",
+        /// A sitemap of the site named it.
+        Sitemap => "sitemap",
+        /// A page linked to it.
+        Link => "link",
+    }
+}
+
+/// One address a crawl knows (spec §13).
+///
+/// Entries name each other by their position in the crawl (`seq`): the
+/// page an address was found on, the pages a page links to, the page it
+/// repeats.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrontierEntry {
     /// Identity.
     pub id: FrontierId,
     /// The crawl job.
     pub job_id: JobId,
+    /// Its position in the crawl: the order in which the crawl came to
+    /// know its addresses, from 0.
+    pub seq: u64,
     /// The URL exactly as discovered; this is what gets requested.
     pub url: String,
     /// Its normalized form; a crawl holds one entry per key (spec §13).
     pub url_key: String,
-    /// Link distance from a seed.
+    /// The site it belongs to: its registrable domain.
+    pub site: String,
+    /// The least number of links from a seed.
     pub depth: u32,
     /// Lifecycle state.
     pub state: FrontierState,
-    /// The page the URL was found on.
+    /// Why it is not read, as a stable `snake_case` name; set exactly when
+    /// the state is `skipped`.
+    pub skip_reason: Option<String>,
+    /// How the crawl came to know it.
+    pub source: FrontierSource,
+    /// The position of the page it was found on.
+    pub found_on: Option<u64>,
+    /// The address of that page.
     pub discovered_from: Option<String>,
-    /// Hash of the fetched content, for exact-duplicate detection.
+    /// Whether its link stood in what the site repeats on every page.
+    pub furniture: bool,
+    /// The positions of the entries the page links to, in the order a
+    /// reader meets them.
+    pub links: Vec<u64>,
+    /// The links of the page that spell their target otherwise than the
+    /// crawl first met it: the target's position and the address as this
+    /// page has it, which is what a click on the link asks for.
+    pub spellings: Vec<(u64, String)>,
+    /// Where the page ended when a redirect led elsewhere.
+    pub final_url: Option<String>,
+    /// Whether that is off the sites the crawl reads.
+    pub left_site: bool,
+    /// Hash of what the page says, for exact-duplicate detection.
     pub content_hash: Option<String>,
-    /// SimHash of the fetched content, for near-duplicate detection.
+    /// SimHash of what the page says, for near-duplicate detection.
     pub simhash: Option<u64>,
-    /// Whether the content nearly duplicates an earlier page of the crawl.
-    pub near_duplicate: bool,
+    /// The position of the page it says the same as, word for word.
+    pub duplicate_of: Option<u64>,
+    /// The position of the page it nearly says the same as, and in how
+    /// many of the 64 bits of their fingerprints the two differ.
+    pub near_duplicate_of: Option<(u64, u32)>,
+    /// What a sitemap says about when the page changed.
+    pub lastmod: Option<DateTime<Utc>>,
+    /// The job item that carries its page.
+    pub item_id: Option<JobItemId>,
     /// When the URL was discovered.
     pub created_at: DateTime<Utc>,
     /// When it was fetched.
@@ -331,7 +379,8 @@ mod tests {
     use chrono::Utc;
 
     use super::{
-        DeliveryState, FrontierState, Job, JobItemState, JobKind, JobOrigin, JobState, WebhookEvent,
+        DeliveryState, FrontierSource, FrontierState, Job, JobItemState, JobKind, JobOrigin,
+        JobState, WebhookEvent,
     };
     use crate::ids::{ApiKeyId, JobId};
     use crate::macros::test_support::assert_string_enum;
@@ -361,6 +410,11 @@ mod tests {
             FrontierState::ALL,
             FrontierState::as_str,
             &["queued", "fetching", "done", "failed", "skipped"],
+        );
+        assert_string_enum(
+            FrontierSource::ALL,
+            FrontierSource::as_str,
+            &["seed", "sitemap", "link"],
         );
         assert_string_enum(JobOrigin::ALL, JobOrigin::as_str, &["api", "sync_overflow"]);
         assert_string_enum(

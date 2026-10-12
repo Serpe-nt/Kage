@@ -7,7 +7,12 @@
 //! one. The items of a claimed job are its worker's: it reads the open ones
 //! and writes each back as it ends, together with the job's counters.
 //!
-//! Claiming the frontier belongs to the crawler of milestone M10.
+//! A crawl grows as it is worked: its worker adds an item for every page it
+//! asks for ([`JobItemRepo::append`]) and keeps the crawl's frontier, one
+//! entry per address the crawl knows ([`FrontierRepo`]). An entry is
+//! claimed for its item with `SELECT ... FOR UPDATE SKIP LOCKED`
+//! ([`FrontierRepo::claim`]), so that no page is asked for twice even when
+//! the job changed hands.
 
 use chrono::{DateTime, Utc};
 use kage_core::domain::{
@@ -20,7 +25,9 @@ use uuid::Uuid;
 
 use super::{page_limit, repository};
 use crate::StoreError;
-use crate::convert::{bits_to_i64, bits_to_u64, parse, parse_opt, to_i32, to_i64, to_u32, to_u64};
+use crate::convert::{
+    bits_to_i64, bits_to_u64, from_json, parse, parse_opt, to_i32, to_i64, to_json, to_u32, to_u64,
+};
 
 /// How many items one statement inserts.
 const INSERT_CHUNK: usize = 500;
@@ -641,6 +648,39 @@ impl JobRepo<'_> {
         Ok(())
     }
 
+    /// What a crawl keeps about itself besides its frontier (its counters,
+    /// its sitemaps, the tab of each visitor): whatever its worker wrote
+    /// last, `null` for a job that keeps nothing.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the query fails.
+    pub async fn crawl(&self, id: JobId) -> Result<serde_json::Value, StoreError> {
+        Ok(
+            sqlx::query_scalar!("SELECT crawl FROM jobs WHERE id = $1", id.as_uuid())
+                .fetch_optional(self.pool)
+                .await?
+                .flatten()
+                .unwrap_or(serde_json::Value::Null),
+        )
+    }
+
+    /// Writes back what a crawl keeps about itself.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the query fails.
+    pub async fn set_crawl(&self, id: JobId, crawl: &serde_json::Value) -> Result<(), StoreError> {
+        sqlx::query!(
+            "UPDATE jobs SET crawl = $2 WHERE id = $1",
+            id.as_uuid(),
+            crawl
+        )
+        .execute(self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// How many jobs of each kind are in each state.
     ///
     /// # Errors
@@ -817,6 +857,48 @@ impl JobItemRepo<'_> {
         .execute(self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Adds an item at the end of a job that grows as it is worked (a
+    /// crawl: one item for every page it asks for) and counts it. The
+    /// position is given here, whatever the item says. Returns it; `None`
+    /// when the job is gone.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the statement fails or a number is out of range.
+    pub async fn append(&self, item: &JobItem) -> Result<Option<u64>, StoreError> {
+        const TABLE: &str = "job_items";
+        let seq = sqlx::query_scalar!(
+            "WITH grown AS (
+                 UPDATE jobs SET items_total = items_total + 1 WHERE id = $2
+                 RETURNING items_total
+             )
+             INSERT INTO job_items (id, job_id, seq, state, input, site, request_id, outcome,
+                                    output, error, not_before, claims, created_at, started_at,
+                                    finished_at)
+             SELECT $1, $2, grown.items_total - 1, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                    $14
+             FROM grown
+             RETURNING seq",
+            item.id.as_uuid(),
+            item.job_id.as_uuid(),
+            item.state.as_str(),
+            item.input,
+            item.site,
+            item.request_id.map(|id| id.as_uuid()),
+            item.outcome.map(Outcome::as_str),
+            item.output,
+            item.error,
+            item.not_before,
+            to_i32((TABLE, "claims"), item.claims)?,
+            item.created_at,
+            item.started_at,
+            item.finished_at,
+        )
+        .fetch_optional(self.pool)
+        .await?;
+        seq.map(|seq| to_u64((TABLE, "seq"), seq)).transpose()
     }
 
     /// A page of a job's items in position order. Pass the `seq` of the last
@@ -1120,14 +1202,28 @@ repository!(
 struct FrontierRow {
     id: Uuid,
     job_id: Uuid,
+    seq: i64,
     url: String,
     url_key: String,
+    site: String,
     depth: i32,
     state: String,
+    skip_reason: Option<String>,
+    source: String,
+    found_on: Option<i64>,
     discovered_from: Option<String>,
+    furniture: bool,
+    links: serde_json::Value,
+    spellings: serde_json::Value,
+    final_url: Option<String>,
+    left_site: bool,
     content_hash: Option<String>,
     simhash: Option<i64>,
-    near_duplicate: bool,
+    duplicate_of: Option<i64>,
+    near_duplicate_of: Option<i64>,
+    near_duplicate_bits: Option<i32>,
+    lastmod: Option<DateTime<Utc>>,
+    item_id: Option<Uuid>,
     created_at: DateTime<Utc>,
     fetched_at: Option<DateTime<Utc>>,
 }
@@ -1137,17 +1233,43 @@ impl TryFrom<FrontierRow> for FrontierEntry {
 
     fn try_from(row: FrontierRow) -> Result<Self, StoreError> {
         const TABLE: &str = "crawl_frontier";
+        let near = match (row.near_duplicate_of, row.near_duplicate_bits) {
+            (Some(of), Some(bits)) => Some((
+                to_u64((TABLE, "near_duplicate_of"), of)?,
+                to_u32((TABLE, "near_duplicate_bits"), bits)?,
+            )),
+            _ => None,
+        };
         Ok(Self {
             id: FrontierId::from_uuid(row.id),
             job_id: JobId::from_uuid(row.job_id),
+            seq: to_u64((TABLE, "seq"), row.seq)?,
             url: row.url,
             url_key: row.url_key,
+            site: row.site,
             depth: to_u32((TABLE, "depth"), row.depth)?,
             state: parse((TABLE, "state"), &row.state)?,
+            skip_reason: row.skip_reason,
+            source: parse((TABLE, "source"), &row.source)?,
+            found_on: row
+                .found_on
+                .map(|seq| to_u64((TABLE, "found_on"), seq))
+                .transpose()?,
             discovered_from: row.discovered_from,
+            furniture: row.furniture,
+            links: from_json((TABLE, "links"), row.links)?,
+            spellings: from_json((TABLE, "spellings"), row.spellings)?,
+            final_url: row.final_url,
+            left_site: row.left_site,
             content_hash: row.content_hash,
             simhash: row.simhash.map(bits_to_u64),
-            near_duplicate: row.near_duplicate,
+            duplicate_of: row
+                .duplicate_of
+                .map(|seq| to_u64((TABLE, "duplicate_of"), seq))
+                .transpose()?,
+            near_duplicate_of: near,
+            lastmod: row.lastmod,
+            item_id: row.item_id.map(JobItemId::from_uuid),
             created_at: row.created_at,
             fetched_at: row.fetched_at,
         })
@@ -1155,65 +1277,176 @@ impl TryFrom<FrontierRow> for FrontierEntry {
 }
 
 impl FrontierRepo<'_> {
-    /// Adds a discovered URL unless the crawl already has its key. Returns
-    /// whether it was added: `false` means the URL is a duplicate.
+    /// Writes entries of a crawl, all or nothing: one the crawl does not
+    /// have at its position yet is added, one it has is brought up to
+    /// date (its address and its key never change). The item of an entry
+    /// is kept when the entry written names none.
     ///
     /// # Errors
     ///
-    /// Fails when the query fails.
-    pub async fn insert_if_new(&self, entry: &FrontierEntry) -> Result<bool, StoreError> {
-        let done = sqlx::query!(
-            "INSERT INTO crawl_frontier (id, job_id, url, url_key, depth, state, discovered_from,
-                                         content_hash, simhash, near_duplicate, created_at,
-                                         fetched_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-             ON CONFLICT (job_id, url_key) DO NOTHING",
-            entry.id.as_uuid(),
-            entry.job_id.as_uuid(),
-            entry.url,
-            entry.url_key,
-            to_i32(("crawl_frontier", "depth"), entry.depth)?,
-            entry.state.as_str(),
-            entry.discovered_from,
-            entry.content_hash,
-            entry.simhash.map(bits_to_i64),
-            entry.near_duplicate,
-            entry.created_at,
-            entry.fetched_at,
-        )
-        .execute(self.pool)
-        .await?;
-        Ok(done.rows_affected() == 1)
+    /// [`StoreError::Conflict`] when an entry's key is another position's
+    /// in the same crawl; fails when a statement fails or a number is out
+    /// of range.
+    pub async fn save(&self, entries: &[FrontierEntry]) -> Result<(), StoreError> {
+        const TABLE: &str = "crawl_frontier";
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let mut transaction = self.pool.begin().await?;
+        for entry in entries {
+            let near = entry.near_duplicate_of;
+            sqlx::query!(
+                "INSERT INTO crawl_frontier (id, job_id, seq, url, url_key, site, depth, state,
+                                             skip_reason, source, found_on, discovered_from,
+                                             furniture, links, final_url, left_site, content_hash,
+                                             simhash, duplicate_of, near_duplicate_of,
+                                             near_duplicate_bits, lastmod, item_id, created_at,
+                                             fetched_at, spellings)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+                         $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
+                 ON CONFLICT (job_id, seq) DO UPDATE
+                 SET depth = EXCLUDED.depth, state = EXCLUDED.state,
+                     skip_reason = EXCLUDED.skip_reason, found_on = EXCLUDED.found_on,
+                     discovered_from = EXCLUDED.discovered_from, furniture = EXCLUDED.furniture,
+                     links = EXCLUDED.links, spellings = EXCLUDED.spellings,
+                     final_url = EXCLUDED.final_url,
+                     left_site = EXCLUDED.left_site, content_hash = EXCLUDED.content_hash,
+                     simhash = EXCLUDED.simhash, duplicate_of = EXCLUDED.duplicate_of,
+                     near_duplicate_of = EXCLUDED.near_duplicate_of,
+                     near_duplicate_bits = EXCLUDED.near_duplicate_bits,
+                     lastmod = EXCLUDED.lastmod,
+                     item_id = COALESCE(EXCLUDED.item_id, crawl_frontier.item_id),
+                     fetched_at = EXCLUDED.fetched_at",
+                entry.id.as_uuid(),
+                entry.job_id.as_uuid(),
+                to_i64((TABLE, "seq"), entry.seq)?,
+                entry.url,
+                entry.url_key,
+                entry.site,
+                to_i32((TABLE, "depth"), entry.depth)?,
+                entry.state.as_str(),
+                entry.skip_reason,
+                entry.source.as_str(),
+                entry
+                    .found_on
+                    .map(|seq| to_i64((TABLE, "found_on"), seq))
+                    .transpose()?,
+                entry.discovered_from,
+                entry.furniture,
+                to_json((TABLE, "links"), &entry.links)?,
+                entry.final_url,
+                entry.left_site,
+                entry.content_hash,
+                entry.simhash.map(bits_to_i64),
+                entry
+                    .duplicate_of
+                    .map(|seq| to_i64((TABLE, "duplicate_of"), seq))
+                    .transpose()?,
+                near.map(|(seq, _)| to_i64((TABLE, "near_duplicate_of"), seq))
+                    .transpose()?,
+                near.map(|(_, bits)| to_i32((TABLE, "near_duplicate_bits"), bits))
+                    .transpose()?,
+                entry.lastmod,
+                entry.item_id.map(|id| id.as_uuid()),
+                entry.created_at,
+                entry.fetched_at,
+                to_json((TABLE, "spellings"), &entry.spellings)?,
+            )
+            .execute(&mut *transaction)
+            .await?;
+        }
+        transaction.commit().await?;
+        Ok(())
     }
 
-    /// A crawl's entries in `state`, shallowest and oldest first.
+    /// Every entry of a crawl, in the order the crawl came to know them.
     ///
     /// # Errors
     ///
     /// Fails when the query fails or a row does not parse.
-    pub async fn list(
-        &self,
-        job_id: JobId,
-        state: FrontierState,
-        limit: u32,
-    ) -> Result<Vec<FrontierEntry>, StoreError> {
+    pub async fn all(&self, job_id: JobId) -> Result<Vec<FrontierEntry>, StoreError> {
         sqlx::query_as!(
             FrontierRow,
-            "SELECT id, job_id, url, url_key, depth, state, discovered_from, content_hash, simhash,
-                    near_duplicate, created_at, fetched_at
+            "SELECT id, job_id, seq, url, url_key, site, depth, state, skip_reason, source,
+                    found_on, discovered_from, furniture, links, spellings, final_url,
+                    left_site,
+                    content_hash, simhash, duplicate_of, near_duplicate_of, near_duplicate_bits,
+                    lastmod, item_id, created_at, fetched_at
              FROM crawl_frontier
-             WHERE job_id = $1 AND state = $2
-             ORDER BY depth, created_at, id
-             LIMIT $3",
+             WHERE job_id = $1
+             ORDER BY seq",
             job_id.as_uuid(),
-            state.as_str(),
-            page_limit(limit),
         )
         .fetch_all(self.pool)
         .await?
         .into_iter()
         .map(FrontierEntry::try_from)
         .collect()
+    }
+
+    /// The entries of a crawl at these positions, in position order: what
+    /// an item of a crawl says about the pages it names.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the query fails, a row does not parse or a position is
+    /// out of range.
+    pub async fn at(&self, job_id: JobId, seqs: &[u64]) -> Result<Vec<FrontierEntry>, StoreError> {
+        let seqs = seqs
+            .iter()
+            .map(|seq| to_i64(("crawl_frontier", "seq"), *seq))
+            .collect::<Result<Vec<i64>, StoreError>>()?;
+        sqlx::query_as!(
+            FrontierRow,
+            "SELECT id, job_id, seq, url, url_key, site, depth, state, skip_reason, source,
+                    found_on, discovered_from, furniture, links, spellings, final_url,
+                    left_site,
+                    content_hash, simhash, duplicate_of, near_duplicate_of, near_duplicate_bits,
+                    lastmod, item_id, created_at, fetched_at
+             FROM crawl_frontier
+             WHERE job_id = $1 AND seq = ANY($2)
+             ORDER BY seq",
+            job_id.as_uuid(),
+            &seqs,
+        )
+        .fetch_all(self.pool)
+        .await?
+        .into_iter()
+        .map(FrontierEntry::try_from)
+        .collect()
+    }
+
+    /// Claims a queued entry for the item that reads its page: the entry
+    /// is `fetching` and the item's from here on. Returns whether it is
+    /// the caller's: `false` for an entry that is not queued, and for one
+    /// another worker holds at this moment (`SELECT ... FOR UPDATE SKIP
+    /// LOCKED`), so that no page of a crawl is asked for twice even when a
+    /// job changed hands.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the query fails or the position is out of range.
+    pub async fn claim(
+        &self,
+        job_id: JobId,
+        seq: u64,
+        item_id: JobItemId,
+    ) -> Result<bool, StoreError> {
+        let done = sqlx::query!(
+            "UPDATE crawl_frontier
+             SET state = 'fetching', item_id = $3
+             WHERE id = (
+                 SELECT id FROM crawl_frontier
+                 WHERE job_id = $1 AND seq = $2 AND state = 'queued'
+                 FOR UPDATE SKIP LOCKED
+             )",
+            job_id.as_uuid(),
+            to_i64(("crawl_frontier", "seq"), seq)?,
+            item_id.as_uuid(),
+        )
+        .execute(self.pool)
+        .await?;
+        Ok(done.rows_affected() == 1)
     }
 
     /// How many of a crawl's entries are in `state`.
@@ -1230,28 +1463,5 @@ impl FrontierRepo<'_> {
         .fetch_one(self.pool)
         .await?;
         to_u64(("crawl_frontier", "count"), row.count)
-    }
-
-    /// Writes back an entry's state and what fetching it found. Returns
-    /// whether the entry exists.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the query fails.
-    pub async fn update(&self, entry: &FrontierEntry) -> Result<bool, StoreError> {
-        let done = sqlx::query!(
-            "UPDATE crawl_frontier
-             SET state = $2, content_hash = $3, simhash = $4, near_duplicate = $5, fetched_at = $6
-             WHERE id = $1",
-            entry.id.as_uuid(),
-            entry.state.as_str(),
-            entry.content_hash,
-            entry.simhash.map(bits_to_i64),
-            entry.near_duplicate,
-            entry.fetched_at,
-        )
-        .execute(self.pool)
-        .await?;
-        Ok(done.rows_affected() == 1)
     }
 }

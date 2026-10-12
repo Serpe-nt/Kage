@@ -9,7 +9,8 @@ use uuid::Uuid;
 use super::repository;
 use crate::StoreError;
 use crate::convert::{
-    from_json, from_json_opt, parse, parse_opt, to_i32, to_json, to_json_opt, to_u16_opt, to_u32,
+    from_json, from_json_opt, parse, parse_opt, to_i32, to_i64, to_json, to_json_opt, to_u16_opt,
+    to_u32, to_u64,
 };
 
 repository!(
@@ -247,6 +248,7 @@ struct AttemptRow {
     timing: serde_json::Value,
     seed: Option<String>,
     reason: Option<String>,
+    patience_ms: Option<i64>,
 }
 
 impl TryFrom<AttemptRow> for Attempt {
@@ -270,6 +272,10 @@ impl TryFrom<AttemptRow> for Attempt {
             timing: from_json((TABLE, "timing"), row.timing)?,
             seed: parse_opt((TABLE, "seed"), row.seed.as_deref())?,
             reason: row.reason,
+            patience_ms: row
+                .patience_ms
+                .map(|millis| to_u64((TABLE, "patience_ms"), millis))
+                .transpose()?,
         })
     }
 }
@@ -286,8 +292,8 @@ impl AttemptRepo<'_> {
         sqlx::query!(
             "INSERT INTO attempts (id, request_id, n, persona_id, engine, render, started_at,
                                    finished_at, status, final_url, outcome, block, timing, seed,
-                                   reason)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
+                                   reason, patience_ms)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
             attempt.id.as_uuid(),
             attempt.request_id.as_uuid(),
             to_i32((TABLE, "n"), attempt.n)?,
@@ -303,6 +309,10 @@ impl AttemptRepo<'_> {
             to_json((TABLE, "timing"), &attempt.timing)?,
             attempt.seed.map(|seed| seed.to_string()),
             attempt.reason,
+            attempt
+                .patience_ms
+                .map(|millis| to_i64((TABLE, "patience_ms"), millis))
+                .transpose()?,
         )
         .execute(self.pool)
         .await?;
@@ -321,7 +331,7 @@ impl AttemptRepo<'_> {
         sqlx::query_as!(
             AttemptRow,
             "SELECT id, request_id, n, persona_id, engine, render, started_at, finished_at, status,
-                    final_url, outcome, block, timing, seed, reason
+                    final_url, outcome, block, timing, seed, reason, patience_ms
              FROM attempts WHERE request_id = $1 ORDER BY n",
             request_id.as_uuid(),
         )

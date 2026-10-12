@@ -66,7 +66,7 @@ pub(crate) async fn fetch(
     out: &mut impl Write,
 ) -> anyhow::Result<()> {
     let session = Session::open(config).await?;
-    let result = run(config, &session, options, out).await;
+    let result = Box::pin(run(config, &session, options, out)).await;
     session.close().await;
     result
 }
@@ -392,6 +392,7 @@ mod tests {
                 },
                 seed: None,
                 reason: None,
+                patience_ms: None,
             }],
             last: Some(last),
             headers: Vec::new(),

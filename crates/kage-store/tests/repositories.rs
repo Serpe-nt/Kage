@@ -11,8 +11,8 @@ use kage_core::alert::{Alert, AlertKind, AlertSeverity};
 use kage_core::domain::{
     ArtifactKind, ArtifactRef, Attempt, AuditActor, AuditEvent, AuditOutcome, BreakerState,
     ClaimedOs, CookieSameSite, CoolingReason, DomainBreaker, Engine, FetchRecord, FrontierEntry,
-    FrontierState, GeoRecord, Header, HealthEvent, HealthFailure, HttpCookie, Job, JobItem,
-    JobItemState, JobKind, JobOrigin, JobState, Persona, PersonaDomainState, PersonaState,
+    FrontierSource, FrontierState, GeoRecord, Header, HealthEvent, HealthFailure, HttpCookie, Job,
+    JobItem, JobItemState, JobKind, JobOrigin, JobState, Persona, PersonaDomainState, PersonaState,
     PersonaSummary, ProxyHealth, ProxyProviderKind, ProxyReplacement, ProxyState, Render,
     ReplaceReason, RobotsVerdict, Scope, SelftestRun, Session, SessionId, SessionLimits,
     SubjectKind, Timing,
@@ -1166,6 +1166,7 @@ async fn requests_attempts_and_results_round_trip() {
         },
         seed: None,
         reason: None,
+        patience_ms: None,
     };
     let succeeded = Attempt {
         id: AttemptId::new(),
@@ -1181,8 +1182,10 @@ async fn requests_attempts_and_results_round_trip() {
             total_ms: 9000,
             ..Timing::default()
         },
-        // What the behavior of the attempt was drawn from.
+        // What the behavior of the attempt was drawn from, and the
+        // patience it had with the page.
         seed: Some(Seed::from_u64(7)),
+        patience_ms: Some(41_200),
         ..blocked.clone()
     };
     // Timed out before any response: no status, no final URL.
@@ -1509,138 +1512,322 @@ async fn job_items_page_in_position_order() {
     assert_eq!(items.list(parent.id, None, 100).await.unwrap(), []);
 }
 
-// One crawl followed from its seed to a fetched page.
+// One crawl followed from its seed to a page that was read, and what it
+// keeps about itself.
 #[allow(clippy::too_many_lines)]
 #[tokio::test]
-async fn the_crawl_frontier_holds_one_entry_per_url_key() {
+async fn the_crawl_frontier_holds_one_entry_per_url_key_and_is_claimed_once() {
     let db = TestDb::migrated().await;
     let frontier = db.store.crawl_frontier();
     let key = common::seed_key(&db.store).await;
     let mut crawl = job(key.id, None);
     crawl.kind = JobKind::Crawl;
+    crawl.items_total = 0;
     db.store.jobs().insert(&crawl).await.unwrap();
     let mut other_crawl = job(key.id, None);
     other_crawl.kind = JobKind::Crawl;
     db.store.jobs().insert(&other_crawl).await.unwrap();
     let start = now();
-    let entry =
-        |job_id: JobId, url: &str, url_key: &str, depth: u32, offset_ms: i64| FrontierEntry {
-            id: FrontierId::new(),
-            job_id,
-            url: url.to_owned(),
-            url_key: url_key.to_owned(),
-            depth,
-            state: FrontierState::Queued,
-            discovered_from: Some("https://example.org/".to_owned()),
-            content_hash: None,
-            simhash: None,
-            near_duplicate: false,
-            created_at: start + Duration::milliseconds(offset_ms),
-            fetched_at: None,
-        };
+    let entry = |job_id: JobId, seq: u64, url: &str, url_key: &str, depth: u32| FrontierEntry {
+        id: FrontierId::new(),
+        job_id,
+        seq,
+        url: url.to_owned(),
+        url_key: url_key.to_owned(),
+        site: "example.org".to_owned(),
+        depth,
+        state: FrontierState::Queued,
+        skip_reason: None,
+        source: if seq == 0 {
+            FrontierSource::Seed
+        } else {
+            FrontierSource::Link
+        },
+        found_on: (seq > 0).then_some(0),
+        discovered_from: (seq > 0).then(|| "https://example.org/".to_owned()),
+        furniture: false,
+        links: Vec::new(),
+        spellings: Vec::new(),
+        final_url: None,
+        left_site: false,
+        content_hash: None,
+        simhash: None,
+        duplicate_of: None,
+        near_duplicate_of: None,
+        lastmod: None,
+        item_id: None,
+        created_at: start + Duration::milliseconds(i64::try_from(seq).unwrap()),
+        fetched_at: None,
+    };
 
     let seed = entry(
         crawl.id,
+        0,
         "https://example.org/",
         "https://example.org/",
         0,
-        0,
-    );
-    let page_b = entry(
-        crawl.id,
-        "https://example.org/b?utm_source=x",
-        "https://example.org/b",
-        1,
-        20,
     );
     let page_a = entry(
         crawl.id,
+        1,
         "https://example.org/a",
         "https://example.org/a",
         1,
-        10,
     );
-    for new in [&seed, &page_b, &page_a] {
-        assert!(frontier.insert_if_new(new).await.unwrap());
-    }
-    // The same page under another spelling has the same key: a duplicate.
+    let page_b = entry(
+        crawl.id,
+        2,
+        "https://example.org/b?utm_source=x",
+        "https://example.org/b",
+        1,
+    );
+    let mut hidden = entry(
+        crawl.id,
+        3,
+        "https://example.org/trap",
+        "https://example.org/trap",
+        1,
+    );
+    hidden.state = FrontierState::Skipped;
+    hidden.skip_reason = Some("hidden".to_owned());
+    hidden.furniture = true;
+    let mut from_sitemap = entry(
+        crawl.id,
+        4,
+        "https://example.org/only",
+        "https://example.org/only",
+        0,
+    );
+    from_sitemap.source = FrontierSource::Sitemap;
+    from_sitemap.found_on = None;
+    from_sitemap.discovered_from = None;
+    from_sitemap.lastmod = Some(start - Duration::days(3));
+    // Nothing is written of a set that is empty; a set is written whole.
+    frontier.save(&[]).await.unwrap();
+    frontier
+        .save(&[
+            seed.clone(),
+            page_a.clone(),
+            page_b.clone(),
+            hidden.clone(),
+            from_sitemap.clone(),
+        ])
+        .await
+        .unwrap();
+    // Another crawl has a frontier of its own, with the same addresses.
+    let elsewhere = entry(
+        other_crawl.id,
+        0,
+        "https://example.org/b",
+        "https://example.org/b",
+        0,
+    );
+    frontier
+        .save(std::slice::from_ref(&elsewhere))
+        .await
+        .unwrap();
+
+    // In the order the crawl came to know them; the discovered spelling
+    // is kept.
+    let all = frontier.all(crawl.id).await.unwrap();
+    assert_eq!(
+        all,
+        [
+            seed.clone(),
+            page_a.clone(),
+            page_b.clone(),
+            hidden.clone(),
+            from_sitemap.clone()
+        ]
+    );
+    assert_eq!(all[2].url, "https://example.org/b?utm_source=x");
+    assert_eq!(frontier.all(other_crawl.id).await.unwrap(), [elsewhere]);
+    assert_eq!(frontier.all(JobId::new()).await.unwrap(), []);
+    assert_eq!(
+        frontier.at(crawl.id, &[4, 1, 99]).await.unwrap(),
+        [page_a.clone(), from_sitemap.clone()]
+    );
+    assert_eq!(frontier.at(crawl.id, &[]).await.unwrap(), []);
+
+    // The same page under another spelling has the same key: the crawl
+    // holds one entry per key, and a set that breaks that writes nothing.
     let respelled = entry(
         crawl.id,
+        5,
         "https://example.org/b?utm_source=y#top",
         "https://example.org/b",
         2,
-        30,
     );
-    assert!(!frontier.insert_if_new(&respelled).await.unwrap());
-    // Another crawl has its own frontier.
+    let fine = entry(
+        crawl.id,
+        6,
+        "https://example.org/c",
+        "https://example.org/c",
+        2,
+    );
     assert!(
         frontier
-            .insert_if_new(&entry(
-                other_crawl.id,
-                "https://example.org/b",
-                "https://example.org/b",
-                0,
-                0
-            ))
+            .save(&[fine, respelled])
             .await
-            .unwrap()
+            .unwrap_err()
+            .is_conflict()
     );
+    assert_eq!(frontier.all(crawl.id).await.unwrap().len(), 5);
+    // What is not read says why, and only what is not read does.
+    let mut unexplained = entry(
+        crawl.id,
+        7,
+        "https://example.org/d",
+        "https://example.org/d",
+        1,
+    );
+    unexplained.state = FrontierState::Skipped;
+    assert!(matches!(
+        frontier.save(&[unexplained]).await.unwrap_err(),
+        StoreError::Database(_)
+    ));
 
-    // Shallowest first, then oldest; the discovered spelling is kept.
-    let queued = frontier
-        .list(crawl.id, FrontierState::Queued, 10)
+    // An entry is claimed for the item that reads its page, once.
+    let item = JobItemId::new();
+    assert!(frontier.claim(crawl.id, 0, item).await.unwrap());
+    assert!(!frontier.claim(crawl.id, 0, JobItemId::new()).await.unwrap());
+    // What is not waiting is nobody's, and neither is what is not there.
+    assert!(!frontier.claim(crawl.id, 3, item).await.unwrap());
+    assert!(!frontier.claim(crawl.id, 99, item).await.unwrap());
+    assert!(!frontier.claim(other_crawl.id, 1, item).await.unwrap());
+    let claimed = frontier.at(crawl.id, &[0]).await.unwrap().remove(0);
+    assert_eq!(claimed.state, FrontierState::Fetching);
+    assert_eq!(claimed.item_id, Some(item));
+    // One that another worker holds at this moment is passed over, not
+    // waited for.
+    let mut held = db.store.pool().begin().await.unwrap();
+    sqlx::query("SELECT id FROM crawl_frontier WHERE job_id = $1 AND seq = 1 FOR UPDATE")
+        .bind(crawl.id.as_uuid())
+        .execute(&mut *held)
         .await
         .unwrap();
-    assert_eq!(queued, [seed.clone(), page_a.clone(), page_b.clone()]);
-    assert_eq!(queued[2].url, "https://example.org/b?utm_source=x");
-    assert_eq!(
-        frontier
-            .list(crawl.id, FrontierState::Queued, 2)
-            .await
-            .unwrap()
-            .len(),
-        2
-    );
+    assert!(!frontier.claim(crawl.id, 1, JobItemId::new()).await.unwrap());
+    held.rollback().await.unwrap();
+    assert!(frontier.claim(crawl.id, 1, JobItemId::new()).await.unwrap());
+
     assert_eq!(
         frontier
             .count(crawl.id, FrontierState::Queued)
             .await
             .unwrap(),
-        3
+        2
     );
     assert_eq!(
-        frontier.count(crawl.id, FrontierState::Done).await.unwrap(),
-        0
+        frontier
+            .count(crawl.id, FrontierState::Fetching)
+            .await
+            .unwrap(),
+        2
     );
 
-    let mut fetched = seed.clone();
-    fetched.state = FrontierState::Done;
-    fetched.content_hash = Some("ab".repeat(32));
+    // The page was read: what it says, what it links to, where it ended.
+    // Its address, its key and its item stay as they are.
+    let mut read = seed.clone();
+    read.url = "https://example.org/changed".to_owned();
+    read.state = FrontierState::Done;
+    read.content_hash = Some("ab".repeat(32));
     // A SimHash uses all 64 bits, the sign bit included.
-    fetched.simhash = Some(0xF000_0000_0000_000F);
-    fetched.near_duplicate = true;
-    fetched.fetched_at = Some(now());
-    assert!(frontier.update(&fetched).await.unwrap());
+    read.simhash = Some(0xF000_0000_0000_000F);
+    read.links = vec![1, 2, 3];
+    read.spellings = vec![(2, "https://example.org/b?utm_source=home".to_owned())];
+    read.final_url = Some("https://example.org/home".to_owned());
+    read.fetched_at = Some(now());
+    let mut nearly = page_a.clone();
+    nearly.state = FrontierState::Done;
+    nearly.depth = 0;
+    nearly.near_duplicate_of = Some((0, 5));
+    nearly.fetched_at = Some(now());
+    let mut same = page_b.clone();
+    same.state = FrontierState::Done;
+    same.duplicate_of = Some(0);
+    same.left_site = true;
+    frontier
+        .save(&[read.clone(), nearly.clone(), same.clone()])
+        .await
+        .unwrap();
+    read.url = seed.url.clone();
+    read.item_id = Some(item);
+    let stored = frontier.at(crawl.id, &[0, 1, 2]).await.unwrap();
+    assert_eq!(stored[0], read);
+    assert_eq!(stored[1].near_duplicate_of, Some((0, 5)));
+    assert_eq!(stored[1].depth, 0);
+    assert!(stored[1].item_id.is_some());
+    assert_eq!(stored[2].duplicate_of, Some(0));
+    assert!(stored[2].left_site);
     assert_eq!(
-        frontier
-            .list(crawl.id, FrontierState::Done, 10)
-            .await
-            .unwrap(),
-        [fetched]
+        frontier.count(crawl.id, FrontierState::Done).await.unwrap(),
+        3
+    );
+
+    // What a crawl keeps about itself besides its frontier.
+    let jobs = db.store.jobs();
+    assert_eq!(jobs.crawl(crawl.id).await.unwrap(), serde_json::Value::Null);
+    let kept = serde_json::json!({ "begun": 3, "tabs": { "example.org": [[0, 1]] } });
+    jobs.set_crawl(crawl.id, &kept).await.unwrap();
+    assert_eq!(jobs.crawl(crawl.id).await.unwrap(), kept);
+    assert_eq!(
+        jobs.crawl(other_crawl.id).await.unwrap(),
+        serde_json::Value::Null
     );
     assert_eq!(
-        frontier
-            .count(crawl.id, FrontierState::Queued)
-            .await
-            .unwrap(),
-        2
+        jobs.crawl(JobId::new()).await.unwrap(),
+        serde_json::Value::Null
     );
-    assert!(
-        !frontier
-            .update(&entry(crawl.id, "x", "x", 0, 0))
-            .await
-            .unwrap()
+
+    // A crawl grows by an item for every page it asks for: the position
+    // is given by the job, which counts it.
+    let items = db.store.job_items();
+    let page = |id: JobItemId| JobItem {
+        id,
+        job_id: crawl.id,
+        // Whatever it says: the job knows its end.
+        seq: 40,
+        state: JobItemState::Running,
+        input: serde_json::json!({ "url": "https://example.org/" }),
+        site: Some("example.org".to_owned()),
+        request_id: Some(RequestId::new()),
+        outcome: None,
+        output: None,
+        error: None,
+        not_before: None,
+        claims: 1,
+        created_at: start,
+        started_at: Some(start),
+        finished_at: None,
+    };
+    assert_eq!(items.append(&page(item)).await.unwrap(), Some(0));
+    assert_eq!(
+        items.append(&page(JobItemId::new())).await.unwrap(),
+        Some(1)
     );
+    let grown = jobs.get(crawl.id).await.unwrap().unwrap();
+    assert_eq!(grown.items_total, 2);
+    let listed = items.list(crawl.id, None, 10).await.unwrap();
+    assert_eq!(
+        listed.iter().map(|item| item.seq).collect::<Vec<_>>(),
+        [0, 1]
+    );
+    assert_eq!(listed[0].id, item);
+    assert_eq!(listed[0].state, JobItemState::Running);
+    assert_eq!(listed[0].claims, 1);
+    // A job that is gone grows by nothing.
+    let mut orphan = page(JobItemId::new());
+    orphan.job_id = JobId::new();
+    assert_eq!(items.append(&orphan).await.unwrap(), None);
+
+    // The frontier goes with its crawl.
+    sqlx::query("DELETE FROM jobs WHERE id = $1")
+        .bind(crawl.id.as_uuid())
+        .execute(db.store.pool())
+        .await
+        .unwrap();
+    assert_eq!(frontier.all(crawl.id).await.unwrap(), []);
+    assert_eq!(frontier.all(other_crawl.id).await.unwrap().len(), 1);
 }
 
 // Both caches follow one timeline, which is what makes the expiry checks readable.

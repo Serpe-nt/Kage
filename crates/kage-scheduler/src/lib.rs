@@ -49,8 +49,8 @@ pub use backend::{Backend, PoolRoutes, StoreBackend};
 pub use bandwidth::{Bandwidth, Ledger, StoreLedger, Term};
 pub use error::SchedulerError;
 pub use executor::{
-    AttemptExecutor, AttemptJob, AttemptOutput, BehaviorApplied, BehaviorWish, FlowPlan, FlowRun,
-    FlowStep, PathExecutor,
+    Arrival, AttemptExecutor, AttemptJob, AttemptOutput, BehaviorApplied, BehaviorWish, FlowPlan,
+    FlowRun, FlowStep, PathExecutor, Reached,
 };
 pub use forwarder::{Forwarder, ForwarderEgress, ForwarderSettings, Meter, Routes, Tokens};
 pub use memory::MemoryBackend;

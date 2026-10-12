@@ -866,6 +866,7 @@ fn capture_of(request: &FetchRequest, include: &Included) -> ApiResult<CaptureOp
     Ok(CaptureOptions {
         console: include.has(Include::Console),
         dom: include.has(Include::Dom),
+        links: None,
         pdf,
         raw: include.has(Include::Raw),
         screenshot,

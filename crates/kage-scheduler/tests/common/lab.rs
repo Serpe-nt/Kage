@@ -210,6 +210,12 @@ pub struct SidecarState {
     pub pages: HashMap<String, Value>,
     /// The cookies a context holds, by origin.
     pub cookies: HashMap<String, Vec<Value>>,
+    /// The tab of each open context: the pages it went to, the open one
+    /// last. A click on a page it went back to drops what came after it.
+    pub tabs: HashMap<String, Vec<String>>,
+    /// Pages whose scrolling ends elsewhere than at the depth asked for:
+    /// by URL, how far down it came and why it ended there.
+    pub scrolls: HashMap<String, (f64, String)>,
     /// Requests, by operation, in order.
     pub generated: Vec<Value>,
     pub opened: Vec<Value>,
@@ -346,9 +352,74 @@ impl SidecarResponder {
         }
     }
 
+    /// What a browser with one tab says of a navigation's behavior (the
+    /// contract since 1.3.0): how it arrived, the patience it was given
+    /// and where its scrolling ended. A link on a page the persona has been
+    /// reading is clicked when the tab holds that page, the open one or at
+    /// most `max_backs` before it; else the address is typed.
+    fn behave(state: &mut SidecarState, context: &str, asked: &Value, page: &mut Value) {
+        let behavior = &asked["behavior"];
+        let url = asked["url"].as_str().unwrap_or_default().to_owned();
+        let tab = state.tabs.entry(context.to_owned()).or_default();
+        if !behavior.is_object() {
+            tab.push(url);
+            return;
+        }
+        let entry = &behavior["entry"];
+        let strategy = entry["strategy"].as_str().unwrap_or("direct");
+        let from = entry["from_url"].as_str();
+        let in_the_tab = strategy == "link" && entry["from_open_page"] == json!(true);
+        let max_backs = usize::try_from(entry["max_backs"].as_u64().unwrap_or(0)).unwrap();
+        let backs = from.filter(|_| in_the_tab).and_then(|from| {
+            tab.iter()
+                .rev()
+                .take(max_backs + 1)
+                .position(|held| held == from)
+        });
+        page["behavior"]["entry"] = match (strategy, backs) {
+            ("link", Some(backs)) => {
+                tab.truncate(tab.len() - backs);
+                json!({
+                    "strategy": "link", "outcome": "arrived", "from_url": from,
+                    "referer": from, "backs": backs,
+                })
+            }
+            ("link", None) if in_the_tab => json!({
+                "strategy": "link", "outcome": "fell_back", "from_url": from,
+                "referer": null, "backs": null,
+            }),
+            ("link", None) => json!({
+                "strategy": "link", "outcome": "arrived", "from_url": from,
+                "referer": from, "backs": null,
+            }),
+            _ => json!({
+                "strategy": strategy, "outcome": "arrived", "from_url": null,
+                "referer": null, "backs": null,
+            }),
+        };
+        tab.push(url.clone());
+        page["behavior"]["patience_ms"] = behavior["patience_ms"].clone();
+        let depth = behavior["scroll_depth"].as_f64();
+        page["behavior"]["scroll_reached"] = json!(depth);
+        page["behavior"]["scroll_ended_by"] = json!(depth.map(|_| "depth"));
+        if let (Some(_), Some((reached, why))) = (depth, state.scrolls.get(&url)) {
+            page["behavior"]["scroll_reached"] = json!(reached);
+            page["behavior"]["scroll_ended_by"] = json!(why);
+        }
+        if let Some(seed) = behavior["seed"].as_str() {
+            page["behavior"]["seed"] = json!(seed);
+        }
+    }
+
     fn navigate(state: &mut SidecarState, context: &str, body: Value) -> ResponseTemplate {
         let url = body["url"].as_str().unwrap_or_default().to_owned();
         let mut page = Self::served(&url);
+        // A page has the links it was asked for and no others.
+        if body["capture"]["links"] != json!(true) {
+            page["links"] = Value::Null;
+            page["links_truncated"] = json!(false);
+        }
+        Self::behave(state, context, &body, &mut page);
         let over = state
             .next_pages
             .pop_front()
@@ -492,6 +563,7 @@ impl Respond for SidecarResponder {
         match (method, operation) {
             ("DELETE", "") => {
                 state.contexts.retain(|_, (open, _)| open != context);
+                state.tabs.remove(context);
                 state.closed.push(context.to_owned());
                 ResponseTemplate::new(204)
             }
@@ -553,6 +625,8 @@ impl MockSidecar {
             next_pages: VecDeque::new(),
             pages: HashMap::new(),
             cookies: HashMap::new(),
+            tabs: HashMap::new(),
+            scrolls: HashMap::new(),
             generated: Vec::new(),
             opened: Vec::new(),
             closed: Vec::new(),

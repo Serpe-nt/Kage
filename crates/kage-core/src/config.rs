@@ -605,7 +605,7 @@ impl Config {
         )
         .map_err(ConfigError::Invalid)?;
         jobs::validate(&self.jobs, &self.webhooks).map_err(ConfigError::Invalid)?;
-        crawl::validate(&self.crawl, self.jobs.max_items).map_err(ConfigError::Invalid)?;
+        crawl::validate(&self.crawl).map_err(ConfigError::Invalid)?;
         match self.proxies.provider {
             ProviderChoice::Webshare if self.webshare.api_key.is_none() => {
                 return Err(ConfigError::MissingSecrets(vec!["KAGE__WEBSHARE__API_KEY"]));

@@ -12,7 +12,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::contract::{
-    ErrorResponse, ExportStateRequest, ExportStateResponse, FlowEvent, FlowRequest,
+    DwellMode, ErrorResponse, ExportStateRequest, ExportStateResponse, FlowEvent, FlowRequest,
     GeneratePersonaRequest, GeneratePersonaResponse, HealthResponse, ImportStateRequest,
     ImportStateResponse, NavigateRequest, OpenContextRequest, OpenContextResponse, PageResult,
     SelftestRequest, SelftestResponse, TOKEN_HEADER,
@@ -29,6 +29,43 @@ const FIRST_BACKOFF: Duration = Duration::from_millis(200);
 
 /// Longest wait between two connection attempts.
 const MAX_BACKOFF: Duration = Duration::from_secs(2);
+
+/// What a navigation has to reach its page when the request does not say:
+/// the contract's default.
+const DEFAULT_NAVIGATE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// The longest dwell a persona draws for itself: the sidecar's own cap
+/// (spec §10.4).
+const HUMAN_DWELL_CAP: Duration = Duration::from_secs(45);
+
+/// What a navigation may take beyond its own times: the flick that is
+/// under way when the patience ends, the captures, and the way there and
+/// back.
+const NAVIGATION_MARGIN: Duration = Duration::from_secs(30);
+
+/// The longest a navigation takes when everything in it takes as long as
+/// it may: reaching the page (`timeout_ms`), the scrolling (the patience
+/// the request gives it, when it gives one) and the dwell, and a margin.
+///
+/// It is derived from the request and from nothing else. A visit of a page
+/// is never ended by a time that is the same for every page (follow-up
+/// F44): whoever waits for a navigation waits this long, the client itself
+/// included.
+pub fn navigation_bound(request: &NavigateRequest) -> Duration {
+    let reach = request
+        .timeout_ms
+        .map_or(DEFAULT_NAVIGATE_TIMEOUT, Duration::from_millis);
+    let fixed_dwell = Duration::from_millis(request.dwell_ms.unwrap_or(0));
+    let on_the_page = request.behavior.as_ref().map_or(fixed_dwell, |behavior| {
+        let patience = Duration::from_millis(behavior.patience_ms.unwrap_or(0));
+        let dwell = match behavior.dwell {
+            Some(DwellMode::Human) => HUMAN_DWELL_CAP,
+            Some(DwellMode::Fixed) | None => fixed_dwell,
+        };
+        patience + dwell
+    });
+    reach + on_the_page + NAVIGATION_MARGIN
+}
 
 /// The operations of the contract this client calls: all of them. The
 /// contract test compares the list with the document, so an endpoint added
@@ -175,6 +212,19 @@ impl SidecarClient {
         path: &str,
         body: Option<Vec<u8>>,
     ) -> Result<(u16, Vec<u8>), BrowserError> {
+        self.send_within(operation, method, path, body, None).await
+    }
+
+    /// [`Self::send`] with a time of its own for this one call in place of
+    /// the client's.
+    async fn send_within(
+        &self,
+        operation: &'static str,
+        method: wreq::Method,
+        path: &str,
+        body: Option<Vec<u8>>,
+        within: Option<Duration>,
+    ) -> Result<(u16, Vec<u8>), BrowserError> {
         let url = self.url(path)?;
         let mut backoff = FIRST_BACKOFF;
         let mut attempts = 0;
@@ -184,6 +234,9 @@ impl SidecarClient {
                 .http
                 .request(method.clone(), url.as_str())
                 .header(TOKEN_HEADER, self.token.expose());
+            if let Some(within) = within {
+                request = request.timeout(within);
+            }
             if let Some(body) = &body {
                 request = request
                     .header("content-type", "application/json")
@@ -382,12 +435,29 @@ impl SidecarClient {
         context: Uuid,
         request: &NavigateRequest,
     ) -> Result<PageResult, BrowserError> {
-        self.post(
-            "navigate",
-            &format!("/v1/contexts/{context}/navigate"),
-            request,
-        )
-        .await
+        const OPERATION: &str = "navigate";
+        // A navigation is waited for as long as this one may take, not as
+        // long as every call may: a page a persona has the patience to read
+        // for minutes is not cut off at the client's own timeout.
+        let path = format!("/v1/contexts/{context}/navigate");
+        let body = Self::body(OPERATION, request)?;
+        let (status, bytes) = self
+            .send_within(
+                OPERATION,
+                wreq::Method::POST,
+                &path,
+                Some(body),
+                Some(navigation_bound(request)),
+            )
+            .await?;
+        if !(200..300).contains(&status) {
+            return Err(Self::refusal(OPERATION, status, &bytes));
+        }
+        serde_json::from_slice(&bytes).map_err(|error| BrowserError::Unexpected {
+            operation: OPERATION,
+            status,
+            detail: error.to_string(),
+        })
     }
 
     /// Navigates, then checks every hop the browser followed against the

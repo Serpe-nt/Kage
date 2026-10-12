@@ -22,8 +22,8 @@ use std::path::Path;
 use kage_browser::IMPLEMENTED_OPERATIONS;
 use kage_browser::contract::{
     self, BehaviorOptions, CONTRACT_VERSION, CaptureOptions, ClaimedOs, DwellMode, Entry,
-    EntryStrategy, ErrorCode, FlowAction, FlowEvent, NavigateRequest, OPERATIONS, PageResult,
-    SCHEMA_NAMES, TOKEN_HEADER, Wait, WaitUntil,
+    EntryFallback, EntryStrategy, ErrorCode, FlowAction, FlowEvent, NavigateRequest, OPERATIONS,
+    PageResult, SCHEMA_NAMES, TOKEN_HEADER, Wait, WaitUntil,
 };
 use serde_json::{Value, json};
 
@@ -175,6 +175,7 @@ fn an_optional_field_is_left_out_and_a_nullable_one_is_written_as_null() {
             console: false,
             screenshot: None,
             pdf: None,
+            links: None,
         },
         timeout_ms: Some(60_000),
         challenge_wait_ms: None,
@@ -201,16 +202,45 @@ fn an_optional_field_is_left_out_and_a_nullable_one_is_written_as_null() {
             strategy: EntryStrategy::Link,
             from_url: Some("https://www.example.org/".to_owned()),
             fallback: None,
+            from_open_page: None,
+            max_backs: None,
         }),
         scroll_depth: Some(0.5),
         dwell: Some(DwellMode::Human),
         wander: None,
+        patience_ms: None,
     });
     let mut with_behavior = bare;
     with_behavior["behavior"] = json!({
         "entry": { "strategy": "link", "from_url": "https://www.example.org/" },
         "scroll_depth": 0.5,
         "dwell": "human",
+    });
+    let written = serde_json::to_value(&request).unwrap();
+    assert!(common::same_json(&written, &with_behavior), "{written:#}");
+    assert_eq!(
+        serde_json::from_value::<NavigateRequest>(written).unwrap(),
+        request
+    );
+
+    // What contract 1.3.0 added to a request is optional too: a sidecar
+    // of 1.2.0 is asked for nothing it does not know unless Kage sets it.
+    request.capture.links = Some(true);
+    if let Some(behavior) = &mut request.behavior {
+        behavior.patience_ms = Some(38_000);
+        behavior.entry = Some(Entry {
+            strategy: EntryStrategy::Link,
+            from_url: Some("https://www.example.org/".to_owned()),
+            fallback: Some(EntryFallback::None),
+            from_open_page: Some(true),
+            max_backs: Some(3),
+        });
+    }
+    with_behavior["capture"]["links"] = json!(true);
+    with_behavior["behavior"]["patience_ms"] = json!(38_000);
+    with_behavior["behavior"]["entry"] = json!({
+        "strategy": "link", "from_url": "https://www.example.org/", "fallback": "none",
+        "from_open_page": true, "max_backs": 3,
     });
     let written = serde_json::to_value(&request).unwrap();
     assert!(common::same_json(&written, &with_behavior), "{written:#}");

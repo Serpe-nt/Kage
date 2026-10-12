@@ -28,8 +28,8 @@ pub use fetch::{
 };
 pub use health::{BreakerState, DomainBreaker, HealthEvent, SelftestRun, SubjectKind};
 pub use job::{
-    DeliveryState, FrontierEntry, FrontierState, Job, JobItem, JobItemState, JobKind, JobOrigin,
-    JobState, WebhookAttempt, WebhookDelivery, WebhookEvent,
+    DeliveryState, FrontierEntry, FrontierSource, FrontierState, Job, JobItem, JobItemState,
+    JobKind, JobOrigin, JobState, WebhookAttempt, WebhookDelivery, WebhookEvent,
 };
 pub use persona::{CoolingReason, Geolocation, Persona, PersonaDomainState, PersonaState, Screen};
 pub use proxy::{

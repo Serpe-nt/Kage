@@ -102,6 +102,11 @@ pub struct Attempt {
     /// Why the attempt ended as it did when the site did not say, as a
     /// stable `snake_case` name: for example `proxy_failed`.
     pub reason: Option<String>,
+    /// How long the persona would have gone on scrolling the page at most,
+    /// in milliseconds: drawn for a browser attempt from its seed (spec
+    /// §10.4), and kept with it so that the visit replays whatever the
+    /// configuration says by then. `None` on the http path and for a flow.
+    pub patience_ms: Option<u64>,
 }
 
 /// One response header. A list keeps order and repeated names.

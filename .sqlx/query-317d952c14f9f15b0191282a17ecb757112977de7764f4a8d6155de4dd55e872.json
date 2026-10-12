@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT crawl FROM jobs WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "crawl",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "jobs",
+            "name": "crawl"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "317d952c14f9f15b0191282a17ecb757112977de7764f4a8d6155de4dd55e872"
+}

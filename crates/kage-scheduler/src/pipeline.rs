@@ -49,7 +49,9 @@ use kage_core::ids::{ApiKeyId, AttemptId, JobId, PersonaId, RequestId, ResultId}
 use kage_core::outcome::{Block, Outcome};
 use kage_core::pacing::Lognormal;
 use kage_core::policy::{EffectivePolicy, PacingDecision, PacingRequest};
-use kage_core::schedule::planner::{Completion, Dispatch, Refusal, RetryPause, Visitors, Work};
+use kage_core::schedule::planner::{
+    Completion, Dispatch, PersonaView, Refusal, RetryPause, Visitors, Work,
+};
 use kage_core::schedule::politeness::Courtesy;
 use kage_core::schedule::queue::Priority;
 use kage_core::schedule::retry::{AttemptVerdict, RequestProgress, Ruling, Step};
@@ -63,7 +65,7 @@ use crate::SchedulerError;
 use crate::archive::{Archive, Archived, Keep};
 use crate::backend::Backend;
 use crate::executor::{
-    AttemptExecutor, AttemptJob, AttemptOutput, BehaviorWish, FlowPlan, default_capture,
+    Arrival, AttemptExecutor, AttemptJob, AttemptOutput, BehaviorWish, FlowPlan, default_capture,
     default_wait,
 };
 use crate::metrics;
@@ -127,6 +129,14 @@ pub struct FetchOrder {
     /// A flow to run in a browser in place of loading `url`, which is
     /// then the page the flow starts on.
     pub flow: Option<FlowPlan>,
+    /// How the persona arrives, when the caller knows what it has been
+    /// reading (a crawl's next page): by a link of a page it holds, or by
+    /// a typed address. `None` leaves it to the path.
+    pub arrival: Option<Arrival>,
+    /// Personas that may not take the fetch, whoever else may: the one
+    /// that read a crawl's sitemaps is not the one that reads its pages.
+    /// A pinned fetch has its persona whatever this says.
+    pub exclude: Vec<PersonaId>,
     /// The request as it was accepted, for the record.
     pub spec: serde_json::Value,
 }
@@ -161,6 +171,8 @@ impl FetchOrder {
             visitors: None,
             patience: None,
             flow: None,
+            arrival: None,
+            exclude: Vec::new(),
         }
     }
 }
@@ -518,6 +530,17 @@ impl Pipeline {
 
     fn backend(&self) -> &Arc<dyn Backend> {
         self.scheduler.backend()
+    }
+
+    /// The personas as the scheduler sees them now: for a caller that has
+    /// to know whether there is somebody else to send (a crawl keeps the
+    /// persona that reads a site's sitemaps apart from its visitor).
+    ///
+    /// # Errors
+    ///
+    /// Fails when the backend fails.
+    pub async fn personas(&self) -> Result<Vec<PersonaView>, SchedulerError> {
+        self.backend().personas().await
     }
 
     fn now(&self) -> DateTime<Utc> {
@@ -969,7 +992,14 @@ impl Pipeline {
             exclude: if course.follow_up.is_some() || order.pin.is_some() {
                 Vec::new()
             } else {
-                course.progress.used().to_vec()
+                // Those that tried already, and those the caller keeps out.
+                let mut exclude = course.progress.used().to_vec();
+                for persona in &order.exclude {
+                    if !exclude.contains(persona) {
+                        exclude.push(*persona);
+                    }
+                }
+                exclude
             },
             avoid: course.avoid.clone(),
             engines,
@@ -1067,6 +1097,11 @@ impl Pipeline {
             timing: output.timing,
             seed: Some(seed),
             reason: output.reason.clone(),
+            patience_ms: output
+                .behavior
+                .as_ref()
+                .and_then(|behavior| behavior.patience)
+                .and_then(|patience| u64::try_from(patience.as_millis()).ok()),
         };
         self.backend().save_attempt(&attempt).await?;
         note(&attempt, &course.domain, &dispatch, &output);
@@ -1114,6 +1149,7 @@ impl Pipeline {
             wait: course.order.wait.clone(),
             max_body_bytes: course.order.max_body_bytes,
             flow: course.order.flow.clone(),
+            arrival: course.order.arrival.clone(),
         }
     }
 
