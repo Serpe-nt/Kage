@@ -21,7 +21,8 @@
     "generate": "node dist/bin.js generate ../../crates/kage-api/openapi.json src/schema.ts",
     "check": "node dist/bin.js check ../../crates/kage-api/openapi.json src/schema.ts",
     "e2e": "node dist/e2e.js",
-    "e2e:jobs": "node dist/e2e-jobs.js"
+    "e2e:jobs": "node dist/e2e-jobs.js",
+    "e2e:crawl": "node dist/e2e-crawl.js"
   },
   "dependencies": {
     "openapi-fetch": "0.17.0"

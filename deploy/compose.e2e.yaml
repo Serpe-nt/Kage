@@ -74,6 +74,13 @@ services:
       KAGE__JOBS__LEASE: 10s
       # The jobs test shortens the wall time to see a fetch outlast it.
       KAGE__SCHEDULER__SYNC_WALL_TIME: ${KAGE_E2E_SYNC_WALL_TIME:-180s}
+      # The crawl test shortens the patience a persona has with a page, to
+      # see a long page left by it within the time of a test; the defaults
+      # are the product's own.
+      KAGE__BROWSER__PATIENCE__MIN: ${KAGE_E2E_PATIENCE_MIN:-6s}
+      KAGE__BROWSER__PATIENCE__MEDIAN: ${KAGE_E2E_PATIENCE_MEDIAN:-38s}
+      KAGE__BROWSER__PATIENCE__P95: ${KAGE_E2E_PATIENCE_P95:-110s}
+      KAGE__BROWSER__PATIENCE__MAX: ${KAGE_E2E_PATIENCE_MAX:-4m}
     volumes:
       # The shipped policies with the domain rules of the test.
       - ${KAGE_E2E_POLICIES:?the test that uses this overlay sets it}:/etc/kage/policies:ro

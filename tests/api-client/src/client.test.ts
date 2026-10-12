@@ -5,16 +5,20 @@ import { after, before, describe, it } from 'node:test';
 
 import {
   cancelJob,
+  crawlProgress,
+  createCrawl,
   createJob,
   createKageClient,
   fetchPage,
   hasEnded,
   KageProblemError,
   readArtifact,
+  readCrawlPages,
   readJob,
   readJobItems,
   readResult,
   waitForJob,
+  type CrawlProgress,
   type FetchResult,
   type Job,
 } from './client.js';
@@ -22,6 +26,29 @@ import {
 const TOKEN = 'kage_0190a0b000007000800000000000000a_dGVzdC1vbmx5';
 const ID = '0190a0b0-0000-7000-8000-000000000001';
 const JOB = '0190a0b0-0000-7000-8000-00000000000b';
+const CRAWL = '0190a0b0-0000-7000-8000-00000000000d';
+
+/** How far a crawl has come, with what a test names. */
+function progress(over: Partial<CrawlProgress>): CrawlProgress {
+  return {
+    discovered: 0,
+    waiting: 0,
+    fetching: 0,
+    fetched: 0,
+    failed: 0,
+    skipped: {},
+    dropped: 0,
+    duplicates: 0,
+    near_duplicates: 0,
+    depth_reached: 0,
+    pages: 0,
+    max_pages: 50,
+    max_depth: 2,
+    reached: { typed: 0, click: 0, back_click: 0, referer: 0 },
+    sitemaps: [],
+    ...over,
+  };
+}
 
 /** A result as the API returns one, with what a test names. */
 function result(over: Partial<FetchResult>): FetchResult {
@@ -132,19 +159,37 @@ describe('the generated client', () => {
             json(200, result({ final_url: asked.url, artifacts: { dom_html: 'art_1' } }));
           }
         } else if (request.method === 'POST' && request.url === '/v1/jobs') {
-          const asked = JSON.parse(body) as { type: string };
-          if (asked.type === 'crawl') {
+          const asked = JSON.parse(body) as { type: string; seeds?: string[] };
+          if (asked.type === 'crawl' && (asked.seeds ?? []).length === 0) {
             json(
               422,
               {
-                type: 'urn:kage:problem:not_available_yet',
-                title: 'This part of the API does not exist yet',
+                type: 'urn:kage:problem:validation_failed',
+                title: 'A field of the request is not acceptable',
                 status: 422,
-                detail: 'crawl jobs arrive with milestone M10',
-                code: 'not_available_yet',
+                detail: 'a crawl starts somewhere: at least one seed',
+                code: 'validation_failed',
                 request_id: ID,
+                field: 'seeds',
               },
               'application/problem+json',
+            );
+          } else if (asked.type === 'crawl') {
+            response.writeHead(201, {
+              'content-type': 'application/json',
+              location: `/v1/jobs/${CRAWL}`,
+            });
+            response.end(
+              JSON.stringify(
+                job({
+                  id: CRAWL,
+                  type: 'crawl',
+                  items: { total: 0, succeeded: 0, failed: 0, cancelled: 0, pending: 0 },
+                  items_url: `/v1/jobs/${CRAWL}/items`,
+                  visitors: 1,
+                  crawl: progress({}),
+                }),
+              ),
             );
           } else if (request.headers['idempotency-key'] === 'again') {
             response.writeHead(200, {
@@ -170,6 +215,58 @@ describe('the generated client', () => {
                   items: { total: 3, succeeded: 3, failed: 0, cancelled: 0, pending: 0 },
                 }),
           );
+        } else if (request.method === 'GET' && request.url === `/v1/jobs/${CRAWL}`) {
+          json(
+            200,
+            job({
+              id: CRAWL,
+              type: 'crawl',
+              state: 'succeeded',
+              items: { total: 3, succeeded: 3, failed: 0, cancelled: 0, pending: 0 },
+              crawl: progress({
+                discovered: 6,
+                fetched: 3,
+                skipped: { too_deep: 2, hidden: 1 },
+                duplicates: 1,
+                depth_reached: 2,
+                pages: 3,
+                reached: { typed: 1, click: 1, back_click: 1, referer: 0 },
+                ended: 'completed',
+              }),
+            }),
+          );
+        } else if (
+          request.method === 'GET' &&
+          (request.url ?? '').startsWith(`/v1/jobs/${CRAWL}/items`)
+        ) {
+          const page = (seq: number, path: string, crawl: object) => ({
+            seq,
+            state: 'succeeded',
+            url: `https://example.org${path}`,
+            outcome: 'ok',
+            request_id: ID,
+            crawl: { depth: seq === 0 ? 0 : 1, found_by: seq === 0 ? 'seed' : 'link', ...crawl },
+          });
+          json(200, {
+            items: [
+              page(0, '/', { reached: 'typed', links: { found: 2, new: 2 } }),
+              page(1, '/a', {
+                found_on: 'https://example.org/',
+                reached: 'click',
+                backs: 0,
+                content_hash: 'ab'.repeat(32),
+              }),
+              page(2, '/b', {
+                found_on: 'https://example.org/',
+                reached: 'back_click',
+                backs: 1,
+                duplicate_of: 'https://example.org/a',
+              }),
+              // A page that is being read has nothing to say yet.
+              { seq: 3, state: 'running', url: 'https://example.org/c' },
+            ],
+            next_cursor: null,
+          });
         } else if (
           request.method === 'GET' &&
           (request.url ?? '').startsWith(`/v1/jobs/${JOB}/items`)
@@ -362,14 +459,60 @@ describe('the generated client', () => {
     assert.equal(seen.at(-1)?.method, 'POST');
   });
 
+  it('submits a crawl, reads how far it came and what each page was to it', async () => {
+    const client = createKageClient({ baseUrl, token: TOKEN });
+    const request = {
+      seeds: ['https://example.org/'],
+      deny: ['/login'],
+      max_depth: 2,
+      max_pages: 50,
+      use_sitemaps: false,
+      defaults: { include: ['dom'] },
+    };
+
+    const submitted = await createCrawl(client, request, 'crawl-1');
+
+    assert.equal(submitted.replayed, false);
+    assert.equal(submitted.job.type, 'crawl');
+    // A crawl has no items when it is accepted.
+    assert.equal(submitted.job.items.total, 0);
+    const sent = seen.at(-1);
+    assert.equal(sent?.url, '/v1/jobs');
+    assert.equal(sent?.idempotencyKey, 'crawl-1');
+    assert.deepEqual(JSON.parse(sent?.body ?? ''), { type: 'crawl', ...request });
+    assert.equal(crawlProgress(submitted.job).max_pages, 50);
+    assert.equal(crawlProgress(submitted.job).ended ?? null, null);
+
+    const done = await waitForJob(client, CRAWL, { timeoutMs: 2000, everyMs: 5 });
+    const crawl = crawlProgress(done);
+    assert.equal(crawl.ended, 'completed');
+    assert.deepEqual(crawl.skipped, { too_deep: 2, hidden: 1 });
+    assert.deepEqual(crawl.reached, { typed: 1, click: 1, back_click: 1, referer: 0 });
+    assert.equal(crawl.fetched, done.items.succeeded);
+
+    const pages = await readCrawlPages(client, CRAWL, { results: false });
+    assert.deepEqual(
+      pages.map((page) => [page.url, page.page.depth, page.page.reached, page.page.backs ?? null]),
+      [
+        ['https://example.org/', 0, 'typed', null],
+        ['https://example.org/a', 1, 'click', 0],
+        ['https://example.org/b', 1, 'back_click', 1],
+      ],
+    );
+    assert.equal(pages[2]?.page.duplicate_of, 'https://example.org/a');
+    assert.equal(pages[1]?.page.found_on, 'https://example.org/');
+    assert.equal(seen.at(-1)?.url, `/v1/jobs/${CRAWL}/items?limit=50&results=false`);
+    // Another kind of job has no progress of a crawl.
+    assert.throws(() => crawlProgress(job({})), /is a batch, not a crawl/);
+  });
+
   it('throws the problem document of a job that is refused or is not there', async () => {
     const client = createKageClient({ baseUrl, token: TOKEN });
-    // The document describes only what the API takes: a crawl is not in it yet.
-    const crawl = { type: 'crawl' } as unknown as Parameters<typeof createJob>[1];
-    await assert.rejects(createJob(client, crawl), (error: unknown) => {
+    await assert.rejects(createCrawl(client, { seeds: [] }), (error: unknown) => {
       assert.ok(error instanceof KageProblemError);
       assert.equal(error.status, 422);
-      assert.equal(error.problem.code, 'not_available_yet');
+      assert.equal(error.problem.code, 'validation_failed');
+      assert.equal(error.problem['field'], 'seeds');
       return true;
     });
     const other = '0190a0b0-0000-7000-8000-00000000000c';

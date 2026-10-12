@@ -13,6 +13,12 @@ export type FetchAccepted = components['schemas']['FetchAccepted'];
 export type JobRequest = components['schemas']['JobRequest'];
 export type Job = components['schemas']['JobView'];
 export type JobItem = components['schemas']['JobItemView'];
+/** A crawl as `POST /v1/jobs` takes it, without its `type`. */
+export type CrawlRequest = components['schemas']['CrawlJob'];
+/** How far a crawl has come: the `crawl` of its job. */
+export type CrawlProgress = components['schemas']['CrawlView'];
+/** What a page was to its crawl: the `crawl` of its item. */
+export type CrawlPage = components['schemas']['CrawlItemView'];
 export type Problem = components['schemas']['Problem'];
 export type KageClient = Client<paths>;
 
@@ -130,6 +136,64 @@ export async function createJob(
     throw new KageProblemError(response.status, error);
   }
   return { job: data, replayed: response.headers.get('idempotency-replayed') === 'true' };
+}
+
+/**
+ * Submits a crawl (`POST /v1/jobs` with `type: "crawl"`): a site read
+ * from its seeds along its links, the way a reader goes through it. The
+ * key needs the `crawl` scope besides `jobs`. The job has no items yet:
+ * one is added for every page the crawl asks for.
+ *
+ * @throws KageProblemError when the crawl is refused; nothing of it is stored then.
+ */
+export async function createCrawl(
+  client: KageClient,
+  crawl: CrawlRequest,
+  idempotencyKey?: string,
+): Promise<SubmittedJob> {
+  return createJob(client, { type: 'crawl', ...crawl }, idempotencyKey);
+}
+
+/**
+ * How far a crawl has come: what it discovered, fetched and skipped, how
+ * its pages were reached, and why it stopped reading once it has.
+ *
+ * @throws Error when the job is no crawl.
+ */
+export function crawlProgress(job: Job): CrawlProgress {
+  if (job.crawl === undefined || job.crawl === null) {
+    throw new Error(`job ${job.id} is a ${job.type}, not a crawl`);
+  }
+  return job.crawl;
+}
+
+/** A page a crawl asked for: its item, its address and what it was to the crawl. */
+export interface CrawledPage {
+  readonly item: JobItem;
+  readonly url: string;
+  readonly page: CrawlPage;
+}
+
+/**
+ * The pages of a crawl in the order it asked for them, each with its depth,
+ * where its link was found, how it was reached and what it repeats
+ * (`GET /v1/jobs/{id}/items`). A page that is still being read is not listed.
+ *
+ * @throws KageProblemError when there is no such job of this key.
+ */
+export async function readCrawlPages(
+  client: KageClient,
+  id: string,
+  options: { readonly results?: boolean; readonly pageSize?: number } = {},
+): Promise<CrawledPage[]> {
+  const pages: CrawledPage[] = [];
+  for (const item of await readJobItems(client, id, options)) {
+    const { url, crawl } = item;
+    if (typeof url === 'string' && crawl !== undefined && crawl !== null) {
+      pages.push({ item, url, page: crawl });
+    }
+  }
+  return pages;
 }
 
 /**
