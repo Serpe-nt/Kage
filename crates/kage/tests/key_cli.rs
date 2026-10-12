@@ -70,6 +70,18 @@ fn json(text: &str) -> Value {
     serde_json::from_str(text).unwrap_or_else(|error| panic!("not JSON ({error}): {text}"))
 }
 
+/// The secret of a token `kage_<key id>_<secret>`: everything after the
+/// second underscore. The secret is base64url, so it may hold an underscore
+/// itself and may end in one; its last piece is not the secret.
+fn secret_of(token: &str) -> &str {
+    let secret = token
+        .splitn(3, '_')
+        .nth(2)
+        .expect("a token has three parts");
+    assert_eq!(secret.len(), 43, "32 bytes in base64url without padding");
+    secret
+}
+
 /// A server process that is killed when the test ends, pass or fail.
 struct Server(Child);
 
@@ -262,7 +274,7 @@ async fn the_first_key_is_made_at_the_command_line_and_the_server_takes_it() {
     assert_eq!(key["max_concurrent"], 4);
     assert_eq!(key["daily_page_budget"], 500);
     assert_eq!(key["active"], true);
-    let secret = token.rsplit('_').next().unwrap().to_owned();
+    let secret = secret_of(&token).to_owned();
     assert!(!text(&created.stderr).contains(&secret));
 
     // In words, with what to do with it.
@@ -459,7 +471,7 @@ async fn the_first_key_is_made_at_the_command_line_and_the_server_takes_it() {
     let trail =
         serde_json::to_string(&events.iter().map(|event| &event.4).collect::<Vec<_>>()).unwrap();
     for token in [&token, &fresh, &reader] {
-        assert!(!trail.contains(token.rsplit('_').next().unwrap()));
+        assert!(!trail.contains(secret_of(token)));
     }
     let hashes: Vec<(Vec<u8>,)> = sqlx::query_as("SELECT secret_hash FROM api_keys")
         .fetch_all(&pool)

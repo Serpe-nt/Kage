@@ -37,6 +37,18 @@ fn last<'a>(events: &'a [Value], action: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("no {action} in {events:?}"))
 }
 
+/// The secret of a token `kage_<key id>_<secret>`: everything after the
+/// second underscore. The secret is base64url, so it may hold an underscore
+/// itself and may end in one; its last piece is not the secret.
+fn secret_of(token: &str) -> &str {
+    let secret = token
+        .splitn(3, '_')
+        .nth(2)
+        .expect("a token has three parts");
+    assert_eq!(secret.len(), 43, "32 bytes in base64url without padding");
+    secret
+}
+
 #[tokio::test]
 async fn personas_are_listed_shown_retired_and_made_again() {
     let mut api = Api::start(2, 149, LENIENT_FAST).await;
@@ -548,7 +560,9 @@ async fn keys_are_made_rotated_and_revoked_and_their_tokens_shown_once() {
     let shown = keys.iter().find(|key| key["id"] == id.as_str()).unwrap();
     assert!(shown.get("token").is_none() && shown.get("secret_hash").is_none());
     assert!(shown["last_used_at"].is_string());
-    let secret = token.rsplit('_').next().unwrap();
+    // The secret is everything after the second underscore: it is base64url
+    // and may itself contain or end in one (F42).
+    let secret = secret_of(&token);
     assert!(!String::from_utf8_lossy(&listed.body).contains(secret));
 
     // Rotated: a new token, the old one is dead at once, the key is the
@@ -637,7 +651,7 @@ async fn keys_are_made_rotated_and_revoked_and_their_tokens_shown_once() {
     assert_eq!(revoke["target"], id.as_str());
     let text = serde_json::to_string(&events).unwrap();
     for token in [&token, &fresh] {
-        let secret = token.rsplit('_').next().unwrap();
+        let secret = secret_of(token);
         assert!(!text.contains(secret), "a secret is in the audit trail");
     }
     assert!(
