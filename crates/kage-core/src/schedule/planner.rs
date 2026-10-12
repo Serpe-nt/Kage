@@ -14,7 +14,10 @@
 //! request. A persona that fetched a page from a domain is *visiting* it:
 //! it keeps taking that domain's requests, each after its own gap from the
 //! start of the page before (a floor: on the browser path the time on a
-//! page is the behavior engine's), burst after burst with a break between
+//! page is the behavior engine's) and never before its rest after the end of
+//! that page is over (the profile's `rest_ms`: a reader who is done with a
+//! page still takes a moment before the next), burst after burst with a
+//! break between
 //! them, until its visit ends: after the number of bursts its profile
 //! drew, after a block, or when no work came for a while. Then it is away
 //! from the domain for the long break.
@@ -1234,11 +1237,17 @@ impl Planner {
                 .errors
                 .record(completion.courtesy, now, &self.rules.server_errors);
         }
-        if completion.blocked
-            && let Some(cadence) = self.cadences.get_mut(&(grant.persona, name))
-        {
-            // It leaves: no more pages of this visit.
-            cadence.visiting = false;
+        if let Some(cadence) = self.cadences.get_mut(&(grant.persona, name)) {
+            if completion.blocked {
+                // It leaves: no more pages of this visit.
+                cadence.visiting = false;
+            } else {
+                // The page is over; the next one is not asked for in the
+                // same instant. The gap counted from the page's start and
+                // may be long past: the rest counts from its end.
+                let rest = cadence.sampler.next_rest();
+                cadence.next_at = cadence.next_at.max(now + chrono_of(rest));
+            }
         }
         true
     }

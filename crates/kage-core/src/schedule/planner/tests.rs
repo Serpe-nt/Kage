@@ -41,11 +41,13 @@ fn human() -> PacingProfile {
         .unwrap()
 }
 
-/// `human` without visits, caps and limits: one persona's bare cadence.
+/// `human` without visits, a rest, caps and limits: one persona's bare
+/// cadence of gaps and breaks.
 fn bare() -> PacingProfile {
     PacingProfile {
         visit_bursts: None,
         visit_break_ms: None,
+        rest_ms: None,
         daily_cap_per_persona_per_domain: 1_000_000,
         domain_concurrency: 1000,
         domain_rpm: 100_000,
@@ -2185,17 +2187,30 @@ fn twenty_personas_never_dispatch_in_lockstep() {
         .collect();
     assert_eq!(factors.len(), 20);
 
-    // 2. No shared timer: two personas never start in the same
-    //    millisecond, and starts are not gathered on any tick of the
-    //    simulation (the work arrived on whole seconds).
+    // 2. No shared timer. Nearly every start is timed by its persona's own
+    //    slot (the end of its page before, plus its own rest), drawn from
+    //    its own seed in whole milliseconds, so two personas share a
+    //    millisecond only by chance: about once in a thousand starts, never
+    //    three of them, and never the same two again. And starts are not
+    //    gathered on any tick of the simulation (the work arrived on whole
+    //    seconds).
     let mut starts: Vec<(DateTime<Utc>, PersonaId)> =
         sim.log.iter().map(|(at, d)| (*at, d.persona)).collect();
     starts.sort();
+    let together: Vec<_> = starts
+        .windows(2)
+        .filter(|pair| pair[0].1 != pair[1].1 && pair[0].0 == pair[1].0)
+        .collect();
+    assert!(together.len() <= 2, "{together:?}");
     assert!(
-        starts
-            .windows(2)
-            .all(|pair| pair[0].1 == pair[1].1 || pair[0].0 != pair[1].0)
+        starts.windows(3).all(|three| three[0].0 != three[2].0),
+        "three starts in one millisecond"
     );
+    let pairs: BTreeSet<(PersonaId, PersonaId)> = together
+        .iter()
+        .map(|pair| (pair[0].1.min(pair[1].1), pair[0].1.max(pair[1].1)))
+        .collect();
+    assert_eq!(pairs.len(), together.len());
     let on_the_second = starts
         .iter()
         .filter(|(at, _)| at.timestamp_subsec_millis() == 0)
@@ -2644,4 +2659,134 @@ fn work_that_would_rather_be_refused_is_told_when_its_visitor_is_back() {
     assert!(back < sim.now + Duration::hours(8), "{back}");
     // Nobody else was sent in its place.
     assert_eq!(sim.log.len(), 3);
+}
+
+/// `bare` with the rest of the shipped `human` profile.
+fn rested() -> PacingProfile {
+    PacingProfile {
+        rest_ms: human().rest_ms,
+        ..bare()
+    }
+}
+
+/// One persona with work always waiting on one site, pages that take as
+/// long as `takes` says, for `hours`.
+fn a_sitting(pacing: PacingProfile, render: Render, takes: Duration, hours: i64) -> Sim {
+    let mut sim = Sim::new(vec![persona(0)]);
+    sim.takes = Box::new(move |_| takes);
+    sim.run_fed(noon() + Duration::hours(hours), Duration::hours(1), |sim| {
+        if sim.planner.depth(Priority::Job) == 0 {
+            sim.submit(Work {
+                render,
+                pacing,
+                ..work("example.org")
+            });
+        }
+    });
+    sim
+}
+
+/// Follow-up F43. The gap counts from the start of a page, so after a page
+/// that was read for longer than its gap the next one used to be asked for
+/// in the instant the persona was done (measured: 1 to 3 ms later). With
+/// the profile's rest it is asked for a drawn moment after the end.
+#[test]
+fn a_reader_rests_between_the_end_of_a_page_and_the_next_one() {
+    assert!(human().rest_ms.is_some(), "the shipped human profile rests");
+    let page = secs(35);
+    let sim = a_sitting(rested(), Render::Browser, page, 12);
+    assert!(sim.log.len() > 700, "{}", sim.log.len());
+
+    let factor = pacing_factor(&persona(0).seed);
+    let mut rests = Vec::new();
+    let mut gap_ruled = 0;
+    for pair in sim.log.windows(2) {
+        let drawn = pair[0].1.next_slot - pair[0].0;
+        let between = pair[1].0 - pair[0].0;
+        let rest = between - page;
+        // Never before the gap is over, and never in the instant the page
+        // ended: the floor of the rest holds after every page.
+        assert!(between >= drawn, "{between} after a gap of {drawn}");
+        assert!(rest > millis(700), "the next page {rest} after the end");
+        if drawn <= page {
+            // The gap was over when the page ended: what followed the end
+            // is the rest alone.
+            rests.push(rest.num_milliseconds());
+        } else if between == drawn {
+            gap_ruled += 1;
+        }
+    }
+    // After a burst the gap and its break are longer than page and rest,
+    // and then the gap is what times the next page, to the millisecond.
+    assert!(gap_ruled > 20, "{gap_ruled}");
+
+    // The rests are the profile's at this persona's pace: a median of
+    // 2.2 s and a 95th percentile of 7 s, each times its factor.
+    assert!(rests.len() > 500, "{}", rests.len());
+    rests.sort_unstable();
+    #[allow(clippy::cast_precision_loss)]
+    let near = |value: i64, target: f64, tolerance: f64| {
+        (value as f64 / (target * factor) - 1.0).abs() < tolerance
+    };
+    let median = percentile(&rests, 0.5);
+    let p95 = percentile(&rests, 0.95);
+    assert!(near(median, 2200.0, 0.12), "median {median} at {factor}");
+    assert!(near(p95, 7000.0, 0.25), "p95 {p95} at {factor}");
+    // No two pages in a row are left after the same rest.
+    let in_order: Vec<Duration> = sim
+        .log
+        .windows(2)
+        .map(|pair| pair[1].0 - pair[0].0 - page)
+        .collect();
+    assert!(in_order.windows(2).all(|pair| pair[0] != pair[1]));
+}
+
+#[test]
+fn a_profile_without_a_rest_asks_for_the_next_page_as_it_always_did() {
+    // The same sitting without a rest: the next page starts when the page
+    // is done or the gap is over, whichever is later, and not a
+    // millisecond after. The gaps are the same ones as with a rest.
+    let page = secs(35);
+    let plain = a_sitting(bare(), Render::Browser, page, 3);
+    for pair in plain.log.windows(2) {
+        let drawn = pair[0].1.next_slot - pair[0].0;
+        assert_eq!(pair[1].0 - pair[0].0, drawn.max(page));
+    }
+    let with_rest = a_sitting(rested(), Render::Browser, page, 3);
+    let gaps = |sim: &Sim| -> Vec<Duration> {
+        sim.log
+            .iter()
+            .take(150)
+            .map(|(at, dispatch)| dispatch.next_slot - *at)
+            .collect()
+    };
+    assert_eq!(gaps(&plain), gaps(&with_rest));
+    assert!(with_rest.log.len() < plain.log.len());
+}
+
+#[test]
+fn on_the_http_path_the_gap_is_still_the_floor_and_the_rest_counts_from_the_end() {
+    // A fetch of 300 ms: the gap from its start is usually what times the
+    // next one, as before; where the rest after its end is the longer of
+    // the two, the rest does.
+    let fetch = millis(300);
+    let sim = a_sitting(rested(), Render::Http, fetch, 24);
+    assert!(sim.log.len() > 3000, "{}", sim.log.len());
+    let (mut by_gap, mut by_rest) = (0_u32, 0_u32);
+    for pair in sim.log.windows(2) {
+        let drawn = pair[0].1.next_slot - pair[0].0;
+        let between = pair[1].0 - pair[0].0;
+        assert!(between >= drawn);
+        assert!(between - fetch > millis(700));
+        if between == drawn {
+            by_gap += 1;
+        } else {
+            by_rest += 1;
+        }
+    }
+    assert!(
+        by_gap > 2 * by_rest,
+        "{by_gap} by the gap, {by_rest} by the rest"
+    );
+    assert!(by_rest > 100, "{by_rest}");
 }

@@ -7,6 +7,11 @@
 #   gap_ms          wait between two consecutive pages, counted from the
 #                   start of the page before: a floor. In a browser the
 #                   persona's own reading of the page usually takes longer.
+#   rest_ms         the rest between leaving a page and asking for the
+#                   next one of the same sitting (optional). The gap counts
+#                   from a page's start; after a page that was read for
+#                   longer than the gap, the next one would otherwise be
+#                   asked for the instant the reader is done.
 #   burst_pages     how many pages make a burst
 #   burst_break_ms  extra pause after a burst, added to the normal gap
 #   visit_bursts    how many bursts make a visit (optional, with
@@ -33,6 +38,7 @@
 
 human:
   gap_ms: { dist: lognormal, median: 4500, p95: 15000, min: 1500 }
+  rest_ms: { dist: lognormal, median: 2200, p95: 7000, min: 700 }
   burst_pages: { min: 4, max: 14 }
   burst_break_ms: { dist: lognormal, median: 60000, p95: 240000 }
   daily_cap_per_persona_per_domain: 300

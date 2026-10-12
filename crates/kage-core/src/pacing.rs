@@ -287,11 +287,20 @@ pub struct PacingProfile {
     /// the burst break. Set together with `visit_bursts`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visit_break_ms: Option<Distribution>,
+    /// The rest between leaving a page and asking for the next one of the
+    /// same sitting (follow-up F43). `gap_ms` counts from the start of a
+    /// page, so a page that was read for a minute has used it up, and the
+    /// next one would be asked for the instant the persona was done with
+    /// this one. With a rest the next page does not start before the end of
+    /// the page before plus a draw from here; the gap stays the floor it
+    /// is. Absent: no rest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rest_ms: Option<Distribution>,
 }
 
 impl PacingProfile {
-    /// The profile as one persona paces it (spec §11): the log-normal gap
-    /// and breaks are stretched by the persona's factor, which is drawn
+    /// The profile as one persona paces it (spec §11): the log-normal gap,
+    /// rest and breaks are stretched by the persona's factor, which is drawn
     /// once from its seed ([`crate::persona::pacing_factor`], roughly 0.8
     /// to 1.25), so that twenty personas never share one identical gap
     /// distribution. Uniform distributions, the burst and visit lengths,
@@ -307,6 +316,7 @@ impl PacingProfile {
             gap_ms: stretch(&self.gap_ms),
             burst_break_ms: stretch(&self.burst_break_ms),
             visit_break_ms: self.visit_break_ms.as_ref().map(stretch),
+            rest_ms: self.rest_ms.as_ref().map(stretch),
             ..*self
         }
     }
@@ -351,6 +361,10 @@ impl PacingProfile {
             if value == 0 {
                 return Err(invalid(field, "must be at least 1".to_owned()));
             }
+        }
+        if let Some(rest) = &self.rest_ms {
+            rest.validate()
+                .map_err(|reason| invalid("rest_ms", reason))?;
         }
         match (&self.visit_bursts, &self.visit_break_ms) {
             (None, None) => {}
@@ -501,6 +515,10 @@ pub struct PacingSampler {
     /// Bursts left in the current visit, counting the one in progress.
     /// `None` when the profile has no visits.
     remaining_in_visit: Option<u32>,
+    /// The stream the rests are drawn from. It is another stream than the
+    /// gaps', so that a profile's gaps and breaks are the same sequence
+    /// with a rest and without one.
+    rest_rng: SeededRng,
 }
 
 impl PacingSampler {
@@ -515,6 +533,7 @@ impl PacingSampler {
             rng,
             remaining_in_burst,
             remaining_in_visit,
+            rest_rng: seed.child("rest").rng(),
         }
     }
 
@@ -532,6 +551,18 @@ impl PacingSampler {
     /// `None` when the profile has no visits.
     pub const fn remaining_in_visit(&self) -> Option<u32> {
         self.remaining_in_visit
+    }
+
+    /// The rest after the page that just ended, before the next one may be
+    /// asked for: a draw from `rest_ms`, or no time at all for a profile
+    /// without one.
+    pub fn next_rest(&mut self) -> Duration {
+        self.profile
+            .rest_ms
+            .as_ref()
+            .map_or(Duration::ZERO, |rest| {
+                rest.sample_duration(&mut self.rest_rng)
+            })
     }
 
     /// The wait between the page just fetched and the next one.
@@ -1380,5 +1411,118 @@ fast:
         let written = serde_json::to_value(human()).unwrap();
         assert!(written.get("visit_bursts").is_none());
         assert!(written.get("visit_break_ms").is_none());
+    }
+
+    /// The rest of the shipped `human` profile, for a profile of the spec's
+    /// table that has none.
+    fn rest() -> Distribution {
+        Distribution::Lognormal(Lognormal {
+            median: 2200.0,
+            p95: 7000.0,
+            min: Some(700.0),
+            max: None,
+        })
+    }
+
+    fn with_rest() -> PacingProfile {
+        PacingProfile {
+            rest_ms: Some(rest()),
+            ..human()
+        }
+    }
+
+    #[test]
+    fn a_rest_is_drawn_from_the_profile_and_none_without_one() {
+        // No rest: no time, however often it is asked.
+        let mut plain = PacingSampler::new(human(), Seed::from_u64(3));
+        assert!((0..50).all(|_| plain.next_rest() == Duration::ZERO));
+
+        let mut sampler = PacingSampler::new(with_rest(), Seed::from_u64(3));
+        let mut rests: Vec<f64> = (0..20_000)
+            .map(|_| sampler.next_rest().as_secs_f64() * 1000.0)
+            .collect();
+        rests.sort_by(f64::total_cmp);
+        // The shifted log-normal: never at or below its floor, the median
+        // and the 95th percentile where the profile says.
+        assert!(rests[0] > 700.0, "{}", rests[0]);
+        let median = percentile(&rests, 0.5);
+        let p95 = percentile(&rests, 0.95);
+        assert!((median - 2200.0).abs() < 110.0, "{median}");
+        assert!((p95 - 7000.0).abs() < 560.0, "{p95}");
+        // And no two rests in a row are the same.
+        let mut again = PacingSampler::new(with_rest(), Seed::from_u64(3));
+        let drawn: Vec<Duration> = (0..200).map(|_| again.next_rest()).collect();
+        assert!(drawn.windows(2).all(|pair| pair[0] != pair[1]));
+    }
+
+    #[test]
+    fn a_rest_leaves_the_gaps_and_breaks_what_they_were() {
+        // The rests come from a stream of their own: the same seed gives
+        // the same gaps, bursts and breaks with a rest and without one,
+        // however the two kinds of draw are interleaved.
+        let mut plain = PacingSampler::new(human(), Seed::from_u64(11));
+        let mut rested = PacingSampler::new(with_rest(), Seed::from_u64(11));
+        for index in 0..500 {
+            if index % 3 != 0 {
+                let _ = rested.next_rest();
+            }
+            assert_eq!(rested.next_gap(), plain.next_gap(), "gap {index}");
+        }
+        // The same seed replays the same rests; another seed has others.
+        let rests = |seed: u64| -> Vec<Duration> {
+            let mut sampler = PacingSampler::new(with_rest(), Seed::from_u64(seed));
+            (0..50).map(|_| sampler.next_rest()).collect()
+        };
+        assert_eq!(rests(11), rests(11));
+        assert_ne!(rests(11), rests(12));
+    }
+
+    #[test]
+    fn a_persona_rests_at_its_own_pace_and_a_bad_rest_is_refused_by_name() {
+        let slow = with_rest().for_persona(1.25);
+        assert_eq!(
+            slow.rest_ms,
+            Some(Distribution::Lognormal(Lognormal {
+                median: 2750.0,
+                p95: 8750.0,
+                min: Some(700.0),
+                max: None,
+            }))
+        );
+        assert_eq!(human().for_persona(1.25).rest_ms, None);
+
+        let field = rejected_field(|profile| {
+            profile.rest_ms = Some(Distribution::Lognormal(Lognormal {
+                median: 500.0,
+                p95: 400.0,
+                min: None,
+                max: None,
+            }));
+        });
+        assert_eq!(field, "rest_ms");
+        with_rest().validate("human").unwrap();
+    }
+
+    #[test]
+    fn the_rest_parses_from_a_profile_and_is_left_out_without_one() {
+        let text = format!(
+            "{SPEC_YAML}calm:\n  gap_ms: {{ dist: uniform, min: 1, max: 2 }}\n  rest_ms: {{ dist: lognormal, median: 2200, p95: 7000, min: 700 }}\n  burst_pages: {{ min: 1, max: 1 }}\n  burst_break_ms: {{ dist: uniform, min: 0, max: 0 }}\n  daily_cap_per_persona_per_domain: 1\n  domain_concurrency: 1\n  domain_rpm: 1\n"
+        );
+        let profiles = PacingProfiles::from_yaml(&text).unwrap();
+        assert_eq!(profiles.require("calm").unwrap().rest_ms, Some(rest()));
+        assert_eq!(profiles.require("human").unwrap().rest_ms, None);
+        let written = serde_json::to_value(human()).unwrap();
+        assert!(written.get("rest_ms").is_none());
+        let written = serde_json::to_value(with_rest()).unwrap();
+        assert_eq!(written["rest_ms"]["median"], 2200.0);
+
+        // The profiles that ship: a reader rests, a script does not.
+        let shipped = PacingProfiles::from_yaml(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../policies/pacing-profiles.yaml"
+        )))
+        .unwrap();
+        assert_eq!(shipped.require("human").unwrap().rest_ms, Some(rest()));
+        assert_eq!(shipped.require("fast").unwrap().rest_ms, None);
     }
 }
