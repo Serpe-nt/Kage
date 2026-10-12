@@ -794,11 +794,97 @@ commits. Read `m9-live-handover.md` for what the real pool showed.
 - Politeness verified with fake clock; crawl respects breaker and
   cooldowns.
 
+**Status.** Merged as seventeen commits ending `ee3444f`
+(`m10-handover.md`). `kage-crawl` (page reader, SimHash, site, sitemaps,
+scope, the frontier) and the `crawl` job on M9's worker; contract 1.3.0
+(a patience per page, an arrival by a click from the page that is open
+with up to three keyboard backs, the links of a document with whether
+each is rendered); migration 0014 (frontier columns, `jobs.crawl`,
+`attempts.patience_ms`); the patience of a page and the rest between two
+pages (D44); the reader's order, the scout for sitemaps, the dedupe and
+the normalization defaults (D45). The gate passed on a clean clone in 43
+min: 1320 Rust tests, 651 sidecar tests in both browsers, five e2e suites
+including a crawl by real personas of both engines; `kage-crawl` 99.66 %
+of lines, every gated crate above 92 %; mutation score of `kage-core`
+92.1 % (2213 mutants, run with 24 jobs as M7 did, see F47). Measured
+before the change: the 60 s default never timed a tall page out, it ended
+the visit `ok` at exactly 56.0 s in six of six runs in both browsers, so
+every tall page of a crawl would have been left at the same instant; the
+next page of a sitting was asked for 1 to 3 ms after the last; a
+breadth-first crawl types 80 to 96 % of its addresses (no `Referer`,
+`Sec-Fetch-Site: none`, no activation on the page that is left), the
+reader's order with text links within three backs before menu links 0.3
+to 8 %. In the compose e2e the fixture's reading room of 21 pages is typed
+4, clicked 5 and reached by a back and a click 12, in both engines; the
+page that is left sees a trusted click with user activation 9 to 14 ms
+before `pagehide`; a hidden link is never asked for; the sitemap is read
+by a Firefox scout at another address than the reader's; under a profile
+with a rest the next page comes 1.4 s later at the median than without.
+Contract and OpenAPI regenerated, client extended, runbook "Crawls". The
+day's disk incident (C: full, Docker Desktop down) was the owner's to
+clear; the session deleted nothing. No live check was run.
+
+**Follow-ups closed by M10.** F28 (the click from the open page, both
+engines, contract 1.3.0), F38, F42, F43 (`rest_ms`), F44 (the patience).
+
+**Follow-ups raised by M10**
+- **F45 (M12):** move the YAML reading off `serde_yaml` and
+  `unsafe-libyaml` (RUSTSEC-2024-0449, ignored in `deny.toml` with the
+  review date 2026-12-31).
+- **F46 (M11, first commit):** `stored_spec` in
+  `crates/kage-api/src/jobs/request.rs` puts a webhook's `progress_every`
+  at the top of the stored spec, and the worker parses a flow's spec back
+  into `FlowJob`, which denies unknown fields; a flow job with
+  `webhook.progress_every` is accepted and then fails in the worker.
+  Found by reading, not tested: write the test first, fix it, check the
+  batch and the crawl take the same road.
+- **F47 (M11, first commit):** `just mutants` as written runs one mutant
+  at a time, about seven hours since M10; M7 and M10 ran its command with
+  `--jobs 24`, each job in its own build directory, and the recipe's own
+  score check after. Give the recipe a `jobs` parameter (default 1, the
+  comment naming what the two runs used and that a busy machine turns
+  slow tests into timeouts), and fix the surviving mutant on M10's lines
+  (`config/crawl.rs:166`, the 16-letter bound of an ending) with a test
+  at the boundary.
+- **F48 (M12):** the sidecar's older `link` and `search_engine` entry
+  (`enter()`) reports `ttfb_ms` 0, a download as `arrived` with the start
+  page's document, and misses a link wrapped over two lines in Chrome;
+  the new arrival from the open page has none of these. A page that
+  answers a click itself (`pushState`) is `link_not_found` and then typed,
+  so on client-routed sites every page is a click and a typed load.
+  `visible` does not see overflow clipping; links in shadow roots are not
+  listed.
+- **F49 (M12):** a page reached while a crawl changed hands between its
+  stored result and its item is recorded as read without its links.
+- **M13, observations:** in Camoufox the window gets its first `focus`
+  only at the first press, so a page that is only read never has the
+  focus; Chrome fires `blur` before `pagehide` on a typed navigation; a
+  page gone back to sees two `keyup` and no `keydown`; the pointer stays
+  still during the rest. The runbook's line that a crawl costs what a
+  batch of as many pages costs is inferred, not measured.
+
 ---
 
 ## M11 — Extraction, robots, cache
 
 **Scope.** §14, §15.
+
+**Starting point (after M10).** The links and the main text of a page are
+already read by `kage_crawl::html` (`scraper` 0.27.0, `html5ever`), which
+`kage-extract` may take over or call; `extract` in `include` is refused
+until M11 and a crawl's items take `include` through `defaults`. A crawl
+does not read `robots.txt`: the frontier has `robots_denied` among its
+reasons, `kage_crawl::sitemap::parse` takes whatever `Sitemap:` lines
+name, and who asks for `robots.txt` is M11's first consult, because a
+reader never requests it (M10's scout rule, a persona that never reads
+the site, is the proposal to weigh; the verdict cache in Postgres means
+one request per site per TTL, never one per page). The response cache
+(§15) is keyed on the normalized URL (`kage_core::urlnorm`) and the
+include set, and a cache hit is a result with `cached: true` and no visit
+at all: it must never shorten or skip a visit that a persona is in the
+middle of, and a crawl's dedupe by address happens before the cache. F36
+(stored results keep `pacing`, `behavior`, `console`, `side_effects`) is
+M11's or M12's; F46 and F47 are M11's first commits.
 
 **Deliverables**
 - `kage-extract`: metadata, JSON-LD, OpenGraph, links, readability text,
