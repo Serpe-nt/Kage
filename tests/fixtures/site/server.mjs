@@ -14,6 +14,8 @@ import { readFileSync } from 'node:fs';
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 
+import { crawlRoute } from './crawl.mjs';
+
 const args = process.argv.slice(2);
 const option = (name, fallback) => {
   const index = args.indexOf(`--${name}`);
@@ -169,6 +171,50 @@ const SPA_PAGE = page(
 </script>`,
 );
 
+// A page that tells the server how it was left (spec §13, follow-up F28):
+// what its visitor did on it, and what the page saw before it went away.
+// A link clicked by a hand shows the pointer arriving, a button going down
+// and up and a trusted click; an address typed into the browser shows none
+// of that. The run in the query tells one load from the next.
+const LEAVE_PAGE = page(
+  'Leave',
+  `<h1 id="title">A page to leave</h1>
+<p>${'A line of text to rest the eyes on. '.repeat(12)}</p>
+<p><a id="next" href="/landing?from=leave">The next page</a></p>
+<p style="height:1400px">below</p>
+<p><a id="below" href="/landing?from=below">A link further down</a></p>
+<script>
+(() => {
+  const run = new URLSearchParams(location.search).get('run') || '';
+  const events = [];
+  let moves = 0, firstMove = null, lastMove = null, wheels = 0;
+  const note = (type, more) => events.push({ type, t: Math.round(performance.now()), ...more });
+  addEventListener('mousemove', (event) => {
+    moves += 1;
+    const t = Math.round(performance.now());
+    firstMove ??= t;
+    lastMove = t;
+    if (!event.isTrusted) note('untrusted-mousemove');
+  }, true);
+  addEventListener('wheel', () => { wheels += 1; }, { capture: true, passive: true });
+  for (const type of ['mousedown', 'mouseup', 'click', 'keydown', 'keyup'])
+    addEventListener(type, (event) => note(type, { trusted: event.isTrusted, target: event.target && event.target.id || null, key: event.key || null }), true);
+  document.documentElement.addEventListener('mouseleave', () => note('mouseleave'));
+  for (const type of ['blur', 'focus', 'beforeunload'])
+    addEventListener(type, () => note(type));
+  document.addEventListener('visibilitychange', () => note('visibilitychange', { state: document.visibilityState }));
+  addEventListener('pagehide', (event) => {
+    note('pagehide', { persisted: event.persisted });
+    navigator.sendBeacon('/__kage/report', JSON.stringify({
+      page: 'leave', run, events, moves, firstMove, lastMove, wheels,
+      scrollY: Math.round(scrollY), activation: navigator.userActivation ? navigator.userActivation.hasBeenActive : null,
+    }));
+  });
+  document.body.setAttribute('data-ready', '1');
+})();
+</script>`,
+);
+
 // The 1x1 transparent PNG.
 const PIXEL = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
@@ -290,6 +336,9 @@ const routes = {
   // The input recorder (spec §10.4): what a page sees of the behavior engine.
   '/input/': (_req, res) => html(res, INPUT_PAGE),
 
+  // The leave recorder (follow-up F28): how a page was left.
+  '/leave/': (_req, res) => html(res, LEAVE_PAGE),
+
   // The activation recorder (spec §10.2): what a page is told of user
   // activation while an engine loads and reads it.
   '/activation/': (_req, res) => html(res, ACTIVATION_PAGE),
@@ -325,6 +374,10 @@ const server = http.createServer((req, res) => {
   }
   const route = routes[url.pathname];
   if (route === undefined) {
+    // The site a crawl reads (spec §13) lives in a file of its own.
+    if (crawlRoute(req, res, url)) {
+      return;
+    }
     html(res, page('Not found', '<h1>Not found</h1>'), {}, 404);
     return;
   }
