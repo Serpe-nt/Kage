@@ -29,16 +29,6 @@ pub const MAX_PATTERN_BYTES: usize = 512;
 /// large machine (`a{1000}{1000}`).
 const MAX_COMPILED_BYTES: usize = 1 << 20;
 
-/// Endings of addresses that are files and not pages: a reader's browser
-/// would save them or open another program. Compared without regard to
-/// case with the end of the path.
-pub const DEFAULT_SKIPPED_EXTENSIONS: [&str; 44] = [
-    "7z", "apk", "avi", "bin", "bmp", "bz2", "css", "csv", "dmg", "doc", "docx", "epub", "exe",
-    "gif", "gz", "ico", "iso", "jpeg", "jpg", "js", "json", "mov", "mp3", "mp4", "mpeg", "msi",
-    "ods", "odt", "ogg", "pdf", "png", "ppt", "pptx", "rar", "svg", "tar", "tgz", "wav", "webm",
-    "webp", "xls", "xlsx", "xml", "zip",
-];
-
 /// Why a crawl does not read an address it found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Skip {
@@ -281,13 +271,11 @@ impl Scope {
 
 #[cfg(test)]
 mod tests {
+    use kage_core::config::DEFAULT_SKIPPED_EXTENSIONS;
     use kage_core::urlnorm::{NormalizeOptions, UrlKey, normalize};
     use url::Url;
 
-    use super::{
-        DEFAULT_SKIPPED_EXTENSIONS, MAX_PATTERN_BYTES, MAX_PATTERNS, Scope, ScopeError,
-        ScopeRequest, Skip,
-    };
+    use super::{MAX_PATTERN_BYTES, MAX_PATTERNS, Scope, ScopeError, ScopeRequest, Skip};
 
     fn url(text: &str) -> Url {
         Url::parse(text).unwrap()

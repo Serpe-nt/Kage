@@ -5,6 +5,7 @@
 //! drives a crawl through the scheduler like every other job; this crate is
 //! what it asks.
 //!
+//! - [`frontier`]: every address a crawl knows, and which it reads next.
 //! - [`html`]: the links and the text of a page.
 //! - [`simhash`]: the content hash and the near-duplicate fingerprint.
 //! - [`scope`]: which addresses a crawl reads.
@@ -13,6 +14,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod frontier;
 pub mod html;
 pub mod scope;
 pub mod simhash;
