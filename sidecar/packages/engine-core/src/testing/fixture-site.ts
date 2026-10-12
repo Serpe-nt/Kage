@@ -14,6 +14,8 @@ export interface FixtureRequest {
   readonly path: string;
   /** Header lines in wire order. */
   readonly headers: readonly (readonly [string, string])[];
+  /** When the site received it, in milliseconds since the epoch. */
+  readonly at: number;
 }
 
 /** A running fixture site. */

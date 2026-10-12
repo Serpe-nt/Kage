@@ -664,6 +664,65 @@ describe('a persona at its mouse and keyboard', () => {
     expect(frozen.human.counts.notches).toBeLessThanOrEqual(6);
   });
 
+  it('says why the scrolling ended: the depth, the deadline, or the page', async () => {
+    // The depth asked was reached.
+    const read = rig({ scrollHeight: 12_000 });
+    expect(await read.human.scrollTo(0.8)).toBe('depth');
+    expect(read.scrollY()).toBeGreaterThanOrEqual((12_000 - 800) * 0.8 - 40);
+    // Already there: no wheel is turned, and it is the depth all the same.
+    const notches = read.human.counts.notches;
+    expect(await read.human.scrollTo(0.5)).toBe('depth');
+    expect(read.human.counts.notches).toBe(notches);
+
+    // The time ran out first, well short of the depth.
+    const hurried = rig({ scrollHeight: 30_000 });
+    expect(await hurried.human.scrollTo(0.9, 1000 + 5000)).toBe('deadline');
+    expect(hurried.scrollY()).toBeGreaterThan(0);
+    expect(hurried.scrollY()).toBeLessThan((30_000 - 800) * 0.5);
+    expect(hurried.elapsed()).toBeLessThan(5000 + 1500);
+    // A deadline that has passed before the first flick turns no wheel.
+    const late = rig({ scrollHeight: 30_000 });
+    expect(await late.human.scrollTo(0.9, 0)).toBe('deadline');
+    expect(late.human.counts.notches).toBe(0);
+    // A depth that the last flick before the deadline reached counts as
+    // reached: the page was read as far as was asked.
+    const justInTime = rig({ scrollHeight: 2400 });
+    const needed = rig({ scrollHeight: 2400 });
+    expect(await needed.human.scrollTo(0.5)).toBe('depth');
+    // The same hand on the same page, with a deadline inside its last rest.
+    expect(await justInTime.human.scrollTo(0.5, 1000 + needed.elapsed() - 100)).toBe('depth');
+    expect(justInTime.scrollY()).toBe(needed.scrollY());
+    expect(justInTime.elapsed()).toBeLessThan(needed.elapsed());
+
+    // The page: one that just fills its window, one shorter than it, and
+    // one that does not move for a wheel.
+    const whole = rig({ scrollHeight: 800 });
+    expect(await whole.human.scrollTo(0.9)).toBe('page');
+    expect(whole.human.counts.notches).toBe(0);
+    const shorter = rig({ scrollHeight: 640 });
+    expect(await shorter.human.scrollTo(0.9)).toBe('page');
+    const frozen = rig({ scrollHeight: 5000, notchPx: 0 });
+    expect(await frozen.human.scrollTo(0.5)).toBe('page');
+    expect(frozen.scrollY()).toBe(0);
+    // The time given does not change what the page is.
+    const frozenInTime = rig({ scrollHeight: 5000, notchPx: 0 });
+    expect(await frozenInTime.human.scrollTo(0.5, 1000 + 60_000)).toBe('page');
+  });
+
+  it('splits a click into its two halves for a caller that looks in between', async () => {
+    const box = { x: 700, y: 300, width: 140, height: 40 };
+    const whole = rig({ boxes: { '#go': box } });
+    await whole.human.click('#go');
+    const halves = rig({ boxes: { '#go': box } });
+    await halves.human.hover('#go');
+    expect(halves.log.some((entry) => entry.startsWith('down'))).toBe(false);
+    expect(halves.human.counts.clicks).toBe(0);
+    await halves.human.pressButton();
+    // The same hand and the same seeds: the two halves are the click, move for move.
+    expect(halves.log).toEqual(whole.log);
+    expect(halves.human.counts).toEqual(whole.human.counts);
+  });
+
   it('types key by key at its pace, and presses a key with its modifiers', async () => {
     const { human, log, elapsed } = rig();
     await human.type('Hi you', { typos: false });

@@ -57,6 +57,14 @@ export interface HumanParts {
   readonly clock?: Clock;
 }
 
+/**
+ * Why a scroll to a depth ended. `depth`: the depth was reached. `deadline`:
+ * the time it was given was used up first (or, on a page without end, the
+ * bound on its flicks). `page`: the page does not scroll, or not any
+ * further.
+ */
+export type ScrollOutcome = 'depth' | 'deadline' | 'page';
+
 /** How long the browser's smooth scrolling of one flick is given before the page is measured. */
 const SCROLL_SETTLE_MS = 260;
 /** Most flicks one scroll may take: a bound, not a behavior. */
@@ -223,6 +231,15 @@ export class Human {
   /** Clicks an element: the pointer travels there, rests, the button goes down and up. */
   async click(selector: string): Promise<void> {
     await this.hover(selector);
+    await this.pressButton();
+  }
+
+  /**
+   * Presses the left button where the pointer rests and lets it go: the
+   * second half of a click, for a caller that looks at what the pointer
+   * rests on (after {@link Human.hover}) before it clicks.
+   */
+  async pressButton(): Promise<void> {
     const { buttonHold } = this.parts.profile;
     await this.parts.device.buttonDown('left');
     await this.clock.sleep(
@@ -241,16 +258,22 @@ export class Human {
    * @param depth where to end, as a share of the scrollable height.
    * @param deadline a time of the clock after which no further flick starts
    *   and no rest goes on: the scrolling ends at most one flick after it.
+   * @returns why the scrolling ended. A depth that was reached with the
+   *   last flick before the deadline counts as reached.
    */
-  async scrollTo(depth: number, deadline = Number.POSITIVE_INFINITY): Promise<void> {
+  async scrollTo(depth: number, deadline = Number.POSITIVE_INFINITY): Promise<ScrollOutcome> {
     const { surface, profile, random } = this.parts;
     let metrics = await surface.metrics();
     await this.overPage(metrics);
-    for (let count = 0; count < MAX_FLICKS && this.clock.now() < deadline; count += 1) {
-      const target = Math.max(0, metrics.scrollHeight - metrics.viewport.height) * depth;
-      const remaining = target - metrics.scrollY;
+    for (let count = 0; count < MAX_FLICKS; count += 1) {
+      const scrollable = Math.max(0, metrics.scrollHeight - metrics.viewport.height);
+      const remaining = scrollable * depth - metrics.scrollY;
       if (remaining < Math.max(8, this.notchPx / 3)) {
-        return;
+        // A document that ends inside its window has no depth to reach.
+        return scrollable === 0 ? 'page' : 'depth';
+      }
+      if (this.clock.now() >= deadline) {
+        return 'deadline';
       }
       const before = metrics.scrollY;
       const notches = await this.flick('down', remaining);
@@ -258,7 +281,7 @@ export class Human {
       const moved = metrics.scrollY - before;
       if (moved <= 0) {
         // The page does not scroll any further (or at all).
-        return;
+        return 'page';
       }
       this.notchPx = Math.max(20, moved / notches);
       // A rest never outlasts the time the scrolling was given: whoever set
@@ -274,6 +297,8 @@ export class Human {
         metrics = await surface.metrics();
       }
     }
+    // The bound on the flicks: a page that grows as fast as it is scrolled.
+    return 'deadline';
   }
 
   /** Types text on the keyboard, key by key. The caller has put the focus where it belongs. */

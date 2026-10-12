@@ -4,8 +4,11 @@
 //
 //   /site/                 the home page: links to the sections, a link with
 //                          campaign tags, one with a fragment, one to another
-//                          site, one no reader can see, a mail address, a
-//                          script link and a file
+//                          site, a mail address, a script link, a file, and
+//                          five links no reader can see: two the markup
+//                          hides (an inline style, the hidden attribute) and
+//                          three only a browser knows of (a class of the
+//                          style sheet, a place off the canvas, no opacity)
 //   /site/articles         the listing: every article, the two copies, the
 //                          two near-copies, the first page of the deep chain,
 //                          an address that moved and one that is gone
@@ -66,7 +69,7 @@ const FOOTER =
   '<footer id="footer"><p>The reading room is a fixture. Its pages are generated and say nothing.</p></footer>';
 
 function layout(title, body) {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${title}</title><style>main{max-width:40em;margin:auto;line-height:1.5}</style></head><body>${NAV}<main><h1>${title}</h1>${body}</main>${FOOTER}</body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${title}</title><style>main{max-width:40em;margin:auto;line-height:1.5}.unseen{display:none}.offstage{position:absolute;left:-9999px;top:0}.clear{opacity:0}</style></head><body>${NAV}<main><h1>${title}</h1>${body}</main>${FOOTER}</body></html>`;
 }
 
 const text = (seed, count) =>
@@ -112,7 +115,10 @@ ${links(
   ['/site/files/report.pdf', 'The yearly report'],
 )}
 <a id="trap" href="/site/trap" style="display:none">Do not follow</a>
-<p hidden><a id="trap-hidden" href="/site/trap?from=hidden">Nor this</a></p>`,
+<p hidden><a id="trap-hidden" href="/site/trap?from=hidden">Nor this</a></p>
+<a id="trap-class" class="unseen" href="/site/trap?from=class">Nor this one</a>
+<a id="trap-offstage" class="offstage" href="/site/trap?from=offstage">Nor this one</a>
+<p class="clear"><a id="trap-clear" href="/site/trap?from=clear">Nor this one</a></p>`,
     ),
   '/site/articles': () =>
     layout(

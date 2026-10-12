@@ -105,6 +105,7 @@ const pageResult = {
       outcome: 'arrived',
       from_url: 'https://www.example.org/',
       referer: 'https://www.example.org/',
+      backs: 1,
     },
     dwell_ms: 6840,
     moves: 3,
@@ -115,7 +116,27 @@ const pageResult = {
     keys: 0,
     typos: 0,
     wanders: 1,
+    patience_ms: 41_200,
+    scroll_reached: 0.62,
+    scroll_ended_by: 'depth',
   },
+  links: [
+    {
+      url: 'https://www.example.org/listing?page=3',
+      text: 'Next page',
+      rel: ['next'],
+      visible: true,
+      furniture: false,
+    },
+    {
+      url: 'https://www.example.org/do-not-follow',
+      text: '',
+      rel: ['nofollow'],
+      visible: false,
+      furniture: false,
+    },
+  ],
+  links_truncated: false,
 };
 
 const failedPageResult = {
@@ -134,6 +155,7 @@ const failedPageResult = {
   timing: { ttfb_ms: null, dom_content_loaded_ms: null, load_ms: null, total_ms: 60_012 },
   screenshot: null,
   behavior: null,
+  links: null,
   error: {
     code: 'timeout',
     message: 'the navigation did not finish within 60000 ms',

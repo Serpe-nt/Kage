@@ -21,9 +21,12 @@ import {
   HealthResponseSchema,
   MAX_PACE_DWELL_MS,
   MAX_PACE_MIN_DWELL_MS,
+  MAX_PAGE_LINKS,
   METRICS_PATH,
   NavigateRequestSchema,
   OpenContextRequestSchema,
+  PageResultSchema,
+  ScrollEndSchema,
   SelftestRequestSchema,
   contextPath,
   routePath,
@@ -54,8 +57,10 @@ describe('contract basics', () => {
   it('serves everything under the versioned prefix', () => {
     expect(CONTRACT_VERSION).toBe('v1');
     expect(CONTRACT_SEMVER.startsWith('1.')).toBe(true);
-    // 1.2.0 added the pace of a flow (M9): optional in the request, additional in the answer.
-    expect(CONTRACT_SEMVER).toBe('1.2.0');
+    // 1.2.0 added the pace of a flow (M9). 1.3.0 adds what a crawl needs (M10): the patience
+    // of a page, the click on a link of the open page, and the links of a document. All of
+    // it is optional in the request and additional in the answer.
+    expect(CONTRACT_SEMVER).toBe('1.3.0');
     expect(HEALTH_PATH).toBe('/v1/health');
     expect(METRICS_PATH).toBe('/v1/metrics');
     for (const endpoint of Object.values<Endpoint>(ENDPOINTS)) {
@@ -346,6 +351,90 @@ describe('requests are strict', () => {
     const without = { ...step };
     delete without['paced_ms'];
     expect(FlowEventSchema.safeParse(without).success).toBe(false);
+  });
+
+  it('takes a patience, a click on the open page and a wish for the links, each inside its bounds', () => {
+    const base = first('NavigateRequest');
+    const withBehavior = (behavior: unknown) =>
+      NavigateRequestSchema.safeParse({ ...base, behavior }).success;
+    const withEntry = (entry: Record<string, unknown>) =>
+      withBehavior({
+        entry: { strategy: 'link', from_url: 'https://www.example.org/', ...entry },
+      });
+    expect(
+      [1000, 38_000, 600_000].every((patience) => withBehavior({ patience_ms: patience })),
+    ).toBe(true);
+    for (const refused of [999, 600_001, 38_000.5, null, '38000']) {
+      expect(withBehavior({ patience_ms: refused }), JSON.stringify(refused)).toBe(false);
+    }
+    expect(withEntry({ from_open_page: true })).toBe(true);
+    expect(withEntry({ from_open_page: true, max_backs: 0, fallback: 'none' })).toBe(true);
+    expect(withEntry({ from_open_page: false, max_backs: 10 })).toBe(true);
+    for (const refused of [
+      { from_open_page: 'yes' },
+      { from_open_page: null },
+      { max_backs: -1 },
+      { max_backs: 11 },
+      { max_backs: 1.5 },
+      { backs: 1 },
+    ]) {
+      expect(withEntry(refused), JSON.stringify(refused)).toBe(false);
+    }
+    const capture = base['capture'] as Record<string, unknown>;
+    const withLinks = (links: unknown) =>
+      NavigateRequestSchema.safeParse({ ...base, capture: { ...capture, links } }).success;
+    expect([true, false].every(withLinks)).toBe(true);
+    expect([null, 'all', 1].some(withLinks)).toBe(false);
+    // A request of 1.2.0 names none of it and is taken as it was.
+    expect(capture).not.toHaveProperty('links');
+    expect(NavigateRequestSchema.safeParse(base).success).toBe(true);
+  });
+
+  it('always says how a page was scrolled, how it was reached and which links it holds, or null', () => {
+    const page = first('PageResult');
+    const behavior = page['behavior'] as Record<string, unknown>;
+    const entry = behavior['entry'] as Record<string, unknown>;
+    const parses = (change: Record<string, unknown>) =>
+      PageResultSchema.safeParse({ ...page, ...change }).success;
+    const behaves = (change: Record<string, unknown>) =>
+      parses({ behavior: { ...behavior, ...change } });
+    expect(parses({})).toBe(true);
+    expect(ScrollEndSchema.options).toEqual(['depth', 'patience', 'budget', 'page']);
+    expect(MAX_PAGE_LINKS).toBe(5000);
+    for (const end of ScrollEndSchema.options) {
+      expect(behaves({ scroll_ended_by: end }), end).toBe(true);
+    }
+    expect(behaves({ patience_ms: null, scroll_reached: null, scroll_ended_by: null })).toBe(true);
+    expect(behaves({ scroll_reached: 0 })).toBe(true);
+    expect(behaves({ scroll_reached: 1 })).toBe(true);
+    for (const refused of [
+      { scroll_reached: 1.01 },
+      { scroll_reached: -0.1 },
+      { scroll_ended_by: 'timeout' },
+      { patience_ms: -1 },
+      { entry: { ...entry, backs: -1 } },
+      { entry: { ...entry, backs: 0.5 } },
+    ]) {
+      expect(behaves(refused), JSON.stringify(refused)).toBe(false);
+    }
+    expect(behaves({ entry: { ...entry, backs: null } })).toBe(true);
+    const [link] = page['links'] as Record<string, unknown>[];
+    expect(parses({ links: null })).toBe(true);
+    expect(parses({ links: [] })).toBe(true);
+    expect(parses({ links: Array.from({ length: MAX_PAGE_LINKS }, () => link) })).toBe(true);
+    expect(parses({ links: Array.from({ length: MAX_PAGE_LINKS + 1 }, () => link) })).toBe(false);
+    expect(parses({ links: [{ ...link, visible: 'yes' }] })).toBe(false);
+    expect(parses({ links: [{ ...link, hidden: true }] })).toBe(false);
+    // The fields are always there: a client reads null, never nothing.
+    const without = (whole: Record<string, unknown>, name: string) =>
+      Object.fromEntries(Object.entries(whole).filter(([field]) => field !== name));
+    for (const name of ['patience_ms', 'scroll_reached', 'scroll_ended_by']) {
+      expect(parses({ behavior: without(behavior, name) }), name).toBe(false);
+    }
+    for (const name of ['links', 'links_truncated']) {
+      expect(PageResultSchema.safeParse(without(page, name)).success, name).toBe(false);
+    }
+    expect(behaves({ entry: without(entry, 'backs') })).toBe(false);
   });
 
   it('keeps a cookie to the fields of an http_cookies row', () => {

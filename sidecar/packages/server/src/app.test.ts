@@ -116,7 +116,7 @@ describe('GET /v1/health', () => {
       contexts_in_use: 1,
       max_contexts: 2,
       uptime_seconds: 2.5,
-      contract_version: '1.2.0',
+      contract_version: '1.3.0',
     });
   });
 

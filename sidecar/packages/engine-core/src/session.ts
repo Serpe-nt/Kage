@@ -4,6 +4,8 @@ import {
   DEFAULT_CHALLENGE_WAIT_MS,
   DEFAULT_MAX_BODY_BYTES,
   DEFAULT_NAVIGATE_TIMEOUT_MS,
+  MAX_PAGE_LINKS,
+  MAX_URL_LENGTH,
   type ArtifactRef,
   type BehaviorReport,
   type CaptureOptions,
@@ -18,12 +20,14 @@ import {
   type ImportStateResponse,
   type NavigateRequest,
   type NavigationError,
+  type PageLink,
   type PageResult,
   type PdfOptions,
   type RedirectHop,
   type RejectedCookie,
   type ScreenshotFormat,
   type ScreenshotOptions,
+  type ScrollEnd,
   type SelftestPage,
   type SelftestRequest,
   type SelftestResponse,
@@ -35,6 +39,7 @@ import {
 } from '@kage/contract';
 
 import {
+  BehaviorError,
   Human,
   motorProfile,
   tempo,
@@ -217,6 +222,26 @@ const RESPONSE_GRACE_MS = 200;
 const BACK_SETTLE_MS = 1000;
 /** How long a page is given to finish loading after a click or a key led to it. */
 const ARRIVAL_LOAD_MS = 4000;
+/**
+ * How long a click on a link of the open page is watched once the page has
+ * another address and the tab has asked for no document: a site that draws
+ * its own pages changes its address and loads nothing, and no document
+ * will come however long the wait.
+ */
+const SOFT_NAVIGATION_MS = 1500;
+/** How often a page is asked, 40 ms apart, whether it shows the document a click was answered with. */
+const DOCUMENT_LOOKS = 25;
+/** How often the hand goes to a link of the open page before it gives up on resting on it. */
+const HOVER_ATTEMPTS = 2;
+/** How many addresses of documents a session remembers its tab to have shown. */
+const SHOWN_LIMIT = 256;
+/** How often a page that still glides from the last flick is asked where it is, and the rest between two looks. */
+const SCROLL_REST_LOOKS = 12;
+const SCROLL_REST_MS = 60;
+/** Longest text of a link in a page result, and the bounds of its `rel`. */
+const LINK_TEXT_LIMIT = 200;
+const LINK_REL_TOKENS = 16;
+const LINK_REL_TOKEN_LIMIT = 64;
 
 const WAIT_UNTIL: Readonly<Record<WaitUntil, LoadState>> = {
   commit: 'commit',
@@ -280,7 +305,13 @@ const boxExpression = (find: string) => `(() => {
   return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
 })()`;
 
-/** A selector the session understands besides CSS: the link an entry clicks. */
+/**
+ * A selector the session understands besides CSS: the link an entry clicks.
+ * What follows the prefix is JSON: the target, and how the link is
+ * recognized (`exact` and `host` on a page the entry loaded, see
+ * {@link linkExpression}; `open` on the page that is open, see
+ * {@link openLinkExpression}).
+ */
 const LINK_PREFIX = 'kage-link:';
 
 /** Finds the anchor an entry is after. `mode` says how it is recognized. */
@@ -297,6 +328,255 @@ function linkExpression(target: string, mode: 'exact' | 'host'): string {
     const result = parsed.find(([, url]) => sameHost(url));
     return result ? result[0] : null;
   })()`;
+}
+
+/** An address as a link is compared by: without its fragment, and without the slash a path may end on. */
+const PLAIN = `(url) => url.origin + url.pathname.replace(/\\/$/, '') + url.search`;
+
+/**
+ * An address as the link of an entry is compared by: its origin, its path
+ * without the slash it may end on, and its query; no fragment. `null` for
+ * what is no address.
+ */
+export function plainAddress(address: string | null | undefined): string | null {
+  try {
+    const url = new URL(address ?? '');
+    return url.origin + url.pathname.replace(/\/$/, '') + url.search;
+  } catch {
+    return null;
+  }
+}
+
+/** Where an anchor leads, as the browser resolved it. An SVG anchor keeps its address in an object. */
+const HREF = `(anchor) => new URL(typeof anchor.href === 'string' ? anchor.href : anchor.href.baseVal, document.baseURI)`;
+
+/**
+ * Statements that define `boxes(element)`: the boxes of an element a reader
+ * can see, in pixels of the viewport, and none for an element nobody sees.
+ *
+ * A reader sees an element that is rendered (not `display: none`, not
+ * `visibility: hidden`, not fully transparent, nor inside anything that
+ * is), has a box that is not empty, and whose box lies on the canvas of
+ * the document: not wholly left of or above its origin, and not beyond
+ * what can be scrolled to. The browser's own `checkVisibility` answers the
+ * first part where it takes the options for opacity and visibility; it is
+ * asked which names it reads, because they were renamed once. Elsewhere the
+ * computed styles of the element and its ancestors answer. An inline anchor
+ * around a block has no box of its own and still one a reader sees, so
+ * every client rectangle counts.
+ *
+ * A style sheet decides most of this, so only the browser knows; and all of
+ * it is read, nothing is changed, in a world the page cannot look into.
+ */
+const SEEN = `
+  const root = document.documentElement;
+  const scroller = document.scrollingElement || root;
+  const wide = Math.max(scroller.scrollWidth, root.clientWidth);
+  const tall = Math.max(scroller.scrollHeight, root.clientHeight);
+  // A document written from the right overflows to the left of its origin.
+  const leftward = getComputedStyle(document.body || root).direction === 'rtl';
+  const leftEdge = leftward ? root.clientWidth - wide : 0;
+  const rightEdge = leftward ? root.clientWidth : wide;
+  const read = [];
+  const probe = {};
+  for (const name of ['opacityProperty', 'visibilityProperty', 'checkOpacity', 'checkVisibilityCSS']) {
+    Object.defineProperty(probe, name, { enumerable: true, get: () => { read.push(name); return true; } });
+  }
+  let asks = typeof root.checkVisibility === 'function';
+  if (asks) {
+    try { root.checkVisibility(probe); } catch (error) { asks = false; }
+  }
+  const checks = {};
+  for (const name of read) checks[name] = true;
+  const whole = asks
+    && (read.includes('opacityProperty') || read.includes('checkOpacity'))
+    && (read.includes('visibilityProperty') || read.includes('checkVisibilityCSS'));
+  const styled = (element) => {
+    if (getComputedStyle(element).visibility !== 'visible') return false;
+    for (let node = element; node && node.nodeType === 1; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      if (style.display === 'none' || Number(style.opacity) === 0) return false;
+      if (node !== element && style.contentVisibility === 'hidden') return false;
+    }
+    return true;
+  };
+  const rendered = (element) => (whole ? element.checkVisibility(checks) : styled(element));
+  const onCanvas = (rect) => rect.width > 0 && rect.height > 0
+    && rect.right + scrollX > leftEdge && rect.left + scrollX < rightEdge
+    && rect.bottom + scrollY > 0 && rect.top + scrollY < tall;
+  const boxes = (element) => (rendered(element) ? Array.from(element.getClientRects()).filter(onCanvas) : []);
+`;
+
+/**
+ * Reads the links of a document for a page result: every `a[href]` that
+ * leads to an `http` or `https` address, in document order, with whether a
+ * reader can see it ({@link SEEN}) and whether it stands in what a site
+ * repeats on every page. One evaluation, so that every link is of the same
+ * moment. An address longer than a navigation takes is left out: nobody
+ * could ask for it.
+ */
+const READ_LINKS = `(() => {
+  if (!document.documentElement) return { links: [], truncated: false };
+  ${SEEN}
+  const href = ${HREF};
+  const furniture = 'nav, header, footer, aside, [role~="navigation" i], [role~="banner" i], [role~="contentinfo" i], [role~="complementary" i]';
+  // Text as JSON can carry it: no half of a character pair, at the end or anywhere.
+  const cut = (text, length) => {
+    const sound = typeof text.toWellFormed === 'function' ? text.toWellFormed() : text;
+    const short = sound.slice(0, length);
+    const last = short.charCodeAt(short.length - 1);
+    return sound.length > length && last >= 0xd800 && last <= 0xdbff ? short.slice(0, -1) : short;
+  };
+  const links = [];
+  let truncated = false;
+  for (const anchor of document.querySelectorAll('a[href]')) {
+    let url;
+    try { url = href(anchor); } catch (error) { continue; }
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.href.length > ${MAX_URL_LENGTH}) continue;
+    if (links.length === ${MAX_PAGE_LINKS}) { truncated = true; break; }
+    links.push({
+      url: url.href,
+      text: cut((anchor.textContent || '').replace(/\\s+/g, ' ').trim(), ${LINK_TEXT_LIMIT}).trimEnd(),
+      rel: (anchor.getAttribute('rel') || '').toLowerCase().split(/\\s+/).filter(Boolean)
+        .slice(0, ${LINK_REL_TOKENS}).map((token) => cut(token, ${LINK_REL_TOKEN_LIMIT})),
+      visible: boxes(anchor).length > 0,
+      furniture: anchor.closest(furniture) !== null,
+    });
+  }
+  return { links, truncated };
+})()`;
+
+/**
+ * Finds the link of the open page a reader would click to get to the
+ * target, and gives the box to aim at: the first anchor to exactly that
+ * address that a reader can see ({@link SEEN}) and that leads on in this
+ * tab (not a download, not another window), and of its boxes the largest.
+ * A link that runs over two lines has two boxes, and the rectangle around
+ * both holds text that is no part of it.
+ */
+function openLinkExpression(target: string): string {
+  return `(() => {
+    if (!document.documentElement) return null;
+    ${SEEN}
+    const href = ${HREF};
+    const plain = ${PLAIN};
+    const wanted = plain(new URL(${JSON.stringify(target)}));
+    const base = document.querySelector('base[target]');
+    const here = (anchor) => {
+      const name = (anchor.getAttribute('target') || (base && base.getAttribute('target')) || '').toLowerCase();
+      return !anchor.hasAttribute('download') && ['', '_self', '_top', '_parent'].includes(name);
+    };
+    for (const anchor of document.querySelectorAll('a[href]')) {
+      let url;
+      try { url = href(anchor); } catch (error) { continue; }
+      if (plain(url) !== wanted || !here(anchor)) continue;
+      const seen = boxes(anchor);
+      if (seen.length === 0) continue;
+      const box = seen.reduce((best, rect) => (rect.width * rect.height > best.width * best.height ? rect : best));
+      return { x: box.x, y: box.y, width: box.width, height: box.height };
+    }
+    return null;
+  })()`;
+}
+
+/** Whether what lies at a point of the viewport is a link to the target, or a part of one. */
+function linkAtExpression(target: string, at: Point): string {
+  return `(() => {
+    const href = ${HREF};
+    const plain = ${PLAIN};
+    const hit = document.elementFromPoint(${Math.round(at.x)}, ${Math.round(at.y)});
+    const anchor = hit && typeof hit.closest === 'function' ? hit.closest('a[href]') : null;
+    if (!anchor) return false;
+    try { return plain(href(anchor)) === plain(new URL(${JSON.stringify(target)})); } catch (error) { return false; }
+  })()`;
+}
+
+/**
+ * What the tab holds before the page that is open, as far as the page can
+ * say without moving. The Navigation API lists the entries of the page's
+ * own origin around the open one, with their addresses: `before` holds
+ * those before it, the oldest first. An entry of another origin is not
+ * listed, and the address of one whose document hides its referrer is
+ * `null`. `listed` is how many entries the API lists and `total` how many
+ * the tab has in all. `api` is false in a browser without the Navigation
+ * API, which then knows the number only.
+ */
+const READ_TAB = `(() => {
+  const total = history.length;
+  try {
+    const api = globalThis.navigation;
+    if (api && typeof api.entries === 'function' && api.currentEntry && api.currentEntry.index >= 0) {
+      const entries = Array.from(api.entries());
+      const before = entries.slice(0, api.currentEntry.index)
+        .map((entry) => (typeof entry.url === 'string' ? entry.url : null));
+      return { api: true, total, listed: entries.length, before };
+    }
+  } catch (error) {}
+  return { api: false, total, listed: 0, before: [] };
+})()`;
+
+/** What a page can say of the history of its tab without moving in it. */
+export interface TabHistory {
+  /** Whether the browser has the Navigation API. */
+  readonly api: boolean;
+  /** How many entries the tab has in all, before and after the open one. */
+  readonly total: number;
+  /** How many of them the Navigation API lists: those of the open page's origin around it. */
+  readonly listed: number;
+  /** The addresses of the listed entries before the open one, the oldest first; `null` for one that is kept back. */
+  readonly before: readonly (string | null)[];
+}
+
+/**
+ * How many entries a persona goes back at most to find a page in its tab,
+ * found out without moving wherever the browser can say (follow-up F28).
+ *
+ * The Navigation API names the entries of the open page's origin. An entry
+ * it does not name (one of another origin, or one whose document hides its
+ * address) can only be looked at by going there, and so can every entry in
+ * a browser without that API. Nobody goes looking for a page the tab never
+ * showed, so an entry without a name is only tried when a document at that
+ * address was loaded in this tab. (Chrome keeps the blank page a tab began
+ * with as an entry, which is where a search through unnamed entries ends.)
+ *
+ * @param wanted the page, as {@link plainAddress} writes it.
+ * @param reach how many entries back the request allows.
+ * @param shown whether the tab was ever answered with a document at that address.
+ * @returns 0 when the tab does not hold the page within reach, and then
+ *   nothing moves. Otherwise the number of entries to go back, looking at
+ *   the address after each one and staying at the first that is the page.
+ */
+export function entriesToGoBack(
+  tab: TabHistory,
+  wanted: string,
+  reach: number,
+  shown: boolean,
+): number {
+  if (reach <= 0) {
+    return 0;
+  }
+  if (!tab.api) {
+    return shown && tab.total > 1 ? reach : 0;
+  }
+  const named = Math.min(reach, tab.before.length);
+  let hidden = false;
+  for (let back = 1; back <= named; back += 1) {
+    const address = tab.before[tab.before.length - back] ?? null;
+    if (address === null) {
+      hidden = true;
+    } else if (plainAddress(address) === wanted) {
+      // The nearest entry with that address; a hidden one before it is
+      // looked at on the way.
+      return back;
+    }
+  }
+  const unnamed = Math.max(0, tab.total - tab.listed);
+  if (!shown || (!hidden && (named === reach || unnamed === 0))) {
+    // Every entry within reach has a name and none is the page, or the tab
+    // never showed it.
+    return 0;
+  }
+  return Math.min(reach, tab.before.length + unnamed);
 }
 
 /** A request's XHR filters, and whether a response is wanted by any of them. */
@@ -365,6 +645,57 @@ interface CaptureNames {
   readonly stamp: string;
 }
 
+/** What came of a way back in the tab. */
+type WentBack =
+  /** The page before is there and has loaded. */
+  | 'arrived'
+  /** The tab has no entry before the open one. */
+  | 'nowhere'
+  /** The browser asked for the page before and got no answer in time. */
+  | 'unanswered'
+  /** The page before came and did not finish loading in time. */
+  | 'unfinished';
+
+/** How the scrolling of a navigation ended, for its report. */
+interface ScrollReport {
+  readonly reached: number | null;
+  readonly endedBy: ScrollEnd;
+}
+
+/**
+ * A page that was asked for by a click or a key did not come in time.
+ * Named as the drivers name their own timeouts, so that every engine
+ * classifies it like one of those.
+ */
+class ArrivalTimeout extends Error {
+  override readonly name = 'TimeoutError';
+}
+
+/**
+ * A click on a link was answered, and the answer became no page. Worded as
+ * the drivers word a navigation that turns into a download, so that every
+ * engine classifies it like one of those: `aborted`.
+ */
+class NoPage extends Error {
+  override readonly name = 'NoPage';
+
+  constructor() {
+    super('the link led to no page: a download is starting, or the answer held no document');
+  }
+}
+
+/** Counts the times of a document from another moment than the one it was first noted at. */
+function countFrom(state: DocumentState, moment: number): void {
+  const later = moment - state.started;
+  state.started = moment;
+  for (const mark of ['ttfb', 'domContentLoaded', 'load'] as const) {
+    const time = state[mark];
+    if (time !== null) {
+      state[mark] = Math.max(0, time - later);
+    }
+  }
+}
+
 /**
  * One open persona context as both engines run it: navigation with its
  * captures, the behavior engine, flows, state export and import, and the
@@ -403,6 +734,12 @@ export class PageSession {
    * out since says that one is on its way (follow-up F38).
    */
   private documentsAsked = 0;
+  /**
+   * The addresses of the documents this tab was answered with, as
+   * {@link plainAddress} writes them, the latest last: what the tab can
+   * hold at all. Kept short; a page from long ago is out of reach anyway.
+   */
+  private readonly shown = new Set<string>();
 
   constructor(private readonly parts: SessionParts) {
     const { page } = parts.driver;
@@ -450,6 +787,15 @@ export class PageSession {
       return;
     }
     if (navigation) {
+      const address = plainAddress(response.url());
+      if (address !== null) {
+        // Said again, an address moves to the end: the latest stay.
+        this.shown.delete(address);
+        this.shown.add(address);
+        if (this.shown.size > SHOWN_LIMIT) {
+          this.shown.delete(this.shown.values().next().value ?? address);
+        }
+      }
       if (
         this.freshOnNavigation !== 'never' &&
         asked.redirectedFrom() === null &&
@@ -606,6 +952,57 @@ export class PageSession {
     }
   }
 
+  /** Notes which document the page shows, for {@link PageSession.departed}. */
+  private mark(): PageMark {
+    return { response: this.document.response, address: this.page.url() };
+  }
+
+  /**
+   * Goes back one entry of the tab and waits for the page before: by the
+   * driver, or by `by` when it is given (the persona's keys). One watch for
+   * both, for a flow's `back` and for an entry that goes back to click
+   * (follow-ups F21, F38, F28): nothing answers for keys, so what the page
+   * shows afterwards is all that is known about where they led.
+   *
+   * @param by what asks the browser to go back in place of the driver.
+   */
+  private async goBack(timeout: number, by?: () => Promise<void>): Promise<WentBack> {
+    const deadline = Date.now() + timeout;
+    const since = this.mark();
+    const before = await this.read<{ born: number }>(READ_SHOWN).catch(() => null);
+    const asked = this.documentsAsked;
+    if (by === undefined) {
+      // The driver is asked for the commit only, and the page itself for
+      // the rest: a page that comes back out of the back/forward cache
+      // fires no `load`, and the driver's wait for one never ends.
+      await this.page.goBack({ waitUntil: 'commit', timeout });
+    } else {
+      await by();
+    }
+    let how = await this.departed(since, Math.min(deadline, Date.now() + BACK_SETTLE_MS));
+    if (how === null && this.documentsAsked !== asked) {
+      // The browser has asked for the page before and holds no answer
+      // yet: keys return at once, where the driver waits for the commit.
+      how = await this.departed(since, deadline);
+      if (how === null) {
+        return 'unanswered';
+      }
+    }
+    if (how === null) {
+      // Neither a response nor another address. The entry before may
+      // still be another document at this very address; the page knows.
+      const after = await this.read<{ born: number }>(READ_SHOWN).catch(() => null);
+      if (before === null || after === null || after.born === before.born) {
+        return 'nowhere';
+      }
+      how = 'unanswered';
+    }
+    if (how === 'unanswered') {
+      await this.adoptShown();
+    }
+    return (await this.loaded(deadline)) ? 'arrived' : 'unfinished';
+  }
+
   private async observe(): Promise<PageObservation> {
     const main = this.page.mainFrame();
     const [title, text] = await Promise.all([
@@ -661,9 +1058,13 @@ export class PageSession {
       if (selector.startsWith(LINK_PREFIX)) {
         const { target, mode } = JSON.parse(selector.slice(LINK_PREFIX.length)) as {
           target: string;
-          mode: 'exact' | 'host';
+          mode: 'exact' | 'host' | 'open';
         };
-        return this.read<Box | null>(boxExpression(linkExpression(target, mode)));
+        return this.read<Box | null>(
+          mode === 'open'
+            ? openLinkExpression(target)
+            : boxExpression(linkExpression(target, mode)),
+        );
       }
       return this.read<Box | null>(
         boxExpression(`document.querySelector(${JSON.stringify(selector)})`),
@@ -693,11 +1094,17 @@ export class PageSession {
     };
   }
 
+  /**
+   * @param patience the patience the request gave the scrolling; `null` without one, and for a flow.
+   * @param scroll how the scrolling of a navigation ended; `null` when none was asked for, and for a flow.
+   */
   private report(
     seed: string,
     counts: BehaviorCounts,
     dwellMs: number,
     entry: EntryReport | null,
+    patience: number | null = null,
+    scroll: ScrollReport | null = null,
   ): BehaviorReport {
     return {
       seed,
@@ -705,14 +1112,58 @@ export class PageSession {
       entry,
       dwell_ms: Math.round(dwellMs),
       ...counts,
+      patience_ms: patience,
+      scroll_reached: scroll?.reached ?? null,
+      scroll_ended_by: scroll?.endedBy ?? null,
     };
   }
 
-  /** Waits until a click has started a new document, then for the state the request names. */
-  private async afterClick(previous: DriverResponse | null, until: WaitUntil, deadline: number) {
+  /**
+   * How far down its document the page is, as a share of what can be
+   * scrolled: 0 at the top, 1 at the end, and 1 for a document that ends
+   * inside its window, of which there is nothing more to see.
+   *
+   * @param gliding whether the wheel was turned a moment ago. The browser
+   *   glides to where a flick sent it, so the page is asked until two looks
+   *   in a row find it in the same place.
+   * @returns `null` when the page could not be read.
+   */
+  private async scrolled(gliding: boolean): Promise<number | null> {
+    let metrics = await this.surface.metrics().catch(() => null);
+    for (let look = 0; gliding && metrics !== null && look < SCROLL_REST_LOOKS; look += 1) {
+      await sleep(SCROLL_REST_MS);
+      const next = await this.surface.metrics().catch(() => null);
+      const rests = next?.scrollY === metrics.scrollY;
+      metrics = next ?? metrics;
+      if (rests || next === null) {
+        break;
+      }
+    }
+    if (metrics === null) {
+      return null;
+    }
+    const scrollable = metrics.scrollHeight - metrics.viewport.height;
+    if (scrollable <= 0) {
+      return 1;
+    }
+    return Math.round(Math.min(1, Math.max(0, metrics.scrollY / scrollable)) * 10_000) / 10_000;
+  }
+
+  /**
+   * Waits until a click has started a new document, then for the state the request names.
+   *
+   * @param idle asked while no document has come: `true` ends the wait, for
+   *   a caller that knows that none will.
+   */
+  private async afterClick(
+    previous: DriverResponse | null,
+    until: WaitUntil,
+    deadline: number,
+    idle: () => boolean = () => false,
+  ) {
     const limit = Math.min(deadline, Date.now() + CLICK_NAVIGATION_MS);
     while (this.document.response === previous || this.document.response === null) {
-      if (Date.now() > limit) {
+      if (Date.now() > limit || idle()) {
         return false;
       }
       await sleep(40);
@@ -743,6 +1194,7 @@ export class PageSession {
       outcome,
       from_url: from,
       referer,
+      backs: null,
     });
     if (from === null) {
       throw new EngineError('invalid_request', `the entry ${entry.strategy} needs from_url`);
@@ -784,6 +1236,211 @@ export class PageSession {
     return report('arrived', referer);
   }
 
+  /**
+   * How many entries the persona goes back at most to find a page in the
+   * tab ({@link entriesToGoBack}), from what the page says of its tab and
+   * what this session has seen the tab show.
+   */
+  private async entriesBack(wanted: string, reach: number): Promise<number> {
+    if (reach <= 0) {
+      return 0;
+    }
+    const tab = await this.read<TabHistory>(READ_TAB).catch(() => null);
+    return tab === null ? 0 : entriesToGoBack(tab, wanted, reach, this.shown.has(wanted));
+  }
+
+  /** Whether the pointer rests on a link to the target: on the link, and not on something that lies over it. */
+  private async pointerOnLink(target: string): Promise<boolean> {
+    const device = this.input;
+    if (device === null) {
+      return false;
+    }
+    try {
+      const [pointer, metrics] = await Promise.all([
+        device.pointerPosition(),
+        this.surface.metrics(),
+      ]);
+      return await this.read<boolean>(
+        linkAtExpression(target, {
+          x: pointer.x - metrics.origin.x,
+          y: pointer.y - metrics.origin.y,
+        }),
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  /** Ends an entry whose page did not come in time: nothing of the pages it passed is the result. */
+  private notCome(message: string): ArrivalTimeout {
+    this.document = newDocument();
+    this.freshOnNavigation = 'never';
+    return new ArrivalTimeout(message);
+  }
+
+  /**
+   * Arrives at the target by a click on a link of a page the persona has
+   * been reading (spec §10.4, follow-up F28). Nothing is loaded to start
+   * from. When the page that is open is that page, its link is clicked
+   * there; when the tab holds it a few entries back, the persona goes back
+   * to it with the keyboard, as a flow's `back` does, looks at what came
+   * back, and clicks there. A page the browser kept costs the site no
+   * request. When the tab does not hold the page, or the page no link a
+   * reader could click, the outcome says so and the caller's fallback
+   * decides; nothing moves when the browser can say beforehand that the
+   * page is not there.
+   *
+   * @throws {ArrivalTimeout} when a page that was asked for, going back or by the click, did not come in time.
+   */
+  private async enterFromOpenPage(
+    entry: Entry,
+    target: string,
+    until: WaitUntil,
+    human: Human,
+    deadline: number,
+  ): Promise<EntryReport> {
+    const from = entry.from_url ?? null;
+    if (from === null) {
+      throw new EngineError('invalid_request', `the entry ${entry.strategy} needs from_url`);
+    }
+    const report = (
+      outcome: EntryReport['outcome'],
+      referer: string | null = null,
+      backs: number | null = null,
+    ): EntryReport => ({ strategy: entry.strategy, outcome, from_url: from, referer, backs });
+    const notFound = () => {
+      this.freshOnNavigation = 'never';
+      return report('link_not_found');
+    };
+    const wanted = plainAddress(from);
+    const left = () => Math.max(1, deadline - Date.now());
+    // The page says where it is: a script may have given it another address than it was loaded from.
+    const address = () => this.read<string>('location.href').catch(() => this.page.url());
+
+    const open = await address();
+    // The tab shows a document from before this request. Marked as one, the
+    // document the click asks for begins the result, and nothing the page
+    // that is left still loads is counted with it.
+    this.document = newDocument(/^https?:\/\//i.test(open) ? withoutFragment(open) : null);
+    let backs = 0;
+    if (wanted === null || plainAddress(open) !== wanted) {
+      const reach = wanted === null ? 0 : await this.entriesBack(wanted, entry.max_backs ?? 0);
+      let found = false;
+      while (!found && backs < reach) {
+        const went = await this.goBack(left(), () => human.chord(['Alt'], 'ArrowLeft'));
+        if (went === 'nowhere') {
+          break;
+        }
+        if (went !== 'arrived') {
+          throw this.notCome(
+            `the page ${backs + 1} back in the tab did not come within the time of the navigation`,
+          );
+        }
+        backs += 1;
+        // A person looks at the page that came back before doing anything on it.
+        await human.dwell(Math.min(human.drawThinking(), left()), { wander: false });
+        found = plainAddress(await address()) === wanted;
+      }
+      if (!found) {
+        return notFound();
+      }
+    }
+    const observation = await this.observe().catch(() => emptyObservation);
+    if ((this.document.response?.status() ?? 0) >= 400 || findInterstitial(observation) !== null) {
+      // The page came back as an error or shows a wall. Nothing is clicked
+      // on it, and nothing is typed after it.
+      return report('blocked');
+    }
+    const selector = LINK_PREFIX + JSON.stringify({ target, mode: 'open' });
+    if ((await this.surface.boxOf(selector)) === null) {
+      return notFound();
+    }
+    if (Date.now() >= deadline) {
+      throw this.notCome('the time of the navigation ran out before the link was clicked');
+    }
+    const previous = this.document.response;
+    const asked = this.documentsAsked;
+    const before = this.page.url();
+    const shown = await this.read<{ born: number }>(READ_SHOWN).catch(() => null);
+    this.freshOnNavigation = 'once';
+    let onLink = false;
+    try {
+      // The pointer goes to the link, and the page is asked what it rests
+      // on. A page that was still gliding when the hand set out has moved
+      // the link a little: the hand goes again, as a hand does. What it
+      // rests on after that lies over the link, and a click there would be
+      // a click on that, so the hand does not click.
+      for (let attempt = 0; attempt < HOVER_ATTEMPTS && !onLink; attempt += 1) {
+        await human.hover(selector);
+        onLink = await this.pointerOnLink(target);
+      }
+    } catch (thrown) {
+      if (!(thrown instanceof BehaviorError)) {
+        throw thrown;
+      }
+      // The link went away, or cannot be brought into view.
+    }
+    if (!onLink) {
+      return notFound();
+    }
+    await human.pressButton();
+    const clicked = Date.now();
+    // A click is watched for a moment whatever the budget says: whether it
+    // asked for a document decides between a link that leads nowhere and a
+    // page that is late.
+    const limit = Math.max(deadline, clicked + SOFT_NAVIGATION_MS);
+    const idle = () =>
+      Date.now() > clicked + SOFT_NAVIGATION_MS &&
+      this.documentsAsked === asked &&
+      this.page.url() !== before;
+    const arrived = await this.afterClick(previous, until, limit, idle).finally(() => {
+      if (this.document.response !== null && this.document.response !== previous) {
+        // Times of the result count from the click: that is when the
+        // target was asked for. Also for a page that came and did not
+        // finish loading in time.
+        countFrom(this.document, clicked);
+      }
+    });
+    if (!arrived) {
+      if (this.documentsAsked !== asked) {
+        throw this.notCome('the page the link leads to did not answer in time');
+      }
+      // The click asked for no document: the link leads nowhere in this
+      // tab, or the page drew something itself.
+      return notFound();
+    }
+    const referer = this.document.response?.request().headers()['referer'] ?? null;
+    if (shown !== null && !(await this.replaced(shown.born))) {
+      // An answer came and the page is the document it was: the browser
+      // saves the answer as a file, or it held no document. Measured in
+      // Chrome 155 and Camoufox 152: the driver reports the response of a
+      // download like one of a page, and the page that was open stays.
+      // Reported as arrived, the result would be that page under the
+      // target's address.
+      this.document = newDocument();
+      throw new NoPage();
+    }
+    return report('arrived', referer, backs);
+  }
+
+  /**
+   * Whether the page shows another document than the one that began at the
+   * given moment. Asked for a second: a response comes a moment before its
+   * document. A page that cannot be read is taken to be another one.
+   */
+  private async replaced(born: number): Promise<boolean> {
+    let same = false;
+    for (let look = 0; look < DOCUMENT_LOOKS; look += 1) {
+      const now = await this.read<{ born: number }>(READ_SHOWN).catch(() => null);
+      if (now !== null && now.born !== born) {
+        return true;
+      }
+      same = now !== null;
+      await sleep(40);
+    }
+    return !same;
+  }
+
   // --- capture ----------------------------------------------------------
 
   /** Reads the page as it is into a page result. Captures a page can notice come last. */
@@ -816,6 +1473,12 @@ export class PageSession {
       domHtml = cut.text;
       domTruncated = cut.truncated;
     }
+    // The links are read as the document is: in the isolated world, all in
+    // one look. A page that could not be read has none to report.
+    const links =
+      options.links === true && loaded
+        ? await this.read<{ links: PageLink[]; truncated: boolean }>(READ_LINKS).catch(() => null)
+        : null;
     const rawBody =
       options.raw && response !== null
         ? await response.body().then(
@@ -882,6 +1545,8 @@ export class PageSession {
       side_effects: sideEffects,
       error: extra.error,
       behavior: extra.behavior,
+      links: links?.links ?? null,
+      links_truncated: links?.truncated ?? false,
     };
   }
 
@@ -904,18 +1569,24 @@ export class PageSession {
     let observation = emptyObservation;
     let wait: ChallengeWait = { marker: null, resolved: null, waitedMs: 0 };
     let dwelled = 0;
+    const patience = behavior?.patience_ms ?? null;
+    let scroll: ScrollReport | null = null;
     this.begin(filters);
     try {
       let typed = true;
       if (entry !== null && acting !== null) {
         if (entry.strategy === 'link' || entry.strategy === 'search_engine') {
-          entryReport = await this.enter(
-            entry,
-            request.url,
-            request.wait.until,
-            acting.human,
-            deadline,
-          );
+          const arrive =
+            entry.strategy === 'link' && entry.from_open_page === true
+              ? this.enterFromOpenPage(
+                  entry,
+                  request.url,
+                  request.wait.until,
+                  acting.human,
+                  deadline,
+                )
+              : this.enter(entry, request.url, request.wait.until, acting.human, deadline);
+          entryReport = await arrive;
           typed = false;
           if (entryReport.outcome !== 'arrived') {
             if ((entry.fallback ?? 'stop') === 'none' && entryReport.outcome !== 'blocked') {
@@ -937,6 +1608,7 @@ export class PageSession {
             outcome: 'arrived',
             from_url: null,
             referer: null,
+            backs: null,
           };
         }
       }
@@ -998,13 +1670,22 @@ export class PageSession {
           const wanted =
             behavior.dwell === 'human' ? acting.human.drawDwell() : (request.dwell_ms ?? 0);
           if (behavior.scroll_depth !== undefined && behavior.scroll_depth > 0) {
-            // Scrolling leaves the dwell its time: at most what the budget has beyond it.
-            await acting.human.scrollTo(
+            // With a patience the page is here, and what `timeout_ms` had
+            // to bound is over: the scrolling ends at its depth or when the
+            // patience is used up (follow-up F44). Without one it leaves
+            // the dwell its time: at most what the budget has beyond it,
+            // which ends every page too long for that at the same moment.
+            const ended = await acting.human.scrollTo(
               behavior.scroll_depth,
-              performance.now() + Math.max(0, budget() - wanted),
+              performance.now() + (patience ?? Math.max(0, budget() - wanted)),
             );
+            scroll = {
+              endedBy: ended === 'deadline' ? (patience === null ? 'budget' : 'patience') : ended,
+              reached: await this.scrolled(ended === 'deadline'),
+            };
           }
-          dwelled = Math.min(wanted, budget());
+          // The dwell follows in full where the scrolling had a time of its own.
+          dwelled = patience === null ? Math.min(wanted, budget()) : wanted;
           await acting.human.dwell(dwelled, { wander: behavior.wander ?? true });
         } else if ((request.dwell_ms ?? 0) > 0) {
           await sleep(Math.min(request.dwell_ms ?? 0, remaining()));
@@ -1030,7 +1711,7 @@ export class PageSession {
         behavior:
           acting === null
             ? null
-            : this.report(acting.seed, acting.human.counts, dwelled, entryReport),
+            : this.report(acting.seed, acting.human.counts, dwelled, entryReport, patience, scroll),
         started,
       },
     );
@@ -1094,7 +1775,6 @@ export class PageSession {
       screenshot: null,
       pdf: null,
     };
-    const mark = (): PageMark => ({ response: this.document.response, address: page.url() });
     const host: FlowHost = {
       human: async () => {
         acting.current ??= await this.human(request.behavior?.seed);
@@ -1113,44 +1793,18 @@ export class PageSession {
         }
       },
       back: async (timeout, by) => {
-        const deadline = Date.now() + timeout;
-        const since = mark();
-        const before = await this.read<{ born: number }>(READ_SHOWN).catch(() => null);
-        const asked = this.documentsAsked;
-        if (by === undefined) {
-          // The driver is asked for the commit only, and the page itself for
-          // the rest: a page that comes back out of the back/forward cache
-          // fires no `load`, and the driver's wait for one never ends.
-          await page.goBack({ waitUntil: 'commit', timeout });
-        } else {
-          // The persona's keys. Nothing answers for them, so what follows
-          // is all that is known about where they led (follow-up F38).
-          await by();
+        // The same watch whoever goes back, and for an entry that goes
+        // back to click as well (follow-ups F38, F28).
+        const went = await this.goBack(timeout, by);
+        if (went === 'unanswered') {
+          throw new FlowStepError(`the page before did not answer within ${timeout} ms`);
         }
-        let how = await this.departed(since, Math.min(deadline, Date.now() + BACK_SETTLE_MS));
-        if (how === null && this.documentsAsked !== asked) {
-          // The browser has asked for the page before and holds no answer
-          // yet: keys return at once, where the driver waits for the commit.
-          how = await this.departed(since, deadline);
-          if (how === null) {
-            throw new FlowStepError(`the page before did not answer within ${timeout} ms`);
-          }
+        if (went === 'nowhere') {
+          throw new FlowStepError(
+            `there is no page to go back to: the history of the tab ends at ${page.url()}`,
+          );
         }
-        if (how === null) {
-          // Neither a response nor another address. The entry before may
-          // still be another document at this very address; the page knows.
-          const after = await this.read<{ born: number }>(READ_SHOWN).catch(() => null);
-          if (before === null || after === null || after.born === before.born) {
-            throw new FlowStepError(
-              `there is no page to go back to: the history of the tab ends at ${page.url()}`,
-            );
-          }
-          how = 'unanswered';
-        }
-        if (how === 'unanswered') {
-          await this.adoptShown();
-        }
-        if (!(await this.loaded(deadline))) {
+        if (went === 'unfinished') {
           throw new FlowStepError(`the page before did not finish loading within ${timeout} ms`);
         }
       },
@@ -1176,7 +1830,7 @@ export class PageSession {
         }
       },
       waitForNetworkIdle: (timeout) => page.waitForLoadState('networkidle', { timeout }),
-      mark,
+      mark: () => this.mark(),
       waitForNavigation: async (since, timeout) => {
         // A click or a key may leave the page: by a request for a new
         // document, or, going back, by a page the browser kept. Either

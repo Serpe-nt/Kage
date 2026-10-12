@@ -150,6 +150,12 @@ export const CaptureOptionsSchema = z
       ),
     screenshot: ScreenshotOptionsSchema.nullable().describe('A screenshot; null for none.'),
     pdf: PdfOptionsSchema.nullable().describe('A PDF; null for none.'),
+    links: z
+      .boolean()
+      .optional()
+      .describe(
+        'The links of the document, each with whether a reader can see it and whether it stands in what the site repeats on every page. Read in the isolated world, like the document; the page cannot notice. Default false.',
+      ),
   })
   .meta({ id: 'CaptureOptions', description: 'What a navigation captures.' });
 export type CaptureOptions = z.infer<typeof CaptureOptionsSchema>;
@@ -158,7 +164,7 @@ export type CaptureOptions = z.infer<typeof CaptureOptionsSchema>;
 export const EntryStrategySchema = z.enum(['none', 'direct', 'link', 'search_engine']).meta({
   id: 'EntryStrategy',
   description:
-    "How the target is arrived at. `none` and `direct`: a typed navigation, with no `Referer`, `Sec-Fetch-Site: none` and `Sec-Fetch-User: ?1`; the two names are equal on the wire. `link`: `from_url` is loaded as a typed navigation, the link to the target is found on it and clicked. `search_engine`: `from_url` is a results page; the first result that leads to the target's host is clicked. A referer is never forged: it is whatever the browser sends for the click.",
+    "How the target is arrived at. `none` and `direct`: a typed navigation, with no `Referer`, `Sec-Fetch-Site: none` and `Sec-Fetch-User: ?1`; the two names are equal on the wire. `link`: the link to the target is found on `from_url` and clicked; `from_url` is loaded as a typed navigation first or, with `from_open_page`, looked for in the tab. `search_engine`: `from_url` is a results page; the first result that leads to the target's host is clicked. A referer is never forged: it is whatever the browser sends for the click.",
 });
 export type EntryStrategy = z.infer<typeof EntryStrategySchema>;
 
@@ -183,6 +189,21 @@ export const EntrySchema = z
     fallback: EntryFallbackSchema.optional().describe(
       'What to do without a link to the target; default `stop`.',
     ),
+    from_open_page: z
+      .boolean()
+      .optional()
+      .describe(
+        "Only with `link`. True: `from_url` is a page the persona has been reading, and nothing is loaded to start from. When it is the page that is open, its link to the target is clicked there. When it is one of the `max_backs` pages before it in the tab, the persona goes back to it with the keyboard first (the browser's own way back: no request when the browser kept the page) and clicks there. When the tab does not hold it, or it holds no such link, `fallback` decides; a link no reader could click there (one that is not rendered, lies under something else, or opens another tab) is none. The report says how many entries back the page was. Default false.",
+      ),
+    max_backs: z
+      .number()
+      .int()
+      .min(0)
+      .max(10)
+      .optional()
+      .describe(
+        'With `from_open_page`: how many entries of the tab the persona goes back at most to find `from_url`; default 0, the open page only.',
+      ),
   })
   .meta({ id: 'Entry', description: 'How a navigation arrives at its target.' });
 export type Entry = z.infer<typeof EntrySchema>;
@@ -219,6 +240,15 @@ export const BehaviorOptionsSchema = z
       .describe(
         'Move the mouse a little now and then while dwelling, as an idle hand does; default true.',
       ),
+    patience_ms: z
+      .number()
+      .int()
+      .min(1000)
+      .max(600_000)
+      .optional()
+      .describe(
+        'How long the persona goes on scrolling this page at most. With it, `timeout_ms` of the request bounds reaching the page only (the navigation, its waits, the challenge wait): the scrolling ends at `scroll_depth` or when the patience is used up, whichever comes first, and the dwell follows in full. Whoever asks draws it anew for every page, so that no two long pages are left after the same time. Absent: the scrolling and the dwell share what `timeout_ms` leaves, as before 1.3.0, and every page too long for that is left at the same moment.',
+      ),
   })
   .meta({
     id: 'BehaviorOptions',
@@ -241,7 +271,9 @@ export const NavigateRequestSchema = z
       .min(1000)
       .max(MAX_NAVIGATE_TIMEOUT_MS)
       .optional()
-      .describe('Budget for the navigation and its waits; default 60000.'),
+      .describe(
+        'Budget for the navigation and its waits; default 60000. Without `behavior.patience_ms` it also bounds the behavior on the page.',
+      ),
     challenge_wait_ms: z
       .number()
       .int()
@@ -461,11 +493,27 @@ export const EntryReportSchema = z
       .describe(
         'The `Referer` the browser sent with the request for the target; null when it sent none.',
       ),
+    backs: z
+      .number()
+      .int()
+      .nonnegative()
+      .nullable()
+      .describe(
+        'With `from_open_page`: how many entries the persona went back in the tab before it clicked, 0 when the page that was open held the link; null for every other entry, and when the target was not reached by a click.',
+      ),
   })
   .meta({ id: 'EntryReport', description: 'How a navigation arrived at its target.' });
 export type EntryReport = z.infer<typeof EntryReportSchema>;
 
 const count = (description: string) => z.number().int().nonnegative().describe(description);
+
+/** Why the scrolling of a page ended. */
+export const ScrollEndSchema = z.enum(['depth', 'patience', 'budget', 'page']).meta({
+  id: 'ScrollEnd',
+  description:
+    'Why the scrolling of a page ended. `depth`: the depth asked was reached. `patience`: `behavior.patience_ms` was used up first. `budget`: no patience was given and what `timeout_ms` left was used up first. `page`: the page does not scroll, or not any further. A page that grows for as long as it is scrolled ends after 400 turns of the wheel, reported as `patience` or `budget`.',
+});
+export type ScrollEnd = z.infer<typeof ScrollEndSchema>;
 
 /** What the behavior engine did (spec §10.4). */
 export const BehaviorReportSchema = z
@@ -493,6 +541,23 @@ export const BehaviorReportSchema = z
     keys: count('Keys pressed, modifiers and corrections included.'),
     typos: count('Characters typed wrong and corrected.'),
     wanders: count('Idle movements while dwelling.'),
+    patience_ms: z
+      .number()
+      .int()
+      .nonnegative()
+      .nullable()
+      .describe('The patience the request gave the scrolling; null when it gave none.'),
+    scroll_reached: z
+      .number()
+      .min(0)
+      .max(1)
+      .nullable()
+      .describe(
+        'How far down the document the page was when the scrolling of a navigation ended, as a share of its scrollable height: 0 at the top, 1 at the end, and 1 for a document that ends inside its window; null when no scrolling was asked for, and for a flow.',
+      ),
+    scroll_ended_by: ScrollEndSchema.nullable().describe(
+      'Why that scrolling ended; null when no scrolling was asked for, and for a flow.',
+    ),
   })
   .meta({
     id: 'BehaviorReport',
@@ -500,6 +565,35 @@ export const BehaviorReportSchema = z
       'What the behavior engine did during a request. With the persona and this seed the behavior can be replayed.',
   });
 export type BehaviorReport = z.infer<typeof BehaviorReportSchema>;
+
+/** One link of a document. */
+export const PageLinkSchema = z
+  .strictObject({
+    url: z.string().describe('Where it leads: the absolute address the browser resolved.'),
+    text: z
+      .string()
+      .describe('The text of the link, white space collapsed, at most 200 characters.'),
+    rel: z
+      .array(z.string())
+      .describe(
+        'The tokens of its `rel` attribute, in lower case: the first 16, each cut at 64 characters.',
+      ),
+    visible: z
+      .boolean()
+      .describe(
+        'Whether a reader can see it: it is rendered (not `display: none`, not `visibility: hidden`, not fully transparent, nor inside anything that is), has a box, and that box lies on the canvas of the document. A link that is not is one nobody can click.',
+      ),
+    furniture: z
+      .boolean()
+      .describe(
+        'Whether it stands in what a site repeats on every page: inside `nav`, `header`, `footer` or `aside`, or an element with the ARIA role of one.',
+      ),
+  })
+  .meta({ id: 'PageLink', description: 'One link of a document, as a reader meets it.' });
+export type PageLink = z.infer<typeof PageLinkSchema>;
+
+/** Most links a page result holds. */
+export const MAX_PAGE_LINKS = 5000;
 
 /** Result of one page load (spec §10.2). */
 export const PageResultSchema = z
@@ -561,6 +655,16 @@ export const PageResultSchema = z
     behavior: BehaviorReportSchema.nullable().describe(
       'What the behavior engine did; null when the request asked for no behavior.',
     ),
+    links: z
+      .array(PageLinkSchema)
+      .max(MAX_PAGE_LINKS)
+      .nullable()
+      .describe(
+        'The links of the document to `http` and `https` addresses, in document order, a link that occurs twice listed twice; an address longer than a navigation takes (8192 characters) is left out. Null when not requested or nothing was loaded.',
+      ),
+    links_truncated: z
+      .boolean()
+      .describe('Whether the document held more links than `links` lists.'),
   })
   .meta({ id: 'PageResult', description: 'What one page load produced.' });
 export type PageResult = z.infer<typeof PageResultSchema>;

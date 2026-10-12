@@ -104,6 +104,9 @@ export async function startTestProxy(routes: TestProxyRoutes): Promise<TestProxy
 
   server.on('connect', (request, socket: net.Socket, head: Buffer) => {
     const target = request.url ?? '';
+    // A browser may drop a tunnel it was refused. That is its business: a
+    // socket nobody listens to for errors would end the test run with one.
+    socket.on('error', () => undefined);
     const authorized = request.headers['proxy-authorization'] === expected;
     const port = routes.tunnels?.[target];
     const relayed = authorized && port !== undefined;

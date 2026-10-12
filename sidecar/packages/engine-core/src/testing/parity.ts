@@ -9,6 +9,7 @@
  * Nothing here leaves the machine: the test proxy refuses every tunnel.
  */
 import dgram from 'node:dgram';
+import { appendFileSync } from 'node:fs';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import { networkInterfaces, tmpdir, userInfo } from 'node:os';
 import path from 'node:path';
@@ -17,10 +18,12 @@ import type {
   CaptureOptions,
   ClaimedOs,
   EngineName,
+  Entry,
   FlowEvent,
   FlowRequest,
   NavigateRequest,
   OpenContextRequest,
+  PageLink,
   PageResult,
   SideEffect,
 } from '@kage/contract';
@@ -39,7 +42,14 @@ import type { FingerprintDocument } from '../fingerprint.js';
 import { judgeProbe, parseProbeReport, type ProbeReport } from '../selftest/probe.js';
 
 import { startFixtureSite, type FixtureRequest, type FixtureSite } from './fixture-site.js';
-import { activationReportOf, inputReportOf, inputStatistics, touched } from './recorder.js';
+import {
+  activationReportOf,
+  inputReportOf,
+  inputStatistics,
+  pressesOf,
+  touched,
+  type LeaveReport,
+} from './recorder.js';
 import { startTestProxy, type TestProxy } from './test-proxy.js';
 
 /** An engine as the parity suite runs it, and what is meant to differ. */
@@ -153,6 +163,38 @@ export function defineParitySuite(subject: ParitySubject): void {
 
   const lastRequest = async (pathname: string) =>
     (await site.requests()).filter((request) => request.path === pathname).at(-1);
+
+  /** The paths the site was asked for since its last reset that begin as given, in order. */
+  const askedFor = async (start: string) =>
+    (await site.requests())
+      .map((request) => request.path)
+      .filter((asked) => asked.startsWith(start));
+
+  /** What one load of the leave recorder reported when its page went away. */
+  const leaveReport = async (run: string): Promise<LeaveReport> => {
+    for (let waited = 0; waited < 5000; waited += 100) {
+      const found = (await site.reports()).find(
+        (report) => report['page'] === 'leave' && report['run'] === run,
+      );
+      if (found !== undefined) {
+        return found as unknown as LeaveReport;
+      }
+      await sleep(100);
+    }
+    throw new Error(`the page of the run ${run} reported nothing: it was not left`);
+  };
+
+  /**
+   * Writes down what a test measured, where `KAGE_PARITY_NOTES` names a
+   * file: numbers for the record of a milestone, one JSON line each. The
+   * tests assert what must hold; this keeps what was seen.
+   */
+  const measured = (what: string, values: Record<string, unknown>) => {
+    const file = process.env['KAGE_PARITY_NOTES'];
+    if (file !== undefined && file !== '') {
+      appendFileSync(file, `${JSON.stringify({ engine: subject.name, what, ...values })}\n`);
+    }
+  };
 
   const probe = async (context: EngineContext): Promise<ProbeReport> => {
     const result = await go(context, secure('/probe/'), {
@@ -772,6 +814,745 @@ export function defineParitySuite(subject: ParitySubject): void {
       });
     });
 
+    it('clicks a link of the page that is open, as its reader would, and loads nothing to start from', async () => {
+      await withContext('open-click', async (context) => {
+        // An ordinary visit: the page loads, and its reader stays a moment.
+        const visit = (url: string) =>
+          go(context, url, {
+            wait: { until: 'load', selector: 'body[data-ready]' },
+            dwell_ms: 1200,
+            behavior: { seed: SEEDS.first, wander: true },
+          });
+
+        // The control first, in a tab nobody has clicked in: the page is
+        // left for a typed address, and has seen nothing of a hand.
+        await site.reset();
+        expect((await visit(secure('/leave/?run=typed'))).error).toBeNull();
+        const typed = await go(context, secure('/landing?from=typed'), {
+          behavior: { seed: SEEDS.other },
+        });
+        expect(typed.behavior).toMatchObject({ clicks: 0, entry: null });
+        const typedRequest = await lastRequest('/landing?from=typed');
+        expect(headerOf(typedRequest, 'referer')).toBeNull();
+        expect(headerOf(typedRequest, 'sec-fetch-site')).toBe('none');
+        const unclicked = await leaveReport('typed');
+        expect(pressesOf(unclicked)).toEqual([]);
+        expect(unclicked.activation).toBe(false);
+        measured('a page left for a typed address', {
+          saw: unclicked.events.map((event) => event.type),
+          moves: unclicked.moves,
+          activation: unclicked.activation,
+        });
+
+        for (const [run, scrolls] of [
+          ['next', false],
+          ['below', true],
+        ] as const) {
+          await site.reset();
+          const leave = secure(`/leave/?run=${run}`);
+          const landing = `/landing?from=${run === 'next' ? 'leave' : 'below'}`;
+          const target = secure(landing);
+          expect((await visit(leave)).error, run).toBeNull();
+          const began = Date.now();
+          const next = await go(context, target, {
+            capture: DOM,
+            behavior: {
+              seed: SEEDS.other,
+              entry: { strategy: 'link', from_url: leave, from_open_page: true },
+            },
+          });
+          expect(next.error, run).toBeNull();
+          expect(next, run).toMatchObject({ status: 200, final_url: target, title: 'Landing' });
+          expect(next.behavior, run).toMatchObject({
+            seed: SEEDS.other,
+            clicks: 1,
+            keys: 0,
+            entry: {
+              strategy: 'link',
+              outcome: 'arrived',
+              from_url: leave,
+              referer: leave,
+              backs: 0,
+            },
+          });
+          // What the site received is what a reader's click sends.
+          const request = await lastRequest(landing);
+          expect(headerOf(request, 'referer'), run).toBe(leave);
+          expect(headerOf(request, 'sec-fetch-site'), run).toBe('same-origin');
+          expect(headerOf(request, 'sec-fetch-user'), run).toBe('?1');
+          expect(headerOf(request, 'sec-fetch-mode'), run).toBe('navigate');
+          expect(headerOf(request, 'sec-fetch-dest'), run).toBe('document');
+          // Nothing was loaded to start from: the page was asked for once,
+          // by the visit before.
+          expect(await askedFor('/leave/'), run).toEqual([`/leave/?run=${run}`]);
+          // What the page that was left saw of its visitor: the pointer on
+          // its way, a button going down and up on the link, a click no
+          // script made, and then the end. It was touched, and knows it.
+          const left = await leaveReport(run);
+          const order = left.events.map((event) => event.type);
+          expect(pressesOf(left), run).toEqual([
+            ['mousedown', true, run],
+            ['mouseup', true, run],
+            ['click', true, run],
+          ]);
+          expect(order.indexOf('click'), run).toBeLessThan(order.indexOf('pagehide'));
+          expect(order, run).not.toContain('untrusted-mousemove');
+          expect(order, run).not.toContain('keydown');
+          expect(left.activation, run).toBe(true);
+          expect(left.moves, run).toBeGreaterThan(10);
+          if (scrolls) {
+            // The link was below the window: the wheel brought it up.
+            expect(left.wheels, run).toBeGreaterThan(0);
+            expect(left.scrollY, run).toBeGreaterThan(200);
+            expect(next.behavior?.notches, run).toBeGreaterThan(0);
+          } else {
+            expect(left.wheels, run).toBe(0);
+            expect(next.behavior?.notches, run).toBe(0);
+          }
+          // The hand takes its time to get there, and the times of the
+          // result count from the click, not from the start of the request.
+          const travelled = (request?.at ?? Number.NaN) - began;
+          expect(travelled, run).toBeGreaterThan(300);
+          expect(next.timing.ttfb_ms ?? Number.NaN, run).toBeLessThan(travelled);
+          expect(next.timing.total_ms, run).toBeGreaterThanOrEqual(travelled);
+          measured('a click on the open page', {
+            link: run,
+            request_after_ms: travelled,
+            ttfb_ms: next.timing.ttfb_ms,
+            saw: order,
+            moves: left.moves,
+            wheels: left.wheels,
+            activation: left.activation,
+            click_to_pagehide_ms:
+              (left.events.find((event) => event.type === 'pagehide')?.t ?? Number.NaN) -
+              (left.events.find((event) => event.type === 'click')?.t ?? Number.NaN),
+          });
+        }
+      });
+    });
+
+    it('goes back in the tab to the page that holds the link and clicks there, at no cost to the site', async () => {
+      const articles = secure('/site/articles');
+      const from = (page: string, backs?: number) => ({
+        strategy: 'link' as const,
+        from_url: page,
+        from_open_page: true,
+        ...(backs === undefined ? {} : { max_backs: backs }),
+      });
+      await withContext('back-click', async (context) => {
+        await site.reset();
+        expect(
+          (await go(context, articles, { dwell_ms: 600, behavior: { seed: SEEDS.first } })).error,
+        ).toBeNull();
+        const first = await go(context, secure('/site/a'), {
+          behavior: { seed: SEEDS.first, entry: from(articles) },
+        });
+        expect(first.behavior?.entry).toMatchObject({
+          outcome: 'arrived',
+          referer: articles,
+          backs: 0,
+        });
+
+        // The next article is linked from the page before: one entry back.
+        const began = Date.now();
+        const second = await go(context, secure('/site/b'), {
+          capture: DOM,
+          behavior: { seed: SEEDS.other, entry: from(articles, 3) },
+        });
+        expect(second.error).toBeNull();
+        expect(second).toMatchObject({
+          status: 200,
+          final_url: secure('/site/b'),
+          title: 'The second article',
+        });
+        // Alt and the left arrow once, then one click.
+        expect(second.behavior).toMatchObject({
+          clicks: 1,
+          keys: 2,
+          entry: {
+            strategy: 'link',
+            outcome: 'arrived',
+            from_url: articles,
+            referer: articles,
+            backs: 1,
+          },
+        });
+        const request = await lastRequest('/site/b');
+        expect(headerOf(request, 'referer')).toBe(articles);
+        expect(headerOf(request, 'sec-fetch-site')).toBe('same-origin');
+        expect(headerOf(request, 'sec-fetch-user')).toBe('?1');
+        // The page that came back came out of the browser: the site was
+        // asked for it once, when it was first read.
+        expect(await askedFor('/site/')).toEqual(['/site/articles', '/site/a', '/site/b']);
+        measured('back, then a click', {
+          backs: 1,
+          request_after_ms: (request?.at ?? Number.NaN) - began,
+          ttfb_ms: second.timing.ttfb_ms,
+          asked: await askedFor('/site/'),
+        });
+
+        // Two entries back: on to the home page by the navigation, and
+        // from there the third article is linked two pages ago.
+        const home = await go(context, secure('/site/'), {
+          behavior: { seed: SEEDS.first, entry: from(secure('/site/b')) },
+        });
+        expect(home.behavior?.entry).toMatchObject({ outcome: 'arrived', backs: 0 });
+        const startedTwo = Date.now();
+        const third = await go(context, secure('/site/c'), {
+          behavior: { seed: SEEDS.other, entry: from(articles, 3) },
+        });
+        expect(third).toMatchObject({ status: 200, title: 'The third article', error: null });
+        expect(third.behavior).toMatchObject({
+          clicks: 1,
+          keys: 4,
+          entry: { outcome: 'arrived', referer: articles, backs: 2 },
+        });
+        expect(headerOf(await lastRequest('/site/c'), 'referer')).toBe(articles);
+        expect(await askedFor('/site/')).toEqual([
+          '/site/articles',
+          '/site/a',
+          '/site/b',
+          '/site/',
+          '/site/c',
+        ]);
+        measured('back, then a click', {
+          backs: 2,
+          request_after_ms: ((await lastRequest('/site/c'))?.at ?? Number.NaN) - startedTwo,
+          ttfb_ms: third.timing.ttfb_ms,
+        });
+
+        // No further back than it may: the listing is two entries back
+        // again, and one is allowed. The browser says so beforehand, so
+        // nothing moves, no key is pressed, and nothing is asked for.
+        const about = await go(context, secure('/site/about'), {
+          behavior: { seed: SEEDS.first, entry: from(secure('/site/c')) },
+        });
+        expect(about.behavior?.entry).toMatchObject({ outcome: 'arrived', backs: 0 });
+        const before = await askedFor('/site/');
+        const tooFar = await go(context, secure('/site/dup-1'), {
+          behavior: { seed: SEEDS.other, entry: from(articles, 1) },
+        });
+        expect(tooFar.error).toMatchObject({ code: 'aborted' });
+        expect(tooFar.behavior).toMatchObject({
+          clicks: 0,
+          keys: 0,
+          moves: 0,
+          entry: { outcome: 'link_not_found', referer: null, backs: null },
+        });
+        expect(await askedFor('/site/')).toEqual(before);
+        // The tab is where it was: a link of the page that was open is still a link of the open page.
+        const still = await go(context, secure('/site/private'), {
+          behavior: { seed: SEEDS.first, entry: from(secure('/site/about')) },
+        });
+        expect(still.behavior?.entry).toMatchObject({
+          outcome: 'arrived',
+          referer: secure('/site/about'),
+          backs: 0,
+        });
+      });
+
+      // A page of another origin: the browser does not name its entry to
+      // the page that is open, so the persona goes and looks, one entry at
+      // a time, and only because this tab has shown that page.
+      await withContext('back-click-origins', async (context) => {
+        await site.reset();
+        const elsewhere = `http://other.localhost:${site.port}/site/a`;
+        expect((await go(context, articles)).error).toBeNull();
+        expect((await go(context, elsewhere)).error).toBeNull();
+        const back = await go(context, secure('/site/b'), {
+          behavior: { seed: SEEDS.other, entry: from(articles, 2) },
+        });
+        expect(back).toMatchObject({ status: 200, title: 'The second article', error: null });
+        expect(back.behavior).toMatchObject({
+          clicks: 1,
+          keys: 2,
+          entry: { outcome: 'arrived', referer: articles, backs: 1 },
+        });
+        expect(await askedFor('/site/')).toEqual(['/site/articles', '/site/a', '/site/b']);
+      });
+    });
+
+    it('types the address when the tab does not hold the page, or the page no link, and only when it may', async () => {
+      const a = secure('/site/a');
+      const b = secure('/site/b');
+      const notes = secure('/site/a/notes');
+      const from = (page: string, more: Partial<Entry> = {}) => ({
+        strategy: 'link' as const,
+        from_url: page,
+        from_open_page: true,
+        ...more,
+      });
+      await withContext('open-missing', async (context) => {
+        await site.reset();
+        expect((await go(context, a)).error).toBeNull();
+
+        // The tab never showed the listing. Nothing is loaded, nothing
+        // moves, and the result is of no page.
+        const stopped = await go(context, b, {
+          capture: { ...DOM, links: true },
+          behavior: { seed: SEEDS.first, entry: from(secure('/site/articles'), { max_backs: 3 }) },
+        });
+        expect(stopped.error).toMatchObject({ code: 'aborted' });
+        expect(stopped.behavior).toMatchObject({
+          clicks: 0,
+          keys: 0,
+          moves: 0,
+          entry: {
+            strategy: 'link',
+            outcome: 'link_not_found',
+            from_url: secure('/site/articles'),
+            referer: null,
+            backs: null,
+          },
+        });
+        expect(stopped).toMatchObject({
+          status: null,
+          dom_html: null,
+          links: null,
+          links_truncated: false,
+        });
+        expect(await askedFor('/site/')).toEqual(['/site/a']);
+
+        // Told to, it types the address: on the wire a typed navigation like any other.
+        const typed = await go(context, b, {
+          behavior: {
+            seed: SEEDS.first,
+            entry: from(secure('/site/articles'), { max_backs: 3, fallback: 'none' }),
+          },
+        });
+        expect(typed).toMatchObject({ status: 200, error: null, final_url: b });
+        expect(typed.behavior).toMatchObject({
+          clicks: 0,
+          keys: 0,
+          entry: { outcome: 'fell_back', referer: null, backs: null },
+        });
+        const request = await lastRequest('/site/b');
+        expect(headerOf(request, 'referer')).toBeNull();
+        expect(headerOf(request, 'sec-fetch-site')).toBe('none');
+        expect(headerOf(request, 'sec-fetch-user')).toBe('?1');
+
+        // The page that links to the notes is one entry back, and nobody
+        // said the persona may go back: it does not.
+        const before = await askedFor('/site/');
+        const stayed = await go(context, notes, {
+          behavior: { seed: SEEDS.first, entry: from(a) },
+        });
+        expect(stayed.error).toMatchObject({ code: 'aborted' });
+        expect(stayed.behavior).toMatchObject({
+          clicks: 0,
+          keys: 0,
+          entry: { outcome: 'link_not_found', backs: null },
+        });
+        expect(await askedFor('/site/')).toEqual(before);
+        // Allowed one entry, it goes: the page was there all along.
+        const went = await go(context, notes, {
+          behavior: { seed: SEEDS.first, entry: from(a, { max_backs: 1 }) },
+        });
+        expect(went.behavior).toMatchObject({
+          clicks: 1,
+          keys: 2,
+          entry: { outcome: 'arrived', referer: a, backs: 1 },
+        });
+
+        // The open page is the page named, and holds no link to the target.
+        const tall = secure('/site/tall');
+        const linkless = await go(context, tall, {
+          behavior: { seed: SEEDS.first, entry: from(notes) },
+        });
+        expect(linkless.error).toMatchObject({ code: 'aborted' });
+        expect(linkless.behavior).toMatchObject({
+          clicks: 0,
+          keys: 0,
+          entry: { outcome: 'link_not_found', referer: null, backs: null },
+        });
+        expect(await askedFor('/site/tall')).toEqual([]);
+        const typedOn = await go(context, tall, {
+          behavior: { seed: SEEDS.first, entry: from(notes, { fallback: 'none' }) },
+        });
+        expect(typedOn).toMatchObject({ status: 200, error: null });
+        expect(typedOn.behavior?.entry).toMatchObject({ outcome: 'fell_back', backs: null });
+        expect(headerOf(await lastRequest('/site/tall'), 'referer')).toBeNull();
+        expect(headerOf(await lastRequest('/site/tall'), 'sec-fetch-site')).toBe('none');
+
+        // A page two entries back that holds no link to the target either:
+        // the persona goes back to it, finds none, and types.
+        const third = secure('/site/c');
+        const afterBack = await go(context, third, {
+          behavior: { seed: SEEDS.first, entry: from(a, { max_backs: 3, fallback: 'none' }) },
+        });
+        expect(afterBack).toMatchObject({ status: 200, error: null, title: 'The third article' });
+        expect(afterBack.behavior).toMatchObject({
+          clicks: 0,
+          keys: 4,
+          entry: { outcome: 'fell_back', referer: null, backs: null },
+        });
+        expect(headerOf(await lastRequest('/site/c'), 'referer')).toBeNull();
+        expect(headerOf(await lastRequest('/site/c'), 'sec-fetch-site')).toBe('none');
+        // Going back cost the site nothing: every page was asked for once.
+        expect(await askedFor('/site/')).toEqual([
+          '/site/a',
+          '/site/b',
+          '/site/a/notes',
+          '/site/tall',
+          '/site/c',
+        ]);
+      });
+    });
+
+    it('does not click what its reader could not, and calls no page what is none: links under something else, for another tab, answered by the page itself, to a file', async () => {
+      await withContext('open-odd', async (context) => {
+        const odd = (run: string) => secure(`/leave/odd?run=${run}`);
+        const attempt = async (
+          run: string,
+          landing: string,
+          fallback: 'stop' | 'none' = 'stop',
+        ) => {
+          await site.reset();
+          // A bare load: until the entry, the page sees no hand at all.
+          expect((await go(context, odd(run))).error, run).toBeNull();
+          const began = Date.now();
+          const result = await go(context, secure(landing), {
+            behavior: {
+              seed: SEEDS.first,
+              entry: { strategy: 'link', from_url: odd(run), from_open_page: true, fallback },
+            },
+          });
+          return { result, took: Date.now() - began };
+        };
+        /** Leaves the page, so that it says what it saw. */
+        const left = async (run: string) => {
+          await go(context, secure('/landing?from=elsewhere'));
+          return leaveReport(run);
+        };
+
+        // A link that runs over the end of a line is clicked on one of its
+        // lines, not in the rectangle around them, which holds other text.
+        const wrapped = await attempt('wrapped', '/landing?from=wrapped');
+        expect(wrapped.result.error).toBeNull();
+        expect(wrapped.result.behavior?.entry).toMatchObject({ outcome: 'arrived', backs: 0 });
+        expect(pressesOf(await leaveReport('wrapped'))).toEqual([
+          ['mousedown', true, 'wrapped'],
+          ['mouseup', true, 'wrapped'],
+          ['click', true, 'wrapped'],
+        ]);
+
+        // Something lies over the link. The hand goes there, sees that it
+        // would click something else, and does not click.
+        const covered = await attempt('covered', '/landing?from=covered');
+        expect(covered.result.error).toMatchObject({ code: 'aborted' });
+        expect(covered.result.behavior).toMatchObject({
+          clicks: 0,
+          entry: { outcome: 'link_not_found', referer: null, backs: null },
+        });
+        expect(covered.result.behavior?.moves).toBeGreaterThan(0);
+        expect(await askedFor('/landing?from=covered')).toEqual([]);
+        const underCover = await left('covered');
+        expect(pressesOf(underCover)).toEqual([]);
+        expect(underCover.moves).toBeGreaterThan(5);
+
+        // A link that opens another tab is none for this one: the hand
+        // stays where it is, and no tab is opened.
+        const otherTab = await attempt('tab', '/landing?from=tab');
+        expect(otherTab.result.error).toMatchObject({ code: 'aborted' });
+        expect(otherTab.result.behavior).toMatchObject({
+          clicks: 0,
+          moves: 0,
+          entry: { outcome: 'link_not_found' },
+        });
+        expect(await askedFor('/landing?from=tab')).toEqual([]);
+        expect(pressesOf(await left('tab'))).toEqual([]);
+
+        // A page that answers the click itself, with another address and
+        // no document. The click was a click; no page came of it, and the
+        // wait for one ends soon, not after the quarter minute a document
+        // is given.
+        const soft = await attempt('soft', '/landing?from=soft');
+        expect(soft.result.error).toMatchObject({ code: 'aborted' });
+        expect(soft.result.behavior).toMatchObject({
+          clicks: 1,
+          entry: { outcome: 'link_not_found', referer: null, backs: null },
+        });
+        expect(soft.took).toBeLessThan(10_000);
+        expect(await askedFor('/landing?from=soft')).toEqual([]);
+        expect(pressesOf(await left('soft')).at(-1)).toEqual(['click', true, 'soft']);
+        measured('a link the page answers itself', { took_ms: soft.took });
+
+        // With the fallback the address is typed: the site is asked for the
+        // document once.
+        const softTyped = await attempt('soft-typed', '/landing?from=soft', 'none');
+        expect(softTyped.result).toMatchObject({ status: 200, error: null, title: 'Landing' });
+        expect(softTyped.result.behavior?.entry).toMatchObject({
+          outcome: 'fell_back',
+          backs: null,
+        });
+        expect(await askedFor('/landing?from=soft')).toEqual(['/landing?from=soft']);
+        expect(headerOf(await lastRequest('/landing?from=soft'), 'sec-fetch-site')).toBe('none');
+
+        // A link the browser answers by saving a file. The click was a
+        // click and was answered, and the page that was open is still the
+        // page: the result is of no page, not of that one under the
+        // address of the file (which is what both drivers report). Nothing
+        // is typed after it either, whatever the fallback says.
+        const file = await attempt('file', '/download?from=odd', 'none');
+        expect(file.result.error).toMatchObject({ code: 'aborted' });
+        expect(file.result).toMatchObject({
+          status: null,
+          title: null,
+          final_url: secure('/download?from=odd'),
+        });
+        expect(file.result.behavior).toMatchObject({ clicks: 1, entry: null });
+        expect(await askedFor('/download')).toEqual(['/download?from=odd']);
+        expect(headerOf(await lastRequest('/download?from=odd'), 'referer')).toBe(odd('file'));
+        expect(pressesOf(await left('file')).at(-1)).toEqual(['click', true, 'file']);
+      });
+    });
+
+    it('lists the links of a document, with whether a reader can see each and whether it is furniture', async () => {
+      const LINKS: CaptureOptions = { ...NO_CAPTURE, links: true };
+      const link = (url: string, text: string, more: Partial<PageLink> = {}): PageLink => ({
+        url,
+        text,
+        rel: [],
+        visible: true,
+        furniture: false,
+        ...more,
+      });
+      await withContext('links', async (context) => {
+        const home = await go(context, named('/site/'), { capture: LINKS });
+        expect(home.error).toBeNull();
+        expect(home.links_truncated).toBe(false);
+        // In the order of the document, a link that occurs twice listed
+        // twice; no mail address and no script. The navigation is
+        // furniture; the five traps are in the document and before no
+        // reader's eyes: by an inline style, by the hidden attribute of
+        // what holds it, by a class of the style sheet, by a place off the
+        // canvas, by a holder that is transparent.
+        expect(home.links).toEqual([
+          link(named('/site/'), 'Home', { furniture: true }),
+          link(named('/site/articles'), 'Articles', { furniture: true }),
+          link(named('/site/about'), 'About', { furniture: true }),
+          link(named('/site/articles'), 'All articles'),
+          link(named('/site/a?utm_source=home&utm_medium=fixture'), 'This week: the first article'),
+          link(named('/site/about#team'), 'Who writes here'),
+          link(named('/site/tall'), 'The long read'),
+          link('http://offsite.example.test/hello', 'A friend of the house'),
+          link(named('/site/files/report.pdf'), 'The yearly report'),
+          link(named('/site/trap'), 'Do not follow', { visible: false }),
+          link(named('/site/trap?from=hidden'), 'Nor this', { visible: false }),
+          link(named('/site/trap?from=class'), 'Nor this one', { visible: false }),
+          link(named('/site/trap?from=offstage'), 'Nor this one', { visible: false }),
+          link(named('/site/trap?from=clear'), 'Nor this one', { visible: false }),
+        ]);
+
+        // Every way a link is in a document, and what it carries.
+        const detail = await go(context, named('/links'), { capture: LINKS });
+        const told = (detail.links ?? []).map((each) => [
+          each.url.replace(named('/links'), ''),
+          each.visible,
+          each.furniture,
+        ]);
+        expect(told).toEqual([
+          ['/header', true, true],
+          // The role decides as the element does, however it is written.
+          ['/role', true, true],
+          ['/plain', true, false],
+          ['/rel', true, false],
+          // An anchor around a block has no box of its own, and one a reader sees.
+          ['/block', true, false],
+          ['/image', true, false],
+          // No text and no box: nothing to see, nothing to click.
+          ['/empty', false, false],
+          ['/long', true, false],
+          ['/pair', true, false],
+          ['/blank', true, false],
+          // Hidden with what holds it; shown again inside what is hidden.
+          ['/veiled', false, false],
+          ['/unveiled', true, false],
+          // Transparent with what holds it, and by itself.
+          ['/faded', false, false],
+          ['/self-faded', false, false],
+          ['/collapsed', false, false],
+          // Above the canvas no reader scrolls; to the right the page does.
+          ['/above', false, false],
+          ['/far-right', true, false],
+          // A link to the page itself, and one to a place on it.
+          ['', true, false],
+          ['#top', true, false],
+          ['/drawn', true, false],
+          ['/aside', true, true],
+          ['/footer', true, true],
+        ]);
+        const detailOf = (name: string) =>
+          (detail.links ?? []).find((each) => each.url === named(`/links/${name}`));
+        // White space collapsed; the tokens of rel in lower case.
+        expect(detailOf('plain')).toMatchObject({ text: 'A plain link', rel: [] });
+        expect(detailOf('rel')).toMatchObject({
+          text: 'one with a rel',
+          rel: ['nofollow', 'noopener', 'ugc'],
+        });
+        expect(detailOf('image')?.text).toBe('');
+        // At most 200 characters, and never half of one.
+        expect(detailOf('long')?.text).toBe('word '.repeat(40).trim());
+        expect(detailOf('pair')?.text).toBe('x'.repeat(199));
+        expect(detailOf('drawn')?.text).toBe('Drawn');
+
+        // No more than the contract holds, and it says when there were more.
+        const full = await go(context, named('/links?many=4978'), { capture: LINKS });
+        expect(full.links).toHaveLength(5000);
+        expect(full.links_truncated).toBe(false);
+        expect(full.links?.at(-1)?.url).toBe(named('/links/n/4977'));
+        const over = await go(context, named('/links?many=4979'), { capture: LINKS });
+        expect(over.links).toHaveLength(5000);
+        expect(over.links_truncated).toBe(true);
+        expect(over.links?.at(-1)?.url).toBe(named('/links/n/4977'));
+
+        // Not asked for, not there; and of a page that did not arrive there are none.
+        const unasked = await go(context, named('/site/'), { capture: DOM });
+        expect(unasked).toMatchObject({ links: null, links_truncated: false });
+        const failed = await go(context, named('/slow?ms=4000'), {
+          capture: LINKS,
+          timeout_ms: 1000,
+        });
+        expect(failed.error).toMatchObject({ code: 'timeout' });
+        expect(failed).toMatchObject({ links: null, links_truncated: false });
+
+        // A capture of a flow lists them the same way.
+        const run = await flow(context, {
+          actions: [
+            { action: 'goto', url: named('/site/a') },
+            { action: 'extract', capture: LINKS },
+            { action: 'extract', capture: DOM },
+          ],
+        });
+        expect(run.steps.filter((step) => !step.ok)).toEqual([]);
+        expect(run.steps[1]?.capture?.links?.map((each) => each.url)).toEqual(
+          ['/site/', '/site/articles', '/site/about', '/site/a/notes'].map(named),
+        );
+        expect(run.steps[2]?.capture).toMatchObject({ links: null, links_truncated: false });
+        expect(run.final.result).toMatchObject({ links: null, links_truncated: false });
+      });
+    });
+
+    it('leaves a long page when its patience is used up, and no two of them after the same time', async () => {
+      await withContext('patience', async (context) => {
+        await site.reset();
+        const tall = named('/site/tall');
+        const visit = async (
+          url: string,
+          behavior: NonNullable<NavigateRequest['behavior']>,
+          change: Partial<NavigateRequest> = {},
+        ) => {
+          const began = Date.now();
+          const result = await go(context, url, {
+            dwell_ms: 2000,
+            timeout_ms: 6000,
+            ...change,
+            behavior: { seed: SEEDS.first, wander: false, ...behavior },
+          });
+          return { result, behavior: result.behavior, took: Date.now() - began };
+        };
+        /** How far the tall page says it was read, for each time it was left. */
+        const told = async () =>
+          (await site.reports())
+            .filter((report) => report['page'] === 'tall')
+            .map(
+              (report) =>
+                Number(report['scrollY']) /
+                (Number(report['scrollHeight']) - Number(report['innerHeight'])),
+            );
+
+        // A page of a dozen windows, and five seconds of patience for it.
+        // The budget of the request (six seconds) is for reaching the page:
+        // the visit takes the patience and the dwell, which is more.
+        const short = await visit(tall, { scroll_depth: 0.9, patience_ms: 5000 });
+        expect(short.result.error).toBeNull();
+        expect(short.behavior).toMatchObject({
+          patience_ms: 5000,
+          scroll_ended_by: 'patience',
+          dwell_ms: 2000,
+        });
+        expect(short.behavior?.notches).toBeGreaterThan(0);
+        expect(short.behavior?.scroll_reached).toBeGreaterThan(0.005);
+        expect(short.behavior?.scroll_reached).toBeLessThan(0.6);
+        expect(short.took).toBeGreaterThanOrEqual(5000 + 2000);
+        expect(short.took).toBeLessThan(5000 + 2000 + 4500);
+
+        // Another patience, another moment: the page is left four seconds later.
+        const long = await visit(tall, { scroll_depth: 0.9, patience_ms: 9000 });
+        expect(long.behavior).toMatchObject({
+          patience_ms: 9000,
+          scroll_ended_by: 'patience',
+          dwell_ms: 2000,
+        });
+        expect(long.took).toBeGreaterThanOrEqual(9000 + 2000);
+        expect(long.took).toBeLessThan(9000 + 2000 + 4500);
+        expect(long.took - short.took).toBeGreaterThan(2500);
+        expect(long.behavior?.notches).toBeGreaterThan(0);
+        expect(long.behavior?.scroll_reached).toBeGreaterThan(0.005);
+        expect(long.behavior?.scroll_reached).toBeLessThan(0.75);
+
+        // Without a patience the budget of the request ends the scrolling,
+        // as before 1.3.0, and the result says that it did.
+        const budgeted = await visit(
+          tall,
+          { scroll_depth: 0.9 },
+          { timeout_ms: 9000, dwell_ms: 1000 },
+        );
+        expect(budgeted.result.error).toBeNull();
+        expect(budgeted.behavior).toMatchObject({ patience_ms: null, scroll_ended_by: 'budget' });
+        expect(budgeted.behavior?.scroll_reached).toBeGreaterThan(0);
+        expect(budgeted.behavior?.scroll_reached).toBeLessThan(0.6);
+        expect(budgeted.took).toBeLessThan(9000);
+
+        // A page that is read to its depth long before the patience ends
+        // is left then: the patience is a bound, not a time to sit out.
+        const read = await visit(
+          named('/leave/?run=patient'),
+          { scroll_depth: 0.9, patience_ms: 60_000 },
+          { dwell_ms: 300, timeout_ms: 30_000 },
+        );
+        expect(read.behavior).toMatchObject({ patience_ms: 60_000, scroll_ended_by: 'depth' });
+        expect(read.behavior?.scroll_reached).toBeGreaterThan(0.8);
+        expect(read.took).toBeLessThan(40_000);
+        // A page that ends inside its window has nothing to scroll.
+        const whole = await visit(
+          named('/landing'),
+          { scroll_depth: 0.9, patience_ms: 20_000 },
+          { dwell_ms: 300 },
+        );
+        expect(whole.behavior).toMatchObject({
+          patience_ms: 20_000,
+          scroll_ended_by: 'page',
+          scroll_reached: 1,
+          notches: 0,
+        });
+        expect(whole.took).toBeLessThan(8000);
+        // And where no scrolling was asked for, none is reported.
+        const unscrolled = await visit(named('/landing'), { patience_ms: 4000 }, { dwell_ms: 300 });
+        expect(unscrolled.behavior).toMatchObject({
+          patience_ms: 4000,
+          scroll_reached: null,
+          scroll_ended_by: null,
+        });
+
+        // The long page itself says how far it was read when it was left,
+        // each of the three times: what the result reports is what it saw.
+        const reached = [short, long, budgeted].map((each) => each.behavior?.scroll_reached ?? -1);
+        const seen = await told();
+        expect(seen).toHaveLength(3);
+        for (const [index, share] of seen.entries()) {
+          expect(Math.abs(share - (reached[index] ?? -1)), `visit ${index}`).toBeLessThan(0.005);
+        }
+        measured('patience on a long page', {
+          took_ms: [short.took, long.took, budgeted.took],
+          reached,
+          page_said: seen,
+          ended_by: [short, long, budgeted].map((each) => each.behavior?.scroll_ended_by),
+          notches: [short, long, budgeted].map((each) => each.behavior?.notches),
+        });
+      });
+    });
+
     it('scrolls, dwells and wanders like a person when a navigation asks for it', async () => {
       const result = await withContext('behavior', async (context) => {
         const page = await go(context, named('/input/'), {
@@ -893,6 +1674,10 @@ export function defineParitySuite(subject: ParitySubject): void {
         seed: SEEDS.first,
         profile_id: motorProfile(persona.seed).id,
         typos: 0,
+        // A flow has no patience and no scrolling of a navigation to report.
+        patience_ms: null,
+        scroll_reached: null,
+        scroll_ended_by: null,
       });
       expect(run.final.behavior?.clicks).toBeGreaterThanOrEqual(4);
     });

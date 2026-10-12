@@ -388,7 +388,6 @@ describe('findBreakingChanges', () => {
     delete properties(step)['paced_ms'];
     step['required'] = (step['required'] as string[]).filter((name) => name !== 'paced_ms');
     before.info['version'] = '1.1.0';
-    expect(now.info['version']).toBe('1.2.0');
     expect(JSON.stringify(now)).toContain('"paced_ms"');
     expect(
       properties(named(now.components['schemas'] as Record<string, JsonObject>, 'FlowPace')),
@@ -404,6 +403,82 @@ describe('findBreakingChanges', () => {
       'POST /v1/contexts/{id}/flow request.behavior.pace: is no longer accepted',
       'POST /v1/contexts/{id}/flow response 200<step>.paced_ms: is no longer returned',
     ]);
+  });
+
+  it('takes what a crawl needs (1.3.0) as additions, and their removal as a break', () => {
+    const now = buildOpenApiDocument();
+    // The document as it was at 1.2.0: no patience, no click on the open
+    // page, no links, and nothing of them in an answer.
+    const before = structuredClone(now);
+    const schemas = before.components['schemas'] as Record<string, JsonObject>;
+    const without = (name: string, fields: string[]) => {
+      const schema = named(schemas, name);
+      schema['properties'] = Object.fromEntries(
+        Object.entries(properties(schema)).filter(([field]) => !fields.includes(field)),
+      );
+      if (Array.isArray(schema['required'])) {
+        schema['required'] = (schema['required'] as string[]).filter(
+          (field) => !fields.includes(field),
+        );
+      }
+    };
+    without('CaptureOptions', ['links']);
+    without('Entry', ['from_open_page', 'max_backs']);
+    without('BehaviorOptions', ['patience_ms']);
+    without('EntryReport', ['backs']);
+    without('BehaviorReport', ['patience_ms', 'scroll_reached', 'scroll_ended_by']);
+    without('PageResult', ['links', 'links_truncated']);
+    delete schemas['PageLink'];
+    delete schemas['ScrollEnd'];
+    before.info['version'] = '1.2.0';
+    expect(now.info['version']).toBe('1.3.0');
+    const current = now.components['schemas'] as Record<string, JsonObject>;
+    // Asked for with optional fields only, so that a caller of 1.2.0 is still served.
+    for (const [name, fields] of [
+      ['CaptureOptions', ['links']],
+      ['Entry', ['from_open_page', 'max_backs']],
+      ['BehaviorOptions', ['patience_ms']],
+    ] as const) {
+      const schema = named(current, name);
+      for (const field of fields) {
+        expect(properties(schema)[field], `${name}.${field}`).toBeDefined();
+        expect(schema['required'] ?? [], `${name}.${field}`).not.toContain(field);
+      }
+    }
+    expect(properties(named(current, 'BehaviorOptions'))['patience_ms']).toMatchObject({
+      type: 'integer',
+      minimum: 1000,
+      maximum: 600_000,
+    });
+    expect(properties(named(current, 'Entry'))['max_backs']).toMatchObject({
+      type: 'integer',
+      minimum: 0,
+      maximum: 10,
+    });
+    expect(named(current, 'ScrollEnd')['enum']).toEqual(['depth', 'patience', 'budget', 'page']);
+    expect(properties(named(current, 'PageResult'))['links']).toMatchObject({
+      anyOf: [{ type: 'array', maxItems: 5000 }, { type: 'null' }],
+    });
+    expect(checkBreaking(before, now)).toEqual({ changes: [], majorBumped: false, ok: true });
+    // The other way round it is what the check is for.
+    const lost = findBreakingChanges(now, before).map(
+      (change) => `${change.where}: ${change.what}`,
+    );
+    const navigate = 'POST /v1/contexts/{id}/navigate';
+    for (const line of [
+      `${navigate} request.capture.links: is no longer accepted`,
+      `${navigate} request.behavior.entry.from_open_page: is no longer accepted`,
+      `${navigate} request.behavior.entry.max_backs: is no longer accepted`,
+      `${navigate} request.behavior.patience_ms: is no longer accepted`,
+      `${navigate} response 200.behavior.entry.backs: is no longer returned`,
+      `${navigate} response 200.behavior.patience_ms: is no longer returned`,
+      `${navigate} response 200.behavior.scroll_reached: is no longer returned`,
+      `${navigate} response 200.behavior.scroll_ended_by: is no longer returned`,
+      `${navigate} response 200.links: is no longer returned`,
+      `${navigate} response 200.links_truncated: is no longer returned`,
+    ]) {
+      expect(lost, line).toContain(line);
+    }
   });
 
   it('compares a schema used twice only once per direction', () => {

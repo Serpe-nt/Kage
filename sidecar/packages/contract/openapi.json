@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Kage browser sidecar",
-    "version": "1.2.0",
+    "version": "1.3.0",
     "description": "Internal contract between Kage and its browser sidecars (spec §10.2). Generated from the zod schemas in sidecar/packages/contract; do not edit by hand. Regenerate with `just openapi`.",
     "license": {
       "name": "MIT OR Apache-2.0",
@@ -1070,6 +1070,12 @@
           "wander": {
             "description": "Move the mouse a little now and then while dwelling, as an idle hand does; default true.",
             "type": "boolean"
+          },
+          "patience_ms": {
+            "description": "How long the persona goes on scrolling this page at most. With it, `timeout_ms` of the request bounds reaching the page only (the navigation, its waits, the challenge wait): the scrolling ends at `scroll_depth` or when the patience is used up, whichever comes first, and the dwell follows in full. Whoever asks draws it anew for every page, so that no two long pages are left after the same time. Absent: the scrolling and the dwell share what `timeout_ms` leaves, as before 1.3.0, and every page too long for that is left at the same moment.",
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 600000
           }
         },
         "additionalProperties": false,
@@ -1152,6 +1158,43 @@
             "minimum": 0,
             "maximum": 9007199254740991,
             "description": "Idle movements while dwelling."
+          },
+          "patience_ms": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The patience the request gave the scrolling; null when it gave none."
+          },
+          "scroll_reached": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How far down the document the page was when the scrolling of a navigation ended, as a share of its scrollable height: 0 at the top, 1 at the end, and 1 for a document that ends inside its window; null when no scrolling was asked for, and for a flow."
+          },
+          "scroll_ended_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScrollEnd"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why that scrolling ended; null when no scrolling was asked for, and for a flow."
           }
         },
         "required": [
@@ -1166,7 +1209,10 @@
           "notches",
           "keys",
           "typos",
-          "wanders"
+          "wanders",
+          "patience_ms",
+          "scroll_reached",
+          "scroll_ended_by"
         ],
         "additionalProperties": false,
         "description": "What the behavior engine did during a request. With the persona and this seed the behavior can be replayed."
@@ -1226,6 +1272,10 @@
               }
             ],
             "description": "A PDF; null for none."
+          },
+          "links": {
+            "description": "The links of the document, each with whether a reader can see it and whether it stands in what the site repeats on every page. Read in the isolated world, like the document; the page cannot notice. Default false.",
+            "type": "boolean"
           }
         },
         "required": [
@@ -1575,6 +1625,16 @@
           "fallback": {
             "description": "What to do without a link to the target; default `stop`.",
             "$ref": "#/components/schemas/EntryFallback"
+          },
+          "from_open_page": {
+            "description": "Only with `link`. True: `from_url` is a page the persona has been reading, and nothing is loaded to start from. When it is the page that is open, its link to the target is clicked there. When it is one of the `max_backs` pages before it in the tab, the persona goes back to it with the keyboard first (the browser's own way back: no request when the browser kept the page) and clicks there. When the tab does not hold it, or it holds no such link, `fallback` decides; a link no reader could click there (one that is not rendered, lies under something else, or opens another tab) is none. The report says how many entries back the page was. Default false.",
+            "type": "boolean"
+          },
+          "max_backs": {
+            "description": "With `from_open_page`: how many entries of the tab the persona goes back at most to find `from_url`; default 0, the open page only.",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10
           }
         },
         "required": [
@@ -1626,13 +1686,27 @@
               "string",
               "null"
             ]
+          },
+          "backs": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "With `from_open_page`: how many entries the persona went back in the tab before it clicked, 0 when the page that was open held the link; null for every other entry, and when the target was not reached by a click."
           }
         },
         "required": [
           "strategy",
           "outcome",
           "from_url",
-          "referer"
+          "referer",
+          "backs"
         ],
         "additionalProperties": false,
         "description": "How a navigation arrived at its target."
@@ -1645,7 +1719,7 @@
           "link",
           "search_engine"
         ],
-        "description": "How the target is arrived at. `none` and `direct`: a typed navigation, with no `Referer`, `Sec-Fetch-Site: none` and `Sec-Fetch-User: ?1`; the two names are equal on the wire. `link`: `from_url` is loaded as a typed navigation, the link to the target is found on it and clicked. `search_engine`: `from_url` is a results page; the first result that leads to the target's host is clicked. A referer is never forged: it is whatever the browser sends for the click."
+        "description": "How the target is arrived at. `none` and `direct`: a typed navigation, with no `Referer`, `Sec-Fetch-Site: none` and `Sec-Fetch-User: ?1`; the two names are equal on the wire. `link`: the link to the target is found on `from_url` and clicked; `from_url` is loaded as a typed navigation first or, with `from_open_page`, looked for in the tab. `search_engine`: `from_url` is a results page; the first result that leads to the target's host is clicked. A referer is never forged: it is whatever the browser sends for the click."
       },
       "ErrorCode": {
         "type": "string",
@@ -2125,7 +2199,8 @@
                   "strategy": "link",
                   "outcome": "arrived",
                   "from_url": "https://www.example.org/",
-                  "referer": "https://www.example.org/"
+                  "referer": "https://www.example.org/",
+                  "backs": 1
                 },
                 "dwell_ms": 6840,
                 "moves": 3,
@@ -2135,8 +2210,32 @@
                 "notches": 9,
                 "keys": 0,
                 "typos": 0,
-                "wanders": 1
-              }
+                "wanders": 1,
+                "patience_ms": 41200,
+                "scroll_reached": 0.62,
+                "scroll_ended_by": "depth"
+              },
+              "links": [
+                {
+                  "url": "https://www.example.org/listing?page=3",
+                  "text": "Next page",
+                  "rel": [
+                    "next"
+                  ],
+                  "visible": true,
+                  "furniture": false
+                },
+                {
+                  "url": "https://www.example.org/do-not-follow",
+                  "text": "",
+                  "rel": [
+                    "nofollow"
+                  ],
+                  "visible": false,
+                  "furniture": false
+                }
+              ],
+              "links_truncated": false
             },
             "behavior": {
               "seed": "5f1c0e9a7b3d2468ace013579bdf02468ace13579bdf0246813579bdf02468ac",
@@ -2145,7 +2244,8 @@
                 "strategy": "link",
                 "outcome": "arrived",
                 "from_url": "https://www.example.org/",
-                "referer": "https://www.example.org/"
+                "referer": "https://www.example.org/",
+                "backs": 1
               },
               "dwell_ms": 6840,
               "moves": 3,
@@ -2155,7 +2255,10 @@
               "notches": 9,
               "keys": 0,
               "typos": 0,
-              "wanders": 1
+              "wanders": 1,
+              "patience_ms": 41200,
+              "scroll_reached": 0.62,
+              "scroll_ended_by": "depth"
             }
           },
           {
@@ -2201,7 +2304,9 @@
                 "message": "the navigation did not finish within 60000 ms",
                 "net_error": null
               },
-              "behavior": null
+              "behavior": null,
+              "links": null,
+              "links_truncated": false
             },
             "behavior": null
           },
@@ -2998,7 +3103,7 @@
             "$ref": "#/components/schemas/CaptureOptions"
           },
           "timeout_ms": {
-            "description": "Budget for the navigation and its waits; default 60000.",
+            "description": "Budget for the navigation and its waits; default 60000. Without `behavior.patience_ms` it also bounds the behavior on the page.",
             "type": "integer",
             "minimum": 1000,
             "maximum": 300000
@@ -3374,6 +3479,43 @@
           }
         ]
       },
+      "PageLink": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Where it leads: the absolute address the browser resolved."
+          },
+          "text": {
+            "type": "string",
+            "description": "The text of the link, white space collapsed, at most 200 characters."
+          },
+          "rel": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The tokens of its `rel` attribute, in lower case: the first 16, each cut at 64 characters."
+          },
+          "visible": {
+            "type": "boolean",
+            "description": "Whether a reader can see it: it is rendered (not `display: none`, not `visibility: hidden`, not fully transparent, nor inside anything that is), has a box, and that box lies on the canvas of the document. A link that is not is one nobody can click."
+          },
+          "furniture": {
+            "type": "boolean",
+            "description": "Whether it stands in what a site repeats on every page: inside `nav`, `header`, `footer` or `aside`, or an element with the ARIA role of one."
+          }
+        },
+        "required": [
+          "url",
+          "text",
+          "rel",
+          "visible",
+          "furniture"
+        ],
+        "additionalProperties": false,
+        "description": "One link of a document, as a reader meets it."
+      },
       "PageResult": {
         "type": "object",
         "properties": {
@@ -3530,6 +3672,25 @@
               }
             ],
             "description": "What the behavior engine did; null when the request asked for no behavior."
+          },
+          "links": {
+            "anyOf": [
+              {
+                "maxItems": 5000,
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PageLink"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The links of the document to `http` and `https` addresses, in document order, a link that occurs twice listed twice; an address longer than a navigation takes (8192 characters) is left out. Null when not requested or nothing was loaded."
+          },
+          "links_truncated": {
+            "type": "boolean",
+            "description": "Whether the document held more links than `links` lists."
           }
         },
         "required": [
@@ -3553,7 +3714,9 @@
           "pdf",
           "side_effects",
           "error",
-          "behavior"
+          "behavior",
+          "links",
+          "links_truncated"
         ],
         "additionalProperties": false,
         "description": "What one page load produced.",
@@ -3647,7 +3810,8 @@
                 "strategy": "link",
                 "outcome": "arrived",
                 "from_url": "https://www.example.org/",
-                "referer": "https://www.example.org/"
+                "referer": "https://www.example.org/",
+                "backs": 1
               },
               "dwell_ms": 6840,
               "moves": 3,
@@ -3657,8 +3821,32 @@
               "notches": 9,
               "keys": 0,
               "typos": 0,
-              "wanders": 1
-            }
+              "wanders": 1,
+              "patience_ms": 41200,
+              "scroll_reached": 0.62,
+              "scroll_ended_by": "depth"
+            },
+            "links": [
+              {
+                "url": "https://www.example.org/listing?page=3",
+                "text": "Next page",
+                "rel": [
+                  "next"
+                ],
+                "visible": true,
+                "furniture": false
+              },
+              {
+                "url": "https://www.example.org/do-not-follow",
+                "text": "",
+                "rel": [
+                  "nofollow"
+                ],
+                "visible": false,
+                "furniture": false
+              }
+            ],
+            "links_truncated": false
           },
           {
             "url": "https://example.org/listing?page=2",
@@ -3700,7 +3888,9 @@
               "message": "the navigation did not finish within 60000 ms",
               "net_error": null
             },
-            "behavior": null
+            "behavior": null,
+            "links": null,
+            "links_truncated": false
           }
         ]
       },
@@ -4132,6 +4322,16 @@
         ],
         "additionalProperties": false,
         "description": "Scroll the page."
+      },
+      "ScrollEnd": {
+        "type": "string",
+        "enum": [
+          "depth",
+          "patience",
+          "budget",
+          "page"
+        ],
+        "description": "Why the scrolling of a page ended. `depth`: the depth asked was reached. `patience`: `behavior.patience_ms` was used up first. `budget`: no patience was given and what `timeout_ms` left was used up first. `page`: the page does not scroll, or not any further. A page that grows for as long as it is scrolled ends after 400 turns of the wheel, reported as `patience` or `budget`."
       },
       "SelectAction": {
         "type": "object",

@@ -176,14 +176,7 @@ const SPA_PAGE = page(
 // A link clicked by a hand shows the pointer arriving, a button going down
 // and up and a trusted click; an address typed into the browser shows none
 // of that. The run in the query tells one load from the next.
-const LEAVE_PAGE = page(
-  'Leave',
-  `<h1 id="title">A page to leave</h1>
-<p>${'A line of text to rest the eyes on. '.repeat(12)}</p>
-<p><a id="next" href="/landing?from=leave">The next page</a></p>
-<p style="height:1400px">below</p>
-<p><a id="below" href="/landing?from=below">A link further down</a></p>
-<script>
+const LEAVE_RECORDER = `<script>
 (() => {
   const run = new URLSearchParams(location.search).get('run') || '';
   const events = [];
@@ -212,8 +205,76 @@ const LEAVE_PAGE = page(
   });
   document.body.setAttribute('data-ready', '1');
 })();
-</script>`,
+</script>`;
+
+const LEAVE_PAGE = page(
+  'Leave',
+  `<h1 id="title">A page to leave</h1>
+<p>${'A line of text to rest the eyes on. '.repeat(12)}</p>
+<p><a id="next" href="/landing?from=leave">The next page</a></p>
+<p style="height:1400px">below</p>
+<p><a id="below" href="/landing?from=below">A link further down</a></p>
+${LEAVE_RECORDER}`,
 );
+
+// The same recorder on a page whose links are not what a list of links
+// makes of them (follow-up F28): one that runs over the end of a line, so
+// that the rectangle around it holds text that is no part of it; one that
+// lies under something else; one that opens another tab; one the page
+// answers itself, by drawing another view under another address without
+// loading a document; and one the browser answers by saving a file.
+const LEAVE_ODD_PAGE = page(
+  'Leave, the odd links',
+  `<h1 id="title">A page with odd links</h1>
+<p id="narrow" style="width:15em;line-height:1.6">A few words stand before it on the line, and then <a id="wrapped" href="/landing?from=wrapped">a link whose words run on past the end of the line and into the next</a>, and more words after it.</p>
+<p style="position:relative;width:14em"><a id="covered" href="/landing?from=covered">A link under a cover</a><span id="cover" style="position:absolute;top:0;left:0;right:0;bottom:0;background:#fff"></span></p>
+<p><a id="other-tab" target="_blank" href="/landing?from=tab">A link that opens another tab</a></p>
+<p><a id="soft" href="/landing?from=soft">A link the page answers itself</a></p>
+<p><a id="file" href="/download?from=odd">A link to a file the browser saves</a></p>
+<p id="view">first view</p>
+<script>
+document.getElementById('soft').addEventListener('click', (event) => {
+  event.preventDefault();
+  history.pushState({ view: 2 }, '', '/leave/odd/second?view=2');
+  document.getElementById('view').textContent = 'second view';
+});
+</script>
+${LEAVE_RECORDER}`,
+);
+
+// A page for whoever lists the links of a document (spec §13): every way
+// a link can be in a document and not before a reader's eyes, and what a
+// link carries besides its address. `?many=N` adds N links more.
+const linksPage = (url) => {
+  const many = Math.min(20_000, Number(url.searchParams.get('many') ?? '0'));
+  const more = Array.from({ length: many }, (_unused, index) => `<a href="/links/n/${index}">${index}</a>`).join(' ');
+  return page(
+    'Links',
+    `<header id="top"><a id="in-header" href="/links/header">In the header</a></header>
+<div role="Navigation"><a id="in-role" href="/links/role">In what plays a navigation</a></div>
+<main>
+<p><a id="plain" href="/links/plain">  A   plain
+  link </a> and <a id="rel" rel="NoFollow  noopener UGC" href="/links/rel">one with a rel</a>.</p>
+<div><a id="block" href="/links/block"><div>A block inside a link</div></a></div>
+<p><a id="image" href="/links/image"><img alt="" src="/pixel.png" width="24" height="24"></a></p>
+<p><a id="empty" href="/links/empty"></a></p>
+<p><a id="long" href="/links/long">${'word '.repeat(60)}</a></p>
+<p><a id="pair" href="/links/pair">${'x'.repeat(199)}\u{1F600} tail</a></p>
+<p><a id="blank" target="_blank" href="/links/blank">In another tab</a></p>
+<p style="visibility:hidden"><a id="veiled" href="/links/veiled">Inside what is hidden</a> <a id="unveiled" style="visibility:visible" href="/links/unveiled">Shown again inside it</a></p>
+<div style="opacity:0"><p><a id="faded" href="/links/faded">Inside what is transparent</a></p></div>
+<p><a id="self-faded" style="opacity:0" href="/links/self-faded">Transparent itself</a></p>
+<p><a id="collapsed" style="display:inline-block;width:0;height:0;overflow:hidden" href="/links/collapsed">Without a box</a></p>
+<p><a id="above" style="position:absolute;top:-500px;left:0" href="/links/above">Above the page</a></p>
+<p><a id="far-right" style="position:absolute;left:3000px;top:40px" href="/links/far-right">Far to the right, where the page scrolls to</a></p>
+<p><a id="mail" href="mailto:nobody@fixture.invalid">A mail address</a> <a id="phone" href="tel:+10000000000">A number</a> <a id="named" name="place">No address at all</a> <a id="self" href="">This page</a> <a id="up" href="#top">Up</a></p>
+<p><svg width="120" height="24"><a id="drawn" href="/links/drawn"><text x="0" y="16">Drawn</text></a></svg></p>
+</main>
+<aside><a id="in-aside" href="/links/aside">In the margin</a></aside>
+<footer><a id="in-footer" href="/links/footer">In the footer</a></footer>
+<p id="more">${more}</p>`,
+  );
+};
 
 // The 1x1 transparent PNG.
 const PIXEL = Buffer.from(
@@ -338,6 +399,10 @@ const routes = {
 
   // The leave recorder (follow-up F28): how a page was left.
   '/leave/': (_req, res) => html(res, LEAVE_PAGE),
+  '/leave/odd': (_req, res) => html(res, LEAVE_ODD_PAGE),
+
+  // What a list of links has to tell apart (spec §13).
+  '/links': (_req, res, url) => html(res, linksPage(url)),
 
   // The activation recorder (spec §10.2): what a page is told of user
   // activation while an engine loads and reads it.
@@ -370,7 +435,11 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (!url.pathname.startsWith('/__kage/')) {
-    requests.push({ method: req.method, host: req.headers.host ?? null, path: url.pathname + url.search, headers: headerPairs(req) });
+    // `at` is when the request came, in milliseconds of the clock: a test
+    // that measures how long a persona took has the site's own word for it.
+    // `from` is the address the request came from: behind the proxies of
+    // a test's world, the proxy of the persona that asked.
+    requests.push({ method: req.method, host: req.headers.host ?? null, path: url.pathname + url.search, headers: headerPairs(req), at: Date.now(), from: req.socket.remoteAddress ?? null });
   }
   const route = routes[url.pathname];
   if (route === undefined) {

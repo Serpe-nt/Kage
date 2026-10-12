@@ -232,6 +232,49 @@ export function activationReportOf(domHtml: string | null): ActivationReport {
   return report;
 }
 
+/** One thing the fixture site's leave recorder noted (`/leave/` in `tests/fixtures/site/server.mjs`). */
+export interface LeaveEvent {
+  /** The event's type, or `untrusted-mousemove` for a movement no device made. */
+  readonly type: string;
+  /** Milliseconds since the page started. */
+  readonly t: number;
+  /** Of a button or a key: whether a device made it. */
+  readonly trusted?: boolean;
+  /** Of a button or a key: the id of the element it met. */
+  readonly target?: string | null;
+  readonly key?: string | null;
+  /** Of `pagehide`: whether the browser keeps the page. */
+  readonly persisted?: boolean;
+}
+
+/**
+ * What a page of the leave recorder reports when it goes away: what its
+ * visitor did on it, as far as a page can see (follow-up F28).
+ */
+export interface LeaveReport {
+  readonly page: 'leave';
+  /** The `run` of the page's query: one load of the page. */
+  readonly run: string;
+  /** Buttons, keys, focus and what a page is told when it is left, in order. */
+  readonly events: readonly LeaveEvent[];
+  /** Movements of the mouse the page saw. */
+  readonly moves: number;
+  readonly firstMove: number | null;
+  readonly lastMove: number | null;
+  /** Wheel events the page saw. */
+  readonly wheels: number;
+  readonly scrollY: number;
+  /** `navigator.userActivation.hasBeenActive` when the page went away. */
+  readonly activation: boolean | null;
+}
+
+/** The buttons a page of the leave recorder saw go down and up and click, in order: type, trusted, target. */
+export function pressesOf(report: LeaveReport): [string, boolean | undefined, string | null][] {
+  return report.events
+    .filter((event) => ['mousedown', 'mouseup', 'click'].includes(event.type))
+    .map((event) => [event.type, event.trusted, event.target ?? null]);
+}
+
 /** Whether a sample shows anything a browser only gives a page its user has touched. */
 export function touched(sample: ActivationSample): boolean {
   return (
