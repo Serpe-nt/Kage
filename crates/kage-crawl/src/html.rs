@@ -34,6 +34,9 @@ pub struct Link {
     pub rel: Vec<String>,
     /// Whether the markup hides the link from a reader.
     pub hidden: bool,
+    /// Whether it stands in what a site repeats on every page: inside
+    /// navigation, a header, a footer or a side bar.
+    pub furniture: bool,
 }
 
 /// What a crawl reads from a page.
@@ -148,7 +151,7 @@ impl Reader<'_> {
         if (name == "a" || name == "area")
             && let Some(href) = value.attr("href")
         {
-            self.link(element, href, here.hidden);
+            self.link(element, href, here);
         }
         for child in element.children() {
             match child.value() {
@@ -168,7 +171,7 @@ impl Reader<'_> {
         }
     }
 
-    fn link(&mut self, element: ElementRef<'_>, href: &str, hidden: bool) {
+    fn link(&mut self, element: ElementRef<'_>, href: &str, here: Inherited) {
         if self.page.links.len() >= MAX_LINKS {
             self.page.links_truncated = true;
             return;
@@ -194,7 +197,8 @@ impl Reader<'_> {
             url,
             text: text_of(element),
             rel,
-            hidden,
+            hidden: here.hidden,
+            furniture: here.furniture,
         });
     }
 }
@@ -429,10 +433,25 @@ mod tests {
             read.text
                 .ends_with("Related things A side bar Imprint Legal")
         );
-        // Links in the furniture are links all the same.
+        // Links in the furniture are links all the same, and say where
+        // they stand: a reader goes through the text before the menu.
         assert_eq!(
             hrefs(&read),
             ["https://shop.example/", "https://shop.example/list"]
+        );
+        assert!(read.links.iter().all(|link| link.furniture));
+        let mixed = page(
+            r#"<main><p><a href="/a">in the text</a></p>
+            <aside><a href="/b">beside it</a></aside></main>
+            <div role="contentinfo"><a href="/c">below it</a></div>"#,
+        );
+        assert_eq!(
+            mixed
+                .links
+                .iter()
+                .map(|link| link.furniture)
+                .collect::<Vec<_>>(),
+            [false, true, true]
         );
 
         // A page that is all furniture has no main text of its own: the

@@ -85,6 +85,9 @@ pub enum Left {
     Scope(Skip),
     /// It was read already, as the page another address redirected to.
     AlreadyRead,
+    /// The guard against requests into private networks refuses it (spec
+    /// §19): it is never asked for.
+    Guard,
 }
 
 impl Left {
@@ -93,6 +96,7 @@ impl Left {
         match self {
             Self::Scope(skip) => skip.as_str(),
             Self::AlreadyRead => "already_read",
+            Self::Guard => "ssrf_denied",
         }
     }
 
@@ -100,6 +104,9 @@ impl Left {
     pub fn parse(name: &str) -> Option<Self> {
         if name == "already_read" {
             return Some(Self::AlreadyRead);
+        }
+        if name == "ssrf_denied" {
+            return Some(Self::Guard);
         }
         Skip::ALL
             .into_iter()
@@ -159,6 +166,11 @@ pub struct Entry {
     pub near_duplicate_of: Option<(EntryId, u32)>,
     /// When the site's sitemap says it last changed.
     pub lastmod: Option<DateTime<Utc>>,
+    /// The links of this page that spell their target otherwise than the
+    /// crawl first met it (another campaign tag, another order of the
+    /// query): the entry, and the address as this page has it. A reader
+    /// who follows a link asks for the address the page gives.
+    pub spellings: Vec<(EntryId, Url)>,
 }
 
 /// The limits of a crawl.
@@ -223,6 +235,9 @@ pub struct Pick {
     pub entry: EntryId,
     /// How to get there.
     pub way: Way,
+    /// The address to ask for: as the page whose link is followed spells
+    /// it, else as the crawl first met it.
+    pub url: Url,
 }
 
 /// What reading a page told the crawl.
@@ -401,6 +416,7 @@ impl Frontier {
             duplicate_of: None,
             near_duplicate_of: None,
             lastmod: None,
+            spellings: Vec::new(),
         });
         self.by_key.insert(key, id);
         self.touch(id);
@@ -507,6 +523,12 @@ impl Frontier {
             };
             return Some(Pick {
                 entry: link,
+                url: holder
+                    .spellings
+                    .iter()
+                    .find(|(target, _)| *target == link)
+                    .map(|(_, spelled)| spelled.clone())
+                    .or_else(|| self.entries.get(link).map(|entry| entry.url.clone()))?,
                 way: Way::Link {
                     // The address the browser shows for that page.
                     from: holder
@@ -522,9 +544,10 @@ impl Frontier {
             .enumerate()
             .filter(|(_, entry)| entry.state == State::Waiting && entry.site == site)
             .min_by_key(|(id, entry)| (entry.depth, *id))
-            .map(|(id, _)| Pick {
+            .map(|(id, entry)| Pick {
                 entry: id,
                 way: Way::Typed,
+                url: entry.url.clone(),
             })
     }
 
@@ -550,6 +573,20 @@ impl Frontier {
             entry.state = State::Waiting;
             self.begun = self.begun.saturating_sub(1);
             self.touch(id);
+        }
+    }
+
+    /// Leaves out a page that waits because the guard refuses its address:
+    /// it is never asked for and does not count against `max_pages`.
+    /// Returns whether it was waiting.
+    pub fn refuse(&mut self, id: EntryId) -> bool {
+        match self.entries.get_mut(id) {
+            Some(entry) if entry.state == State::Waiting => {
+                entry.state = State::Skipped(Left::Guard);
+                self.touch(id);
+                true
+            }
+            _ => false,
         }
     }
 
@@ -718,6 +755,7 @@ impl Frontier {
         // What it links to: the links of the text first.
         let depth = self.entries[id].depth.saturating_add(1);
         let mut links: Vec<EntryId> = Vec::new();
+        let mut spellings: Vec<(EntryId, Url)> = Vec::new();
         let ordered = page
             .links
             .iter()
@@ -732,10 +770,17 @@ impl Frontier {
                 && !links.contains(&target)
             {
                 links.push(target);
+                // The first link to it is the one a reader meets: when it
+                // spells the address otherwise, that spelling is kept.
+                let spelled = request_url(&link.url);
+                if spelled != self.entries[target].url {
+                    spellings.push((target, spelled));
+                }
             }
         }
         recorded.links_found = u32::try_from(links.len()).unwrap_or(u32::MAX);
         self.entries[id].links = links;
+        self.entries[id].spellings = spellings;
         recorded
     }
 

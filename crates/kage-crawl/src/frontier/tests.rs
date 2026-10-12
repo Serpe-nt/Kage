@@ -1090,11 +1090,12 @@ fn names_of_sources_and_reasons_are_read_back() {
     for left in Skip::ALL
         .into_iter()
         .map(Left::Scope)
-        .chain([Left::AlreadyRead])
+        .chain([Left::AlreadyRead, Left::Guard])
     {
         assert_eq!(Left::parse(left.as_str()), Some(left));
     }
     assert_eq!(Left::AlreadyRead.as_str(), "already_read");
+    assert_eq!(Left::Guard.as_str(), "ssrf_denied");
     assert_eq!(Left::parse("because"), None);
 }
 
@@ -1116,4 +1117,114 @@ fn nothing_happens_to_an_entry_that_is_not_there() {
     assert_eq!(recorded, super::Recorded::default());
     assert_eq!(frontier.entry(99), None);
     assert_eq!(frontier.counts().discovered, 1);
+}
+
+#[test]
+fn an_address_the_guard_refuses_is_left_out_and_never_counted_as_asked() {
+    let mut frontier = frontier(5);
+    let seed = frontier.find(&url("/")).unwrap();
+    let site = frontier.entry(seed).unwrap().site.clone();
+    assert!(frontier.next(&site, &[]).is_some());
+    frontier.take_changed();
+
+    assert!(frontier.refuse(seed));
+
+    assert_eq!(
+        frontier.entry(seed).unwrap().state,
+        State::Skipped(Left::Guard)
+    );
+    assert_eq!(frontier.take_changed(), [seed]);
+    let counts = frontier.counts();
+    assert_eq!(counts.skipped["ssrf_denied"], 1);
+    assert_eq!((counts.begun, counts.waiting), (0, 0));
+    // Nobody reads it afterwards, and it is refused once.
+    assert_eq!(frontier.next(&site, &[]), None);
+    assert!(!frontier.begin(seed));
+    assert!(!frontier.refuse(seed));
+    assert!(!frontier.refuse(99));
+    assert_eq!(frontier.take_changed(), Vec::<usize>::new());
+}
+
+#[test]
+fn a_link_is_followed_under_the_address_its_page_gives() {
+    let mut frontier = frontier(5);
+    let site = frontier.entry(0).unwrap().site.clone();
+    let home = frontier.next(&site, &[]).unwrap();
+    assert_eq!((home.way.clone(), home.url.clone()), (Way::Typed, url("/")));
+    frontier.begin(home.entry);
+    // The home page names an article with a campaign tag and the listing;
+    // the listing names the same article without the tag, with its query
+    // in another order, and the home page with a fragment.
+    frontier.record_read(
+        home.entry,
+        &PageRead {
+            final_url: url("/"),
+            links: vec![link("/list"), link("/a?utm_source=home&b=2&a=1")],
+            links_truncated: false,
+            text: text_of("home"),
+        },
+    );
+    let list = frontier.next(&site, &[home.entry]).unwrap();
+    assert_eq!(list.url, url("/list"));
+    frontier.begin(list.entry);
+    frontier.record_read(
+        list.entry,
+        &PageRead {
+            final_url: url("/list"),
+            links: vec![link("/a?a=1&b=2"), link("/a?b=2&a=1#top"), link("/#top")],
+            links_truncated: false,
+            text: text_of("list"),
+        },
+    );
+
+    // One article, whatever the spelling; first met with the tag.
+    let article = frontier.find(&url("/a?a=1&b=2")).unwrap();
+    assert_eq!(
+        frontier.entry(article).unwrap().url,
+        url("/a?utm_source=home&b=2&a=1")
+    );
+    assert_eq!(frontier.counts().discovered, 3);
+    // From the listing it is asked for as the listing has it: a browser
+    // finds the link it is told to click, and the site sees the address
+    // its own page gave. The first of two links is the one a reader meets,
+    // and a fragment is never sent.
+    let pick = frontier.next(&site, &[home.entry, list.entry]).unwrap();
+    assert_eq!(pick.entry, article);
+    assert_eq!(
+        pick.way,
+        Way::Link {
+            from: url("/list"),
+            backs: 0
+        }
+    );
+    assert_eq!(pick.url, url("/a?a=1&b=2"));
+    // From the home page, one step back, it is the address with the tag.
+    let from_home = frontier.next(&site, &[list.entry, home.entry]).unwrap();
+    assert_eq!(from_home.url, url("/a?utm_source=home&b=2&a=1"));
+    // Typed, it is the address the crawl first met.
+    let typed = frontier.next(&site, &[]).unwrap();
+    assert_eq!(
+        (typed.way, typed.url),
+        (Way::Typed, url("/a?utm_source=home&b=2&a=1"))
+    );
+    // Only what is spelled otherwise is kept, each target once.
+    assert_eq!(
+        frontier.entry(list.entry).unwrap().spellings,
+        [(article, url("/a?a=1&b=2"))]
+    );
+    assert_eq!(frontier.entry(home.entry).unwrap().spellings, Vec::new());
+
+    // A frontier that is restored follows the same spellings.
+    let restored = Frontier::restore(
+        Scope::new(&request(5), &[url("/")]).unwrap(),
+        limits(),
+        NormalizeOptions::default(),
+        frontier.entries().to_vec(),
+        2,
+        0,
+    );
+    assert_eq!(
+        restored.next(&site, &[home.entry, list.entry]).unwrap().url,
+        url("/a?a=1&b=2")
+    );
 }
