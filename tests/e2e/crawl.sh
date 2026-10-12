@@ -19,7 +19,8 @@
 #     the site's reader, which never asks for one; the pages only a
 #     sitemap names are read;
 #   - the rest between two pages under a pacing profile that has one, by
-#     the site's own clock;
+#     the site's own clock, against the same pages read under the profile
+#     without one (a click takes its own second or so either way);
 #   - a crawl that is cancelled while it reads: the page under way is
 #     finished and not one more is asked for;
 #   - no page of any crawl asked for twice, and the series of `/metrics`.
@@ -251,11 +252,18 @@ echo "    $(value "${summary}" "d.sitemaps.map((s) => 'reader ' + s.engine + ': 
 echo "    $(value "${both}" "d.crawl.sitemaps.map((s) => { const created = Date.parse(s.created_at), end = Date.parse(s.finished_at); const maps = d.seen.filter((r) => r.path.includes('sitemap') && r.at >= created && r.at <= end); const ua = (r) => (r.headers.find(([name]) => name.toLowerCase() === 'user-agent') || [])[1] || ''; return 'reader ' + s.engine + ': the scout was ' + (/Firefox/.test(ua(maps[0])) ? 'Firefox' : 'Chrome') + ' at ' + maps[0].from; }).join('; ')")"
 
 echo "==> the rest between two pages, by the site's own clock"
-check "under a profile with a rest the next page is not asked for at once" "${both}" \
-    "(() => { const times = d.crawl.rested.times; const t0 = Date.parse(times[0].started_at); const at = (url) => d.seen.find((r) => r.at >= t0 - 50 && url.endsWith(r.path)).at; return times.slice(1).every((next, i) => at(next.url) - Date.parse(times[i].finished_at) >= 800); })()"
-rests="$(value "${both}" "(() => { const gaps = (times) => { const t0 = Date.parse(times[0].started_at); const t1 = Math.max(...times.map((t) => Date.parse(t.finished_at))); const at = (url) => { const u = new URL(url); const hit = d.seen.find((r) => r.at >= t0 - 50 && r.at <= t1 && r.host === u.host && r.path === u.pathname + u.search); return hit ? hit.at : null; }; return times.slice(1).map((next, i) => at(next.url) === null ? null : at(next.url) - Date.parse(times[i].finished_at)).filter((gap) => gap !== null); }; const rested = gaps(d.crawl.rested.times); const fast = d.crawl.rooms.flatMap((room) => gaps(room.times)); const stats = (all) => ({ pages: all.length, min_ms: Math.min(...all), median_ms: all.slice().sort((a, b) => a - b)[Math.floor(all.length / 2)], max_ms: Math.max(...all) }); return JSON.stringify({ e2e_rested: stats(rested), fast: stats(fast) }); })()")"
+rests="$(value "${both}" "(() => { const gaps = (times) => { const t0 = Date.parse(times[0].started_at); const t1 = Math.max(...times.map((t) => Date.parse(t.finished_at))); const at = (url) => { const u = new URL(url); const hit = d.seen.find((r) => r.at >= t0 - 50 && r.at <= t1 && r.host === u.host && r.path === u.pathname + u.search); return hit ? hit.at : null; }; return times.slice(1).map((next, i) => at(next.url) === null ? null : at(next.url) - Date.parse(times[i].finished_at)).filter((gap) => gap !== null); }; const rested = gaps(d.crawl.rested.times); const same = gaps(d.crawl.unrested.times); const fast = d.crawl.rooms.flatMap((room) => gaps(room.times)); const stats = (all) => ({ pages: all.length, min_ms: Math.min(...all), median_ms: all.slice().sort((a, b) => a - b)[Math.floor(all.length / 2)], max_ms: Math.max(...all) }); return JSON.stringify({ e2e_rested: stats(rested), fast_same_pages: stats(same), fast_reading_rooms: stats(fast) }); })()")"
 keep rest-between-pages.json "${rests}"
 echo "    from the end of a page to the request for the next: ${rests}"
+# The rest of `e2e_rested` is 1200 to 1800 ms and comes before the pointer
+# moves at all, so no next page may be asked for sooner than 1200 ms. A
+# click takes its own time under either profile (the pointer travels, the
+# link is pressed), which is why the same five clicks without the rest are
+# the measure of what the rest adds.
+check "under a profile with a rest no next page is asked for before the rest is over" "${rests}" \
+    "d.e2e_rested.pages === 5 && d.e2e_rested.min_ms >= 1200"
+check "the same pages under the profile without the rest are asked for most of a second sooner" "${rests}" \
+    "d.fast_same_pages.pages === 5 && d.e2e_rested.median_ms - d.fast_same_pages.median_ms >= 800"
 
 echo "==> the cancel stopped the crawl within one page"
 check "the cancel stopped the crawl within one page" "${summary}" \

@@ -362,8 +362,13 @@ async function withSitemaps(client: KageClient, site: string, engine: EngineName
   };
 }
 
-/** A chain of pages under a pacing profile that rests between two pages. */
-async function rested(client: KageClient, site: string) {
+/**
+ * A chain of pages, each reached by a click on the one before, under a
+ * pacing profile. Read once under a profile that rests between two pages
+ * and once under the same profile without the rest, the two say what the
+ * rest adds to what a click takes anyway.
+ */
+async function chain(client: KageClient, site: string, profile: string) {
   const { done, pages } = await run(
     client,
     {
@@ -373,7 +378,7 @@ async function rested(client: KageClient, site: string) {
       deny: ['/site/(articles|about)?$'],
       defaults: {
         ...READ,
-        pacing: { profile: 'e2e_rested' },
+        pacing: { profile },
         persona: { engines: ['chromium'] },
       },
     },
@@ -474,11 +479,12 @@ async function main() {
   }
   // Two personas of two engines read the same site, each on its own.
   assert.notEqual(rooms[0]?.persona, rooms[1]?.persona);
-  const rest = await rested(client, site);
+  const rested = await chain(client, site, 'e2e_rested');
+  const unrested = await chain(client, site, 'fast');
   const cancel = await cancelled(client, site);
 
   process.stdout.write(
-    `${JSON.stringify({ refusals, rooms, left, sitemaps, rested: rest, cancelled: cancel })}\n`,
+    `${JSON.stringify({ refusals, rooms, left, sitemaps, rested, unrested, cancelled: cancel })}\n`,
   );
 }
 
