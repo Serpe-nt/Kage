@@ -234,6 +234,9 @@ pub fn request_url(discovered: &Url) -> Url {
 }
 
 #[cfg(test)]
+mod properties;
+
+#[cfg(test)]
 mod tests {
     use url::Url;
 

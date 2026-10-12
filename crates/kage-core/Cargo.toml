@@ -32,4 +32,6 @@ url = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+# Property tests of URL normalization (spec §13).
+proptest = { workspace = true }
 tempfile = { workspace = true }
