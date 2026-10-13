@@ -109,7 +109,6 @@ regex = { version = "=1.13.1" }
 # --- Networking helpers ---------------------------------------------------
 url = { version = "=2.5.8" }
 ipnet = { version = "=2.12.2" }
-hickory-resolver = { version = "=0.26.3", default-features = false }
 # The Public Suffix List, compiled in. It decides what a "site" is: the
 # `Sec-Fetch-Site` value of a request and which `Domain` a cookie may name.
 # A newer list is a deliberate bump like any other pin.

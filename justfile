@@ -255,10 +255,12 @@ cov-node:
 # --- Supply chain ------------------------------------------------------------
 
 # cargo-deny, cargo-audit, pnpm audit, the license policies of the sidecar
-# and of the API test client, openssl-sys check.
+# and of the API test client, openssl-sys check, and that every pin of the
+# workspace is used by a crate.
 deny: audit
     cargo deny --all-features --locked check
     scripts/check-no-openssl.sh
+    node scripts/check-workspace-pins.mjs
     node scripts/check-npm-licenses.mjs
     node scripts/check-npm-licenses.mjs tests/api-client
 

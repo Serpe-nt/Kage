@@ -23,6 +23,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - A test holds the bound on how much of a `robots.txt` is ever read
     (`MAX_ROBOTS_BYTES`, 4 MiB) to its value: the one mutant that
     survived on M11's lines of `kage-core` (F50).
+  - The pin of `hickory-resolver`, which no crate ever used, is gone
+    (F37), and `just deny` now fails on a pin in
+    `[workspace.dependencies]` that no crate of the workspace uses
+    (`scripts/check-workspace-pins.mjs`; what is declared on purpose is
+    listed there with its reason).
 
 - M11, extraction, `robots.txt` and the response cache:
   - `include: ["extract"]` returns what a page says: `title`,
