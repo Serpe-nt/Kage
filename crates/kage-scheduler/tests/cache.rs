@@ -16,13 +16,14 @@ mod common;
 use std::time::Duration;
 
 use chrono::Duration as Span;
-use common::{DEFAULT_DOMAINS, World, blocked, document, file};
-use kage_core::domain::{DomainBreaker, RenderMode, SessionId};
+use common::{DEFAULT_DOMAINS, World, blocked, document, file, page_with};
+use kage_core::domain::{DomainBreaker, RenderMode, SessionId, Visit};
 use kage_core::ids::{ApiKeyId, RequestId};
 use kage_core::outcome::Outcome;
+use kage_core::policy::RefererStrategy;
 use kage_core::schedule::queue::Priority;
 use kage_extract::Options;
-use kage_scheduler::{CachePlan, FetchOrder, JobFetch};
+use kage_scheduler::{BehaviorApplied, CachePlan, FetchOrder, JobFetch};
 use tokio::sync::watch;
 use url::Url;
 
@@ -342,6 +343,133 @@ async fn a_crawl_fills_the_cache_and_a_session_stays_out_of_it() {
     assert_ne!(
         world.backend.cache_entry("k1").unwrap().result_id,
         own.result
+    );
+    world.shut_down().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_result_keeps_what_its_visit_was_like_and_an_answer_from_the_cache_shows_it() {
+    let mut world = World::new(3, BROWSER);
+    let url = "https://shop.example/a";
+    // A page whose browser logged two lines and whose screenshot fired a
+    // resize, read by a persona that was asked for the request's own
+    // scroll depth and dwell.
+    let visited = |url: &'static str| {
+        move |job: &kage_scheduler::AttemptJob| {
+            let mut output = page_with(
+                url,
+                &serde_json::json!({
+                    "dom_html": article(120),
+                    "console": [
+                        { "level": "error", "source": "network",
+                          "text": "Failed to load resource", "url": "https://shop.example/missing.js" },
+                        { "level": "warning", "source": "deprecation", "text": "x".repeat(5000), "url": null },
+                    ],
+                    "side_effects": ["resize"],
+                }),
+            );
+            output.behavior = Some(BehaviorApplied {
+                from_request: true,
+                request_ignored: false,
+                scroll_depth: Some(0.4),
+                dwell: Some(Duration::from_millis(2500)),
+                patience: Some(Duration::from_secs(30)),
+                referer_strategy: RefererStrategy::Direct,
+                seed: job.seed,
+            });
+            output
+        }
+    };
+    let asking = |console: bool| {
+        let mut order = cached(url, if console { "with-log" } else { "without" }, 10);
+        order.capture.console = console;
+        order
+    };
+
+    world.script.then_with(visited(url));
+    let first = world.pipeline.fetch(asking(true)).await.unwrap();
+    assert_eq!(first.outcome, Outcome::Ok);
+    // The report and the stored result say the same.
+    let stored = world.backend.records().pop().unwrap();
+    assert_eq!(stored.request_id, first.request);
+    assert_eq!(stored.visit, first.visit);
+    let pacing = first.visit.pacing.clone().unwrap();
+    assert_eq!(pacing.applied, "fast");
+    assert!(!pacing.request_ignored);
+    assert_eq!(Duration::from_millis(pacing.waited_ms), first.pacing.waited);
+    // What the persona was asked for, and what the browser says it did
+    // (the contract's example of a page: 6840 ms, 3 moves, 9 notches,
+    // scrolled to 0.62 and stopped at the depth).
+    let behavior = first.visit.behavior.clone().unwrap();
+    assert!(behavior.from_request && !behavior.request_ignored);
+    assert_eq!(behavior.scroll_depth, Some(0.4));
+    assert_eq!(behavior.scroll_reached, Some(0.62));
+    assert_eq!(behavior.scroll_ended_by.as_deref(), Some("depth"));
+    assert_eq!(behavior.patience_ms, Some(30_000));
+    assert_eq!(behavior.dwell_ms, Some(6840));
+    assert_eq!(behavior.referer_strategy, RefererStrategy::Direct);
+    assert_eq!((behavior.moves, behavior.notches), (Some(3), Some(9)));
+    // The browser's log, each text bounded, and what the capture fired.
+    let console = first.visit.console.clone().unwrap();
+    assert_eq!(console.len(), 2);
+    assert_eq!(console[0].level, "error");
+    assert_eq!(console[0].source, "network");
+    assert_eq!(console[0].text, "Failed to load resource");
+    assert_eq!(
+        console[0].url.as_deref(),
+        Some("https://shop.example/missing.js")
+    );
+    assert_eq!(console[1].text.len(), 4096);
+    assert_eq!(first.visit.side_effects, ["resize"]);
+
+    // Answered from the cache: the page is the one that visit got, so
+    // what the persona did there, the log and what the capture fired are
+    // that visit's; the pacing is the request's own, which waited for
+    // nobody.
+    tokio::time::sleep(Duration::from_mins(2)).await;
+    let second = world.pipeline.fetch(asking(true)).await.unwrap();
+    assert!(second.cached.is_some() && second.attempts.is_empty());
+    assert_eq!(world.script.seen().len(), 1);
+    assert_eq!(second.visit.behavior, first.visit.behavior);
+    assert_eq!(second.visit.console, first.visit.console);
+    assert_eq!(second.visit.side_effects, first.visit.side_effects);
+    let pacing = second.visit.pacing.clone().unwrap();
+    assert_eq!((pacing.applied.as_str(), pacing.waited_ms), ("fast", 0));
+    assert_eq!(world.backend.records().pop().unwrap().visit, second.visit);
+    assert_eq!(second.cached.as_deref().unwrap().visit, second.visit);
+
+    // A request that did not ask for the log keeps none, though the
+    // browser brought one back.
+    world.script.then_with(visited(url));
+    let quiet = world.pipeline.fetch(asking(false)).await.unwrap();
+    assert_eq!(quiet.visit.console, None);
+    assert!(quiet.visit.behavior.is_some());
+    assert_eq!(quiet.visit.side_effects, ["resize"]);
+
+    // A fetch that made no attempt keeps the pacing and nothing else.
+    let mut breaker = DomainBreaker::closed("closed.example", world.now());
+    for _ in 0..50 {
+        breaker.record_block(world.now(), &world.verdicts.breaker_rules("closed.example"));
+    }
+    world.backend.put_breaker(breaker);
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    let refused = world
+        .pipeline
+        .fetch(get("https://closed.example/a"))
+        .await
+        .unwrap();
+    assert_eq!(refused.outcome, Outcome::ProviderError);
+    assert_eq!(refused.attempts.len(), 0);
+    assert_eq!(
+        refused.visit,
+        Visit {
+            pacing: Some(kage_core::domain::PacingApplied {
+                applied: "fast".to_owned(),
+                request_ignored: false,
+                waited_ms: 0,
+            }),
+            ..Visit::default()
+        }
     );
     world.shut_down().await;
 }

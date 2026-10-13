@@ -235,7 +235,10 @@ answered with it: `cached: true`, `cached_at` (when the page was
 fetched), `attempts: []`. Nothing is asked of the site, no persona
 visits, the page does not count against the key's daily budget, and the
 answer comes while the site is paused or every persona sleeps. It still
-counts against the key's requests per minute.
+counts against the key's requests per minute. `behavior`, `console` and
+`side_effects` of such an answer are those of the visit that got the
+page (how far it was scrolled matters for what the document holds);
+`pacing` is the request's own, with `waited_ms: 0`.
 
 - **"The same" is strict.** Another `include` set, another `render`,
   other `wait`, `behavior`, `extract`, `screenshot`, `pdf`, `xhr` or

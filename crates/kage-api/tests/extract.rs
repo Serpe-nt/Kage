@@ -227,9 +227,17 @@ async fn a_fetch_returns_what_the_page_says_and_the_cache_answers_the_second_tim
         "final_url",
         "persona",
         "robots",
+        // The page is the one the first visit got: what the persona did
+        // on it and what a capture fired there are that visit's.
+        "behavior",
+        "side_effects",
     ] {
         assert_eq!(second[same], first[same], "{same}");
     }
+    assert!(first["behavior"]["dwell_ms"].is_u64(), "{first}");
+    // The pacing is the request's own: it waited for nobody.
+    assert_eq!(second["pacing"]["applied"], first["pacing"]["applied"]);
+    assert_eq!(second["pacing"]["waited_ms"], 0);
     assert!(
         second["dom_html"]
             .as_str()
@@ -250,6 +258,10 @@ async fn a_fetch_returns_what_the_page_says_and_the_cache_answers_the_second_tim
     assert_eq!(found.status, StatusCode::OK);
     assert_eq!(found.json()["cached"], true);
     assert_eq!(found.json()["extract"], first["extract"]);
+    // Read again, the answer from the cache says what it said.
+    for same in ["pacing", "behavior", "side_effects", "console"] {
+        assert_eq!(found.json()[same], second[same], "{same}");
+    }
     let artifact = api
         .get(
             &token,

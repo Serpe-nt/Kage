@@ -45,6 +45,7 @@
 mod cache;
 mod gate;
 mod read;
+mod visit;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -56,7 +57,7 @@ use kage_browser::contract::{CaptureOptions, PageResult, Wait};
 use kage_core::config::{Config, MAX_ATTEMPT_TIMEOUT};
 use kage_core::domain::{
     ArtifactRef, Attempt, CountryCode, Engine, FetchRecord, Header, Persona, PersonaSummary,
-    Render, RenderMode, RequestRecord, RobotsVerdict, SessionId, redact_set_cookie,
+    Render, RenderMode, RequestRecord, RobotsVerdict, SessionId, Visit, redact_set_cookie,
 };
 use kage_core::ids::{ApiKeyId, AttemptId, JobId, PersonaId, RequestId, ResultId};
 use kage_core::outcome::{Block, Outcome};
@@ -277,6 +278,10 @@ pub struct FetchReport {
     /// The stored result, when the fetch was answered from the response
     /// cache: nothing was asked of the site, and there are no attempts.
     pub cached: Option<Box<FetchRecord>>,
+    /// What the result keeps of the visit besides the page, as it was
+    /// stored: the pacing, what the persona did on the page, the
+    /// browser's log, what a capture fired.
+    pub visit: Visit,
 }
 
 /// A synchronous fetch that outlasted its wall time. It keeps running;
@@ -924,6 +929,9 @@ impl Pipeline {
             cached: false,
             cached_at: None,
             reason: output.reason.clone(),
+            // A capture point of a flow is no visit of its own: the flow's
+            // last result says what applied.
+            visit: Visit::default(),
             created_at: now,
         };
         self.backend().finish(&record).await?;
@@ -1336,6 +1344,14 @@ impl Pipeline {
         }
     }
 
+    /// Keeps what a request asked to keep of its last attempt.
+    async fn keep(&self, request: RequestId, keep: Keep, last: Option<&AttemptOutput>) -> Archived {
+        match (&self.archive, last) {
+            (Some(archive), Some(last)) => archive.keep(request, keep, last, self.now()).await,
+            _ => Archived::default(),
+        }
+    }
+
     /// Stores the result and reports.
     async fn conclude(
         &self,
@@ -1366,15 +1382,19 @@ impl Pipeline {
                 redact_set_cookie(&last.headers)
             }
         });
-        let archived = match (&self.archive, &last) {
-            (Some(archive), Some(last)) => {
-                archive
-                    .keep(course.request.id, course.order.keep, last, self.now())
-                    .await
-            }
-            _ => Archived::default(),
-        };
+        let archived = self
+            .keep(course.request.id, course.order.keep, last.as_ref())
+            .await;
         let reading = self.read(&course.order, outcome, last.as_ref()).await;
+        // What the answer says of the visit besides the page is stored
+        // with the result, so that the result read later says the same.
+        let pacing = PacingReport {
+            applied: course.pacing.applied,
+            request_ignored: course.pacing.request_ignored,
+            waited: course.waited,
+        };
+        let asked = course.order.capture.console;
+        let kept = visit::of(visit::pacing(&pacing), outcome, last.as_ref(), asked);
         let record = FetchRecord {
             id: ResultId::new(),
             request_id: course.request.id,
@@ -1400,6 +1420,7 @@ impl Pipeline {
             cached: false,
             cached_at: None,
             reason: reason.clone(),
+            visit: kept.clone(),
             created_at: self.now(),
         };
         self.backend().finish(&record).await?;
@@ -1432,16 +1453,13 @@ impl Pipeline {
             finished_at: record.created_at,
             persona,
             block,
-            pacing: PacingReport {
-                applied: course.pacing.applied,
-                request_ignored: course.pacing.request_ignored,
-                waited: course.waited,
-            },
+            pacing,
             escalated: course.progress.escalated(),
             extract: reading.extract,
             robots: course.robots,
             page: reading.page,
             cached: None,
+            visit: kept,
         })
     }
 }

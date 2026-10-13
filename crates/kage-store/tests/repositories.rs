@@ -9,13 +9,13 @@ use chrono::{Duration, NaiveDate};
 use common::{TestDb, now};
 use kage_core::alert::{Alert, AlertKind, AlertSeverity};
 use kage_core::domain::{
-    ArtifactKind, ArtifactRef, Attempt, AuditActor, AuditEvent, AuditOutcome, BreakerState,
-    ClaimedOs, CookieSameSite, CoolingReason, DomainBreaker, Engine, FetchRecord, FrontierEntry,
-    FrontierSource, FrontierState, GeoRecord, Header, HealthEvent, HealthFailure, HttpCookie, Job,
-    JobItem, JobItemState, JobKind, JobOrigin, JobState, Persona, PersonaDomainState, PersonaState,
-    PersonaSummary, ProxyHealth, ProxyProviderKind, ProxyReplacement, ProxyState, Render,
-    ReplaceReason, RobotsVerdict, Scope, SelftestRun, Session, SessionId, SessionLimits,
-    SubjectKind, Timing,
+    ArtifactKind, ArtifactRef, Attempt, AuditActor, AuditEvent, AuditOutcome, BehaviorDone,
+    BreakerState, ClaimedOs, ConsoleEntry, CookieSameSite, CoolingReason, DomainBreaker, Engine,
+    FetchRecord, FrontierEntry, FrontierSource, FrontierState, GeoRecord, Header, HealthEvent,
+    HealthFailure, HttpCookie, Job, JobItem, JobItemState, JobKind, JobOrigin, JobState,
+    PacingApplied, Persona, PersonaDomainState, PersonaState, PersonaSummary, ProxyHealth,
+    ProxyProviderKind, ProxyReplacement, ProxyState, Render, ReplaceReason, RobotsVerdict, Scope,
+    SelftestRun, Session, SessionId, SessionLimits, SubjectKind, Timing, Visit,
 };
 use kage_core::ids::{
     ApiKeyId, ArtifactId, AttemptId, AuditEventId, FrontierId, HealthEventId, JobId, JobItemId,
@@ -1120,6 +1120,7 @@ async fn a_keys_requests_are_counted_since_a_moment() {
             cached,
             cached_at: cached.then_some(at),
             reason: None,
+            visit: Visit::default(),
             created_at: request.created_at,
         };
         store.results().insert(&record).await.unwrap();
@@ -1324,6 +1325,33 @@ async fn requests_attempts_and_results_round_trip() {
         cached: false,
         cached_at: None,
         reason: None,
+        // What is kept of the visit besides the page (follow-up F36).
+        visit: Visit {
+            pacing: Some(PacingApplied {
+                applied: "human".to_owned(),
+                request_ignored: true,
+                waited_ms: 3900,
+            }),
+            behavior: Some(BehaviorDone {
+                from_request: true,
+                request_ignored: false,
+                scroll_depth: Some(0.8),
+                scroll_reached: Some(0.76),
+                scroll_ended_by: Some("patience".to_owned()),
+                patience_ms: Some(38_000),
+                dwell_ms: Some(6100),
+                referer_strategy: kage_core::policy::RefererStrategy::Direct,
+                moves: Some(87),
+                notches: Some(12),
+            }),
+            console: Some(vec![ConsoleEntry::bounded(
+                "error",
+                "network",
+                "Failed to load resource",
+                Some("https://example.org/missing.js"),
+            )]),
+            side_effects: vec!["resize".to_owned()],
+        },
         created_at: now(),
     };
     store.results().insert(&record).await.unwrap();
@@ -1331,6 +1359,16 @@ async fn requests_attempts_and_results_round_trip() {
         store.results().get(record.id).await.unwrap(),
         Some(record.clone())
     );
+    // The visit is one document of the row, with a member for each part.
+    let visit: serde_json::Value = sqlx::query_scalar("SELECT visit FROM results WHERE id = $1")
+        .bind(record.id.as_uuid())
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(visit["pacing"]["waited_ms"], 3900);
+    assert_eq!(visit["behavior"]["scroll_ended_by"], "patience");
+    assert_eq!(visit["console"][0]["source"], "network");
+    assert_eq!(visit["side_effects"], serde_json::json!(["resize"]));
     assert_eq!(
         store.results().get_by_request(request.id).await.unwrap(),
         Some(record.clone())
@@ -1378,13 +1416,32 @@ async fn requests_attempts_and_results_round_trip() {
         cached: true,
         cached_at: Some(now()),
         reason: Some("domain_paused".to_owned()),
+        visit: Visit::default(),
         created_at: now(),
     };
     store.results().insert(&blocked_record).await.unwrap();
     assert_eq!(
         store.results().get(blocked_record.id).await.unwrap(),
-        Some(blocked_record)
+        Some(blocked_record.clone())
     );
+    // A result that keeps nothing of a visit stores no document for it,
+    // and a row without one (every row older than the column) reads as a
+    // visit of which nothing is known.
+    let kept: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT visit FROM results WHERE id = $1")
+            .bind(blocked_record.id.as_uuid())
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+    assert_eq!(kept, None);
+    assert!(blocked_record.visit.is_empty());
+    // A document that is no visit is a row that does not parse.
+    sqlx::query("UPDATE results SET visit = '{\"side_effects\": 7}' WHERE id = $1")
+        .bind(blocked_record.id.as_uuid())
+        .execute(store.pool())
+        .await
+        .unwrap();
+    assert!(store.results().get(blocked_record.id).await.is_err());
 }
 
 fn job(api_key_id: ApiKeyId, idempotency_key: Option<&str>) -> Job {
@@ -2020,6 +2077,7 @@ async fn the_response_cache_serves_an_entry_until_it_expires() {
         cached: false,
         cached_at: None,
         reason: None,
+        visit: Visit::default(),
         created_at: fetched_at,
     };
     db.store.results().insert(&record).await.unwrap();

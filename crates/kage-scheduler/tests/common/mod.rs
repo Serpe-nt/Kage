@@ -222,6 +222,13 @@ fn page(url: &str, status: u16, content_type: &str, over: &serde_json::Value) ->
     )
 }
 
+/// The page of `url` as a browser brings it back, with `over` laid over
+/// the contract's example of a page: for a test that says what the
+/// browser logged or what a capture fired.
+pub fn page_with(url: &str, over: &serde_json::Value) -> AttemptOutput {
+    page(url, 200, "text/html; charset=utf-8", over)
+}
+
 /// The page of `url` with `html` as the document the browser had.
 pub fn document(url: &str, html: &str) -> AttemptOutput {
     page(

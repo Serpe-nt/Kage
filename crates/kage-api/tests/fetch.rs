@@ -190,9 +190,13 @@ async fn a_page_is_fetched_on_the_http_path_and_found_again_by_its_id() {
     ] {
         assert_eq!(stored[member], result[member], "{member}");
     }
-    // What only the synchronous answer has.
-    assert_eq!(stored["pacing"], Value::Null);
-    assert_eq!(stored["behavior"], Value::Null);
+    // What the answer said of the visit besides the page is stored with
+    // the result (follow-up F36): the pacing that applied and how long
+    // the request waited.
+    assert_eq!(stored["pacing"], result["pacing"]);
+    assert_eq!(stored["pacing"]["applied"], "fast");
+    assert_eq!(stored["behavior"], result["behavior"]);
+    assert_eq!(stored["side_effects"], result["side_effects"]);
 
     // Another key sees neither, as if they were not there; one with the
     // admin scope sees both, and the persona as it is.
@@ -390,7 +394,24 @@ async fn a_page_is_fetched_in_a_browser_with_what_was_asked_for() {
     assert_eq!(stored["dom_html"], result["dom_html"]);
     assert_eq!(stored["xhr"], result["xhr"]);
     assert_eq!(stored["artifacts"], result["artifacts"]);
-    assert_eq!(stored["console"], Value::Null);
+    // And what the answer said of the visit: the browser's log, what the
+    // screenshot fired in the page, what the persona did there and the
+    // pacing that applied (follow-up F36).
+    assert_eq!(stored["console"], result["console"]);
+    assert_eq!(stored["console"][0]["text"], "Failed to load resource");
+    assert_eq!(stored["side_effects"], json!(["resize"]));
+    assert_eq!(stored["behavior"], result["behavior"]);
+    assert!(stored["behavior"]["dwell_ms"].is_u64(), "{stored}");
+    assert_eq!(stored["pacing"], result["pacing"]);
+    // The seed of what the persona did is for a key with the admin scope,
+    // in the stored result as in the answer.
+    assert_eq!(stored["behavior"]["seed"], Value::Null);
+    let seen_by_admin = api.get(&admin, &format!("/v1/results/{id}")).await.json();
+    assert_eq!(
+        seen_by_admin["behavior"]["seed"],
+        seen_by_admin["attempts"][0]["seed"]
+    );
+    assert!(seen_by_admin["behavior"]["seed"].is_string());
 
     // Without `include`, a browser render returns the document and the
     // headers, keeps the document, and behaves as the policy says. A key

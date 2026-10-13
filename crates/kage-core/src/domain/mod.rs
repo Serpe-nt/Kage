@@ -22,9 +22,10 @@ pub use access::{ApiKey, AuditActor, AuditEvent, AuditOutcome, KeyLimits, Scope}
 pub use bandwidth::{BandwidthUsage, IDLE_DOMAIN, hour_of};
 pub use cookie::{CookieSameSite, HttpCookie};
 pub use fetch::{
-    Artifact, ArtifactEncoding, ArtifactKind, ArtifactRef, Attempt, ContentHash, FetchRecord,
-    Header, InvalidContentHash, PersonaSummary, REDACTED_COOKIE, RequestRecord, RobotsVerdict,
-    Timing, redact_set_cookie,
+    Artifact, ArtifactEncoding, ArtifactKind, ArtifactRef, Attempt, BehaviorDone, ConsoleEntry,
+    ContentHash, FetchRecord, Header, InvalidContentHash, MAX_CONSOLE_ENTRIES,
+    MAX_CONSOLE_TEXT_BYTES, PacingApplied, PersonaSummary, REDACTED_COOKIE, RequestRecord,
+    RobotsVerdict, Timing, Visit, redact_set_cookie,
 };
 pub use health::{BreakerState, DomainBreaker, HealthEvent, SelftestRun, SubjectKind};
 pub use job::{

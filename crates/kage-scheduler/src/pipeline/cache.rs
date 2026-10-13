@@ -16,7 +16,7 @@ use kage_core::ids::{ApiKeyId, ArtifactId, ResultId};
 use kage_store::repo::ResponseCacheEntry;
 use serde_json::Value;
 
-use super::{Course, FetchOrder, FetchReport, PacingReport, Pipeline};
+use super::{Course, FetchOrder, FetchReport, PacingReport, Pipeline, visit};
 use crate::SchedulerError;
 use crate::backend::CacheHit;
 use crate::metrics;
@@ -156,6 +156,12 @@ impl Pipeline {
         };
         let now = self.now();
         let stored = hit.record;
+        // The request's own pacing: it waited for nobody.
+        let pacing = PacingReport {
+            applied: course.pacing.applied.clone(),
+            request_ignored: course.pacing.request_ignored,
+            waited: Duration::ZERO,
+        };
         let record = FetchRecord {
             id: ResultId::new(),
             request_id: course.request.id,
@@ -175,6 +181,7 @@ impl Pipeline {
             cached: true,
             cached_at: Some(hit.entry.cached_at),
             reason: None,
+            visit: visit::of_cached(stored.visit, visit::pacing(&pacing)),
             created_at: now,
         };
         self.backend().finish(&record).await?;
@@ -199,15 +206,12 @@ impl Pipeline {
             finished_at: now,
             persona: record.persona.clone(),
             block: None,
-            pacing: PacingReport {
-                applied: course.pacing.applied.clone(),
-                request_ignored: course.pacing.request_ignored,
-                waited: Duration::ZERO,
-            },
+            pacing,
             escalated: false,
             extract: record.extract.clone(),
             robots: record.robots.clone(),
             page: None,
+            visit: record.visit.clone(),
             cached: Some(Box::new(record)),
         }))
     }
@@ -251,7 +255,7 @@ mod tests {
     use std::time::Duration;
 
     use chrono::{DateTime, TimeZone, Utc};
-    use kage_core::domain::FetchRecord;
+    use kage_core::domain::{FetchRecord, Visit};
     use kage_core::ids::{RequestId, ResultId};
     use kage_core::outcome::Outcome;
 
@@ -293,6 +297,7 @@ mod tests {
             cached: false,
             cached_at: None,
             reason: None,
+            visit: Visit::default(),
             created_at: at(),
         };
         for (outcome, status) in [

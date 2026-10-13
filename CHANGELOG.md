@@ -23,6 +23,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - A test holds the bound on how much of a `robots.txt` is ever read
     (`MAX_ROBOTS_BYTES`, 4 MiB) to its value: the one mutant that
     survived on M11's lines of `kage-core` (F50).
+  - A stored result keeps what its answer said of the visit besides the
+    page: `pacing`, `behavior`, `console` and `side_effects` are the same
+    in the answer of `POST /v1/fetch`, in `GET /v1/results/{id}` and in
+    an item's result of a job, where they were null before (F36;
+    migration 0016, `results.visit`). An answer from the response cache
+    shows what the persona did on the page, the browser's log and what a
+    capture fired as the visit that got the page had them, and its own
+    pacing with `waited_ms: 0`. A result keeps at most the first 1000
+    entries of a browser's log, each text cut at 4096 bytes.
   - The pin of `hickory-resolver`, which no crate ever used, is gone
     (F37), and `just deny` now fails on a pin in
     `[workspace.dependencies]` that no crate of the workspace uses

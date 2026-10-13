@@ -13,7 +13,7 @@ use chrono::{DateTime, Duration, Utc};
 use common::{TestDb, now};
 use kage_core::domain::{
     ArtifactKind, DeliveryState, FetchRecord, Job, JobItem, JobItemState, JobKind, JobOrigin,
-    JobState, Scope, WebhookAttempt, WebhookDelivery, WebhookEvent,
+    JobState, Scope, Visit, WebhookAttempt, WebhookDelivery, WebhookEvent,
 };
 use kage_core::ids::{ApiKeyId, ArtifactId, JobId, JobItemId, ResultId, WebhookDeliveryId};
 use kage_core::outcome::Outcome;
@@ -821,6 +821,7 @@ async fn fetched(
         cached: false,
         cached_at: None,
         reason: None,
+        visit: Visit::default(),
         created_at: at,
     };
     store.results().insert(&record).await.unwrap();
