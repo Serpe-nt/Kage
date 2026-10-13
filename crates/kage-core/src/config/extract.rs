@@ -209,6 +209,20 @@ mod tests {
     }
 
     #[test]
+    fn no_configuration_reads_more_than_four_mebibytes_of_a_robots_txt() {
+        // The number itself: every other test names the constant, and a
+        // constant that is wrong moves with them.
+        assert_eq!(MAX_ROBOTS_BYTES, 4_194_304);
+        assert_eq!(
+            check(|sections| sections.1.max_bytes = 4_194_304, 14),
+            Ok(())
+        );
+        assert!(check(|sections| sections.1.max_bytes = 4_194_305, 14).is_err());
+        // What is read unless said is an eighth of it.
+        assert_eq!(RobotsConfig::default().max_bytes * 8, MAX_ROBOTS_BYTES);
+    }
+
+    #[test]
     fn every_key_out_of_range_is_named() {
         type Change = fn(&mut Sections);
         let cases: [(Change, &str); 13] = [

@@ -8,6 +8,22 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- M12, the follow-ups carried into the release:
+  - `kage fetch` takes `--extract`, `--cache-ttl <duration>` and
+    `--robots policy|report|enforce|ignore` and shows what they return:
+    what the site's `robots.txt` says of the address, whether the answer
+    came from the response cache and when its page was fetched, and the
+    title, the words and the links of what was extracted (`robots`,
+    `cached`, `cached_at`, `cache_ttl_s` and `extract` with `--json`).
+    A wish the site's policy does not allow is refused before anything
+    starts, as the API refuses it. The command line's cache entries are
+    its own, and a fetch that may fill the cache keeps its document, so
+    that `--output` writes the stored page for an answer from the cache
+    (F50).
+  - A test holds the bound on how much of a `robots.txt` is ever read
+    (`MAX_ROBOTS_BYTES`, 4 MiB) to its value: the one mutant that
+    survived on M11's lines of `kage-core` (F50).
+
 - M11, extraction, `robots.txt` and the response cache:
   - `include: ["extract"]` returns what a page says: `title`,
     `description`, `canonical`, `lang`, `published_at`, `modified_at`,

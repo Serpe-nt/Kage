@@ -28,6 +28,27 @@ other, and the command is in the audit log.
 | `--retries N` | Retries after the first attempt, instead of the policy's. |
 | `--pacing <profile>` | A pacing profile instead of the policy's, unless the policy locks pacing. |
 | `--output FILE` | Write the document there. |
+| `--extract` | Also read what the page says from the document that was fetched (`docs/runbooks/api.md`, "What a page says"): the title, the words of the main content and the links in a sentence, everything under `extract` with `--json`. Nothing is extracted from a page that was not fetched or from a response that is no HTML document. |
+| `--cache-ttl 10m` | For how long the result may be answered from the response cache; `0s` is never; left out, the site's policy decides (`cache.ttl`). Longer than results of the site are served for is refused, not cut. |
+| `--robots policy\|report\|enforce\|ignore` | What to do about the site's `robots.txt`. More care than the policy takes may be asked for, never less: `enforce` where the policy never asks for the file, and `report` or `ignore` where it enforces it, are refused before anything starts. |
+
+What the three return is shown like everything else. `robots.txt:` says
+what the site's file says of the address (`allowed` or `disallowed`, the
+rule that decided, a `Crawl-delay`), or `not asked for` when the command
+named `--robots` and the policy leaves the file alone. `cache:` says
+whether the answer came from the cache and when its page was fetched, or
+that the page was fetched now and is kept. `extract:` is the sentence
+above. With `--json` they are `robots`, `cached`, `cached_at`,
+`cache_ttl_s` and `extract`.
+
+The cache of the command line is its own: no API key is answered from an
+entry the command wrote, and the command is answered from no key's. A
+fetch that may fill it keeps its document in the artifact store (the DOM
+of a browser attempt, the body of an http one), because an answer from
+the cache can only return what was stored: `--output` then writes the
+stored document, and the answer has no attempt and relayed nothing.
+`--extract`, `--render`, `--persona` and `--engine` are part of an entry's
+key; the timeout, the retries, the pacing and `--robots` are not.
 
 The command shares the store with the server, so cooldowns, daily caps,
 breakers, the leak flag and the bandwidth budget hold for it. It does not
