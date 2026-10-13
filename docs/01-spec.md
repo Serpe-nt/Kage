@@ -1978,6 +1978,29 @@ that works the job: what waits is cancelled, an item that waits for its
 persona is taken out of the scheduler's queue, and an attempt that is
 under way is finished, never cut.
 
+**A server that stops (F39).** A page that is being read when the server
+is told to stop is a request the site has seen. Cut without a word, the
+record says nothing of it, the request is taken up again after the
+restart and the site sees the page twice: measured live in M9 for a fetch
+that was carried on, and true of every item of a job whose page took
+longer than the 20 s the worker then waited. So, from the moment of the
+signal: the scheduler grants nothing more (what waits for a persona is
+told `shutting_down`, a job's item is given back with its time), and the
+server waits for the attempts that are under way, whoever they are for
+(an item, a page of a crawl, a fetch that is carried on, a caller that
+still waits), for at most `jobs.wind_down` (150 s: a visit under `human`
+takes about 130 s at the 95th percentile). Each is finished and written
+down like any attempt, and its request ends or goes on as it would have.
+What is still under way when the wait is over is cut and written down as
+cut: an attempt with the outcome `provider_error` and the reason
+`interrupted`, which cools nobody, counts on no breaker and counts toward
+the request's retries. A job's request stays open and is taken up again
+after the restart, with that attempt in its record; a fetch whose caller
+still waited ends with it. `jobs.wind_down: 0s` waits for nothing. The
+container must be given the time: `stop_grace_period` of the `kage`
+service is 200 s (§22). A process that is killed writes nothing; its
+pages are fetched again when the lease has run out.
+
 **Webhooks.** `webhook: { url, secret, progress_every? }` on a job. The
 receiver must be an origin the operator listed in
 `webhooks.allowed_origins` (none by default: no job may have a webhook
@@ -2077,7 +2100,9 @@ proxy probe), `shutdown_grace` (30 s), `max_connections` (1024),
 `allow_ip_targets`, `resolve_on_host` and `expose_set_cookie`, all false.
 `jobs` holds `max_items` (10 000), `max_running` (8), `max_items_in_flight`
 (24), `max_age` (7 d), `retention_days` (14), `lease` (1 m),
-`poll_interval` (2 s) and `idempotency_ttl` (1 d). `webhooks` holds
+`poll_interval` (2 s), `idempotency_ttl` (1 d) and `wind_down` (150 s, at
+most 15 m: how long a server that stops waits for the pages that are
+being read, §16.6). `webhooks` holds
 `allowed_origins` and `private_origins` (both empty: no job may have a
 webhook; a private origin must also be an allowed one), `timeout` (10 s),
 `max_retries` (5), `first_retry` (30 s), `backoff_factor` (4), `jitter`
@@ -2387,7 +2412,10 @@ generated, images pushed with digests recorded in `deploy/compose.yaml`.
   same browsers on a CI runner or a developer machine from the same lines.
 - `deploy/compose.yaml`: services, healthchecks, resource limits,
   `shm_size`, read-only FS, secrets, volumes, digests. The sidecars reach
-  kage's forwarder at `http://kage:8899` on the compose network.
+  kage's forwarder at `http://kage:8899` on the compose network. `kage`
+  has a `stop_grace_period` of 200 s: `jobs.wind_down` (150 s, §16.6) and
+  50 s for the rest of a stop, because Docker kills a container 10 s
+  after it was told to stop unless the file says otherwise.
 - Runbooks in `docs/runbooks/`: first start, adding proxies, replacing an
   IP, rotating keys, upgrading an engine, reading a block report.
 - Local dev: `just dev` brings up Postgres and sidecars in compose and runs

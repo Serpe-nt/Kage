@@ -26,7 +26,7 @@ use kage_api::{DirectTransport, WebhookSender};
 use kage_core::config::Config;
 use kage_core::domain::{KeyLimits, Scope};
 use kage_core::duration::HumanDuration;
-use kage_core::ids::{RequestId, WebhookDeliveryId};
+use kage_core::ids::{JobId, RequestId, WebhookDeliveryId};
 use kage_proxy::{Clock, CredentialCipher, ManualClock};
 use serde_json::{Value, json};
 use sha2::Sha256;
@@ -1193,6 +1193,71 @@ async fn a_fetch_that_overflowed_is_a_job_and_its_result_is_there_after_a_restar
     assert_eq!(items[0]["state"], "succeeded");
     assert_eq!(items[0]["request_id"], request);
     work.stop().await;
+    api.shut_down().await;
+}
+
+#[tokio::test]
+async fn a_carried_fetch_that_is_being_read_when_the_server_stops_is_finished_and_asked_for_once() {
+    let rules = "defaults: { render: http, pacing: fast, active_hours: ignore }\ndomains: {}\n";
+    let mut api = Api::start_with(2, 149, rules, |config| {
+        quick(config);
+        config.scheduler.sync_wall_time = HumanDuration::new(Duration::from_millis(300));
+    })
+    .await;
+    let token = api.key(&[Scope::Fetch, Scope::Jobs]).await;
+    // A page that takes its time.
+    Mock::given(method("GET"))
+        .and(path("/slow"))
+        .respond_with(page("Slow").set_delay(Duration::from_millis(1500)))
+        .mount(&api.lab.site)
+        .await;
+    let work = Background::worker_only(&api.state);
+
+    let reply = api
+        .post(
+            &token,
+            "/v1/fetch",
+            &json!({ "url": Api::url("/slow"), "render": "http" }),
+        )
+        .await;
+    assert_eq!(reply.status, StatusCode::ACCEPTED, "{:?}", reply.json());
+    let request: RequestId = reply.json()["id"].as_str().unwrap().parse().unwrap();
+    let job: JobId = reply.json()["job_id"].as_str().unwrap().parse().unwrap();
+
+    // The server is told to stop while the page is being read, more than a
+    // second before the site answers: it waits for the page instead of
+    // cutting it (follow-up F39).
+    work.stop().await;
+
+    // What the store says now is what a server that starts again finds:
+    // the fetch has ended with its page, by the one attempt that got it,
+    // and its job with it.
+    let store = api.lab.store();
+    let attempts = store.attempts().list_for_request(request).await.unwrap();
+    assert_eq!(attempts.len(), 1, "{attempts:?}");
+    assert!(attempts[0].outcome.is_success(), "{attempts:?}");
+    assert_eq!(attempts[0].reason, None);
+    let stored = store.results().get_by_request(request).await.unwrap();
+    assert_eq!(
+        stored.map(|record| record.outcome),
+        Some(kage_core::outcome::Outcome::Ok)
+    );
+    let ended = store.jobs().get(job).await.unwrap().unwrap();
+    assert_eq!(ended.state, kage_core::domain::JobState::Succeeded);
+    assert_eq!(asked(&api, "/slow").await.len(), 1);
+
+    // Another server over the same store has nothing to take up, also
+    // once the first one's lease has run out: the site is not asked for
+    // the page a second time.
+    let restarted = api.restarted_state();
+    let again = Background::worker_only(&restarted);
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert_eq!(asked(&api, "/slow").await.len(), 1);
+    let result = api.get(&token, &format!("/v1/results/{request}")).await;
+    assert_eq!(result.status, StatusCode::OK, "{:?}", result.json());
+    assert_eq!(result.json()["outcome"], "ok");
+    assert_eq!(result.json()["attempts"].as_array().unwrap().len(), 1);
+    again.stop().await;
     api.shut_down().await;
 }
 

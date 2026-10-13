@@ -766,7 +766,9 @@ and says why.
 database answers, at least one persona is ready behind a usable proxy and
 at least one sidecar answers; otherwise `503` with the three checks, and
 `503` with `status: "stopping"` from the moment the server is told to
-stop, while requests in flight finish (`server.shutdown_grace`, 30 s).
+stop, while requests in flight finish (`server.shutdown_grace`, 30 s) and
+the pages that are being read are waited for (`jobs.wind_down`, 150 s;
+`docs/runbooks/fetching.md`, "Stopping the server").
 
 `/metrics` on the API needs a key with the `admin` scope. For a Prometheus
 on the compose network set `server.metrics_bind` (for example

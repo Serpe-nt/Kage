@@ -115,6 +115,13 @@ services:
     mem_limit: 1g
     cpus: 2
     pids_limit: 512
+    # A server that is told to stop finishes the pages that are being read
+    # first, for at most jobs.wind_down (150 s): a page that is cut is
+    # asked for again after the restart, and the site sees it twice. Docker
+    # kills a container after 10 s unless told otherwise; this is
+    # jobs.wind_down and 50 s for the rest of the stop. Keep the two
+    # together when you change one.
+    stop_grace_period: 200s
     healthcheck:
       test: [CMD, /usr/local/bin/kage, healthcheck]
       interval: 10s

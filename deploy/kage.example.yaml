@@ -502,6 +502,14 @@ jobs:
   poll_interval: 2s
   # How long an Idempotency-Key names the job it made.
   idempotency_ttl: 1d
+  # How long a server that stops waits for the pages that are being read
+  # (an item of a job, a page of a crawl, a fetch that is carried on)
+  # before it cuts them. A page that is finished is asked for once; one that
+  # is cut is asked for again after the restart, and the cut attempt is on
+  # the record as `interrupted`. 0s waits for nothing. At most 15m. The
+  # container must be given that long to stop: stop_grace_period of the
+  # kage service in deploy/compose.yaml (200s) is this and 50 s.
+  wind_down: 150s
 
 # Webhooks (spec §16.6): a job's events, posted to the receiver it names.
 # They leave from this host's own address, never through a proxy.

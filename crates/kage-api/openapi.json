@@ -3445,7 +3445,7 @@
               "string",
               "null"
             ],
-            "description": "Why it ended without the site's verdict, as a stable name:\n`no_persona`, `domain_paused`, `egress_unsafe`,\n`bandwidth_exhausted`, `proxy_failed`, `timeout` and others."
+            "description": "Why it ended without the site's verdict, as a stable name:\n`no_persona`, `domain_paused`, `egress_unsafe`,\n`bandwidth_exhausted`, `proxy_failed`, `timeout`, `interrupted`\n(the server stopped while the page was being read) and others."
           },
           "redirects": {
             "type": "array",

@@ -58,9 +58,9 @@ pub use executor::{
 pub use forwarder::{Forwarder, ForwarderEgress, ForwarderSettings, Meter, Routes, Tokens};
 pub use memory::MemoryBackend;
 pub use pipeline::{
-    CachePlan, Capture, Deferred, FetchOrder, FetchReport, JobFetch, Kept, PacingReport, Peek,
-    Pipeline, PipelineSettings, ROBOTS_NO_SCOUT, ROBOTS_UNAVAILABLE, RobotsRead, Running,
-    ScoutNeed, Stop, Synchronous,
+    CachePlan, Capture, Deferred, FetchOrder, FetchReport, INTERRUPTED, JobFetch, Kept,
+    PacingReport, Peek, Pipeline, PipelineSettings, ROBOTS_NO_SCOUT, ROBOTS_UNAVAILABLE,
+    RobotsRead, Running, ScoutNeed, Stop, Synchronous, WoundDown,
 };
 pub use robots::{Conflict, RobotsSettings, RobotsWish};
 pub use scheduler::{Grant, Refused, Scheduler, SchedulerGate};

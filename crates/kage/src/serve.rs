@@ -225,15 +225,21 @@ async fn serve_api(
             return ended.context("the API server task failed")?;
         }
     }
-    // Readiness says so at once; the requests in flight finish.
+    // Readiness says so at once; the requests in flight finish. The
+    // scheduler grants nothing more from here on: what waited for a
+    // persona is told `shutting_down`, a job's page is given back.
     state.stop();
+    if let Some((engine, _)) = engine {
+        engine.quiesce();
+    }
     let _ = stop.send(true);
     let served = api.await.context("the API server task failed")?;
     if let Some(server) = metrics_server {
         let _ = server.await;
     }
-    // Before the engine stops: the worker lets a page that is under way
-    // finish and gives its jobs back, the sender its deliveries.
+    // Before the engine stops: the worker waits for the pages that are
+    // being read (`jobs.wind_down`), writes down what it has to cut, and
+    // gives its jobs back; the sender its deliveries.
     for task in background {
         let _ = task.await;
     }

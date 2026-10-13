@@ -32,6 +32,20 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     capture fired as the visit that got the page had them, and its own
     pacing with `waited_ms: 0`. A result keeps at most the first 1000
     entries of a browser's log, each text cut at 4096 bytes.
+  - A server that stops finishes the pages that are being read (F39).
+    Until now a fetch that was carried on as a job ran in a task nobody
+    waited for, the job worker waited 20 s for pages that take one to two
+    minutes, and Docker killed the container after 10 s: the attempt was
+    cut without a record and the page fetched again after the restart,
+    so the site saw it twice. Now the scheduler grants nothing more from
+    the moment of the signal, the server waits for every attempt that is
+    under way for at most `jobs.wind_down` (new, 150 s, at most 15 m),
+    and what outlasts the wait is cut and written down as an attempt
+    with the reason `interrupted`, which cools nobody and counts toward
+    the request's retries. `kage` has a `stop_grace_period` of 200 s in
+    `deploy/compose.yaml`. A request that waited for a persona when the
+    signal came is answered `shutting_down` at once instead of waiting
+    out the grace.
   - The pin of `hickory-resolver`, which no crate ever used, is gone
     (F37), and `just deny` now fails on a pin in
     `[workspace.dependencies]` that no crate of the workspace uses

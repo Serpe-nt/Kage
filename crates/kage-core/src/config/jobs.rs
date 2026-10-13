@@ -14,6 +14,11 @@ pub const MAX_JOB_ITEMS: u32 = 100_000;
 /// Most retries a webhook delivery may ever be given.
 pub const MAX_WEBHOOK_RETRIES: u32 = 10;
 
+/// The longest a server that stops may wait for the pages that are being
+/// read: the longest one attempt can take (300 s to reach a page, a
+/// patience of 240 s, a dwell of 60 s) with room to write it down.
+pub const MAX_WIND_DOWN: Duration = Duration::from_mins(15);
+
 /// Jobs: batches and flows worked in the background (spec §16.6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -45,6 +50,13 @@ pub struct JobsConfig {
     /// How long an `Idempotency-Key` names the job it made.
     #[serde(default = "default_idempotency_ttl")]
     pub idempotency_ttl: HumanDuration,
+    /// How long a server that stops waits for the pages that are being
+    /// read (an item of a job, a page of a crawl, a fetch that is carried
+    /// on) before it cuts them. A page that is finished is asked for once;
+    /// one that is cut is asked for again after the restart, and its cut
+    /// attempt is on the record as `interrupted`. `0s` waits for nothing.
+    #[serde(default = "default_wind_down")]
+    pub wind_down: HumanDuration,
 }
 
 const fn default_max_items() -> u32 {
@@ -79,6 +91,12 @@ const fn default_idempotency_ttl() -> HumanDuration {
     HumanDuration::from_hours(24)
 }
 
+/// Longer than a visit under the `human` profile takes 95 times of 100
+/// (about 130 s: reaching the page, a patience of 110 s, the dwell).
+const fn default_wind_down() -> HumanDuration {
+    HumanDuration::from_secs(150)
+}
+
 impl Default for JobsConfig {
     fn default() -> Self {
         Self {
@@ -90,6 +108,7 @@ impl Default for JobsConfig {
             lease: default_lease(),
             poll_interval: default_poll_interval(),
             idempotency_ttl: default_idempotency_ttl(),
+            wind_down: default_wind_down(),
         }
     }
 }
@@ -264,6 +283,12 @@ pub(super) fn validate(jobs: &JobsConfig, webhooks: &WebhooksConfig) -> Result<(
     if jobs.idempotency_ttl.get() < Duration::from_secs(1) {
         return Err("jobs.idempotency_ttl must be at least 1s".to_owned());
     }
+    if jobs.wind_down.get() > MAX_WIND_DOWN {
+        return Err(format!(
+            "jobs.wind_down must be at most {}: no page takes longer",
+            HumanDuration::new(MAX_WIND_DOWN)
+        ));
+    }
 
     for (key, origins) in [
         ("webhooks.allowed_origins", &webhooks.allowed_origins),
@@ -323,7 +348,7 @@ mod tests {
 
     use url::Url;
 
-    use super::{JobsConfig, WebhooksConfig, origin_of, validate};
+    use super::{JobsConfig, MAX_WIND_DOWN, WebhooksConfig, origin_of, validate};
     use crate::duration::HumanDuration;
 
     #[test]
@@ -336,10 +361,38 @@ mod tests {
         assert_eq!(jobs.max_age.get(), Duration::from_hours(168));
         assert_eq!(jobs.retention(), Duration::from_hours(14 * 24));
         assert_eq!(jobs.idempotency_ttl.get(), Duration::from_hours(24));
+        // A server that stops waits two and a half minutes for the pages
+        // that are being read.
+        assert_eq!(jobs.wind_down.get(), Duration::from_secs(150));
         assert_eq!(webhooks.max_retries, 5);
         // No receiver is listed, so no job may have a webhook.
         assert!(webhooks.allowed_origins.is_empty() && webhooks.private_origins.is_empty());
         assert!(!webhooks.allows(&Url::parse("https://hooks.example.org/kage").unwrap()));
+    }
+
+    #[test]
+    fn a_server_that_stops_waits_for_no_longer_than_a_page_can_take() {
+        let jobs = JobsConfig::default();
+        let webhooks = WebhooksConfig::default();
+        let with = |wind_down: Duration| JobsConfig {
+            wind_down: HumanDuration::new(wind_down),
+            ..jobs
+        };
+        // The bound itself, as a number.
+        assert_eq!(MAX_WIND_DOWN.as_secs(), 900);
+        // Nothing is a wait too: a quick stop, with what it cuts on the
+        // record.
+        assert_eq!(validate(&with(Duration::ZERO), &webhooks), Ok(()));
+        assert_eq!(validate(&with(Duration::from_mins(15)), &webhooks), Ok(()));
+        let refused = validate(&with(Duration::from_secs(901)), &webhooks).unwrap_err();
+        assert!(
+            refused.starts_with("jobs.wind_down must be at most 15m"),
+            "{refused}"
+        );
+        // An empty section is the default, and the key reads a duration.
+        let read: JobsConfig = serde_json::from_str(r#"{ "wind_down": "45s" }"#).unwrap();
+        assert_eq!(read.wind_down.get(), Duration::from_secs(45));
+        assert_eq!(serde_json::from_str::<JobsConfig>("{}").unwrap(), jobs);
     }
 
     #[test]
