@@ -22,6 +22,13 @@
 //! A typed address arrives from nowhere (no `Referer`, `Sec-Fetch-Site:
 //! none`), which no reader does page after page: the share of typed
 //! addresses is what the order is judged by.
+//!
+//! A second table (spec §15) asks what a response cache would do to that
+//! order if a crawl were served from it: a page that is served is not
+//! visited, so it is never open in the tab, and what it links to cannot be
+//! clicked from it. For shares of a site that are in the cache (which pages
+//! are is drawn from a seed, five seeds a row) it says how many pages are
+//! still asked of the site and how those are reached.
 
 // An example over tables of its own: an address that does not parse is a
 // mistake in this file.
@@ -326,7 +333,32 @@ fn pick(
     }
 }
 
-fn crawl(site: &Site, max_pages: u32, order: Order) -> Option<(Ways, usize)> {
+/// Which pages a response cache holds: a share of the site in percent,
+/// drawn per page from a seed.
+#[derive(Clone, Copy)]
+struct Cache {
+    percent: u64,
+    seed: u64,
+}
+
+impl Cache {
+    /// Whether the page at `path` is in the cache (FNV-1a over the seed
+    /// and the path: the same pages for the same seed, whatever the order
+    /// they are met in).
+    fn holds(self, path: &str) -> bool {
+        let mut hash = 0xcbf2_9ce4_8422_2325_u64 ^ self.seed.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        for byte in path.bytes() {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        (hash >> 20) % 100 < self.percent
+    }
+}
+
+/// Reads a site in `order`. With a cache, a page it holds is served and
+/// not visited: its links are known, the tab never holds it. Returns how
+/// the pages asked of the site were reached and how many those were.
+fn crawl(site: &Site, max_pages: u32, order: Order, cache: Option<Cache>) -> Option<(Ways, usize)> {
     let mut frontier = frontier(max_pages)?;
     let mut tab: Vec<EntryId> = Vec::new();
     let mut ways = Ways::default();
@@ -335,12 +367,16 @@ fn crawl(site: &Site, max_pages: u32, order: Order) -> Option<(Ways, usize)> {
         let Some((entry, backs)) = pick(site, &frontier, &tab, order) else {
             break;
         };
-        match backs {
-            None => ways.typed += 1,
-            Some(0) => ways.click += 1,
-            Some(backs) => {
-                ways.back += 1;
-                tab.truncate(tab.len().saturating_sub(backs));
+        let path = path_of(&frontier.entry(entry)?.url);
+        let served = cache.is_some_and(|cache| cache.holds(&path));
+        if !served {
+            match backs {
+                None => ways.typed += 1,
+                Some(0) => ways.click += 1,
+                Some(backs) => {
+                    ways.back += 1;
+                    tab.truncate(tab.len().saturating_sub(backs));
+                }
             }
         }
         frontier.begin(entry);
@@ -367,6 +403,9 @@ fn crawl(site: &Site, max_pages: u32, order: Order) -> Option<(Ways, usize)> {
                 text: String::new(),
             },
         );
+        if served {
+            continue;
+        }
         read += 1;
         tab.push(entry);
         if tab.len() > BACK_LIMIT + 1 {
@@ -374,6 +413,58 @@ fn crawl(site: &Site, max_pages: u32, order: Order) -> Option<(Ways, usize)> {
         }
     }
     Some((ways, read))
+}
+
+/// The second table: the reader's order with shares of each site served
+/// from a cache.
+fn with_a_cache(out: &mut impl std::io::Write) -> Result<(), Box<dyn std::error::Error>> {
+    const SEEDS: [u64; 5] = [1, 2, 3, 4, 5];
+    writeln!(out)?;
+    writeln!(
+        out,
+        "site | in the cache | pages asked of the site | typed, of those asked (fewest to most over five draws) | click on the open page | back, then click"
+    )?;
+    for site in [shop(), blog(), manual(), reading_room()] {
+        for percent in [0, 10, 25, 50, 75, 90, 100] {
+            let mut asked = Vec::new();
+            let mut typed = Vec::new();
+            let mut total = Ways::default();
+            for seed in SEEDS {
+                let cache = Cache { percent, seed };
+                let (ways, read) = crawl(&site, 10_000, Order::Reader, Some(cache))
+                    .ok_or("the site has no seed")?;
+                asked.push(read);
+                typed.push(
+                    (ways.typed * 1000 + read / 2)
+                        .checked_div(read)
+                        .unwrap_or(0),
+                );
+                total.typed += ways.typed;
+                total.click += ways.click;
+                total.back += ways.back;
+            }
+            let all: usize = asked.iter().sum();
+            let share = |count: usize| {
+                format!(
+                    "{} %",
+                    (count * 100 + all / 2).checked_div(all).unwrap_or(0)
+                )
+            };
+            let tenth = |value: usize| format!("{}.{} %", value / 10, value % 10);
+            writeln!(
+                out,
+                "{} | {percent} % | {} | {} ({} to {}) | {} | {}",
+                site.name,
+                all / SEEDS.len(),
+                share(total.typed),
+                tenth(typed.iter().copied().min().unwrap_or(0)),
+                tenth(typed.iter().copied().max().unwrap_or(0)),
+                share(total.click),
+                share(total.back),
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -389,7 +480,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ("page first", Order::PageFirst),
                 ("reader", Order::Reader),
             ] {
-                let (ways, read) = crawl(&site, max_pages, order).ok_or("the site has no seed")?;
+                let (ways, read) =
+                    crawl(&site, max_pages, order, None).ok_or("the site has no seed")?;
                 let share = |count: usize| format!("{} %", (count * 100 + read / 2) / read.max(1));
                 writeln!(
                     out,
@@ -403,5 +495,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    Ok(())
+    with_a_cache(&mut out)
 }

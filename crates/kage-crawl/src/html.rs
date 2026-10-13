@@ -14,6 +14,11 @@
 //! that plants one is looking for whoever does. The markup is all this
 //! module sees; what a style sheet hides only a browser knows, and on the
 //! browser path the browser is asked (spec §10.2).
+//!
+//! A page is parsed once. [`Document`] is that one tree: a crawl reads its
+//! links and its text from it ([`Document::page`]), and extraction
+//! (`kage-extract`, spec §14) reads everything else from the same tree
+//! with the same rules for what is hidden and what is furniture.
 
 use scraper::node::Node;
 use scraper::{ElementRef, Html};
@@ -57,7 +62,7 @@ pub struct Page {
 }
 
 /// Elements whose content is never text of the page.
-const NOT_TEXT: [&str; 8] = [
+pub const NOT_TEXT: [&str; 8] = [
     "script", "style", "noscript", "template", "head", "svg", "iframe", "object",
 ];
 
@@ -72,7 +77,7 @@ const FURNITURE_ROLES: [&str; 4] = ["navigation", "banner", "contentinfo", "comp
 const MIN_MAIN_WORDS: usize = 20;
 
 /// Whether an element's own markup hides it and everything inside it.
-fn hides(element: &scraper::node::Element) -> bool {
+pub fn hides(element: &scraper::node::Element) -> bool {
     if element.attr("hidden").is_some() {
         return true;
     }
@@ -94,7 +99,9 @@ fn hides(element: &scraper::node::Element) -> bool {
     })
 }
 
-fn is_furniture(element: &scraper::node::Element) -> bool {
+/// Whether an element holds what a site repeats on every page: navigation,
+/// a header, a footer or a side bar, by its name or its ARIA role.
+pub fn is_furniture(element: &scraper::node::Element) -> bool {
     FURNITURE.contains(&element.name())
         || element.attr("role").is_some_and(|role| {
             FURNITURE_ROLES
@@ -103,8 +110,9 @@ fn is_furniture(element: &scraper::node::Element) -> bool {
         })
 }
 
-/// Appends text with one space between it and what is there.
-fn push_text(out: &mut String, text: &str) {
+/// Appends text with one space between it and what is there, white space
+/// collapsed.
+pub fn push_text(out: &mut String, text: &str) {
     for word in text.split_whitespace() {
         if !out.is_empty() {
             out.push(' ');
@@ -114,7 +122,7 @@ fn push_text(out: &mut String, text: &str) {
 }
 
 /// The text inside an element, white space collapsed.
-fn text_of(element: ElementRef<'_>) -> String {
+pub fn text_of(element: ElementRef<'_>) -> String {
     let mut out = String::new();
     for piece in element.text() {
         push_text(&mut out, piece);
@@ -218,45 +226,89 @@ fn base_of(document: &Html, loaded_from: &Url) -> Url {
         .unwrap_or_else(|| loaded_from.clone())
 }
 
-/// Reads a page: its links and its text.
-///
-/// `loaded_from` is the address of the document after redirects; relative
-/// links resolve against it, or against the document's `<base href>`.
-/// Nothing here fails: markup that is no HTML at all reads as a page
-/// without links, and what it holds as its text.
-pub fn read(html: &str, loaded_from: &Url) -> Page {
-    let document = Html::parse_document(html);
-    let base = base_of(&document, loaded_from);
-    let mut reader = Reader {
-        base: &base,
-        page: Page::default(),
-    };
-    let root = document.root_element();
-    reader.page.title = root
-        .descendent_elements()
-        .find(|element| element.value().name() == "title")
-        .map(text_of)
-        .unwrap_or_default();
-    reader.element(
-        root,
-        Inherited {
-            silent: false,
-            hidden: false,
-            furniture: false,
-        },
-    );
-    let mut page = reader.page;
-    if page.main_text.split(' ').count() < MIN_MAIN_WORDS {
-        page.main_text.clone_from(&page.text);
+/// A page parsed once: the tree a crawl reads its links and its text from,
+/// and the one extraction works on.
+#[derive(Debug, Clone)]
+pub struct Document {
+    tree: Html,
+    loaded_from: Url,
+    base: Url,
+}
+
+impl Document {
+    /// Parses a page.
+    ///
+    /// `loaded_from` is the address of the document after redirects;
+    /// relative links resolve against it, or against the document's
+    /// `<base href>`. Nothing here fails: markup that is no HTML at all is
+    /// a page without links, and what it holds is its text.
+    pub fn parse(html: &str, loaded_from: &Url) -> Self {
+        let tree = Html::parse_document(html);
+        let base = base_of(&tree, loaded_from);
+        Self {
+            tree,
+            loaded_from: loaded_from.clone(),
+            base,
+        }
     }
-    page
+
+    /// The tree of the page.
+    pub const fn tree(&self) -> &Html {
+        &self.tree
+    }
+
+    /// The address the document was loaded from, after redirects.
+    pub const fn loaded_from(&self) -> &Url {
+        &self.loaded_from
+    }
+
+    /// The address relative links resolve against: the first `<base href>`
+    /// that is an `http` or `https` address, else where the document was
+    /// loaded from.
+    pub const fn base(&self) -> &Url {
+        &self.base
+    }
+
+    /// What a crawl reads from the page: its links and its text.
+    pub fn page(&self) -> Page {
+        let mut reader = Reader {
+            base: &self.base,
+            page: Page::default(),
+        };
+        let root = self.tree.root_element();
+        reader.page.title = root
+            .descendent_elements()
+            .find(|element| element.value().name() == "title")
+            .map(text_of)
+            .unwrap_or_default();
+        reader.element(
+            root,
+            Inherited {
+                silent: false,
+                hidden: false,
+                furniture: false,
+            },
+        );
+        let mut page = reader.page;
+        if page.main_text.split(' ').count() < MIN_MAIN_WORDS {
+            page.main_text.clone_from(&page.text);
+        }
+        page
+    }
+}
+
+/// Reads a page: its links and its text. [`Document::parse`] and
+/// [`Document::page`] in one step, for whoever needs nothing else of the
+/// tree.
+pub fn read(html: &str, loaded_from: &Url) -> Page {
+    Document::parse(html, loaded_from).page()
 }
 
 #[cfg(test)]
 mod tests {
     use url::Url;
 
-    use super::{MAX_LINKS, Page, read};
+    use super::{Document, MAX_LINKS, Page, read};
 
     fn page(html: &str) -> Page {
         read(
@@ -472,6 +524,24 @@ mod tests {
         assert_eq!(
             read.links.last().unwrap().url.path(),
             format!("/p{}", MAX_LINKS - 1)
+        );
+    }
+
+    #[test]
+    fn a_document_is_parsed_once_and_read_as_often_as_wanted() {
+        let loaded_from = Url::parse("https://shop.example/catalogue/list?page=2").unwrap();
+        let html = r#"<html><head><base href="/elsewhere/"><title>T</title></head>
+            <body><nav><a href="menu">menu</a></nav><p>Some text.</p></body></html>"#;
+        let document = Document::parse(html, &loaded_from);
+        assert_eq!(document.loaded_from(), &loaded_from);
+        assert_eq!(document.base().as_str(), "https://shop.example/elsewhere/");
+        assert_eq!(document.tree().root_element().value().name(), "html");
+        // The same page every time, and the one `read` gives.
+        assert_eq!(document.page(), document.page());
+        assert_eq!(document.page(), read(html, &loaded_from));
+        assert_eq!(
+            hrefs(&document.page()),
+            ["https://shop.example/elsewhere/menu"]
         );
     }
 
