@@ -73,7 +73,41 @@ The outcome is `provider_error` and the reason says why:
 | `bandwidth_exhausted` | The bandwidth budget of the term is used up and `bandwidth.hard_stop` is on. | Below. |
 | `domain_paused` | The domain's circuit breaker is open; the answer names when to ask again. | Below. |
 | `no_persona` | No persona can serve the request: none is ready, none matches the engines and countries of the policy and the request, or none has an http path for `render: http`. | `kage persona list`. |
-| `shutting_down` | The server is stopping. | |
+| `shutting_down` | The server is stopping: the request waited for a persona when the signal came, and nothing was asked of the site. | Ask again when it is back. |
+
+An attempt can end with a reason too, when it was not the site that
+ended it: `proxy_failed`, `timeout`, and `interrupted`.
+
+## Stopping the server
+
+`docker compose stop kage` (or a `SIGTERM`) does three things at once:
+`/readyz` answers `503`, the scheduler grants nothing more (a request that
+waited for a persona is answered `provider_error` with `shutting_down`,
+an item of a job is given back), and the server waits for the pages that
+are being read, for at most `jobs.wind_down` (150 s). A page under the
+shipped behavior takes one to two minutes, so a stop takes that long
+while one is open and no time when none is.
+
+- A page that ends inside the wait is stored like any other: one attempt,
+  the site asked once. Its job goes on after the restart with the next
+  page.
+- A page that is still being read when the wait is over is cut. Its
+  attempt is on the record with the outcome `provider_error` and the
+  reason `interrupted`; it cools no persona and counts on no breaker. The
+  request is taken up again after the restart (a job's, a carried
+  fetch's) and counts that attempt against its retries, so the site sees
+  that page twice. A fetch whose caller still waited ends with it.
+- `jobs.wind_down: 0s` is a stop that waits for nothing: every page under
+  way is cut and written down.
+- Docker kills a container that has not stopped after
+  `stop_grace_period`; `deploy/compose.yaml` gives `kage` 200 s, which is
+  `jobs.wind_down` and 50 s. Raise both together. A killed process writes
+  nothing: its pages are fetched again when `jobs.lease` (1 min) has run
+  out, and nothing says they had been asked for.
+
+The log says what happened: `the server stops: the pages that are being
+read are finished first` with their number, and a warning with the number
+that was cut.
 
 A fetch can also end without an attempt as `robots_denied`: the site's
 policy enforces its `robots.txt` (`docs/runbooks/api.md`, "robots.txt").

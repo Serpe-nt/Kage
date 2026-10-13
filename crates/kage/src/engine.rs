@@ -107,8 +107,39 @@ pub(crate) struct Engine {
     context_idle: Duration,
     flush_interval: Duration,
     stops: Arc<Stops>,
-    shutdown: watch::Sender<bool>,
+    signals: Signals,
     tasks: Vec<JoinHandle<()>>,
+}
+
+/// What tells the engine's tasks to stop, in two steps.
+#[derive(Debug)]
+struct Signals {
+    /// Tells the scheduler to grant nothing more; the forwarder goes on
+    /// relaying for the pages that are being read (follow-up F39).
+    quiesce: watch::Sender<bool>,
+    /// Tells everything else to stop.
+    shutdown: watch::Sender<bool>,
+}
+
+impl Default for Signals {
+    fn default() -> Self {
+        Self {
+            quiesce: watch::Sender::new(false),
+            shutdown: watch::Sender::new(false),
+        }
+    }
+}
+
+impl Signals {
+    /// Resolves when the scheduler is told to grant nothing more.
+    fn quiesced(&self) -> impl Future<Output = ()> + Send + use<> {
+        stopped(self.quiesce.subscribe())
+    }
+
+    /// Resolves when everything is told to stop.
+    fn stopped(&self) -> impl Future<Output = ()> + Send + use<> {
+        stopped(self.shutdown.subscribe())
+    }
 }
 
 impl std::fmt::Debug for Engine {
@@ -223,10 +254,11 @@ impl Engine {
             clock,
         ));
 
-        let (shutdown, _) = watch::channel(false);
+        // The scheduler has a signal of its own: it stops first.
+        let signals = Signals::default();
         let tasks = vec![
-            tokio::spawn(Arc::clone(&forwarder).serve(listener, stopped(shutdown.subscribe()))),
-            tokio::spawn(Arc::clone(&scheduler).run(stopped(shutdown.subscribe()))),
+            tokio::spawn(Arc::clone(&forwarder).serve(listener, signals.stopped())),
+            tokio::spawn(Arc::clone(&scheduler).run(signals.quiesced())),
         ];
         Ok(Self {
             personas,
@@ -238,7 +270,7 @@ impl Engine {
             context_idle: config.scheduler.context_idle.get(),
             flush_interval: config.bandwidth.flush_interval.get(),
             stops: Arc::new(Stops::default()),
-            shutdown,
+            signals,
             tasks,
         })
     }
@@ -274,7 +306,7 @@ impl Engine {
         let bandwidth = tokio::spawn(Arc::clone(&self.bandwidth).run(
             self.flush_interval,
             self.on_budget(),
-            stopped(self.shutdown.subscribe()),
+            self.signals.stopped(),
         ));
         let tend = tokio::spawn(tend(
             Arc::clone(&self.personas),
@@ -282,15 +314,24 @@ impl Engine {
             Arc::clone(&self.forwarder),
             Arc::clone(&self.stops),
             self.context_idle,
-            stopped(self.shutdown.subscribe()),
+            self.signals.stopped(),
         ));
         self.tasks.extend([bandwidth, tend]);
+    }
+
+    /// Tells the scheduler to stop: what waits for a persona is refused
+    /// with `shutting_down` and nothing new is granted. The attempts that
+    /// are under way go on, through the forwarder, until they end or
+    /// [`Self::stop`] closes their browsers.
+    pub(crate) fn quiesce(&self) {
+        let _ = self.signals.quiesce.send(true);
     }
 
     /// Stops everything: what waits is refused, the browsers this process
     /// opened are closed, and what the forwarder counted is written.
     pub(crate) async fn stop(mut self) {
-        let _ = self.shutdown.send(true);
+        self.quiesce();
+        let _ = self.signals.shutdown.send(true);
         for task in self.tasks.drain(..) {
             if let Err(error) = task.await {
                 tracing::warn!(%error, "a task of the engine ended badly");

@@ -407,7 +407,8 @@ pub(crate) struct FetchResult {
     pub(crate) outcome: OutcomeField,
     /// Why it ended without the site's verdict, as a stable name:
     /// `no_persona`, `domain_paused`, `egress_unsafe`,
-    /// `bandwidth_exhausted`, `proxy_failed`, `timeout` and others.
+    /// `bandwidth_exhausted`, `proxy_failed`, `timeout`, `interrupted`
+    /// (the server stopped while the page was being read) and others.
     pub(crate) reason: Option<String>,
     /// When asking again is worth it, when Kage knows: the end of a
     /// domain's pause or of a persona's cooldown.

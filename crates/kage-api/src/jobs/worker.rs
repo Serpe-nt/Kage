@@ -93,9 +93,10 @@ const HOLD: Duration = Duration::from_secs(30);
 /// the scheduler is taken looks again.
 const STARVED: Duration = Duration::from_millis(250);
 
-/// How long the worker waits for its runners to give their jobs back when
-/// the server stops.
-const WIND_DOWN: Duration = Duration::from_secs(20);
+/// How long the worker waits, once no page is being read any more, for
+/// its runners and the fetches it carries on to write back what they came
+/// to and give their jobs back when the server stops.
+const WRITE_BACK: Duration = Duration::from_secs(20);
 
 /// What a runner is told from outside. A later variant outranks an
 /// earlier one.
@@ -124,6 +125,23 @@ pub(crate) struct JobsHub {
     in_flight: Arc<Semaphore>,
     nudges: Mutex<HashMap<JobId, Arc<Notify>>>,
     sender: Mutex<Option<Arc<WebhookSender>>>,
+    /// The fetches that are carried on as jobs by this server and have
+    /// not been written back yet (follow-up F39): a server that stops
+    /// waits for them as it waits for its runners.
+    carried: std::sync::atomic::AtomicUsize,
+    carried_changed: Notify,
+}
+
+/// One fetch that is carried on, counted until it is written back.
+struct Carried(ApiState);
+
+impl Drop for Carried {
+    fn drop(&mut self) {
+        let hub = self.0.jobs();
+        hub.carried
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        hub.carried_changed.notify_waiters();
+    }
 }
 
 impl std::fmt::Debug for JobsHub {
@@ -153,6 +171,23 @@ impl JobsHub {
             )),
             nudges: Mutex::new(HashMap::new()),
             sender: Mutex::new(None),
+            carried: std::sync::atomic::AtomicUsize::new(0),
+            carried_changed: Notify::new(),
+        }
+    }
+
+    /// Resolves when no fetch is carried on by this server any more.
+    async fn carried_back(&self) {
+        loop {
+            let changed = self.carried_changed.notified();
+            tokio::pin!(changed);
+            // Registered before the count is read: a fetch that is written
+            // back between the two is not missed.
+            changed.as_mut().enable();
+            if self.carried.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+                return;
+            }
+            changed.await;
         }
     }
 
@@ -1601,14 +1636,22 @@ pub async fn run_worker(state: ApiState, shutdown: impl Future<Output = ()> + Se
             Some(_) = runners.join_next(), if !runners.is_empty() => {}
         }
     }
-    // The runners take what waits out of the scheduler, let what is under
-    // way finish, and give their jobs back.
+    // The runners take what waits out of the scheduler. The pages that
+    // are being read are finished first, whoever they are for (an item, a
+    // page of a crawl, a fetch that is carried on, a caller that still
+    // waits): a page that is cut is asked for again after the restart, and
+    // the site sees it twice. What outlasts `jobs.wind_down` is cut, and
+    // written down as cut (follow-up F39).
     let _ = stopping_tx.send(true);
-    let wound_down = tokio::time::timeout(WIND_DOWN, async {
+    engine.pipeline.wind_down(config.wind_down.get()).await;
+    // Then the runners and the carried fetches write back what they came
+    // to and give their jobs back.
+    let written_back = tokio::time::timeout(WRITE_BACK, async {
         while runners.join_next().await.is_some() {}
+        state.jobs().carried_back().await;
     })
     .await;
-    if wound_down.is_err() {
+    if written_back.is_err() {
         tracing::warn!(
             "some jobs were still being worked when the server stopped; their leases run out"
         );
@@ -1691,7 +1734,18 @@ pub(crate) async fn carry_on(
     state.store().requests().adopt(request, job.id).await?;
 
     let id = job.id;
-    tokio::spawn(carried(state.clone(), Arc::clone(key), job, item, running));
+    // Counted before the task begins: a server that stops in between
+    // waits for it all the same.
+    state
+        .jobs()
+        .carried
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let counted = Carried(state.clone());
+    let carrying = carried(state.clone(), Arc::clone(key), job, item, running);
+    tokio::spawn(async move {
+        carrying.await;
+        drop(counted);
+    });
     Ok(id)
 }
 

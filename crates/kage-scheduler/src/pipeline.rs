@@ -37,15 +37,23 @@
 //! scheduler) is not answered with an error: it is [`JobFetch::Deferred`],
 //! nothing is concluded, and the job asks again later under the same
 //! request. A stop signal takes a request that waits for a persona out of
-//! the queue ([`JobFetch::Stopped`]); an attempt in flight is never cut.
-//! And a request can be taken up again after the process that began it
-//! stopped: its earlier attempts stay in the record and count toward the
-//! retry budget.
+//! the queue ([`JobFetch::Stopped`]); an attempt in flight is never cut
+//! by it. And a request can be taken up again after the process that began
+//! it stopped: its earlier attempts stay in the record and count toward
+//! the retry budget.
+//!
+//! # A server that stops
+//!
+//! [`Pipeline::wind_down`] waits for the attempts that are under way,
+//! whoever they are for, and cuts what outlasts the wait: such an attempt
+//! is written down with the reason [`INTERRUPTED`], so that the record
+//! says the site was asked (follow-up F39).
 
 mod cache;
 mod gate;
 mod read;
 mod visit;
+mod wind_down;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -80,6 +88,8 @@ use url::Url;
 pub use self::cache::CachePlan;
 use self::gate::Gate;
 pub use self::gate::{Peek, ROBOTS_NO_SCOUT, ROBOTS_UNAVAILABLE, RobotsRead, ScoutNeed};
+use self::wind_down::UnderWay;
+pub use self::wind_down::{INTERRUPTED, WoundDown};
 
 use crate::SchedulerError;
 use crate::archive::{Archive, Archived, Keep};
@@ -454,6 +464,8 @@ pub struct Pipeline {
     archive: Option<Arc<dyn Archive>>,
     robots: Arc<RobotsSettings>,
     desk: Arc<Desk>,
+    /// The attempts that are under way, for a server that stops.
+    under_way: Arc<UnderWay>,
 }
 
 /// Counts an attempt and writes its line in the log.
@@ -558,6 +570,13 @@ impl Course {
                 .is_some_and(|flag| flag.load(Ordering::Relaxed))
     }
 
+    /// Whether the last attempt was cut because the server stopped.
+    fn was_cut(&self) -> bool {
+        self.last
+            .as_ref()
+            .is_some_and(|last| last.reason.as_deref() == Some(INTERRUPTED))
+    }
+
     fn standing(&self) -> (Outcome, Option<String>) {
         match (&self.last, self.attempts.last()) {
             (Some(last), _) => (last.outcome(), last.reason.clone()),
@@ -591,6 +610,7 @@ impl Pipeline {
             archive: None,
             robots: Arc::new(RobotsSettings::default()),
             desk: Arc::new(Desk::default()),
+            under_way: Arc::new(UnderWay::default()),
         }
     }
 
@@ -1029,6 +1049,12 @@ impl Pipeline {
                 }
             };
             let ruling = self.attempt(&mut course, grant).await?;
+            // The server stopped waiting for the page: this process asks
+            // for nothing more. A job's fetch is given back with the cut
+            // attempt in its record; any other ends with it.
+            if course.was_cut() {
+                return self.after_cut(course, stop.is_some()).await;
+            }
             // A session's persona that was turned away cannot be replaced:
             // the request ends with what it got.
             let pinned_and_blocked = course.order.pin.is_some() && ruling.penalty.is_some();
@@ -1047,6 +1073,24 @@ impl Pipeline {
                 }
             }
         }
+    }
+
+    /// How a run ends whose last attempt was cut: a fetch for a job
+    /// (`for_job`) is stopped and one that outlasted its wall time is given
+    /// back, both with the request open; any other ends with what was cut.
+    async fn after_cut(&self, course: Course, for_job: bool) -> Result<Ran, SchedulerError> {
+        if for_job {
+            return Ok(Ran::Stopped);
+        }
+        if course.waits_like_a_job(false) {
+            return Ok(Ran::Deferred(Deferred {
+                reason: Refusal::ShuttingDown,
+                retry_at: None,
+            }));
+        }
+        let (outcome, reason) = course.standing();
+        let report = self.conclude(course, outcome, reason, None).await?;
+        Ok(Ran::Finished(Box::new(report)))
     }
 
     /// What stands before the attempts of a request: the response cache,
@@ -1235,8 +1279,11 @@ impl Pipeline {
         let seed = attempt_seed(&persona.seed, course.request.id, n);
         let job = self.job(course, &dispatch, &persona, n, seed);
 
+        // Under way from here until it is written down: a server that
+        // stops waits for it, and cuts it only when the wait is over.
+        let _under_way = self.under_way.begin();
         let started_at = self.now();
-        let output = self.executor.run(&job).await;
+        let output = self.under_way.until_cut(self.executor.run(&job)).await;
         let finished_at = self.now();
         let outcome = output.outcome();
         let verdict = AttemptVerdict::of(&output.classification);

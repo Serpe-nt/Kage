@@ -263,8 +263,12 @@ check "a batch of one item, made by the overflow" "${body}" "d.type === 'batch' 
 call GET "/v1/results/${request}" "${client}"
 expect 202 "the result while the fetch runs"
 check "the result names the job too" "${body}" "d.job_id === '${carried}'"
-# The server stops while the page is being fetched, and starts again.
+# The server stops while the page is being fetched, and starts again. It
+# waits for the page that is being read before it stops (jobs.wind_down,
+# follow-up F39), so the restart takes as long as the page has left.
+restarting="$(date +%s)"
 "${compose[@]}" restart kage > /dev/null 2>&1 || fail "the server did not restart"
+restarted_after="$(($(date +%s) - restarting))"
 for _ in $(seq 1 60); do
     call GET /readyz || true
     [ "${status}" = 200 ] && break
@@ -280,12 +284,20 @@ expect 200 "the result after the restart"
 check "the fetch was finished under its own request" "${body}" \
     "d.id === '${request}' && d.state === 'finished' && d.outcome === 'ok' && d.status === 200 && d.final_url.endsWith('/slow?ms=20000&n=overflow') && d.attempts.length >= 1"
 attempts="$(value "${body}" "d.attempts.length")"
+# The page was being read when the server was told to stop: it was
+# finished, not cut and fetched again. One attempt, and the site was asked
+# once.
+check "the page that was being read was finished by the attempt that began it" "${body}" \
+    "d.attempts.length === 1 && d.attempts[0].outcome === 'ok' && d.attempts[0].reason === null"
+seen="$(got "${site}/__kage/requests")"
+check "the site was asked for the page once, across the restart" "${seen}" \
+    "d.filter((r) => r.path === '/slow?ms=20000&n=overflow').length === 1"
 call GET "/v1/jobs/${carried}" "${client}"
 expect 200 "the job after the restart"
 check "the job ended with its item" "${body}" "d.state === 'succeeded' && d.items.succeeded === 1"
 call GET "/v1/jobs/${carried}/items" "${client}"
 check "the item is the request of the fetch" "${body}" "d.items.length === 1 && d.items[0].request_id === '${request}' && d.items[0].state === 'succeeded'"
-echo "    request ${request}: 202 with job ${carried}, the server restarted, finished after ${attempts} attempt(s)"
+echo "    request ${request}: 202 with job ${carried}, the server restarted (its stop took ${restarted_after} s: it waited for the page), finished after ${attempts} attempt(s), the site asked once"
 
 echo "==> an admin purges everything the key fetched; it is on the audit log"
 before="$(psql "SELECT count(*) FROM requests WHERE api_key_id = '${client_id}'")"
