@@ -898,11 +898,93 @@ M11's or M12's; F46 and F47 are M11's first commits.
   cases; enforcement only under `enforce`.
 - Cache hit returns `cached: true`; different include sets miss.
 
+**Status.** Merged as fourteen commits ending `4adc07e`
+(`m11-handover.md`). `kage-extract` (Readability's scoring ported onto
+the tree the crawler already keeps, one parse per page, the text and the
+markdown from one walk, metadata and times, a robots.txt parser and
+matcher of Kage's own); `robots.txt` asked for only where a site's policy
+says so and then by the site's one scout (D46, which changes D15); the
+response cache that answers without a visit (D47); extraction from the
+captured document at the end of the attempt (D48); migration 0015
+(`site_scouts`, 23 tables). The gate passed on the third clean-clone run
+in 44 min (the first fell to the secrets scanner on an invented key-shaped
+value in a fixture page, the second to the smoke test's table count):
+1435 Rust tests, 651 sidecar tests, six e2e suites with the new
+`extract.sh` by real personas of both engines, `kage-extract` 98.86 % of
+lines, mutation score of `kage-core` 92.5 %. Measured: the port reads a
+mean F1 of 97.0 on the ten tuned fixture pages and 97.7 on three pages
+written afterwards by a subagent that saw neither the rules nor the
+fixtures, against 89.4 and 78.2 for the best crate; a typed `robots.txt`
+in both browsers is one document navigation of a person who typed the
+address, the file there in under 100 ms and the visit 3 to 16 s; a crawl
+served page by page from a half-warm cache types 19 to 45 % of what it
+still asks for, so a crawl fills the cache and never reads it; in the
+e2e the cache answered in 13 to 15 ms against a visit of 0.8 to 1.2 s,
+the reader never asked for `robots.txt`, the scout asked once from an
+address that read nothing, a crawl under `enforce` never asked for the
+denied page, and the sitemaps came from the address the file named. Two
+bugs found on the way and fixed: a crawl never sent `job.progress` (with
+F46), and a navigation a browser turns into a download (a gzipped
+sitemap in Chrome) was classified as a soft block and cooled the persona
+for hours. The `robotstxt` crate panics on input a site controls and is
+the test oracle only. The session removed its container and volumes;
+image `kage-dev:m11` stays for M12. No live check was run.
+
+**Follow-ups closed by M11.** F46, F47.
+
+**Follow-ups raised by M11**
+- **F50 (M12, first commit):** a test for the value of
+  `MAX_ROBOTS_BYTES` (the one surviving mutant on M11's lines), and
+  `kage fetch` at the command line gets `--extract`, `--cache-ttl` and
+  `--robots` and shows what they return.
+- **F51 (M12, decide):** a site every persona has read has no scout for
+  good, and a scout that is not ready (its proxy down, the persona
+  cooling) closes an enforced site until it is back or retired. Give the
+  rule an end (a persona that has not read the site for
+  `robots.scout_quarantine`, 30 days, may scout) and an admin call that
+  gives a site another scout. The scout's preference for a Firefox can
+  take a site's only Firefox reader; `readers_needed` counts readers,
+  not engines.
+- **F52 (M12):** two identical requests in flight are both fetched; join
+  the second onto the first inside one process. A whole crawl asked for
+  again inside the cache's lifetime visits every page again; an
+  all-or-nothing replay of an identical crawl is the stealth-neutral way
+  to serve it.
+- **F53 (M13, observe):** `Crawl-delay` is a floor per persona and host,
+  not per site; two visitors of one site may land closer than the delay
+  from two addresses. A redirect's target is not checked against
+  `robots.txt`. A fetch that ends `robots_denied` costs a page of the
+  daily budget. Thin content keeps a page out of the cache only when
+  `extract` was asked for. Under `report`, a page already queued when
+  the scout was chosen can still go to the scout (closed under
+  `enforce`).
+- **F36 stands** (M12): a cache hit, like every stored result, has
+  `pacing`, `behavior`, `console` and `side_effects` null.
+
 ---
 
 ## M12 — Observability, hardening, docs, release 1.0
 
 **Scope.** §20, §22, §19 review, §21 nightly.
+
+**Starting point (after M11).** Every feature of the spec is built
+(M0 to M11); what remains is to make the whole observable, hard and
+releasable. The verification image `kage-dev:m11` is on the host with
+the pinned browsers inside; each session builds its own container on
+fresh volumes and removes them when done. The gate takes 44 min on a
+clean clone and the mutation run 93 min with 24 jobs; nothing has ever
+run on GitHub Actions because nothing is pushed (D30): M12 is where the
+repository goes to origin, the PR workflow starts, and the nightly live
+workflow runs for the first time with the owner's secrets documented and
+never committed. Carried into M12: F36, F37 (the unused resolver pin),
+F39 (a carried fetch's attempt cut on shutdown), F45 (the YAML parser
+behind the ignored advisory, review by 2026-12-31), F48, F49, F50, F51,
+F52, and the Camoufox 156 line as a fingerprint-critical change of its
+own that removes the ADR 0010 backport (D32). The security review of §19
+must cover the SSRF guard on every road a URL enters (targets, hops,
+sitemaps, robots.txt, webhooks, redirects) and the secrets that exist
+(`KAGE_MASTER_KEY`, the sidecar token, the provider key, API keys, the
+webhook secrets).
 
 **Deliverables**
 - OTLP traces end to end, dashboards and alert rules in the observability
