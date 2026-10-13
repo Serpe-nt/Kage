@@ -17,6 +17,10 @@ workspace = true
 kage-browser = { workspace = true }
 # The rules: the planner, retries, the breaker, the budget, the classifier.
 kage-core = { workspace = true }
+# What a site is, and the tree a page's document is read from once.
+kage-crawl = { workspace = true }
+# Extraction, and what a robots.txt says of an address.
+kage-extract = { workspace = true }
 # The http path.
 kage-http = { workspace = true }
 # Personas, their contexts, their state per domain, the cookie handoff.
@@ -45,8 +49,6 @@ url = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
-# The frontier of a crawl, for the test of a crawl's politeness.
-kage-crawl = { workspace = true }
 sqlx = { workspace = true }
 tempfile = { workspace = true }
 testcontainers = { workspace = true }

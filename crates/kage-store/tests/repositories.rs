@@ -1098,6 +1098,39 @@ async fn a_keys_requests_are_counted_since_a_moment() {
             .unwrap(),
         0
     );
+    // A request that was served from the cache is not a page of the
+    // budget; one that was fetched is, whatever came of it.
+    for cached in [true, false] {
+        let request = common::request(Some(key.id));
+        store.requests().insert(&request).await.unwrap();
+        let record = FetchRecord {
+            id: ResultId::new(),
+            request_id: request.id,
+            outcome: Outcome::Ok,
+            status: Some(200),
+            headers: Vec::new(),
+            final_url: None,
+            redirects: Vec::new(),
+            extract: None,
+            xhr: None,
+            artifacts: Vec::new(),
+            persona: None,
+            block: None,
+            robots: None,
+            cached,
+            cached_at: cached.then_some(at),
+            reason: None,
+            created_at: request.created_at,
+        };
+        store.results().insert(&record).await.unwrap();
+    }
+    assert_eq!(
+        requests
+            .count_for_key_since(key.id, since(48))
+            .await
+            .unwrap(),
+        4
+    );
     // Another key's requests, and Kage's own, are not this key's.
     assert_eq!(
         requests
@@ -1289,6 +1322,7 @@ async fn requests_attempts_and_results_round_trip() {
             crawl_delay: None,
         }),
         cached: false,
+        cached_at: None,
         reason: None,
         created_at: now(),
     };
@@ -1342,6 +1376,7 @@ async fn requests_attempts_and_results_round_trip() {
         block: Some(block()),
         robots: None,
         cached: true,
+        cached_at: Some(now()),
         reason: Some("domain_paused".to_owned()),
         created_at: now(),
     };
@@ -1832,55 +1867,138 @@ async fn the_crawl_frontier_holds_one_entry_per_url_key_and_is_claimed_once() {
     assert_eq!(frontier.all(other_crawl.id).await.unwrap().len(), 1);
 }
 
-// Both caches follow one timeline, which is what makes the expiry checks readable.
-#[allow(clippy::too_many_lines)]
 #[tokio::test]
-async fn caches_serve_entries_until_they_expire() {
+async fn what_is_known_of_a_robots_txt_is_kept_until_it_is_asked_for_again() {
     let db = TestDb::migrated().await;
     let robots = db.store.robots_cache();
-    let responses = db.store.response_cache();
     let fetched_at = now();
     let later = fetched_at + Duration::hours(25);
 
     let mut entry = RobotsCacheEntry {
-        origin: "https://example.org".to_owned(),
+        origin: "https://www.example.org".to_owned(),
+        site: "example.org".to_owned(),
         fetched_at,
         expires_at: fetched_at + Duration::hours(24),
         status: Some(200),
         body: Some("User-agent: *\nDisallow: /private\n".to_owned()),
+        unreachable: false,
     };
     robots.put(&entry).await.unwrap();
     assert_eq!(
-        robots.get("https://example.org", fetched_at).await.unwrap(),
+        robots.get("https://www.example.org").await.unwrap(),
         Some(entry.clone())
     );
-    assert_eq!(
-        robots.get("https://example.net", fetched_at).await.unwrap(),
-        None
-    );
-    // Expired entries are not served.
-    assert_eq!(
-        robots.get("https://example.org", later).await.unwrap(),
-        None
-    );
-    // A refetch replaces the entry; a failed fetch has no status or body.
+    // An origin is a scheme, a host and a port: another of the same site
+    // has a file of its own.
+    assert_eq!(robots.get("http://www.example.org").await.unwrap(), None);
+    assert_eq!(robots.get("https://example.org").await.unwrap(), None);
+    // Asking again replaces the entry; a file that could not be had has
+    // no status and no body.
     entry.fetched_at = later;
-    entry.expires_at = later + Duration::hours(24);
+    entry.expires_at = later + Duration::hours(1);
     entry.status = None;
     entry.body = None;
+    entry.unreachable = true;
     robots.put(&entry).await.unwrap();
     assert_eq!(
-        robots.get("https://example.org", later).await.unwrap(),
+        robots.get("https://www.example.org").await.unwrap(),
         Some(entry)
     );
-    assert_eq!(robots.delete_expired(later).await.unwrap(), 0);
-    assert_eq!(
-        robots
-            .delete_expired(later + Duration::hours(24))
+}
+
+#[tokio::test]
+async fn a_site_has_one_scout_and_everybody_else_who_asked_it_is_a_reader() {
+    let db = TestDb::migrated().await;
+    let scouts = db.store.site_scouts();
+    let states = db.store.persona_domain_state();
+    let scout = common::seed_persona(&db.store).await;
+    let reader = common::seed_persona(&db.store).await;
+    let deep_reader = common::seed_persona(&db.store).await;
+    let stranger = common::seed_persona(&db.store).await;
+    let at = now();
+
+    assert_eq!(scouts.get("example.org").await.unwrap(), None);
+    assert_eq!(scouts.readers("example.org").await.unwrap(), []);
+
+    scouts.set("example.org", scout.id, at).await.unwrap();
+    assert_eq!(scouts.get("example.org").await.unwrap(), Some(scout.id));
+    assert_eq!(scouts.get("example.net").await.unwrap(), None);
+    // Said again, nothing changes: the persona has been the scout since
+    // it first asked.
+    scouts
+        .set("example.org", scout.id, at + Duration::hours(3))
+        .await
+        .unwrap();
+    let since: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT since FROM site_scouts WHERE site = 'example.org'")
+            .fetch_one(db.store.pool())
             .await
-            .unwrap(),
-        1
+            .unwrap();
+    assert_eq!(since, at);
+
+    // Whoever asked a host of the site for a page is a reader of it; the
+    // scout is not, though it asked too, and neither is a persona that
+    // only has a row for it, or one that read another site whose name
+    // ends alike.
+    let asked = |persona: PersonaId, host: &str, did: bool| {
+        let mut state = PersonaDomainState::new(persona, host);
+        state.last_request_at = did.then_some(at);
+        state
+    };
+    for state in [
+        asked(scout.id, "example.org", true),
+        asked(reader.id, "example.org", true),
+        asked(deep_reader.id, "a.b.example.org", true),
+        asked(deep_reader.id, "example.org", true),
+        asked(stranger.id, "example.org", false),
+        asked(stranger.id, "notexample.org", true),
+        asked(stranger.id, "example.org.evil.test", true),
+    ] {
+        states.upsert(&state).await.unwrap();
+    }
+    let mut expected = vec![reader.id, deep_reader.id];
+    expected.sort();
+    assert_eq!(scouts.readers("example.org").await.unwrap(), expected);
+    assert_eq!(scouts.readers("example.net").await.unwrap(), []);
+
+    // Another persona takes the scout's place: the one before is a reader
+    // like any other from then on, for it has asked.
+    scouts
+        .set("example.org", stranger.id, at + Duration::hours(4))
+        .await
+        .unwrap();
+    assert_eq!(scouts.get("example.org").await.unwrap(), Some(stranger.id));
+    let mut expected = vec![scout.id, reader.id, deep_reader.id];
+    expected.sort();
+    assert_eq!(scouts.readers("example.org").await.unwrap(), expected);
+
+    // A retired persona is nobody's scout, and the row goes with it.
+    db.store
+        .personas()
+        .modify(stranger.id, |stored| {
+            stored.state = PersonaState::Retired;
+            stored.cooling_reason = None;
+            stored.retired_at = Some(at);
+        })
+        .await
+        .unwrap();
+    assert_eq!(scouts.get("example.org").await.unwrap(), None);
+    // A persona that does not exist cannot be one.
+    assert!(
+        scouts
+            .set("example.net", PersonaId::new(), at)
+            .await
+            .is_err()
     );
+}
+
+// One entry followed from its first write to the result that takes it along.
+#[allow(clippy::too_many_lines)]
+#[tokio::test]
+async fn the_response_cache_serves_an_entry_until_it_expires() {
+    let db = TestDb::migrated().await;
+    let responses = db.store.response_cache();
+    let fetched_at = now();
 
     let key = common::seed_key(&db.store).await;
     let request = common::request(Some(key.id));
@@ -1900,6 +2018,7 @@ async fn caches_serve_entries_until_they_expire() {
         block: None,
         robots: None,
         cached: false,
+        cached_at: None,
         reason: None,
         created_at: fetched_at,
     };
@@ -1908,6 +2027,7 @@ async fn caches_serve_entries_until_they_expire() {
         cache_key: "k1".to_owned(),
         url_key: "https://example.org/listing?page=2".to_owned(),
         result_id: record.id,
+        api_key_id: Some(key.id),
         cached_at: fetched_at,
         expires_at: fetched_at + Duration::minutes(10),
     };
@@ -1924,14 +2044,17 @@ async fn caches_serve_entries_until_they_expire() {
             .unwrap(),
         None
     );
+    // A later visit replaces the entry; one that a policy shares between
+    // keys is nobody's.
     cached.expires_at = fetched_at + Duration::minutes(30);
+    cached.api_key_id = None;
     responses.put(&cached).await.unwrap();
     assert_eq!(
         responses
             .get("k1", fetched_at + Duration::minutes(10))
             .await
             .unwrap(),
-        Some(cached)
+        Some(cached.clone())
     );
     assert_eq!(
         responses
@@ -1947,6 +2070,47 @@ async fn caches_serve_entries_until_they_expire() {
             .unwrap(),
         1
     );
+
+    // An entry goes with the result it serves, and so with the request.
+    responses.put(&cached).await.unwrap();
+    db.store
+        .requests()
+        .finish(request.id, Outcome::Ok, fetched_at)
+        .await
+        .unwrap();
+    let (requests, _) = db
+        .store
+        .requests()
+        .delete_before(fetched_at + Duration::hours(1), Some(key.id), true)
+        .await
+        .unwrap();
+    assert_eq!(requests, 1);
+    assert_eq!(responses.get("k1", fetched_at).await.unwrap(), None);
+
+    // A result says when its page was fetched exactly when it was served
+    // from the cache.
+    let request = common::request(Some(key.id));
+    db.store.requests().insert(&request).await.unwrap();
+    let half = FetchRecord {
+        id: ResultId::new(),
+        request_id: request.id,
+        cached: true,
+        cached_at: None,
+        ..record.clone()
+    };
+    assert!(db.store.results().insert(&half).await.is_err());
+    let other_half = FetchRecord {
+        cached: false,
+        cached_at: Some(fetched_at),
+        ..half.clone()
+    };
+    assert!(db.store.results().insert(&other_half).await.is_err());
+    let whole = FetchRecord {
+        cached_at: Some(fetched_at),
+        ..half
+    };
+    db.store.results().insert(&whole).await.unwrap();
+    assert_eq!(db.store.results().get(whole.id).await.unwrap(), Some(whole));
 }
 
 #[tokio::test]

@@ -353,6 +353,9 @@ pub struct FetchRecord {
     pub robots: Option<RobotsVerdict>,
     /// Whether this result was served from the response cache.
     pub cached: bool,
+    /// When the page of a result that was served from the cache was
+    /// fetched; `None` for a result that was fetched for its own request.
+    pub cached_at: Option<DateTime<Utc>>,
     /// Why the request ended without the site's verdict, as a stable
     /// `snake_case` name: for example `domain_paused` (spec §8.3).
     pub reason: Option<String>,
@@ -547,6 +550,7 @@ mod tests {
             block: None,
             robots: None,
             cached: false,
+            cached_at: None,
             reason: None,
             created_at: Utc::now(),
         };

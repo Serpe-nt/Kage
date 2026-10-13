@@ -115,8 +115,14 @@ error_codes! {
     PreflightRequired => ("preflight_required", UNPROCESSABLE_ENTITY, "A browser would send a preflight before this request"),
     /// `timeout_ms` leaves a browser no time to behave like a person.
     TimeoutTooShort => ("timeout_too_short", UNPROCESSABLE_ENTITY, "The timeout is shorter than an attempt needs"),
-    /// The request asks for something a later milestone brings.
-    NotAvailableYet => ("not_available_yet", UNPROCESSABLE_ENTITY, "This part of the API does not exist yet"),
+    /// The request asks for less care about `robots.txt` than the site's
+    /// policy enforces.
+    RobotsEnforced => ("robots_enforced", UNPROCESSABLE_ENTITY, "The policy for the site enforces its robots.txt"),
+    /// The request asks to have a `robots.txt` enforced that the site's
+    /// policy never asks for.
+    RobotsIgnored => ("robots_ignored", UNPROCESSABLE_ENTITY, "The policy for the site never asks for its robots.txt"),
+    /// `cache_ttl_s` is longer than results of the site may be served for.
+    CacheTtlTooLong => ("cache_ttl_too_long", UNPROCESSABLE_ENTITY, "Results are not served from the cache for that long"),
     /// The pacing profile is not defined, or an inline profile is invalid.
     InvalidPacing => ("invalid_pacing", UNPROCESSABLE_ENTITY, "The pacing asked for cannot be used"),
     /// The session id is not 1 to 64 characters of `[A-Za-z0-9_.-]`.

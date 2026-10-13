@@ -17,6 +17,8 @@
 //!   cooldowns scaled by confidence, the breaker.
 //! - [`archive`]: what a request keeps of its page, stored as artifacts
 //!   with its result.
+//! - [`robots`]: the rules of `robots.txt` (spec §14): whether a site's
+//!   file is asked for, who asks, what is kept of the answer.
 //! - [`forwarder`]: the one proxy every persona's traffic leaves through
 //!   (follow-up F10): the provider's credentials stay in this process and
 //!   every byte is counted.
@@ -36,6 +38,7 @@ pub mod forwarder;
 mod memory;
 pub mod metrics;
 pub mod pipeline;
+pub mod robots;
 pub mod scheduler;
 pub mod verdicts;
 
@@ -45,7 +48,7 @@ use kage_core::schedule::politeness::ServerErrorRules;
 use kage_core::schedule::retry::CooldownRules;
 
 pub use archive::{Archive, Archived, Keep, StoreArchive};
-pub use backend::{Backend, PoolRoutes, StoreBackend};
+pub use backend::{Backend, CacheHit, PoolRoutes, StoreBackend};
 pub use bandwidth::{Bandwidth, Ledger, StoreLedger, Term};
 pub use error::SchedulerError;
 pub use executor::{
@@ -55,9 +58,11 @@ pub use executor::{
 pub use forwarder::{Forwarder, ForwarderEgress, ForwarderSettings, Meter, Routes, Tokens};
 pub use memory::MemoryBackend;
 pub use pipeline::{
-    Capture, Deferred, FetchOrder, FetchReport, JobFetch, Kept, PacingReport, Pipeline,
-    PipelineSettings, Running, Stop, Synchronous,
+    CachePlan, Capture, Deferred, FetchOrder, FetchReport, JobFetch, Kept, PacingReport, Peek,
+    Pipeline, PipelineSettings, ROBOTS_NO_SCOUT, ROBOTS_UNAVAILABLE, RobotsRead, Running,
+    ScoutNeed, Stop, Synchronous,
 };
+pub use robots::{Conflict, RobotsSettings, RobotsWish};
 pub use scheduler::{Grant, Refused, Scheduler, SchedulerGate};
 pub use verdicts::Verdicts;
 
@@ -110,6 +115,19 @@ pub fn describe(config: &Config) -> serde_json::Value {
         "forwarder": {
             "bind": config.forwarder.bind.to_string(),
             "advertise": config.forwarder.advertise,
+        },
+        // Whether a site's robots.txt is asked for at all is its policy's.
+        "robots": {
+            "ttl_s": config.robots.ttl.get().as_secs(),
+            "error_ttl_s": config.robots.error_ttl.get().as_secs(),
+            "max_bytes": config.robots.max_bytes,
+            "agents": config.robots.agents,
+        },
+        "cache": {
+            "max_ttl_s": config.cache.max_ttl.get().as_secs(),
+        },
+        "extract": {
+            "thin_words": config.extract.thin_words,
         },
     })
 }
@@ -173,5 +191,11 @@ mod tests {
         assert_eq!(described["bandwidth"]["cap_bytes"], 250_000_000_000_u64);
         assert_eq!(described["bandwidth"]["hard_stop"], true);
         assert_eq!(described["forwarder"]["advertise"], "http://kage:8899");
+        assert_eq!(described["robots"]["ttl_s"], 86_400);
+        assert_eq!(described["robots"]["error_ttl_s"], 3600);
+        assert_eq!(described["robots"]["max_bytes"], 524_288);
+        assert_eq!(described["robots"]["agents"], serde_json::json!(["kage"]));
+        assert_eq!(described["cache"]["max_ttl_s"], 86_400);
+        assert_eq!(described["extract"]["thin_words"], 80);
     }
 }

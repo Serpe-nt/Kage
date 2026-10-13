@@ -98,6 +98,9 @@ pub enum Left {
     /// The guard against requests into private networks refuses it (spec
     /// §19): it is never asked for.
     Guard,
+    /// The site's `robots.txt` disallows it and the site's policy keeps
+    /// to the file (spec §14): it is never asked for.
+    Robots,
 }
 
 impl Left {
@@ -107,6 +110,7 @@ impl Left {
             Self::Scope(skip) => skip.as_str(),
             Self::AlreadyRead => "already_read",
             Self::Guard => "ssrf_denied",
+            Self::Robots => "robots_denied",
         }
     }
 
@@ -117,6 +121,9 @@ impl Left {
         }
         if name == "ssrf_denied" {
             return Some(Self::Guard);
+        }
+        if name == "robots_denied" {
+            return Some(Self::Robots);
         }
         Skip::ALL
             .into_iter()
@@ -617,9 +624,21 @@ impl Frontier {
     /// it is never asked for and does not count against `max_pages`.
     /// Returns whether it was waiting.
     pub fn refuse(&mut self, id: EntryId) -> bool {
+        self.leave(id, Left::Guard)
+    }
+
+    /// Leaves out a page that waits because the site's `robots.txt`
+    /// disallows its address and the site's policy keeps to the file: it
+    /// is never asked for and does not count against `max_pages`. Returns
+    /// whether it was waiting.
+    pub fn disallow(&mut self, id: EntryId) -> bool {
+        self.leave(id, Left::Robots)
+    }
+
+    fn leave(&mut self, id: EntryId, why: Left) -> bool {
         match self.entries.get_mut(id) {
             Some(entry) if entry.state == State::Waiting => {
-                entry.state = State::Skipped(Left::Guard);
+                entry.state = State::Skipped(why);
                 self.touch(id);
                 true
             }

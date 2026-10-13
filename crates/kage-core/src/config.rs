@@ -30,6 +30,7 @@ use crate::secret::Secret;
 use crate::urlnorm::NormalizeOptions;
 
 mod crawl;
+mod extract;
 mod http;
 mod jobs;
 mod personas;
@@ -41,6 +42,7 @@ pub use crawl::{
     CrawlConfig, DEFAULT_SKIPPED_EXTENSIONS, MAX_BACK_LIMIT, MAX_CRAWL_DEPTH, MAX_CRAWL_SEEDS,
     MAX_NEAR_DUPLICATE_BITS,
 };
+pub use extract::{CacheConfig, ExtractConfig, MAX_ROBOTS_AGENTS, MAX_ROBOTS_BYTES, RobotsConfig};
 pub use http::{
     BrowserSelftestConfig, ChromiumEngineConfig, EngineConfig, EnginesConfig, HttpConfig,
     HttpSelftestConfig, MAX_REDIRECTS_LIMIT, MAX_SELFTEST_PAGES, MAX_SUBRESOURCE_CONCURRENCY,
@@ -431,6 +433,15 @@ pub struct Config {
     /// Crawls: jobs that read a site by following its links.
     #[serde(default)]
     pub crawl: CrawlConfig,
+    /// Extraction: what `include: ["extract"]` returns.
+    #[serde(default)]
+    pub extract: ExtractConfig,
+    /// `robots.txt`: how long an answer is kept and whom Kage answers to.
+    #[serde(default)]
+    pub robots: RobotsConfig,
+    /// The response cache.
+    #[serde(default)]
+    pub cache: CacheConfig,
     /// The policy files.
     #[serde(default)]
     pub policies: PoliciesConfig,
@@ -606,6 +617,13 @@ impl Config {
         .map_err(ConfigError::Invalid)?;
         jobs::validate(&self.jobs, &self.webhooks).map_err(ConfigError::Invalid)?;
         crawl::validate(&self.crawl).map_err(ConfigError::Invalid)?;
+        extract::validate(
+            self.extract,
+            &self.robots,
+            &self.cache,
+            self.artifacts.retention_days,
+        )
+        .map_err(ConfigError::Invalid)?;
         match self.proxies.provider {
             ProviderChoice::Webshare if self.webshare.api_key.is_none() => {
                 return Err(ConfigError::MissingSecrets(vec!["KAGE__WEBSHARE__API_KEY"]));

@@ -412,6 +412,10 @@ mod tests {
                 waited: Duration::from_millis(700),
             },
             escalated: true,
+            extract: None,
+            robots: None,
+            page: None,
+            cached: None,
         }
     }
 

@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT state.persona_id FROM persona_domain_state state\n             WHERE state.last_request_at IS NOT NULL\n               AND (state.domain = $1 OR right(state.domain, length($1) + 1) = '.' || $1)\n               AND NOT EXISTS (SELECT 1 FROM site_scouts scout\n                               WHERE scout.site = $1 AND scout.persona_id = state.persona_id)\n             ORDER BY state.persona_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "persona_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "persona_domain_state",
+            "name": "persona_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "9aca5f3cbca613bd8af7d3ca336d50ea852c9ebdfff43703088c393c75b79528"
+}

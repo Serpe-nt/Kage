@@ -22,9 +22,10 @@ use kage_core::schedule::breaker::{Admission, BreakerChange, BreakerRules};
 use kage_core::schedule::planner::{DomainFacts, PersonaView};
 use kage_core::schedule::selection::Network;
 use kage_persona::identity::http_spec;
+use kage_store::repo::{ResponseCacheEntry, RobotsCacheEntry};
 
 use crate::SchedulerError;
-use crate::backend::Backend;
+use crate::backend::{Backend, CacheHit};
 
 #[derive(Debug, Default)]
 struct State {
@@ -34,6 +35,9 @@ struct State {
     requests: Vec<RequestRecord>,
     attempts: Vec<Attempt>,
     records: Vec<FetchRecord>,
+    robots: HashMap<String, RobotsCacheEntry>,
+    scouts: HashMap<String, PersonaId>,
+    cache: HashMap<String, ResponseCacheEntry>,
 }
 
 /// See the module documentation.
@@ -124,6 +128,26 @@ impl MemoryBackend {
     /// Every result that was stored, in order.
     pub fn records(&self) -> Vec<FetchRecord> {
         self.state().records.clone()
+    }
+
+    /// What is kept of the `robots.txt` of an origin.
+    pub fn robots_entry(&self, origin: &str) -> Option<RobotsCacheEntry> {
+        self.state().robots.get(origin).cloned()
+    }
+
+    /// Puts an answer about an origin's `robots.txt` in place.
+    pub fn put_robots(&self, entry: RobotsCacheEntry) {
+        self.state().robots.insert(entry.origin.clone(), entry);
+    }
+
+    /// The scout of a site, when it has one.
+    pub fn scout_of(&self, site: &str) -> Option<PersonaId> {
+        self.state().scouts.get(site).copied()
+    }
+
+    /// The entry of the response cache under a key, expired or not.
+    pub fn cache_entry(&self, cache_key: &str) -> Option<ResponseCacheEntry> {
+        self.state().cache.get(cache_key).cloned()
     }
 }
 
@@ -257,6 +281,90 @@ impl Backend for MemoryBackend {
             request.finished_at = Some(record.created_at);
         }
         state.records.push(record.clone());
+        Ok(())
+    }
+
+    async fn robots(&self, origin: &str) -> Result<Option<RobotsCacheEntry>, SchedulerError> {
+        Ok(self.robots_entry(origin))
+    }
+
+    async fn save_robots(&self, entry: &RobotsCacheEntry) -> Result<(), SchedulerError> {
+        self.put_robots(entry.clone());
+        Ok(())
+    }
+
+    async fn scout(&self, site: &str) -> Result<Option<PersonaId>, SchedulerError> {
+        let state = self.state();
+        Ok(state
+            .scouts
+            .get(site)
+            .copied()
+            .filter(|scout| state.personas.contains_key(scout)))
+    }
+
+    async fn set_scout(
+        &self,
+        site: &str,
+        persona: PersonaId,
+        _at: DateTime<Utc>,
+    ) -> Result<(), SchedulerError> {
+        self.state().scouts.insert(site.to_owned(), persona);
+        Ok(())
+    }
+
+    async fn readers(&self, site: &str) -> Result<Vec<PersonaId>, SchedulerError> {
+        let state = self.state();
+        let scout = state.scouts.get(site);
+        let below = format!(".{site}");
+        let mut readers: Vec<PersonaId> = state
+            .facts
+            .iter()
+            .filter(|(domain, _)| domain.as_str() == site || domain.ends_with(&below))
+            .flat_map(|(_, facts)| facts.states.values())
+            .filter(|domain| domain.last_request_at.is_some() && Some(&domain.persona_id) != scout)
+            .map(|domain| domain.persona_id)
+            .collect();
+        readers.sort_unstable();
+        readers.dedup();
+        Ok(readers)
+    }
+
+    async fn cached(
+        &self,
+        cache_key: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<CacheHit>, SchedulerError> {
+        let state = self.state();
+        let Some(entry) = state
+            .cache
+            .get(cache_key)
+            .filter(|entry| entry.expires_at > now)
+        else {
+            return Ok(None);
+        };
+        let Some(record) = state
+            .records
+            .iter()
+            .find(|record| record.id == entry.result_id)
+        else {
+            return Ok(None);
+        };
+        let filled_by = state
+            .requests
+            .iter()
+            .find(|request| request.id == record.request_id)
+            .and_then(|request| request.api_key_id);
+        Ok(Some(CacheHit {
+            entry: entry.clone(),
+            record: record.clone(),
+            filled_by,
+        }))
+    }
+
+    async fn cache(&self, entry: &ResponseCacheEntry) -> Result<(), SchedulerError> {
+        self.state()
+            .cache
+            .insert(entry.cache_key.clone(), entry.clone());
         Ok(())
     }
 }

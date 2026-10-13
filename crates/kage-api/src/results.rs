@@ -86,7 +86,11 @@ fn included(request: &RequestRecord) -> Included {
 }
 
 /// The stored document and body of a result, as text.
-async fn bodies(state: &ApiState, record: &FetchRecord, include: &Included) -> ApiResult<Bodies> {
+pub(crate) async fn bodies(
+    state: &ApiState,
+    record: &FetchRecord,
+    include: &Included,
+) -> ApiResult<Bodies> {
     let mut bodies = Bodies::default();
     for (kind, wanted) in [
         (ArtifactKind::DomHtml, include.has(Include::Dom)),

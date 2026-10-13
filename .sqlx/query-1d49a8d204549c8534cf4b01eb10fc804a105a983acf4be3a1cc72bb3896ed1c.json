@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT scout.persona_id FROM site_scouts scout\n             JOIN personas persona ON persona.id = scout.persona_id\n             WHERE scout.site = $1 AND persona.state <> 'retired'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "persona_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "site_scouts",
+            "name": "persona_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1d49a8d204549c8534cf4b01eb10fc804a105a983acf4be3a1cc72bb3896ed1c"
+}

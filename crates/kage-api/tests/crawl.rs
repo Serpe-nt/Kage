@@ -725,6 +725,10 @@ async fn sitemaps_are_read_by_a_scout_and_never_by_the_sites_reader() {
     let readers: BTreeSet<String> = navigated[4..].iter().map(window).collect();
     assert!(scouts.is_disjoint(&readers), "{scouts:?} {readers:?}");
     assert_eq!(readers.len(), 1);
+    // One scout a site: a file the browser saved and showed nothing of
+    // did not make another address ask for the next one.
+    assert_eq!(scouts.len(), 1, "{scouts:?}");
+    assert_eq!(count(&api, "site_scouts").await, 1);
     for asked in &navigated[..4] {
         assert_eq!(asked["behavior"]["entry"]["strategy"], "direct");
         assert_eq!(asked["capture"]["raw"], true);

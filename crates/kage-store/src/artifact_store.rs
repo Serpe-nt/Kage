@@ -175,6 +175,46 @@ impl ArtifactStore {
         Ok(artifact)
     }
 
+    /// A new reference to the content of an artifact that is already
+    /// stored: what a result served from the cache points at (spec §15).
+    /// The content is not written again; the new artifact is another
+    /// request's, with its own retention deadline, `now` plus the
+    /// configured retention. `None` when the artifact is gone.
+    ///
+    /// # Errors
+    ///
+    /// Fails when a query fails.
+    pub async fn link(
+        &self,
+        source: ArtifactId,
+        request_id: RequestId,
+        now: DateTime<Utc>,
+    ) -> Result<Option<Artifact>, ArtifactError> {
+        let Some(found) = self.get(source).await? else {
+            return Ok(None);
+        };
+        let mut transaction = self.pool.begin().await.map_err(StoreError::from)?;
+        // Under the blob's lock the retention job cannot remove the file
+        // between the look at the row and the new row.
+        ArtifactRepo::lock_blob(&mut transaction, &found.content_hash).await?;
+        if !ArtifactRepo::blob_in_use_on(&mut transaction, &found.content_hash, found.encoding)
+            .await?
+        {
+            transaction.rollback().await.map_err(StoreError::from)?;
+            return Ok(None);
+        }
+        let artifact = Artifact {
+            id: ArtifactId::new(),
+            request_id: Some(request_id),
+            created_at: now,
+            expires_at: now + self.retention,
+            ..found
+        };
+        ArtifactRepo::insert_on(&mut transaction, &artifact).await?;
+        transaction.commit().await.map_err(StoreError::from)?;
+        Ok(Some(artifact))
+    }
+
     /// The artifact's row, without its content.
     ///
     /// # Errors

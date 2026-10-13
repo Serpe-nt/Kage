@@ -33,8 +33,9 @@ use kage_persona::{BrowserGate, Egress, PersonaManager};
 use kage_proxy::Pool;
 use kage_scheduler::{
     Archive, AttemptExecutor, Backend, Bandwidth, Forwarder, ForwarderSettings, Ledger,
-    PathExecutor, Pipeline, PipelineSettings, PoolRoutes, Routes, Scheduler, SchedulerGate,
-    StoreArchive, StoreBackend, StoreLedger, Tokens, Verdicts, cooldown_rules, planner_rules,
+    PathExecutor, Pipeline, PipelineSettings, PoolRoutes, RobotsSettings, Routes, Scheduler,
+    SchedulerGate, StoreArchive, StoreBackend, StoreLedger, Tokens, Verdicts, cooldown_rules,
+    planner_rules,
 };
 use kage_store::{ArtifactStore, Store};
 use tokio::sync::watch;
@@ -207,7 +208,8 @@ impl Engine {
             verdicts,
             PipelineSettings::from_config(config),
         )
-        .with_archive(archive);
+        .with_archive(archive)
+        .with_robots(RobotsSettings::from_config(config));
         let ledger: Arc<dyn Ledger> = Arc::new(StoreLedger::new(store.clone(), Arc::clone(&pool)));
         let bandwidth = Arc::new(Bandwidth::new(
             meter,

@@ -16,7 +16,28 @@
 #   engines            only personas on these engines (chromium, firefox)
 #   pacing             a profile from pacing-profiles.yaml
 #   pacing_locked      true: requests cannot choose their own pacing
-#   robots             report | enforce | ignore
+#   robots             ignore | report | enforce. A reader never asks for
+#                      /robots.txt, so the request marks the address that
+#                      makes it (spec §14):
+#                      ignore   nobody asks; every result says
+#                               { fetched: false, allowed: true }
+#                      report   a persona that never reads the site asks,
+#                               once a day; results say what the file
+#                               says of their address, nothing is refused
+#                      enforce  the same, and an address the file
+#                               disallows is not fetched (robots_denied),
+#                               the first fetch of a site waits for the
+#                               answer, and a Crawl-delay is kept to: a
+#                               site that asks for an hour gets an hour
+#   cache              the response cache of the site (spec §15):
+#                      shared   true: a page one API key fetched may be
+#                               served to another; the site shows
+#                               everybody the same. false unless said
+#                      max_ttl  the longest a result is served for; never
+#                               beyond cache.max_ttl of kage.yaml
+#                      ttl      how long a result is served for when a
+#                               request does not say (cache_ttl_s); not
+#                               set: only requests that ask are served
 #   referer_strategy   how a persona arrives at the first page of a visit
 #                      (spec §10.4). A Referer is never forged: it is what
 #                      the browser sends for a real click.
@@ -77,7 +98,7 @@ defaults:
   render: auto
   pacing: human
   pacing_locked: false
-  robots: report
+  robots: ignore
   referer_strategy: direct
   active_hours: prefer
   min_dwell: 2s

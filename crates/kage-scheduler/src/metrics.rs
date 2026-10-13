@@ -13,6 +13,10 @@
 //! | `kage_breaker_open` | `domain` | 1 while a domain is paused |
 //! | `kage_bandwidth_bytes_total` | `direction` | bytes through the forwarder |
 //! | `kage_bandwidth_budget_ratio` | | the share of the bandwidth cap that is used |
+//! | `kage_cache_requests_total` | `result` | what the response cache did for a request: `hit`, `miss`, `stored`, `bypass` |
+//! | `kage_robots_requests_total` | `result` | what came of asking for a `robots.txt`: `file`, `missing`, `unreachable`, `not_asked`, `no_scout` |
+//! | `kage_robots_denied_total` | `reason` | fetches that ended `robots_denied`: `rule`, `robots_unavailable`, `robots_no_scout`, `robots_enforced`, `robots_ignored` |
+//! | `kage_extract_duration_seconds` | | how long reading a page's document took |
 //!
 //! A domain is a label of unbounded cardinality in principle; in practice
 //! it is the set of sites the owner's projects fetch.
@@ -113,6 +117,30 @@ pub fn budget(share: f64) {
     metrics::gauge!("kage_bandwidth_budget_ratio").set(share);
 }
 
+/// What the response cache did for a request: `hit` (served from it),
+/// `miss` (asked, and nothing young enough was there), `stored` (its
+/// result was put in), `bypass` (it named a lifetime and its result is
+/// none the cache keeps).
+pub fn cache(result: &'static str) {
+    metrics::counter!("kage_cache_requests_total", "result" => result).increment(1);
+}
+
+/// What came of asking for a `robots.txt`.
+pub fn robots(result: &'static str) {
+    metrics::counter!("kage_robots_requests_total", "result" => result).increment(1);
+}
+
+/// A fetch ended `robots_denied`.
+pub fn robots_denied(reason: &'static str) {
+    metrics::counter!("kage_robots_denied_total", "reason" => reason).increment(1);
+}
+
+/// Reading a page's document (its links, its text, its extraction) took
+/// this long.
+pub fn extracted(took: Duration) {
+    metrics::histogram!("kage_extract_duration_seconds").record(took.as_secs_f64());
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -150,5 +178,9 @@ mod tests {
         super::breaker("example.org", false);
         super::bandwidth(1200, 98_000);
         super::budget(0.41);
+        super::cache("hit");
+        super::robots("file");
+        super::robots_denied("rule");
+        super::extracted(Duration::from_millis(12));
     }
 }

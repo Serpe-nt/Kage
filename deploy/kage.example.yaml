@@ -638,3 +638,38 @@ crawl:
      gz, ico, iso, jpeg, jpg, js, json, mov, mp3, mp4, mpeg, msi, ods, odt,
      ogg, pdf, png, ppt, pptx, rar, svg, tar, tgz, wav, webm, webp, xls,
      xlsx, xml, zip]
+
+# Extraction (spec §14): what include: ["extract"] returns of a page, read
+# from the document the visit captured and never by a second request.
+extract:
+  # A page whose main content has fewer words than this gave its reader next
+  # to nothing: thin_content in its result. On the http path that is a page
+  # scripts would have filled, or a wall; it is true of a short page too.
+  thin_words: 80
+
+# robots.txt (spec §14). Whether a site's file is ever asked for is that
+# site's policy (robots: ignore | report | enforce in policies/domains.yaml,
+# ignore unless said): a reader never asks for /robots.txt, so the request
+# marks the address that makes it. Where a policy says report or enforce, a
+# persona that never reads the site asks, once per ttl.
+robots:
+  # How long an answer is kept before the file is asked for again, when a
+  # request needs it; moved by up to a tenth per site.
+  ttl: 1d
+  # How long a site is left alone after its robots.txt could not be had (a
+  # server error, a timeout, a block). Under enforce nothing of the site is
+  # fetched for that long.
+  error_ttl: 1h
+  # How much of a robots.txt is read, in bytes.
+  max_bytes: 524288
+  # The product tokens Kage answers to besides "*": a group that names one
+  # of them applies in place of the group for everybody.
+  agents: [kage]
+
+# The response cache (spec §15). A result is served from it only to a request
+# that asks (cache_ttl_s, or the cache.ttl of the site's policy), and by
+# default only to the API key that fetched it.
+cache:
+  # The longest a result may be served from the cache, whatever a policy or
+  # a request says; never longer than artifacts.retention_days.
+  max_ttl: 1d

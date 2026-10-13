@@ -6,8 +6,9 @@
 //! needs `render: http` and is refused under `browser` and `auto`, where it
 //! would otherwise be fetched as a plain navigation without it. What the
 //! http path cannot do (a DOM, a screenshot, a wait, behavior) is refused
-//! under `http`. What a later milestone brings (extraction, the response
-//! cache, robots enforcement) is refused with `not_available_yet`.
+//! under `http`. What depends on the site (what its policy says about
+//! `robots.txt` and the response cache) is settled in
+//! [`terms`](super::terms).
 //!
 //! # What a caller may shorten
 //!
@@ -38,7 +39,7 @@ use kage_core::schedule::queue::Priority;
 use kage_core::ssrf::SsrfDenial;
 use kage_http::headers::{CallerHeaders, HeaderError, denied_reason, placed_in_scripted};
 use kage_http::{HttpError, RequestKind};
-use kage_scheduler::{BehaviorWish, FetchOrder, Keep};
+use kage_scheduler::{BehaviorWish, FetchOrder, Keep, RobotsWish};
 use serde::{Deserialize, Serialize};
 use url::Url;
 use utoipa::ToSchema;
@@ -109,6 +110,17 @@ pub(crate) enum RequestKindField {
     Xhr,
 }
 
+impl RequestKindField {
+    /// The name as a request writes it.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Navigation => "navigation",
+            Self::Fetch => "fetch",
+            Self::Xhr => "xhr",
+        }
+    }
+}
+
 impl From<RequestKindField> for RequestKind {
     fn from(kind: RequestKindField) -> Self {
         match kind {
@@ -131,7 +143,9 @@ pub(crate) enum Include {
     Raw,
     /// The headers of the main response.
     Headers,
-    /// Text, markdown, metadata and links. Arrives with milestone M11.
+    /// What the page says: its metadata, its links, its headings and its
+    /// main content as text and as markdown, read from the document the
+    /// visit captured (`extract` in the result).
     Extract,
     /// The responses the page's scripts fetched.
     Xhr,
@@ -432,21 +446,60 @@ impl Default for XhrField {
     }
 }
 
-/// What to do about robots.txt. Fetching and enforcing it arrive with
-/// milestone M11; until then no verdict is reported and `enforce` is
-/// refused.
+/// What to do about the site's `robots.txt`. Whether the file is asked
+/// for at all is the site's policy (`ignore` unless the operator says
+/// otherwise): a reader never asks for it, so asking marks an address. A
+/// request may ask for more care than the policy takes and never for
+/// less, and never makes Kage ask a site its policy leaves alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum RobotsField {
     /// What the domain's policy says.
     #[default]
     Policy,
-    /// Report the verdict, fetch either way.
+    /// Report the verdict, fetch either way. Refused with
+    /// `robots_enforced` where the policy enforces; where the policy
+    /// ignores, nothing is asked and the verdict says `fetched: false`.
     Report,
-    /// Do not fetch what robots.txt disallows.
+    /// Do not fetch what `robots.txt` disallows, and wait for the file
+    /// when it is not known yet. Refused with `robots_ignored` where the
+    /// policy never asks for the file.
     Enforce,
-    /// Do not look at robots.txt.
+    /// Do not look at `robots.txt`. Refused with `robots_enforced` where
+    /// the policy enforces.
     Ignore,
+}
+
+impl From<RobotsField> for RobotsWish {
+    fn from(robots: RobotsField) -> Self {
+        match robots {
+            RobotsField::Policy => Self::Policy,
+            RobotsField::Report => Self::Report,
+            RobotsField::Enforce => Self::Enforce,
+            RobotsField::Ignore => Self::Ignore,
+        }
+    }
+}
+
+/// What of a page is extracted; with `include: ["extract"]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ExtractField {
+    /// Whether the main content is also written as markdown.
+    #[serde(default = "yes")]
+    pub(crate) markdown: bool,
+    /// Whether the links of the page are listed.
+    #[serde(default = "yes")]
+    pub(crate) links: bool,
+}
+
+impl Default for ExtractField {
+    fn default() -> Self {
+        Self {
+            markdown: true,
+            links: true,
+        }
+    }
 }
 
 /// One fetch (spec §16.4).
@@ -538,17 +591,22 @@ pub(crate) struct FetchRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(maximum = 10)]
     pub(crate) max_retries: Option<u32>,
-    /// How long a cached result may be served for, in seconds. The cache
-    /// arrives with milestone M11; until then only 0 is accepted.
-    #[serde(default)]
-    pub(crate) cache_ttl_s: u64,
-    /// What to do about robots.txt.
+    /// For how many seconds the result may be served from the response
+    /// cache: a later request that asks for the same is answered with it,
+    /// without a visit, while it is no older than that request's own
+    /// `cache_ttl_s`. 0 is never. Left out, the site's policy decides
+    /// (never, unless the operator set `cache.ttl`). At most the site's
+    /// `cache.max_ttl` (a day unless configured): more is refused with
+    /// `cache_ttl_too_long`. Not in a session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = 600)]
+    pub(crate) cache_ttl_s: Option<u64>,
+    /// What to do about the site's `robots.txt`.
     #[serde(default)]
     pub(crate) robots: RobotsField,
-    /// Options of the extraction, which arrives with milestone M11.
+    /// What is extracted; with `include: ["extract"]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schema(value_type = Option<FreeForm>)]
-    pub(crate) extract: Option<serde_json::Value>,
+    pub(crate) extract: Option<ExtractField>,
     /// Which responses of the page's scripts are kept; with
     /// `include: ["xhr"]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -572,6 +630,13 @@ impl Included {
         self.0.contains(&part)
     }
 
+    /// The names of the parts, in the order of their names.
+    pub(crate) fn names(&self) -> Vec<&'static str> {
+        let mut names: Vec<&'static str> = self.0.iter().map(|part| part.as_str()).collect();
+        names.sort_unstable();
+        names
+    }
+
     /// What a request that was accepted earlier asked for; `None` when it
     /// would not be accepted as it stands.
     pub(crate) fn of(request: &FetchRequest) -> Option<Self> {
@@ -584,6 +649,7 @@ impl Included {
             Include::Dom,
             Include::Raw,
             Include::Headers,
+            Include::Extract,
             Include::Xhr,
             Include::Screenshot,
             Include::Pdf,
@@ -756,13 +822,6 @@ fn included(request: &FetchRequest) -> ApiResult<Included> {
         }
         None => BTreeSet::from([Include::Dom, Include::Headers]),
     };
-    if parts.contains(&Include::Extract) || request.extract.is_some() {
-        return Err(ApiError::new(
-            ErrorCode::NotAvailableYet,
-            "extraction arrives with milestone M11; ask for dom or raw and extract from that",
-        )
-        .with("field", "include"));
-    }
     if request.render == RenderField::Http
         && let Some(part) = parts.iter().find(|part| part.needs_browser())
     {
@@ -784,6 +843,7 @@ fn included(request: &FetchRequest) -> ApiResult<Included> {
         ),
         ("pdf", request.pdf.is_some(), Include::Pdf),
         ("xhr", request.xhr.is_some(), Include::Xhr),
+        ("extract", request.extract.is_some(), Include::Extract),
     ] {
         if given && !parts.contains(&part) {
             return Err(ApiError::field(
@@ -865,7 +925,8 @@ fn capture_of(request: &FetchRequest, include: &Included) -> ApiResult<CaptureOp
     };
     Ok(CaptureOptions {
         console: include.has(Include::Console),
-        dom: include.has(Include::Dom),
+        // The extraction is read from the document the visit captured.
+        dom: include.has(Include::Dom) || include.has(Include::Extract),
         links: None,
         pdf,
         raw: include.has(Include::Raw),
@@ -1089,21 +1150,6 @@ pub(crate) fn plan(request: &FetchRequest, profiles: &PacingProfiles) -> ApiResu
             format!("at most {MAX_RETRIES}"),
         ));
     }
-    if request.cache_ttl_s > 0 {
-        return Err(ApiError::new(
-            ErrorCode::NotAvailableYet,
-            "the response cache arrives with milestone M11; leave cache_ttl_s at 0",
-        )
-        .with("field", "cache_ttl_s"));
-    }
-    if request.robots == RobotsField::Enforce {
-        return Err(ApiError::new(
-            ErrorCode::NotAvailableYet,
-            "robots.txt is fetched and enforced from milestone M11 on; until then nothing is \
-             enforced and no verdict is reported",
-        )
-        .with("field", "robots"));
-    }
     if request
         .max_body_bytes
         .is_some_and(|bytes| !(1..=MAX_BODY_BYTES).contains(&bytes))
@@ -1159,6 +1205,16 @@ pub(crate) fn plan(request: &FetchRequest, profiles: &PacingProfiles) -> ApiResu
         keep,
         max_body_bytes: request.max_body_bytes,
         session: session.clone(),
+        robots: request.robots.into(),
+        // What counts as thin is the configuration's: `terms` sets it.
+        extract: include.has(Include::Extract).then(|| {
+            let asked = request.extract.unwrap_or_default();
+            kage_extract::Options {
+                markdown: asked.markdown,
+                links: asked.links,
+                ..kage_extract::Options::default()
+            }
+        }),
         ..FetchOrder::get(url, Priority::Sync)
     };
     Ok(Planned {
@@ -1180,6 +1236,7 @@ mod tests {
     use kage_core::policy::{PacingRequest, RefererStrategy};
     use kage_core::ssrf::{DeniedRange, SsrfDenial};
     use kage_http::RequestKind;
+    use kage_scheduler::RobotsWish;
     use serde_json::{Value, json};
 
     use super::{FetchRequest, Include, Planned, plan, url_refused};
@@ -1500,28 +1557,52 @@ fast:
         }
         planned_ok(json!({ "url": url, "render": "http", "include": ["raw", "headers"] }));
 
-        assert_eq!(
-            code(json!({ "url": url, "include": ["dom", "extract"] })),
-            ErrorCode::NotAvailableYet
+        // Extraction is read from the document the visit captured: in a
+        // browser that is the DOM, which is captured for it and kept only
+        // when the request asks for it too; on the http path it is the
+        // body.
+        let extracting = planned_ok(json!({ "url": url, "include": ["extract"] }));
+        assert!(extracting.include.has(Include::Extract));
+        assert!(extracting.order.capture.dom && !extracting.order.keep.dom);
+        let options = extracting.order.extract.unwrap();
+        assert!(options.markdown && options.links);
+        let lean = planned_ok(json!({
+            "url": url,
+            "include": ["dom", "extract"],
+            "extract": { "markdown": false, "links": false },
+        }));
+        assert!(lean.order.keep.dom);
+        let options = lean.order.extract.unwrap();
+        assert!(!options.markdown && !options.links);
+        planned_ok(json!({ "url": url, "render": "http", "include": ["raw", "extract"] }));
+        assert!(planned_ok(json!({ "url": url })).order.extract.is_none());
+        assert!(
+            serde_json::from_value::<FetchRequest>(
+                json!({ "url": url, "include": ["extract"], "extract": { "summary": true } })
+            )
+            .is_err()
         );
-        assert_eq!(
-            code(json!({ "url": url, "extract": { "markdown": true } })),
-            ErrorCode::NotAvailableYet
-        );
-        assert_eq!(
-            code(json!({ "url": url, "cache_ttl_s": 60 })),
-            ErrorCode::NotAvailableYet
-        );
-        assert_eq!(
-            code(json!({ "url": url, "robots": "enforce" })),
-            ErrorCode::NotAvailableYet
-        );
-        for robots in ["policy", "report", "ignore"] {
-            planned_ok(json!({ "url": url, "robots": robots, "cache_ttl_s": 0 }));
+
+        // What a request says of robots.txt and the cache is the order's;
+        // whether the site's policy allows it is settled where the site is
+        // known.
+        for (robots, wish) in [
+            ("policy", RobotsWish::Policy),
+            ("report", RobotsWish::Report),
+            ("enforce", RobotsWish::Enforce),
+            ("ignore", RobotsWish::Ignore),
+        ] {
+            let planned = planned_ok(json!({ "url": url, "robots": robots, "cache_ttl_s": 60 }));
+            assert_eq!(planned.order.robots, wish);
+            assert!(planned.order.cache.is_none());
         }
+        assert_eq!(
+            planned_ok(json!({ "url": url })).order.robots,
+            RobotsWish::Policy
+        );
 
         // Options without the part they belong to are a mistake, not noise.
-        for field in ["screenshot", "pdf", "xhr"] {
+        for field in ["screenshot", "pdf", "xhr", "extract"] {
             let refused = refused(json!({ "url": url, field: {} }));
             assert_eq!(refused.code(), ErrorCode::ValidationFailed, "{field}");
             assert_eq!(refused.problem().extensions["field"], field);

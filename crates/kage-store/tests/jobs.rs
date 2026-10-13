@@ -819,6 +819,7 @@ async fn fetched(
         block: None,
         robots: None,
         cached: false,
+        cached_at: None,
         reason: None,
         created_at: at,
     };

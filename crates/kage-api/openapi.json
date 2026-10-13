@@ -2671,7 +2671,7 @@
           },
           "skipped": {
             "$ref": "#/components/schemas/FreeForm",
-            "description": "Addresses the crawl knows and does not read, by reason: `off_site`,\n`too_deep`, `denied`, `not_allowed`, `not_a_page` (a file),\n`hidden` (no reader can see the link), `already_read` (another\naddress redirected there), `ssrf_denied`."
+            "description": "Addresses the crawl knows and does not read, by reason: `off_site`,\n`too_deep`, `denied`, `not_allowed`, `not_a_page` (a file),\n`hidden` (no reader can see the link), `already_read` (another\naddress redirected there), `ssrf_denied`, `robots_denied` (the\nsite's `robots.txt` disallows it and its policy keeps to the file)."
           },
           "waiting": {
             "type": "integer",
@@ -2776,7 +2776,9 @@
           "request_kind_needs_referer",
           "preflight_required",
           "timeout_too_short",
-          "not_available_yet",
+          "robots_enforced",
+          "robots_ignored",
+          "cache_ttl_too_long",
           "invalid_pacing",
           "invalid_session_id",
           "session_not_found",
@@ -2802,10 +2804,36 @@
           "internal"
         ]
       },
+      "ExtractField": {
+        "type": "object",
+        "description": "What of a page is extracted; with `include: [\"extract\"]`.",
+        "properties": {
+          "links": {
+            "type": "boolean",
+            "description": "Whether the links of the page are listed."
+          },
+          "markdown": {
+            "type": "boolean",
+            "description": "Whether the main content is also written as markdown."
+          }
+        },
+        "additionalProperties": false
+      },
       "ExtractStep": {
         "type": "object",
         "description": "Capture the page as it is at this point of the flow.",
         "properties": {
+          "extract": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ExtractField",
+                "description": "What is extracted from the page as it is at this point; with\n`extract`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "include": {
             "type": [
               "array",
@@ -2814,7 +2842,7 @@
             "items": {
               "$ref": "#/components/schemas/Include"
             },
-            "description": "What to capture: `dom`, `raw`, `headers`, `xhr`, `console`. `dom`\nand `headers` unless said."
+            "description": "What to capture: `dom`, `raw`, `headers`, `extract`, `xhr`,\n`console`. `dom` and `headers` unless said."
           },
           "timeout_ms": {
             "type": [
@@ -2836,6 +2864,161 @@
                 "type": "null"
               }
             ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "ExtractView": {
+        "type": "object",
+        "description": "What a page says (spec §14): read from the document the visit captured,\nnever by a second request.",
+        "required": [
+          "meta",
+          "opengraph",
+          "twitter",
+          "jsonld",
+          "jsonld_skipped",
+          "links_truncated",
+          "headings",
+          "text",
+          "word_count",
+          "thin_content"
+        ],
+        "properties": {
+          "canonical": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`<link rel=\"canonical\">`, as an absolute address."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`<meta name=\"description\">`."
+          },
+          "headings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeadingView"
+            },
+            "description": "The headings of the main content, in order."
+          },
+          "jsonld": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FreeForm"
+            },
+            "description": "Every JSON-LD block that parses, a top-level array as its members;\nat most 64."
+          },
+          "jsonld_skipped": {
+            "type": "integer",
+            "format": "int32",
+            "description": "JSON-LD blocks left out: not JSON, too large, or beyond the 64.",
+            "minimum": 0
+          },
+          "lang": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The language the document says it is in (`<html lang>`)."
+          },
+          "links": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/LinkView"
+            },
+            "description": "The links a reader can see, in document order; null when the\nrequest said `extract.links: false`."
+          },
+          "links_truncated": {
+            "type": "boolean",
+            "description": "Whether the page held more links than are listed."
+          },
+          "markdown": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The main content as markdown: headings, lists, fenced code with its\nlanguage, tables, absolute links. Null when the request said\n`extract.markdown: false`."
+          },
+          "meta": {
+            "type": "object",
+            "description": "Every `<meta name>` with content, by name in lower case: its values\nin document order.",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "modified_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the page says it was last changed, read the same way."
+          },
+          "opengraph": {
+            "type": "object",
+            "description": "The OpenGraph properties (`og:`, `article:` and their kin), by\nname.",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "published_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the page says it was published: from its JSON-LD, else its\n`article:` metadata, else other metadata, else a `<time>` of its\ncontent. In UTC when the page named a zone, as written when not."
+          },
+          "text": {
+            "type": "string",
+            "description": "The main content as text: what a reader would read, without the\nnavigation, the side bars and the footer."
+          },
+          "thin_content": {
+            "type": "boolean",
+            "description": "Whether the main content has fewer words than `extract.thin_words`\n(80 unless configured): the document gave a reader next to nothing.\nOn the http path that usually means scripts or a wall."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The document's `<title>`."
+          },
+          "twitter": {
+            "type": "object",
+            "description": "The Twitter card properties, by name.",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "word_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many words the main content has.",
+            "minimum": 0
           }
         },
         "additionalProperties": false
@@ -2899,16 +3082,20 @@
             "description": "The body of a `POST`, as text; needs `render: http` and a\n`Content-Type` header."
           },
           "cache_ttl_s": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int64",
-            "description": "How long a cached result may be served for, in seconds. The cache\narrives with milestone M11; until then only 0 is accepted.",
+            "description": "For how many seconds the result may be served from the response\ncache: a later request that asks for the same is answered with it,\nwithout a visit, while it is no older than that request's own\n`cache_ttl_s`. 0 is never. Left out, the site's policy decides\n(never, unless the operator set `cache.ttl`). At most the site's\n`cache.max_ttl` (a day unless configured): more is refused with\n`cache_ttl_too_long`. Not in a session.",
+            "example": 600,
             "minimum": 0
           },
           "extract": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/FreeForm",
-                "description": "Options of the extraction, which arrives with milestone M11."
+                "$ref": "#/components/schemas/ExtractField",
+                "description": "What is extracted; with `include: [\"extract\"]`."
               },
               {
                 "type": "null"
@@ -3003,7 +3190,7 @@
           },
           "robots": {
             "$ref": "#/components/schemas/RobotsField",
-            "description": "What to do about robots.txt."
+            "description": "What to do about the site's `robots.txt`."
           },
           "screenshot": {
             "oneOf": [
@@ -3151,7 +3338,15 @@
           },
           "cached": {
             "type": "boolean",
-            "description": "Always false until milestone M11."
+            "description": "Whether the result was served from the response cache: nothing was\nasked of the site, `attempts` is empty, and the page is the one a\nvisit at `cached_at` got."
+          },
+          "cached_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the page of a result served from the cache was fetched."
           },
           "console": {
             "type": [
@@ -3182,8 +3377,8 @@
           "extract": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/FreeForm",
-                "description": "Always null until milestone M11."
+                "$ref": "#/components/schemas/ExtractView",
+                "description": "What the page says; with `include: [\"extract\"]`. Null for a fetch\nthat did not get its page and for a response that is no HTML\ndocument."
               },
               {
                 "type": "null"
@@ -3270,8 +3465,8 @@
           "robots": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/FreeForm",
-                "description": "The robots.txt verdict; null until milestone M11."
+                "$ref": "#/components/schemas/RobotsView",
+                "description": "What the site's `robots.txt` says of the address. Null for a\nrequest that ended before it was looked at (a refused URL)."
               },
               {
                 "type": "null"
@@ -3367,6 +3562,17 @@
               {
                 "$ref": "#/components/schemas/FlowBehaviorField",
                 "description": "What the flow may change of how its persona behaves."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "extract": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ExtractField",
+                "description": "What is extracted from the last page; with `include: [\"extract\"]`."
               },
               {
                 "type": "null"
@@ -3868,6 +4074,35 @@
             "description": "The value. Of a `Set-Cookie` only the cookie's name and attributes:\nits value reads `[redacted]` unless the operator exposes it."
           }
         }
+      },
+      "HeadingView": {
+        "type": "object",
+        "description": "A heading of a page's main content.",
+        "required": [
+          "level",
+          "text"
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its `id`, when it has one: the fragment that links to it."
+          },
+          "level": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1 for `h1` to 6 for `h6`.",
+            "maximum": 6,
+            "minimum": 1
+          },
+          "text": {
+            "type": "string",
+            "description": "Its text."
+          }
+        },
+        "additionalProperties": false
       },
       "Include": {
         "type": "string",
@@ -4418,6 +4653,38 @@
             "description": "What it may do."
           }
         }
+      },
+      "LinkView": {
+        "type": "object",
+        "description": "A link of a page.",
+        "required": [
+          "url",
+          "text",
+          "rel",
+          "same_site"
+        ],
+        "properties": {
+          "rel": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The tokens of its `rel`, in lower case."
+          },
+          "same_site": {
+            "type": "boolean",
+            "description": "Whether it leads to a page of the site the document was loaded\nfrom (the same registrable domain)."
+          },
+          "text": {
+            "type": "string",
+            "description": "Its text."
+          },
+          "url": {
+            "type": "string",
+            "description": "Where it leads, as an absolute address."
+          }
+        },
+        "additionalProperties": false
       },
       "LinksView": {
         "type": "object",
@@ -5321,13 +5588,47 @@
       },
       "RobotsField": {
         "type": "string",
-        "description": "What to do about robots.txt. Fetching and enforcing it arrive with\nmilestone M11; until then no verdict is reported and `enforce` is\nrefused.",
+        "description": "What to do about the site's `robots.txt`. Whether the file is asked\nfor at all is the site's policy (`ignore` unless the operator says\notherwise): a reader never asks for it, so asking marks an address. A\nrequest may ask for more care than the policy takes and never for\nless, and never makes Kage ask a site its policy leaves alone.",
         "enum": [
           "policy",
           "report",
           "enforce",
           "ignore"
         ]
+      },
+      "RobotsView": {
+        "type": "object",
+        "description": "What the site's `robots.txt` says of the address (spec §14).",
+        "required": [
+          "fetched",
+          "allowed"
+        ],
+        "properties": {
+          "allowed": {
+            "type": "boolean",
+            "description": "Whether the file allows the address; true when nothing is known.\nUnder `report` a page that is not allowed is fetched all the same."
+          },
+          "crawl_delay": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The `Crawl-delay` of the group that applies, in seconds. Kept to\nonly where the file is enforced."
+          },
+          "fetched": {
+            "type": "boolean",
+            "description": "Whether the verdict is the file's. False when nothing is known of\nit: the site's policy never asks for it (the default), the request\nsaid `ignore`, or the site's scout has not brought it yet."
+          },
+          "matched_rule": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The line that decided, as `Allow: <pattern>` or `Disallow:\n<pattern>`; null when no rule matched.",
+            "example": "Disallow: /private"
+          }
+        }
       },
       "ScopeField": {
         "type": "string",

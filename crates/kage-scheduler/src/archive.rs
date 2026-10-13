@@ -82,6 +82,16 @@ pub trait Archive: Send + Sync + fmt::Debug {
         output: &AttemptOutput,
         now: DateTime<Utc>,
     ) -> Archived;
+
+    /// A reference of `request` to a body that is already stored: what a
+    /// result served from the cache points at (spec §15). Nothing is
+    /// written again. `None` when the body is gone.
+    async fn link(
+        &self,
+        request: RequestId,
+        artifact: ArtifactRef,
+        now: DateTime<Utc>,
+    ) -> Option<ArtifactRef>;
 }
 
 /// The archive over the artifact store. The sidecars write their files
@@ -102,7 +112,7 @@ fn content_type_of(headers: &[Header]) -> Option<&str> {
 }
 
 /// The bytes of a body the sidecar captured.
-fn bytes_of(body: &CapturedBody) -> Option<Vec<u8>> {
+pub(crate) fn bytes_of(body: &CapturedBody) -> Option<Vec<u8>> {
     match body.encoding {
         BodyEncoding::Utf8 => Some(body.data.clone().into_bytes()),
         BodyEncoding::Base64 => STANDARD.decode(body.data.as_bytes()).ok(),
@@ -325,6 +335,24 @@ impl Archive for StoreArchive {
             return self.keep_fetched(request, keep, fetched, now).await;
         }
         Archived::default()
+    }
+
+    async fn link(
+        &self,
+        request: RequestId,
+        artifact: ArtifactRef,
+        now: DateTime<Utc>,
+    ) -> Option<ArtifactRef> {
+        match self.store.link(artifact.id, request, now).await {
+            Ok(linked) => linked.map(|linked| ArtifactRef {
+                kind: artifact.kind,
+                id: linked.id,
+            }),
+            Err(error) => {
+                tracing::warn!(%request, artifact = %artifact.id, %error, "a stored body could not be pointed at");
+                None
+            }
+        }
     }
 }
 

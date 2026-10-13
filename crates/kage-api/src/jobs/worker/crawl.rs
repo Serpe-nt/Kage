@@ -12,9 +12,18 @@
 //!
 //! With `use_sitemaps` the sitemaps of the seeds' sites are read before
 //! the first page of each site, by a persona that is not the site's reader
-//! (a scout) and never by the reader itself: a reader does not ask for
-//! `/sitemap.xml`. A scout is a Firefox persona when one is there, because
-//! Chrome saves a gzipped sitemap as a file and shows nothing of it.
+//! (the site's scout) and never by the reader itself: a reader does not
+//! ask for `/sitemap.xml`. Where the site's policy has its `robots.txt`
+//! asked for, that file is read first, by the same scout, and the
+//! sitemaps it names take the place of the guess. A scout is a Firefox
+//! persona when one is there, because Chrome saves a gzipped sitemap as a
+//! file and shows nothing of it.
+//!
+//! Where a site's `robots.txt` is enforced, an address the file is known
+//! to disallow is never made a page of the crawl: it is left out with the
+//! reason `robots_denied`, like an address the guard refuses. The first
+//! page of an origin whose file is not known yet waits for it in the
+//! pipeline, like any fetch.
 //!
 //! What a crawl keeps besides its frontier (its counters, the tab of every
 //! visitor, the pages under way, its sitemaps) is stored with the job
@@ -29,18 +38,21 @@ use base64::Engine as _;
 use chrono::{DateTime, Utc};
 use kage_browser::contract::{BodyEncoding, NavigationErrorCode, PageResult};
 use kage_core::domain::{
-    Engine, FrontierEntry, FrontierSource, FrontierState, JobItem, JobItemState, JobState,
-    RenderMode,
+    FrontierEntry, FrontierSource, FrontierState, JobItem, JobItemState, JobState, RenderMode,
 };
 use kage_core::ids::{FrontierId, JobItemId, PersonaId, RequestId};
 use kage_core::outcome::Outcome;
+use kage_core::policy::RobotsMode;
 use kage_core::schedule::planner::Visitors;
 use kage_core::schedule::queue::Priority;
 use kage_crawl::frontier::{
     Entry, EntryId, FoundLink, Frontier, Left, PageRead, Recorded, Source, State, Way,
 };
-use kage_crawl::{html, site, sitemap};
-use kage_scheduler::{Arrival, FetchOrder, FetchReport, Reached};
+use kage_crawl::{site, sitemap};
+use kage_scheduler::{
+    Arrival, FetchOrder, FetchReport, Peek, Reached, RobotsRead, RobotsWish, SchedulerError,
+    ScoutNeed, robots,
+};
 use kage_store::StoreError;
 use serde_json::{Map, Value, json};
 use tokio::sync::OwnedSemaphorePermit;
@@ -52,6 +64,7 @@ use super::{
     error_of, later,
 };
 use crate::error::ErrorCode;
+use crate::fetch::request::RobotsField;
 use crate::fetch::result::ScrollEndField;
 use crate::jobs::crawl::{
     CrawlItemView, CrawlRules, Flight, Kept, LinksView, NearDuplicateView, ReachedField,
@@ -77,7 +90,17 @@ enum Back {
         url: String,
         end: Box<ItemEnd>,
     },
+    /// The `robots.txt` of a seed's origin, read for the sitemaps it
+    /// names.
+    Robots {
+        site: String,
+        url: String,
+        read: Result<RobotsRead, SchedulerError>,
+    },
 }
+
+/// The path of the file a site says its rules for robots in.
+const ROBOTS_PATH: &str = "/robots.txt";
 
 /// What became of an attempt to begin a page.
 enum Begun {
@@ -202,19 +225,15 @@ fn page_of(report: &FetchReport, asked: &Url) -> PageRead {
         .and_then(|last| last.final_url.as_deref())
         .and_then(|url| Url::parse(url).ok())
         .unwrap_or_else(|| asked.clone());
-    let document = last.and_then(|last| {
-        last.page
-            .as_ref()
-            .and_then(|page| page.dom_html.clone())
-            .or_else(|| last.fetched.as_ref().map(|fetched| fetched.text()))
-    });
-    let read = document.map(|document| html::read(&document, &landed));
+    // What the pipeline read from the page's document: the tree is parsed
+    // once, for this and for what the request asked to have extracted.
+    let read = report.page.as_ref();
     let seen = last.and_then(|last| last.page.as_ref()).and_then(|page| {
         page.links
             .as_ref()
             .map(|links| (links, page.links_truncated))
     });
-    let (links, links_truncated) = match (seen, &read) {
+    let (links, links_truncated) = match (seen, read) {
         (Some((links, truncated)), _) => (
             links
                 .iter()
@@ -245,7 +264,7 @@ fn page_of(report: &FetchReport, asked: &Url) -> PageRead {
         final_url: landed,
         links,
         links_truncated,
-        text: read.map(|read| read.main_text).unwrap_or_default(),
+        text: read.map(|read| read.main_text.clone()).unwrap_or_default(),
     }
 }
 
@@ -267,6 +286,8 @@ struct Crawl {
     session: Option<String>,
     /// The persona of the job's session, which reads every page.
     pinned: Option<PersonaId>,
+    /// What the crawl's pages say about `robots.txt`.
+    robots: RobotsWish,
     frontier: Frontier,
     /// The stored identity of every entry, by position: its id and when
     /// the crawl came to know it.
@@ -300,6 +321,7 @@ impl Crawl {
             config: state.config(),
             policies: &policies,
             resolver: state.resolver(),
+            key: runner.work.key.id,
         };
         let rules = match rules(&request, checks) {
             Ok(rules) => rules,
@@ -351,11 +373,18 @@ impl Crawl {
                 .map(|found| found.persona.id),
             None => None,
         };
+        let robots = request
+            .defaults
+            .as_ref()
+            .and_then(|defaults| defaults.get("robots"))
+            .and_then(|wish| serde_json::from_value::<RobotsField>(wish.clone()).ok())
+            .map_or(RobotsWish::Policy, RobotsWish::from);
         Ok(Ok(Self {
             rules,
             defaults: request.defaults.clone(),
             session: request.session_id.clone(),
             pinned,
+            robots,
             frontier,
             known,
             items,
@@ -504,7 +533,14 @@ impl Crawl {
             let (Some(site), true) = (site::of(seed), self.rules.use_sitemaps) else {
                 continue;
             };
-            let Ok(file) = seed.join("/sitemap.xml") else {
+            // Where the site's robots.txt is asked for, it is read first:
+            // the sitemaps it names take the place of the guess.
+            let first = if self.robots_mode(runner, seed) == RobotsMode::Ignore {
+                "/sitemap.xml"
+            } else {
+                ROBOTS_PATH
+            };
+            let Ok(file) = seed.join(first) else {
                 continue;
             };
             let sitemaps = &mut self.kept.progress.sitemaps;
@@ -681,6 +717,7 @@ impl Crawl {
             arrival: Some(arrival),
             exclude: self.excluded(&site, flight.slot),
             links: true,
+            page: true,
         };
         // The page is its visitor's: the persona of its place once the
         // crawl has one there, and nobody else while that one can go on.
@@ -736,12 +773,33 @@ impl Crawl {
             let url = pick.url.clone();
             if guard(&url, ssrf, runner.work.state.resolver())
                 .await
-                .is_ok()
+                .is_err()
             {
-                break (pick, url);
+                self.frontier.refuse(pick.entry);
+                self.persist(runner).await?;
+                continue;
             }
-            self.frontier.refuse(pick.entry);
-            self.persist(runner).await?;
+            // What the site's enforced robots.txt is known to disallow is
+            // left out the same way: no item, no request, no page of the
+            // budget.
+            let peek = runner
+                .work
+                .engine
+                .pipeline
+                .robots_peek(&url, self.robots)
+                .await?;
+            if let Peek::Denied(verdict) = peek {
+                tracing::debug!(
+                    job = %runner.job.id,
+                    url = url.as_str(),
+                    rule = verdict.matched_rule.as_deref(),
+                    "a page of a crawl is disallowed by robots.txt"
+                );
+                self.frontier.disallow(pick.entry);
+                self.persist(runner).await?;
+                continue;
+            }
+            break (pick, url);
         };
         let Ok(place) = Arc::clone(&runner.hub().in_flight).try_acquire_owned() else {
             return Ok(Begun::Starved);
@@ -860,16 +918,19 @@ impl Crawl {
 
     // --- sitemaps --------------------------------------------------------
 
-    /// Who may read a sitemap of a site, as an order says it: the engines
-    /// a scout is taken from and the personas it must not be. `None` when
-    /// nobody but the site's reader could ask.
-    async fn scout_for(
-        &self,
-        runner: &Runner,
-        site: &str,
-        host: &str,
-    ) -> Result<Option<(Vec<Engine>, Vec<PersonaId>)>, WorkError> {
+    /// What applies to the `robots.txt` of an address's site for this
+    /// crawl: its policy's mode, as far as the crawl's wish may move it. A
+    /// wish the policy does not allow asks nobody.
+    fn robots_mode(&self, runner: &Runner, url: &Url) -> RobotsMode {
+        let host = url.host_str().unwrap_or_default();
         let policy = runner.work.state.policies().current().domains.resolve(host);
+        robots::mode(policy.robots, self.robots).unwrap_or(RobotsMode::Ignore)
+    }
+
+    /// Who the crawl needs a site's scout not to be, and how many readers
+    /// the site has to keep: the personas that read the site for the
+    /// crawl, and as many as it has visitors.
+    fn scout_need(&self, site: &str) -> ScoutNeed {
         let mut readers: Vec<PersonaId> = self
             .kept
             .slots
@@ -879,35 +940,17 @@ impl Crawl {
             .filter_map(|slot| slot.persona)
             .collect();
         readers.extend(self.pinned);
-        let personas = runner.work.engine.pipeline.personas().await?;
-        let able: Vec<_> = personas
-            .iter()
-            .filter(|persona| persona.ready && policy.engines.contains(&persona.engine))
-            .collect();
-        let others: Vec<_> = able
-            .iter()
-            .filter(|persona| !readers.contains(&persona.id))
-            .collect();
-        // The scout takes one persona and the site's readers need theirs.
-        let needed = if self.pinned.is_some() {
-            1
-        } else {
-            1 + usize::try_from(self.rules.visitors.max(1)).unwrap_or(1)
-        };
-        if others.is_empty() || (self.pinned.is_none() && able.len() < needed) {
-            return Ok(None);
+        ScoutNeed {
+            readers,
+            // A session's persona reads whatever else happens.
+            readers_needed: if self.pinned.is_some() {
+                0
+            } else {
+                usize::try_from(self.rules.visitors.max(1)).unwrap_or(1)
+            },
+            priority: Priority::Job,
+            patience: Some(PATIENCE),
         }
-        // Chrome saves a gzipped sitemap as a file and shows nothing of
-        // it; Firefox reads it.
-        let firefox = others
-            .iter()
-            .any(|persona| persona.engine == Engine::Firefox);
-        let engines = if firefox {
-            vec![Engine::Firefox]
-        } else {
-            Vec::new()
-        };
-        Ok(Some((engines, readers)))
     }
 
     /// Sends a scout for the next sitemap of every site that has one
@@ -937,13 +980,58 @@ impl Crawl {
                 self.note_sitemap(&file, "failed", 0);
                 continue;
             };
-            let host = url.host_str().unwrap_or_default().to_owned();
-            let Some((engines, readers)) = self.scout_for(runner, &site, &host).await? else {
+            let need = self.scout_need(&site);
+            if url.path() == ROBOTS_PATH {
+                // The site's robots.txt, for the sitemaps it names: asked
+                // for by the site's scout when it is not known yet.
+                let Ok(place) = Arc::clone(&runner.hub().in_flight).try_acquire_owned() else {
+                    return Ok(true);
+                };
+                self.scouting.insert(site.clone());
+                self.held.remove(&site);
+                let pipeline = runner.work.engine.pipeline.clone();
+                let stop = runner.stop.subscribe();
+                let wish = self.robots;
+                set.spawn(async move {
+                    let _place = place;
+                    let read = pipeline.robots_read(&url, wish, need, stop).await;
+                    Back::Robots {
+                        site,
+                        url: file,
+                        read,
+                    }
+                });
+                continue;
+            }
+            // The site's scout: whoever asked for its robots.txt or a
+            // sitemap before, else one chosen now. One marked address a
+            // site, not two.
+            let scout = runner
+                .work
+                .engine
+                .pipeline
+                .scout_for(&url, &need.readers, need.readers_needed)
+                .await?;
+            let Some(scout) = scout else {
                 // Nobody but the reader could ask, and a reader does not.
                 self.note_sitemap(&file, "no_scout", 0);
                 self.persist(runner).await?;
                 continue;
             };
+            // A scout the site turned away is not waited for through its
+            // cooldown, and nobody asks in its place: the crawl reads on
+            // without the file.
+            let barred = runner
+                .work
+                .engine
+                .pipeline
+                .scout_barred(scout, &url)
+                .await?;
+            if barred.is_some_and(|until| until > later(now, PATIENCE)) {
+                self.note_sitemap(&file, "no_scout", 0);
+                self.persist(runner).await?;
+                continue;
+            }
             let Ok(place) = Arc::clone(&runner.hub().in_flight).try_acquire_owned() else {
                 return Ok(true);
             };
@@ -955,21 +1043,12 @@ impl Crawl {
             order.api_key = Some(runner.work.key.id);
             order.job = Some(runner.job.id);
             order.patience = Some(PATIENCE);
-            order.engines = engines;
-            order.exclude = readers;
+            order.pin = Some(scout);
+            order.scout = true;
             order.arrival = Some(Arrival::Typed);
             // A scout asks once: a file that did not come is not asked for
             // again from another address.
             order.max_retries = Some(0);
-            order.visitors = self
-                .kept
-                .scouts
-                .get(&site)
-                .and_then(|scouts| scouts.last())
-                .map(|scout| Visitors {
-                    known: vec![*scout],
-                    max: 1,
-                });
             order.spec = json!({ "url": file.as_str(), "sitemap": true });
             self.scouting.insert(site.clone());
             self.held.remove(&site);
@@ -1078,6 +1157,108 @@ impl Crawl {
                 self.note_sitemap(file, "index", taken);
             }
         }
+    }
+
+    /// Adds a sitemap of a site to those that wait to be read, when the
+    /// crawl does not know it and the site has not as many as it may.
+    /// Returns whether it was added.
+    fn add_sitemap(&mut self, runner: &Runner, site: &str, url: &Url) -> bool {
+        let most =
+            usize::try_from(runner.work.state.config().crawl.max_sitemaps).unwrap_or(usize::MAX);
+        let sitemaps = &mut self.kept.progress.sitemaps;
+        // The robots.txt itself is no sitemap of the site.
+        let of_site = sitemaps
+            .iter()
+            .filter(|one| one.site == site && !one.url.ends_with(ROBOTS_PATH))
+            .count();
+        if of_site >= most || sitemaps.iter().any(|one| one.url == url.as_str()) {
+            return false;
+        }
+        sitemaps.push(SitemapView {
+            site: site.to_owned(),
+            url: url.to_string(),
+            state: WAITING.to_owned(),
+            urls: 0,
+        });
+        true
+    }
+
+    /// Takes the `robots.txt` of a seed's origin that came back: the
+    /// sitemaps it names wait to be read, and where it names none (or
+    /// there is no file) the guess `/sitemap.xml` does, as without it.
+    async fn robots_back(
+        &mut self,
+        runner: &Runner,
+        site: String,
+        file: &str,
+        read: Result<RobotsRead, SchedulerError>,
+    ) -> Result<(), WorkError> {
+        self.scouting.remove(&site);
+        let Ok(origin) = Url::parse(file) else {
+            self.note_sitemap(file, "failed", 0);
+            return self.persist(runner).await;
+        };
+        let guess = origin.join("/sitemap.xml").ok();
+        let (state, named, guessed) = match read {
+            Ok(RobotsRead::Read { found, sitemaps }) => {
+                let mut named = 0_u64;
+                for sitemap in &sitemaps {
+                    // A sitemap of another site is that site's.
+                    let Ok(url) = Url::parse(sitemap) else {
+                        continue;
+                    };
+                    if site::of(&url).as_deref() == Some(site.as_str())
+                        && self.add_sitemap(runner, &site, &url)
+                    {
+                        named += 1;
+                    }
+                }
+                (if found { "read" } else { "missing" }, named, named == 0)
+            }
+            // The site's policy leaves the file alone by now.
+            Ok(RobotsRead::NotAsked) => ("not_read", 0, true),
+            Ok(RobotsRead::Unreachable { until }) => {
+                if self.robots_mode(runner, &origin) == RobotsMode::Enforce {
+                    // Nothing of the origin is asked for until the file
+                    // can be had: the site waits, and the file with it.
+                    self.held
+                        .insert(site, (until, kage_scheduler::ROBOTS_UNAVAILABLE.to_owned()));
+                    return self.persist(runner).await;
+                }
+                ("failed", 0, true)
+            }
+            // Nobody but a reader could ask, for the file or for a
+            // sitemap, and a reader does not.
+            Ok(RobotsRead::NoScout) => ("no_scout", 0, false),
+            Ok(RobotsRead::Later(deferred)) => {
+                let reason = deferred.reason.as_str();
+                let until = deferred
+                    .retry_at
+                    .unwrap_or_else(|| later(runner.now(), default_wait(reason)));
+                let long = until > later(runner.now(), PATIENCE);
+                if long && self.robots_mode(runner, &origin) != RobotsMode::Enforce {
+                    // Where the file is only reported nothing waits for
+                    // it: the scout is away (the site turned it away, or
+                    // it sleeps), and the crawl reads on without the file
+                    // and without the sitemaps only it could ask for.
+                    ("no_scout", 0, false)
+                } else {
+                    self.held.insert(site, (until, reason.to_owned()));
+                    return self.persist(runner).await;
+                }
+            }
+            // Nobody asked it to stop yet: it waits its turn again.
+            Ok(RobotsRead::Stopped) => return Ok(()),
+            Err(error) => {
+                tracing::warn!(job = %runner.job.id, file, %error, "a robots.txt could not be read for a crawl");
+                ("failed", 0, true)
+            }
+        };
+        self.note_sitemap(file, state, named);
+        if guessed && let Some(guess) = guess {
+            self.add_sitemap(runner, &site, &guess);
+        }
+        self.persist(runner).await
     }
 
     /// Takes a sitemap that came back.
@@ -1408,6 +1589,9 @@ impl Crawl {
                 (_, Back::Sitemap { site, url, end }) => {
                     self.sitemap_back(runner, site, &url, *end).await?;
                 }
+                (_, Back::Robots { site, url, read }) => {
+                    self.robots_back(runner, site, &url, read).await?;
+                }
                 (
                     _,
                     Back::Page {
@@ -1568,6 +1752,9 @@ impl Runner {
                         }
                         Back::Sitemap { site, url, end } => {
                             crawl.sitemap_back(self, site, &url, *end).await?;
+                        }
+                        Back::Robots { site, url, read } => {
+                            crawl.robots_back(self, site, &url, read).await?;
                         }
                     }
                 }

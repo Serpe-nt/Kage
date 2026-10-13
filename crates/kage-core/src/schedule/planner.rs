@@ -85,6 +85,11 @@ string_enum! {
         NoPersona => "no_persona",
         /// The scheduler is shutting down.
         ShuttingDown => "shutting_down",
+        /// The site's `robots.txt` is enforced and what it says cannot be
+        /// had now (spec §14). Never the planner's own answer: the pipeline
+        /// gives it, with `robots_denied` to a caller that waits for its
+        /// page and as the reason a job's fetch is put off.
+        RobotsUnavailable => "robots_unavailable",
     }
 }
 
@@ -216,6 +221,29 @@ pub struct Work {
     pub not_before: Option<DateTime<Utc>>,
     /// Refuse instead of waiting past this moment.
     pub give_up_at: Option<DateTime<Utc>>,
+    /// The least time from the start of this page to the start of the
+    /// persona's next one on the domain: the `Crawl-delay` of a site whose
+    /// `robots.txt` is enforced. A gap the persona's pacing draws shorter
+    /// is this long and up to a fifth longer, never a constant.
+    pub gap_floor: Option<StdDuration>,
+}
+
+/// A gap with a floor under it: the gap as drawn when it is at least the
+/// floor, else the floor and up to a fifth of it more. What the site asked
+/// for is kept to the millisecond, and no two gaps at the floor are alike.
+pub fn floored(
+    drawn: StdDuration,
+    floor: Option<StdDuration>,
+    seed: &Seed,
+    page: u32,
+) -> StdDuration {
+    let Some(floor) = floor.filter(|floor| drawn < *floor) else {
+        return drawn;
+    };
+    let share = Seed::derive("gap-floor", &[seed.as_bytes(), &page.to_le_bytes()])
+        .rng()
+        .unit();
+    floor + floor.mul_f64(share * 0.2)
 }
 
 /// One attempt that may leave now.
@@ -1070,7 +1098,8 @@ impl Planner {
             cadence.pages = cadence.pages.max(1);
         } else {
             let gap = cadence.sampler.next_gap();
-            cadence.next_at = now + chrono_of(gap.wait);
+            let wait = floored(gap.wait, work.gap_floor, &cadence.seed, cadence.pages);
+            cadence.next_at = now + chrono_of(wait);
             cadence.on_break = gap.after_burst;
             cadence.visiting = !(gap.after_visit || woken);
             cadence.pages = cadence.pages.saturating_add(1);

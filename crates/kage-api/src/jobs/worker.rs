@@ -68,11 +68,14 @@ use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, watch};
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
-use super::request::{Checks, FlowJob, JobRequest, plan_flow, stored_progress, stored_request};
+use super::request::{
+    Checks, FlowJob, JobRequest, StepKeep, plan_flow, stored_progress, stored_request,
+};
 use super::webhook::{self, WebhookSender};
-use crate::error::ErrorCode;
+use crate::error::{ApiError, ErrorCode};
 use crate::fetch::conflict_of;
 use crate::fetch::request::{FetchRequest, Planned, plan};
+use crate::fetch::terms::{CacheUse, settle};
 use crate::state::{ApiState, EngineParts};
 
 mod crawl;
@@ -293,6 +296,11 @@ struct Tune {
     exclude: Vec<PersonaId>,
     /// Whether the links of the page are brought back.
     links: bool,
+    /// Whether the page is a crawl's: it is a visit every time (it fills
+    /// the response cache and is never answered from it), and what a
+    /// crawl reads of it comes back with its report, read from its
+    /// document once.
+    page: bool,
 }
 
 /// What working one job needs.
@@ -312,11 +320,22 @@ impl Work {
 
     /// The request of an item as the pipeline takes it, checked again
     /// under the policies in force now.
-    fn planned(&self, input: &Value) -> Result<Planned, String> {
+    fn planned(&self, input: &Value, cache: CacheUse) -> Result<Planned, String> {
         let request: FetchRequest = serde_json::from_value(input.clone())
             .map_err(|_| ErrorCode::ValidationFailed.as_str().to_owned())?;
         let policies = self.state.policies().current();
-        plan(&request, &policies.pacing).map_err(|error| error.code().as_str().to_owned())
+        let code = |error: ApiError| error.code().as_str().to_owned();
+        let mut planned = plan(&request, &policies.pacing).map_err(code)?;
+        settle(
+            &mut planned,
+            &request,
+            self.state.config(),
+            &policies,
+            self.key.id,
+            cache,
+        )
+        .map_err(code)?;
+        Ok(planned)
     }
 
     /// Pins an order to the job's session, when it has one.
@@ -469,7 +488,12 @@ impl Work {
             error,
             outcome: None,
         };
-        let mut planned = match self.planned(&item.input) {
+        let cache = if tune.page {
+            CacheUse::Fill
+        } else {
+            CacheUse::ReadAndFill
+        };
+        let mut planned = match self.planned(&item.input, cache) {
             Ok(planned) => planned,
             Err(error) => return failed(error),
         };
@@ -487,11 +511,18 @@ impl Work {
         if let Err(error) = self.pin(&mut planned).await {
             return failed(error);
         }
-        // A page counts against the key's day when its request begins.
-        if earlier.is_none()
-            && let Err(end) = self.spend_page().await
-        {
-            return end;
+        // A page counts against the key's day when its request begins,
+        // unless the response cache holds it: that is no visit.
+        if earlier.is_none() {
+            let held = self
+                .engine
+                .pipeline
+                .has_cached(&planned.order)
+                .await
+                .unwrap_or(false);
+            if !held && let Err(end) = self.spend_page().await {
+                return end;
+            }
         }
         let request = item.request_id.unwrap_or_default();
         let now = self.now();
@@ -520,6 +551,7 @@ impl Work {
             patience: Some(PATIENCE),
             arrival: tune.arrival,
             exclude: tune.exclude,
+            read_page: tune.page,
             ..planned.order
         };
         if tune.links {
@@ -534,7 +566,7 @@ impl Work {
         let Some(request) = item.request_id else {
             return;
         };
-        let Ok(planned) = self.planned(&item.input) else {
+        let Ok(planned) = self.planned(&item.input, CacheUse::Nothing) else {
             return;
         };
         let store = self.state.store();
@@ -1127,7 +1159,7 @@ impl Runner {
         request: Option<RequestId>,
         first: JobItemId,
         stop: Stop,
-    ) -> (RequestId, Vec<Option<kage_scheduler::Keep>>, ItemEnd) {
+    ) -> (RequestId, Vec<Option<StepKeep>>, ItemEnd) {
         let failed = |error: &str| ItemEnd::Failed {
             error: error.to_owned(),
             outcome: None,
@@ -1142,6 +1174,7 @@ impl Runner {
             config: work.state.config(),
             policies: &policies,
             resolver: work.state.resolver(),
+            key: work.key.id,
         };
         let mut planned = match plan_flow(&flow, checks).await {
             Ok(planned) => planned,
@@ -1341,6 +1374,7 @@ impl Runner {
                 config: self.work.state.config(),
                 policies: &policies,
                 resolver: self.work.state.resolver(),
+                key: self.work.key.id,
             };
             if let Ok(planned) = plan_flow(&flow, checks).await {
                 let earlier = self
@@ -1378,7 +1412,7 @@ impl Runner {
         &self,
         open: Vec<JobItem>,
         report: &FetchReport,
-        keeps: &[Option<kage_scheduler::Keep>],
+        keeps: &[Option<StepKeep>],
     ) -> Result<(), WorkError> {
         let run = report.last.as_ref().and_then(|last| last.flow.as_ref());
         for mut item in open {
@@ -1427,13 +1461,15 @@ impl Runner {
             }));
             let mut outcome = None;
             if let Some(page) = step.capture.as_deref() {
+                let kept = keeps.get(index).copied().flatten().unwrap_or_default();
                 let kept = self
                     .work
                     .engine
                     .pipeline
                     .keep_capture(Capture {
                         page,
-                        keep: keeps.get(index).copied().flatten().unwrap_or_default(),
+                        keep: kept.keep,
+                        extract: kept.extract,
                         api_key: Some(self.work.key.id),
                         job: Some(self.job.id),
                         session: self.work.session.clone(),

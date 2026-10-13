@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO site_scouts (site, persona_id, since) VALUES ($1, $2, $3)\n             ON CONFLICT (site) DO UPDATE\n             SET persona_id = EXCLUDED.persona_id, since = EXCLUDED.since\n             WHERE site_scouts.persona_id <> EXCLUDED.persona_id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e20c6add728bc5f2cecc85f3b0ed96eb618f7a1ddfe359a536eeecbec943a012"
+}

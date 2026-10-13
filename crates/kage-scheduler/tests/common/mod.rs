@@ -6,6 +6,8 @@
 //!   block signatures and the domain rules a test writes.
 //! - [`Script`]: an attempt executor that answers what a test scripted and
 //!   records what it was asked.
+//! - [`document`], [`file`]: a page as a browser brings it back, with a
+//!   document or with the body of a file.
 //! - [`World`]: a scheduler over the in-memory backend with a pipeline on
 //!   top, on tokio's clock, so a test that pauses the timer steps through
 //!   hours in milliseconds.
@@ -35,6 +37,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
+use kage_browser::contract::PageResult;
 use kage_core::alert::{AlertSink, MemoryAlertSink};
 use kage_core::classifier::Classification;
 use kage_core::config::Config;
@@ -184,6 +187,67 @@ pub fn blocked(outcome: Outcome, confidence: f32) -> AttemptOutput {
     answered(outcome, Some(block), status)
 }
 
+/// A page as a browser brings it back from `url`, before anything a test
+/// lays over it.
+fn page(url: &str, status: u16, content_type: &str, over: &serde_json::Value) -> AttemptOutput {
+    let mut page = lab::example("PageResult");
+    page["url"] = serde_json::json!(url);
+    page["final_url"] = serde_json::json!(url);
+    page["redirects"] = serde_json::json!([]);
+    page["status"] = serde_json::json!(status);
+    page["error"] = serde_json::Value::Null;
+    page["headers"] = serde_json::json!([{ "name": "content-type", "value": content_type }]);
+    page["dom_html"] = serde_json::Value::Null;
+    page["raw_body"] = serde_json::Value::Null;
+    page["links"] = serde_json::Value::Null;
+    page["links_truncated"] = serde_json::json!(false);
+    page["xhr"] = serde_json::json!([]);
+    page["console"] = serde_json::json!([]);
+    page["screenshot"] = serde_json::Value::Null;
+    page["pdf"] = serde_json::Value::Null;
+    if let serde_json::Value::Object(over) = over {
+        for (key, value) in over {
+            page[key.as_str()] = value.clone();
+        }
+    }
+    let page: PageResult = serde_json::from_value(page).unwrap();
+    let outcome = if status >= 500 {
+        Outcome::ProviderError
+    } else {
+        Outcome::Ok
+    };
+    AttemptOutput::of_page(
+        Box::new(page),
+        answered(outcome, None, status).classification,
+    )
+}
+
+/// The page of `url` with `html` as the document the browser had.
+pub fn document(url: &str, html: &str) -> AttemptOutput {
+    page(
+        url,
+        200,
+        "text/html; charset=utf-8",
+        &serde_json::json!({ "dom_html": html }),
+    )
+}
+
+/// What a browser brings back of a file it shows as text (a
+/// `robots.txt`): the body as the site sent it, with `status`.
+pub fn file(url: &str, status: u16, body: &str) -> AttemptOutput {
+    page(
+        url,
+        status,
+        "text/plain",
+        &serde_json::json!({
+            "dom_html": format!("<html><head></head><body><pre>{body}</pre></body></html>"),
+            "raw_body": {
+                "data": body, "encoding": "utf8", "bytes": body.len(), "truncated": false,
+            },
+        }),
+    )
+}
+
 /// A server error with no vendor marker.
 pub fn server_error(status: u16) -> AttemptOutput {
     let mut output = answered(Outcome::ProviderError, None, status);
@@ -239,9 +303,12 @@ pub struct Seen {
 
 type Reply = Box<dyn FnOnce(&AttemptJob) -> AttemptOutput + Send>;
 
+type Rule = Box<dyn Fn(&AttemptJob) -> Option<AttemptOutput> + Send>;
+
 /// An executor that answers what a test scripted, in order, and a served
 /// page once the script is over. Every attempt takes `took` on the clock.
 pub struct Script {
+    rules: Mutex<Vec<Rule>>,
     replies: Mutex<VecDeque<Reply>>,
     seen: Mutex<Vec<Seen>>,
     took: Mutex<Duration>,
@@ -257,6 +324,7 @@ impl fmt::Debug for Script {
 impl Script {
     fn new(clock: Arc<dyn Clock>) -> Self {
         Self {
+            rules: Mutex::new(Vec::new()),
             replies: Mutex::new(VecDeque::new()),
             seen: Mutex::new(Vec::new()),
             took: Mutex::new(Duration::from_millis(800)),
@@ -277,6 +345,21 @@ impl Script {
     ) -> &Self {
         self.replies.lock().unwrap().push_back(Box::new(reply));
         self
+    }
+
+    /// Every attempt `rule` has an answer for gets that answer, whenever
+    /// it comes and before anything scripted in order: for what is asked
+    /// for beside the pages of a test (a `robots.txt`).
+    pub fn when(&self, rule: impl Fn(&AttemptJob) -> Option<AttemptOutput> + Send + 'static) {
+        self.rules.lock().unwrap().push(Box::new(rule));
+    }
+
+    /// The addresses of the attempts asked for so far, in order.
+    pub fn urls(&self) -> Vec<String> {
+        self.seen()
+            .iter()
+            .map(|seen| seen.job.url.to_string())
+            .collect()
     }
 
     /// How long every later attempt takes.
@@ -309,6 +392,10 @@ impl AttemptExecutor for Script {
         });
         let took = *self.took.lock().unwrap();
         tokio::time::sleep(took).await;
+        let ruled = self.rules.lock().unwrap().iter().find_map(|rule| rule(job));
+        if let Some(output) = ruled {
+            return output;
+        }
         let reply = self.replies.lock().unwrap().pop_front();
         reply.map_or_else(ok, |reply| reply(job))
     }
@@ -440,6 +527,7 @@ impl World {
             retry_pause: None,
             not_before: None,
             give_up_at: None,
+            gap_floor: None,
         }
     }
 

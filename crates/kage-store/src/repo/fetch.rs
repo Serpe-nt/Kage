@@ -103,8 +103,9 @@ impl RequestRepo<'_> {
         .transpose()
     }
 
-    /// How many requests a key has made since `since`: what its daily page
-    /// budget is counted against.
+    /// How many requests a key has made since `since` that were not served
+    /// from the cache: what its daily page budget is counted against. A
+    /// page that was not fetched is not a page of the budget (spec §15).
     ///
     /// # Errors
     ///
@@ -116,7 +117,9 @@ impl RequestRepo<'_> {
     ) -> Result<u64, StoreError> {
         let count = sqlx::query_scalar!(
             r#"SELECT count(*) AS "count!" FROM requests
-               WHERE api_key_id = $1 AND created_at >= $2"#,
+               WHERE api_key_id = $1 AND created_at >= $2
+                 AND NOT EXISTS (SELECT 1 FROM results
+                                 WHERE results.request_id = requests.id AND results.cached)"#,
             api_key_id.as_uuid(),
             since,
         )
@@ -363,6 +366,7 @@ struct ResultRow {
     block: Option<serde_json::Value>,
     robots: Option<serde_json::Value>,
     cached: bool,
+    cached_at: Option<DateTime<Utc>>,
     reason: Option<String>,
     created_at: DateTime<Utc>,
 }
@@ -387,6 +391,7 @@ impl TryFrom<ResultRow> for FetchRecord {
             block: from_json_opt((TABLE, "block"), row.block)?,
             robots: from_json_opt((TABLE, "robots"), row.robots)?,
             cached: row.cached,
+            cached_at: row.cached_at,
             reason: row.reason,
             created_at: row.created_at,
         })
@@ -404,8 +409,9 @@ impl ResultRepo<'_> {
         sqlx::query!(
             "INSERT INTO results (id, request_id, outcome, status, headers, final_url, redirects,
                                   extract, xhr, artifacts, persona, block, robots, cached,
-                                  reason, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
+                                  cached_at, reason, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+                     $17)",
             record.id.as_uuid(),
             record.request_id.as_uuid(),
             record.outcome.as_str(),
@@ -420,6 +426,7 @@ impl ResultRepo<'_> {
             to_json_opt((TABLE, "block"), record.block.as_ref())?,
             to_json_opt((TABLE, "robots"), record.robots.as_ref())?,
             record.cached,
+            record.cached_at,
             record.reason,
             record.created_at,
         )
@@ -437,7 +444,7 @@ impl ResultRepo<'_> {
         sqlx::query_as!(
             ResultRow,
             "SELECT id, request_id, outcome, status, headers, final_url, redirects, extract, xhr,
-                    artifacts, persona, block, robots, cached, reason, created_at
+                    artifacts, persona, block, robots, cached, cached_at, reason, created_at
              FROM results WHERE id = $1",
             id.as_uuid(),
         )
@@ -459,7 +466,7 @@ impl ResultRepo<'_> {
         sqlx::query_as!(
             ResultRow,
             "SELECT id, request_id, outcome, status, headers, final_url, redirects, extract, xhr,
-                    artifacts, persona, block, robots, cached, reason, created_at
+                    artifacts, persona, block, robots, cached, cached_at, reason, created_at
              FROM results WHERE request_id = $1",
             request_id.as_uuid(),
         )

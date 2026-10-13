@@ -691,21 +691,22 @@ async fn a_request_that_cannot_be_made_as_asked_is_refused_and_nothing_is_fetche
             StatusCode::UNPROCESSABLE_ENTITY,
             "validation_failed",
         ),
-        // What arrives with a later milestone is refused, not ignored.
-        (
-            json!({ "url": page, "include": ["extract"] }),
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "not_available_yet",
-        ),
-        (
-            json!({ "url": page, "cache_ttl_s": 60 }),
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "not_available_yet",
-        ),
+        // What the site's policy does not let a request ask for is
+        // refused, not ignored.
         (
             json!({ "url": page, "robots": "enforce" }),
             StatusCode::UNPROCESSABLE_ENTITY,
-            "not_available_yet",
+            "robots_ignored",
+        ),
+        (
+            json!({ "url": page, "cache_ttl_s": 86_401 }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "cache_ttl_too_long",
+        ),
+        (
+            json!({ "url": page, "extract": { "links": false } }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation_failed",
         ),
         // What the API does not take at all.
         (

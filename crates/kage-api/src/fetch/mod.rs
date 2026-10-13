@@ -8,16 +8,20 @@
 //!    session and never moves one: a persona that changed under an id
 //!    would show a site one visitor changing address in the middle of a
 //!    visit.
-//! 3. The page counts against the key's daily budget.
-//! 4. The pipeline fetches. A block is a result (`200` with its outcome),
-//!    not an error.
-//! 5. A fetch that outlasts `scheduler.sync_wall_time` runs on as a job:
+//! 3. What the request says about `robots.txt`, the cache and extraction
+//!    is settled against the policy of its site ([`terms`]).
+//! 4. The page counts against the key's daily budget, unless the response
+//!    cache holds it: a page that is not fetched is no page of the budget.
+//! 5. The pipeline fetches, or answers from the cache. A block is a result
+//!    (`200` with its outcome), not an error.
+//! 6. A fetch that outlasts `scheduler.sync_wall_time` runs on as a job:
 //!    the answer is `202` with the request's id, under which the result
 //!    will be found, and the id of the job that carries it on. From then
 //!    on it waits where a job waits and survives a stop of the server.
 
 pub(crate) mod request;
 pub(crate) mod result;
+pub(crate) mod terms;
 
 use axum::Json;
 use axum::extract::State;
@@ -30,7 +34,8 @@ use kage_persona::identity::http_spec;
 use kage_scheduler::{SchedulerError, Synchronous};
 
 use self::request::{FetchRequest, Planned, plan, url_refused};
-use self::result::{FetchAccepted, Viewer, from_report};
+use self::result::{FetchAccepted, Viewer, from_report, from_stored};
+use self::terms::{CacheUse, settle};
 use crate::auth::Caller;
 use crate::error::{ApiError, ApiResult, ErrorCode, Problem};
 use crate::extract::Body;
@@ -186,6 +191,14 @@ pub(crate) async fn fetch(
     };
     let policies = state.policies().current();
     let mut planned = plan(&request, &policies.pacing)?;
+    settle(
+        &mut planned,
+        &request,
+        state.config(),
+        &policies,
+        caller.key.id,
+        CacheUse::ReadAndFill,
+    )?;
     guard(
         &planned.order.url,
         state.config().security.ssrf(),
@@ -200,18 +213,26 @@ pub(crate) async fn fetch(
         planned.order.pin = Some(persona.id);
     }
 
-    let store = state.store().clone();
-    let key = caller.key.id;
-    state
-        .limits()
-        .spend_page(&caller.key, state.clock().now(), async move |since| {
-            store
-                .requests()
-                .count_for_key_since(key, since)
-                .await
-                .map_err(|error| ApiError::internal(&error))
-        })
-        .await?;
+    // A page the cache holds is no visit and no page of the budget.
+    let held = engine
+        .pipeline
+        .has_cached(&planned.order)
+        .await
+        .map_err(|error| failed(&error))?;
+    if !held {
+        let store = state.store().clone();
+        let key = caller.key.id;
+        state
+            .limits()
+            .spend_page(&caller.key, state.clock().now(), async move |since| {
+                store
+                    .requests()
+                    .count_for_key_since(key, since)
+                    .await
+                    .map_err(|error| ApiError::internal(&error))
+            })
+            .await?;
+    }
 
     let mut order = planned.order;
     order.api_key = Some(caller.key.id);
@@ -237,12 +258,16 @@ pub(crate) async fn fetch(
         .map_err(|error| failed(&error))?
     {
         Synchronous::Finished(report) => {
-            let result = from_report(
-                &report,
-                &planned.include,
-                session.as_ref().map(SessionId::as_str),
-                &viewer,
-            );
+            let session = session.as_ref().map(SessionId::as_str);
+            let result = match report.cached.as_deref() {
+                // Served from the cache: the stored result of the visit
+                // that filled it, with the bodies it kept.
+                Some(record) => {
+                    let bodies = crate::results::bodies(&state, record, &planned.include).await?;
+                    from_stored(record, &[], bodies, &planned.include, session, &viewer)
+                }
+                None => from_report(&report, &planned.include, session, &viewer),
+            };
             Ok(Json(result).into_response())
         }
         Synchronous::Overflowed(running) => {

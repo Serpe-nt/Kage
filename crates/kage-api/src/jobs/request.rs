@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use kage_browser::contract::{CaptureOptions, FlowAction};
 use kage_core::config::{Config, MAX_ATTEMPT_TIMEOUT};
+use kage_core::ids::ApiKeyId;
 use kage_core::pacing::PacingProfiles;
 use kage_core::policy::{DomainPolicies, PolicySet};
 use kage_scheduler::{FetchOrder, FlowPlan, Keep};
@@ -32,9 +33,10 @@ use utoipa::ToSchema;
 use super::crawl::CrawlJob;
 use crate::error::{ApiError, ApiResult, ErrorCode};
 use crate::fetch::request::{
-    FetchRequest, Include, PacingField, PdfField, PersonaHints, Planned, ScreenshotField, XhrField,
-    plan, url_refused,
+    ExtractField, FetchRequest, Include, PacingField, PdfField, PersonaHints, Planned,
+    ScreenshotField, XhrField, plan, url_refused,
 };
+use crate::fetch::terms::{CacheUse, settle};
 use crate::resolve::{HostResolver, guard};
 use crate::schema::FreeForm;
 
@@ -277,13 +279,17 @@ pub(crate) struct BackStep {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ExtractStep {
-    /// What to capture: `dom`, `raw`, `headers`, `xhr`, `console`. `dom`
-    /// and `headers` unless said.
+    /// What to capture: `dom`, `raw`, `headers`, `extract`, `xhr`,
+    /// `console`. `dom` and `headers` unless said.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) include: Option<Vec<Include>>,
     /// Which responses of the page's scripts are kept; with `xhr`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) xhr: Option<XhrField>,
+    /// What is extracted from the page as it is at this point; with
+    /// `extract`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) extract: Option<ExtractField>,
     /// The step's own budget in milliseconds; 30000 unless said.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(minimum = 100, maximum = 300_000)]
@@ -469,6 +475,9 @@ pub(crate) struct FlowJob {
     /// `include: ["xhr"]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) xhr: Option<XhrField>,
+    /// What is extracted from the last page; with `include: ["extract"]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) extract: Option<ExtractField>,
     /// Which personas the flow would have.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) persona: Option<PersonaHints>,
@@ -544,6 +553,9 @@ pub(crate) struct Checks<'a> {
     pub(crate) policies: &'a PolicySet,
     /// The host-side lookup of the guard, when it is on.
     pub(crate) resolver: Option<&'a HostResolver>,
+    /// The key the job is for: whose entries of the response cache its
+    /// pages read and fill.
+    pub(crate) key: ApiKeyId,
 }
 
 impl Checks<'_> {
@@ -650,7 +662,16 @@ pub(crate) async fn plan_batch(
                 index,
             )
         })?;
-        let one = plan(&request, checks.pacing()).map_err(|error| at_item(error, index))?;
+        let mut one = plan(&request, checks.pacing()).map_err(|error| at_item(error, index))?;
+        settle(
+            &mut one,
+            &request,
+            checks.config,
+            checks.policies,
+            checks.key,
+            CacheUse::ReadAndFill,
+        )
+        .map_err(|error| at_item(error, index))?;
         guard(
             &one.order.url,
             checks.config.security.ssrf(),
@@ -707,13 +728,22 @@ pub(crate) async fn plan_batch(
     Ok(planned)
 }
 
+/// What a capturing step of a flow keeps of the page it captured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct StepKeep {
+    /// Which bodies are stored.
+    pub(crate) keep: Keep,
+    /// What is extracted from the document.
+    pub(crate) extract: Option<kage_extract::Options>,
+}
+
 /// A flow that passed every check.
 #[derive(Debug, Clone)]
 pub(crate) struct PlannedFlow {
     /// The order: a browser attempt at the first page, with the flow in it.
     pub(crate) planned: Planned,
     /// What each capturing step keeps, by the step's position.
-    pub(crate) keeps: Vec<Option<Keep>>,
+    pub(crate) keeps: Vec<Option<StepKeep>>,
     /// The site the flow starts on.
     pub(crate) site: String,
 }
@@ -747,8 +777,8 @@ fn capture_of(
     index: usize,
     start: &str,
     fields: Value,
-    profiles: &PacingProfiles,
-) -> ApiResult<(CaptureOptions, Keep)> {
+    checks: Checks<'_>,
+) -> ApiResult<(CaptureOptions, StepKeep)> {
     let mut request = Map::new();
     request.insert("url".to_owned(), json!(start));
     request.insert("render".to_owned(), json!("browser"));
@@ -758,8 +788,22 @@ fn capture_of(
     let request: FetchRequest = serde_json::from_value(Value::Object(request))
         .map_err(|error| ApiError::new(ErrorCode::ValidationFailed, error.to_string()))
         .map_err(|error| at_step(error, index))?;
-    let planned = plan(&request, profiles).map_err(|error| at_step(error, index))?;
-    Ok((planned.order.capture, planned.order.keep))
+    let mut planned = plan(&request, checks.pacing()).map_err(|error| at_step(error, index))?;
+    // What counts as thin is the configuration's.
+    settle(
+        &mut planned,
+        &request,
+        checks.config,
+        checks.policies,
+        checks.key,
+        CacheUse::Nothing,
+    )
+    .map_err(|error| at_step(error, index))?;
+    let kept = StepKeep {
+        keep: planned.order.keep,
+        extract: planned.order.extract,
+    };
+    Ok((planned.order.capture, kept))
 }
 
 /// The steps as the sidecar takes them, with what each capturing step
@@ -770,7 +814,7 @@ async fn steps_of(
     flow: &FlowJob,
     start: &str,
     checks: Checks<'_>,
-) -> ApiResult<(Vec<FlowAction>, Vec<Option<Keep>>)> {
+) -> ApiResult<(Vec<FlowAction>, Vec<Option<StepKeep>>)> {
     let mut actions = Vec::with_capacity(flow.actions.len());
     let mut keeps = Vec::with_capacity(flow.actions.len());
     for (index, step) in flow.actions.iter().enumerate() {
@@ -925,8 +969,8 @@ async fn steps_of(
                 let (capture, kept) = capture_of(
                     index,
                     start,
-                    json!({ "include": include, "xhr": extract.xhr }),
-                    checks.pacing(),
+                    json!({ "include": include, "xhr": extract.xhr, "extract": extract.extract }),
+                    checks,
                 )?;
                 keep = Some(kept);
                 FlowAction::Extract {
@@ -940,7 +984,7 @@ async fn steps_of(
                     index,
                     start,
                     json!({ "include": ["screenshot"], "screenshot": shot.options }),
-                    checks.pacing(),
+                    checks,
                 )?;
                 let Some(options) = capture.screenshot else {
                     return Err(at_step(
@@ -960,7 +1004,7 @@ async fn steps_of(
                     index,
                     start,
                     json!({ "include": ["pdf"], "pdf": pdf.options }),
-                    checks.pacing(),
+                    checks,
                 )?;
                 let Some(options) = capture.pdf else {
                     return Err(at_step(
@@ -1057,6 +1101,7 @@ pub(crate) async fn plan_flow(flow: &FlowJob, checks: Checks<'_>) -> ApiResult<P
         ("screenshot", json!(flow.screenshot)),
         ("pdf", json!(flow.pdf)),
         ("xhr", json!(flow.xhr)),
+        ("extract", json!(flow.extract)),
         ("persona", json!(flow.persona)),
         ("session_id", json!(flow.session_id)),
         ("pacing", json!(flow.pacing)),
@@ -1078,6 +1123,15 @@ pub(crate) async fn plan_flow(flow: &FlowJob, checks: Checks<'_>) -> ApiResult<P
     let request: FetchRequest = serde_json::from_value(Value::Object(request))
         .map_err(|error| ApiError::new(ErrorCode::ValidationFailed, error.to_string()))?;
     let mut planned = plan(&request, checks.pacing())?;
+    // A flow is a script in a browser: the cache knows nothing of it.
+    settle(
+        &mut planned,
+        &request,
+        checks.config,
+        checks.policies,
+        checks.key,
+        CacheUse::Nothing,
+    )?;
     // A flow in a session is its persona's alone: nobody else may run it
     // again, and the same persona does not walk into the same wall twice.
     if flow.session_id.is_some() {
@@ -1288,6 +1342,7 @@ mod tests {
     use kage_browser::contract::FlowAction;
     use kage_core::config::Config;
     use kage_core::domain::SessionId;
+    use kage_core::ids::ApiKeyId;
     use kage_core::pacing::PacingProfiles;
     use kage_core::policy::{DomainPolicies, PolicySet};
     use serde_json::{Value, json};
@@ -1345,6 +1400,7 @@ mod tests {
             config,
             policies,
             resolver: None,
+            key: ApiKeyId::new(),
         };
         plan_batch(&batch, checks).await.map(|items| items.len())
     }
@@ -1387,6 +1443,7 @@ mod tests {
                 config: &config,
                 policies,
                 resolver: None,
+                key: ApiKeyId::new(),
             },
         )
         .await
@@ -1408,6 +1465,7 @@ mod tests {
             config: &config,
             policies: &policies,
             resolver: None,
+            key: ApiKeyId::new(),
         };
 
         let items = plan_batch(&request, checks).await.unwrap();
@@ -1621,9 +1679,10 @@ mod tests {
             ]
         );
         let extract = planned.keeps[10].unwrap();
-        assert!(extract.dom && extract.xhr && !extract.screenshot);
-        assert!(planned.keeps[11].unwrap().screenshot);
-        assert!(planned.keeps[12].unwrap().pdf);
+        assert!(extract.keep.dom && extract.keep.xhr && !extract.keep.screenshot);
+        assert!(extract.extract.is_none());
+        assert!(planned.keeps[11].unwrap().keep.screenshot);
+        assert!(planned.keeps[12].unwrap().keep.pdf);
         assert!(matches!(
             &plan.actions[10],
             FlowAction::Extract { capture, .. } if capture.dom && capture.xhr.is_some()
@@ -1692,15 +1751,13 @@ mod tests {
             json!({ "action": "press", "key": "" }),
             json!({ "action": "click", "selector": "#a", "timeout_ms": 5 }),
             json!({ "action": "extract", "include": ["screenshot"] }),
-            json!({ "action": "extract", "include": ["extract"] }),
+            json!({ "action": "extract", "extract": { "links": false } }),
         ] {
             let error = refused(json!({ "type": "flow", "actions": [goto, step] })).await;
             assert!(
                 matches!(
                     error.code(),
-                    ErrorCode::ValidationFailed
-                        | ErrorCode::NotAvailableYet
-                        | ErrorCode::RenderIncludeConflict
+                    ErrorCode::ValidationFailed | ErrorCode::RenderIncludeConflict
                 ),
                 "{step}: {error}"
             );
@@ -1799,6 +1856,7 @@ mod tests {
                         config: &config,
                         policies: &policies,
                         resolver: None,
+                        key: ApiKeyId::new(),
                     },
                 )
                 .await

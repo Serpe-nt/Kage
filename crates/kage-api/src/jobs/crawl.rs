@@ -32,6 +32,7 @@ use utoipa::ToSchema;
 use super::request::{Checks, WebhookField};
 use crate::error::{ApiError, ApiResult, ErrorCode};
 use crate::fetch::request::{FetchRequest, Planned, plan, url_refused};
+use crate::fetch::terms::{CacheUse, settle};
 use crate::resolve::guard;
 use crate::schema::FreeForm;
 
@@ -311,7 +312,18 @@ pub(crate) async fn plan_crawl(crawl: &CrawlJob, checks: Checks<'_>) -> ApiResul
                 index,
             )
         })?;
-        let one = plan(&request, &checks.policies.pacing).map_err(|error| at(error, index))?;
+        let mut one = plan(&request, &checks.policies.pacing).map_err(|error| at(error, index))?;
+        // A page of a crawl is a visit every time; what it read fills the
+        // cache when its defaults name a lifetime.
+        settle(
+            &mut one,
+            &request,
+            checks.config,
+            checks.policies,
+            checks.key,
+            CacheUse::Fill,
+        )
+        .map_err(|error| at(error, index))?;
         guard(
             &one.order.url,
             checks.config.security.ssrf(),
@@ -498,7 +510,8 @@ pub(crate) struct CrawlView {
     /// Addresses the crawl knows and does not read, by reason: `off_site`,
     /// `too_deep`, `denied`, `not_allowed`, `not_a_page` (a file),
     /// `hidden` (no reader can see the link), `already_read` (another
-    /// address redirected there), `ssrf_denied`.
+    /// address redirected there), `ssrf_denied`, `robots_denied` (the
+    /// site's `robots.txt` disallows it and its policy keeps to the file).
     #[schema(value_type = FreeForm, example = json!({ "too_deep": 12, "hidden": 1 }))]
     pub(crate) skipped: BTreeMap<String, u64>,
     /// Addresses found after the crawl knew `crawl.max_frontier` of them:
@@ -720,6 +733,7 @@ mod tests {
             config: &config,
             policies: &policies,
             resolver: None,
+            key: kage_core::ids::ApiKeyId::new(),
         };
         plan_crawl(&crawl(body), checks)
             .await
@@ -747,6 +761,7 @@ mod tests {
             config: &config,
             policies: &policies,
             resolver: None,
+            key: kage_core::ids::ApiKeyId::new(),
         };
         let asked = crawl(json!({ "seeds": ["https://example.org/", "https://example.org/b"] }));
 

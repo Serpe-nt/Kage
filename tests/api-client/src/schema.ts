@@ -1146,7 +1146,8 @@ export interface components {
              * @description Addresses the crawl knows and does not read, by reason: `off_site`,
              *     `too_deep`, `denied`, `not_allowed`, `not_a_page` (a file),
              *     `hidden` (no reader can see the link), `already_read` (another
-             *     address redirected there), `ssrf_denied`.
+             *     address redirected there), `ssrf_denied`, `robots_denied` (the
+             *     site's `robots.txt` disallows it and its policy keeps to the file).
              */
             skipped: components["schemas"]["FreeForm"];
             /**
@@ -1209,12 +1210,20 @@ export interface components {
          *     what a problem document carries as `code`.
          * @enum {string}
          */
-        ErrorCode: "missing_key" | "invalid_key" | "key_disabled" | "scope_missing" | "rate_limited" | "concurrency_limited" | "budget_exhausted" | "invalid_request" | "validation_failed" | "invalid_url" | "ssrf_denied" | "header_denied" | "header_invalid" | "header_not_placeable" | "render_include_conflict" | "render_kind_conflict" | "render_needs_http" | "request_kind_needs_referer" | "preflight_required" | "timeout_too_short" | "not_available_yet" | "invalid_pacing" | "invalid_session_id" | "session_not_found" | "session_persona_conflict" | "no_matching_persona" | "not_found" | "method_not_allowed" | "result_not_found" | "artifact_not_found" | "persona_not_found" | "proxy_not_found" | "key_not_found" | "job_not_found" | "idempotency_key_reused" | "webhook_origin_not_allowed" | "driver_input_denied" | "conflict" | "payload_too_large" | "uri_too_long" | "unsupported_media_type" | "request_timeout" | "unavailable" | "internal";
+        ErrorCode: "missing_key" | "invalid_key" | "key_disabled" | "scope_missing" | "rate_limited" | "concurrency_limited" | "budget_exhausted" | "invalid_request" | "validation_failed" | "invalid_url" | "ssrf_denied" | "header_denied" | "header_invalid" | "header_not_placeable" | "render_include_conflict" | "render_kind_conflict" | "render_needs_http" | "request_kind_needs_referer" | "preflight_required" | "timeout_too_short" | "robots_enforced" | "robots_ignored" | "cache_ttl_too_long" | "invalid_pacing" | "invalid_session_id" | "session_not_found" | "session_persona_conflict" | "no_matching_persona" | "not_found" | "method_not_allowed" | "result_not_found" | "artifact_not_found" | "persona_not_found" | "proxy_not_found" | "key_not_found" | "job_not_found" | "idempotency_key_reused" | "webhook_origin_not_allowed" | "driver_input_denied" | "conflict" | "payload_too_large" | "uri_too_long" | "unsupported_media_type" | "request_timeout" | "unavailable" | "internal";
+        /** @description What of a page is extracted; with `include: ["extract"]`. */
+        ExtractField: {
+            /** @description Whether the links of the page are listed. */
+            links?: boolean;
+            /** @description Whether the main content is also written as markdown. */
+            markdown?: boolean;
+        };
         /** @description Capture the page as it is at this point of the flow. */
         ExtractStep: {
+            extract?: components["schemas"]["ExtractField"] | null;
             /**
-             * @description What to capture: `dom`, `raw`, `headers`, `xhr`, `console`. `dom`
-             *     and `headers` unless said.
+             * @description What to capture: `dom`, `raw`, `headers`, `extract`, `xhr`,
+             *     `console`. `dom` and `headers` unless said.
              */
             include?: components["schemas"]["Include"][] | null;
             /**
@@ -1223,6 +1232,87 @@ export interface components {
              */
             timeout_ms?: number | null;
             xhr?: components["schemas"]["XhrField"] | null;
+        };
+        /**
+         * @description What a page says (spec §14): read from the document the visit captured,
+         *     never by a second request.
+         */
+        ExtractView: {
+            /** @description `<link rel="canonical">`, as an absolute address. */
+            canonical?: string | null;
+            /** @description `<meta name="description">`. */
+            description?: string | null;
+            /** @description The headings of the main content, in order. */
+            headings: components["schemas"]["HeadingView"][];
+            /**
+             * @description Every JSON-LD block that parses, a top-level array as its members;
+             *     at most 64.
+             */
+            jsonld: components["schemas"]["FreeForm"][];
+            /**
+             * Format: int32
+             * @description JSON-LD blocks left out: not JSON, too large, or beyond the 64.
+             */
+            jsonld_skipped: number;
+            /** @description The language the document says it is in (`<html lang>`). */
+            lang?: string | null;
+            /**
+             * @description The links a reader can see, in document order; null when the
+             *     request said `extract.links: false`.
+             */
+            links?: components["schemas"]["LinkView"][] | null;
+            /** @description Whether the page held more links than are listed. */
+            links_truncated: boolean;
+            /**
+             * @description The main content as markdown: headings, lists, fenced code with its
+             *     language, tables, absolute links. Null when the request said
+             *     `extract.markdown: false`.
+             */
+            markdown?: string | null;
+            /**
+             * @description Every `<meta name>` with content, by name in lower case: its values
+             *     in document order.
+             */
+            meta: {
+                [key: string]: string[];
+            };
+            /** @description When the page says it was last changed, read the same way. */
+            modified_at?: string | null;
+            /**
+             * @description The OpenGraph properties (`og:`, `article:` and their kin), by
+             *     name.
+             */
+            opengraph: {
+                [key: string]: string[];
+            };
+            /**
+             * @description When the page says it was published: from its JSON-LD, else its
+             *     `article:` metadata, else other metadata, else a `<time>` of its
+             *     content. In UTC when the page named a zone, as written when not.
+             */
+            published_at?: string | null;
+            /**
+             * @description The main content as text: what a reader would read, without the
+             *     navigation, the side bars and the footer.
+             */
+            text: string;
+            /**
+             * @description Whether the main content has fewer words than `extract.thin_words`
+             *     (80 unless configured): the document gave a reader next to nothing.
+             *     On the http path that usually means scripts or a wall.
+             */
+            thin_content: boolean;
+            /** @description The document's `<title>`. */
+            title?: string | null;
+            /** @description The Twitter card properties, by name. */
+            twitter: {
+                [key: string]: string[];
+            };
+            /**
+             * Format: int64
+             * @description How many words the main content has.
+             */
+            word_count: number;
         };
         /** @description The answer to a fetch that is not finished: `202`. */
         FetchAccepted: {
@@ -1285,11 +1375,17 @@ export interface components {
             body?: string | null;
             /**
              * Format: int64
-             * @description How long a cached result may be served for, in seconds. The cache
-             *     arrives with milestone M11; until then only 0 is accepted.
+             * @description For how many seconds the result may be served from the response
+             *     cache: a later request that asks for the same is answered with it,
+             *     without a visit, while it is no older than that request's own
+             *     `cache_ttl_s`. 0 is never. Left out, the site's policy decides
+             *     (never, unless the operator set `cache.ttl`). At most the site's
+             *     `cache.max_ttl` (a day unless configured): more is refused with
+             *     `cache_ttl_too_long`. Not in a session.
+             * @example 600
              */
-            cache_ttl_s?: number;
-            extract?: components["schemas"]["FreeForm"] | null;
+            cache_ttl_s?: number | null;
+            extract?: components["schemas"]["ExtractField"] | null;
             /**
              * @description Headers of the request's own; at most 32, and only with
              *     `render: http`. A browser sends its own headers and cannot be given
@@ -1334,7 +1430,7 @@ export interface components {
              *     makes the request.
              */
             request_kind?: components["schemas"]["RequestKindField"];
-            /** @description What to do about robots.txt. */
+            /** @description What to do about the site's `robots.txt`. */
             robots?: components["schemas"]["RobotsField"];
             screenshot?: components["schemas"]["ScreenshotField"] | null;
             /**
@@ -1374,8 +1470,17 @@ export interface components {
             attempts: components["schemas"]["AttemptView"][];
             behavior?: components["schemas"]["BehaviorView"] | null;
             block?: components["schemas"]["BlockView"] | null;
-            /** @description Always false until milestone M11. */
+            /**
+             * @description Whether the result was served from the response cache: nothing was
+             *     asked of the site, `attempts` is empty, and the page is the one a
+             *     visit at `cached_at` got.
+             */
             cached: boolean;
+            /**
+             * Format: date-time
+             * @description When the page of a result served from the cache was fetched.
+             */
+            cached_at?: string | null;
             /**
              * @description The browser's log; with `include: ["console"]`, in the answer of
              *     `POST /v1/fetch` only.
@@ -1394,7 +1499,7 @@ export interface components {
             dom_html?: string | null;
             /** @description Whether the request moved from the http path to a browser. */
             escalated: boolean;
-            extract?: components["schemas"]["FreeForm"] | null;
+            extract?: components["schemas"]["ExtractView"] | null;
             /** @description The URL after redirects. */
             final_url?: string | null;
             /** @description The headers of the main response; with `include: ["headers"]`. */
@@ -1432,7 +1537,7 @@ export interface components {
              *     domain's pause or of a persona's cooldown.
              */
             retry_at?: string | null;
-            robots?: components["schemas"]["FreeForm"] | null;
+            robots?: components["schemas"]["RobotsView"] | null;
             /** @description The session the request was made in. */
             session_id?: string | null;
             /**
@@ -1514,6 +1619,7 @@ export interface components {
             /** @description The steps, at most 100. The first is a `goto`. */
             actions: components["schemas"]["FlowStepField"][];
             behavior?: components["schemas"]["FlowBehaviorField"] | null;
+            extract?: components["schemas"]["ExtractField"] | null;
             /**
              * @description What is returned and kept of the page the flow ends on: `dom` and
              *     `headers` unless said.
@@ -1618,6 +1724,18 @@ export interface components {
              *     its value reads `[redacted]` unless the operator exposes it.
              */
             value: string;
+        };
+        /** @description A heading of a page's main content. */
+        HeadingView: {
+            /** @description Its `id`, when it has one: the fragment that links to it. */
+            id?: string | null;
+            /**
+             * Format: int32
+             * @description 1 for `h1` to 6 for `h6`.
+             */
+            level: number;
+            /** @description Its text. */
+            text: string;
         };
         /**
          * @description A part of the result a request asks for.
@@ -1846,6 +1964,20 @@ export interface components {
             requests_per_minute: number;
             /** @description What it may do. */
             scopes: components["schemas"]["ScopeField"][];
+        };
+        /** @description A link of a page. */
+        LinkView: {
+            /** @description The tokens of its `rel`, in lower case. */
+            rel: string[];
+            /**
+             * @description Whether it leads to a page of the site the document was loaded
+             *     from (the same registrable domain).
+             */
+            same_site: boolean;
+            /** @description Its text. */
+            text: string;
+            /** @description Where it leads, as an absolute address. */
+            url: string;
         };
         /** @description The links of a page as the crawl took them. */
         LinksView: {
@@ -2313,12 +2445,40 @@ export interface components {
          */
         ResultState: "running" | "finished";
         /**
-         * @description What to do about robots.txt. Fetching and enforcing it arrive with
-         *     milestone M11; until then no verdict is reported and `enforce` is
-         *     refused.
+         * @description What to do about the site's `robots.txt`. Whether the file is asked
+         *     for at all is the site's policy (`ignore` unless the operator says
+         *     otherwise): a reader never asks for it, so asking marks an address. A
+         *     request may ask for more care than the policy takes and never for
+         *     less, and never makes Kage ask a site its policy leaves alone.
          * @enum {string}
          */
         RobotsField: "policy" | "report" | "enforce" | "ignore";
+        /** @description What the site's `robots.txt` says of the address (spec §14). */
+        RobotsView: {
+            /**
+             * @description Whether the file allows the address; true when nothing is known.
+             *     Under `report` a page that is not allowed is fetched all the same.
+             */
+            allowed: boolean;
+            /**
+             * Format: double
+             * @description The `Crawl-delay` of the group that applies, in seconds. Kept to
+             *     only where the file is enforced.
+             */
+            crawl_delay?: number | null;
+            /**
+             * @description Whether the verdict is the file's. False when nothing is known of
+             *     it: the site's policy never asks for it (the default), the request
+             *     said `ignore`, or the site's scout has not brought it yet.
+             */
+            fetched: boolean;
+            /**
+             * @description The line that decided, as `Allow: <pattern>` or `Disallow:
+             *     <pattern>`; null when no rule matched.
+             * @example Disallow: /private
+             */
+            matched_rule?: string | null;
+        };
         /**
          * @description What an API key may do.
          * @enum {string}

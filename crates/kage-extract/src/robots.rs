@@ -49,8 +49,10 @@ pub const MAX_RULES: usize = 20_000;
 /// The most `Sitemap:` lines kept of one file.
 pub const MAX_SITEMAPS: usize = 1000;
 
-/// The longest crawl delay that is reported as one, in seconds: a day.
-const MAX_CRAWL_DELAY: f64 = 86_400.0;
+/// The longest crawl delay, in seconds: 366 days. A site that asks for more
+/// is taken to ask for this much; the bound is there so that a number a
+/// site wrote never overflows a time, not to shorten what it asked for.
+pub const MAX_CRAWL_DELAY: f64 = 31_622_400.0;
 
 /// One `Allow` or `Disallow` line.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -262,7 +264,8 @@ impl Builder {
             .trim()
             .parse::<f64>()
             .ok()
-            .filter(|delay| delay.is_finite() && (0.0..=MAX_CRAWL_DELAY).contains(delay));
+            .filter(|delay| delay.is_finite() && *delay >= 0.0)
+            .map(|delay| delay.min(MAX_CRAWL_DELAY));
         // The first one a group states is the group's.
         if group.crawl_delay.is_none() {
             group.crawl_delay = delay;
@@ -666,8 +669,12 @@ mod tests {
             ("5", Some(5.0)),
             ("0.5", Some(0.5)),
             ("0", Some(0.0)),
-            ("86400", Some(86_400.0)),
-            ("86401", None),
+            ("3600", Some(3600.0)),
+            ("86401", Some(86_401.0)),
+            // What would overflow a time is a year and a day.
+            ("31622400", Some(31_622_400.0)),
+            ("31622401", Some(31_622_400.0)),
+            ("1e300", Some(31_622_400.0)),
             ("-1", None),
             ("soon", None),
             ("NaN", None),

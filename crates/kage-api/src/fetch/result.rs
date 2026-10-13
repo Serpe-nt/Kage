@@ -3,7 +3,10 @@
 //! The same document answers `POST /v1/fetch` and `GET /v1/results/{id}`.
 //! The first is built from what the pipeline just did, the second from
 //! what was stored; what is not stored (`pacing`, `behavior`, `console`,
-//! `side_effects`) is null in the second.
+//! `side_effects`) is null in the second. A fetch that was answered from
+//! the response cache is the second kind from the start: the stored result
+//! of the visit that filled the cache, under the request's own id, with
+//! `cached: true` and no attempts.
 //!
 //! What a result shows of the pool depends on who asks (spec §19). A key
 //! without the `admin` scope sees its persona as a handle
@@ -17,12 +20,12 @@ use chrono::{DateTime, Utc};
 use kage_browser::contract::{BodyEncoding, PageResult, ScrollEnd};
 use kage_core::domain::{
     ArtifactKind, ArtifactRef, Attempt, ClaimedOs, FetchRecord, Header, PersonaSummary, Render,
-    Timing,
+    RobotsVerdict, Timing,
 };
 use kage_core::ids::{ApiKeyId, ArtifactId, PersonaId, RequestId};
 use kage_core::outcome::{Block, Outcome};
 use kage_scheduler::{BehaviorApplied, FetchReport};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
 
@@ -409,9 +412,10 @@ pub(crate) struct FetchResult {
     /// and on the http path with `include: ["dom"]` too. Null when the
     /// body is not text: `artifacts.raw_body` has it then.
     pub(crate) raw_body: Option<String>,
-    /// Always null until milestone M11.
-    #[schema(value_type = Option<FreeForm>)]
-    pub(crate) extract: Option<Value>,
+    /// What the page says; with `include: ["extract"]`. Null for a fetch
+    /// that did not get its page and for a response that is no HTML
+    /// document.
+    pub(crate) extract: Option<ExtractView>,
     /// The responses the page's scripts fetched; with `include: ["xhr"]`.
     pub(crate) xhr: Option<XhrView>,
     /// The browser's log; with `include: ["console"]`, in the answer of
@@ -431,9 +435,9 @@ pub(crate) struct FetchResult {
     pub(crate) attempts: Vec<AttemptView>,
     /// Who blocked and how, when the outcome is a block.
     pub(crate) block: Option<BlockView>,
-    /// The robots.txt verdict; null until milestone M11.
-    #[schema(value_type = Option<FreeForm>)]
-    pub(crate) robots: Option<Value>,
+    /// What the site's `robots.txt` says of the address. Null for a
+    /// request that ended before it was looked at (a refused URL).
+    pub(crate) robots: Option<RobotsView>,
     /// The pacing that applied; in the answer of `POST /v1/fetch` only.
     pub(crate) pacing: Option<PacingView>,
     /// What the persona did on the page; for a browser attempt, in the
@@ -441,12 +445,135 @@ pub(crate) struct FetchResult {
     pub(crate) behavior: Option<BehaviorView>,
     /// The session the request was made in.
     pub(crate) session_id: Option<String>,
-    /// Always false until milestone M11.
+    /// Whether the result was served from the response cache: nothing was
+    /// asked of the site, `attempts` is empty, and the page is the one a
+    /// visit at `cached_at` got.
     pub(crate) cached: bool,
+    /// When the page of a result served from the cache was fetched.
+    pub(crate) cached_at: Option<DateTime<Utc>>,
     /// Whether the request moved from the http path to a browser.
     pub(crate) escalated: bool,
     /// When the result was stored.
     pub(crate) created_at: DateTime<Utc>,
+}
+
+/// What the site's `robots.txt` says of the address (spec §14).
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
+pub(crate) struct RobotsView {
+    /// Whether the verdict is the file's. False when nothing is known of
+    /// it: the site's policy never asks for it (the default), the request
+    /// said `ignore`, or the site's scout has not brought it yet.
+    pub(crate) fetched: bool,
+    /// Whether the file allows the address; true when nothing is known.
+    /// Under `report` a page that is not allowed is fetched all the same.
+    pub(crate) allowed: bool,
+    /// The line that decided, as `Allow: <pattern>` or `Disallow:
+    /// <pattern>`; null when no rule matched.
+    #[schema(example = "Disallow: /private")]
+    pub(crate) matched_rule: Option<String>,
+    /// The `Crawl-delay` of the group that applies, in seconds. Kept to
+    /// only where the file is enforced.
+    pub(crate) crawl_delay: Option<f64>,
+}
+
+impl From<&RobotsVerdict> for RobotsView {
+    fn from(verdict: &RobotsVerdict) -> Self {
+        Self {
+            fetched: verdict.fetched,
+            allowed: verdict.allowed,
+            matched_rule: verdict.matched_rule.clone(),
+            crawl_delay: verdict.crawl_delay,
+        }
+    }
+}
+
+/// A heading of a page's main content.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct HeadingView {
+    /// 1 for `h1` to 6 for `h6`.
+    #[schema(minimum = 1, maximum = 6)]
+    pub(crate) level: u8,
+    /// Its text.
+    pub(crate) text: String,
+    /// Its `id`, when it has one: the fragment that links to it.
+    pub(crate) id: Option<String>,
+}
+
+/// A link of a page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LinkView {
+    /// Where it leads, as an absolute address.
+    pub(crate) url: String,
+    /// Its text.
+    pub(crate) text: String,
+    /// The tokens of its `rel`, in lower case.
+    pub(crate) rel: Vec<String>,
+    /// Whether it leads to a page of the site the document was loaded
+    /// from (the same registrable domain).
+    pub(crate) same_site: bool,
+}
+
+/// What a page says (spec §14): read from the document the visit captured,
+/// never by a second request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ExtractView {
+    /// The document's `<title>`.
+    pub(crate) title: Option<String>,
+    /// `<meta name="description">`.
+    pub(crate) description: Option<String>,
+    /// `<link rel="canonical">`, as an absolute address.
+    pub(crate) canonical: Option<String>,
+    /// The language the document says it is in (`<html lang>`).
+    pub(crate) lang: Option<String>,
+    /// When the page says it was published: from its JSON-LD, else its
+    /// `article:` metadata, else other metadata, else a `<time>` of its
+    /// content. In UTC when the page named a zone, as written when not.
+    pub(crate) published_at: Option<String>,
+    /// When the page says it was last changed, read the same way.
+    pub(crate) modified_at: Option<String>,
+    /// Every `<meta name>` with content, by name in lower case: its values
+    /// in document order.
+    pub(crate) meta: BTreeMap<String, Vec<String>>,
+    /// The OpenGraph properties (`og:`, `article:` and their kin), by
+    /// name.
+    pub(crate) opengraph: BTreeMap<String, Vec<String>>,
+    /// The Twitter card properties, by name.
+    pub(crate) twitter: BTreeMap<String, Vec<String>>,
+    /// Every JSON-LD block that parses, a top-level array as its members;
+    /// at most 64.
+    #[schema(value_type = Vec<FreeForm>)]
+    pub(crate) jsonld: Vec<Value>,
+    /// JSON-LD blocks left out: not JSON, too large, or beyond the 64.
+    pub(crate) jsonld_skipped: u32,
+    /// The links a reader can see, in document order; null when the
+    /// request said `extract.links: false`.
+    pub(crate) links: Option<Vec<LinkView>>,
+    /// Whether the page held more links than are listed.
+    pub(crate) links_truncated: bool,
+    /// The headings of the main content, in order.
+    pub(crate) headings: Vec<HeadingView>,
+    /// The main content as text: what a reader would read, without the
+    /// navigation, the side bars and the footer.
+    pub(crate) text: String,
+    /// The main content as markdown: headings, lists, fenced code with its
+    /// language, tables, absolute links. Null when the request said
+    /// `extract.markdown: false`.
+    pub(crate) markdown: Option<String>,
+    /// How many words the main content has.
+    pub(crate) word_count: u64,
+    /// Whether the main content has fewer words than `extract.thin_words`
+    /// (80 unless configured): the document gave a reader next to nothing.
+    /// On the http path that usually means scripts or a wall.
+    pub(crate) thin_content: bool,
+}
+
+/// What was extracted, as the API returns it; null for what was stored in
+/// a shape this release does not know.
+fn extract_of(stored: Option<&Value>) -> Option<ExtractView> {
+    serde_json::from_value(stored?.clone()).ok()
 }
 
 /// The answer to a fetch that is not finished: `202`.
@@ -674,7 +801,7 @@ pub(crate) fn from_report(
             .then(|| headers_of(&report.headers)),
         dom_html: bodies.dom_html.filter(|_| include.has(Include::Dom)),
         raw_body: bodies.raw_body.filter(|_| wants_raw),
-        extract: None,
+        extract: extract_of(report.extract.as_ref()).filter(|_| include.has(Include::Extract)),
         xhr: xhr_of(report.xhr.as_ref()),
         console: page
             .filter(|_| include.has(Include::Console) && readable)
@@ -707,7 +834,7 @@ pub(crate) fn from_report(
             .map(|attempt| viewer.attempt(attempt))
             .collect(),
         block: report.block.as_ref().map(BlockView::from),
-        robots: None,
+        robots: report.robots.as_ref().map(RobotsView::from),
         pacing: Some(PacingView {
             applied: report.pacing.applied.clone(),
             request_ignored: report.pacing.request_ignored,
@@ -718,6 +845,7 @@ pub(crate) fn from_report(
             .map(|applied| behavior_of(applied, page, viewer)),
         session_id: session.map(str::to_owned),
         cached: false,
+        cached_at: None,
         escalated: report.escalated,
         created_at: crate::stored(report.finished_at),
     }
@@ -750,7 +878,7 @@ pub(crate) fn from_stored(
             .then(|| headers_of(&record.headers)),
         dom_html: bodies.dom_html.filter(|_| include.has(Include::Dom)),
         raw_body: bodies.raw_body.filter(|_| wants_raw),
-        extract: None,
+        extract: extract_of(record.extract.as_ref()).filter(|_| include.has(Include::Extract)),
         xhr: xhr_of(record.xhr.as_ref()),
         console: None,
         artifacts: artifacts_of(&record.artifacts),
@@ -767,11 +895,12 @@ pub(crate) fn from_stored(
             .map(|attempt| viewer.attempt(attempt))
             .collect(),
         block: record.block.as_ref().map(BlockView::from),
-        robots: None,
+        robots: record.robots.as_ref().map(RobotsView::from),
         pacing: None,
         behavior: None,
         session_id: session.map(str::to_owned),
         cached: record.cached,
+        cached_at: record.cached_at,
         // An http attempt followed by a browser attempt.
         escalated: attempts
             .windows(2)
@@ -787,8 +916,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        ARTIFACT_PREFIX, FetchAccepted, Viewer, artifact_handle, artifacts_of, parse_artifact,
-        xhr_of,
+        ARTIFACT_PREFIX, ExtractView, FetchAccepted, RobotsView, Viewer, artifact_handle,
+        artifacts_of, extract_of, parse_artifact, xhr_of,
     };
     use crate::handle::Handles;
 
@@ -863,6 +992,64 @@ mod tests {
         assert_eq!(view.responses[0]["body"], "{}");
         assert_eq!(view.responses[1]["body_artifact"], artifact_handle(body));
         assert!(xhr_of(None).is_none());
+    }
+
+    #[test]
+    fn what_was_extracted_is_returned_as_it_was_stored() {
+        // Everything the extraction writes has a place in the view, and
+        // nothing is lost on the way: a field added to one and not to the
+        // other fails here.
+        let document = kage_extract::Document::parse(
+            "<html lang=\"en\"><head><title>A page</title>\
+             <meta name=\"description\" content=\"About it.\">\
+             <meta property=\"og:title\" content=\"A page, shared\">\
+             <meta name=\"twitter:card\" content=\"summary\">\
+             <link rel=\"canonical\" href=\"/a\">\
+             <script type=\"application/ld+json\">{\"@type\":\"Article\",\
+             \"datePublished\":\"2026-10-01T08:00:00+02:00\"}</script></head>\
+             <body><article><h1 id=\"top\">A page</h1><p>Some words about it, and \
+             <a rel=\"nofollow\" href=\"https://other.example/b\">a link</a>.</p>\
+             </article></body></html>",
+            &url::Url::parse("https://example.org/a?x=1").unwrap(),
+        );
+        let extract = kage_extract::extract(&document, &kage_extract::Options::default());
+        let stored = serde_json::to_value(&extract).unwrap();
+
+        let view: ExtractView = extract_of(Some(&stored)).unwrap();
+
+        assert_eq!(serde_json::to_value(&view).unwrap(), stored);
+        assert_eq!(view.title.as_deref(), Some("A page"));
+        assert_eq!(view.canonical.as_deref(), Some("https://example.org/a"));
+        assert_eq!(view.published_at.as_deref(), Some("2026-10-01T06:00:00Z"));
+        assert_eq!(view.opengraph["og:title"], ["A page, shared"]);
+        assert_eq!(view.headings[0].id.as_deref(), Some("top"));
+        let links = view.links.unwrap();
+        assert_eq!(links[0].url, "https://other.example/b");
+        assert!(!links[0].same_site);
+        assert_eq!(links[0].rel, ["nofollow"]);
+        assert!(view.thin_content);
+        // Nothing stored, or something this release cannot read: null.
+        assert!(extract_of(None).is_none());
+        assert!(extract_of(Some(&json!({ "title": "x" }))).is_none());
+    }
+
+    #[test]
+    fn a_robots_verdict_is_returned_as_it_was_reported() {
+        let verdict = kage_core::domain::RobotsVerdict {
+            fetched: true,
+            allowed: false,
+            matched_rule: Some("Disallow: /private".to_owned()),
+            crawl_delay: Some(2.5),
+        };
+        assert_eq!(
+            serde_json::to_value(RobotsView::from(&verdict)).unwrap(),
+            json!({
+                "fetched": true,
+                "allowed": false,
+                "matched_rule": "Disallow: /private",
+                "crawl_delay": 2.5,
+            })
+        );
     }
 
     #[test]

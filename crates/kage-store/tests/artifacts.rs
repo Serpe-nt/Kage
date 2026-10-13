@@ -229,6 +229,71 @@ async fn the_same_content_is_stored_once_and_referenced_many_times() {
 }
 
 #[tokio::test]
+async fn a_result_from_the_cache_points_at_content_that_is_already_stored() {
+    let db = TestDb::migrated().await;
+    let dir = TempDir::new().unwrap();
+    let store = artifact_store(&db, &dir);
+    let page = html(300);
+    let stored_at = now();
+    let first = store.put(text(&page), stored_at).await.unwrap();
+
+    // Another request's reference to the same content, with a deadline of
+    // its own: nothing is written.
+    let request = common::request(None);
+    db.store.requests().insert(&request).await.unwrap();
+    let later = stored_at + Duration::days(3);
+    let linked = store
+        .link(first.id, request.id, later)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(linked.id, first.id);
+    assert_eq!(linked.request_id, Some(request.id));
+    assert_eq!(linked.created_at, later);
+    assert_eq!(linked.expires_at - later, first.expires_at - stored_at);
+    assert_eq!(
+        (&linked.content_hash, linked.kind, &linked.content_type),
+        (&first.content_hash, first.kind, &first.content_type)
+    );
+    assert_eq!(
+        (linked.size_bytes, linked.stored_bytes, linked.encoding),
+        (first.size_bytes, first.stored_bytes, first.encoding)
+    );
+    assert_eq!(files_under(store.root()).len(), 1);
+    assert_eq!(
+        db.store
+            .artifacts()
+            .list_for_request(request.id)
+            .await
+            .unwrap(),
+        std::slice::from_ref(&linked)
+    );
+    let (_, content) = store.read(linked.id).await.unwrap().unwrap();
+    assert_eq!(content, page);
+
+    // When the first reference expires the content stays for the second.
+    let report = store.sweep(first.expires_at).await.unwrap();
+    assert_eq!((report.artifacts_deleted, report.blobs_deleted), (1, 0));
+    let (_, content) = store.read(linked.id).await.unwrap().unwrap();
+    assert_eq!(content, page);
+    // An artifact that is gone cannot be pointed at.
+    assert!(
+        store
+            .link(first.id, request.id, later)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .link(ArtifactId::new(), request.id, later)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn an_unknown_artifact_reads_as_none() {
     let db = TestDb::migrated().await;
     let dir = TempDir::new().unwrap();

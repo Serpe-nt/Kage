@@ -127,6 +127,23 @@ fn describe() {
         "kage_crawl_duplicates_total",
         "Pages crawls read that repeat a page read before, by kind: exact, near"
     );
+    metrics::describe_counter!(
+        "kage_cache_requests_total",
+        "What the response cache did for a request: hit, miss, stored, bypass"
+    );
+    metrics::describe_counter!(
+        "kage_robots_requests_total",
+        "What came of asking for a robots.txt: file, missing, unreachable, not_asked, no_scout"
+    );
+    metrics::describe_counter!(
+        "kage_robots_denied_total",
+        "Fetches that ended robots_denied, by reason"
+    );
+    metrics::describe_histogram!(
+        "kage_extract_duration_seconds",
+        metrics::Unit::Seconds,
+        "Time to read a page's document: its links, its text, its extraction"
+    );
     metrics::describe_gauge!("kage_persona_state", "Personas by state");
     metrics::describe_gauge!(
         "kage_selftest_score",

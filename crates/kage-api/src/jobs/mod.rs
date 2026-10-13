@@ -312,6 +312,7 @@ pub(crate) async fn create(
         config: state.config(),
         policies: &policies,
         resolver: state.resolver(),
+        key: caller.key.id,
     };
     let webhook: Option<PlannedWebhook> = match request.webhook() {
         Some(webhook) => Some(plan_webhook(webhook, checks).await?),
@@ -659,9 +660,11 @@ pub(crate) async fn cancel(
 
 /// What the retention job does for jobs and results every sweep: finished
 /// jobs older than `jobs.retention_days` go with everything of theirs,
-/// and fetches that are no job's go when their results are as old as
-/// `artifacts.retention_days`. Returns how many jobs and how many requests
-/// went, those of the jobs among them.
+/// fetches that are no job's go when their results are as old as
+/// `artifacts.retention_days`, and the entries of the response cache
+/// that have expired go (an entry also goes with the result it serves).
+/// Returns how many jobs and how many requests went, those of the jobs
+/// among them.
 ///
 /// # Errors
 ///
@@ -687,6 +690,13 @@ pub async fn sweep(
         .requests()
         .delete_before(before(config.artifacts.retention()), None, false)
         .await?;
+    let expired = state.store().response_cache().delete_expired(now).await?;
+    if expired > 0 {
+        tracing::debug!(
+            entries = expired,
+            "expired entries of the response cache were removed"
+        );
+    }
     Ok((ended.jobs, ended.requests + requests))
 }
 

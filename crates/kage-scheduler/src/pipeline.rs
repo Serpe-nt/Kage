@@ -15,6 +15,15 @@
 //!    The result's headers show the names of the cookies a site set and
 //!    not their values, unless the configuration says otherwise.
 //!
+//! Three things stand around those steps since M11. Before the scheduler
+//! is asked, a fetch that named a cache lifetime is answered from the
+//! response cache when the cache has its page (`cache`, spec §15), and
+//! the site's `robots.txt` is looked at where its policy says so
+//! (`gate`, spec §14): a scout asks for the file, never the persona that
+//! reads. After the last attempt, the document the visit captured is read
+//! once for what the request asked to have extracted and for what a crawl
+//! takes from it (`read`, spec §13, §14).
+//!
 //! A synchronous fetch that takes longer than its wall time is not
 //! cancelled: [`Pipeline::fetch_sync`] hands back a [`Running`] fetch,
 //! which the API carries on as a job (spec §8.4).
@@ -33,6 +42,10 @@
 //! stopped: its earlier attempts stay in the record and count toward the
 //! retry budget.
 
+mod cache;
+mod gate;
+mod read;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -43,7 +56,7 @@ use kage_browser::contract::{CaptureOptions, PageResult, Wait};
 use kage_core::config::{Config, MAX_ATTEMPT_TIMEOUT};
 use kage_core::domain::{
     ArtifactRef, Attempt, CountryCode, Engine, FetchRecord, Header, Persona, PersonaSummary,
-    Render, RenderMode, RequestRecord, SessionId, redact_set_cookie,
+    Render, RenderMode, RequestRecord, RobotsVerdict, SessionId, redact_set_cookie,
 };
 use kage_core::ids::{ApiKeyId, AttemptId, JobId, PersonaId, RequestId, ResultId};
 use kage_core::outcome::{Block, Outcome};
@@ -58,8 +71,14 @@ use kage_core::schedule::retry::{AttemptVerdict, RequestProgress, Ruling, Step};
 use kage_core::schedule::selection::Network;
 use kage_core::seed::Seed;
 use kage_core::ssrf::{SsrfPolicy, check_url};
+use kage_crawl::html::Page;
+use kage_extract::Options as ExtractOptions;
 use kage_http::RequestKind;
 use url::Url;
+
+pub use self::cache::CachePlan;
+use self::gate::Gate;
+pub use self::gate::{Peek, ROBOTS_NO_SCOUT, ROBOTS_UNAVAILABLE, RobotsRead, ScoutNeed};
 
 use crate::SchedulerError;
 use crate::archive::{Archive, Archived, Keep};
@@ -69,6 +88,7 @@ use crate::executor::{
     default_wait,
 };
 use crate::metrics;
+use crate::robots::{Desk, RobotsSettings, RobotsWish};
 use crate::scheduler::{Grant, Scheduler};
 use crate::verdicts::Verdicts;
 
@@ -137,6 +157,23 @@ pub struct FetchOrder {
     /// that read a crawl's sitemaps is not the one that reads its pages.
     /// A pinned fetch has its persona whatever this says.
     pub exclude: Vec<PersonaId>,
+    /// What the request says about the site's `robots.txt` (spec §14).
+    pub robots: RobotsWish,
+    /// The fetch is the site's scout's: it asks for what no reader asks
+    /// for (a `robots.txt`, a sitemap). `pin` names the scout, the
+    /// policy's engines and countries do not bind it (a scout may be a
+    /// persona the policy keeps from reading the site), and `robots.txt`
+    /// is not looked at for it.
+    pub scout: bool,
+    /// What is extracted from the page's document (spec §14); `None` for
+    /// nothing.
+    pub extract: Option<ExtractOptions>,
+    /// Whether the report carries what a crawl reads from the page (its
+    /// links, its text), from the same tree as the extraction.
+    pub read_page: bool,
+    /// What the fetch may do with the response cache (spec §15); `None`
+    /// for one that neither reads nor fills it.
+    pub cache: Option<CachePlan>,
     /// The request as it was accepted, for the record.
     pub spec: serde_json::Value,
 }
@@ -173,6 +210,11 @@ impl FetchOrder {
             flow: None,
             arrival: None,
             exclude: Vec::new(),
+            robots: RobotsWish::Policy,
+            scout: false,
+            extract: None,
+            read_page: false,
+            cache: None,
         }
     }
 }
@@ -223,6 +265,18 @@ pub struct FetchReport {
     pub pacing: PacingReport,
     /// Whether the fetch moved from the http path to the browser.
     pub escalated: bool,
+    /// What was extracted from the page's document, when the request
+    /// asked for it and the fetch got an HTML document.
+    pub extract: Option<serde_json::Value>,
+    /// What the site's `robots.txt` says of the address; `None` for a
+    /// scout's own fetch and for a request that ended before it was
+    /// looked at.
+    pub robots: Option<RobotsVerdict>,
+    /// What a crawl reads from the page, when the order asked for it.
+    pub page: Option<Page>,
+    /// The stored result, when the fetch was answered from the response
+    /// cache: nothing was asked of the site, and there are no attempts.
+    pub cached: Option<Box<FetchRecord>>,
 }
 
 /// A synchronous fetch that outlasted its wall time. It keeps running;
@@ -307,6 +361,8 @@ pub struct Capture<'a> {
     pub session: Option<SessionId>,
     /// The persona that ran the flow.
     pub persona: Option<PersonaSummary>,
+    /// What is extracted from the captured document (spec §14).
+    pub extract: Option<ExtractOptions>,
     /// What is recorded as the request: which step of which flow.
     pub spec: serde_json::Value,
 }
@@ -322,6 +378,8 @@ pub struct Kept {
     pub status: Option<u16>,
     /// The bodies and files that were stored.
     pub artifacts: Vec<ArtifactRef>,
+    /// What was extracted from the captured document.
+    pub extract: Option<serde_json::Value>,
 }
 
 /// Tells work for a job to stop waiting: `true` once it should. An attempt
@@ -342,6 +400,7 @@ const fn waits(refused: &crate::scheduler::Refused) -> bool {
         Refusal::DomainPaused
         | Refusal::EgressUnsafe
         | Refusal::BandwidthExhausted
+        | Refusal::RobotsUnavailable
         | Refusal::ShuttingDown => true,
         // Nobody can serve it at all, unless the scheduler named the
         // moment somebody can.
@@ -388,6 +447,8 @@ pub struct Pipeline {
     verdicts: Arc<Verdicts>,
     settings: PipelineSettings,
     archive: Option<Arc<dyn Archive>>,
+    robots: Arc<RobotsSettings>,
+    desk: Arc<Desk>,
 }
 
 /// Counts an attempt and writes its line in the log.
@@ -464,6 +525,18 @@ struct Course {
     /// Set once a synchronous fetch outlasted its wall time: it is carried
     /// on as a job and waits where a job waits.
     overflowed: Option<Arc<AtomicBool>>,
+    /// The site the page belongs to: its registrable domain.
+    site: String,
+    /// The site's scout, which reads none of its pages.
+    site_scout: Option<PersonaId>,
+    /// The request for the site's `robots.txt` that follows this fetch,
+    /// where the file is reported and nothing of it is known.
+    robots_due: Option<gate::Call>,
+    /// What the site's `robots.txt` says of the address, once it was
+    /// looked at.
+    robots: Option<RobotsVerdict>,
+    /// The gap an enforced `Crawl-delay` asks for.
+    gap_floor: Option<Duration>,
 }
 
 impl Course {
@@ -511,7 +584,17 @@ impl Pipeline {
             verdicts,
             settings,
             archive: None,
+            robots: Arc::new(RobotsSettings::default()),
+            desk: Arc::new(Desk::default()),
         }
+    }
+
+    /// The same pipeline, keeping `robots.txt` as `settings` say (the
+    /// configuration's `robots` section) in place of the defaults.
+    #[must_use]
+    pub fn with_robots(mut self, settings: RobotsSettings) -> Self {
+        self.robots = Arc::new(settings);
+        self
     }
 
     /// The same pipeline, keeping what a request asks to keep of its page
@@ -587,7 +670,7 @@ impl Pipeline {
         let mut task = tokio::spawn(async move {
             let mut course = pipeline.begin(request, order, None, None).await?;
             course.overflowed = Some(flag);
-            pipeline.run(course, None).await
+            Box::pin(pipeline.run(course, None)).await
         });
         let Ok(finished) = tokio::time::timeout(wall, &mut task).await else {
             // From here on the fetch is a job's.
@@ -635,6 +718,14 @@ impl Pipeline {
         let policies = self.verdicts.policies().current();
         let policy = policies.domains.resolve(&domain);
         let pacing = policy.pacing_for(order.pacing.as_ref(), &policies.pacing)?;
+        // The site's scout reads none of its pages. A session's persona is
+        // the session's, whatever else it is.
+        let site = kage_crawl::site::of_host(&domain);
+        let site_scout = if order.scout || order.pin.is_some() {
+            None
+        } else {
+            self.site_scout(&site).await?
+        };
         let request = RequestRecord {
             id,
             api_key_id: order.api_key,
@@ -692,6 +783,11 @@ impl Pipeline {
             retry: None,
             give_up_at,
             overflowed: None,
+            site,
+            site_scout,
+            robots_due: None,
+            robots: None,
+            gap_floor: None,
         })
     }
 
@@ -702,7 +798,7 @@ impl Pipeline {
         give_up_at: Option<DateTime<Utc>>,
     ) -> Result<FetchReport, SchedulerError> {
         let course = self.begin(id, order, give_up_at, None).await?;
-        match self.run(course, None).await? {
+        match Box::pin(self.run(course, None)).await? {
             Ran::Finished(report) => Ok(*report),
             // Without a stop signal nothing is deferred and nothing stops.
             Ran::Deferred(_) | Ran::Stopped => Err(SchedulerError::ShuttingDown),
@@ -725,7 +821,7 @@ impl Pipeline {
         stop: Stop,
     ) -> Result<JobFetch, SchedulerError> {
         let course = self.begin(id, order, None, earlier).await?;
-        Ok(match self.run(course, Some(stop)).await? {
+        Ok(match Box::pin(self.run(course, Some(stop))).await? {
             Ran::Finished(report) => JobFetch::Finished(report),
             Ran::Deferred(deferred) => JobFetch::Deferred(deferred),
             Ran::Stopped => JobFetch::Stopped,
@@ -801,6 +897,16 @@ impl Pipeline {
             Some(archive) => archive.keep(id, capture.keep, &output, now).await,
             None => Archived::default(),
         };
+        let extract = match (&page.dom_html, capture.extract, Url::parse(&page.final_url)) {
+            (Some(document), Some(options), Ok(loaded_from))
+                if outcome.is_success() && read::is_html(&output.headers) =>
+            {
+                read::read_document(document.clone(), loaded_from, false, Some(options))
+                    .await
+                    .extract
+            }
+            _ => None,
+        };
         let record = FetchRecord {
             id: ResultId::new(),
             request_id: id,
@@ -809,13 +915,14 @@ impl Pipeline {
             headers,
             final_url: output.final_url.clone(),
             redirects: output.redirects.clone(),
-            extract: None,
+            extract: extract.clone(),
             xhr: archived.xhr,
             artifacts: archived.artifacts.clone(),
             persona: capture.persona,
             block,
             robots: None,
             cached: false,
+            cached_at: None,
             reason: output.reason.clone(),
             created_at: now,
         };
@@ -825,11 +932,12 @@ impl Pipeline {
             outcome,
             status: record.status,
             artifacts: archived.artifacts,
+            extract,
         })
     }
 
     /// The attempts of a request until it is done, deferred or stopped.
-    async fn run(&self, mut course: Course, mut stop: Option<Stop>) -> Result<Ran, SchedulerError> {
+    async fn run(&self, course: Course, mut stop: Option<Stop>) -> Result<Ran, SchedulerError> {
         let id = course.request.id;
         let finished = |report| Ok(Ran::Finished(Box::new(report)));
         // The guard looks at the URL before anything is sent anywhere.
@@ -851,6 +959,10 @@ impl Pipeline {
             let (outcome, reason) = course.standing();
             return finished(self.conclude(course, outcome, reason, None).await?);
         }
+        let mut course = match self.before(course, stop.as_ref()).await? {
+            Ok(course) => course,
+            Err(ran) => return Ok(ran),
+        };
 
         loop {
             let acquiring = self.scheduler.acquire(self.work(&course));
@@ -929,6 +1041,58 @@ impl Pipeline {
         }
     }
 
+    /// What stands before the attempts of a request: the response cache,
+    /// which may hold its page, and the site's `robots.txt`, where its
+    /// policy asks. `Err` with how the run ended when it ends here.
+    async fn before(
+        &self,
+        mut course: Course,
+        stop: Option<&Stop>,
+    ) -> Result<Result<Course, Ran>, SchedulerError> {
+        let finished = |report| Ok(Err(Ran::Finished(Box::new(report))));
+        // A page the cache holds is no visit: nothing is asked of anybody.
+        if course.attempts.is_empty()
+            && let Some(report) = self.serve_cached(&course).await?
+        {
+            return finished(report);
+        }
+        let (outcome, reason, retry_at) = match self.robots_gate(&mut course, stop).await? {
+            Gate::Open => return Ok(Ok(course)),
+            Gate::Stopped => return Ok(Err(Ran::Stopped)),
+            Gate::Denied(reason) => {
+                metrics::robots_denied(reason.unwrap_or("rule"));
+                (Outcome::RobotsDenied, reason.map(str::to_owned), None)
+            }
+            Gate::Unavailable { reason, retry_at } => {
+                // A job waits until the file can be had; a caller that
+                // waits for its page is told that it is not fetched.
+                if course.waits_like_a_job(stop.is_some()) {
+                    return Ok(Err(Ran::Deferred(Deferred {
+                        reason: Refusal::RobotsUnavailable,
+                        retry_at,
+                    })));
+                }
+                metrics::robots_denied(reason);
+                (Outcome::RobotsDenied, Some(reason.to_owned()), retry_at)
+            }
+            // The scout was told what the page would have been told.
+            Gate::Refused(refused) => {
+                if course.waits_like_a_job(stop.is_some()) && waits(&refused) {
+                    return Ok(Err(Ran::Deferred(Deferred {
+                        reason: refused.reason,
+                        retry_at: refused.retry_at,
+                    })));
+                }
+                (
+                    Outcome::ProviderError,
+                    Some(refused.reason.as_str().to_owned()),
+                    refused.retry_at,
+                )
+            }
+        };
+        finished(self.conclude(course, outcome, reason, retry_at).await?)
+    }
+
     /// The pause before the next attempt of a request, when another
     /// persona makes it.
     fn retry_pause(&self, course: &Course) -> RetryPause {
@@ -975,9 +1139,13 @@ impl Pipeline {
     /// The next attempt of a request, as work for the scheduler.
     fn work(&self, course: &Course) -> Work {
         let order = &course.order;
-        let engines: Vec<Engine> = course
-            .policy
-            .engines
+        // A scout may be a persona the policy keeps from reading the site.
+        let allowed: &[Engine] = if order.scout {
+            Engine::ALL
+        } else {
+            &course.policy.engines
+        };
+        let engines: Vec<Engine> = allowed
             .iter()
             .copied()
             .filter(|engine| order.engines.is_empty() || order.engines.contains(engine))
@@ -992,9 +1160,19 @@ impl Pipeline {
             exclude: if course.follow_up.is_some() || order.pin.is_some() {
                 Vec::new()
             } else {
-                // Those that tried already, and those the caller keeps out.
+                // Those that tried already, those the caller keeps out,
+                // and the site's scout, which reads none of its pages: the
+                // one known when the request began, or one chosen since.
+                let scout = if order.scout {
+                    None
+                } else {
+                    self.desk
+                        .scout(&course.site)
+                        .and_then(|scouted| scouted.0)
+                        .or(course.site_scout)
+                };
                 let mut exclude = course.progress.used().to_vec();
-                for persona in &order.exclude {
+                for persona in order.exclude.iter().chain(&scout) {
                     if !exclude.contains(persona) {
                         exclude.push(*persona);
                     }
@@ -1003,7 +1181,11 @@ impl Pipeline {
             },
             avoid: course.avoid.clone(),
             engines,
-            countries: course.policy.countries.clone(),
+            countries: if order.scout {
+                None
+            } else {
+                course.policy.countries.clone()
+            },
             prefer_countries: order.prefer_countries.clone(),
             // A session's persona and a persona's own second try are not
             // a matter of visitors.
@@ -1019,6 +1201,7 @@ impl Pipeline {
             follow_up: course.follow_up.is_some(),
             retry_pause: course.retry,
             not_before: None,
+            gap_floor: course.gap_floor,
             give_up_at: course.give_up_at.or_else(|| {
                 let patience = chrono::Duration::from_std(order.patience?).ok()?;
                 self.now().checked_add_signed(patience)
@@ -1191,6 +1374,7 @@ impl Pipeline {
             }
             _ => Archived::default(),
         };
+        let reading = self.read(&course.order, outcome, last.as_ref()).await;
         let record = FetchRecord {
             id: ResultId::new(),
             request_id: course.request.id,
@@ -1207,17 +1391,23 @@ impl Pipeline {
             redirects: last
                 .as_ref()
                 .map_or_else(Vec::new, |last| last.redirects.clone()),
-            extract: None,
+            extract: reading.extract.clone(),
             xhr: archived.xhr.clone(),
             artifacts: archived.artifacts.clone(),
             persona: persona.clone(),
             block: block.clone(),
-            robots: None,
+            robots: course.robots.clone(),
             cached: false,
+            cached_at: None,
             reason: reason.clone(),
             created_at: self.now(),
         };
         self.backend().finish(&record).await?;
+        self.fill_cache(&course.order, &record, reading.thin).await;
+        if let Some(call) = course.robots_due {
+            let readers = course.attempts.iter().map(|attempt| attempt.persona_id);
+            self.follow_up(call, readers);
+        }
         let first_vendor = last
             .as_ref()
             .and_then(|last| last.classification.vendors.first())
@@ -1248,6 +1438,10 @@ impl Pipeline {
                 waited: course.waited,
             },
             escalated: course.progress.escalated(),
+            extract: reading.extract,
+            robots: course.robots,
+            page: reading.page,
+            cached: None,
         })
     }
 }

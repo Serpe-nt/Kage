@@ -49,14 +49,79 @@ pub const MIN_DWELL_BOUNDS: (Duration, Duration) =
 pub const MAX_RETRIES: u32 = 10;
 
 string_enum! {
-    /// What to do with robots.txt (spec §14, decision D15).
+    /// What to do with robots.txt (spec §14, decision D15). A reader never
+    /// asks for `/robots.txt`, so the request marks the address that makes
+    /// it: a site's file is asked for only where its policy says so, and
+    /// then by a persona that never reads the site.
     pub enum RobotsMode {
-        /// Fetch it and report the verdict; never refuse.
+        /// Ask for it and report the verdict; never refuse.
         Report => "report",
-        /// Fetch it and refuse disallowed URLs with `robots_denied`.
+        /// Ask for it, refuse disallowed URLs with `robots_denied`, and
+        /// keep to its `Crawl-delay`.
         Enforce => "enforce",
-        /// Do not fetch it.
+        /// Do not ask for it: the default.
         Ignore => "ignore",
+    }
+}
+
+/// What a domain entry says about the response cache (spec §15). Every
+/// field is optional and cascades by itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CacheRule {
+    /// When true, a page one API key fetched may be served to another:
+    /// the operator says the site shows everybody the same.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared: Option<bool>,
+    /// The longest a result of this site may be served for; the
+    /// configuration's `cache.max_ttl` when not set, and never beyond it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_ttl: Option<HumanDuration>,
+    /// How long a result is served for when a request does not say
+    /// (`cache_ttl_s`). Not set: a request that does not ask is not served
+    /// from the cache and fills none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl: Option<HumanDuration>,
+}
+
+/// The response cache as a domain's policy resolves it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+pub struct CachePolicy {
+    /// Whether a page one API key fetched may be served to another.
+    pub shared: bool,
+    /// The longest a result may be served for; `None` leaves it to the
+    /// configuration's `cache.max_ttl`.
+    pub max_ttl: Option<HumanDuration>,
+    /// How long a result is served for when a request does not say.
+    pub ttl: Option<HumanDuration>,
+}
+
+impl CachePolicy {
+    /// The longest a result of the site may be served for, given the
+    /// configuration's bound.
+    pub fn longest(&self, bound: Duration) -> Duration {
+        self.max_ttl.map_or(bound, |own| own.get().min(bound))
+    }
+
+    /// For how long a request is served from the cache and fills it:
+    /// what it asks for (`Some(0)` is never), else the policy's `ttl`,
+    /// else never. `Err` with the bound when it asks for longer than the
+    /// site's results may be served.
+    ///
+    /// # Errors
+    ///
+    /// The longest time allowed, when the request asks for more.
+    pub fn ttl_for(
+        &self,
+        asked: Option<Duration>,
+        bound: Duration,
+    ) -> Result<Option<Duration>, Duration> {
+        let longest = self.longest(bound);
+        match asked {
+            Some(asked) if asked > longest => Err(longest),
+            Some(asked) => Ok(Some(asked).filter(|asked| !asked.is_zero())),
+            None => Ok(self.ttl.map(|own| own.get().min(longest))),
+        }
     }
 }
 
@@ -264,6 +329,9 @@ pub struct DomainRule {
     /// robots.txt handling.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub robots: Option<RobotsMode>,
+    /// The response cache.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache: Option<CacheRule>,
     /// How the first navigation arrives.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub referer_strategy: Option<RefererStrategy>,
@@ -330,6 +398,25 @@ impl DomainRule {
         }
         if self.pacing.as_deref() == Some("") {
             return Err(invalid("pacing", "must name a profile"));
+        }
+        if let Some(cache) = &self.cache {
+            if cache.max_ttl.is_some_and(|ttl| ttl.get().is_zero()) {
+                return Err(invalid("cache.max_ttl", "must be longer than zero"));
+            }
+            if cache.ttl.is_some_and(|ttl| ttl.get().is_zero()) {
+                return Err(invalid(
+                    "cache.ttl",
+                    "must be longer than zero; omit it for no default",
+                ));
+            }
+            if let (Some(ttl), Some(max_ttl)) = (cache.ttl, cache.max_ttl)
+                && ttl.get() > max_ttl.get()
+            {
+                return Err(invalid(
+                    "cache.ttl",
+                    "must not be longer than cache.max_ttl",
+                ));
+            }
         }
         let (shortest, longest) = MIN_DWELL_BOUNDS;
         if self
@@ -421,6 +508,8 @@ pub struct EffectivePolicy {
     pub pacing_locked: bool,
     /// robots.txt handling.
     pub robots: RobotsMode,
+    /// The response cache.
+    pub cache: CachePolicy,
     /// How the first navigation arrives.
     pub referer_strategy: RefererStrategy,
     /// What the personas' own days mean for this domain.
@@ -655,7 +744,19 @@ impl DomainPolicies {
                 .unwrap_or_else(|| PacingProfiles::DEFAULT.to_owned()),
             pacing_source,
             pacing_locked: inherited(&rules, defaults, |rule| rule.pacing_locked).unwrap_or(false),
-            robots: inherited(&rules, defaults, |rule| rule.robots).unwrap_or(RobotsMode::Report),
+            robots: inherited(&rules, defaults, |rule| rule.robots).unwrap_or(RobotsMode::Ignore),
+            cache: CachePolicy {
+                shared: inherited(&rules, defaults, |rule| {
+                    rule.cache.and_then(|cache| cache.shared)
+                })
+                .unwrap_or(false),
+                max_ttl: inherited(&rules, defaults, |rule| {
+                    rule.cache.and_then(|cache| cache.max_ttl)
+                }),
+                ttl: inherited(&rules, defaults, |rule| {
+                    rule.cache.and_then(|cache| cache.ttl)
+                }),
+            },
             referer_strategy: inherited(&rules, defaults, |rule| rule.referer_strategy)
                 .unwrap_or(RefererStrategy::Direct),
             active_hours: inherited(&rules, defaults, |rule| rule.active_hours)
@@ -1709,3 +1810,6 @@ defaults:
         }
     }
 }
+
+#[cfg(test)]
+mod cache_tests;

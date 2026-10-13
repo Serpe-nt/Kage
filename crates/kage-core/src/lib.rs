@@ -29,6 +29,7 @@
 mod macros;
 
 pub mod alert;
+pub mod cache;
 pub mod classifier;
 pub mod config;
 pub mod domain;

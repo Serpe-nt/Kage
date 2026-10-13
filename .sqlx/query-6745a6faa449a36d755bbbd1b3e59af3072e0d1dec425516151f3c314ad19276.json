@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO response_cache (cache_key, url_key, result_id, api_key_id, cached_at,\n                                         expires_at)\n             VALUES ($1, $2, $3, $4, $5, $6)\n             ON CONFLICT (cache_key) DO UPDATE\n             SET url_key = EXCLUDED.url_key, result_id = EXCLUDED.result_id,\n                 api_key_id = EXCLUDED.api_key_id, cached_at = EXCLUDED.cached_at,\n                 expires_at = EXCLUDED.expires_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6745a6faa449a36d755bbbd1b3e59af3072e0d1dec425516151f3c314ad19276"
+}

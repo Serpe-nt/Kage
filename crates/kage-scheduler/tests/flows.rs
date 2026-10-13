@@ -187,6 +187,7 @@ async fn a_flow_is_one_browser_attempt_paced_like_a_person_with_a_capture_per_st
             job: None,
             session: None,
             persona: report.persona.clone(),
+            extract: Some(kage_extract::Options::default()),
             spec: json!({ "flow": report.request, "step": 5, "action": "extract" }),
         })
         .await

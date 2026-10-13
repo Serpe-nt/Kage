@@ -1089,15 +1089,17 @@ fn names_of_sources_and_reasons_are_read_back() {
         assert_eq!(Source::parse(source.as_str()), Some(source));
     }
     assert_eq!(Source::parse("guess"), None);
-    for left in Skip::ALL
-        .into_iter()
-        .map(Left::Scope)
-        .chain([Left::AlreadyRead, Left::Guard])
+    for left in
+        Skip::ALL
+            .into_iter()
+            .map(Left::Scope)
+            .chain([Left::AlreadyRead, Left::Guard, Left::Robots])
     {
         assert_eq!(Left::parse(left.as_str()), Some(left));
     }
     assert_eq!(Left::AlreadyRead.as_str(), "already_read");
     assert_eq!(Left::Guard.as_str(), "ssrf_denied");
+    assert_eq!(Left::Robots.as_str(), "robots_denied");
     assert_eq!(Left::parse("because"), None);
 }
 
@@ -1145,6 +1147,44 @@ fn an_address_the_guard_refuses_is_left_out_and_never_counted_as_asked() {
     assert!(!frontier.refuse(seed));
     assert!(!frontier.refuse(99));
     assert_eq!(frontier.take_changed(), Vec::<usize>::new());
+}
+
+#[test]
+fn an_address_a_robots_txt_disallows_is_left_out_and_never_counted_as_asked() {
+    let mut frontier = frontier(5);
+    let site = frontier.entry(0).unwrap().site.clone();
+    let home = frontier.next(&site, &[]).unwrap();
+    frontier.begin(home.entry);
+    frontier.record_read(
+        home.entry,
+        &PageRead {
+            final_url: url("/"),
+            links: vec![link("/private/a"), link("/open")],
+            links_truncated: false,
+            text: text_of("home"),
+        },
+    );
+    let private = frontier.find(&url("/private/a")).unwrap();
+    frontier.take_changed();
+
+    assert!(frontier.disallow(private));
+
+    assert_eq!(
+        frontier.entry(private).unwrap().state,
+        State::Skipped(Left::Robots)
+    );
+    assert_eq!(frontier.take_changed(), [private]);
+    let counts = frontier.counts();
+    assert_eq!(counts.skipped["robots_denied"], 1);
+    // It was never asked for: one page was, and one still waits.
+    assert_eq!((counts.begun, counts.waiting), (1, 1));
+    // The reader goes on to what is allowed, and never there.
+    let next = frontier.next(&site, &[home.entry]).unwrap();
+    assert_eq!(next.url, url("/open"));
+    assert!(!frontier.begin(private));
+    assert!(!frontier.disallow(private));
+    assert!(!frontier.disallow(home.entry));
+    assert!(!frontier.disallow(99));
 }
 
 #[test]

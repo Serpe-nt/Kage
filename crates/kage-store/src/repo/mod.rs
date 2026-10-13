@@ -16,7 +16,9 @@ mod webhooks;
 pub use access::{ApiKeyRepo, AuditRepo, SessionRepo};
 pub use artifacts::ArtifactRepo;
 pub use bandwidth::{BandwidthRepo, Traffic};
-pub use caches::{ResponseCacheEntry, ResponseCacheRepo, RobotsCacheEntry, RobotsCacheRepo};
+pub use caches::{
+    ResponseCacheEntry, ResponseCacheRepo, RobotsCacheEntry, RobotsCacheRepo, SiteScoutRepo,
+};
 pub use cookies::HttpCookieRepo;
 pub use events::{BreakerRepo, HealthEventRepo, SelftestRepo};
 pub use fetch::{AttemptRepo, RequestRepo, ResultRepo};

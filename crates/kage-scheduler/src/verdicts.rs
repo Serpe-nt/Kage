@@ -169,6 +169,18 @@ pub fn page_failure(page: &PageResult) -> Option<Failure> {
     })
 }
 
+/// Whether a navigation ended because the browser saved what came instead
+/// of showing it (a gzipped sitemap, any download) and nothing of it was
+/// kept: there is no page to judge, and what would be judged in its place
+/// is an empty document the site never sent.
+pub fn saved_not_shown(page: &PageResult) -> bool {
+    page.error
+        .as_ref()
+        .is_some_and(|error| error.code == NavigationErrorCode::Aborted)
+        && page.dom_html.is_none()
+        && page.raw_body.is_none()
+}
+
 /// What an answer says about the site's health.
 pub const fn courtesy_of(outcome: Outcome, status: Option<u16>) -> Courtesy {
     match (outcome, status) {
@@ -349,8 +361,16 @@ impl Verdicts {
         let seen = observe_page(page).map(|observation| self.classify(&observation));
         match (page_failure(page), seen) {
             // A page that hung after it answered may be a wall that never
-            // finishes: what was seen decides when it is a block.
-            (Some(_), Some(seen)) if seen.outcome.is_block() => seen,
+            // finishes: what was seen decides when it is a block. A soft
+            // block is judged by what a page says, so a file the browser
+            // saved and showed nothing of is none: the persona that asked
+            // for it was not turned away.
+            (Some(_), Some(seen))
+                if seen.outcome.is_block()
+                    && !(seen.outcome == Outcome::SoftBlock && saved_not_shown(page)) =>
+            {
+                seen
+            }
             (Some(failure), _) => unanswered(failure.outcome, failure.reason),
             (None, Some(seen)) => seen,
             (None, None) => unanswered(Outcome::ProviderError, "no_response"),
@@ -365,7 +385,9 @@ mod tests {
     use kage_core::outcome::Outcome;
     use kage_core::schedule::politeness::Courtesy;
 
-    use super::{cookies_set, courtesy_of, observe_page, page_failure, unanswered};
+    use super::{
+        cookies_set, courtesy_of, observe_page, page_failure, saved_not_shown, unanswered,
+    };
 
     fn page() -> PageResult {
         let examples: serde_json::Value = serde_json::from_str(EXAMPLES_JSON).unwrap();
@@ -486,6 +508,49 @@ mod tests {
             failed(NavigationErrorCode::Aborted),
             (Outcome::ProviderError, "aborted", Courtesy::NotTheSite)
         );
+    }
+
+    #[test]
+    fn a_file_a_browser_saved_and_showed_nothing_of_is_no_empty_page() {
+        let aborted = |code| {
+            let mut page = page();
+            page.error = Some(NavigationError {
+                code,
+                message: "page.goto: Download is starting".to_owned(),
+                net_error: None,
+            });
+            page.dom_html = None;
+            page.raw_body = None;
+            page
+        };
+        // Saved, nothing kept: no page.
+        let saved = aborted(NavigationErrorCode::Aborted);
+        assert!(saved_not_shown(&saved));
+        // The bytes were handed over all the same (Firefox): there is
+        // something to look at.
+        let mut handed = saved.clone();
+        handed.raw_body = page().raw_body.or_else(|| {
+            serde_json::from_value(serde_json::json!({
+                "data": "H4sI", "encoding": "base64", "bytes": 3, "truncated": false,
+            }))
+            .ok()
+        });
+        assert!(!saved_not_shown(&handed));
+        let mut shown = saved.clone();
+        shown.dom_html = Some("<html></html>".to_owned());
+        assert!(!saved_not_shown(&shown));
+        // A page that hung or did not come is another matter, and so is
+        // one that loaded.
+        for code in [
+            NavigationErrorCode::Timeout,
+            NavigationErrorCode::NavigationFailed,
+            NavigationErrorCode::ProxyFailed,
+        ] {
+            assert!(!saved_not_shown(&aborted(code)), "{code:?}");
+        }
+        let mut loaded = saved;
+        loaded.error = None;
+        assert!(!saved_not_shown(&loaded));
     }
 
     #[test]

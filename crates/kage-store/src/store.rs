@@ -10,7 +10,7 @@ use crate::repo::{
     ApiKeyRepo, ArtifactRepo, AttemptRepo, AuditRepo, BandwidthRepo, BreakerRepo, FrontierRepo,
     HealthEventRepo, HttpCookieRepo, JobItemRepo, JobRepo, PersonaDomainStateRepo, PersonaRepo,
     ProxyRepo, RequestRepo, ResponseCacheRepo, ResultRepo, RobotsCacheRepo, SelftestRepo,
-    SessionRepo, WebhookRepo,
+    SessionRepo, SiteScoutRepo, WebhookRepo,
 };
 
 /// The migrations in `crates/kage-store/migrations`, embedded at compile time.
@@ -236,6 +236,11 @@ impl Store {
     /// The robots.txt cache.
     pub const fn robots_cache(&self) -> RobotsCacheRepo<'_> {
         RobotsCacheRepo::new(&self.pool)
+    }
+
+    /// The persona that asks for a site's `robots.txt` and sitemaps.
+    pub const fn site_scouts(&self) -> SiteScoutRepo<'_> {
+        SiteScoutRepo::new(&self.pool)
     }
 
     /// The response cache.

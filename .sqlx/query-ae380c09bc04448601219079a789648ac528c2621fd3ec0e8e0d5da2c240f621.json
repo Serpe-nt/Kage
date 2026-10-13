@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT cache_key, url_key, result_id, cached_at, expires_at\n             FROM response_cache WHERE cache_key = $1 AND expires_at > $2",
+  "query": "SELECT cache_key, url_key, result_id, api_key_id, cached_at, expires_at\n             FROM response_cache WHERE cache_key = $1 AND expires_at > $2",
   "describe": {
     "columns": [
       {
@@ -38,6 +38,17 @@
       },
       {
         "ordinal": 3,
+        "name": "api_key_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "response_cache",
+            "name": "api_key_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
         "name": "cached_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -48,7 +59,7 @@
         }
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "expires_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -69,9 +80,10 @@
       false,
       false,
       false,
+      true,
       false,
       false
     ]
   },
-  "hash": "03620caee884eed1d1e57eaa417c04ddecdedc310fdda071c2e0cc1db9e3f39f"
+  "hash": "ae380c09bc04448601219079a789648ac528c2621fd3ec0e8e0d5da2c240f621"
 }

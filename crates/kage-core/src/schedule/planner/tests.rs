@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use super::{
     Completion, Decision, Dispatch, DomainFacts, Held, PersonaView, Planner, PlannerRules, Refusal,
-    RetryPause, Visitors, Work,
+    RetryPause, Visitors, Work, floored,
 };
 use crate::domain::{BreakerState, CountryCode, DomainBreaker, Engine, PersonaDomainState, Render};
 use crate::ids::PersonaId;
@@ -164,6 +164,7 @@ fn work(domain: &str) -> Work {
         retry_pause: None,
         not_before: None,
         give_up_at: None,
+        gap_floor: None,
     }
 }
 
@@ -1725,6 +1726,7 @@ fn refusal_names_are_the_reasons_callers_get() {
             "domain_paused",
             "no_persona",
             "shutting_down",
+            "robots_unavailable",
         ],
     );
 }
@@ -2789,4 +2791,67 @@ fn on_the_http_path_the_gap_is_still_the_floor_and_the_rest_counts_from_the_end(
         "{by_gap} by the gap, {by_rest} by the rest"
     );
     assert!(by_rest > 100, "{by_rest}");
+}
+
+#[test]
+fn a_gap_with_a_floor_is_never_shorter_and_never_a_constant() {
+    let secs = StdDuration::from_secs;
+    let seed = Seed::from_u64(7);
+    // Without a floor, and at or above one, a gap is as it was drawn.
+    assert_eq!(floored(secs(3), None, &seed, 1), secs(3));
+    assert_eq!(floored(secs(10), Some(secs(10)), &seed, 1), secs(10));
+    assert_eq!(floored(secs(11), Some(secs(10)), &seed, 1), secs(11));
+    // Under it, the floor and up to a fifth more, another for every page.
+    let mut drawn = Vec::new();
+    for page in 1..=200 {
+        let gap = floored(secs(3), Some(secs(10)), &seed, page);
+        assert!(gap >= secs(10) && gap <= secs(12), "{gap:?}");
+        // The same page, the same gap: a visit replays.
+        assert_eq!(floored(secs(3), Some(secs(10)), &seed, page), gap);
+        drawn.push(gap);
+    }
+    drawn.sort_unstable();
+    drawn.dedup();
+    assert!(drawn.len() > 190, "{} different gaps", drawn.len());
+    assert!(drawn[0] < StdDuration::from_millis(10_100));
+    assert!(drawn[drawn.len() - 1] > StdDuration::from_millis(11_900));
+    // Another persona, other gaps.
+    assert_ne!(
+        floored(secs(3), Some(secs(10)), &Seed::from_u64(8), 1),
+        floored(secs(3), Some(secs(10)), &seed, 1)
+    );
+    // The gap one millisecond under the floor is floored too.
+    assert!(floored(StdDuration::from_millis(9_999), Some(secs(10)), &seed, 1) >= secs(10));
+}
+
+#[test]
+fn a_site_that_asks_for_a_delay_gets_it_between_two_pages_of_a_persona() {
+    // Twelve pages for one persona under a brisk profile, whose own gaps
+    // are far shorter than the 20 s the site asks for.
+    let floor = StdDuration::from_secs(20);
+    let run = |gap_floor: Option<StdDuration>| {
+        let mut sim = Sim::new(personas(1));
+        for _ in 0..12 {
+            sim.submit(Work {
+                gap_floor,
+                ..work("slow.example")
+            });
+        }
+        sim.run_until(noon() + Duration::hours(2));
+        let starts: Vec<DateTime<Utc>> = sim.log.iter().map(|(at, _)| *at).collect();
+        assert_eq!(starts.len(), 12);
+        starts
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).to_std().unwrap())
+            .collect::<Vec<_>>()
+    };
+    let free = run(None);
+    assert!(free.iter().any(|gap| *gap < floor), "{free:?}");
+    let held = run(Some(floor));
+    assert!(held.iter().all(|gap| *gap >= floor), "{held:?}");
+    // And they are not all alike.
+    let mut different = held.clone();
+    different.sort_unstable();
+    different.dedup();
+    assert!(different.len() > 6, "{held:?}");
 }

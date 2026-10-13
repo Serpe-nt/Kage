@@ -18,7 +18,7 @@ use chrono::{DateTime, Utc};
 use kage_core::domain::{
     Attempt, FetchRecord, Persona, PersonaState, Proxy, ProxyEndpoint, RequestRecord,
 };
-use kage_core::ids::PersonaId;
+use kage_core::ids::{ApiKeyId, PersonaId};
 use kage_core::outcome::Outcome;
 use kage_core::persona::place;
 use kage_core::schedule::breaker::{Admission, BreakerChange, BreakerRules};
@@ -27,6 +27,7 @@ use kage_core::schedule::selection::Network;
 use kage_persona::identity::http_spec;
 use kage_proxy::Pool;
 use kage_store::Store;
+use kage_store::repo::{ResponseCacheEntry, RobotsCacheEntry};
 use tokio::time::Instant;
 
 use crate::SchedulerError;
@@ -35,6 +36,18 @@ use crate::forwarder::{RouteRefusal, Routes};
 /// How long the forwarder trusts what it found out about a persona's
 /// proxy before it asks again.
 const ROUTE_TTL: Duration = Duration::from_secs(5);
+
+/// A result the response cache holds, with what it takes to serve it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CacheHit {
+    /// The entry.
+    pub entry: ResponseCacheEntry,
+    /// The result it points at.
+    pub record: FetchRecord,
+    /// The key whose request fetched the page; `None` for a request of
+    /// Kage's own.
+    pub filled_by: Option<ApiKeyId>,
+}
 
 /// See the module documentation.
 #[async_trait]
@@ -97,6 +110,40 @@ pub trait Backend: Send + Sync + fmt::Debug {
 
     /// Stores the result of a request and marks the request finished.
     async fn finish(&self, record: &FetchRecord) -> Result<(), SchedulerError>;
+
+    /// What is kept of the `robots.txt` of an origin, however old.
+    async fn robots(&self, origin: &str) -> Result<Option<RobotsCacheEntry>, SchedulerError>;
+
+    /// Keeps what a scout brought back, in place of what was kept.
+    async fn save_robots(&self, entry: &RobotsCacheEntry) -> Result<(), SchedulerError>;
+
+    /// The persona that asks a site for what no reader asks for, when the
+    /// site has one that lives.
+    async fn scout(&self, site: &str) -> Result<Option<PersonaId>, SchedulerError>;
+
+    /// Makes a persona the scout of a site.
+    async fn set_scout(
+        &self,
+        site: &str,
+        persona: PersonaId,
+        at: DateTime<Utc>,
+    ) -> Result<(), SchedulerError>;
+
+    /// The personas that asked a host of a site for a page and are not its
+    /// scout.
+    async fn readers(&self, site: &str) -> Result<Vec<PersonaId>, SchedulerError>;
+
+    /// The entry of the response cache under a key that has not expired
+    /// by `now`, with its result.
+    async fn cached(
+        &self,
+        cache_key: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<CacheHit>, SchedulerError>;
+
+    /// Puts a result into the response cache, in place of what its key
+    /// held.
+    async fn cache(&self, entry: &ResponseCacheEntry) -> Result<(), SchedulerError>;
 }
 
 /// The address a persona's requests are seen from, when it is known.
@@ -279,6 +326,59 @@ impl Backend for StoreBackend {
             .finish(record.request_id, record.outcome, record.created_at)
             .await?;
         Ok(())
+    }
+
+    async fn robots(&self, origin: &str) -> Result<Option<RobotsCacheEntry>, SchedulerError> {
+        Ok(self.store.robots_cache().get(origin).await?)
+    }
+
+    async fn save_robots(&self, entry: &RobotsCacheEntry) -> Result<(), SchedulerError> {
+        Ok(self.store.robots_cache().put(entry).await?)
+    }
+
+    async fn scout(&self, site: &str) -> Result<Option<PersonaId>, SchedulerError> {
+        Ok(self.store.site_scouts().get(site).await?)
+    }
+
+    async fn set_scout(
+        &self,
+        site: &str,
+        persona: PersonaId,
+        at: DateTime<Utc>,
+    ) -> Result<(), SchedulerError> {
+        Ok(self.store.site_scouts().set(site, persona, at).await?)
+    }
+
+    async fn readers(&self, site: &str) -> Result<Vec<PersonaId>, SchedulerError> {
+        Ok(self.store.site_scouts().readers(site).await?)
+    }
+
+    async fn cached(
+        &self,
+        cache_key: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<CacheHit>, SchedulerError> {
+        let Some(entry) = self.store.response_cache().get(cache_key, now).await? else {
+            return Ok(None);
+        };
+        let Some(record) = self.store.results().get(entry.result_id).await? else {
+            return Ok(None);
+        };
+        let filled_by = self
+            .store
+            .requests()
+            .get(record.request_id)
+            .await?
+            .and_then(|request| request.api_key_id);
+        Ok(Some(CacheHit {
+            entry,
+            record,
+            filled_by,
+        }))
+    }
+
+    async fn cache(&self, entry: &ResponseCacheEntry) -> Result<(), SchedulerError> {
+        Ok(self.store.response_cache().put(entry).await?)
     }
 }
 
