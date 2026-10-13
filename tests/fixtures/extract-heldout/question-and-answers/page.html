@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<!-- Fixture: a generated page with invented names; no real site. -->
+<html class="html__responsive" lang="en">
+<head>
+<meta charset="utf-8">
+<title>python - siltpipe window() yields the last partial window twice with a CSV source - Loop Overflow</title>
+<link rel="shortcut icon" href="https://cdn.loopstatic.example/Sites/loopoverflow/Img/favicon.ico?v=4f32ecc8f43d">
+<link rel="canonical" href="https://loopoverflow.example/questions/7741206/siltpipe-window-yields-the-last-partial-window-twice">
+<meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, minimum-scale=1.0">
+<meta name="description" content="I am using siltpipe 2.4 to group CSV readings into fixed-size windows. When the row count is not a multiple of the window size, the last window is yielded twice.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://loopoverflow.example/questions/7741206/siltpipe-window-yields-the-last-partial-window-twice">
+<meta property="og:site_name" content="Loop Overflow">
+<meta property="og:image" itemprop="image primaryImageOfPage" content="https://cdn.loopstatic.example/Sites/loopoverflow/Img/apple-touch-icon@2.png?v=73d79a89bded">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" property="og:title" itemprop="name" content="siltpipe window() yields the last partial window twice with a CSV source">
+<meta name="twitter:description" property="og:description" itemprop="description" content="I am using siltpipe 2.4 to read temperature readings from a CSV file and group them into fixed-size windows before averaging each one. Whenever the number ...">
+<script src="https://cdn.loopstatic.example/Js/stub.en.js?v=9c2c1a7e0b45"></script>
+<link rel="stylesheet" type="text/css" href="https://cdn.loopstatic.example/Sites/loopoverflow/primary.css?v=0b9e3c7d21aa">
+<link rel="alternate" type="application/atom+xml" title="Feed for this question" href="/feeds/question/7741206">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"QAPage","mainEntity":{"@type":"Question","name":"siltpipe window() yields the last partial window twice with a CSV source","text":"I am using siltpipe 2.4 to read temperature readings from a CSV file and group them into fixed-size windows before averaging each one. Whenever the number of rows is not a multiple of the window size, the last, shorter window is yielded twice.","answerCount":3,"upvoteCount":9,"dateCreated":"2026-03-03T14:07:00","author":{"@type":"Person","name":"junia_feld"},"acceptedAnswer":{"@type":"Answer","text":"This is documented behaviour rather than a bug. The fix is to hand window() a one-shot cursor, which cannot seek, instead of the source itself.","dateCreated":"2026-03-03T15:22:48","upvoteCount":14,"url":"https://loopoverflow.example/a/7741388","author":{"@type":"Person","name":"Halvard Brenn"}},"suggestedAnswer":[{"@type":"Answer","text":"Since version 2.5 the library also emits a SeekableInputWarning when a buffering function is given a source directly.","dateCreated":"2026-03-04T09:41:12","upvoteCount":6,"url":"https://loopoverflow.example/a/7743051","author":{"@type":"Person","name":"Ilka Rosvold"}},{"@type":"Answer","text":"If you cannot change how the source is opened, another way out is to stop asking for a short last window at all.","dateCreated":"2026-04-19T20:15:30","upvoteCount":2,"url":"https://loopoverflow.example/a/7802264","author":{"@type":"Person","name":"Davor Menski"}}]}}</script>
+<script>
+LoopExchange.init({"locale":"en","serverTime":1791886031,"routeName":"Questions/Show","site":{"name":"Loop Overflow","id":1},"user":{"isAnonymous":true}});
+LoopExchange.ready(function () { LoopExchange.question.init({ totalCommentCount: 7, questionId: 7741206 }); });
+</script>
+<style>.everyoneloves__top-leaderboard:empty{margin-bottom:0}</style>
+</head>
+<body class="question-page unified-theme">
+<header class="s-topbar ps-fixed t0 l0 js-top-bar">
+<a href="#content" class="s-topbar--skip-link">Skip to main content</a>
+<div class="s-topbar--container">
+<a href="javascript:void(0)" class="s-topbar--menu-btn js-left-sidebar-toggle" role="menuitem" aria-controls="left-sidebar" aria-expanded="false"><span></span></a>
+<a href="https://loopoverflow.example" class="s-topbar--logo js-gps-track"><span class="-img _glyph">Loop Overflow</span></a>
+<ol class="s-navigation" role="presentation">
+<li><a href="https://loopexchange.example/about" class="s-navigation--item">About</a></li>
+<li><a href="#" class="s-navigation--item js-products-menu">Products</a></li>
+</ol>
+<form id="search" role="search" action="/search" class="s-topbar--searchbar js-searchbar" autocomplete="off">
+<div class="s-topbar--searchbar--input-group">
+<input name="q" type="text" placeholder="Search&#x2026;" value="" autocomplete="off" maxlength="240" class="s-input s-input__search js-search-field" aria-label="Search">
+<svg aria-hidden="true" class="s-input-icon s-input-icon__search svg-icon iconSearch" width="18" height="18" viewBox="0 0 18 18"><path d="m18 16.5-5.14-5.18h-.35a7 7 0 1 0-1.19 1.19v.35L16.5 18z"></path></svg>
+</div>
+</form>
+<nav class="h100 ml-auto overflow-x-auto pr12" aria-label="Topbar">
+<ol class="s-topbar--content" role="menubar">
+<li class="-ctas">
+<a href="https://loopoverflow.example/users/login?ssrc=head" class="s-topbar--item s-btn s-btn__outlined ws-nowrap" role="menuitem" rel="nofollow">Log in</a>
+<a href="https://loopoverflow.example/users/signup?ssrc=head" class="s-topbar--item ml4 s-btn s-btn__filled ws-nowrap" role="menuitem" rel="nofollow">Sign up</a>
+</li>
+</ol>
+</nav>
+</div>
+</header>
+
+<div class="container">
+<div id="left-sidebar" data-is-here-when="md lg" class="left-sidebar js-pinned-left-sidebar ps-relative">
+<div class="left-sidebar--sticky-container js-sticky-leftnav">
+<nav aria-label="Primary">
+<ol class="s-navigation s-navigation__muted s-navigation__vertical">
+<li><a href="/" class="s-block-link pl8 nav-links--link">Home</a></li>
+<li class="youarehere" aria-current="true"><a id="nav-questions" href="/questions" class="s-block-link pl8 nav-links--link">Questions</a></li>
+<li><a id="nav-tags" href="/tags" class="s-block-link pl8 nav-links--link">Tags</a></li>
+<li><a id="nav-users" href="/users" class="s-block-link pl8 nav-links--link">Users</a></li>
+<li><a id="nav-unanswered" href="/unanswered" class="s-block-link pl8 nav-links--link">Unanswered</a></li>
+</ol>
+</nav>
+</div>
+</div>
+
+<div id="content" class="snippet-hidden">
+<div itemprop="mainEntity" itemscope itemtype="https://schema.org/Question">
+<div class="inner-content clearfix">
+
+<div id="question-header" class="d-flex sm:fd-column">
+<h1 itemprop="name" class="fs-headline1 ow-break-word mb8 flex--item fl1"><a href="/questions/7741206/siltpipe-window-yields-the-last-partial-window-twice" class="question-hyperlink">siltpipe window() yields the last partial window twice with a CSV source</a></h1>
+<div class="ml12 aside-cta flex--item d-flex jc-end">
+<a href="/questions/ask" class="ws-nowrap s-btn s-btn__filled">Ask Question</a>
+</div>
+</div>
+<div class="d-flex fw-wrap pb8 mb16 bb bc-black-200">
+<div class="flex--item ws-nowrap mr16 mb8" title="2026-03-03 14:07:00Z">
+<span class="fc-black-400 mr2">Asked</span>
+<time itemprop="dateCreated" datetime="2026-03-03T14:07:00">7 months ago</time>
+</div>
+<div class="flex--item ws-nowrap mr16 mb8">
+<span class="fc-black-400 mr2">Modified</span>
+<a href="?lastactivity" class="s-link s-link__inherit" title="2026-04-20 06:55:19Z">5 months ago</a>
+</div>
+<div class="flex--item ws-nowrap mb8" title="Viewed 4,018 times">
+<span class="fc-black-400 mr2">Viewed</span>
+4k times
+</div>
+</div>
+
+<div id="mainbar" role="main" aria-label="question and answers">
+
+<div class="question js-question" data-questionid="7741206" data-score="9" id="question">
+<div class="js-zone-container zone-container-main"><div id="dfp-tlb" class="everyonelovesloopoverflow everyoneloves__top-leaderboard"></div></div>
+<div class="post-layout">
+<div class="votecell post-layout--left">
+<div class="js-voting-container d-flex jc-center fd-column ai-center gs4" data-post-id="7741206">
+<button class="js-vote-up-btn flex--item s-btn s-btn__muted s-btn__outlined bar-pill" aria-label="Up vote"><svg aria-hidden="true" class="svg-icon iconArrowUp" width="18" height="18" viewBox="0 0 18 18"><path d="M1 12h16L9 4z"></path></svg></button>
+<div class="js-vote-count flex--item fw-bold fs-subheading py4" itemprop="upvoteCount" data-value="9">9</div>
+<button class="js-vote-down-btn flex--item s-btn s-btn__muted s-btn__outlined bar-pill" aria-label="Down vote"><svg aria-hidden="true" class="svg-icon iconArrowDown" width="18" height="18" viewBox="0 0 18 18"><path d="M1 6h16l-8 8z"></path></svg></button>
+</div>
+</div>
+
+<div class="postcell post-layout--right">
+<div class="s-prose js-post-body" itemprop="text">
+<p>I am using siltpipe 2.4 to read temperature readings from a CSV file and group them into fixed-size windows before averaging each one. Whenever the number of rows is not a multiple of the window size, the last, shorter window is yielded twice, so the tail of the file is counted double.</p>
+<p>Here is a reduced example:</p>
+<pre class="lang-py s-code-block"><code class="hljs language-python">from siltpipe import Source, window
+
+readings = Source.from_csv(&quot;readings.csv&quot;, columns=[&quot;ts&quot;, &quot;value&quot;])
+
+for chunk in window(readings, size=4, partial=&quot;keep&quot;):
+    print(len(chunk), [r.value for r in chunk])
+</code></pre>
+<p>With ten rows in the file I expected three windows of 4, 4 and 2 readings, but the loop prints a fourth line that repeats the third. If I pass <code>partial=&quot;drop&quot;</code> the duplicate goes away, but so does the tail, which I need. Converting the source to a list first also gives the right answer:</p>
+<pre class="lang-py s-code-block"><code class="hljs language-python">rows = list(readings)  # correct, but loads the whole file
+for chunk in window(rows, size=4, partial=&quot;keep&quot;):
+    print(len(chunk))
+</code></pre>
+<p>That is not an option for the real data, because the files are several gigabytes each. Is this a bug in siltpipe, or am I using <code>window</code> wrongly with a lazy source? I have read the windowing chapter of the documentation twice and found nothing that says a source may be read more than once. This is Python 3.12, in case it matters.</p>
+</div>
+
+<div class="mt24 mb12">
+<div class="post-taglist d-flex gs4 gsy fd-column">
+<ul class="ml0 list-ls-none js-post-tag-list-wrapper d-inline"><li class="d-inline mr4 js-post-tag-list-item"><a href="/questions/tagged/python" class="s-tag post-tag" rel="tag">python</a></li><li class="d-inline mr4 js-post-tag-list-item"><a href="/questions/tagged/siltpipe" class="s-tag post-tag" rel="tag">siltpipe</a></li><li class="d-inline mr4 js-post-tag-list-item"><a href="/questions/tagged/csv" class="s-tag post-tag" rel="tag">csv</a></li><li class="d-inline mr4 js-post-tag-list-item"><a href="/questions/tagged/sliding-window" class="s-tag post-tag" rel="tag">sliding-window</a></li></ul>
+</div>
+</div>
+
+<div class="mt16 d-flex gs8 gsy fw-wrap jc-end ai-start pt4 mb16">
+<div class="js-post-menu flex--item mr16 fl1 pt2" data-post-id="7741206">
+<div class="d-flex gs8 s-anchors s-anchors__muted fw-wrap">
+<a href="/q/7741206" rel="nofollow" itemprop="url" class="js-share-link flex--item">Share</a>
+<a href="/posts/7741206/edit" class="js-suggest-edit-post flex--item">Improve this question</a>
+<button type="button" class="s-btn s-btn__link js-follow-post flex--item">Follow</button>
+</div>
+</div>
+<div class="post-signature owner flex--item fl0">
+<div class="user-info user-hover">
+<div class="user-action-time fl-grow1">asked <span title="2026-03-03 14:07:00Z" class="relativetime">Mar 3 at 14:07</span></div>
+<div class="user-gravatar32"><a href="/users/2290417/junia-feld"><div class="gravatar-wrapper-32"><img src="https://i.loopstatic.example/u/2290417.png?s=64" alt="junia_feld&#39;s user avatar" width="32" height="32" class="bar-sm"></div></a></div>
+<div class="user-details">
+<a href="/users/2290417/junia-feld">junia_feld</a>
+<div class="-flair"><span class="reputation-score" title="reputation score" dir="ltr">417</span><span title="13 bronze badges" aria-hidden="true"><span class="badge3"></span><span class="badgecount">13</span></span></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+
+<div class="post-layout--right js-post-comments-component">
+<div id="comments-7741206" class="comments js-comments-container" data-post-id="7741206">
+<ul class="comments-list js-comments-list">
+<li id="comment-139842205" class="comment js-comment">
+<div class="comment-actions"><div class="comment-score"><span class="cool">2</span></div></div>
+<div class="comment-text"><div class="comment-body">
+<span class="comment-copy">Which version of siltpipe exactly? The look-ahead code was rewritten in 2.3.</span>
+&ndash;&nbsp;<a href="/users/118834/tarn-owl" class="comment-user">tarn_owl</a>
+<span class="comment-date" dir="ltr"><a class="comment-link" href="#comment139842205_7741206"><span class="relativetime-clean">Mar 3 at 14:19</span></a></span>
+</div></div>
+</li>
+<li id="comment-139842371" class="comment js-comment">
+<div class="comment-text"><div class="comment-body">
+<span class="comment-copy">2.4.1, installed last week. I have added the version to the question.</span>
+&ndash;&nbsp;<a href="/users/2290417/junia-feld" class="comment-user owner">junia_feld</a>
+<span class="comment-date" dir="ltr"><a class="comment-link" href="#comment139842371_7741206"><span class="relativetime-clean">Mar 3 at 14:26</span></a></span>
+</div></div>
+</li>
+<li id="comment-139842690" class="comment js-comment">
+<div class="comment-actions"><div class="comment-score"><span class="cool">1</span></div></div>
+<div class="comment-text"><div class="comment-body">
+<span class="comment-copy">Does the same thing happen with <code>Source.from_lines</code>? If it does not, the CSV reader is the suspect.</span>
+&ndash;&nbsp;<a href="/users/402771/pemberleaf" class="comment-user">pemberleaf</a>
+<span class="comment-date" dir="ltr"><a class="comment-link" href="#comment139842690_7741206"><span class="relativetime-clean">Mar 3 at 14:48</span></a></span>
+</div></div>
+</li>
+</ul>
+</div>
+<div id="comments-link-7741206"><a class="js-add-link comments-link" title="Use comments to ask for more information or suggest improvements." href="#" role="button">Add a comment</a></div>
+</div>
+</div>
+</div>
+
+<div id="answers">
+<a name="tab-top"></a>
+<div id="answers-header">
+<div class="answers-subheader d-flex ai-center mb8">
+<div class="flex--item fl1">
+<h2 class="mb0" data-answercount="3">3 Answers <span style="display:none;" itemprop="answerCount">3</span></h2>
+</div>
+<div class="flex--item d-flex g4 gsx ai-center">
+<div class="d-flex fd-column ai-end">
+<label class="flex--item fs-caption" for="answer-sort-dropdown-select-menu">Sorted by:</label>
+<a class="js-sort-preference-change s-link flex--item fs-fine d-none" data-value="ScoreDesc" href="/questions/7741206/siltpipe-window-yields-the-last-partial-window-twice?answertab=scoredesc#tab-top">Reset to default</a>
+</div>
+<div class="flex--item s-select">
+<select id="answer-sort-dropdown-select-menu">
+<option value="scoredesc" selected="selected">Highest score (default)</option>
+<option value="modifieddesc">Date modified (newest first)</option>
+<option value="createdasc">Date created (oldest first)</option>
+</select>
+</div>
+</div>
+</div>
+</div>
+
+<a name="7741388"></a>
+<div id="answer-7741388" class="answer js-answer accepted-answer js-accepted-answer" data-answerid="7741388" data-score="14" itemprop="acceptedAnswer" itemscope itemtype="https://schema.org/Answer">
+<div class="post-layout">
+<div class="votecell post-layout--left">
+<div class="js-voting-container d-flex jc-center fd-column ai-center gs4" data-post-id="7741388">
+<button class="js-vote-up-btn flex--item s-btn s-btn__muted s-btn__outlined bar-pill" aria-label="Up vote"><svg aria-hidden="true" class="svg-icon iconArrowUp" width="18" height="18" viewBox="0 0 18 18"><path d="M1 12h16L9 4z"></path></svg></button>
+<div class="js-vote-count flex--item fw-bold fs-subheading py4" itemprop="upvoteCount" data-value="14">14</div>
+<button class="js-vote-down-btn flex--item s-btn s-btn__muted s-btn__outlined bar-pill" aria-label="Down vote"><svg aria-hidden="true" class="svg-icon iconArrowDown" width="18" height="18" viewBox="0 0 18 18"><path d="M1 6h16l-8 8z"></path></svg></button>
+<div class="js-accepted-answer-indicator flex--item fc-green-400 py6 mtn8" title="The question owner accepted this as the best answer." role="note" aria-label="Accepted"><svg aria-hidden="true" class="svg-icon iconCheckmarkLg" width="36" height="36" viewBox="0 0 36 36"><path d="m6 14 8 8L30 6v8L14 30l-8-8z"></path></svg></div>
+</div>
+</div>
+
+<div class="answercell post-layout--right">
+<div class="s-prose js-post-body" itemprop="text">
+<p>This is documented behaviour rather than a bug, although the documentation hides it well. <code>window()</code> keeps a bookmark at the start of every window. When the input runs out in the middle of a window and <code>partial=&quot;keep&quot;</code> is set, it yields what it has buffered and then, if the input says it can seek, goes back to the bookmark to make sure nothing was left unread. A <code>Source</code> built by <code>from_csv</code> can seek, so the tail is read, and yielded, a second time.</p>
+<p>The fix is to hand <code>window()</code> a one-shot cursor, which cannot seek, instead of the source itself:</p>
+<ol>
+<li>Open the source once with <code>readings.open()</code>, which returns a cursor that can only be read a single time.</li>
+<li>Pass that cursor to <code>window()</code> in place of the source.</li>
+<li>Keep the loop inside the <code>with</code> block, so that the file is closed as soon as the last window has been consumed.</li>
+</ol>
+<pre class="lang-py s-code-block"><code class="hljs language-python">with readings.open() as cursor:
+    for chunk in window(cursor, size=4, partial=&quot;keep&quot;):
+        print(len(chunk), [r.value for r in chunk])
+</code></pre>
+<p>Memory use stays flat, because the cursor holds only the current window and the single record it has peeked at. I ran this against a file of forty million rows and the process never grew beyond 30 MB.</p>
+</div>
+<div class="mt24 d-flex fw-wrap ai-start jc-end gs8 gsy">
+<time itemprop="dateCreated" datetime="2026-03-03T15:22:48"></time>
+<div class="js-post-menu flex--item mr16 fl1 pt2" data-post-id="7741388">
+<div class="d-flex gs8 s-anchors s-anchors__muted fw-wrap">
+<a href="/a/7741388" rel="nofollow" itemprop="url" class="js-share-link flex--item">Share</a>
+<a href="/posts/7741388/edit" class="js-suggest-edit-post flex--item">Improve this answer</a>
+<button type="button" class="s-btn s-btn__link js-follow-post flex--item">Follow</button>
+</div>
+</div>
+<div class="post-signature flex--item fl0">
+<div class="user-info user-hover">
+<div class="user-action-time fl-grow1">answered <span title="2026-03-03 15:22:48Z" class="relativetime">Mar 3 at 15:22</span></div>
+<div class="user-gravatar32"><a href="/users/88214/halvard-brenn"><div class="gravatar-wrapper-32"><img src="https://i.loopstatic.example/u/88214.png?s=64" alt="Halvard Brenn&#39;s user avatar" width="32" height="32" class="bar-sm"></div></a></div>
+<div class="user-details">
+<a href="/users/88214/halvard-brenn">Halvard Brenn</a>
+<div class="-flair"><span class="reputation-score" title="reputation score 18,402" dir="ltr">18.4k</span><span title="41 silver badges" aria-hidden="true"><span class="badge2"></span><span class="badgecount">41</span></span></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+
+<div class="post-layout--right js-post-comments-component">
+<div id="comments-7741388" class="comments js-comments-container" data-post-id="7741388">
+<ul class="comments-list js-comments-list">
+<li id="comment-139844118" class="comment js-comment">
+<div class="comment-text"><div class="comment-body">
+<span class="comment-copy">That was it, thank you. Three windows now, and the averages match what I get from the list version.</span>
+&ndash;&nbsp;<a href="/users/2290417/junia-feld" class="comment-user owner">junia_feld</a>
+<span class="comment-date" dir="ltr"><a class="comment-link" href="#comment139844118_7741388"><span class="relativetime-clean">Mar 3 at 16:02</span></a></span>
+</div></div>
+</li>
+<li id="comment-139871420" class="comment js-comment">
+<div class="comment-actions"><div class="comment-score"><span class="cool">3</span></div></div>
+<div class="comment-text"><div class="comment-body">
+<span class="comment-copy">Worth knowing that <code>open()</code> also takes a start offset, which is handy for resuming a job that died halfway.</span>
+&ndash;&nbsp;<a href="/users/118834/tarn-owl" class="comment-user">tarn_owl</a>
+<span class="comment-date" dir="ltr"><a class="comment-link" href="#comment139871420_7741388"><span class="relativetime-clean">Mar 5 at 8:30</span></a></span>
+</div></div>
+</li>
+</ul>
+</div>
+<div id="comments-link-7741388"><a class="js-add-link comments-link" href="#" role="button">Add a comment</a></div>
+</div>
+</div>
+</div>
+
+<a name="7743051"></a>
+<div id="answer-7743051" class="answer js-answer" data-answerid="7743051" data-score="6" itemprop="suggestedAnswer" itemscope itemtype="https://schema.org/Answer">
+<div class="post-layout">
+<div class="votecell post-layout--left">
+<div class="js-voting-container d-flex jc-center fd-column ai-center gs4" data-post-id="7743051">
+<button class="js-vote-up-btn flex--item s-btn s-btn__muted s-btn__outlined bar-pill" aria-label="Up vote"><svg aria-hidden="true" class="svg-icon iconArrowUp" width="18" height="18" viewBox="0 0 18 18"><path d="M1 12h16L9 4z"></path></svg></button>
+<div class="js-vote-count flex--item fw-bold fs-subheading py4" itemprop="upvoteCount" data-value="6">6</div>
+<button class="js-vote-down-btn flex--item s-btn s-btn__muted s-btn__outlined bar-pill" aria-label="Down vote"><svg aria-hidden="true" class="svg-icon iconArrowDown" width="18" height="18" viewBox="0 0 18 18"><path d="M1 6h16l-8 8z"></path></svg></button>
+</div>
+</div>
+
+<div class="answercell post-layout--right">
+<div class="s-prose js-post-body" itemprop="text">
+<p>The accepted answer is right about the cause. For anyone who lands here wondering where this is written down, it is in <a href="https://docs.siltpipe.example/en/2.5/reference/source.html#seeking" rel="nofollow noreferrer">the reference page for <code>Source</code></a>, not in the windowing chapter, which is why it is so easy to miss:</p>
+<blockquote>
+<p>A source is seekable and may be read any number of times. Functions that buffer their input, such as <code>window</code> and <code>pairwise</code>, re-read from their last bookmark when a seekable input ends early. Pass a cursor if each record must be seen exactly once.</p>
+</blockquote>
+<p>Since version 2.5 the library also emits a <code>SeekableInputWarning</code> when a buffering function is given a source directly. If you would rather have the job fail loudly than produce doubled rows, turn that warning into an error at the top of your script:</p>
+<pre class="lang-py s-code-block"><code class="hljs language-python">import warnings
+from siltpipe import SeekableInputWarning
+
+warnings.simplefilter(&quot;error&quot;, SeekableInputWarning)
+</code></pre>
+<p>With that in place the original loop raises on its first iteration, and the traceback points at the call to <code>window()</code>. Upgrading from 2.4 is painless, by the way: the changelog lists no breaking changes between the two releases, and the CSV reader is a little faster as well.</p>
+</div>
+<div class="mt24 d-flex fw-wrap ai-start jc-end gs8 gsy">
+<time itemprop="dateCreated" datetime="2026-03-04T09:41:12"></time>
+<div class="js-post-menu flex--item mr16 fl1 pt2" data-post-id="7743051">
+<div class="d-flex gs8 s-anchors s-anchors__muted fw-wrap">
+<a href="/a/7743051" rel="nofollow" itemprop="url" class="js-share-link flex--item">Share</a>
+<a href="/posts/7743051/edit" class="js-suggest-edit-post flex--item">Improve this answer</a>
+<button type="button" class="s-btn s-btn__link js-follow-post flex--item">Follow</button>
+</div>
+</div>
+<div class="post-signature flex--item fl0">
+<div class="user-info user-hover">
+<div class="user-action-time fl-grow1">answered <span title="2026-03-04 09:41:12Z" class="relativetime">Mar 4 at 9:41</span></div>
+<div class="user-gravatar32"><a href="/users/731905/ilka-rosvold"><div class="gravatar-wrapper-32"><img src="https://i.loopstatic.example/u/731905.png?s=64" alt="Ilka Rosvold&#39;s user avatar" width="32" height="32" class="bar-sm"></div></a></div>
+<div class="user-details">
+<a href="/users/731905/ilka-rosvold">Ilka Rosvold</a>
+<div class="-flair"><span class="reputation-score" title="reputation score" dir="ltr">6,212</span><span title="19 silver badges" aria-hidden="true"><span class="badge2"></span><span class="badgecount">19</span></span></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+
+<div class="post-layout--right js-post-comments-component">
+<div id="comments-7743051" class="comments js-comments-container" data-post-id="7743051">
+<ul class="comments-list js-comments-list">
+<li id="comment-139858803" class="comment js-comment">
+<div class="comment-actions"><div class="comment-score"><span class="cool">2</span></div></div>
+<div class="comment-text"><div class="comment-body">
+<span class="comment-copy">The warning is raised only once per process, so do not rely on it inside a long-running worker.</span>
+&ndash;&nbsp;<a href="/users/88214/halvard-brenn" class="comment-user">Halvard Brenn</a>
+<span class="comment-date" dir="ltr"><a class="comment-link" href="#comment139858803_7743051"><span class="relativetime-clean">Mar 4 at 11:17</span></a></span>
+</div></div>
+</li>
+</ul>
+</div>
+<div id="comments-link-7743051"><a class="js-add-link comments-link" href="#" role="button">Add a comment</a></div>
+</div>
+</div>
+</div>
+
+<a name="7802264"></a>
+<div id="answer-7802264" class="answer js-answer" data-answerid="7802264" data-score="2" itemprop="suggestedAnswer" itemscope itemtype="https://schema.org/Answer">
+<div class="post-layout">
+<div class="votecell post-layout--left">
+<div class="js-voting-container d-flex jc-center fd-column ai-center gs4" data-post-id="7802264">
+<button class="js-vote-up-btn flex--item s-btn s-btn__muted s-btn__outlined bar-pill" aria-label="Up vote"><svg aria-hidden="true" class="svg-icon iconArrowUp" width="18" height="18" viewBox="0 0 18 18"><path d="M1 12h16L9 4z"></path></svg></button>
+<div class="js-vote-count flex--item fw-bold fs-subheading py4" itemprop="upvoteCount" data-value="2">2</div>
+<button class="js-vote-down-btn flex--item s-btn s-btn__muted s-btn__outlined bar-pill" aria-label="Down vote"><svg aria-hidden="true" class="svg-icon iconArrowDown" width="18" height="18" viewBox="0 0 18 18"><path d="M1 6h16l-8 8z"></path></svg></button>
+</div>
+</div>
+
+<div class="answercell post-layout--right">
+<div class="s-prose js-post-body" itemprop="text">
+<p>If you cannot change how the source is opened, for instance because a framework builds it for you, another way out is to stop asking for a short last window at all. The <code>partial</code> argument takes three values, and only one of them triggers the re-read. For ten rows and a window of four they behave like this:</p>
+<div class="s-table-container"><table class="s-table">
+<thead>
+<tr>
+<th>partial</th>
+<th>Windows yielded</th>
+<th>Last window</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&quot;keep&quot;</code></td>
+<td>3</td>
+<td>2 rows</td>
+</tr>
+<tr>
+<td><code>&quot;drop&quot;</code></td>
+<td>2</td>
+<td>4 rows, tail discarded</td>
+</tr>
+<tr>
+<td><code>&quot;pad&quot;</code></td>
+<td>3</td>
+<td>2 rows and 2 fill values</td>
+</tr>
+</tbody>
+</table></div>
+<p>With <code>&quot;pad&quot;</code> every window has the full size, so the end of the input never falls inside a window and the bookmark is never revisited. Choose a fill value that your aggregation can recognise and skip:</p>
+<pre class="lang-py s-code-block"><code class="hljs language-python">for chunk in window(readings, size=4, partial=&quot;pad&quot;, fill=None):
+    values = [r.value for r in chunk if r is not None]
+    print(len(values), sum(values) / len(values))
+</code></pre>
+<p>This costs one filter per window, which was not measurable in my tests. I would still prefer the cursor from the accepted answer in new code, because it states the intent, but padding has the advantage of working with sources you do not control.</p>
+</div>
+<div class="mt24 d-flex fw-wrap ai-start jc-end gs8 gsy">
+<time itemprop="dateCreated" datetime="2026-04-19T20:15:30"></time>
+<div class="js-post-menu flex--item mr16 fl1 pt2" data-post-id="7802264">
+<div class="d-flex gs8 s-anchors s-anchors__muted fw-wrap">
+<a href="/a/7802264" rel="nofollow" itemprop="url" class="js-share-link flex--item">Share</a>
+<a href="/posts/7802264/edit" class="js-suggest-edit-post flex--item">Improve this answer</a>
+<button type="button" class="s-btn s-btn__link js-follow-post flex--item">Follow</button>
+</div>
+</div>
+<div class="post-signature flex--item fl0">
+<div class="user-info user-hover">
+<div class="user-action-time fl-grow1">answered <span title="2026-04-19 20:15:30Z" class="relativetime">Apr 19 at 20:15</span></div>
+<div class="user-gravatar32"><a href="/users/3018846/davor-menski"><div class="gravatar-wrapper-32"><img src="https://i.loopstatic.example/u/3018846.png?s=64" alt="Davor Menski&#39;s user avatar" width="32" height="32" class="bar-sm"></div></a></div>
+<div class="user-details">
+<a href="/users/3018846/davor-menski">Davor Menski</a>
+<div class="-flair"><span class="reputation-score" title="reputation score" dir="ltr">1,034</span><span title="21 bronze badges" aria-hidden="true"><span class="badge3"></span><span class="badgecount">21</span></span></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+
+<div class="post-layout--right js-post-comments-component">
+<div id="comments-7802264" class="comments js-comments-container" data-post-id="7802264">
+<ul class="comments-list js-comments-list">
+<li id="comment-140207731" class="comment js-comment">
+<div class="comment-text"><div class="comment-body">
+<span class="comment-copy"><code>fill=None</code> breaks as soon as <code>None</code> is a legitimate reading in your data. A dedicated sentinel object is safer.</span>
+&ndash;&nbsp;<a href="/users/1650033/quietbyte" class="comment-user">quietbyte</a>
+<span class="comment-date" dir="ltr"><a class="comment-link" href="#comment140207731_7802264"><span class="relativetime-clean">Apr 20 at 6:55</span></a></span>
+</div></div>
+</li>
+</ul>
+</div>
+<div id="comments-link-7802264"><a class="js-add-link comments-link" href="#" role="button">Add a comment</a></div>
+</div>
+</div>
+</div>
+
+<a name="new-answer"></a>
+<form id="post-form" action="/questions/7741206/answer/submit" method="post" class="js-add-answer-component post-form">
+<input type="hidden" id="post-id" value="7741206">
+<h2 class="space" id="your-answer-header">Your Answer</h2>
+<div id="post-editor" class="post-editor js-post-editor">
+<div class="wmd-container mb8">
+<div id="wmd-button-bar" class="wmd-button-bar btr-sm"></div>
+<textarea id="wmd-input" name="post-text" class="wmd-input s-input bar0 js-post-body-field" cols="92" rows="15" aria-labelledby="your-answer-header" tabindex="101"></textarea>
+</div>
+<aside class="mt8 s-notice s-notice__warning post-notice js-post-notice mb16 d-none" role="status"><p class="mb0">Thanks for contributing an answer to Loop Overflow! Please be sure to answer the question and share your research. See our tips on <a href="../../help/how-to-answer">writing great answers</a>.</p></aside>
+</div>
+<div class="form-submit d-flex gsx gs4 pt2">
+<button id="submit-button" class="flex--item s-btn s-btn__filled s-btn__icon" type="submit" tabindex="120">Post Your Answer</button>
+<p class="privacy-policy-agreement mt16 mb0 ml12 fs-caption fc-black-400">By clicking &ldquo;Post Your Answer&rdquo;, you agree to our <a href="https://loopexchange.example/legal/terms-of-service/public" class="s-link" target="_blank">terms of service</a> and acknowledge you have read our <a href="https://loopexchange.example/legal/privacy-policy" class="s-link" target="_blank">privacy policy</a>.</p>
+</div>
+</form>
+<h2 class="bottom-notice" data-loc="1">Not the answer you&#39;re looking for? Browse other questions tagged <a href="/questions/tagged/python" class="s-tag post-tag" rel="tag">python</a> <a href="/questions/tagged/siltpipe" class="s-tag post-tag" rel="tag">siltpipe</a> or <a href="/questions/ask">ask your own question</a>.</h2>
+</div>
+</div>
+
+<div id="sidebar" class="show-votes" role="complementary" aria-label="sidebar">
+<div class="s-sidebarwidget s-sidebarwidget__yellow s-anchors s-anchors__grayscale mb16" data-tracker="cb=1">
+<ul class="d-block p0 m0">
+<li class="s-sidebarwidget--header s-sidebarwidget__small-bold-text d-flex fc-black-600 bb bbw1">The Overflow Blog</li>
+<li class="s-sidebarwidget--item d-flex px16">
+<div class="flex--item1 fl-shrink0"><svg aria-hidden="true" class="svg-icon iconPencilSm" width="14" height="14" viewBox="0 0 14 14"><path d="M2 10l6-6 2 2-6 6H2z"></path></svg></div>
+<div class="flex--item wmn0 ow-break-word"><a href="https://blog.loopoverflow.example/2026/10/08/a-decade-of-deprecation-warnings/" class="js-gps-track">What a decade of deprecation warnings taught one maintainer</a></div>
+</li>
+<li class="s-sidebarwidget--item d-flex px16">
+<div class="flex--item1 fl-shrink0"><svg aria-hidden="true" class="svg-icon iconPencilSm" width="14" height="14" viewBox="0 0 14 14"><path d="M2 10l6-6 2 2-6 6H2z"></path></svg></div>
+<div class="flex--item wmn0 ow-break-word"><a href="https://blog.loopoverflow.example/2026/10/06/podcast-the-quiet-cost-of-flaky-tests/" class="js-gps-track">Podcast: the quiet cost of flaky tests</a></div>
+</li>
+</ul>
+</div>
+<div class="js-zone-container zone-container-sidebar"><div id="dfp-tsb" class="everyonelovesloopoverflow everyoneloves__top-sidebar"></div></div>
+
+<div class="module sidebar-linked">
+<h4 id="h-linked">Linked</h4>
+<div class="linked" data-tracker="lq=1">
+<div class="spacer">
+<a href="/q/2204418" title="Question score (upvotes - downvotes)"><div class="answer-votes answered-accepted default">112</div></a>
+<a href="/questions/2204418/read-a-file-lazily-in-fixed-size-chunks?noredirect=1" class="question-hyperlink">How do I read a file lazily in fixed-size chunks?</a>
+</div>
+<div class="spacer">
+<a href="/q/6630915"><div class="answer-votes answered-accepted default">17</div></a>
+<a href="/questions/6630915/siltpipe-source-versus-cursor?noredirect=1" class="question-hyperlink">Difference between a siltpipe Source and a cursor</a>
+</div>
+<div class="spacer">
+<a href="/q/5127740"><div class="answer-votes default">4</div></a>
+<a href="/questions/5127740/generator-consumed-twice-inside-a-helper?noredirect=1" class="question-hyperlink">Why is my generator consumed twice inside a helper function?</a>
+</div>
+<div class="spacer more"><a href="/questions/linked/7741206">See more linked questions</a></div>
+</div>
+</div>
+
+<div class="module sidebar-related">
+<h4 id="h-related">Related</h4>
+<div class="related js-gps-related-questions" data-tracker="rq=1">
+<div class="spacer">
+<a href="/q/7410233"><div class="answer-votes answered-accepted default">8</div></a>
+<a href="/questions/7410233/siltpipe-pairwise-skips-the-first-record" class="question-hyperlink">siltpipe pairwise() skips the first record after a header row</a>
+</div>
+<div class="spacer">
+<a href="/q/3981004"><div class="answer-votes answered-accepted default">61</div></a>
+<a href="/questions/3981004/rolling-average-over-a-large-csv-file" class="question-hyperlink">Rolling average over a CSV file too large for memory</a>
+</div>
+<div class="spacer">
+<a href="/q/1150627"><div class="answer-votes answered-accepted default">240</div></a>
+<a href="/questions/1150627/is-it-safe-to-call-iter-twice" class="question-hyperlink">Is it safe to call iter() twice on the same object?</a>
+</div>
+<div class="spacer">
+<a href="/q/4466182"><div class="answer-votes default">15</div></a>
+<a href="/questions/4466182/turn-one-warning-into-an-error-in-one-module" class="question-hyperlink">Turn one specific warning into an error inside a single module</a>
+</div>
+<div class="spacer">
+<a href="/q/7598340"><div class="answer-votes default">1</div></a>
+<a href="/questions/7598340/siltpipe-read-a-compressed-csv" class="question-hyperlink">siltpipe: read a compressed CSV without unpacking it first</a>
+</div>
+<div class="spacer">
+<a href="/q/2877091"><div class="answer-votes answered-accepted default">33</div></a>
+<a href="/questions/2877091/sliding-versus-tumbling-windows" class="question-hyperlink">Sliding versus tumbling windows over an iterator</a>
+</div>
+</div>
+</div>
+</div>
+
+</div>
+</div>
+</div>
+</div>
+
+<footer id="footer" class="site-footer js-footer theme-light__forced" role="contentinfo">
+<div class="site-footer--container">
+<div class="site-footer--logo"><a href="https://loopoverflow.example" aria-label="Loop Overflow"><svg aria-hidden="true" class="native svg-icon iconLogoGlyphMd" width="32" height="37" viewBox="0 0 32 37"><path d="M26 33v-9h4v13H0V24h4v9z" fill="#BCBBBB"></path></svg></a></div>
+<nav class="site-footer--nav" aria-label="Footer">
+<div class="site-footer--col">
+<h5 class="-title"><a href="https://loopoverflow.example">Loop Overflow</a></h5>
+<ul class="-list js-primary-footer-links">
+<li><a href="/questions" class="-link">Questions</a></li>
+<li><a href="/help" class="-link">Help</a></li>
+<li><a href="https://chat.loopoverflow.example/?tab=site&amp;host=loopoverflow.example" class="-link">Chat</a></li>
+</ul>
+</div>
+<div class="site-footer--col">
+<h5 class="-title"><a href="https://loopexchange.example/about">Company</a></h5>
+<ul class="-list">
+<li><a href="https://loopexchange.example/press" class="-link">Press</a></li>
+<li><a href="https://loopexchange.example/legal" class="-link">Legal</a></li>
+<li><a href="https://loopexchange.example/legal/privacy-policy" class="-link">Privacy Policy</a></li>
+<li><a href="mailto:team@loopoverflow.example" class="-link">Contact Us</a></li>
+<li id="consent-footer-link"><a href="javascript:void(0)" class="s-btn s-btn__link py4 -link" data-controller="s-modal">Cookie Settings</a></li>
+</ul>
+</div>
+<div class="site-footer--col site-footer--categories-nav">
+<h5 class="-title"><a href="https://loopexchange.example">Loop Exchange Network</a></h5>
+<ul class="-list">
+<li><a href="https://loopexchange.example/sites#technology" class="-link">Technology</a></li>
+<li><a href="https://loopexchange.example/sites#culturerecreation" class="-link">Culture &amp; recreation</a></li>
+</ul>
+</div>
+</nav>
+<div class="site-footer--copyright fs-fine md:mt24">
+<ul class="-list -social md:mb8">
+<li><a class="-link" href="https://blog.loopoverflow.example?blb=1" rel="noopener">Blog</a></li>
+<li><a class="-link" href="https://social.example/@loopoverflow" rel="noopener noreferrer" target="_blank">Social</a></li>
+</ul>
+<p class="md:mb0"><span>Site design / logo &#169; 2026 Loop Exchange Ltd; </span><span>user contributions licensed under <a class="-link s-link" href="https://loopoverflow.example/help/licensing" rel="license">LX BY-SA</a>. </span><span id="svnrev">rev&nbsp;2026.10.9.34185</span></p>
+</div>
+</div>
+</footer>
+<script>LoopExchange.ready(function () { LoopExchange.ads.init({ zones: ["dfp-tlb", "dfp-tsb"], consent: false }); });</script>
+</body>
+</html>

@@ -20,6 +20,13 @@
 //!   the main content is text of the page as the crawl reads it, in the
 //!   same order, and two pages are near-duplicates by the one exactly when
 //!   they are by the other.
+//!
+//! `tests/fixtures/extract-heldout/` holds three more pages of three other
+//! kinds, written after the rules of the main content were, by somebody
+//! who had not seen them. **Nobody tunes on these.** They say what the
+//! rules do on a page they were not written for: each has to be read to an
+//! F1 of 90 at least, and a rule that is changed to move one of them makes
+//! it a page of the first kind, to be replaced here by a new one.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -33,6 +40,11 @@ fn directory() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/extract")
 }
 
+/// The pages nobody tunes on.
+fn held_out() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/extract-heldout")
+}
+
 /// A fixture page: its name, its markup and the address it was loaded
 /// from.
 struct Fixture {
@@ -44,7 +56,11 @@ struct Fixture {
 }
 
 fn fixtures() -> Vec<Fixture> {
-    let mut names: Vec<String> = std::fs::read_dir(directory())
+    fixtures_in(&directory())
+}
+
+fn fixtures_in(directory: &Path) -> Vec<Fixture> {
+    let mut names: Vec<String> = std::fs::read_dir(directory)
         .unwrap()
         .filter_map(Result::ok)
         .filter(|entry| entry.path().is_dir())
@@ -55,7 +71,7 @@ fn fixtures() -> Vec<Fixture> {
         .into_iter()
         .map(|name| {
             let read = |file: &str| {
-                std::fs::read_to_string(directory().join(&name).join(file))
+                std::fs::read_to_string(directory.join(&name).join(file))
                     .unwrap_or_else(|error| panic!("{name}/{file}: {error}"))
             };
             let about: serde_json::Value = serde_json::from_str(&read("about.json")).unwrap();
@@ -202,6 +218,33 @@ fn the_main_content_is_the_text_a_reader_would_copy_out() {
             "{}",
             fixture.name
         );
+    }
+}
+
+#[test]
+fn pages_nobody_tuned_on_are_read_as_a_reader_would_read_them() {
+    let pages = fixtures_in(&held_out());
+    let names: Vec<&str> = pages.iter().map(|page| page.name.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "essay-hashed-classes",
+            "government-notice",
+            "question-and-answers"
+        ]
+    );
+    for page in &pages {
+        let document = Document::parse(&page.html, &page.url);
+        let extracted = extract(&document, &Options::default());
+        let (precision, recall) = judge(&extracted.text, &page.expected);
+        let f1 = 2.0 * precision * recall / (precision + recall);
+        assert!(
+            f1 >= 90.0,
+            "{}: F1 {f1:.1} (precision {precision:.1}, recall {recall:.1}); this page is not \
+             tuned on: say so in place of changing a rule for it",
+            page.name
+        );
+        assert_eq!(extracted.thin_content, page.thin, "{}", page.name);
     }
 }
 

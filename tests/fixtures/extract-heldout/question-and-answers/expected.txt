@@ -1,0 +1,27 @@
+siltpipe window() yields the last partial window twice with a CSV source
+I am using siltpipe 2.4 to read temperature readings from a CSV file and group them into fixed-size windows before averaging each one. Whenever the number of rows is not a multiple of the window size, the last, shorter window is yielded twice, so the tail of the file is counted double.
+Here is a reduced example:
+from siltpipe import Source, window readings = Source.from_csv("readings.csv", columns=["ts", "value"]) for chunk in window(readings, size=4, partial="keep"): print(len(chunk), [r.value for r in chunk])
+With ten rows in the file I expected three windows of 4, 4 and 2 readings, but the loop prints a fourth line that repeats the third. If I pass partial="drop" the duplicate goes away, but so does the tail, which I need. Converting the source to a list first also gives the right answer:
+rows = list(readings) # correct, but loads the whole file for chunk in window(rows, size=4, partial="keep"): print(len(chunk))
+That is not an option for the real data, because the files are several gigabytes each. Is this a bug in siltpipe, or am I using window wrongly with a lazy source? I have read the windowing chapter of the documentation twice and found nothing that says a source may be read more than once. This is Python 3.12, in case it matters.
+This is documented behaviour rather than a bug, although the documentation hides it well. window() keeps a bookmark at the start of every window. When the input runs out in the middle of a window and partial="keep" is set, it yields what it has buffered and then, if the input says it can seek, goes back to the bookmark to make sure nothing was left unread. A Source built by from_csv can seek, so the tail is read, and yielded, a second time.
+The fix is to hand window() a one-shot cursor, which cannot seek, instead of the source itself:
+Open the source once with readings.open(), which returns a cursor that can only be read a single time.
+Pass that cursor to window() in place of the source.
+Keep the loop inside the with block, so that the file is closed as soon as the last window has been consumed.
+with readings.open() as cursor: for chunk in window(cursor, size=4, partial="keep"): print(len(chunk), [r.value for r in chunk])
+Memory use stays flat, because the cursor holds only the current window and the single record it has peeked at. I ran this against a file of forty million rows and the process never grew beyond 30 MB.
+The accepted answer is right about the cause. For anyone who lands here wondering where this is written down, it is in the reference page for Source, not in the windowing chapter, which is why it is so easy to miss:
+A source is seekable and may be read any number of times. Functions that buffer their input, such as window and pairwise, re-read from their last bookmark when a seekable input ends early. Pass a cursor if each record must be seen exactly once.
+Since version 2.5 the library also emits a SeekableInputWarning when a buffering function is given a source directly. If you would rather have the job fail loudly than produce doubled rows, turn that warning into an error at the top of your script:
+import warnings from siltpipe import SeekableInputWarning warnings.simplefilter("error", SeekableInputWarning)
+With that in place the original loop raises on its first iteration, and the traceback points at the call to window(). Upgrading from 2.4 is painless, by the way: the changelog lists no breaking changes between the two releases, and the CSV reader is a little faster as well.
+If you cannot change how the source is opened, for instance because a framework builds it for you, another way out is to stop asking for a short last window at all. The partial argument takes three values, and only one of them triggers the re-read. For ten rows and a window of four they behave like this:
+partial Windows yielded Last window
+"keep" 3 2 rows
+"drop" 2 4 rows, tail discarded
+"pad" 3 2 rows and 2 fill values
+With "pad" every window has the full size, so the end of the input never falls inside a window and the bookmark is never revisited. Choose a fill value that your aggregation can recognise and skip:
+for chunk in window(readings, size=4, partial="pad", fill=None): values = [r.value for r in chunk if r is not None] print(len(values), sum(values) / len(values))
+This costs one filter per window, which was not measurable in my tests. I would still prefer the cursor from the accepted answer in new code, because it states the intent, but padding has the advantage of working with sources you do not control.
