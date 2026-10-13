@@ -210,13 +210,29 @@ test-live:
     tests/live/run.sh
 
 # Mutation testing on kage-core: fails under a score of 70 % (spec §21, a
-# gate since M7). It tests about two thousand mutants and takes about two
-# hours, so it is not part of `ci`; run it before a milestone is merged.
-mutants:
+# gate since M7). Not part of `ci`; run it before a milestone is merged.
+#
+# One mutant at a time (`jobs` 1, the default) it takes about seven hours
+# since M10: some 2200 mutants at about 11 s each. M7 and M10 ran it with 24
+# jobs (`just mutants 24`, 89 minutes on 32 cores). Each job then works in
+# its own copy of the tree with a build directory of its own, which is why
+# CARGO_TARGET_DIR is unset for such a run: with one shared directory the
+# jobs overwrite each other's test binary and a mutant is judged by another
+# mutant's tests. The copies go to TMPDIR, about 1 GB a job. A busy machine
+# turns slow tests into timeouts, and a timeout is left out of the score:
+# run it with nothing else on the machine, never beside `just ci`, and with
+# more than one job a test gets six times its usual time, at least two
+# minutes, before it counts as hung.
+mutants jobs="1":
     #!/usr/bin/env bash
     set -euo pipefail
+    flags=()
+    if [ "{{ jobs }}" != "1" ]; then
+        unset CARGO_TARGET_DIR
+        flags=(--jobs "{{ jobs }}" --no-shuffle --timeout-multiplier 6 --minimum-test-timeout 120)
+    fi
     # cargo-mutants exits non-zero when any mutant survives; the score decides.
-    cargo mutants --package kage-core --output target/mutants || true
+    cargo mutants --package kage-core --output target/mutants ${flags[@]+"${flags[@]}"} || true
     node scripts/check-mutation-score.mjs target/mutants/mutants.out 70
 
 # --- Coverage ----------------------------------------------------------------

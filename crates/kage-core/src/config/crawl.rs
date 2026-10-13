@@ -271,5 +271,15 @@ mod tests {
         assert_eq!(edge(|crawl| crawl.near_duplicate_bits = 16), Ok(()));
         assert_eq!(edge(|crawl| crawl.near_duplicate_bits = 0), Ok(()));
         assert_eq!(edge(|crawl| crawl.skipped_extensions.clear()), Ok(()));
+        // An ending of 16 letters is the longest there is: the one of 17
+        // above is refused.
+        assert_eq!(
+            edge(|crawl| crawl.skipped_extensions.push("a".repeat(16))),
+            Ok(())
+        );
+        assert_eq!(
+            edge(|crawl| crawl.skipped_extensions.push("a".to_owned())),
+            Ok(())
+        );
     }
 }
