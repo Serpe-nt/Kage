@@ -126,7 +126,7 @@ applied_migrations="$(psql 'SELECT count(*) FROM _sqlx_migrations WHERE success'
 [ "${applied_migrations}" -eq "${expected_migrations}" ] \
     || fail "${applied_migrations} of ${expected_migrations} migrations are applied"
 tables="$(psql "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name <> '_sqlx_migrations'")"
-[ "${tables}" -eq 22 ] || fail "expected the 22 tables of spec §18, found ${tables}"
+[ "${tables}" -eq 23 ] || fail "expected the 23 tables of spec §18, found ${tables}"
 echo "    ${applied_migrations} migrations, ${tables} tables"
 
 echo "==> kage migrate --check agrees, and applying again changes nothing"
