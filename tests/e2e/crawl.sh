@@ -242,8 +242,13 @@ echo "    the long page: $(value "${both}" "d.reports.filter((r) => r.page === '
 echo "==> sitemaps: a scout asked for them, from another address than the reader's"
 check "each sitemap crawl read the index and the plain sitemap" "${summary}" \
     "d.sitemaps.length === 2 && d.sitemaps.every((s) => s.sitemaps[0].state === 'index' && s.sitemaps.some((m) => m.state === 'read' && m.urls === 3))"
+# The site has one scout for both crawls (the persona neither reading room
+# was read by), so both saw the gzipped sitemap the same way: a Firefox
+# reads it, Chrome saves it and shows nothing of it.
 check "a Firefox scout read the gzipped sitemap and its pages were read; a Chrome scout was shown nothing of it" "${summary}" \
-    "d.sitemaps.every((s) => { const packed = s.sitemaps.find((m) => m.url.endsWith('.xml.gz')); return packed.state === 'read' ? s.pages.includes('/site/only-1') && s.pages.includes('/site/only-2') : packed.state === 'sitemap_unreadable' && s.pages.length === 3; }) && d.sitemaps.some((s) => s.sitemaps.some((m) => m.url.endsWith('.xml.gz') && m.state === 'read'))"
+    "d.sitemaps.every((s) => { const packed = s.sitemaps.find((m) => m.url.endsWith('.xml.gz')); return packed.state === 'read' ? s.pages.includes('/site/only-1') && s.pages.includes('/site/only-2') : packed.state === 'sitemap_unreadable' && s.pages.length === 3; }) && new Set(d.sitemaps.map((s) => s.sitemaps.find((m) => m.url.endsWith('.xml.gz')).state)).size === 1"
+check "one address asked for every sitemap of both crawls, and read no page of the site" "${both}" \
+    "(() => { const scouts = new Set(d.seen.filter((r) => r.path.includes('sitemap')).map((r) => r.from)); return scouts.size === 1 && !d.seen.some((r) => scouts.has(r.from) && r.path.startsWith('/site/')); })()"
 check "the sitemaps came from one address and the pages from another, in each crawl" "${both}" \
     "d.crawl.sitemaps.every((s) => { const created = Date.parse(s.created_at), first = Date.parse(s.first_page_at), end = Date.parse(s.finished_at); const maps = d.seen.filter((r) => r.path.includes('sitemap') && r.at >= created && r.at <= end); const pages = d.seen.filter((r) => r.path.startsWith('/site/') && r.at >= first - 50 && r.at <= end); const scouts = new Set(maps.map((r) => r.from)), readers = new Set(pages.map((r) => r.from)); return maps.length >= 3 && pages.length >= 3 && scouts.size === 1 && readers.size === 1 && ![...scouts].some((from) => readers.has(from)) && maps.every((r) => r.at <= first); })"
 check "a sitemap is asked for like a typed address" "${both}" \

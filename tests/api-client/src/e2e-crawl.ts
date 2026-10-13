@@ -470,12 +470,20 @@ async function main() {
   const rooms = [];
   const left = [];
   const sitemaps = [];
-  // One engine after the other: each crawl has the site to itself, so the
-  // site's own log says which request was whose.
+  // One crawl after the other: each has the site to itself, so the site's
+  // own log says which request was whose. The reading rooms come first: a
+  // persona of each engine has then read the site, and the one that is
+  // left is the site's scout from the first sitemap on, whatever the mix
+  // of the three personas is. A site has one scout, which reads none of
+  // its pages and is never a persona that read one.
   for (const engine of ENGINES) {
     rooms.push(await readingRoom(client, site, engine));
-    left.push(await leaving(client, site, engine));
+  }
+  for (const engine of ENGINES) {
     sitemaps.push(await withSitemaps(client, site, engine));
+  }
+  for (const engine of ENGINES) {
+    left.push(await leaving(client, site, engine));
   }
   // Two personas of two engines read the same site, each on its own.
   assert.notEqual(rooms[0]?.persona, rooms[1]?.persona);
