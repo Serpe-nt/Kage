@@ -45,9 +45,13 @@ impl Cli {
                  personas:\n  warmup:\n    enabled: false\n\
                  scheduler:\n  retry_pause: {{ min: 50ms, median: 100ms, p95: 200ms }}\n  \
                  visit_start_spacing: {{ min: 10ms, median: 20ms, p95: 40ms }}\n\
-                 forwarder:\n  bind: 127.0.0.1:8899\n",
+                 forwarder:\n  bind: 127.0.0.1:8899\n\
+                 artifacts:\n  dir: {}\n",
                 lab.chromium.url(),
                 lab.firefox.url(),
+                // What a fetch keeps for the cache goes below the test's
+                // own directory.
+                dir.join("artifacts").display(),
             ),
         )
         .unwrap();
@@ -301,5 +305,129 @@ async fn fetch_runs_one_request_through_the_whole_pipeline() {
         "{}",
         text(&unknown.stderr)
     );
+    lab.shut_down().await;
+}
+
+#[tokio::test]
+async fn fetch_returns_what_the_page_says_and_the_cache_answers_the_second_time() {
+    let mut lab = Lab::start(2, 149, LENIENT_FAST).await;
+    Mock::given(method("GET"))
+        .and(path("/read"))
+        .respond_with(
+            // The type is set with the body: `set_body_string` after a
+            // header would answer `text/plain`, and what is no HTML
+            // document has no extraction.
+            ResponseTemplate::new(200)
+                .set_body_raw(article("The reading room"), "text/html; charset=utf-8"),
+        )
+        .mount(&lab.site)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let cli = Cli::new(&lab, dir.path());
+    let url = format!("http://{SITE}/read");
+    let page = article("The reading room");
+
+    // Fetched, read and kept: what the page says is in the answer, and
+    // the site was asked once.
+    let first_file = dir.path().join("first.html");
+    let asked = [
+        url.as_str(),
+        "--extract",
+        "--cache-ttl",
+        "10m",
+        "--output",
+        first_file.to_str().unwrap(),
+    ];
+    let first = cli.json(&asked).await;
+    assert_eq!(first["outcome"], "ok", "{first}");
+    assert_eq!(first["cached"], false);
+    assert_eq!(first["cache_ttl_s"], 600);
+    assert_eq!(first["extract"]["title"], "The reading room", "{first}");
+    assert_eq!(first["extract"]["thin_content"], false);
+    assert!(
+        first["extract"]["word_count"].as_u64().unwrap() >= 60 * 14,
+        "{first}"
+    );
+    assert!(
+        first["extract"]["markdown"]
+            .as_str()
+            .unwrap()
+            .contains("The council met on Tuesday"),
+        "{first}"
+    );
+    // Nobody asks this site for its robots.txt, and the answer says so.
+    assert_eq!(
+        first["robots"],
+        json!({ "fetched": false, "allowed": true, "matched_rule": null, "crawl_delay": null })
+    );
+    assert_eq!(std::fs::read_to_string(&first_file).unwrap(), page);
+    assert_eq!(lab.received("/read").await.len(), 1);
+
+    // The same command again is answered from the cache: no attempt,
+    // nothing relayed, nothing asked of the site, and the document is the
+    // one that was stored.
+    let again_file = dir.path().join("again.html");
+    let again = [
+        url.as_str(),
+        "--extract",
+        "--cache-ttl",
+        "10m",
+        "--output",
+        again_file.to_str().unwrap(),
+    ];
+    let second = cli.json(&again).await;
+    assert_eq!(second["outcome"], "ok", "{second}");
+    assert_eq!(second["cached"], true);
+    assert!(second["cached_at"].is_string(), "{second}");
+    assert_eq!(second["attempts"], json!([]));
+    assert_eq!(second["status"], 200);
+    assert_eq!(second["extract"], first["extract"]);
+    assert_eq!(second["document_bytes"], page.len());
+    assert_eq!(second["relayed_bytes"], json!({ "up": 0, "down": 0 }));
+    assert_ne!(second["request_id"], first["request_id"]);
+    assert_eq!(std::fs::read_to_string(&again_file).unwrap(), page);
+    assert_eq!(lab.received("/read").await.len(), 1);
+
+    // In sentences, for a person.
+    let output = cli
+        .run(&["fetch", &url, "--extract", "--cache-ttl", "10m"])
+        .await;
+    assert!(output.status.success(), "{}", text(&output.stderr));
+    let sentences = text(&output.stdout);
+    assert!(
+        sentences.contains("cache: answered from the cache, fetched "),
+        "{sentences}"
+    );
+    assert!(
+        sentences.contains("extract: \"The reading room\", "),
+        "{sentences}"
+    );
+    assert!(!sentences.contains("attempts:"), "{sentences}");
+    assert_eq!(lab.received("/read").await.len(), 1);
+
+    // A result with other parts is another entry: without the extraction
+    // the page is fetched.
+    let other = cli.json(&[&url, "--cache-ttl", "10m"]).await;
+    assert_eq!(other["cached"], false);
+    assert_eq!(other["extract"], Value::Null);
+    assert_eq!(lab.received("/read").await.len(), 2);
+
+    // What the site's policy does not allow is refused before anything
+    // starts: nobody asks this site for its robots.txt, and results are
+    // not served for longer than a day.
+    for (flag, value, said) in [
+        ("--robots", "enforce", "robots_ignored"),
+        ("--cache-ttl", "2d", "--cache-ttl is at most 1d"),
+    ] {
+        let refused = cli.run(&["fetch", &url, flag, value]).await;
+        assert!(!refused.status.success());
+        assert!(
+            text(&refused.stderr).contains(said),
+            "{}",
+            text(&refused.stderr)
+        );
+        assert_eq!(text(&refused.stdout), "");
+    }
+    assert_eq!(lab.received("/read").await.len(), 2);
     lab.shut_down().await;
 }

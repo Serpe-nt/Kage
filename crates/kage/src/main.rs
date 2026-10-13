@@ -108,38 +108,7 @@ enum Command {
     /// Fetch one page through the whole pipeline: the domain policy, the
     /// scheduler, a persona, its path, the classifier and the store. May
     /// run next to the server. Exits non-zero unless the page was fetched.
-    Fetch {
-        /// The page.
-        #[arg(value_name = "URL")]
-        url: url::Url,
-        /// The path: auto (the domain policy decides, and a block on the
-        /// http path moves the request to the browser), http or browser.
-        #[arg(long, default_value = "auto")]
-        render: RenderMode,
-        /// Only this persona.
-        #[arg(long, value_name = "PERSONA_ID")]
-        persona: Option<PersonaId>,
-        /// Only personas on this engine: chromium or firefox.
-        #[arg(long)]
-        engine: Option<Engine>,
-        /// Longest one attempt may take, for example 45s.
-        #[arg(long, value_name = "DURATION")]
-        timeout: Option<HumanDuration>,
-        /// Retries after the first attempt, instead of the policy's.
-        #[arg(long, value_name = "N")]
-        retries: Option<u32>,
-        /// A pacing profile instead of the policy's, unless the policy
-        /// locks pacing.
-        #[arg(long, value_name = "PROFILE")]
-        pacing: Option<String>,
-        /// Write the document (the DOM of a browser attempt, the body of
-        /// an http one) to this file.
-        #[arg(long, short, value_name = "FILE")]
-        output: Option<PathBuf>,
-        /// Print one JSON document instead of sentences.
-        #[arg(long)]
-        json: bool,
-    },
+    Fetch(FetchArgs),
     /// Check that Kage still looks like the browsers it presents as.
     Selftest {
         #[command(subcommand)]
@@ -161,6 +130,76 @@ enum Command {
     /// Print the OpenAPI document of the public API, as `/openapi.json`
     /// serves it. Needs no configuration.
     Openapi,
+}
+
+/// What `kage fetch` takes.
+#[derive(Debug, clap::Args)]
+struct FetchArgs {
+    /// The page.
+    #[arg(value_name = "URL")]
+    url: url::Url,
+    /// The path: auto (the domain policy decides, and a block on the
+    /// http path moves the request to the browser), http or browser.
+    #[arg(long, default_value = "auto")]
+    render: RenderMode,
+    /// Only this persona.
+    #[arg(long, value_name = "PERSONA_ID")]
+    persona: Option<PersonaId>,
+    /// Only personas on this engine: chromium or firefox.
+    #[arg(long)]
+    engine: Option<Engine>,
+    /// Longest one attempt may take, for example 45s.
+    #[arg(long, value_name = "DURATION")]
+    timeout: Option<HumanDuration>,
+    /// Retries after the first attempt, instead of the policy's.
+    #[arg(long, value_name = "N")]
+    retries: Option<u32>,
+    /// A pacing profile instead of the policy's, unless the policy
+    /// locks pacing.
+    #[arg(long, value_name = "PROFILE")]
+    pacing: Option<String>,
+    /// Write the document (the DOM of a browser attempt, the body of
+    /// an http one) to this file.
+    #[arg(long, short, value_name = "FILE")]
+    output: Option<PathBuf>,
+    /// Print one JSON document instead of sentences.
+    #[arg(long)]
+    json: bool,
+    /// Also read what the page says from the document that was
+    /// fetched: its title, its main text as text and markdown, its
+    /// links and its metadata.
+    #[arg(long)]
+    extract: bool,
+    /// For how long the result may be answered from the response
+    /// cache, for example 10m; 0s is never. Left out, the policy of
+    /// the site decides. The command line's entries are its own: no
+    /// API key reads them.
+    #[arg(long, value_name = "DURATION")]
+    cache_ttl: Option<HumanDuration>,
+    /// What to do about the site's robots.txt: policy (what the
+    /// domain policy says), report, enforce or ignore. More care than
+    /// the policy takes may be asked for, never less.
+    #[arg(long, default_value = "policy", value_parser = fetch_cmd::parse_robots)]
+    robots: kage_scheduler::RobotsWish,
+}
+
+impl From<FetchArgs> for fetch_cmd::FetchOptions {
+    fn from(args: FetchArgs) -> Self {
+        Self {
+            url: args.url,
+            render: args.render,
+            persona: args.persona,
+            engine: args.engine,
+            timeout: args.timeout.map(HumanDuration::get),
+            retries: args.retries,
+            pacing: args.pacing,
+            output: args.output,
+            json: args.json,
+            extract: args.extract,
+            cache_ttl: args.cache_ttl.map(HumanDuration::get),
+            robots: args.robots,
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -646,7 +685,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Proxy { .. }
             | Command::Persona { .. }
             | Command::Selftest { .. }
-            | Command::Fetch { .. }
+            | Command::Fetch(_)
             | Command::Key { .. }
     ))?;
     match cli.command {
@@ -660,29 +699,9 @@ async fn main() -> anyhow::Result<()> {
                 .context("the fingerprint echo failed")
         }
         Command::Selftest { command } => selftest(command, config_file.as_deref()).await,
-        Command::Fetch {
-            url,
-            render,
-            persona,
-            engine,
-            timeout,
-            retries,
-            pacing,
-            output,
-            json,
-        } => {
+        Command::Fetch(args) => {
             let config = config_cmd::load(config_file.as_deref(), process_env())?;
-            let options = fetch_cmd::FetchOptions {
-                url,
-                render,
-                persona,
-                engine,
-                timeout: timeout.map(HumanDuration::get),
-                retries,
-                pacing,
-                output,
-                json,
-            };
+            let options = fetch_cmd::FetchOptions::from(args);
             let mut out = Vec::new();
             let result = Box::pin(fetch_cmd::fetch(&config, &options, &mut out)).await;
             shown(&out, result)
@@ -826,6 +845,7 @@ mod tests {
     use clap::{CommandFactory, Parser};
     use kage_core::domain::{Engine, PersonaState, ProxyState, RenderMode};
     use kage_core::duration::HumanDuration;
+    use kage_scheduler::RobotsWish;
 
     use super::{
         COMPONENTS, Cli, Command, ConfigCommand, EchoCommand, PersonaCommand, ProxyCommand,
@@ -840,27 +860,24 @@ mod tests {
     #[test]
     fn fetch_takes_a_url_and_leaves_the_rest_to_the_policy() {
         let cli = Cli::try_parse_from(["kage", "fetch", "https://shop.example/page"]).unwrap();
-        let Command::Fetch {
-            url,
-            render,
-            persona,
-            engine,
-            timeout,
-            retries,
-            pacing,
-            output,
-            json,
-        } = cli.command
-        else {
+        let Command::Fetch(plain) = cli.command else {
             panic!("expected the fetch command, got {:?}", cli.command);
         };
-        assert_eq!(url.as_str(), "https://shop.example/page");
-        assert_eq!(render, RenderMode::Auto);
+        assert_eq!(plain.url.as_str(), "https://shop.example/page");
+        assert_eq!(plain.render, RenderMode::Auto);
         assert_eq!(
-            (persona, engine, timeout, retries),
+            (plain.persona, plain.engine, plain.timeout, plain.retries),
             (None, None, None, None)
         );
-        assert_eq!((pacing, output, json), (None, None, false));
+        assert_eq!(
+            (plain.pacing, plain.output, plain.json),
+            (None, None, false)
+        );
+        // Nothing is extracted, the cache and robots.txt are the policy's.
+        assert_eq!(
+            (plain.extract, plain.cache_ttl, plain.robots),
+            (false, None, RobotsWish::Policy)
+        );
 
         let cli = Cli::try_parse_from([
             "kage",
@@ -883,34 +900,23 @@ mod tests {
             "--json",
         ])
         .unwrap();
-        let Command::Fetch {
-            render,
-            persona,
-            engine,
-            timeout,
-            retries,
-            pacing,
-            output,
-            json,
-            ..
-        } = cli.command
-        else {
+        let Command::Fetch(asked) = cli.command else {
             panic!("expected the fetch command, got {:?}", cli.command);
         };
-        assert_eq!(render, RenderMode::Browser);
+        assert_eq!(asked.render, RenderMode::Browser);
         assert_eq!(
-            persona.map(|persona| persona.to_string()).as_deref(),
+            asked.persona.map(|persona| persona.to_string()).as_deref(),
             Some("0199c1f2-6b7a-7c3e-9d41-2f8a5b6c7d8e")
         );
-        assert_eq!(engine, Some(Engine::Firefox));
+        assert_eq!(asked.engine, Some(Engine::Firefox));
         assert_eq!(
-            timeout.map(HumanDuration::get),
+            asked.timeout.map(HumanDuration::get),
             Some(Duration::from_secs(45))
         );
-        assert_eq!(retries, Some(0));
-        assert_eq!(pacing.as_deref(), Some("fast"));
-        assert_eq!(output, Some(PathBuf::from("page.html")));
-        assert!(json);
+        assert_eq!(asked.retries, Some(0));
+        assert_eq!(asked.pacing.as_deref(), Some("fast"));
+        assert_eq!(asked.output, Some(PathBuf::from("page.html")));
+        assert!(asked.json);
 
         // Not a URL, not a path: refused before anything starts.
         assert!(Cli::try_parse_from(["kage", "fetch", "not a url"]).is_err());
@@ -919,6 +925,37 @@ mod tests {
                 .is_err()
         );
         assert!(Cli::try_parse_from(["kage", "fetch"]).is_err());
+    }
+
+    #[test]
+    fn fetch_says_what_a_request_may_say_about_extraction_the_cache_and_robots_txt() {
+        let cli = Cli::try_parse_from([
+            "kage",
+            "fetch",
+            "https://shop.example/page",
+            "--extract",
+            "--cache-ttl",
+            "10m",
+            "--robots",
+            "enforce",
+        ])
+        .unwrap();
+        let Command::Fetch(asked) = cli.command else {
+            panic!("expected the fetch command, got {:?}", cli.command);
+        };
+        // As the command hands it on.
+        let options = crate::fetch_cmd::FetchOptions::from(asked);
+        assert!(options.extract);
+        assert_eq!(options.cache_ttl, Some(Duration::from_mins(10)));
+        assert_eq!(options.robots, RobotsWish::Enforce);
+        assert_eq!(options.url.as_str(), "https://shop.example/page");
+        assert_eq!((options.timeout, options.retries), (None, None));
+        // A word that is none of the four, and a time that is none.
+        for refused in [["--robots", "obey"], ["--cache-ttl", "soon"]] {
+            let mut arguments = vec!["kage", "fetch", "https://shop.example/page"];
+            arguments.extend(refused);
+            assert!(Cli::try_parse_from(arguments).is_err(), "{refused:?}");
+        }
     }
 
     #[test]
