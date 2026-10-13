@@ -671,3 +671,134 @@ async fn the_items_of_a_batch_are_answered_from_the_cache_and_a_flow_extracts_wh
     work.stop().await;
     api.shut_down().await;
 }
+
+/// A file of the site that the server could not give: a `503`.
+fn show_down(api: &Api, path: &str) {
+    api.lab.chromium.with(|sidecar| {
+        sidecar.pages.insert(
+            Api::url(path),
+            json!({
+                "status": 503,
+                "title": "Service Unavailable",
+                "headers": [{ "name": "content-type", "value": "text/html" }],
+                "dom_html": "<html><head><title>Service Unavailable</title></head><body><h1>503</h1></body></html>",
+            }),
+        );
+    });
+}
+
+#[tokio::test]
+async fn a_crawl_waits_for_an_enforced_robots_txt_and_reads_on_where_it_is_only_reported() {
+    let crawl = json!({
+        "type": "crawl",
+        "seeds": [Api::url("/")],
+        "use_sitemaps": true,
+        "max_depth": 0,
+        "defaults": { "behavior": { "scroll_depth": 0, "dwell_ms": 1000 } },
+    });
+
+    // Enforced, and the file cannot be had: nothing of the origin is asked
+    // for, not the sitemap either. The crawl waits until the file is asked
+    // for again, in nobody's hands, and says what it waits for.
+    let mut api = Api::start_with(3, 155, ENFORCED, quick).await;
+    let token = api.key(&[Scope::Jobs, Scope::Crawl, Scope::Fetch]).await;
+    show_down(&api, "/robots.txt");
+    show(&api, "/", &article("Home", &[]), &[]);
+    let reply = api.post(&token, "/v1/jobs", &crawl).await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.json());
+    let id = reply.json()["id"].as_str().unwrap().to_owned();
+    let work = api.work();
+    let paused = api
+        .job_until(&token, &id, |job| job["state"] == "paused")
+        .await;
+    assert_eq!(paused["paused"]["reason"], "robots_unavailable", "{paused}");
+    assert!(paused["paused"]["until"].is_string());
+    assert_eq!(
+        paused["crawl"]["sitemaps"],
+        json!([{ "site": "kage.test", "url": Api::url("/robots.txt"), "state": "waiting", "urls": 0 }])
+    );
+    assert_eq!(paused["items"]["total"], 0);
+    assert_eq!(paths(&api), ["/robots.txt"]);
+    // A fetch of the origin is told the same, with the time to come back.
+    let fetched = api
+        .post(&token, "/v1/fetch", &json!({ "url": Api::url("/") }))
+        .await
+        .json();
+    assert_eq!(fetched["outcome"], "robots_denied");
+    assert_eq!(fetched["reason"], "robots_unavailable");
+    assert!(fetched["retry_at"].is_string());
+    assert_eq!(fetched["robots"]["fetched"], false);
+    assert_eq!(paths(&api), ["/robots.txt"]);
+    let cancelled = api
+        .post(&token, &format!("/v1/jobs/{id}/cancel"), &json!({}))
+        .await;
+    assert_eq!(cancelled.status, StatusCode::OK, "{:?}", cancelled.json());
+    let done = api.job_until(&token, &id, ended).await;
+    assert_eq!(done["state"], "cancelled", "{done}");
+    work.stop().await;
+    api.shut_down().await;
+
+    // Only reported, and there is no file: everything is allowed, the
+    // guess takes the place of what a file would have named, and the crawl
+    // reads its page.
+    let reported = ENFORCED.replace("robots: enforce", "robots: report");
+    let mut api = Api::start_with(3, 155, &reported, quick).await;
+    let token = api.key(&[Scope::Jobs, Scope::Crawl, Scope::Fetch]).await;
+    api.lab.chromium.with(|sidecar| {
+        sidecar.pages.insert(
+            Api::url("/robots.txt"),
+            json!({ "status": 404, "title": "Not found", "dom_html": "<html><body><h1>Not found</h1></body></html>" }),
+        );
+        sidecar.pages.insert(
+            Api::url("/sitemap.xml"),
+            json!({
+                "title": "",
+                "dom_html": "<html><body><pre>a sitemap</pre></body></html>",
+                "raw_body": {
+                    "data": format!(
+                        "<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\"><url><loc>{}</loc></url></urlset>",
+                        Api::url("/only")
+                    ),
+                    "encoding": "utf8", "bytes": 120, "truncated": false,
+                },
+            }),
+        );
+    });
+    show(&api, "/", &article("Home", &[]), &[]);
+    show(&api, "/only", &article("Only", &[]), &[]);
+    let reply = api.post(&token, "/v1/jobs", &crawl).await;
+    let id = reply.json()["id"].as_str().unwrap().to_owned();
+    let work = api.work();
+    let done = api.job_until(&token, &id, ended).await;
+    assert_eq!(done["state"], "succeeded", "{done}");
+    assert_eq!(
+        done["crawl"]["sitemaps"],
+        json!([
+            { "site": "kage.test", "url": Api::url("/robots.txt"), "state": "missing", "urls": 0 },
+            { "site": "kage.test", "url": Api::url("/sitemap.xml"), "state": "read", "urls": 1 },
+        ])
+    );
+    let asked = navigated(&api);
+    let order: Vec<&str> = asked.iter().map(|(path, _)| path.as_str()).collect();
+    assert_eq!(order[..2], ["/robots.txt", "/sitemap.xml"]);
+    let mut pages: Vec<&str> = order[2..].to_vec();
+    pages.sort_unstable();
+    assert_eq!(pages, ["/", "/only"]);
+    // One scout for both files, and it read neither page.
+    assert_eq!(asked[0].1, asked[1].1);
+    assert!(asked[2..].iter().all(|(_, window)| *window != asked[0].1));
+    // Every page's result says that the file was asked for and allows it.
+    for item in api.job_items(&token, &id).await {
+        let result = api
+            .get(
+                &token,
+                &format!("/v1/results/{}", item["request_id"].as_str().unwrap()),
+            )
+            .await
+            .json();
+        assert_eq!(result["robots"]["fetched"], true, "{result}");
+        assert_eq!(result["robots"]["allowed"], true);
+    }
+    work.stop().await;
+    api.shut_down().await;
+}
