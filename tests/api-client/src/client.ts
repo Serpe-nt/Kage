@@ -19,6 +19,10 @@ export type CrawlRequest = components['schemas']['CrawlJob'];
 export type CrawlProgress = components['schemas']['CrawlView'];
 /** What a page was to its crawl: the `crawl` of its item. */
 export type CrawlPage = components['schemas']['CrawlItemView'];
+/** What a page says: the `extract` of its result. */
+export type Extract = components['schemas']['ExtractView'];
+/** What a site's `robots.txt` says of an address: the `robots` of a result. */
+export type RobotsVerdict = components['schemas']['RobotsView'];
 export type Problem = components['schemas']['Problem'];
 export type KageClient = Client<paths>;
 
@@ -107,6 +111,74 @@ export async function readArtifact(
   return {
     contentType: response.headers.get('content-type') ?? 'application/octet-stream',
     bytes: new Uint8Array(data),
+  };
+}
+
+/** Whether what a fetch came back with is its result, and not the place one will be. */
+export function isResult(fetched: FetchResult | FetchAccepted): fetched is FetchResult {
+  return fetched.state === 'finished';
+}
+
+/**
+ * What was extracted from the page of a result (`include: ["extract"]`).
+ *
+ * @throws Error when the result has none: the request did not ask for it,
+ * the fetch did not get its page, or the response is no HTML document.
+ */
+export function extractOf(result: FetchResult): Extract {
+  if (result.extract === undefined || result.extract === null) {
+    throw new Error(`result ${result.id} (${result.outcome}) has no extract`);
+  }
+  return result.extract;
+}
+
+/**
+ * When the page of a result that was served from the response cache was
+ * fetched; `undefined` for a result that was fetched for its own request.
+ *
+ * @throws Error when a cached result does not say when.
+ */
+export function cachedAt(result: FetchResult): Date | undefined {
+  if (!result.cached) {
+    return undefined;
+  }
+  if (result.cached_at === undefined || result.cached_at === null) {
+    throw new Error(`result ${result.id} is cached and does not say since when`);
+  }
+  return new Date(result.cached_at);
+}
+
+/** Why a page was not fetched for the sake of its site's `robots.txt`. */
+export interface RobotsDenial {
+  /** The line of the file that disallows the address, when one does. */
+  readonly rule?: string;
+  /**
+   * Why else: `robots_unavailable` (the file is enforced and could not be
+   * had), `robots_no_scout` (nobody can ask for it), `robots_enforced` or
+   * `robots_ignored` (the request's wish and the site's policy).
+   */
+  readonly reason?: string;
+  /** When asking again is worth it, when Kage knows. */
+  readonly retryAt?: Date;
+}
+
+/**
+ * Why a result is `robots_denied`; `undefined` for any other result. A
+ * result of a page that `robots.txt` disallows and that was fetched all
+ * the same (the site's policy only reports) is no denial: read its
+ * `robots`.
+ */
+export function robotsDenial(result: FetchResult): RobotsDenial | undefined {
+  if (result.outcome !== 'robots_denied') {
+    return undefined;
+  }
+  const rule = result.robots?.matched_rule;
+  return {
+    ...(rule === undefined || rule === null ? {} : { rule }),
+    ...(result.reason === undefined || result.reason === null ? {} : { reason: result.reason }),
+    ...(result.retry_at === undefined || result.retry_at === null
+      ? {}
+      : { retryAt: new Date(result.retry_at) }),
   };
 }
 

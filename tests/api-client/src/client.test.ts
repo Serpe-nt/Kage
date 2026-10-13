@@ -4,21 +4,26 @@ import type { AddressInfo } from 'node:net';
 import { after, before, describe, it } from 'node:test';
 
 import {
+  cachedAt,
   cancelJob,
   crawlProgress,
   createCrawl,
   createJob,
   createKageClient,
+  extractOf,
   fetchPage,
   hasEnded,
+  isResult,
   KageProblemError,
   readArtifact,
   readCrawlPages,
   readJob,
   readJobItems,
   readResult,
+  robotsDenial,
   waitForJob,
   type CrawlProgress,
+  type Extract,
   type FetchResult,
   type Job,
 } from './client.js';
@@ -65,6 +70,26 @@ function result(over: Partial<FetchResult>): FetchResult {
     cached: false,
     escalated: false,
     created_at: '2026-10-11T12:00:00Z',
+    ...over,
+  };
+}
+
+/** What a page says, with what a test names. */
+function extract(over: Partial<Extract>): Extract {
+  return {
+    title: 'The budget',
+    meta: {},
+    opengraph: {},
+    twitter: {},
+    jsonld: [],
+    jsonld_skipped: 0,
+    links: [],
+    links_truncated: false,
+    headings: [{ level: 1, text: 'The budget' }],
+    text: 'The council met.',
+    markdown: '# The budget\n\nThe council met.',
+    word_count: 3,
+    thin_content: true,
     ...over,
   };
 }
@@ -155,6 +180,59 @@ describe('the generated client', () => {
             );
           } else if (asked.url.endsWith('/slow')) {
             json(202, { id: ID, state: 'running', job_id: null, result: `/v1/results/${ID}` });
+          } else if (asked.url.endsWith('/private/ledger')) {
+            // The site's robots.txt is enforced and disallows the address.
+            json(
+              200,
+              result({
+                outcome: 'robots_denied',
+                status: null,
+                robots: {
+                  fetched: true,
+                  allowed: false,
+                  matched_rule: 'Disallow: /private',
+                  crawl_delay: 2.5,
+                },
+              }),
+            );
+          } else if (asked.url.endsWith('/unknown')) {
+            json(
+              200,
+              result({
+                outcome: 'robots_denied',
+                status: null,
+                reason: 'robots_unavailable',
+                retry_at: '2026-10-11T13:00:00Z',
+                robots: { fetched: false, allowed: true },
+              }),
+            );
+          } else if (asked.url.endsWith('/too-long')) {
+            json(
+              422,
+              {
+                type: 'urn:kage:problem:cache_ttl_too_long',
+                title: 'Results are not served from the cache for that long',
+                status: 422,
+                detail: 'cache_ttl_s is at most 86400 for example.org',
+                code: 'cache_ttl_too_long',
+                request_id: ID,
+                field: 'cache_ttl_s',
+                maximum_s: 86_400,
+              },
+              'application/problem+json',
+            );
+          } else if (asked.url.endsWith('/budget')) {
+            // The second request for the page is answered from the cache.
+            const again = seen.filter((one) => one.body.includes('/budget')).length > 1;
+            json(
+              200,
+              result({
+                final_url: asked.url,
+                extract: extract({ canonical: asked.url, thin_content: false, word_count: 300 }),
+                robots: { fetched: false, allowed: true },
+                ...(again ? { cached: true, cached_at: '2026-10-11T11:58:00Z' } : {}),
+              }),
+            );
           } else {
             json(200, result({ final_url: asked.url, artifacts: { dom_html: 'art_1' } }));
           }
@@ -357,6 +435,80 @@ describe('the generated client', () => {
     const blocked = await readResult(client, ID);
     assert.ok('outcome' in blocked);
     assert.equal(blocked.outcome, 'forbidden');
+  });
+
+  it('asks for what a page says, for the cache and about robots.txt, as the document types them', async () => {
+    const client = createKageClient({ baseUrl, token: TOKEN });
+    const asking = {
+      url: 'https://example.org/budget',
+      include: ['headers', 'extract'],
+      extract: { markdown: true, links: false },
+      cache_ttl_s: 600,
+      robots: 'report',
+    } as const;
+
+    const first = await fetchPage(client, { ...asking, include: [...asking.include] });
+    assert.ok(isResult(first));
+    assert.deepEqual(JSON.parse(seen.at(-1)?.body ?? ''), asking);
+    const said = extractOf(first);
+    assert.equal(said.title, 'The budget');
+    assert.equal(said.canonical, 'https://example.org/budget');
+    assert.equal(said.headings[0]?.level, 1);
+    assert.equal(said.thin_content, false);
+    assert.equal(first.robots?.fetched, false);
+    assert.equal(first.robots?.allowed, true);
+    assert.equal(cachedAt(first), undefined);
+    assert.equal(robotsDenial(first), undefined);
+
+    // The same again is answered from the cache, and says since when.
+    const second = await fetchPage(client, { ...asking, include: [...asking.include] });
+    assert.ok(isResult(second));
+    assert.equal(second.cached, true);
+    assert.equal(cachedAt(second)?.toISOString(), '2026-10-11T11:58:00.000Z');
+    assert.deepEqual(second.attempts, []);
+    assert.equal(extractOf(second).word_count, 300);
+
+    // A result without an extraction says so when it is asked for one, and
+    // a fetch that runs on is no result yet.
+    const plain = await fetchPage(client, { url: 'https://example.org/listing' });
+    assert.ok(isResult(plain));
+    assert.throws(() => extractOf(plain), /has no extract/);
+    assert.throws(() => cachedAt({ ...plain, cached: true }), /does not say since when/);
+    assert.equal(isResult(await fetchPage(client, { url: 'https://example.org/slow' })), false);
+
+    // More than a site's results may be served for is refused, with the most.
+    await assert.rejects(
+      fetchPage(client, { url: 'https://example.org/too-long', cache_ttl_s: 86_401 }),
+      (error: unknown) => {
+        assert.ok(error instanceof KageProblemError);
+        assert.equal(error.status, 422);
+        assert.equal(error.problem.code, 'cache_ttl_too_long');
+        assert.equal(error.problem['maximum_s'], 86_400);
+        return true;
+      },
+    );
+  });
+
+  it('says why a page was not fetched for the sake of robots.txt', async () => {
+    const client = createKageClient({ baseUrl, token: TOKEN });
+
+    // A rule of the file: the result is a result, and names the rule.
+    const denied = await fetchPage(client, {
+      url: 'https://example.org/private/ledger',
+      robots: 'enforce',
+    });
+    assert.ok(isResult(denied));
+    assert.equal(denied.outcome, 'robots_denied');
+    assert.deepEqual(robotsDenial(denied), { rule: 'Disallow: /private' });
+    assert.equal(denied.robots?.crawl_delay, 2.5);
+
+    // A file that could not be had: why, and when to ask again.
+    const unknown = await fetchPage(client, { url: 'https://example.org/unknown' });
+    assert.ok(isResult(unknown));
+    const why = robotsDenial(unknown);
+    assert.equal(why?.rule, undefined);
+    assert.equal(why?.reason, 'robots_unavailable');
+    assert.equal(why?.retryAt?.toISOString(), '2026-10-11T13:00:00.000Z');
   });
 
   it('reads an artifact as bytes', async () => {
