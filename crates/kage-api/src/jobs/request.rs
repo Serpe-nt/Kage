@@ -1229,24 +1229,58 @@ pub(crate) fn canonical(value: &Value) -> Value {
     }
 }
 
+/// What a stored job says beside the request it was accepted with: how
+/// often its webhook hears of its progress.
+pub(crate) const PROGRESS_EVERY: &str = "progress_every";
+
+/// What a stored batch says in place of its items: how many it had.
+const ITEM_COUNT: &str = "item_count";
+
 /// The job as it is stored: what was accepted, without the webhook's
 /// secret and URL (kept apart, the secret sealed) and, for a batch,
-/// without its items (kept as items).
+/// without its items (kept as items). [`stored_request`] reads it back.
 pub(crate) fn stored_spec(request: &JobRequest, items: usize) -> ApiResult<Value> {
     let mut spec = serde_json::to_value(request).map_err(|error| ApiError::internal(&error))?;
     if let Value::Object(members) = &mut spec {
         let progress = request.webhook().and_then(|webhook| webhook.progress_every);
         members.remove("webhook");
         if let Some(every) = progress {
-            members.insert("progress_every".to_owned(), json!(every));
+            members.insert(PROGRESS_EVERY.to_owned(), json!(every));
         }
         if matches!(request, JobRequest::Batch(_)) {
             members.remove("urls");
             members.remove("items");
-            members.insert("item_count".to_owned(), json!(items));
+            members.insert(ITEM_COUNT.to_owned(), json!(items));
         }
     }
     Ok(spec)
+}
+
+/// The request a stored job was accepted with, read back from what
+/// [`stored_spec`] kept of it: without its webhook, and a batch without
+/// its items. What `stored_spec` put beside the request is no member of
+/// it, and a request refuses members it does not know, so this is the one
+/// way a worker reads a job's request, whatever its kind.
+///
+/// # Errors
+///
+/// Fails when what is stored is no job request.
+pub(crate) fn stored_request(spec: &Value) -> Result<JobRequest, serde_json::Error> {
+    let mut spec = spec.clone();
+    if let Value::Object(members) = &mut spec {
+        members.remove(PROGRESS_EVERY);
+        members.remove(ITEM_COUNT);
+    }
+    serde_json::from_value(spec)
+}
+
+/// How often a stored job's webhook hears of its progress: every so many
+/// items, when it asked.
+pub(crate) fn stored_progress(spec: &Value) -> Option<u32> {
+    spec.get(PROGRESS_EVERY)
+        .and_then(Value::as_u64)
+        .and_then(|every| u32::try_from(every).ok())
+        .filter(|every| *every > 0)
 }
 
 #[cfg(test)]
@@ -1259,7 +1293,8 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{
-        Checks, FlowJob, JobRequest, canonical, plan_batch, plan_flow, plan_webhook, stored_spec,
+        Checks, FlowJob, JobRequest, canonical, plan_batch, plan_flow, plan_webhook,
+        stored_progress, stored_request, stored_spec,
     };
     use crate::error::{ApiError, ErrorCode};
 
@@ -1878,5 +1913,74 @@ mod tests {
             canonical(&one).to_string(),
             r#"{"a":true,"b":{"x":[{"a":1,"k":2}],"y":1}}"#
         );
+    }
+
+    #[test]
+    fn a_stored_job_is_read_back_as_the_request_it_was_whatever_its_kind() {
+        let webhook = json!({
+            "url": "https://hooks.example.org/kage",
+            "secret": "a secret of sixteen bytes or more",
+            "progress_every": 5,
+        });
+        let bodies = [
+            json!({
+                "type": "batch",
+                "urls": ["https://shop.example/a", "https://shop.example/b"],
+                "defaults": { "render": "http" },
+                "visitors": 2,
+            }),
+            json!({
+                "type": "flow",
+                "actions": [
+                    { "action": "goto", "url": "https://shop.example/" },
+                    { "action": "extract", "include": ["dom"] },
+                ],
+                "behavior": { "dwell_ms": 4000 },
+            }),
+            json!({
+                "type": "crawl",
+                "seeds": ["https://shop.example/"],
+                "max_depth": 2,
+                "defaults": { "include": ["headers"] },
+            }),
+        ];
+        for body in bodies {
+            let kind = body["type"].clone();
+            // What a job without a webhook is stored as is read back as it
+            // was; a batch without the items, which are kept as items.
+            let mut expected = body.clone();
+            if kind == "batch" {
+                expected.as_object_mut().unwrap().remove("urls");
+            }
+            let plain = job(body.clone());
+            assert_eq!(
+                stored_request(&stored_spec(&plain, 2).unwrap()).unwrap(),
+                job(expected.clone()),
+                "{kind}"
+            );
+            assert_eq!(stored_progress(&stored_spec(&plain, 2).unwrap()), None);
+
+            // And so is one whose webhook asks to hear of its progress:
+            // what is kept of the webhook beside the request is no member
+            // of the request.
+            let mut with_webhook = body;
+            with_webhook["webhook"] = webhook.clone();
+            let spec = stored_spec(&job(with_webhook), 2).unwrap();
+            assert_eq!(spec["progress_every"], 5, "{kind}");
+            assert_eq!(stored_progress(&spec), Some(5), "{kind}");
+            assert_eq!(stored_request(&spec).unwrap(), job(expected), "{kind}");
+            // Read as it stands it is no request: that was the flow's road.
+            assert!(
+                serde_json::from_value::<JobRequest>(spec).is_err(),
+                "{kind}"
+            );
+        }
+        // What is no job is said to be none, and progress every 0 items is
+        // none.
+        assert!(stored_request(&json!({ "type": "walk" })).is_err());
+        assert!(stored_request(&json!(null)).is_err());
+        assert_eq!(stored_progress(&json!({ "progress_every": 0 })), None);
+        assert_eq!(stored_progress(&json!({ "progress_every": "5" })), None);
+        assert_eq!(stored_progress(&json!(null)), None);
     }
 }

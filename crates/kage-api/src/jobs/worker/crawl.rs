@@ -57,7 +57,7 @@ use crate::jobs::crawl::{
     CrawlItemView, CrawlRules, Flight, Kept, LinksView, NearDuplicateView, ReachedField,
     ScrollView, SitemapView, Slot, page_request, rules,
 };
-use crate::jobs::request::{Checks, JobRequest};
+use crate::jobs::request::{Checks, JobRequest, stored_request};
 use crate::resolve::guard;
 
 /// A sitemap file that waits to be read.
@@ -292,13 +292,7 @@ impl Crawl {
     async fn restore(runner: &Runner) -> Result<Result<Self, String>, WorkError> {
         let job = runner.job.id;
         let state = &runner.work.state;
-        // The stored request is what was accepted, with what the webhook
-        // says about progress beside it.
-        let mut spec = runner.job.spec.clone();
-        if let Value::Object(members) = &mut spec {
-            members.remove("progress_every");
-        }
-        let Ok(JobRequest::Crawl(request)) = serde_json::from_value::<JobRequest>(spec) else {
+        let Ok(JobRequest::Crawl(request)) = stored_request(&runner.job.spec) else {
             return Ok(Err(ErrorCode::ValidationFailed.as_str().to_owned()));
         };
         let policies = state.policies().current();

@@ -17,6 +17,7 @@ use url::Url;
 use utoipa::ToSchema;
 
 use super::crawl::{CrawlItemView, CrawlView};
+use super::request::stored_progress;
 use crate::fetch::result::{FetchResult, OutcomeField};
 
 /// The kind of a job.
@@ -250,7 +251,7 @@ impl JobView {
             .and_then(|url| url.host_str().map(str::to_owned))
             .map(|host| WebhookView {
                 host,
-                progress_every: number("progress_every"),
+                progress_every: stored_progress(&job.spec),
                 deliveries: deliveries.to_vec(),
             });
         Self {

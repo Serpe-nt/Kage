@@ -68,7 +68,7 @@ use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, watch};
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
-use super::request::{Checks, FlowJob, JobRequest, plan_flow};
+use super::request::{Checks, FlowJob, JobRequest, plan_flow, stored_progress, stored_request};
 use super::webhook::{self, WebhookSender};
 use crate::error::ErrorCode;
 use crate::fetch::conflict_of;
@@ -668,16 +668,15 @@ impl Runner {
     }
 
     /// How many more items are over, and the event that reports it when
-    /// the job asked for one.
+    /// the job asked for one. The last item of a batch or a flow reports
+    /// no progress: the job's end follows it. A crawl's list grows as it
+    /// reads, so that none of its items is open says nothing about its
+    /// end: every page counts, and the event of its end overtakes a
+    /// progress that still waits.
     async fn progressed(&self, job: &Job) -> Result<(), StoreError> {
-        let every = job
-            .spec
-            .get("progress_every")
-            .and_then(Value::as_u64)
-            .and_then(|every| u32::try_from(every).ok())
-            .filter(|every| *every > 0);
-        if let Some(every) = every
-            && job.items_pending() > 0
+        let goes_on = job.kind == JobKind::Crawl || job.items_pending() > 0;
+        if let Some(every) = stored_progress(&job.spec)
+            && goes_on
             && job.items_finished() > 0
             && job.items_finished().is_multiple_of(every)
             && webhook::enqueue(self.store(), job, WebhookEvent::JobProgress, self.now()).await?
@@ -1134,7 +1133,7 @@ impl Runner {
             outcome: None,
         };
         let id = request.unwrap_or_default();
-        let Ok(JobRequest::Flow(flow)) = serde_json::from_value::<JobRequest>(spec.clone()) else {
+        let Ok(JobRequest::Flow(flow)) = stored_request(&spec) else {
             return (id, Vec::new(), failed(ErrorCode::ValidationFailed.as_str()));
         };
         let flow: FlowJob = *flow;
@@ -1335,8 +1334,7 @@ impl Runner {
                 self.store().results().get_by_request(request).await,
                 Ok(None)
             )
-            && let Ok(JobRequest::Flow(flow)) =
-                serde_json::from_value::<JobRequest>(self.job.spec.clone())
+            && let Ok(JobRequest::Flow(flow)) = stored_request(&self.job.spec)
         {
             let policies = self.work.state.policies().current();
             let checks = Checks {

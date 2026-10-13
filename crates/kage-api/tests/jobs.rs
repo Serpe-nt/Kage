@@ -933,6 +933,136 @@ async fn a_webhook_is_signed_and_retried_on_its_schedule() {
     api.shut_down().await;
 }
 
+/// What a webhook says about progress is stored beside the request a job
+/// was accepted with, and every kind of job is read back from there (F46):
+/// a flow, a batch and a crawl that ask for `job.progress` are worked like
+/// those that do not, and each reports its progress.
+#[tokio::test]
+async fn a_job_that_reports_its_progress_is_worked_whatever_its_kind() {
+    const SECRET: &str = "a secret of the receivers own";
+    let receiver = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/hooks"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&receiver)
+        .await;
+    let origin = receiver.uri();
+    let listed = origin.clone();
+    let mut api = Api::start_with(2, 149, BROWSER_FAST, move |config| {
+        quick(config);
+        config.webhooks.allowed_origins = vec![listed.clone()];
+        config.webhooks.private_origins = vec![listed];
+    })
+    .await;
+    // A site of three pages: a listing and the two pages it links to.
+    pages(&api, "/k", page("A page")).await;
+    let listing = "<!DOCTYPE html><html><head><title>Listing</title></head><body><main>\
+                   <p>Two pages are listed here, one after the other, for whoever reads on.</p>\
+                   <p><a href=\"/k/1\">the first</a></p><p><a href=\"/k/2\">the second</a></p>\
+                   </main></body></html>";
+    Mock::given(method("GET"))
+        .and(path("/k"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(listing, "text/html; charset=utf-8"))
+        .mount(&api.lab.site)
+        .await;
+    let token = api.key(&[Scope::Jobs, Scope::Crawl]).await;
+    let webhook =
+        json!({ "url": format!("{origin}/hooks"), "secret": SECRET, "progress_every": 1 });
+    let jobs = [
+        (
+            "flow",
+            json!({
+                "type": "flow",
+                "actions": [
+                    { "action": "goto", "url": Api::url("/start") },
+                    { "action": "extract", "include": ["dom"] },
+                ],
+                "webhook": webhook,
+            }),
+            3,
+        ),
+        (
+            "batch",
+            json!({
+                "type": "batch",
+                "urls": urls("/k", 3),
+                "defaults": { "render": "http" },
+                "webhook": webhook,
+            }),
+            3,
+        ),
+        (
+            "crawl",
+            json!({
+                "type": "crawl",
+                "seeds": [Api::url("/k")],
+                "defaults": { "render": "http", "include": ["headers"] },
+                "webhook": webhook,
+            }),
+            3,
+        ),
+    ];
+    let work = api.work();
+
+    for (kind, body, items) in jobs {
+        let reply = api.post(&token, "/v1/jobs", &body).await;
+        assert_eq!(
+            reply.status,
+            StatusCode::CREATED,
+            "{kind}: {:?}",
+            reply.json()
+        );
+        let accepted = reply.json();
+        assert_eq!(accepted["type"], kind);
+        assert_eq!(accepted["webhook"]["progress_every"], 1, "{kind}");
+        let id = accepted["id"].as_str().unwrap().to_owned();
+
+        // The job is worked to its end, every item of it.
+        let done = api.job_until(&token, &id, ended).await;
+        assert_eq!(done["state"], "succeeded", "{kind}: {done}");
+        assert_eq!(done["items"]["succeeded"], items, "{kind}: {done}");
+        for item in api.job_items(&token, &id).await {
+            assert_eq!(item["state"], "succeeded", "{kind}: {item}");
+            assert_eq!(item["error"], Value::Null, "{kind}: {item}");
+        }
+
+        // Its end reached the receiver, and before that its progress was
+        // queued: an event the next one overtook counts, it was reported.
+        let done = api
+            .job_until(&token, &id, |job| {
+                job["webhook"]["deliveries"]
+                    .as_array()
+                    .is_some_and(|deliveries| {
+                        deliveries.iter().any(|delivery| {
+                            delivery["type"] == "job.completed" && delivery["state"] == "delivered"
+                        })
+                    })
+            })
+            .await;
+        let events: Vec<&str> = done["webhook"]["deliveries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|delivery| delivery["type"].as_str().unwrap())
+            .collect();
+        assert!(
+            events.contains(&"job.progress"),
+            "{kind}: no progress among {events:?}"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| **event == "job.completed")
+                .count(),
+            1,
+            "{kind}: {events:?}"
+        );
+    }
+
+    work.stop().await;
+    api.shut_down().await;
+}
+
 #[tokio::test]
 async fn a_fetch_that_overflowed_is_a_job_and_its_result_is_there_after_a_restart() {
     // One block pauses the site for a few seconds.
