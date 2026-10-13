@@ -22,7 +22,17 @@
 //   /site/only-1, /only-2  pages nothing links to: only the sitemap names them
 //   /site/slow/<n>?ms=     a chain of pages that take their time
 //   /sitemap.xml           a sitemap index: one plain sitemap, one gzipped
-//   /robots.txt            names the sitemap and disallows /site/private
+//   /sitemaps/index.xml    the same index under the address robots.txt names:
+//                          whoever read robots.txt asks for this one, whoever
+//                          guessed asks for /sitemap.xml
+//   /robots.txt            names /sitemaps/index.xml and disallows
+//                          /site/private
+//   /read/essay            an essay with what extraction returns (spec §14):
+//                          a description, a canonical address, OpenGraph and
+//                          JSON-LD with its dates, headings, a list, code, a
+//                          table and links, between a menu, a side bar and a
+//                          footer that are none of its content. Nothing of
+//                          the reading room links to it.
 import { gzipSync } from 'node:zlib';
 
 const WORDS = (
@@ -91,6 +101,42 @@ function near(which) {
     'A walk along the harbour',
     `<p class="date">${date}</p>${changed.map((p) => `<p>${p}</p>`).join('\n')}`,
   );
+}
+
+/** What the essay is called, for whoever checks an extraction of it. */
+const ESSAY_TITLE = 'The lamplighter and the ledger';
+
+function essay() {
+  const [first, second, third, fourth, fifth] = paragraphs('essay', 5);
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<title>${ESSAY_TITLE} | The reading room</title>
+<meta name="description" content="How a harbour town kept its lamps lit: an essay from the reading room.">
+<link rel="canonical" href="/read/essay">
+<meta property="og:title" content="${ESSAY_TITLE}">
+<meta property="og:type" content="article">
+<meta property="article:published_time" content="2026-09-28T07:30:00+02:00">
+<meta name="twitter:card" content="summary">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"Article","headline":"${ESSAY_TITLE}","datePublished":"2026-09-28T07:30:00+02:00","dateModified":"2026-10-02T09:00:00Z"}</script>
+<style>main{max-width:40em;margin:auto;line-height:1.5}</style></head><body>
+${NAV}
+<aside id="letter"><p>Subscribe to the letter of the reading room and never miss an essay.</p></aside>
+<main><article>
+<h1>${ESSAY_TITLE}</h1>
+<p>Forty-two lamps stood along the quay when the ledger was begun. ${first}</p>
+<p>${second}</p>
+<h2 id="rounds">The rounds</h2>
+<p>${third}</p>
+<ol><li>The quay, before the boats come in.</li><li>The market, while the stalls are set.</li><li>The hill, last of all.</li></ol>
+<pre><code class="language-toml">[lamps]
+quay = 12
+market = 9
+</code></pre>
+<table><thead><tr><th>Street</th><th>Lamps</th></tr></thead><tbody><tr><td>Quay</td><td>12</td></tr><tr><td>Market</td><td>9</td></tr></tbody></table>
+<h2 id="ledger">The ledger</h2>
+<p>${fourth}</p>
+<p>${fifth} More of the town is in <a href="/site/a">the first article</a>, and the lamps themselves are described at <a rel="nofollow" href="http://elsewhere.kage-fixture.example/lamps">another site</a>.</p>
+</article></main>
+${FOOTER}</body></html>`;
 }
 
 const DEEPEST = 6;
@@ -203,10 +249,14 @@ export function crawlRoute(req, res, url) {
   const path = url.pathname;
 
   if (path === '/robots.txt') {
-    send(200, 'text/plain; charset=utf-8', `User-agent: *\nDisallow: /site/private\n\nSitemap: http://${host}/sitemap.xml\n`);
+    send(200, 'text/plain; charset=utf-8', `User-agent: *\nDisallow: /site/private\n\nSitemap: http://${host}/sitemaps/index.xml\n`);
     return true;
   }
-  if (path === '/sitemap.xml') {
+  if (path === '/read/essay') {
+    html(essay());
+    return true;
+  }
+  if (path === '/sitemap.xml' || path === '/sitemaps/index.xml') {
     send(200, 'application/xml; charset=utf-8', sitemapIndex(host));
     return true;
   }

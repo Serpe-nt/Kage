@@ -204,6 +204,7 @@ test-e2e: setup-env
     tests/e2e/api.sh
     tests/e2e/jobs.sh
     tests/e2e/crawl.sh
+    tests/e2e/extract.sh
 
 # Gated live suite: needs KAGE_LIVE=1 and secrets, never runs in PR CI.
 test-live:

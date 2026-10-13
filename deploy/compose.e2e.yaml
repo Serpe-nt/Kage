@@ -1,10 +1,12 @@
-# Overlay for the end-to-end tests of the fetch pipeline, of the API and of
-# jobs (tests/e2e/fetch.sh, tests/e2e/api.sh, tests/e2e/jobs.sh). Never for
-# a deployment: it adds a world for Kage to fetch from that lives entirely
-# on the compose network.
+# Overlay for the end-to-end tests of the fetch pipeline, of the API, of
+# jobs, of crawls and of extraction (tests/e2e/fetch.sh, api.sh, jobs.sh,
+# crawl.sh, extract.sh). Never for a deployment: it adds a world for Kage
+# to fetch from that lives entirely on the compose network.
 #
 #   fixture   the fixture site (tests/fixtures/site), reached by names that
-#             only the proxies can resolve: fixture.kage.test, lenient.kage.test
+#             only the proxies can resolve: fixture.kage.test,
+#             lenient.kage.test, and rules.kage.test (the name the
+#             extraction test gives a policy that enforces robots.txt)
 #   proxy-a/b/c  three "residential proxies" of a provider, each with its own
 #             credential, relaying to the fixture and the echo only
 #   world     the echo the proxy health probe asks for its exit address and
@@ -90,7 +92,7 @@ services:
     command: [/fixtures/site/server.mjs, --host, 0.0.0.0, --port, "8088"]
     networks:
       default:
-        aliases: [fixture.kage.test, lenient.kage.test]
+        aliases: [fixture.kage.test, lenient.kage.test, rules.kage.test]
     healthcheck:
       test: [CMD, node, -e, "fetch('http://127.0.0.1:8088/__kage/requests').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
       interval: 3s
@@ -124,7 +126,7 @@ services:
 
   proxy-a: &proxy
     <<: *helper
-    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-a, --pass, e2e-only-a, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,world.kage.test:8089"]
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-a, --pass, e2e-only-a, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,world.kage.test:8089"]
     healthcheck:
       test: [CMD, node, -e, "fetch('http://127.0.0.1:3128/__stats').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
       interval: 3s
@@ -133,8 +135,8 @@ services:
 
   proxy-b:
     <<: *proxy
-    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-b, --pass, e2e-only-b, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,world.kage.test:8089"]
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-b, --pass, e2e-only-b, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,world.kage.test:8089"]
 
   proxy-c:
     <<: *proxy
-    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-c, --pass, e2e-only-c, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,world.kage.test:8089"]
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-c, --pass, e2e-only-c, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,world.kage.test:8089"]
