@@ -104,8 +104,9 @@ it runs on, and `GET /v1/results/{id}` returns `202` until it ended and the
 result afterwards. The id of every fetch is also in `X-Request-Id`.
 
 `include` chooses what comes back and what is kept: `dom` (the document as
-the browser had it), `raw` (the main response's body), `headers`, `xhr`
-(the responses the page's scripts fetched), `screenshot`, `pdf`, `console`.
+the browser had it), `raw` (the main response's body), `headers`,
+`extract` (what the page says, below), `xhr` (the responses the page's
+scripts fetched), `screenshot`, `pdf`, `console`.
 Without it a fetch returns `dom` and `headers`. What was asked for is also
 stored as artifacts for `artifacts.retention_days` (14) and named in
 `artifacts`; `GET /v1/artifacts/{id}` streams one. A screenshot is WebP
@@ -181,6 +182,146 @@ sites.)
 For a listing that is paged through, `scroll_depth: 0.3, dwell_ms: 3000`
 is the setting that still looks like someone skimming. Keep the default
 for a site that watches.
+
+### What a page says: `extract`
+
+`include: ["extract"]` returns what the page says beside (or instead of)
+its markup:
+
+```bash
+curl --silent http://127.0.0.1:8080/v1/fetch \
+    --header "Authorization: Bearer ${KAGE_KEY}" \
+    --header 'Content-Type: application/json' \
+    --data '{"url": "https://example.org/article", "include": ["extract"]}'
+```
+
+`extract` holds the `title`, `description`, `canonical`, `lang`, when the
+page says it was published and changed, its `meta`, `opengraph`,
+`twitter` and `jsonld`, its `links` (absolute, with `same_site`), and its
+main content: `headings`, `text`, `markdown`, `word_count`. It is read
+from the document the visit captured, so it costs no second request and
+nothing a site could see. `extract: { "markdown": false, "links": false }`
+leaves either out.
+
+- The main content is what a reader would read: Firefox's reader-view
+  rules, without navigation, side bars, footers and bylines. On a page
+  that is a list of the same thing (a thread, search results) every one
+  of them is content.
+- `thin_content: true` says the main content has fewer than
+  `extract.thin_words` (80) words. On the http path that usually means
+  the page is built by scripts or a wall stands in front of it: fetch it
+  with `render: "browser"`. The result does not guess which.
+- `extract` is null when the fetch did not get its page (a block, a
+  failure) and for a response that is no HTML document (a PDF, JSON).
+- `title` is the document's `<title>`, as written; the headline is in
+  `headings`, what the page says to social networks in `opengraph`.
+- A time with a zone is given in UTC; one without is given as the page
+  wrote it. Kage invents no zone.
+
+### The same page again: `cache_ttl_s`
+
+A request with `cache_ttl_s` may be answered from the response cache:
+
+```bash
+curl --silent http://127.0.0.1:8080/v1/fetch \
+    --header "Authorization: Bearer ${KAGE_KEY}" \
+    --header 'Content-Type: application/json' \
+    --data '{"url": "https://example.org/prices", "include": ["extract"], "cache_ttl_s": 600}'
+```
+
+The first one is fetched and kept for ten minutes. A later request that
+asks for the same and accepts a result up to its own `cache_ttl_s` old is
+answered with it: `cached: true`, `cached_at` (when the page was
+fetched), `attempts: []`. Nothing is asked of the site, no persona
+visits, the page does not count against the key's daily budget, and the
+answer comes while the site is paused or every persona sleeps. It still
+counts against the key's requests per minute.
+
+- **"The same" is strict.** Another `include` set, another `render`,
+  other `wait`, `behavior`, `extract`, `screenshot`, `pdf`, `xhr` or
+  persona hints, another method, body or header: each is another entry.
+  A request for fewer parts is not served from a result with more.
+  `timeout_ms`, `max_retries`, `pacing` and `robots` do not matter.
+- **A key's entries are its own.** Another key's identical request is a
+  visit, unless the operator set `cache: { shared: true }` for the site
+  (a site that shows everybody the same). Across keys the result does not
+  say who fetched it (`persona: null`).
+- **Only good pages are kept**: `ok` or `challenge_passed` with a `2xx`,
+  and not a page extraction called thin. A block is never served twice.
+- `cache_ttl_s: 0` is "never from the cache", whatever the site's policy
+  says. More than the site allows (`cache.max_ttl`, a day unless
+  configured, never longer than results are kept) is refused with
+  `cache_ttl_too_long`; `maximum_s` says the most.
+- A request in a session is never answered from the cache and never
+  fills it, and says so when it asks (`validation_failed`).
+- A crawl's pages fill the cache (when its `defaults` name
+  `cache_ttl_s`) and are never answered from it: a page that is not
+  visited is not open in the tab, and its links cannot be clicked. A
+  second crawl of a site visits every page again.
+- A flow has no part in the cache.
+
+An operator sets the bounds: `cache.max_ttl` in `kage.yaml` for every
+site, and per site in `policies/domains.yaml`
+(`cache: { shared, max_ttl, ttl }`, where `ttl` is what a request gets
+that does not name `cache_ttl_s`). `kage_cache_requests_total{result}`
+counts `hit`, `miss`, `stored` and `bypass` (a result the cache does not
+keep).
+
+### `robots.txt`
+
+**Nobody asks for a site's `robots.txt` unless its policy says so.** No
+reader opens that file, so the request marks the address that makes it.
+The shipped default is therefore `robots: ignore`: nothing is asked, and
+every result says `"robots": { "fetched": false, "allowed": true }`. The
+operator chooses per site whether a verdict is worth one marked address
+(`policies/domains.yaml`):
+
+```yaml
+domains:
+  "example.org":
+    robots: enforce   # or report
+```
+
+- `report`: the file is asked for and every result says what it says of
+  the address (`allowed`, `matched_rule`, `crawl_delay`); the page is
+  fetched either way. Nothing waits: the first results of an origin say
+  `fetched: false`, and the verdict is there from the next one on.
+- `enforce`: what the file disallows is not fetched. The answer is a
+  result with `outcome: "robots_denied"`, the rule in
+  `robots.matched_rule`, no attempts, and nothing asked of the site. The
+  first fetch of an origin waits for the file (about 8 s at the median, a
+  visit like any other). The file's `Crawl-delay` is kept to: each
+  persona leaves at least that long between two pages of the host, and a
+  site that asks for an hour gets an hour. If that is too slow, `report`
+  is the way out; Kage does not half-obey.
+- **Who asks** is the site's scout: one persona per site that asks for
+  the file (and for sitemaps, in a crawl) from its own address, in its
+  own browser, as a person who typed the address, and never reads a page
+  of that site. One address per site is marked, not two. A site
+  therefore needs a persona to spare: with a single persona, or when
+  every persona has read the site, nobody asks
+  (`reason: "robots_no_scout"` under `enforce`).
+- The file is kept for about a day (`robots.ttl`) and asked for again
+  only when a request needs it. A `404` is "no file": everything is
+  allowed. A server error, a timeout or a block is "unreachable" for an
+  hour (`robots.error_ttl`): under `enforce` nothing of the origin is
+  fetched meanwhile (`reason: "robots_unavailable"`, with `retry_at`), a
+  job's pages of that site wait (`paused`, `robots_unavailable`).
+- Kage answers to the group of `*`, and to a group that names `kage`
+  (`robots.agents`) in its place: a site owner who wants to address Kage
+  can. Its requests carry a browser's `User-Agent`, as always.
+- A request may say `robots` itself: `enforce` where the policy reports
+  is honoured. Less than the policy enforces is refused
+  (`robots_enforced`), and so is `enforce` where the policy never asks
+  for the file (`robots_ignored`): a request does not make Kage ask a
+  site the operator left alone.
+- To make Kage ask again before the day is over, delete the origin's row
+  from `robots_cache`; it is noticed within half a minute. To give a site
+  another scout, retire the persona (`site_scouts` names it).
+
+`kage_robots_requests_total{result}` counts what came of asking (`file`,
+`missing`, `unreachable`, `not_asked` for a proxy or sidecar failure,
+`no_scout`), `kage_robots_denied_total{reason}` what was not fetched.
 
 ### When a fetch takes longer than the server waits
 
@@ -303,7 +444,7 @@ A flow is a script of steps in one browser, by one persona:
     { "action": "type", "selector": "input[name=q]", "text": "lamp" },
     { "action": "press", "key": "Enter" },
     { "action": "wait_for", "selector": "#results" },
-    { "action": "extract", "include": ["dom"] } ] }
+    { "action": "extract", "include": ["dom", "extract"] } ] }
 ```
 
 - It starts with a `goto`. Every `goto` is checked by the SSRF guard when
@@ -434,7 +575,22 @@ linked from nowhere, not as a habit.
 - What a sitemap names are places to start from, inside `allow`, `deny`,
   `same_site_only` and `max_pages`; `lastmod` is shown and orders nothing.
   At most `crawl.max_sitemaps` (10) files per site.
-- `robots.txt` is not read by a crawl yet (M11).
+- Where the site's policy has its `robots.txt` asked for (`report` or
+  `enforce`, above), the crawl reads that file first, by the same scout,
+  and takes the sitemaps it names in place of the guess `/sitemap.xml`.
+  The file is listed with the sitemaps (`state: "read"`, or `missing`).
+- A scout the site turned away is not waited for: the files it could not
+  ask for are `no_scout`, and the crawl reads on.
+
+**A crawl keeps to an enforced `robots.txt`.** Where a site's policy says
+`robots: enforce`, an address the file disallows never becomes a page of
+the crawl: it has no item, costs no page, and is counted under
+`crawl.skipped.robots_denied`. Every page's result carries the verdict.
+The first page of an origin waits for the file like any fetch; a file
+that cannot be had pauses the job (`robots_unavailable`) until it is
+asked for again. A crawl's `defaults` take `include: ["extract"]`,
+`cache_ttl_s` (its pages then fill the cache for later fetches) and
+`robots` like a fetch.
 
 **Limits an operator sets** (`crawl` in `kage.yaml`): `default_max_depth`,
 `default_max_pages`, `max_seeds`, `max_frontier` (addresses a crawl keeps,
@@ -680,7 +836,8 @@ off behind a residential provider.
 | `render_needs_http`, `render_kind_conflict`, `render_include_conflict` | What was asked does not fit the render mode. |
 | `request_kind_needs_referer`, `preflight_required` | A script's request without its page, or one a browser would preflight. |
 | `timeout_too_short`, `invalid_pacing` | `minimum_ms` says the least; a pacing profile that does not exist or leaves D9's bounds. |
-| `not_available_yet` | `extract`, the cache and `robots: enforce` arrive with M11. |
+| `robots_enforced`, `robots_ignored` | The request asks for less care about `robots.txt` than the site's policy enforces, or to have a file enforced that the policy never asks for. |
+| `cache_ttl_too_long` | `cache_ttl_s` is more than the site's results may be served for; `maximum_s` says the most. |
 | `job_not_found` | `404`: no such job among those this key made. |
 | `idempotency_key_reused` | `409`: the `Idempotency-Key` made another job within the last day; `job_id` names it. |
 | `webhook_origin_not_allowed` | `422`: the webhook's receiver is not in `webhooks.allowed_origins`. |

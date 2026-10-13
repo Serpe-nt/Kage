@@ -93,6 +93,12 @@ otel-collector, jaeger, prometheus, grafana (optional compose profiles)
 1. API validates the request, authenticates the key, checks scopes and the
    key's rate limit, runs the SSRF guard on the URL.
 2. Policy resolves the effective domain policy and the render decision.
+   A request that named a cache lifetime is answered from the response
+   cache when the cache holds its page (§15): none of the steps below
+   happen. Where the site's policy has its `robots.txt` asked for, what
+   the file says of the address is looked up, and under `enforce` waited
+   for and kept to (§14); the file is asked for by the site's scout, never
+   by the persona of step 3.
 3. Scheduler picks a persona: session-pinned if a session is given, otherwise
    a persona already visiting the domain whose slot is free, otherwise the
    best-scored eligible persona (§8.2), preferring one that is awake in its
@@ -109,8 +115,10 @@ otel-collector, jaeger, prometheus, grafana (optional compose profiles)
    or a browser block, the persona cools for the domain, its visit ends and
    its context is closed, and another persona on another network retries
    after a seeded pause, up to the retry budget.
-7. Result and artifacts are stored; the response is returned or the job
-   record is updated and webhooks fire.
+7. What the request asked to have extracted is read from the document
+   the visit captured (§14). Result and artifacts are stored, and the
+   cache is filled when the request named a lifetime; the response is
+   returned or the job record is updated and webhooks fire.
 
 ### 3.3 Deployment topology
 
@@ -1384,17 +1392,33 @@ its words changed is within 6 bits 95 times of 100.
 **Sitemaps.** Off unless `use_sitemaps`: a reader does not ask for
 `/sitemap.xml`, and a site that watches for the request sees it. When on,
 the sitemaps of the seeds' sites are read before the first page of each
-site by a **scout**: a persona that is not the site's reader and never
-becomes it, a Firefox persona when one is free (Chrome saves a gzipped
-sitemap as a file and shows nothing of it: `sitemap_unreadable`). Each
-file is a typed navigation through the scheduler in the scout's browser,
-`/sitemap.xml` and what an index names of the same site, at most
+site by the site's **scout** (§14): the one persona that asks a site for
+what no reader asks for, is not the site's reader and never becomes it, a
+Firefox persona when one is free (Chrome saves a gzipped sitemap as a
+file and shows nothing of it: `sitemap_unreadable`; a file a browser
+saved and showed nothing of is no empty page, and turns nobody away).
+Each file is a typed navigation through the scheduler in the scout's
+browser, `/sitemap.xml` and what an index names of the same site, at most
 `crawl.max_sitemaps` (10) files per site and `crawl.max_sitemap_urls`
 (50 000) addresses per file, in the scout's own window (the sidecar
 returns the file as the server sent it, `capture.raw`). What they name are places to start from at
 depth 0, inside the scope and `max_pages`; `lastmod` is kept and shown
 and orders nothing. Where no persona but the reader could ask (`no_scout`)
-nobody asks. `robots.txt` is M11's; a crawl does not read it.
+nobody asks, and a scout the site turned away is not waited for through
+its cooldown: the crawl reads on without the file.
+
+**robots.txt.** Where the policy of a seed's site has its `robots.txt`
+asked for (`report` or `enforce`, §14) and the crawl reads sitemaps, the
+file is read first, by the same scout, and listed with the sitemaps: the
+`Sitemap:` lines of the same site take the place of the guess
+`/sitemap.xml`, which is asked for only when the file names none or
+there is no file. Where a site's file is enforced, an address the file is
+known to disallow never becomes a page of the crawl: no item, no request,
+no page of the budget, counted as `skipped.robots_denied`. The first page
+of an origin whose file is not known yet waits for it in the pipeline
+like any fetch, and a file that cannot be had holds the site
+(`robots_unavailable`). Every page's result carries the verdict. A crawl's
+`defaults` may say `robots` like a fetch.
 
 **The job.** A crawl has no items when it is accepted; an item is added
 for every page it asks for, in the order it asks, and paginated like a
@@ -1408,7 +1432,8 @@ status is a fetch that was made, stored like any other, and no page of
 the crawl: nothing is taken from what an error page says, and the crawl
 counts it as `failed`. The job's `crawl` counts what it discovered,
 fetched, failed, skipped by reason, found repeated, how its pages were
-reached, its sitemaps, and why it stopped reading (`completed`,
+reached, its sitemaps (and the `robots.txt` that named them), and why it
+stopped reading (`completed`,
 `max_pages`, `cancelled`, `expired`). Cancel, pause, deadline and
 idempotency are a batch's (§16.6); a cancel finishes the page that is
 being read and asks for no other.
@@ -1425,24 +1450,172 @@ works crawls.
 
 ## 14. Extraction and robots
 
-`include: ["extract"]` yields: `title`, `description`, `canonical`, `lang`,
-`meta` (name/property map), `jsonld[]`, `opengraph`, `links[]`
-(absolute, rel, text, same_site), `text` (readability-style main content),
-`markdown`, `word_count`, `thin_content` flag, `headings[]`.
+**Extraction.** `include: ["extract"]` returns what the page says, read
+from the document the visit captured (the DOM in a browser, the body on
+the http path when it is HTML) at the end of the attempt that got the
+page, never by a second request. `extract` is null for a fetch that did
+not get its page and for a response that is no HTML document. One tree is
+parsed per page: a crawl reads its links and its text from the tree
+extraction works on (`kage_crawl::html::Document`).
 
-robots.txt: fetched per host via the http path with the persona in use,
-cached 24 h, parsed with the Google matcher. Verdict object on every result:
-`{ "fetched": true, "allowed": true, "matched_rule": "...", "crawl_delay": null }`.
-Enforcement only when policy `robots: enforce`; `ignore` skips fetching.
+The object: `title` (the document's `<title>`), `description`,
+`canonical` (absolute), `lang`, `published_at` and `modified_at` (from
+JSON-LD, then `article:*` metadata, then other metadata, then a `<time>`
+of the content; in UTC when the page named a zone, as written when not),
+`meta`, `opengraph` and `twitter` (a name to the list of its values, in
+document order), `jsonld` (every block that parses, a top-level array as
+its members, at most 64; `jsonld_skipped` counts the rest), `links`
+(`url` absolute, `text`, `rel`, `same_site`; what a reader can see, at
+most 5000, with `links_truncated`), `headings` (`level`, `text`, `id`),
+`text` and `markdown` (the main content), `word_count`, `thin_content`.
+The request's `extract: { markdown, links }`, both true unless said,
+leaves either out.
+
+The main content is Readability's scoring (the algorithm of Firefox's
+reader view) ported onto that tree in `kage-extract`, with three rules of
+Kage's own: what the markup names as furniture (`nav`, `aside`, `footer`,
+the ARIA roles of the same, dialogs) is never content, and a page without
+a candidate has no content; bylines are metadata, not content; where the
+chosen element is one of three or more alike (the posts of a thread) the
+others are content too, and a figure between two parts of the content
+belongs to it. The markdown is written by the same walk as the text:
+headings, nested lists, fenced code with its language, GFM tables with a
+header row, absolute links. `thin_content` is true when the main content
+has fewer words than `extract.thin_words` (80): the document gave a
+reader next to nothing, which on the http path usually means scripts or
+a wall. The result does not guess which.
+
+Measured word for word against text marked by hand: on the ten fixture
+pages of ten kinds (`tests/fixtures/extract/`, written, not recorded;
+each has a golden file that `just goldens` regenerates and `just test`
+compares) the mean F1 is 97.0, against 76.2 for the furniture rule of §13
+alone; on three further pages written afterwards and never tuned on
+(`tests/fixtures/extract-heldout/`) it is 97.7.
+
+**robots.txt.** A reader never asks for `/robots.txt`, so the request
+marks the address that makes it. Whether a site's file is asked for at
+all is therefore its policy's: `robots: ignore` (the default: nobody
+asks, and every result says `{ "fetched": false, "allowed": true }`),
+`report` (ask, report the verdict, fetch either way) or `enforce` (ask,
+never fetch what the file disallows, keep to its `Crawl-delay`).
+
+- **Who asks.** The site's *scout*: one persona per site (registrable
+  domain), which asks for the `robots.txt` of each of the site's origins
+  and for its sitemaps (§13) and never reads a page of the site; the
+  pipeline keeps it out of every other fetch of the site. It is
+  remembered (`site_scouts`), so that one address is marked and no other.
+  The scout is, in this order: the persona that asked before; a ready
+  persona the site's policy keeps from reading anyway (another country or
+  engine), which costs the site no reader; a ready persona that never
+  read a page of the site, as long as the readers the fetch needs stay;
+  nobody. Never a persona that read the site. Among equals a Firefox goes
+  first, and then the site's name draws.
+- **How.** Through the scheduler like any page, in the scout's browser,
+  the address typed, once (no retry from another address), with the dwell
+  of any visit; the request is Kage's own and no key's. Measured in
+  Chrome 155 and Camoufox 152: what the site sees is one document
+  navigation of a person who typed the address (Firefox also asks for the
+  favicon), the file is there in under 100 ms, and the visit lasts 3 to
+  16 s, 8 s at the median. A scout that is blocked cools down for the
+  site and counts on its breaker like any persona.
+- **What is kept.** One answer per origin (`robots_cache`), for
+  `robots.ttl` (24 h, moved by up to a tenth either way so that files are
+  not asked for on a grid), and asked for again only when a request needs
+  it. A `4xx` that is no block is "no file": everything is allowed. A
+  server error, a timeout or a block is "unreachable" for
+  `robots.error_ttl` (1 h). An attempt that failed before the site had a
+  say (the proxy, the sidecar) is nothing: nothing is kept, and it is
+  tried again a minute later. At most `robots.max_bytes` (512 KiB, what
+  Google reads) of a file are read.
+- **The verdict** is Kage's own reading of the file by Google's rules
+  (RFC 9309: the longest match, `Allow` on a tie, `*` and `$`; the group
+  of `*`, and before it any group that names a token of `robots.agents`,
+  `["kage"]`, so that a site owner can address Kage):
+  `{ fetched, allowed, matched_rule, crawl_delay }` on every result. The
+  parser and the matcher are Kage's; the `robotstxt` crate (a port of
+  Google's parser) is the test oracle only, because it fails on a long
+  line with characters of more than one byte, loses the first line of a
+  file with a byte order mark, and matches `*` wrongly in one case.
+- **`report`**: nothing waits. A fetch reports what is known; when
+  nothing is, its result says `fetched: false` and the scout is sent
+  after it, at job priority, so that the next result of the origin has
+  the verdict. Whoever read the page is not chosen as the scout.
+- **`enforce`**: the first fetch of an origin waits for the scout.
+  Nothing of an origin is fetched without a verdict. A disallowed address
+  is `robots_denied` with the rule, and nothing is asked of the site. An
+  unreachable file means disallowed (RFC 9309 §2.3.1.4): `robots_denied`
+  with `reason: robots_unavailable` and `retry_at` for a caller that
+  waits, while a job's page waits (`paused`, `robots_unavailable`) up to
+  `jobs.max_age`; `robots_no_scout` when nobody can ask. A scout the
+  scheduler refuses (the site is paused, the scout sleeps) is the page's
+  own refusal. `Crawl-delay` is a floor under the gap from the start of
+  one page to the start of the next for each persona on the host, with up
+  to a fifth added so that no two gaps are alike, and no cap but 366
+  days: a site that asks for an hour gets an hour, and `report` is the
+  way out. Under `report` it is reported only.
+- **A request** (`robots: policy | report | enforce | ignore`) may ask
+  for more care than the policy takes and never for less, and never
+  makes Kage ask a site its policy leaves alone: `enforce` where the
+  policy reports is honoured, with the same file; `report` or `ignore`
+  where it enforces is refused (`robots_enforced`); `enforce` where it
+  ignores is refused (`robots_ignored`: no verdict will ever exist);
+  `report` where it ignores answers `fetched: false`.
+- **Not covered**: a redirect. The verdict is about the address that was
+  asked for; where a redirect leads is the site's own doing.
 
 ---
 
 ## 15. Caching
 
-Opt-in via `cache_ttl_s`. Key = normalized URL + method + body hash +
-render + include set + persona country. Served only for `ok` outcomes.
-Response carries `cached: true` and `cached_at`. Stored in Postgres with
-bodies in the artifact store.
+Opt-in per request (`cache_ttl_s`) or per site (the policy's
+`cache.ttl`). A request whose key holds a result that is young enough is
+answered with it: no persona, no visit, no pacing, nothing asked of the
+site and no page of the key's daily budget, and so also while the site is
+paused or the pool sleeps. It counts against the key's requests per
+minute like any call.
+
+- **The key** is everything that changes what a result holds, and
+  nothing that only changes when or how politely it is fetched: the
+  normalized URL (as a crawl normalizes it, §13), the method, the body,
+  the request kind, the caller's headers, `render` as asked (`auto`,
+  `http` and `browser` are three keys: which path `auto` takes is the
+  policy's, and may change), the include set (a result with more parts is
+  not cut down for a request for fewer), `wait`, `behavior`, the
+  `screenshot`, `pdf`, `xhr` and `extract` options, `max_body_bytes`, the
+  persona hints as asked (never the country of whoever happened to
+  fetch), and the API key, unless the site's policy says `cache.shared`.
+  Not in it: `cache_ttl_s`, `timeout_ms`, `max_retries`, `pacing`,
+  `robots`.
+- **Age.** An entry lives as long as the request that wrote it asked for,
+  and is served to a later request only while it is also no older than
+  that request's own lifetime: nobody gets a page older than they asked
+  for. `cache_ttl_s: 0` is never. More than the site's `cache.max_ttl`
+  (the configuration's, 24 h and never beyond the retention of results,
+  unless the policy sets a shorter one) is refused with
+  `cache_ttl_too_long`, not cut.
+- **What is kept**: a result with the outcome `ok` or `challenge_passed`
+  and a `2xx` status whose extraction, when there was one, is not thin.
+  Never a block, a failure, a refused redirect or an error status.
+- **Who reads and who fills.** A fetch and an item of a batch read and
+  fill. A page of a crawl fills and never reads: a page that is not
+  visited is not open in the tab, and what it links to cannot be clicked
+  from it. Measured on the fixture sites in the reader's order: with half
+  of a site cached, a fifth to a half of the pages still asked for would
+  arrive from nowhere (no `Referer`, `Sec-Fetch-Site: none`), where the
+  reader's order has 0.3 to 8 %. A flow has no part in the cache; a
+  request in a session neither reads nor fills it (what a session sees
+  depends on its cookies).
+- **A hit** is a request and a result of the key that asked, with
+  `cached: true`, `cached_at` (when the page was fetched), no attempts,
+  the stored extraction and robots verdict, artifact rows of its own that
+  point at the stored bodies, and the persona handle only for the key
+  that had the page fetched. Purge and retention of one key take nothing
+  from another.
+- **Storage.** `response_cache`; an entry goes with the result it serves
+  and is swept when it expires.
+- **Not built**: two identical requests in flight at the same moment are
+  both fetched; the same crawl asked for again inside the lifetime visits
+  every page again.
 
 ---
 
@@ -1564,7 +1737,7 @@ naming the constraint, and nothing is fetched.
   "pdf": null,
   "timeout_ms": 60000,
   "max_retries": 2,
-  "cache_ttl_s": 0,
+  "cache_ttl_s": 600,
   "robots": "policy",
   "extract": { "markdown": true, "links": true },
   "xhr": { "content_types": ["application/json"], "max_bytes": 2000000 },
@@ -1627,9 +1800,17 @@ a budget that only fits a bare load would make every visit one. `pacing`
 is D9's: a profile's name or a custom profile, ignored and reported when
 the policy locks it.
 
-Until M11, `include: ["extract"]`, `extract`, `cache_ttl_s` above 0 and
-`robots: "enforce"` are `not_available_yet`: refused, not silently
-without effect.
+`include: ["extract"]` returns what the page says (§14), on either path;
+`extract` (`markdown`, `links`, both true unless said) leaves a part out
+and is refused without it. `cache_ttl_s` is for how many seconds the
+result may be served from the response cache (§15): left out, the site's
+policy decides (`cache.ttl`, never unless set); 0 is never; more than the
+site's results may be served for is `cache_ttl_too_long`; in a session it
+is refused. `robots` (`policy`, `report`, `enforce`, `ignore`) is what
+the request says about the site's `robots.txt`: it may ask for more care
+than the policy takes and never for less, and never makes Kage ask a site
+its policy leaves alone (`robots_enforced`, `robots_ignored`; §14). The
+code `not_available_yet` is gone: nothing answers it any more.
 
 ### 16.5 FetchResult
 
@@ -1646,9 +1827,9 @@ without effect.
   "persona": { "id": "…", "engine": "chromium", "claimed_os": "windows", "country": "DE" },
   "attempts": [ { "n": 1, "render": "browser", "outcome": "ok", "status": 200, "total_ms": 9800 } ],
   "block": null,
-  "robots": { "fetched": true, "allowed": true },
+  "robots": { "fetched": true, "allowed": true, "matched_rule": null, "crawl_delay": null },
   "pacing": { "applied": "human", "waited_ms": 3900 },
-  "cached": false
+  "cached": false, "cached_at": null
 }
 ```
 
@@ -1685,12 +1866,38 @@ As built (the OpenAPI document is the contract):
   what applied.
   They, `console` and `side_effects` are in the answer of `POST /v1/fetch`
   only; a stored result has them null.
-- `extract` and `robots` are null and `cached` is false until M11.
+- `extract` is the object of §14, with `include: ["extract"]`; null for a
+  fetch that did not get its page and for a response that is no HTML
+  document. `robots` is `{ fetched, allowed, matched_rule, crawl_delay }`
+  on every result that got as far as the site's policy; `fetched: false`
+  says that nothing is known of the file (the default: nobody asks).
+- `outcome: "robots_denied"` is a result like a block: `200`, no attempts,
+  nothing asked of the site. Its `reason` is null when a rule of the file
+  disallows the address (`robots.matched_rule` names it),
+  `robots_unavailable` when the file is enforced and could not be had
+  (`retry_at` says when it is asked for again), `robots_no_scout` when
+  nobody can ask for it, and `robots_enforced` or `robots_ignored` when a
+  policy changed under a job's request.
+- `cached: true` says the result was served from the response cache:
+  `cached_at` is when its page was fetched, `attempts` is empty, `pacing`
+  and `behavior` are null, and `persona` is shown only to the key that
+  had the page fetched. Its `artifacts` are its own.
 - A result and its artifacts are a key's own: another key gets `404`, a
   key with the admin scope reads all. Both live for
   `artifacts.retention_days`.
 
 ### 16.6 Jobs and webhooks
+
+Extraction, the cache and `robots.txt` in a job (§14, §15): a batch's
+`defaults` and items take `include: ["extract"]`, `extract`,
+`cache_ttl_s` and `robots` like a fetch, and an item the cache holds is
+answered from it (no visit, no page of the budget). A flow's `include`
+and its `extract` step take `extract`; a flow never reads or fills the
+cache. A crawl's `defaults` take all four; its pages fill the cache and
+are never answered from it (§15), and what an enforced `robots.txt`
+disallows never becomes one of its pages (§13). A page whose site's
+enforced file cannot be had pauses the job with the reason
+`robots_unavailable` until the file is asked for again.
 
 Job states: `queued`, `running`, `paused`, `succeeded`, `partial`,
 `failed`, `cancelled`. A job ends `succeeded` when every item succeeded,
@@ -1847,7 +2054,10 @@ verified or recorded as browser-only, or `kage config check` fails;
 drawn from, §10.4), `crawl` (`default_max_depth` 3, `default_max_pages`
 100, `max_seeds` 100, `max_frontier` 50 000, `back_limit` 3,
 `near_duplicate_bits` 6, `max_sitemaps` 10, `max_sitemap_urls` 50 000,
-`skipped_extensions`; §13), `bandwidth` and `forwarder` (§7.5).
+`skipped_extensions`; §13), `extract` (`thin_words` 80; §14), `robots`
+(`ttl` 24 h, `error_ttl` 1 h, `max_bytes` 512 KiB, `agents` `["kage"]`;
+§14), `cache` (`max_ttl` 24 h, never longer than
+`artifacts.retention_days`; §15), `bandwidth` and `forwarder` (§7.5).
 `kage config check` reports the scheduler's caps, the budget and the
 forwarder. `server` holds what the API's listener enforces (§19): `bind`
 (`127.0.0.1:8080`), `metrics_bind` (unset), `max_body_bytes` (1 MiB),
@@ -1876,7 +2086,7 @@ Domain policy (`policies/domains.yaml`):
 defaults:
   render: auto
   pacing: human
-  robots: report
+  robots: ignore
   retries: 2
   breaker_threshold: 5
   breaker_pause: 30m
@@ -1888,6 +2098,7 @@ domains:
     pacing: human
     pacing_locked: false
     robots: enforce
+    cache: { shared: false, max_ttl: 6h, ttl: 10m }
     referer_strategy: search_engine
     min_dwell: 2s
     behavior_locked: false
@@ -1902,7 +2113,13 @@ nearest to furthest (suffix on label boundaries), then `defaults`, then the
 built-in defaults; each field takes the value from the first level that sets
 it, and `pacing_locked`, `min_dwell` (between 500 ms and 45 s: the floor
 below which a request cannot shorten a persona's stay on a page),
-`behavior_locked` and the per-outcome cooldowns cascade the same way.
+`behavior_locked`, the per-outcome cooldowns and each member of `cache`
+cascade the same way. `robots` is `ignore` unless set (§14: asking for
+the file marks an address, so the operator says where a verdict is worth
+one). `cache.shared` (false) says that the site shows every key the same
+and one key's page may serve another's; `cache.max_ttl` bounds how long
+its results are served, inside the configuration's; `cache.ttl` is what a
+request gets that does not name `cache_ttl_s` (nothing unless set).
 Reloaded on file change with typed validation (unknown keys rejected,
 semantic checks, every named pacing profile must exist); an invalid file
 keeps the last good policy and raises an alert.
@@ -1913,7 +2130,8 @@ keeps the last good policy and raises an alert.
 
 Tables: `proxies`, `personas`, `persona_domain_state`, `sessions`,
 `requests`, `attempts`, `results`, `artifacts`, `jobs`, `job_items`,
-`crawl_frontier`, `robots_cache`, `response_cache`, `api_keys`,
+`crawl_frontier`, `robots_cache`, `site_scouts`, `response_cache`,
+`api_keys`,
 `audit_events`, `health_events`, `selftest_runs`, `domain_breakers`
 (with how often the breaker opened since the domain last answered well,
 `trips`, and when its one trial was let through, `trial_started_at`),
@@ -1940,6 +2158,19 @@ was found, the positions it links to, where a redirect ended, content hash
 and SimHash, what it repeats, a sitemap's `lastmod`, and the item that
 carries its page) and, in `jobs.crawl`, its counters, its sitemaps and the
 tab of each of its visitors; nothing of who reads is ever returned.
+`robots_cache` holds one answer per origin (the file, or that there is
+none, or that it could not be had; its site, when it was asked for and
+when it is due again) and is never swept by age: a row that is due says
+"ask again". `site_scouts` names the one persona per site (registrable
+domain) that asks for what no reader asks for; the row goes with the
+persona. `response_cache` points from a cache key to the result it
+serves, with the normalized URL, the API key the entry is for (null where
+a policy shares the site's pages), when the page was fetched and when the
+entry expires; an entry goes with its result and is swept when it
+expires. A result served from the cache has `cached` and `cached_at`
+(both or neither), and artifact rows of its own that point at the stored
+bodies; the daily page budget counts requests whose result is not
+`cached`.
 Migrations in `crates/kage-store/migrations`, applied by `kage migrate` and
 checked in CI (`sqlx migrate info`, offline query data committed). Bodies and
 artifacts live on disk under `artifacts/` keyed by content hash with a
@@ -2080,7 +2311,15 @@ are gzip-compressed on disk.
   `failed`) from the process. A crawl is a job (`job_type="crawl"`) and
   adds `kage_crawl_pages_total{reached}` (`typed`, `click`, `back_click`,
   `referer`), `kage_crawl_skipped_total{reason}` and
-  `kage_crawl_duplicates_total{kind}` (`exact`, `near`). The scheduler's `kage_queue_depth{kind}` and
+  `kage_crawl_duplicates_total{kind}` (`exact`, `near`). Extraction,
+  `robots.txt` and the cache add `kage_extract_duration_seconds` (reading
+  a page's document: its links, its text, its extraction),
+  `kage_robots_requests_total{result}` (what came of asking for a file:
+  `file`, `missing`, `unreachable`, `not_asked`, `no_scout`),
+  `kage_robots_denied_total{reason}` (`rule`, `robots_unavailable`,
+  `robots_no_scout`, `robots_enforced`, `robots_ignored`) and
+  `kage_cache_requests_total{result}` (`hit`, `miss`, `stored`, and
+  `bypass` for a result the cache does not keep). The scheduler's `kage_queue_depth{kind}` and
   `kage_scheduler_wait_seconds{kind}` have a `job` kind for what jobs have
   in the queue.
   `/metrics` is one exposition: the process's recorder (histograms of

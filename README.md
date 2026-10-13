@@ -22,9 +22,16 @@ personal projects. Whoever runs it is responsible for how it is used.
   and by site. Check both before pointing Kage at a target, and stop when a
   site asks you to.
 - **Stay polite.** Pacing defaults imitate one human visitor per persona.
-  Do not raise them to extract more than a person could read. Kage fetches
-  `robots.txt`, reports its verdict on every response, and enforces it
-  wherever the domain policy says so.
+  Do not raise them to extract more than a person could read.
+- **`robots.txt` is the operator's choice, per site.** A reader never asks
+  for that file, so asking marks the address that does. Kage therefore
+  asks for a site's `robots.txt` only where the domain policy says
+  `report` or `enforce`, and then from one address that never reads the
+  site. Under `enforce` it obeys the file fully: what is disallowed is
+  not fetched, and a `Crawl-delay` is kept to, however long. Where the
+  policy says nothing, every response says that the file was not asked
+  for. Decide per site, and decide `enforce` where a site's rules are
+  what you mean to follow.
 - **No access you were not given.** Kage does not solve CAPTCHAs through
   external services, does not log in with accounts, does not perform write
   actions on targets, and never connects to a target from the host's own IP.
