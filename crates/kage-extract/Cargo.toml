@@ -12,3 +12,22 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[dependencies]
+# Times in metadata, as written and in UTC.
+chrono = { workspace = true }
+# Node ids of the tree scraper keeps a page in.
+ego-tree = { workspace = true }
+# The page reader: one tree per page, the same rules for what a reader sees.
+kage-crawl = { workspace = true }
+scraper = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+# The meaning of a robots.txt pattern, said as a regular expression.
+regex = { workspace = true }
+# A port of the robots.txt library Google published: the oracle the
+# verdicts are compared with, on files it reads rightly. Never used on a
+# file a site sends (see src/robots.rs).
+robotstxt = { workspace = true }

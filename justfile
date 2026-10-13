@@ -361,6 +361,13 @@ openapi:
     cp "${document}" crates/kage-api/openapi.json
     (cd tests/api-client && pnpm run build && pnpm run generate)
 
+# Write the golden files of the extraction fixtures again
+# (tests/fixtures/extract/*/golden.json: everything extraction returns for
+# each page), after a change that is meant to move them. Read the
+# difference before committing it; `just test` compares them byte for byte.
+goldens:
+    KAGE_UPDATE_GOLDENS=1 cargo test --package kage-extract --test fixtures --locked every_page_extracts_to_its_golden_file
+
 # Record what an engine's real browser shows the in-repo fingerprint echo
 # (tests/fixtures/fingerprints/browser/): `just capture-browser-fingerprint
 # firefox`. Run it when the pinned browser of that engine moves; see

@@ -1,0 +1,702 @@
+{
+  "title": "Nightly backup stops at exactly 4 GB on external drive - Brindlebox Community Forum",
+  "description": "Hello all, I have been running Brindlebox 4.2 on a small home server for just over a year, and the nightly backup has suddenly started failing, always",
+  "canonical": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184",
+  "lang": "en-gb",
+  "published_at": "2026-03-02T19:41:07Z",
+  "modified_at": null,
+  "meta": {
+    "description": [
+      "Hello all, I have been running Brindlebox 4.2 on a small home server for just over a year, and the nightly backup has suddenly started failing, always"
+    ],
+    "viewport": [
+      "width=device-width, initial-scale=1"
+    ],
+    "x-ua-compatible": [
+      "IE=edge"
+    ]
+  },
+  "opengraph": {},
+  "twitter": {},
+  "jsonld": [
+    {
+      "@context": "https://schema.org",
+      "@id": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184",
+      "@type": "DiscussionForumPosting",
+      "articleSection": "Backup and Restore",
+      "author": {
+        "@type": "Person",
+        "name": "marlow_k",
+        "url": "https://forum.brindlebox.example/memberlist.php?mode=viewprofile&u=1532"
+      },
+      "comment": [
+        {
+          "@type": "Comment",
+          "author": {
+            "@type": "Person",
+            "name": "Halvard"
+          },
+          "datePublished": "2026-03-02T20:03:44+00:00",
+          "text": "Welcome to the forum, and thank you for posting the log as text. That byte count is the giveaway.",
+          "url": "https://forum.brindlebox.example/viewtopic.php?p=41875#p41875"
+        },
+        {
+          "@type": "Comment",
+          "author": {
+            "@type": "Person",
+            "name": "quietfern"
+          },
+          "datePublished": "2026-03-02T21:37:19+00:00",
+          "text": "That explains it. FAT32 cannot hold a single file larger than 4 GB, however big the drive is.",
+          "url": "https://forum.brindlebox.example/viewtopic.php?p=41883#p41883"
+        }
+      ],
+      "datePublished": "2026-03-02T19:41:07+00:00",
+      "headline": "Nightly backup stops at exactly 4 GB on external drive",
+      "interactionStatistic": [
+        {
+          "@type": "InteractionCounter",
+          "interactionType": "https://schema.org/ReplyAction",
+          "userInteractionCount": 19
+        },
+        {
+          "@type": "InteractionCounter",
+          "interactionType": "https://schema.org/ViewAction",
+          "userInteractionCount": 1463
+        }
+      ],
+      "text": "Hello all, I have been running Brindlebox 4.2 on a small home server for just over a year, and the nightly backup has suddenly started failing, always at exactly the same point.",
+      "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184"
+    }
+  ],
+  "jsonld_skipped": 0,
+  "links": [
+    {
+      "url": "https://forum.brindlebox.example/index.php?sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&start=0#start_here",
+      "text": "Skip to content",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/search.php?sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Advanced search",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/search.php?search_id=unanswered&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Unanswered topics",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/search.php?search_id=active_topics&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Active topics",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/faq.php?sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "FAQ",
+      "rel": [
+        "help"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/ucp.php?mode=login&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Login",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/ucp.php?mode=register&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Register",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.brindlebox.example/",
+      "text": "Brindlebox home",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/index.php?sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Board index",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewforum.php?f=3&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Support",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewforum.php?f=7&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Backup and Restore",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Nightly backup stops at exactly 4 GB on external drive",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/posting.php?mode=reply&f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Post Reply",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&view=print",
+      "text": "Print view",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&start=0#",
+      "text": "Page 1 of 3",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&start=7",
+      "text": "2",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&start=14",
+      "text": "3",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&start=7",
+      "text": "Next",
+      "rel": [
+        "next"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/memberlist.php?mode=viewprofile&u=1532&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/memberlist.php?mode=viewprofile&u=1532&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "marlow_k",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/search.php?author_id=1532&sr=posts&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "87",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&start=0#p41872",
+      "text": "Nightly backup stops at exactly 4 GB on external drive",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/posting.php?mode=quote&f=7&p=41872&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Quote",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?p=41872&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83#p41872",
+      "text": "Post",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/memberlist.php?mode=viewprofile&u=1532&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "marlow_k",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&start=0#",
+      "text": "Select all",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&start=0#top",
+      "text": "Top",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/memberlist.php?mode=viewprofile&u=12&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/memberlist.php?mode=viewprofile&u=12&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Halvard",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/search.php?author_id=12&sr=posts&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "4318",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&start=0#p41875",
+      "text": "Re: Nightly backup stops at exactly 4 GB on external drive",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/posting.php?mode=quote&f=7&p=41875&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Quote",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?p=41875&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83#p41875",
+      "text": "Post",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/memberlist.php?mode=viewprofile&u=12&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Halvard",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=11",
+      "text": "backup checklist",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&start=0#top",
+      "text": "Top",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/memberlist.php?mode=viewprofile&u=1532&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/memberlist.php?mode=viewprofile&u=1532&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "marlow_k",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/search.php?author_id=1532&sr=posts&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "87",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&start=0#p41879",
+      "text": "Re: Nightly backup stops at exactly 4 GB on external drive",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/posting.php?mode=quote&f=7&p=41879&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Quote",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?p=41879&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83#p41879",
+      "text": "Post",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/memberlist.php?mode=viewprofile&u=1532&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "marlow_k",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/memberlist.php?mode=viewprofile&u=1532&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "marlow_k",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&start=0#top",
+      "text": "Top",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/memberlist.php?mode=viewprofile&u=873&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/memberlist.php?mode=viewprofile&u=873&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "quietfern",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/search.php?author_id=873&sr=posts&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "1234",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&start=0#p41883",
+      "text": "Re: Nightly backup stops at exactly 4 GB on external drive",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/posting.php?mode=quote&f=7&p=41883&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Quote",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?p=41883&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83#p41883",
+      "text": "Post",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/memberlist.php?mode=viewprofile&u=873&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "quietfern",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.brindlebox.example/backup/splitting",
+      "text": "the manual",
+      "rel": [
+        "nofollow",
+        "noopener"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&start=0#top",
+      "text": "Top",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/memberlist.php?mode=viewprofile&u=2291&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/memberlist.php?mode=viewprofile&u=2291&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Oda_Brennick",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/search.php?author_id=2291&sr=posts&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "412",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&start=0#p41890",
+      "text": "Re: Nightly backup stops at exactly 4 GB on external drive",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/posting.php?mode=quote&f=7&p=41890&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Quote",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?p=41890&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83#p41890",
+      "text": "Post",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/memberlist.php?mode=viewprofile&u=2291&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Oda_Brennick",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&start=0#top",
+      "text": "Top",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/memberlist.php?mode=viewprofile&u=12&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/memberlist.php?mode=viewprofile&u=12&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Halvard",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/search.php?author_id=12&sr=posts&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "4318",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&start=0#p41894",
+      "text": "Re: Nightly backup stops at exactly 4 GB on external drive",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/posting.php?mode=quote&f=7&p=41894&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Quote",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?p=41894&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83#p41894",
+      "text": "Post",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/memberlist.php?mode=viewprofile&u=12&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Halvard",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=11",
+      "text": "backup checklist",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&start=0#top",
+      "text": "Top",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/memberlist.php?mode=viewprofile&u=1532&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/memberlist.php?mode=viewprofile&u=1532&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "marlow_k",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/search.php?author_id=1532&sr=posts&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "87",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&start=0#p41901",
+      "text": "Re: Nightly backup stops at exactly 4 GB on external drive",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/posting.php?mode=quote&f=7&p=41901&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Quote",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?p=41901&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83#p41901",
+      "text": "Post",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/memberlist.php?mode=viewprofile&u=1532&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "marlow_k",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&start=0#top",
+      "text": "Top",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/posting.php?mode=reply&f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Post Reply",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&start=7",
+      "text": "2",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&start=14",
+      "text": "3",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&start=7",
+      "text": "Next",
+      "rel": [
+        "next"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewforum.php?f=7&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Return to “Backup and Restore”",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewforum.php?f=1&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Announcements",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewforum.php?f=3&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Support",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewforum.php?f=5&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "↳ Installation and Upgrades",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewforum.php?f=7&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "↳ Backup and Restore",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewforum.php?f=9&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Show Your Setup",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewonline.php?sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Who is online",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/memberlist.php?mode=viewprofile&u=12&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Halvard",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/memberlist.php?mode=viewprofile&u=873&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "quietfern",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.brindlebox.example/",
+      "text": "Brindlebox home",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/index.php?sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Board index",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/ucp.php?mode=delete_cookies&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Delete cookies",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/memberlist.php?mode=contactadmin&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Contact us",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.larkboard.example.org/",
+      "text": "Larkboard",
+      "rel": [],
+      "same_site": false
+    },
+    {
+      "url": "https://forum.brindlebox.example/ucp.php?mode=privacy&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Privacy",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/ucp.php?mode=terms&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83",
+      "text": "Terms",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&start=0#",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    }
+  ],
+  "links_truncated": false,
+  "headings": [],
+  "text": "Hello all, I have been running Brindlebox 4.2 on a small home server for just over a year, and the nightly backup has suddenly started failing, always at exactly the same point.\n\nThe job copies the library database and the artwork cache to an external USB drive. Since last Thursday it stops when the archive reaches 4 GB, and the log shows the lines below. Smaller jobs, such as the settings-only backup, still finish without complaint.\n\nCode: Select all\n\n[02:00:04] backup: starting job nightly-full\n[02:00:05] backup: target /mnt/usb-backup/brindlebox\n[02:23:51] backup: wrote 4294967295 bytes to nightly-full.bbx\n[02:23:51] backup: ERROR archive closed unexpectedly (code 27)\n\nSo far I have restarted the server, run the job by hand and checked the drive, which has more than 400 GB free. It is the same drive I have always used, although I did wipe and reformat it a couple of weeks ago, after it started making odd clicking noises on another machine.\n\nNothing else has changed that I can think of. Is there a size limit somewhere in the settings that I have managed to switch on, or is this a bug in 4.2? Any pointers would be very welcome, because I would rather not go a second week without a full backup.\n\nWelcome to the forum, and thank you for posting the log as text.\n\nThat byte count is the giveaway. 4294967295 is one byte short of 4 GB, which is the largest single file that some filesystems can hold, so the job is hitting a wall rather than failing at random. Brindlebox has no size limit of its own.\n\nCan you tell us how the drive is formatted now? Open Storage in the admin panel, pick the backup drive and post what it says next to Filesystem.\n\nHalvard wrote:Can you tell us how the drive is formatted now?\n\nIt says FAT32, which surprised me. I let the other machine choose the format when I wiped the drive and never looked at what it had picked. Before that I am fairly sure it was ext4, because I set it up by following the install guide word for word.\n\nSo is the answer simply to reformat it again?\n\nThat explains it. FAT32 cannot hold a single file larger than 4 GB, however big the drive is. You have three ways out, roughly in order of effort:\n\nTurn on archive splitting under Settings, Backup, Advanced, and set the part size to 2 GB.\nReformat the drive as ext4 or exFAT, and let the job write one large file again.\nPoint the nightly job at a network share instead, and keep the USB drive for a weekly copy.\n\nI would choose the second if nothing else lives on that drive. Splitting works, but restoring from a dozen parts is slower, and one missing part spoils the lot. The steps are in the manual if you want to try it.\n\nquietfern wrote:Splitting works, but restoring from a dozen parts is slower, and one missing part spoils the lot.\n\nTrue, although 4.2 verifies split archives part by part, so a damaged part is at least reported on the night it is written rather than discovered during a restore. I ran split backups to a FAT32 stick for most of last year without any trouble.\n\nI still agree that reformatting is the cleaner fix. If you go that way, exFAT has one advantage over ext4: the drive stays readable on an ordinary laptop if the server itself ever dies.\n\nOne caution before you reformat anything. The clicking noises you mentioned worry me more than the filesystem does. Run a full surface check on the drive first, and if it reports even a handful of reallocated sectors, retire it.\n\nA backup drive that is quietly failing is worse than no backup at all, because it lets you believe you are covered.\n\nThank you, all three of you. The surface check is running now and says it needs about five hours for a drive this size, so I will leave it going overnight.\n\nIf it comes back clean I will reformat as ext4 tomorrow evening and run the job by hand before I trust the schedule again. In the meantime I have switched on splitting at 2 GB, so that tonight's backup at least has a chance of finishing. I will report back either way.",
+  "markdown": "Hello all, I have been running Brindlebox 4.2 on a small home server for just over a year, and the nightly backup has suddenly started failing, always at exactly the same point.\n\nThe job copies the library database and the artwork cache to an external USB drive. Since last Thursday it stops when the archive reaches 4 GB, and the log shows the lines below. Smaller jobs, such as the settings-only backup, still finish without complaint.\n\nCode: [Select all](https://forum.brindlebox.example/viewtopic.php?f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&start=0#)\n\n```\n[02:00:04] backup: starting job nightly-full\n[02:00:05] backup: target /mnt/usb-backup/brindlebox\n[02:23:51] backup: wrote 4294967295 bytes to nightly-full.bbx\n[02:23:51] backup: ERROR archive closed unexpectedly (code 27)\n```\n\nSo far I have restarted the server, run the job by hand and checked the drive, which has more than 400 GB free. It is the same drive I have always used, although I did wipe and reformat it a couple of weeks ago, after it started making odd clicking noises on another machine.\n\nNothing else has changed that I can think of. Is there a size limit somewhere in the settings that I have managed to switch on, or is this a bug in 4.2? Any pointers would be very welcome, because I would rather not go a second week without a full backup.\n\nWelcome to the forum, and thank you for posting the log as text.\n\nThat byte count is the giveaway. 4294967295 is one byte short of 4 GB, which is the largest single file that some filesystems can hold, so the job is hitting a wall rather than failing at random. Brindlebox has no size limit of its own.\n\nCan you tell us how the drive is formatted now? Open Storage in the admin panel, pick the backup drive and post what it says next to Filesystem.\n\n> *Halvard wrote:*Can you tell us how the drive is formatted now?\n\nIt says FAT32, which surprised me. I let the other machine choose the format when I wiped the drive and never looked at what it had picked. Before that I am fairly sure it was ext4, because I set it up by following the install guide word for word.\n\nSo is the answer simply to reformat it again?\n\nThat explains it. FAT32 cannot hold a single file larger than 4 GB, however big the drive is. You have three ways out, roughly in order of effort:\n\n- Turn on archive splitting under Settings, Backup, Advanced, and set the part size to 2 GB.\n- Reformat the drive as ext4 or exFAT, and let the job write one large file again.\n- Point the nightly job at a network share instead, and keep the USB drive for a weekly copy.\n\nI would choose the second if nothing else lives on that drive. Splitting works, but restoring from a dozen parts is slower, and one missing part spoils the lot. The steps are in [the manual](https://docs.brindlebox.example/backup/splitting) if you want to try it.\n\n> *quietfern wrote:*Splitting works, but restoring from a dozen parts is slower, and one missing part spoils the lot.\n\nTrue, although 4.2 verifies split archives part by part, so a damaged part is at least reported on the night it is written rather than discovered during a restore. I ran split backups to a FAT32 stick for most of last year without any trouble.\n\nI still agree that reformatting is the cleaner fix. If you go that way, exFAT has one advantage over ext4: the drive stays readable on an ordinary laptop if the server itself ever dies.\n\nOne caution before you reformat anything. The clicking noises you mentioned worry me more than the filesystem does. Run a full surface check on the drive first, and if it reports even a handful of reallocated sectors, retire it.\n\nA backup drive that is quietly failing is worse than no backup at all, because it lets you believe you are covered.\n\nThank you, all three of you. The surface check is running now and says it needs about five hours for a drive this size, so I will leave it going overnight.\n\nIf it comes back clean I will reformat as ext4 tomorrow evening and run the job by hand before I trust the schedule again. In the meantime I have switched on splitting at 2 GB, so that tonight's backup at least has a chance of finishing. I will report back either way.",
+  "word_count": 723,
+  "thin_content": false
+}

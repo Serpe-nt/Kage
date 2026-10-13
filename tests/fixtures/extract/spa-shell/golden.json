@@ -1,0 +1,85 @@
+{
+  "title": "Tidewater Tracker",
+  "description": "Tidewater Tracker keeps tide tables, mooring bookings and passage plans for small harbours in one place.",
+  "canonical": "https://app.tidewatertracker.example/",
+  "lang": "en",
+  "published_at": null,
+  "modified_at": null,
+  "meta": {
+    "apple-mobile-web-app-capable": [
+      "yes"
+    ],
+    "apple-mobile-web-app-status-bar-style": [
+      "black-translucent"
+    ],
+    "application-name": [
+      "Tidewater Tracker"
+    ],
+    "color-scheme": [
+      "light dark"
+    ],
+    "description": [
+      "Tidewater Tracker keeps tide tables, mooring bookings and passage plans for small harbours in one place."
+    ],
+    "theme-color": [
+      "#0b3954"
+    ],
+    "viewport": [
+      "width=device-width, initial-scale=1.0, viewport-fit=cover"
+    ]
+  },
+  "opengraph": {
+    "og:description": [
+      "Tide tables, mooring bookings and passage plans for small harbours, in one place."
+    ],
+    "og:image": [
+      "https://app.tidewatertracker.example/social/share-1200x630.png"
+    ],
+    "og:title": [
+      "Tidewater Tracker"
+    ],
+    "og:type": [
+      "website"
+    ],
+    "og:url": [
+      "https://app.tidewatertracker.example/"
+    ]
+  },
+  "twitter": {
+    "twitter:card": [
+      "summary_large_image"
+    ]
+  },
+  "jsonld": [
+    {
+      "@context": "https://schema.org",
+      "@type": "WebApplication",
+      "applicationCategory": "UtilitiesApplication",
+      "browserRequirements": "Requires JavaScript and a browser released after 2022.",
+      "description": "Tidewater Tracker keeps tide tables, mooring bookings and passage plans for small harbours in one place.",
+      "image": "https://app.tidewatertracker.example/social/share-1200x630.png",
+      "inLanguage": "en",
+      "name": "Tidewater Tracker",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "EUR"
+      },
+      "operatingSystem": "Any",
+      "publisher": {
+        "@type": "Organization",
+        "name": "Tidewater Tracker Cooperative",
+        "url": "https://www.tidewatertracker.example/"
+      },
+      "url": "https://app.tidewatertracker.example/"
+    }
+  ],
+  "jsonld_skipped": 0,
+  "links": [],
+  "links_truncated": false,
+  "headings": [],
+  "text": "",
+  "markdown": "",
+  "word_count": 0,
+  "thin_content": true
+}

@@ -1,0 +1,583 @@
+{
+  "title": "La tourte aux poireaux de tante Lucette, celle des dimanches de pluie - Le Carnet de Solène",
+  "description": "La recette de famille de la tourte aux poireaux et aux pommes de terre de ma tante Lucette : pâte brisée maison, garniture fondante et 45 minutes de four.",
+  "canonical": "https://lecarnet.example/tourte-aux-poireaux/",
+  "lang": "fr-FR",
+  "published_at": "2026-02-08T08:30:00Z",
+  "modified_at": "2026-09-21T15:12:44Z",
+  "meta": {
+    "author": [
+      "Solène Varnier"
+    ],
+    "description": [
+      "La recette de famille de la tourte aux poireaux et aux pommes de terre de ma tante Lucette : pâte brisée maison, garniture fondante et 45 minutes de four."
+    ],
+    "viewport": [
+      "width=device-width, initial-scale=1"
+    ]
+  },
+  "opengraph": {
+    "article:modified_time": [
+      "2026-09-21T15:12:44+00:00"
+    ],
+    "article:published_time": [
+      "2026-02-08T08:30:00+00:00"
+    ],
+    "og:description": [
+      "Une pâte brisée maison, des poireaux fondus, des pommes de terre et de la crème : la tourte que préparait ma tante les dimanches de pluie."
+    ],
+    "og:image": [
+      "https://lecarnet.example/wp-content/uploads/2026/02/tourte-lucette-1200x800.jpg"
+    ],
+    "og:locale": [
+      "fr_FR"
+    ],
+    "og:site_name": [
+      "Le Carnet de Solène"
+    ],
+    "og:title": [
+      "La tourte aux poireaux de tante Lucette, celle des dimanches de pluie"
+    ],
+    "og:type": [
+      "article"
+    ],
+    "og:url": [
+      "https://lecarnet.example/tourte-aux-poireaux/"
+    ]
+  },
+  "twitter": {
+    "twitter:card": [
+      "summary_large_image"
+    ],
+    "twitter:data1": [
+      "Solène Varnier"
+    ],
+    "twitter:data2": [
+      "6 minutes"
+    ],
+    "twitter:label1": [
+      "Écrit par"
+    ],
+    "twitter:label2": [
+      "Durée de lecture estimée"
+    ]
+  },
+  "jsonld": [
+    {
+      "@context": "https://schema.org/",
+      "@id": "https://lecarnet.example/tourte-aux-poireaux/#recipe",
+      "@type": "Recipe",
+      "aggregateRating": {
+        "@type": "AggregateRating",
+        "ratingCount": "17",
+        "ratingValue": "4.82"
+      },
+      "author": {
+        "@type": "Person",
+        "name": "Solène Varnier"
+      },
+      "cookTime": "PT45M",
+      "datePublished": "2026-02-08T08:30:00+00:00",
+      "description": "Une tourte généreuse à la pâte brisée maison, garnie de poireaux fondus, de pommes de terre et de crème, telle que la préparait ma tante Lucette les dimanches de pluie.",
+      "image": [
+        "https://lecarnet.example/wp-content/uploads/2026/02/tourte-lucette-1x1.jpg",
+        "https://lecarnet.example/wp-content/uploads/2026/02/tourte-lucette-4x3.jpg",
+        "https://lecarnet.example/wp-content/uploads/2026/02/tourte-lucette-16x9.jpg"
+      ],
+      "keywords": "poireaux, tourte, pâte brisée, recette de famille",
+      "name": "Tourte aux poireaux de tante Lucette",
+      "nutrition": {
+        "@type": "NutritionInformation",
+        "calories": "486 kcal",
+        "carbohydrateContent": "41 g",
+        "fatContent": "29 g",
+        "fiberContent": "4 g",
+        "proteinContent": "14 g",
+        "servingSize": "1 part",
+        "sodiumContent": "520 mg"
+      },
+      "prepTime": "PT20M",
+      "recipeCategory": [
+        "Plat principal"
+      ],
+      "recipeCuisine": [
+        "Française"
+      ],
+      "recipeIngredient": [
+        "250 g de farine de blé T65",
+        "125 g de beurre demi-sel bien froid",
+        "1 jaune d’œuf",
+        "4 c. à soupe d’eau glacée",
+        "1 pincée de sel fin",
+        "4 poireaux moyens",
+        "400 g de pommes de terre à chair ferme",
+        "20 cl de crème fraîche épaisse",
+        "2 œufs entiers",
+        "80 g de tomme de brebis râpée",
+        "1 c. à café de thym séché",
+        "1 pincée de noix de muscade"
+      ],
+      "recipeInstructions": [
+        {
+          "@type": "HowToStep",
+          "text": "Préparez la pâte : du bout des doigts, sablez la farine, le sel et le beurre froid coupé en dés, puis incorporez le jaune d’œuf et l’eau glacée. Formez une boule sans trop la travailler, filmez-la et gardez-la au frais le temps de préparer la garniture.",
+          "url": "https://lecarnet.example/tourte-aux-poireaux/#wprm-recipe-9052-step-0-0"
+        },
+        {
+          "@type": "HowToStep",
+          "text": "Lavez soigneusement les poireaux, émincez-les finement, vert compris, et faites-les fondre 12 minutes à feu doux et à couvert dans une sauteuse, avec une noix de beurre. Ils ne doivent surtout pas colorer.",
+          "url": "https://lecarnet.example/tourte-aux-poireaux/#wprm-recipe-9052-step-0-1"
+        },
+        {
+          "@type": "HowToStep",
+          "text": "Épluchez les pommes de terre et coupez-les en rondelles de 2 mm d’épaisseur. Préchauffez le four à 190 °C (chaleur tournante).",
+          "url": "https://lecarnet.example/tourte-aux-poireaux/#wprm-recipe-9052-step-0-2"
+        },
+        {
+          "@type": "HowToStep",
+          "text": "Dans un saladier, fouettez la crème avec les œufs entiers, le thym, la muscade, du sel et du poivre. Ajoutez la tomme râpée et les poireaux tiédis, puis mélangez.",
+          "url": "https://lecarnet.example/tourte-aux-poireaux/#wprm-recipe-9052-step-0-3"
+        },
+        {
+          "@type": "HowToStep",
+          "text": "Étalez les deux tiers de la pâte et foncez-en un moule à manqué beurré de 24 cm, en laissant dépasser les bords. Versez la moitié de la garniture, couvrez de rondelles de pommes de terre, puis ajoutez le reste.",
+          "url": "https://lecarnet.example/tourte-aux-poireaux/#wprm-recipe-9052-step-0-4"
+        },
+        {
+          "@type": "HowToStep",
+          "text": "Étalez le reste de pâte, posez-le sur la tourte et soudez les bords en les pinçant. Badigeonnez le dessus d’un peu de crème, dessinez quelques feuilles à la fourchette et percez une petite cheminée au centre.",
+          "url": "https://lecarnet.example/tourte-aux-poireaux/#wprm-recipe-9052-step-0-5"
+        },
+        {
+          "@type": "HowToStep",
+          "text": "Enfournez pour 45 minutes, jusqu’à ce que la croûte soit bien dorée. Laissez reposer 10 minutes hors du four avant de démouler, et servez tiède.",
+          "url": "https://lecarnet.example/tourte-aux-poireaux/#wprm-recipe-9052-step-0-6"
+        }
+      ],
+      "recipeYield": [
+        "6",
+        "6 personnes"
+      ],
+      "totalTime": "PT65M"
+    },
+    {
+      "@context": "https://schema.org",
+      "@id": "https://lecarnet.example/tourte-aux-poireaux/#article",
+      "@type": "Article",
+      "articleSection": [
+        "Plats",
+        "Recettes de famille"
+      ],
+      "author": {
+        "@id": "https://lecarnet.example/#/schema/person/solene"
+      },
+      "dateModified": "2026-09-21T15:12:44+00:00",
+      "datePublished": "2026-02-08T08:30:00+00:00",
+      "headline": "La tourte aux poireaux de tante Lucette, celle des dimanches de pluie",
+      "inLanguage": "fr-FR",
+      "isPartOf": {
+        "@id": "https://lecarnet.example/tourte-aux-poireaux/"
+      },
+      "mainEntityOfPage": {
+        "@id": "https://lecarnet.example/tourte-aux-poireaux/"
+      },
+      "wordCount": 1126
+    }
+  ],
+  "jsonld_skipped": 0,
+  "links": [
+    {
+      "url": "https://lecarnet.example/tourte-aux-poireaux/#main",
+      "text": "Aller au contenu",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/",
+      "text": "Le Carnet de Solène",
+      "rel": [
+        "home"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/",
+      "text": "Accueil",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/index-des-recettes/",
+      "text": "Toutes les recettes",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/category/entrees/",
+      "text": "Entrées",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/category/plats/",
+      "text": "Plats",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/category/desserts/",
+      "text": "Desserts",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/a-propos/",
+      "text": "À propos",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/",
+      "text": "Accueil",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/category/plats/",
+      "text": "Plats",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/tourte-aux-poireaux/",
+      "text": "8 février 2026",
+      "rel": [
+        "bookmark"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/author/solene/",
+      "text": "Solène Varnier",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/tourte-aux-poireaux/#comments",
+      "text": "3 commentaires",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/tourte-aux-poireaux/#recipe",
+      "text": "Aller à la recette",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/bien-choisir-ses-poireaux/",
+      "text": "conseils pour bien les choisir",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/pate-brisee-maison/",
+      "text": "pâte brisée maison",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/wprm_print/tourte-aux-poireaux",
+      "text": "Imprimer la recette",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/category/plats/",
+      "text": "Plats",
+      "rel": [
+        "category",
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/category/recettes-de-famille/",
+      "text": "Recettes de famille",
+      "rel": [
+        "category",
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/tag/poireaux/",
+      "text": "poireaux",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/tag/tourte/",
+      "text": "tourte",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://social.example.net/share?text=La%20tourte%20aux%20poireaux%20de%20tante%20Lucette",
+      "text": "Réseau",
+      "rel": [
+        "nofollow",
+        "noopener"
+      ],
+      "same_site": false
+    },
+    {
+      "url": "https://lecarnet.example/gratin-de-blettes-a-la-creme/",
+      "text": "Gratin de blettes à la crème",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/soupe-de-potimarron/",
+      "text": "Soupe de potimarron aux châtaignes",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/quiche-aux-oignons-doux/",
+      "text": "Quiche aux oignons doux",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/pate-brisee-maison/",
+      "text": "La pâte brisée maison, pas à pas",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/author/solene/",
+      "text": "Tous ses articles",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://social.example.net/@carnetdesolene",
+      "text": "La suivre",
+      "rel": [
+        "me",
+        "noopener"
+      ],
+      "same_site": false
+    },
+    {
+      "url": "https://lecarnet.example/soupe-de-potimarron/",
+      "text": "Article précédent Soupe de potimarron aux châtaignes",
+      "rel": [
+        "prev"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/galettes-de-sarrasin-au-chevre/",
+      "text": "Article suivant Galettes de sarrasin au chèvre",
+      "rel": [
+        "next"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/tourte-aux-poireaux/#comment-20417",
+      "text": "15 février 2026 à 19 h 04 min",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/tourte-aux-poireaux/?replytocom=20417#respond",
+      "text": "Répondre",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/",
+      "text": "Solène Varnier",
+      "rel": [
+        "ugc"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/tourte-aux-poireaux/#comment-20421",
+      "text": "16 février 2026 à 8 h 12 min",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/tourte-aux-poireaux/?replytocom=20421#respond",
+      "text": "Répondre",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://jardin-de-jeanloup.example/",
+      "text": "Jean-Loup",
+      "rel": [
+        "ugc",
+        "external",
+        "nofollow"
+      ],
+      "same_site": false
+    },
+    {
+      "url": "https://lecarnet.example/tourte-aux-poireaux/#comment-20588",
+      "text": "2 mars 2026 à 11 h 47 min",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/tourte-aux-poireaux/?replytocom=20588#respond",
+      "text": "Répondre",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/a-propos/",
+      "text": "En savoir plus",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/galettes-de-sarrasin-au-chevre/",
+      "text": "Galettes de sarrasin au chèvre",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/tourte-aux-poireaux/",
+      "text": "La tourte aux poireaux de tante Lucette",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/soupe-de-potimarron/",
+      "text": "Soupe de potimarron aux châtaignes",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/far-aux-pruneaux-de-mamie/",
+      "text": "Le far aux pruneaux de mamie",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/category/entrees/",
+      "text": "Entrées",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/category/plats/",
+      "text": "Plats",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/category/desserts/",
+      "text": "Desserts",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/category/recettes-de-famille/",
+      "text": "Recettes de famille",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/mentions-legales/",
+      "text": "Mentions légales",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/politique-de-confidentialite/",
+      "text": "Politique de confidentialité",
+      "rel": [
+        "privacy-policy"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/index-des-recettes/?page=2",
+      "text": "Index des recettes",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://themes.example.org/potager/",
+      "text": "Thème Potager",
+      "rel": [
+        "nofollow",
+        "noopener"
+      ],
+      "same_site": false
+    },
+    {
+      "url": "https://lecarnet.example/tourte-aux-poireaux/#page",
+      "text": "Haut de page",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://lecarnet.example/politique-de-confidentialite/#cookies",
+      "text": "En savoir plus",
+      "rel": [],
+      "same_site": true
+    }
+  ],
+  "links_truncated": false,
+  "headings": [
+    {
+      "level": 2,
+      "text": "Une recette née au potager",
+      "id": "une-recette-nee-au-potager"
+    },
+    {
+      "level": 2,
+      "text": "Mes conseils avant de commencer",
+      "id": "mes-conseils-avant-de-commencer"
+    },
+    {
+      "level": 2,
+      "text": "Tourte aux poireaux de tante Lucette",
+      "id": null
+    },
+    {
+      "level": 4,
+      "text": "Pour la pâte",
+      "id": null
+    },
+    {
+      "level": 4,
+      "text": "Pour la garniture",
+      "id": null
+    }
+  ],
+  "text": "Aller à la recette\n\nIl y a des plats qui n’ont pas besoin de recette écrite, parce qu’on les a vus faire cent fois. La tourte aux poireaux de ma tante Lucette est de ceux-là. Elle la préparait le dimanche, quand la pluie empêchait d’aller au jardin, et toute la maison sentait le beurre chaud bien avant midi. J’ai mis des années à retrouver son tour de main, et je crois enfin pouvoir vous la confier.\n\nLucette n’était pas une cuisinière de livres. Elle mesurait la farine dans un vieux bol ébréché, le beurre « à l’œil », et l’eau au creux de la main. Quand je lui demandais combien de temps il fallait laisser cuire, elle haussait les épaules et répondait : « Jusqu’à ce que ce soit prêt, pardi ! » Autant dire que mes premiers essais, seule dans ma cuisine d’étudiante, ont donné des résultats pour le moins variables.\n\nLa tourte à la sortie du four, encore dans le plat en terre de Lucette.\n\nUne recette née au potager\n\nLe secret, s’il y en a un, tient d’abord aux poireaux. Ma tante les cultivait elle-même, au fond du jardin, contre le mur exposé au sud. Elle les arrachait le matin même, les lavait longuement dans une bassine d’eau froide, puis les éminçait finement, vert compris. « Le vert, c’est là qu’est le goût », disait-elle, et elle avait raison : une tourte faite avec le blanc seul reste fade et un peu triste. Si vous n’avez pas de potager, lisez mes conseils pour bien les choisir au marché.\n\nLes pommes de terre, elles, venaient de chez le voisin, un vieux monsieur qui échangeait volontiers un cageot contre un pot de confiture. Lucette les choisissait petites et fermes, les coupait en rondelles très fines et les glissait crues entre deux couches de poireaux fondus. Elles cuisent ainsi dans la vapeur de la garniture, s’imprègnent de crème et de thym, et donnent à la tourte cette tenue qui permet de la couper en parts nettes, même tiède.\n\nPourquoi une tourte plutôt qu’une simple tarte ? Parce que le couvercle de pâte change tout. Il retient l’humidité, il empêche la crème de dessécher, et il offre surtout ce moment délicieux où l’on brise la croûte dorée du bout du couteau. Enfant, j’avais le droit de dessiner des feuilles sur le dessus avec une fourchette, et je prenais cette mission très au sérieux.\n\nLes poireaux doivent fondre doucement, sans jamais colorer.\n\nMes conseils avant de commencer\n\nLa pâte brisée maison ne demande que dix minutes, mais elle exige un beurre vraiment froid et des gestes rapides. Travaillez du bout des doigts, sans insister, jusqu’à obtenir un sable grossier, puis ajoutez le jaune d’œuf et l’eau glacée. Si vous êtes pressé, une bonne pâte du commerce fera l’affaire ; choisissez-la pur beurre, et prévoyez-en deux rouleaux, un pour le fond et un pour le couvercle.\n\nCôté fromage, ma tante utilisait ce qu’elle avait sous la main, le plus souvent un reste de tomme de brebis. Un fromage à pâte pressée un peu affiné convient très bien, à condition de ne pas en mettre trop : il doit soutenir le poireau, pas le couvrir. Servez la tourte tiède avec une salade verte bien relevée, et gardez-en une part pour le lendemain, elle est encore meilleure réchauffée.\n\nTourte aux poireaux de tante Lucette\n\nUne tourte généreuse à la pâte brisée maison, garnie de poireaux fondus, de pommes de terre et de crème, telle que la préparait ma tante Lucette les dimanches de pluie.\n\n4.82 de 17 votes\n\nImprimer la recette\n\nPréparation 20 min\n\nCuisson 45 min\n\nTotal 1 h 5 min\n\nPortions 6 personnes\n\nPour la pâte\n\n250 g de farine de blé T65\n125 g de beurre demi-sel bien froid\n1 jaune d’œuf\n4 c. à soupe d’eau glacée\n1 pincée de sel fin\n\nPour la garniture\n\n4 poireaux moyens\n400 g de pommes de terre à chair ferme\n20 cl de crème fraîche épaisse\n2 œufs entiers\n80 g de tomme de brebis râpée\n1 c. à café de thym séché\n1 pincée de noix de muscade\n\nPréparez la pâte : du bout des doigts, sablez la farine, le sel et le beurre froid coupé en dés, puis incorporez le jaune d’œuf et l’eau glacée. Formez une boule sans trop la travailler, filmez-la et gardez-la au frais le temps de préparer la garniture.\nLavez soigneusement les poireaux, émincez-les finement, vert compris, et faites-les fondre 12 minutes à feu doux et à couvert dans une sauteuse, avec une noix de beurre. Ils ne doivent surtout pas colorer.\nÉpluchez les pommes de terre et coupez-les en rondelles de 2 mm d’épaisseur. Préchauffez le four à 190 °C (chaleur tournante).\nDans un saladier, fouettez la crème avec les œufs entiers, le thym, la muscade, du sel et du poivre. Ajoutez la tomme râpée et les poireaux tiédis, puis mélangez.\nÉtalez les deux tiers de la pâte et foncez-en un moule à manqué beurré de 24 cm, en laissant dépasser les bords. Versez la moitié de la garniture, couvrez de rondelles de pommes de terre, puis ajoutez le reste.\nÉtalez le reste de pâte, posez-le sur la tourte et soudez les bords en les pinçant. Badigeonnez le dessus d’un peu de crème, dessinez quelques feuilles à la fourchette et percez une petite cheminée au centre.\nEnfournez pour 45 minutes, jusqu’à ce que la croûte soit bien dorée. Laissez reposer 10 minutes hors du four avant de démouler, et servez tiède.\n\nLa tourte se conserve deux jours au réfrigérateur, bien emballée. Réchauffez-la 15 minutes à 160 °C plutôt qu’au micro-ondes, qui ramollit la pâte.\n\nHors saison, remplacez les poireaux par des blettes ou des épinards frais, en les pressant bien pour en retirer l’eau ; le reste de la recette ne change pas.\n\nCalories 486 kcal\nGlucides 41 g\nProtéines 14 g\nLipides 29 g\nFibres 4 g\nSodium 520 mg\n\n4.8/5 - (17 votes)\n\nCuisinière du dimanche devenue blogueuse, je collectionne les carnets de recettes de ma famille. Je les teste, je les corrige et je les raconte ici depuis 2017.",
+  "markdown": "[Aller à la recette](https://lecarnet.example/tourte-aux-poireaux/#recipe)\n\nIl y a des plats qui n’ont pas besoin de recette écrite, parce qu’on les a vus faire cent fois. La tourte aux poireaux de ma tante Lucette est de ceux-là. Elle la préparait le dimanche, quand la pluie empêchait d’aller au jardin, et toute la maison sentait le beurre chaud bien avant midi. J’ai mis des années à retrouver son tour de main, et je crois enfin pouvoir vous la confier.\n\nLucette n’était pas une cuisinière de livres. Elle mesurait la farine dans un vieux bol ébréché, le beurre « à l’œil », et l’eau au creux de la main. Quand je lui demandais combien de temps il fallait laisser cuire, elle haussait les épaules et répondait : « Jusqu’à ce que ce soit prêt, pardi ! » Autant dire que mes premiers essais, seule dans ma cuisine d’étudiante, ont donné des résultats pour le moins variables.\n\n![Tourte aux poireaux dorée, à peine sortie du four](https://lecarnet.example/wp-content/uploads/2026/02/tourte-lucette-800x533.jpg)\n\nLa tourte à la sortie du four, encore dans le plat en terre de Lucette.\n\n## Une recette née au potager\n\nLe secret, s’il y en a un, tient d’abord aux poireaux. Ma tante les cultivait elle-même, au fond du jardin, contre le mur exposé au sud. Elle les arrachait le matin même, les lavait longuement dans une bassine d’eau froide, puis les éminçait finement, vert compris. « Le vert, c’est là qu’est le goût », disait-elle, et elle avait raison : une tourte faite avec le blanc seul reste fade et un peu triste. Si vous n’avez pas de potager, lisez mes [conseils pour bien les choisir](https://lecarnet.example/bien-choisir-ses-poireaux/) au marché.\n\nLes pommes de terre, elles, venaient de chez le voisin, un vieux monsieur qui échangeait volontiers un cageot contre un pot de confiture. Lucette les choisissait petites et fermes, les coupait en rondelles très fines et les glissait crues entre deux couches de poireaux fondus. Elles cuisent ainsi dans la vapeur de la garniture, s’imprègnent de crème et de thym, et donnent à la tourte cette tenue qui permet de la couper en parts nettes, même tiède.\n\nPourquoi une tourte plutôt qu’une simple tarte ? Parce que le couvercle de pâte change tout. Il retient l’humidité, il empêche la crème de dessécher, et il offre surtout ce moment délicieux où l’on brise la croûte dorée du bout du couteau. Enfant, j’avais le droit de dessiner des feuilles sur le dessus avec une fourchette, et je prenais cette mission *très* au sérieux.\n\n![Poireaux émincés en train de fondre dans une sauteuse](https://lecarnet.example/wp-content/uploads/2026/02/poireaux-fondus-800x533.jpg)\n\nLes poireaux doivent fondre doucement, sans jamais colorer.\n\n## Mes conseils avant de commencer\n\nLa [pâte brisée maison](https://lecarnet.example/pate-brisee-maison/) ne demande que dix minutes, mais elle exige un beurre vraiment froid et des gestes rapides. Travaillez du bout des doigts, sans insister, jusqu’à obtenir un sable grossier, puis ajoutez le jaune d’œuf et l’eau glacée. Si vous êtes pressé, une bonne pâte du commerce fera l’affaire ; choisissez-la pur beurre, et prévoyez-en deux rouleaux, un pour le fond et un pour le couvercle.\n\nCôté fromage, ma tante utilisait ce qu’elle avait sous la main, le plus souvent un reste de tomme de brebis. Un fromage à pâte pressée un peu affiné convient très bien, à condition de ne pas en mettre trop : il doit soutenir le poireau, pas le couvrir. Servez la tourte tiède avec une salade verte bien relevée, et gardez-en une part pour le lendemain, elle est encore meilleure réchauffée.\n\n![Tourte aux poireaux de tante Lucette](https://lecarnet.example/wp-content/uploads/2026/02/tourte-lucette-250x250.jpg)\n\n## Tourte aux poireaux de tante Lucette\n\nUne tourte généreuse à la pâte brisée maison, garnie de poireaux fondus, de pommes de terre et de crème, telle que la préparait ma tante Lucette les dimanches de pluie.\n\n4\\.82 de 17 votes\n\n[Imprimer la recette](https://lecarnet.example/wprm_print/tourte-aux-poireaux)\n\nPréparation 20 min\n\nCuisson 45 min\n\nTotal 1 h 5 min\n\nPortions 6 personnes\n\n#### Pour la pâte\n\n- 250 g de farine de blé T65\n- 125 g de beurre demi-sel bien froid\n- 1 jaune d’œuf\n- 4 c. à soupe d’eau glacée\n- 1 pincée de sel fin\n\n#### Pour la garniture\n\n- 4 poireaux moyens\n- 400 g de pommes de terre à chair ferme\n- 20 cl de crème fraîche épaisse\n- 2 œufs entiers\n- 80 g de tomme de brebis râpée\n- 1 c. à café de thym séché\n- 1 pincée de noix de muscade\n\n- Préparez la pâte : du bout des doigts, sablez la farine, le sel et le beurre froid coupé en dés, puis incorporez le jaune d’œuf et l’eau glacée. Formez une boule sans trop la travailler, filmez-la et gardez-la au frais le temps de préparer la garniture.\n- Lavez soigneusement les poireaux, émincez-les finement, vert compris, et faites-les fondre 12 minutes à feu doux et à couvert dans une sauteuse, avec une noix de beurre. Ils ne doivent surtout pas colorer.\n- Épluchez les pommes de terre et coupez-les en rondelles de 2 mm d’épaisseur. Préchauffez le four à 190 °C (chaleur tournante).\n- Dans un saladier, fouettez la crème avec les œufs entiers, le thym, la muscade, du sel et du poivre. Ajoutez la tomme râpée et les poireaux tiédis, puis mélangez.\n- Étalez les deux tiers de la pâte et foncez-en un moule à manqué beurré de 24 cm, en laissant dépasser les bords. Versez la moitié de la garniture, couvrez de rondelles de pommes de terre, puis ajoutez le reste.\n- Étalez le reste de pâte, posez-le sur la tourte et soudez les bords en les pinçant. Badigeonnez le dessus d’un peu de crème, dessinez quelques feuilles à la fourchette et percez une petite cheminée au centre.\n- Enfournez pour 45 minutes, jusqu’à ce que la croûte soit bien dorée. Laissez reposer 10 minutes hors du four avant de démouler, et servez tiède.\n\nLa tourte se conserve deux jours au réfrigérateur, bien emballée. Réchauffez-la 15 minutes à 160 °C plutôt qu’au micro-ondes, qui ramollit la pâte.\n\nHors saison, remplacez les poireaux par des blettes ou des épinards frais, en les pressant bien pour en retirer l’eau ; le reste de la recette ne change pas.\n\n| Calories | 486 kcal |\n| --- | --- |\n| Glucides | 41 g |\n| Protéines | 14 g |\n| Lipides | 29 g |\n| Fibres | 4 g |\n| Sodium | 520 mg |\n\n4\\.8/5 - (17 votes)\n\n![](https://lecarnet.example/wp-content/uploads/2024/05/solene-96x96.jpg)\n\nCuisinière du dimanche devenue blogueuse, je collectionne les carnets de recettes de ma famille. Je les teste, je les corrige et je les raconte ici depuis 2017.",
+  "word_count": 1015,
+  "thin_content": false
+}

@@ -17,5 +17,6 @@ doc-valid-idents = [
     "PerimeterX",
     "reCAPTCHA",
     "hCaptcha",
+    "OpenGraph",
     "..",
 ]

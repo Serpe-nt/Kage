@@ -1,0 +1,1295 @@
+{
+  "title": "Food & Drink – Page 2 of 18 – Lanternfold",
+  "description": "Recipes, restaurants and the people behind them: the latest food and drink stories from Lanternfold, page 2 of 18.",
+  "canonical": "https://www.lanternfold.example/food-drink?page=2",
+  "lang": "en",
+  "published_at": null,
+  "modified_at": null,
+  "meta": {
+    "description": [
+      "Recipes, restaurants and the people behind them: the latest food and drink stories from Lanternfold, page 2 of 18."
+    ],
+    "robots": [
+      "noindex, follow"
+    ],
+    "viewport": [
+      "width=device-width, initial-scale=1"
+    ]
+  },
+  "opengraph": {
+    "og:image": [
+      "https://media.lanternfold.example/share/section-food-drink-1200x630.jpg"
+    ],
+    "og:site_name": [
+      "Lanternfold"
+    ],
+    "og:title": [
+      "Food & Drink – Lanternfold"
+    ],
+    "og:type": [
+      "website"
+    ],
+    "og:url": [
+      "https://www.lanternfold.example/food-drink?page=2"
+    ]
+  },
+  "twitter": {
+    "twitter:card": [
+      "summary"
+    ]
+  },
+  "jsonld": [
+    {
+      "@context": "https://schema.org",
+      "@id": "https://www.lanternfold.example/food-drink?page=2",
+      "@type": "CollectionPage",
+      "description": "Recipes, restaurants and the people behind them: the latest food and drink stories from Lanternfold.",
+      "inLanguage": "en",
+      "isPartOf": {
+        "@id": "https://www.lanternfold.example/#website",
+        "@type": "WebSite",
+        "name": "Lanternfold",
+        "url": "https://www.lanternfold.example/"
+      },
+      "mainEntity": {
+        "@type": "ItemList",
+        "itemListElement": [
+          {
+            "@type": "ListItem",
+            "name": "The Bakery That Only Opens When the Ferry Runs",
+            "position": 1,
+            "url": "https://www.lanternfold.example/food-drink/2026/09/bakery-ferry-timetable"
+          },
+          {
+            "@type": "ListItem",
+            "name": "Brown Butter, Explained by Someone Who Burned It for Years",
+            "position": 2,
+            "url": "https://www.lanternfold.example/food-drink/2026/09/brown-butter-explained"
+          },
+          {
+            "@type": "ListItem",
+            "name": "A Cider Maker Bets on Forgotten Orchards",
+            "position": 3,
+            "url": "https://www.lanternfold.example/food-drink/2026/09/cider-forgotten-orchards"
+          },
+          {
+            "@type": "ListItem",
+            "name": "Six Soups for the Week the Heating Comes On",
+            "position": 4,
+            "url": "https://www.lanternfold.example/food-drink/2026/09/six-soups-heating"
+          },
+          {
+            "@type": "ListItem",
+            "name": "Why Every New Restaurant Has the Same Chairs",
+            "position": 5,
+            "url": "https://www.lanternfold.example/food-drink/2026/09/same-restaurant-chairs"
+          }
+        ],
+        "itemListOrder": "https://schema.org/ItemListOrderDescending",
+        "numberOfItems": 24
+      },
+      "name": "Food & Drink – Page 2 of 18",
+      "url": "https://www.lanternfold.example/food-drink?page=2"
+    },
+    {
+      "@context": "https://schema.org",
+      "@id": "https://www.lanternfold.example/#organization",
+      "@type": "Organization",
+      "logo": {
+        "@type": "ImageObject",
+        "height": 60,
+        "url": "https://www.lanternfold.example/static/img/logo-600x60.png",
+        "width": 600
+      },
+      "name": "Lanternfold Media",
+      "sameAs": [
+        "https://social.example/@lanternfold",
+        "https://video.example/lanternfold"
+      ],
+      "url": "https://www.lanternfold.example/"
+    }
+  ],
+  "jsonld_skipped": 0,
+  "links": [
+    {
+      "url": "https://www.lanternfold.example/food-drink?page=2#main",
+      "text": "Skip to content",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/news",
+      "text": "News",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/culture",
+      "text": "Culture",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink",
+      "text": "Food & Drink",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/travel",
+      "text": "Travel",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/science",
+      "text": "Science",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/opinion",
+      "text": "Opinion",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://account.lanternfold.example/subscribe?ref=header",
+      "text": "Subscribe",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink?filter=recipes",
+      "text": "Recipes",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink?filter=restaurants",
+      "text": "Restaurants",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink?filter=drinks",
+      "text": "Drinks",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/bakery-ferry-timetable",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/producers",
+      "text": "Producers",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/bakery-ferry-timetable",
+      "text": "The Bakery That Only Opens When the Ferry Runs",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/authors/maren-oyelaran",
+      "text": "Maren Oyelaran",
+      "rel": [
+        "author"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/brown-butter-explained",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/kitchen-notes",
+      "text": "Kitchen Notes",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/brown-butter-explained",
+      "text": "Brown Butter, Explained by Someone Who Burned It for Years",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/authors/tobias-quennell",
+      "text": "Tobias Quennell",
+      "rel": [
+        "author"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/cider-forgotten-orchards",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/drinks",
+      "text": "Drinks",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/cider-forgotten-orchards",
+      "text": "A Cider Maker Bets on Forgotten Orchards",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/authors/ines-havercroft",
+      "text": "Ines Havercroft",
+      "rel": [
+        "author"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/six-soups-heating",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/recipes",
+      "text": "Recipes",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/six-soups-heating",
+      "text": "Six Soups for the Week the Heating Comes On",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/authors/suvi-lindqvarn",
+      "text": "Suvi Lindqvarn",
+      "rel": [
+        "author"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/same-restaurant-chairs",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/restaurants",
+      "text": "Restaurants",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/same-restaurant-chairs",
+      "text": "Why Every New Restaurant Has the Same Chairs",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/authors/dario-pellwick",
+      "text": "Dario Pellwick",
+      "rel": [
+        "author"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/return-of-the-lunch-counter",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/restaurants",
+      "text": "Restaurants",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/return-of-the-lunch-counter",
+      "text": "The Quiet Return of the Lunch Counter",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/authors/callum-abernethy",
+      "text": "Callum Abernethy",
+      "rel": [
+        "author"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/sourdough-starter-holiday",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/kitchen-notes",
+      "text": "Kitchen Notes",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/sourdough-starter-holiday",
+      "text": "How to Keep a Sourdough Starter Alive on Holiday",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/authors/tobias-quennell",
+      "text": "Tobias Quennell",
+      "rel": [
+        "author"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/second-best-olive-oil",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/kitchen-notes",
+      "text": "Kitchen Notes",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/second-best-olive-oil",
+      "text": "In Praise of the Second-Best Olive Oil",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/authors/maren-oyelaran",
+      "text": "Maren Oyelaran",
+      "rel": [
+        "author"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/night-shift-noodle-pullers",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/restaurants",
+      "text": "Restaurants",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/night-shift-noodle-pullers",
+      "text": "A Night Shift with the Noodle Pullers",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/authors/dario-pellwick",
+      "text": "Dario Pellwick",
+      "rel": [
+        "author"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/against-resting-steak",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/kitchen-notes",
+      "text": "Kitchen Notes",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/against-resting-steak",
+      "text": "The Case Against Resting Your Steak for Ten Minutes",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/authors/tobias-quennell",
+      "text": "Tobias Quennell",
+      "rel": [
+        "author"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/tea-north-facing-slope",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/producers",
+      "text": "Producers",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/tea-north-facing-slope",
+      "text": "Tea Grown Where Nobody Thought It Could",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/authors/ines-havercroft",
+      "text": "Ines Havercroft",
+      "rel": [
+        "author"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/market-traders-breakfast",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/restaurants",
+      "text": "Restaurants",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/market-traders-breakfast",
+      "text": "What the Market Traders Eat for Breakfast",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/authors/callum-abernethy",
+      "text": "Callum Abernethy",
+      "rel": [
+        "author"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/pickling-ratio",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/recipes",
+      "text": "Recipes",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/pickling-ratio",
+      "text": "Pickling Without a Recipe: A Ratio Worth Memorising",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/authors/suvi-lindqvarn",
+      "text": "Suvi Lindqvarn",
+      "rel": [
+        "author"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/shorter-wine-list",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/drinks",
+      "text": "Drinks",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/shorter-wine-list",
+      "text": "The Wine List Is Getting Shorter, and That Is Good News",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/authors/ines-havercroft",
+      "text": "Ines Havercroft",
+      "rel": [
+        "author"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/fishmonger-guide",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/producers",
+      "text": "Producers",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/fishmonger-guide",
+      "text": "A Fishmonger’s Guide to Buying Less and Eating Better",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/authors/maren-oyelaran",
+      "text": "Maren Oyelaran",
+      "rel": [
+        "author"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/cakes-third-day",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/recipes",
+      "text": "Recipes",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/cakes-third-day",
+      "text": "Seven Cakes That Improve on the Third Day",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/authors/suvi-lindqvarn",
+      "text": "Suvi Lindqvarn",
+      "rel": [
+        "author"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/shipyard-canteen",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/restaurants",
+      "text": "Restaurants",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/shipyard-canteen",
+      "text": "Inside the Canteen That Feeds a Shipyard",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/authors/dario-pellwick",
+      "text": "Dario Pellwick",
+      "rel": [
+        "author"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/tasting-menu-over",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/restaurants",
+      "text": "Restaurants",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/tasting-menu-over",
+      "text": "Is the Tasting Menu Finally Over?",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/authors/callum-abernethy",
+      "text": "Callum Abernethy",
+      "rel": [
+        "author"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/unwashed-carrots",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/producers",
+      "text": "Producers",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/unwashed-carrots",
+      "text": "The Farmer Who Stopped Washing Her Carrots",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/authors/maren-oyelaran",
+      "text": "Maren Oyelaran",
+      "rel": [
+        "author"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/map-of-bitter-drinks",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/drinks",
+      "text": "Drinks",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/map-of-bitter-drinks",
+      "text": "A Beginner’s Map of Bitter Drinks",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/authors/ines-havercroft",
+      "text": "Ines Havercroft",
+      "rel": [
+        "author"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/cooking-for-one",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/recipes",
+      "text": "Recipes",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/cooking-for-one",
+      "text": "Cooking for One Without Eating the Same Thing All Week",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/authors/suvi-lindqvarn",
+      "text": "Suvi Lindqvarn",
+      "rel": [
+        "author"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/cheese-cave-railway-arches",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/producers",
+      "text": "Producers",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/cheese-cave-railway-arches",
+      "text": "The Cheese Cave Under the Railway Arches",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/authors/tobias-quennell",
+      "text": "Tobias Quennell",
+      "rel": [
+        "author"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/stock-is-not-broth",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/kitchen-notes",
+      "text": "Kitchen Notes",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/stock-is-not-broth",
+      "text": "Stock Is Not Broth, and Other Things Worth Arguing About",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/authors/tobias-quennell",
+      "text": "Tobias Quennell",
+      "rel": [
+        "author"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/last-orders-harbour-tavern",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/drinks",
+      "text": "Drinks",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/09/last-orders-harbour-tavern",
+      "text": "Last Orders at the Harbour Tavern",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/authors/callum-abernethy",
+      "text": "Callum Abernethy",
+      "rel": [
+        "author"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink",
+      "text": "Previous",
+      "rel": [
+        "prev"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink",
+      "text": "1",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink?page=3",
+      "text": "3",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink?page=18",
+      "text": "18",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink?page=3",
+      "text": "Next",
+      "rel": [
+        "next"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/travel/2026/10/slow-train-eleven-hours",
+      "text": "The Slow Train That Takes Eleven Hours on Purpose",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/homes/2026/10/houseplants-lean",
+      "text": "Why Your Houseplants Lean, and When to Let Them",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/culture/2026/10/twelve-small-museums",
+      "text": "Twelve Small Museums Worth a Detour",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/homes/2026/09/smaller-kitchen",
+      "text": "The Case for a Smaller Kitchen",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/news/2026/10/year-without-a-car",
+      "text": "What a Year Without a Car Taught One Family",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/science/2026/10/tide-clock",
+      "text": "How the Tide Clock Came Back Into Fashion",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/10/coast-path-eating",
+      "text": "A Walker’s Guide to Eating Well on the Coast Path",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/culture/2026/09/novel-nobody-returned",
+      "text": "The Novel Everyone Borrowed and Nobody Returned",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/2026/10/instant-coffee",
+      "text": "Is It Time to Stop Apologising for Instant Coffee?",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/opinion/2026/10/letters-bread-issue",
+      "text": "Letters: What Readers Made of Our Bread Issue",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/news",
+      "text": "News",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/culture",
+      "text": "Culture",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink",
+      "text": "Food & Drink",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/travel",
+      "text": "Travel",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/homes",
+      "text": "Homes",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/science",
+      "text": "Science",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/opinion",
+      "text": "Opinion",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/puzzles",
+      "text": "Puzzles",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/recipes",
+      "text": "Recipes",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/restaurants",
+      "text": "Restaurants",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/drinks",
+      "text": "Drinks",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/producers",
+      "text": "Producers",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/kitchen-notes",
+      "text": "Kitchen Notes",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/seasonal",
+      "text": "In season",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/food-drink/recipes/index",
+      "text": "Recipe index",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/about",
+      "text": "About Lanternfold",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/about/editors",
+      "text": "Our editors",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/about/standards",
+      "text": "Editorial standards",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/about/corrections",
+      "text": "Corrections",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/about/jobs",
+      "text": "Work with us",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://media.lanternfold.example/advertise",
+      "text": "Advertise",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/about/press",
+      "text": "Press office",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://account.lanternfold.example/subscribe?ref=footer",
+      "text": "Subscribe",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://account.lanternfold.example/gift",
+      "text": "Give a gift subscription",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/newsletters",
+      "text": "Newsletters",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://account.lanternfold.example/",
+      "text": "Manage your account",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://help.lanternfold.example/",
+      "text": "Help centre",
+      "rel": [
+        "noopener"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/legal/terms",
+      "text": "Terms of use",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/legal/privacy",
+      "text": "Privacy notice",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/accessibility",
+      "text": "Accessibility",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.lanternfold.example/feeds",
+      "text": "RSS feeds",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://social.example/@lanternfold",
+      "text": "Lanternfold on Social",
+      "rel": [
+        "me",
+        "noopener",
+        "nofollow"
+      ],
+      "same_site": false
+    },
+    {
+      "url": "https://video.example/lanternfold",
+      "text": "Lanternfold on Video",
+      "rel": [
+        "noopener",
+        "nofollow"
+      ],
+      "same_site": false
+    }
+  ],
+  "links_truncated": false,
+  "headings": [
+    {
+      "level": 2,
+      "text": "The Bakery That Only Opens When the Ferry Runs",
+      "id": null
+    },
+    {
+      "level": 2,
+      "text": "Brown Butter, Explained by Someone Who Burned It for Years",
+      "id": null
+    },
+    {
+      "level": 2,
+      "text": "A Cider Maker Bets on Forgotten Orchards",
+      "id": null
+    },
+    {
+      "level": 2,
+      "text": "Six Soups for the Week the Heating Comes On",
+      "id": null
+    },
+    {
+      "level": 2,
+      "text": "Why Every New Restaurant Has the Same Chairs",
+      "id": null
+    },
+    {
+      "level": 2,
+      "text": "The Quiet Return of the Lunch Counter",
+      "id": null
+    },
+    {
+      "level": 2,
+      "text": "How to Keep a Sourdough Starter Alive on Holiday",
+      "id": null
+    },
+    {
+      "level": 2,
+      "text": "In Praise of the Second-Best Olive Oil",
+      "id": null
+    },
+    {
+      "level": 2,
+      "text": "A Night Shift with the Noodle Pullers",
+      "id": null
+    },
+    {
+      "level": 2,
+      "text": "The Case Against Resting Your Steak for Ten Minutes",
+      "id": null
+    },
+    {
+      "level": 2,
+      "text": "Tea Grown Where Nobody Thought It Could",
+      "id": null
+    },
+    {
+      "level": 2,
+      "text": "What the Market Traders Eat for Breakfast",
+      "id": null
+    },
+    {
+      "level": 2,
+      "text": "Pickling Without a Recipe: A Ratio Worth Memorising",
+      "id": null
+    },
+    {
+      "level": 2,
+      "text": "The Wine List Is Getting Shorter, and That Is Good News",
+      "id": null
+    },
+    {
+      "level": 2,
+      "text": "A Fishmonger’s Guide to Buying Less and Eating Better",
+      "id": null
+    },
+    {
+      "level": 2,
+      "text": "Seven Cakes That Improve on the Third Day",
+      "id": null
+    },
+    {
+      "level": 2,
+      "text": "Inside the Canteen That Feeds a Shipyard",
+      "id": null
+    },
+    {
+      "level": 2,
+      "text": "Is the Tasting Menu Finally Over?",
+      "id": null
+    },
+    {
+      "level": 2,
+      "text": "The Farmer Who Stopped Washing Her Carrots",
+      "id": null
+    },
+    {
+      "level": 2,
+      "text": "A Beginner’s Map of Bitter Drinks",
+      "id": null
+    },
+    {
+      "level": 2,
+      "text": "Cooking for One Without Eating the Same Thing All Week",
+      "id": null
+    },
+    {
+      "level": 2,
+      "text": "The Cheese Cave Under the Railway Arches",
+      "id": null
+    },
+    {
+      "level": 2,
+      "text": "Stock Is Not Broth, and Other Things Worth Arguing About",
+      "id": null
+    },
+    {
+      "level": 2,
+      "text": "Last Orders at the Harbour Tavern",
+      "id": null
+    }
+  ],
+  "text": "Producers\n\nThe Bakery That Only Opens When the Ferry Runs\n\nOn a windswept quay, one baker times her ovens to the boat schedule, and the queue forms before the gangway drops.\n\nBy 29 September 2026\n\nKitchen Notes\n\nBrown Butter, Explained by Someone Who Burned It for Years\n\nPatience matters more than the pan, and the moment to stop is a smell rather than a colour.\n\nBy 28 September 2026\n\nDrinks\n\nA Cider Maker Bets on Forgotten Orchards\n\nTrees nobody has pruned in forty years are giving sharper, stranger fruit than anything planted for the supermarkets.\n\nBy 28 September 2026\n\nRecipes\n\nSix Soups for the Week the Heating Comes On\n\nNone takes longer than forty minutes, most freeze well, and one of them is really just very good toast.\n\nBy 27 September 2026\n\nRestaurants\n\nWhy Every New Restaurant Has the Same Chairs\n\nA furniture importer, two design blogs and a shortage of oak explain more of the dining room than any chef does.\n\nBy 26 September 2026\n\nRestaurants\n\nThe Quiet Return of the Lunch Counter\n\nStools, a short menu and a cook who remembers your order are back, although the prices have not travelled in time.\n\nBy 25 September 2026\n\nKitchen Notes\n\nHow to Keep a Sourdough Starter Alive on Holiday\n\nFeed it thickly, chill it early, and stop apologising to the neighbour you asked to look after it.\n\nBy 25 September 2026\n\nKitchen Notes\n\nIn Praise of the Second-Best Olive Oil\n\nThe expensive bottle is for finishing; the one you actually cook with deserves just as much thought, and far less guilt.\n\nBy 24 September 2026\n\nRestaurants\n\nA Night Shift with the Noodle Pullers\n\nBetween midnight and dawn, four cooks stretch enough dough to feed a market, and they rarely say a word.\n\nBy 23 September 2026\n\nKitchen Notes\n\nThe Case Against Resting Your Steak for Ten Minutes\n\nWe cooked twelve identical cuts, timed each one, and found that the old rule mostly gives you cold dinner.\n\nBy 22 September 2026\n\nProducers\n\nTea Grown Where Nobody Thought It Could\n\nOn a north-facing slope better known for sheep, a retired engineer is harvesting her third crop of green tea.\n\nBy 22 September 2026\n\nRestaurants\n\nWhat the Market Traders Eat for Breakfast\n\nLong before the stalls open, the best meal in the square is served from a van with no sign.\n\nBy 21 September 2026\n\nRecipes\n\nPickling Without a Recipe: A Ratio Worth Memorising\n\nLearn one brine by heart, and almost anything in the vegetable drawer can be rescued before the weekend.\n\nBy 20 September 2026\n\nDrinks\n\nThe Wine List Is Getting Shorter, and That Is Good News\n\nSommeliers are trading leather-bound volumes for a single page, which turns out to be harder to write.\n\nBy 19 September 2026\n\nProducers\n\nA Fishmonger’s Guide to Buying Less and Eating Better\n\nAsk what came in this morning, buy the unfashionable fish, and learn to love a whole one on the bone.\n\nBy 18 September 2026\n\nRecipes\n\nSeven Cakes That Improve on the Third Day\n\nFruit, spice and a little syrup do the work, so the baker can get on with something else entirely.\n\nBy 17 September 2026\n\nRestaurants\n\nInside the Canteen That Feeds a Shipyard\n\nEleven hundred lunches leave one small kitchen every weekday, and the cook insists that nobody gets the same stew twice.\n\nBy 16 September 2026\n\nRestaurants\n\nIs the Tasting Menu Finally Over?\n\nDiners are tired, chefs are tired, and a plate of roast chicken for two is suddenly the hardest table to book.\n\nBy 16 September 2026\n\nProducers\n\nThe Farmer Who Stopped Washing Her Carrots\n\nSoil keeps them sweet for weeks, she says, and customers who complained at first now ask for them by name.\n\nBy 15 September 2026\n\nDrinks\n\nA Beginner’s Map of Bitter Drinks\n\nFrom gentle aperitifs to the bottles that taste of tree bark, here is where to start and what to skip.\n\nBy 14 September 2026\n\nRecipes\n\nCooking for One Without Eating the Same Thing All Week\n\nBatch the components, not the meals, and Tuesday’s rice becomes Thursday’s fritters with very little effort.\n\nBy 13 September 2026\n\nProducers\n\nThe Cheese Cave Under the Railway Arches\n\nTrains rumble overhead every nine minutes while four hundred wheels ripen slowly in the cool, damp dark below.\n\nBy 12 September 2026\n\nKitchen Notes\n\nStock Is Not Broth, and Other Things Worth Arguing About\n\nA short, opinionated glossary for anyone who has ever stood in an aisle wondering which carton to buy.\n\nBy 11 September 2026\n\nDrinks\n\nLast Orders at the Harbour Tavern\n\nAfter ninety years and three generations, the family behind the bar is pouring its final pints this winter.\n\nBy 10 September 2026",
+  "markdown": "[![](https://media.lanternfold.example/t/640x360/2026/09/bakery-ferry-timetable.jpg)](https://www.lanternfold.example/food-drink/2026/09/bakery-ferry-timetable)\n\n[Producers](https://www.lanternfold.example/food-drink/producers)\n\n## [The Bakery That Only Opens When the Ferry Runs](https://www.lanternfold.example/food-drink/2026/09/bakery-ferry-timetable)\n\nOn a windswept quay, one baker times her ovens to the boat schedule, and the queue forms before the gangway drops.\n\nBy 29 September 2026\n\n[![](https://media.lanternfold.example/t/640x360/2026/09/brown-butter-explained.jpg)](https://www.lanternfold.example/food-drink/2026/09/brown-butter-explained)\n\n[Kitchen Notes](https://www.lanternfold.example/food-drink/kitchen-notes)\n\n## [Brown Butter, Explained by Someone Who Burned It for Years](https://www.lanternfold.example/food-drink/2026/09/brown-butter-explained)\n\nPatience matters more than the pan, and the moment to stop is a smell rather than a colour.\n\nBy 28 September 2026\n\n[![](https://media.lanternfold.example/t/640x360/2026/09/cider-forgotten-orchards.jpg)](https://www.lanternfold.example/food-drink/2026/09/cider-forgotten-orchards)\n\n[Drinks](https://www.lanternfold.example/food-drink/drinks)\n\n## [A Cider Maker Bets on Forgotten Orchards](https://www.lanternfold.example/food-drink/2026/09/cider-forgotten-orchards)\n\nTrees nobody has pruned in forty years are giving sharper, stranger fruit than anything planted for the supermarkets.\n\nBy 28 September 2026\n\n[![](https://media.lanternfold.example/t/640x360/2026/09/six-soups-heating.jpg)](https://www.lanternfold.example/food-drink/2026/09/six-soups-heating)\n\n[Recipes](https://www.lanternfold.example/food-drink/recipes)\n\n## [Six Soups for the Week the Heating Comes On](https://www.lanternfold.example/food-drink/2026/09/six-soups-heating)\n\nNone takes longer than forty minutes, most freeze well, and one of them is really just very good toast.\n\nBy 27 September 2026\n\n[![](https://media.lanternfold.example/t/640x360/2026/09/same-restaurant-chairs.jpg)](https://www.lanternfold.example/food-drink/2026/09/same-restaurant-chairs)\n\n[Restaurants](https://www.lanternfold.example/food-drink/restaurants)\n\n## [Why Every New Restaurant Has the Same Chairs](https://www.lanternfold.example/food-drink/2026/09/same-restaurant-chairs)\n\nA furniture importer, two design blogs and a shortage of oak explain more of the dining room than any chef does.\n\nBy 26 September 2026\n\n[![](https://media.lanternfold.example/t/640x360/2026/09/return-of-the-lunch-counter.jpg)](https://www.lanternfold.example/food-drink/2026/09/return-of-the-lunch-counter)\n\n[Restaurants](https://www.lanternfold.example/food-drink/restaurants)\n\n## [The Quiet Return of the Lunch Counter](https://www.lanternfold.example/food-drink/2026/09/return-of-the-lunch-counter)\n\nStools, a short menu and a cook who remembers your order are back, although the prices have not travelled in time.\n\nBy 25 September 2026\n\n[![](https://media.lanternfold.example/t/640x360/2026/09/sourdough-starter-holiday.jpg)](https://www.lanternfold.example/food-drink/2026/09/sourdough-starter-holiday)\n\n[Kitchen Notes](https://www.lanternfold.example/food-drink/kitchen-notes)\n\n## [How to Keep a Sourdough Starter Alive on Holiday](https://www.lanternfold.example/food-drink/2026/09/sourdough-starter-holiday)\n\nFeed it thickly, chill it early, and stop apologising to the neighbour you asked to look after it.\n\nBy 25 September 2026\n\n[![](https://media.lanternfold.example/t/640x360/2026/09/second-best-olive-oil.jpg)](https://www.lanternfold.example/food-drink/2026/09/second-best-olive-oil)\n\n[Kitchen Notes](https://www.lanternfold.example/food-drink/kitchen-notes)\n\n## [In Praise of the Second-Best Olive Oil](https://www.lanternfold.example/food-drink/2026/09/second-best-olive-oil)\n\nThe expensive bottle is for finishing; the one you actually cook with deserves just as much thought, and far less guilt.\n\nBy 24 September 2026\n\n[![](https://media.lanternfold.example/t/640x360/2026/09/night-shift-noodle-pullers.jpg)](https://www.lanternfold.example/food-drink/2026/09/night-shift-noodle-pullers)\n\n[Restaurants](https://www.lanternfold.example/food-drink/restaurants)\n\n## [A Night Shift with the Noodle Pullers](https://www.lanternfold.example/food-drink/2026/09/night-shift-noodle-pullers)\n\nBetween midnight and dawn, four cooks stretch enough dough to feed a market, and they rarely say a word.\n\nBy 23 September 2026\n\n[![](https://media.lanternfold.example/t/640x360/2026/09/against-resting-steak.jpg)](https://www.lanternfold.example/food-drink/2026/09/against-resting-steak)\n\n[Kitchen Notes](https://www.lanternfold.example/food-drink/kitchen-notes)\n\n## [The Case Against Resting Your Steak for Ten Minutes](https://www.lanternfold.example/food-drink/2026/09/against-resting-steak)\n\nWe cooked twelve identical cuts, timed each one, and found that the old rule mostly gives you cold dinner.\n\nBy 22 September 2026\n\n[![](https://media.lanternfold.example/t/640x360/2026/09/tea-north-facing-slope.jpg)](https://www.lanternfold.example/food-drink/2026/09/tea-north-facing-slope)\n\n[Producers](https://www.lanternfold.example/food-drink/producers)\n\n## [Tea Grown Where Nobody Thought It Could](https://www.lanternfold.example/food-drink/2026/09/tea-north-facing-slope)\n\nOn a north-facing slope better known for sheep, a retired engineer is harvesting her third crop of green tea.\n\nBy 22 September 2026\n\n[![](https://media.lanternfold.example/t/640x360/2026/09/market-traders-breakfast.jpg)](https://www.lanternfold.example/food-drink/2026/09/market-traders-breakfast)\n\n[Restaurants](https://www.lanternfold.example/food-drink/restaurants)\n\n## [What the Market Traders Eat for Breakfast](https://www.lanternfold.example/food-drink/2026/09/market-traders-breakfast)\n\nLong before the stalls open, the best meal in the square is served from a van with no sign.\n\nBy 21 September 2026\n\n[![](https://media.lanternfold.example/t/640x360/2026/09/pickling-ratio.jpg)](https://www.lanternfold.example/food-drink/2026/09/pickling-ratio)\n\n[Recipes](https://www.lanternfold.example/food-drink/recipes)\n\n## [Pickling Without a Recipe: A Ratio Worth Memorising](https://www.lanternfold.example/food-drink/2026/09/pickling-ratio)\n\nLearn one brine by heart, and almost anything in the vegetable drawer can be rescued before the weekend.\n\nBy 20 September 2026\n\n[![](https://media.lanternfold.example/t/640x360/2026/09/shorter-wine-list.jpg)](https://www.lanternfold.example/food-drink/2026/09/shorter-wine-list)\n\n[Drinks](https://www.lanternfold.example/food-drink/drinks)\n\n## [The Wine List Is Getting Shorter, and That Is Good News](https://www.lanternfold.example/food-drink/2026/09/shorter-wine-list)\n\nSommeliers are trading leather-bound volumes for a single page, which turns out to be harder to write.\n\nBy 19 September 2026\n\n[![](https://media.lanternfold.example/t/640x360/2026/09/fishmonger-guide.jpg)](https://www.lanternfold.example/food-drink/2026/09/fishmonger-guide)\n\n[Producers](https://www.lanternfold.example/food-drink/producers)\n\n## [A Fishmonger’s Guide to Buying Less and Eating Better](https://www.lanternfold.example/food-drink/2026/09/fishmonger-guide)\n\nAsk what came in this morning, buy the unfashionable fish, and learn to love a whole one on the bone.\n\nBy 18 September 2026\n\n[![](https://media.lanternfold.example/t/640x360/2026/09/cakes-third-day.jpg)](https://www.lanternfold.example/food-drink/2026/09/cakes-third-day)\n\n[Recipes](https://www.lanternfold.example/food-drink/recipes)\n\n## [Seven Cakes That Improve on the Third Day](https://www.lanternfold.example/food-drink/2026/09/cakes-third-day)\n\nFruit, spice and a little syrup do the work, so the baker can get on with something else entirely.\n\nBy 17 September 2026\n\n[![](https://media.lanternfold.example/t/640x360/2026/09/shipyard-canteen.jpg)](https://www.lanternfold.example/food-drink/2026/09/shipyard-canteen)\n\n[Restaurants](https://www.lanternfold.example/food-drink/restaurants)\n\n## [Inside the Canteen That Feeds a Shipyard](https://www.lanternfold.example/food-drink/2026/09/shipyard-canteen)\n\nEleven hundred lunches leave one small kitchen every weekday, and the cook insists that nobody gets the same stew twice.\n\nBy 16 September 2026\n\n[![](https://media.lanternfold.example/t/640x360/2026/09/tasting-menu-over.jpg)](https://www.lanternfold.example/food-drink/2026/09/tasting-menu-over)\n\n[Restaurants](https://www.lanternfold.example/food-drink/restaurants)\n\n## [Is the Tasting Menu Finally Over?](https://www.lanternfold.example/food-drink/2026/09/tasting-menu-over)\n\nDiners are tired, chefs are tired, and a plate of roast chicken for two is suddenly the hardest table to book.\n\nBy 16 September 2026\n\n[![](https://media.lanternfold.example/t/640x360/2026/09/unwashed-carrots.jpg)](https://www.lanternfold.example/food-drink/2026/09/unwashed-carrots)\n\n[Producers](https://www.lanternfold.example/food-drink/producers)\n\n## [The Farmer Who Stopped Washing Her Carrots](https://www.lanternfold.example/food-drink/2026/09/unwashed-carrots)\n\nSoil keeps them sweet for weeks, she says, and customers who complained at first now ask for them by name.\n\nBy 15 September 2026\n\n[![](https://media.lanternfold.example/t/640x360/2026/09/map-of-bitter-drinks.jpg)](https://www.lanternfold.example/food-drink/2026/09/map-of-bitter-drinks)\n\n[Drinks](https://www.lanternfold.example/food-drink/drinks)\n\n## [A Beginner’s Map of Bitter Drinks](https://www.lanternfold.example/food-drink/2026/09/map-of-bitter-drinks)\n\nFrom gentle aperitifs to the bottles that taste of tree bark, here is where to start and what to skip.\n\nBy 14 September 2026\n\n[![](https://media.lanternfold.example/t/640x360/2026/09/cooking-for-one.jpg)](https://www.lanternfold.example/food-drink/2026/09/cooking-for-one)\n\n[Recipes](https://www.lanternfold.example/food-drink/recipes)\n\n## [Cooking for One Without Eating the Same Thing All Week](https://www.lanternfold.example/food-drink/2026/09/cooking-for-one)\n\nBatch the components, not the meals, and Tuesday’s rice becomes Thursday’s fritters with very little effort.\n\nBy 13 September 2026\n\n[![](https://media.lanternfold.example/t/640x360/2026/09/cheese-cave-railway-arches.jpg)](https://www.lanternfold.example/food-drink/2026/09/cheese-cave-railway-arches)\n\n[Producers](https://www.lanternfold.example/food-drink/producers)\n\n## [The Cheese Cave Under the Railway Arches](https://www.lanternfold.example/food-drink/2026/09/cheese-cave-railway-arches)\n\nTrains rumble overhead every nine minutes while four hundred wheels ripen slowly in the cool, damp dark below.\n\nBy 12 September 2026\n\n[![](https://media.lanternfold.example/t/640x360/2026/09/stock-is-not-broth.jpg)](https://www.lanternfold.example/food-drink/2026/09/stock-is-not-broth)\n\n[Kitchen Notes](https://www.lanternfold.example/food-drink/kitchen-notes)\n\n## [Stock Is Not Broth, and Other Things Worth Arguing About](https://www.lanternfold.example/food-drink/2026/09/stock-is-not-broth)\n\nA short, opinionated glossary for anyone who has ever stood in an aisle wondering which carton to buy.\n\nBy 11 September 2026\n\n[![](https://media.lanternfold.example/t/640x360/2026/09/last-orders-harbour-tavern.jpg)](https://www.lanternfold.example/food-drink/2026/09/last-orders-harbour-tavern)\n\n[Drinks](https://www.lanternfold.example/food-drink/drinks)\n\n## [Last Orders at the Harbour Tavern](https://www.lanternfold.example/food-drink/2026/09/last-orders-harbour-tavern)\n\nAfter ninety years and three generations, the family behind the bar is pouring its final pints this winter.\n\nBy 10 September 2026",
+  "word_count": 774,
+  "thin_content": false
+}

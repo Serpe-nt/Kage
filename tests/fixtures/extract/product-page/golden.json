@@ -1,0 +1,606 @@
+{
+  "title": "Walkjacke Tannhöhe – Haldenwinkel",
+  "description": "Walkjacke Tannhöhe aus 100 % Schurwolle: winddicht, angenehm leicht und in kleinen Serien im Rauhtal genäht. Jetzt für 129,00 € statt 159,00 €.",
+  "canonical": "https://haldenwinkel.example/produkt/walkjacke-tannhoehe/",
+  "lang": "de-DE",
+  "published_at": null,
+  "modified_at": null,
+  "meta": {
+    "description": [
+      "Walkjacke Tannhöhe aus 100 % Schurwolle: winddicht, angenehm leicht und in kleinen Serien im Rauhtal genäht. Jetzt für 129,00 € statt 159,00 €."
+    ],
+    "generator": [
+      "WooCommerce 9.8.2"
+    ],
+    "robots": [
+      "index, follow, max-image-preview:large"
+    ],
+    "viewport": [
+      "width=device-width, initial-scale=1"
+    ]
+  },
+  "opengraph": {
+    "og:description": [
+      "Dicht gewalkte Schurwolle, gerader Schnitt, hoher Stehkragen: die Walkjacke Tannhöhe aus unserer Werkstatt im Rauhtal."
+    ],
+    "og:image": [
+      "https://haldenwinkel.example/wp-content/uploads/2026/03/walkjacke-tannhoehe-vorn.jpg"
+    ],
+    "og:image:height": [
+      "1500"
+    ],
+    "og:image:width": [
+      "1200"
+    ],
+    "og:locale": [
+      "de_DE"
+    ],
+    "og:site_name": [
+      "Haldenwinkel"
+    ],
+    "og:title": [
+      "Walkjacke Tannhöhe"
+    ],
+    "og:type": [
+      "product"
+    ],
+    "og:url": [
+      "https://haldenwinkel.example/produkt/walkjacke-tannhoehe/"
+    ],
+    "product:availability": [
+      "instock"
+    ],
+    "product:price:amount": [
+      "129.00"
+    ],
+    "product:price:currency": [
+      "EUR"
+    ]
+  },
+  "twitter": {
+    "twitter:card": [
+      "summary"
+    ]
+  },
+  "jsonld": [
+    {
+      "@context": "https://schema.org/",
+      "@graph": [
+        {
+          "@id": "https://haldenwinkel.example/produkt/walkjacke-tannhoehe/#product",
+          "@type": "Product",
+          "aggregateRating": {
+            "@type": "AggregateRating",
+            "ratingValue": "4.67",
+            "reviewCount": 3
+          },
+          "brand": {
+            "@type": "Brand",
+            "name": "Haldenwinkel"
+          },
+          "description": "Die Walkjacke Tannhöhe ist aus dicht gewalkter Schurwolle gefertigt, hält den Wind ab und bleibt dabei angenehm leicht.",
+          "image": "https://haldenwinkel.example/wp-content/uploads/2026/03/walkjacke-tannhoehe-vorn.jpg",
+          "name": "Walkjacke Tannhöhe",
+          "offers": {
+            "@type": "Offer",
+            "availability": "https://schema.org/InStock",
+            "price": "129.00",
+            "priceCurrency": "EUR",
+            "priceValidUntil": "2026-12-31",
+            "url": "https://haldenwinkel.example/produkt/walkjacke-tannhoehe/"
+          },
+          "review": [
+            {
+              "@type": "Review",
+              "author": {
+                "@type": "Person",
+                "name": "Henrike B."
+              },
+              "datePublished": "2026-09-14T08:41:07+02:00",
+              "reviewBody": "Die Jacke ist genau so, wie ich sie mir vorgestellt habe: schwer genug, um warm zu halten, aber nicht steif.",
+              "reviewRating": {
+                "@type": "Rating",
+                "bestRating": "5",
+                "ratingValue": "5",
+                "worstRating": "1"
+              }
+            },
+            {
+              "@type": "Review",
+              "author": {
+                "@type": "Person",
+                "name": "Torben K."
+              },
+              "datePublished": "2026-06-02T19:15:40+02:00",
+              "reviewBody": "Sehr gute Verarbeitung, saubere Nähte, schöne Knöpfe.",
+              "reviewRating": {
+                "@type": "Rating",
+                "bestRating": "5",
+                "ratingValue": "4",
+                "worstRating": "1"
+              }
+            }
+          ],
+          "sku": "HW-WJ-3187"
+        },
+        {
+          "@type": "BreadcrumbList",
+          "itemListElement": [
+            {
+              "@type": "ListItem",
+              "item": {
+                "@id": "https://haldenwinkel.example",
+                "name": "Startseite"
+              },
+              "position": 1
+            },
+            {
+              "@type": "ListItem",
+              "item": {
+                "@id": "https://haldenwinkel.example/produkt-kategorie/jacken/",
+                "name": "Jacken"
+              },
+              "position": 2
+            },
+            {
+              "@type": "ListItem",
+              "item": {
+                "@id": "https://haldenwinkel.example/produkt/walkjacke-tannhoehe/",
+                "name": "Walkjacke Tannhöhe"
+              },
+              "position": 3
+            }
+          ]
+        },
+        {
+          "@id": "https://haldenwinkel.example/#website",
+          "@type": "WebSite",
+          "inLanguage": "de-DE",
+          "name": "Haldenwinkel",
+          "potentialAction": {
+            "@type": "SearchAction",
+            "query-input": "required name=search_term_string",
+            "target": {
+              "@type": "EntryPoint",
+              "urlTemplate": "https://haldenwinkel.example/?s={search_term_string}&post_type=product"
+            }
+          },
+          "url": "https://haldenwinkel.example/"
+        }
+      ]
+    }
+  ],
+  "jsonld_skipped": 1,
+  "links": [
+    {
+      "url": "https://haldenwinkel.example/produkt/walkjacke-tannhoehe/#site-navigation",
+      "text": "Zur Navigation springen",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt/walkjacke-tannhoehe/#content",
+      "text": "Zum Inhalt springen",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/",
+      "text": "Haldenwinkel",
+      "rel": [
+        "home"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/",
+      "text": "Startseite",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt-kategorie/jacken/",
+      "text": "Jacken",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt-kategorie/westen/",
+      "text": "Westen",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt-kategorie/muetzen-schals/",
+      "text": "Mützen & Schals",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt-kategorie/decken/",
+      "text": "Decken",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/werkstatt/",
+      "text": "Werkstatt",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/kontakt/",
+      "text": "Kontakt",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/warenkorb/",
+      "text": "0,00 € 0 Artikel",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/",
+      "text": "Startseite",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt-kategorie/jacken/",
+      "text": "Jacken",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt/walkjacke-tannhoehe/#",
+      "text": "+",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/wp-content/uploads/2026/03/walkjacke-tannhoehe-vorn.jpg",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/wp-content/uploads/2026/03/walkjacke-tannhoehe-ruecken.jpg",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/wp-content/uploads/2026/03/walkjacke-tannhoehe-kragen.jpg",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/wp-content/uploads/2026/03/walkjacke-tannhoehe-knopf.jpg",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt/walkjacke-tannhoehe/#reviews",
+      "text": "( 3 Kundenbewertungen)",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/versand-lieferung/",
+      "text": "Versand",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt-kategorie/jacken/",
+      "text": "Jacken",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt-kategorie/wolle/",
+      "text": "Wolle",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt-schlagwort/schurwolle/",
+      "text": "Schurwolle",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt-schlagwort/walk/",
+      "text": "Walk",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt-schlagwort/winddicht/",
+      "text": "winddicht",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://social.example.net/share?url=https%3A%2F%2Fhaldenwinkel.example%2Fprodukt%2Fwalkjacke-tannhoehe%2F",
+      "text": "Im Netzwerk teilen",
+      "rel": [
+        "nofollow",
+        "noopener"
+      ],
+      "same_site": false
+    },
+    {
+      "url": "https://merkzettel.example.com/pin?u=https%3A%2F%2Fhaldenwinkel.example%2Fprodukt%2Fwalkjacke-tannhoehe%2F",
+      "text": "Merken",
+      "rel": [
+        "nofollow",
+        "noopener"
+      ],
+      "same_site": false
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt/walkjacke-tannhoehe/#tab-description",
+      "text": "Beschreibung",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt/walkjacke-tannhoehe/#tab-additional_information",
+      "text": "Zusätzliche Informationen",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt/walkjacke-tannhoehe/#tab-reviews",
+      "text": "Bewertungen (3)",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt/wollwaschmittel-lanolin/",
+      "text": "Wollwaschmittel",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/rueckgabe/#reparatur",
+      "text": "schicken Sie uns die Jacke einfach zu",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt/strickmuetze-moosgrund/",
+      "text": "Strickmütze Moosgrund 34,90 €",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt/walkjacke-tannhoehe/?add-to-cart=3102",
+      "text": "In den Warenkorb",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt/wollschal-nebelbank/",
+      "text": "Wollschal Nebelbank 49,00 €",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt/walkjacke-tannhoehe/?add-to-cart=3120",
+      "text": "In den Warenkorb",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt/walkweste-birkenmoor/",
+      "text": "Walkweste Birkenmoor 99,00 €",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt/walkweste-birkenmoor/",
+      "text": "Ausführung wählen",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt/lodenhandschuhe-reifkante/",
+      "text": "Lodenhandschuhe Reifkante 42,50 €",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt/walkjacke-tannhoehe/?add-to-cart=3175",
+      "text": "In den Warenkorb",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt/walkweste-birkenmoor/",
+      "text": "Walkweste Birkenmoor",
+      "rel": [
+        "prev"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt/wolldecke-rauhtal/",
+      "text": "Wolldecke Rauhtal",
+      "rel": [
+        "next"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/werkstatt/",
+      "text": "Mehr über die Werkstatt",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/versand-lieferung/",
+      "text": "Versand & Lieferung",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/rueckgabe/",
+      "text": "Rückgabe & Umtausch",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/groessentabelle/",
+      "text": "Größentabelle",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/pflegehinweise/",
+      "text": "Pflegehinweise",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/impressum/",
+      "text": "Impressum",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/agb/",
+      "text": "AGB",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/datenschutz/",
+      "text": "Datenschutzerklärung",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/widerruf/",
+      "text": "Widerrufsbelehrung",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://social.example.net/@haldenwinkel",
+      "text": "Haldenwinkel im Fediversum",
+      "rel": [
+        "noopener",
+        "nofollow"
+      ],
+      "same_site": false
+    },
+    {
+      "url": "https://fotos.example.com/haldenwinkel",
+      "text": "Fotos aus der Werkstatt",
+      "rel": [
+        "noopener"
+      ],
+      "same_site": false
+    },
+    {
+      "url": "https://haldenwinkel.example/datenschutz/",
+      "text": "Datenschutzerklärung",
+      "rel": [
+        "privacy-policy"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://themes.example.org/storefront/",
+      "text": "Erstellt mit einem Storefront-Thema",
+      "rel": [
+        "noreferrer",
+        "nofollow"
+      ],
+      "same_site": false
+    },
+    {
+      "url": "https://haldenwinkel.example/mein-konto/",
+      "text": "Mein Konto",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt/walkjacke-tannhoehe/",
+      "text": "Suche",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/warenkorb/",
+      "text": "Warenkorb 0",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt/walkjacke-tannhoehe/#",
+      "text": "Einverstanden",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/produkt/walkjacke-tannhoehe/#",
+      "text": "Ablehnen",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://haldenwinkel.example/datenschutz/",
+      "text": "Datenschutzerklärung",
+      "rel": [],
+      "same_site": true
+    }
+  ],
+  "links_truncated": false,
+  "headings": [
+    {
+      "level": 1,
+      "text": "Walkjacke Tannhöhe",
+      "id": null
+    },
+    {
+      "level": 2,
+      "text": "Beschreibung",
+      "id": null
+    },
+    {
+      "level": 3,
+      "text": "Pflege und Haltbarkeit",
+      "id": null
+    }
+  ],
+  "text": "Angebot!\n\nWalkjacke Tannhöhe\n\nBewertet mit 4.67 von 5, basierend auf 3 Kundenbewertungen\n\n(3 Kundenbewertungen)\n\nUrsprünglicher Preis war: 159,00 €Aktueller Preis ist: 129,00 €. inkl. 19 % MwSt., zzgl. Versand\n\nDie Walkjacke Tannhöhe ist aus dicht gewalkter Schurwolle gefertigt, hält den Wind ab und bleibt dabei angenehm leicht. Ein Begleiter für kühle Morgen, lange Spaziergänge und den Weg ins Büro.\n\nGerader Schnitt, hoher Stehkragen, zwei tiefe Eingrifftaschen – genäht in unserer Werkstatt im Rauhtal, in kleinen Serien von höchstens sechzig Stück.\n\nBeschreibung\nZusätzliche Informationen\nBewertungen (3)\n\nBeschreibung\n\nWer einmal eine gute Walkjacke getragen hat, möchte sie nicht mehr missen. Der Stoff der Tannhöhe wird zunächst locker gestrickt und anschließend in warmem Wasser so lange gewalkt, bis sich die Fasern fest ineinander verhaken. Dabei schrumpft das Gestrick um fast ein Drittel, und es entsteht ein dichtes, winddichtes Tuch, das trotzdem atmet und sich weich anfühlt.\n\nFür die Tannhöhe verwenden wir ausschließlich Schurwolle von Schafen, die auf den Hochweiden rund um das Rauhtal gehalten werden. Die Wolle wird nicht gebleicht und nur mit wenigen, sorgfältig ausgewählten Farbstoffen gefärbt, sodass der natürliche Griff erhalten bleibt. Leichte Unregelmäßigkeiten im Farbton sind deshalb kein Fehler, sondern ein Zeichen dafür, dass hier mit einem Naturmaterial gearbeitet wurde.\n\nDer Schnitt ist bewusst schlicht gehalten. Die Jacke fällt gerade, endet knapp unter der Hüfte und lässt genug Raum für einen Pullover, ohne aufzutragen. Der Stehkragen lässt sich bis unters Kinn schließen, die Ärmel haben einen verdeckten Windfang aus Baumwolle, und die beiden Eingrifftaschen sind so tief, dass auch große Hände samt Handschuhen darin Platz finden.\n\n100 % Schurwolle, gewalkt und ungefüttert\nHoher Stehkragen mit Kinnschutz\nFünf Knöpfe aus Steinnuss\nZwei tiefe Eingrifftaschen und eine Innentasche\nVerdeckter Windfang an den Ärmeln\nGefertigt in kleinen Serien im Rauhtal\n\nPflege und Haltbarkeit\n\nWolle reinigt sich zu einem guten Teil selbst. In den meisten Fällen genügt es, die Jacke über Nacht an die frische Luft zu hängen, am besten bei feuchtem Wetter. Flecken lassen sich mit einem feuchten Tuch abtupfen. Wenn doch einmal eine Wäsche nötig ist, dann bitte von Hand in kaltem Wasser mit einem milden Wollwaschmittel, ohne zu reiben und ohne zu wringen.\n\nEine Walkjacke ist kein Kleidungsstück für eine Saison. Bei guter Pflege begleitet sie ihre Trägerin oder ihren Träger viele Jahre, und sie wird mit der Zeit eher schöner als schlechter. Sollte sich dennoch einmal eine Naht lösen oder ein Knopf verloren gehen, schicken Sie uns die Jacke einfach zu: Kleine Reparaturen übernehmen wir in den ersten fünf Jahren kostenlos.\n\nGewicht 0,84 kg\nAbmessungen 42 × 34 × 9 cm\nMaterial 100 % Schurwolle\nFarbe Tannengrün, Steingrau\nGröße S, M, L, XL\nVerschluss Knopfleiste mit fünf Steinnussknöpfen\nPflegehinweis Handwäsche kalt, liegend trocknen",
+  "markdown": "Angebot!\n\n# Walkjacke Tannhöhe\n\nBewertet mit **4.67** von 5, basierend auf 3 Kundenbewertungen\n\n[(3 Kundenbewertungen)](https://haldenwinkel.example/produkt/walkjacke-tannhoehe/#reviews)\n\nUrsprünglicher Preis war: 159,00 €Aktueller Preis ist: 129,00 €. inkl. 19 % MwSt., zzgl. [Versand](https://haldenwinkel.example/versand-lieferung/)\n\nDie Walkjacke Tannhöhe ist aus dicht gewalkter Schurwolle gefertigt, hält den Wind ab und bleibt dabei angenehm leicht. Ein Begleiter für kühle Morgen, lange Spaziergänge und den Weg ins Büro.\n\nGerader Schnitt, hoher Stehkragen, zwei tiefe Eingrifftaschen – genäht in unserer Werkstatt im Rauhtal, in kleinen Serien von höchstens sechzig Stück.\n\n- [Beschreibung](https://haldenwinkel.example/produkt/walkjacke-tannhoehe/#tab-description)\n- [Zusätzliche Informationen](https://haldenwinkel.example/produkt/walkjacke-tannhoehe/#tab-additional_information)\n- [Bewertungen (3)](https://haldenwinkel.example/produkt/walkjacke-tannhoehe/#tab-reviews)\n\n## Beschreibung\n\nWer einmal eine gute Walkjacke getragen hat, möchte sie nicht mehr missen. Der Stoff der Tannhöhe wird zunächst locker gestrickt und anschließend in warmem Wasser so lange gewalkt, bis sich die Fasern fest ineinander verhaken. Dabei schrumpft das Gestrick um fast ein Drittel, und es entsteht ein dichtes, **winddichtes Tuch**, das trotzdem atmet und sich weich anfühlt.\n\nFür die Tannhöhe verwenden wir ausschließlich Schurwolle von Schafen, die auf den Hochweiden rund um das Rauhtal gehalten werden. Die Wolle wird nicht gebleicht und nur mit wenigen, sorgfältig ausgewählten Farbstoffen gefärbt, sodass der natürliche Griff erhalten bleibt. Leichte Unregelmäßigkeiten im Farbton sind deshalb kein Fehler, sondern ein Zeichen dafür, dass hier mit einem Naturmaterial gearbeitet wurde.\n\nDer Schnitt ist bewusst schlicht gehalten. Die Jacke fällt gerade, endet knapp unter der Hüfte und lässt genug Raum für einen Pullover, ohne aufzutragen. Der Stehkragen lässt sich bis unters Kinn schließen, die Ärmel haben einen verdeckten Windfang aus Baumwolle, und die beiden Eingrifftaschen sind so tief, dass auch große Hände samt Handschuhen darin Platz finden.\n\n- 100 % Schurwolle, gewalkt und ungefüttert\n- Hoher Stehkragen mit Kinnschutz\n- Fünf Knöpfe aus Steinnuss\n- Zwei tiefe Eingrifftaschen und eine Innentasche\n- Verdeckter Windfang an den Ärmeln\n- Gefertigt in kleinen Serien im Rauhtal\n\n### Pflege und Haltbarkeit\n\nWolle reinigt sich zu einem guten Teil selbst. In den meisten Fällen genügt es, die Jacke über Nacht an die frische Luft zu hängen, am besten bei feuchtem Wetter. Flecken lassen sich mit einem feuchten Tuch abtupfen. Wenn doch einmal eine Wäsche nötig ist, dann bitte von Hand in kaltem Wasser mit einem milden [Wollwaschmittel](https://haldenwinkel.example/produkt/wollwaschmittel-lanolin/), ohne zu reiben und ohne zu wringen.\n\nEine Walkjacke ist kein Kleidungsstück für eine Saison. Bei guter Pflege begleitet sie ihre Trägerin oder ihren Träger viele Jahre, und sie wird mit der Zeit eher schöner als schlechter. Sollte sich dennoch einmal eine Naht lösen oder ein Knopf verloren gehen, [schicken Sie uns die Jacke einfach zu](https://haldenwinkel.example/rueckgabe/#reparatur): Kleine Reparaturen übernehmen wir in den ersten fünf Jahren kostenlos.\n\n| Gewicht | 0,84 kg |\n| --- | --- |\n| Abmessungen | 42 × 34 × 9 cm |\n| Material | 100 % Schurwolle |\n| Farbe | Tannengrün, Steingrau |\n| Größe | S, M, L, XL |\n| Verschluss | Knopfleiste mit fünf Steinnussknöpfen |\n| Pflegehinweis | Handwäsche kalt, liegend trocknen |",
+  "word_count": 443,
+  "thin_content": false
+}

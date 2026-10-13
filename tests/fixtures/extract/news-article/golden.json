@@ -1,0 +1,556 @@
+{
+  "title": "Larrow Viaduct to reopen as walking and cycling route after council backs £6.2m plan – Transport – Calderwick Herald",
+  "description": "Councillors have voted to spend £6.2m turning the disused Larrow Viaduct above Calderwick into a traffic-free path, with the first section due to open in spring 2028.",
+  "canonical": "https://www.calderwickherald.example/news/transport/2026/03/larrow-viaduct-walking-cycling-route-approved",
+  "lang": "en-GB",
+  "published_at": "2026-03-12T06:30:00Z",
+  "modified_at": "2026-03-12T14:05:00Z",
+  "meta": {
+    "author": [
+      "Rowan Achterberg, Delphine Okafor-Hale"
+    ],
+    "description": [
+      "Councillors have voted to spend £6.2m turning the disused Larrow Viaduct above Calderwick into a traffic-free path, with the first section due to open in spring 2028."
+    ],
+    "robots": [
+      "index, follow, max-image-preview:large"
+    ],
+    "theme-color": [
+      "#12324a"
+    ],
+    "viewport": [
+      "width=device-width, initial-scale=1"
+    ]
+  },
+  "opengraph": {
+    "article:modified_time": [
+      "2026-03-12T14:05:00+00:00"
+    ],
+    "article:published_time": [
+      "2026-03-12T06:30:00+00:00"
+    ],
+    "article:section": [
+      "Transport"
+    ],
+    "article:tag": [
+      "Larrow Viaduct",
+      "Cycling"
+    ],
+    "og:description": [
+      "Forty years after the last freight train crossed it, the eleven-arch viaduct above Calderwick is to carry walkers and cyclists."
+    ],
+    "og:image": [
+      "https://media.calderwickherald.example/images/2026/03/larrow-viaduct-dawn-1200x675.jpg"
+    ],
+    "og:image:alt": [
+      "A brick railway viaduct of eleven arches crossing a misty river valley at dawn"
+    ],
+    "og:image:height": [
+      "675"
+    ],
+    "og:image:width": [
+      "1200"
+    ],
+    "og:locale": [
+      "en_GB"
+    ],
+    "og:site_name": [
+      "Calderwick Herald"
+    ],
+    "og:title": [
+      "Larrow Viaduct to reopen as walking and cycling route after council backs £6.2m plan"
+    ],
+    "og:type": [
+      "article"
+    ],
+    "og:url": [
+      "https://www.calderwickherald.example/news/transport/2026/03/larrow-viaduct-walking-cycling-route-approved"
+    ]
+  },
+  "twitter": {
+    "twitter:card": [
+      "summary_large_image"
+    ],
+    "twitter:description": [
+      "Council backs £6.2m plan to open the disused viaduct above Calderwick to walkers and cyclists by 2028."
+    ],
+    "twitter:image": [
+      "https://media.calderwickherald.example/images/2026/03/larrow-viaduct-dawn-1200x675.jpg"
+    ],
+    "twitter:site": [
+      "@CalderwickHerald"
+    ],
+    "twitter:title": [
+      "Larrow Viaduct to reopen as walking and cycling route"
+    ]
+  },
+  "jsonld": [
+    {
+      "@context": "https://schema.org",
+      "@type": "NewsArticle",
+      "articleSection": "Transport",
+      "author": [
+        {
+          "@type": "Person",
+          "name": "Rowan Achterberg",
+          "url": "https://www.calderwickherald.example/authors/rowan-achterberg"
+        },
+        {
+          "@type": "Person",
+          "name": "Delphine Okafor-Hale",
+          "url": "https://www.calderwickherald.example/authors/delphine-okafor-hale"
+        }
+      ],
+      "dateModified": "2026-03-12T14:05:00+00:00",
+      "datePublished": "2026-03-12T06:30:00+00:00",
+      "description": "Councillors have voted to spend £6.2m turning the disused Larrow Viaduct above Calderwick into a traffic-free path, with the first section due to open in spring 2028.",
+      "headline": "Larrow Viaduct to reopen as walking and cycling route after council backs £6.2m plan",
+      "image": [
+        "https://media.calderwickherald.example/images/2026/03/larrow-viaduct-dawn-1200x675.jpg",
+        "https://media.calderwickherald.example/images/2026/03/larrow-viaduct-dawn-1200x900.jpg",
+        "https://media.calderwickherald.example/images/2026/03/larrow-viaduct-dawn-1200x1200.jpg"
+      ],
+      "isAccessibleForFree": true,
+      "keywords": [
+        "Larrow Viaduct",
+        "Cycling",
+        "Larrowdale District Council"
+      ],
+      "mainEntityOfPage": {
+        "@id": "https://www.calderwickherald.example/news/transport/2026/03/larrow-viaduct-walking-cycling-route-approved",
+        "@type": "WebPage"
+      },
+      "publisher": {
+        "@type": "Organization",
+        "logo": {
+          "@type": "ImageObject",
+          "height": 60,
+          "url": "https://www.calderwickherald.example/assets/img/herald-logo-600x60.png",
+          "width": 600
+        },
+        "name": "Calderwick Herald",
+        "url": "https://www.calderwickherald.example/"
+      }
+    },
+    {
+      "@context": "https://schema.org",
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "item": "https://www.calderwickherald.example/",
+          "name": "Home",
+          "position": 1
+        },
+        {
+          "@type": "ListItem",
+          "item": "https://www.calderwickherald.example/news",
+          "name": "News",
+          "position": 2
+        },
+        {
+          "@type": "ListItem",
+          "item": "https://www.calderwickherald.example/news/transport",
+          "name": "Transport",
+          "position": 3
+        }
+      ]
+    }
+  ],
+  "jsonld_skipped": 0,
+  "links": [
+    {
+      "url": "https://www.calderwickherald.example/news/transport/2026/03/larrow-viaduct-walking-cycling-route-approved?utm_source=newsletter&ref=home#main-content",
+      "text": "Skip to main content",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/",
+      "text": "Calderwick Herald",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/subscribe?source=article-header",
+      "text": "Subscribe",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://account.calderwickherald.example/sign-in",
+      "text": "Sign in",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/search",
+      "text": "Search",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/news",
+      "text": "News",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/sport",
+      "text": "Sport",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/business",
+      "text": "Business",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/whats-on",
+      "text": "What’s On",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/opinion",
+      "text": "Opinion",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/property",
+      "text": "Property",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/announcements",
+      "text": "Announcements",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://jobs.calderwickherald.example/",
+      "text": "Jobs",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/",
+      "text": "Home",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/news",
+      "text": "News",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/news/transport",
+      "text": "Transport",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/news/transport",
+      "text": "Transport",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/authors/rowan-achterberg",
+      "text": "Rowan Achterberg",
+      "rel": [
+        "author"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/authors/delphine-okafor-hale",
+      "text": "Delphine Okafor-Hale",
+      "rel": [
+        "author"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/news/transport/2026/03/larrow-viaduct-walking-cycling-route-approved?utm_source=newsletter&ref=home#comments",
+      "text": "27 comments",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://chirp.example.com/share?url=https%3A%2F%2Fwww.calderwickherald.example%2Fnews%2Ftransport%2F2026%2F03%2Flarrow-viaduct-walking-cycling-route-approved",
+      "text": "Chirp",
+      "rel": [
+        "noopener",
+        "noreferrer"
+      ],
+      "same_site": false
+    },
+    {
+      "url": "https://townsquare.example.net/sharer?u=https%3A%2F%2Fwww.calderwickherald.example%2Fnews%2Ftransport%2F2026%2F03%2Flarrow-viaduct-walking-cycling-route-approved",
+      "text": "Townsquare",
+      "rel": [
+        "noopener",
+        "noreferrer"
+      ],
+      "same_site": false
+    },
+    {
+      "url": "https://www.larrowdale.example.org/meetings/cabinet/2026-03-11/item-6",
+      "text": "cabinet papers",
+      "rel": [],
+      "same_site": false
+    },
+    {
+      "url": "https://www.calderwickherald.example/news/environment/2026/02/rare-bats-found-roosting-in-viaduct-arches",
+      "text": "Rare bats found roosting in viaduct arches, survey confirms",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/news/transport/2025/09/viaduct-survey-finds-structure-sound",
+      "text": "structural survey",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/topics/larrow-viaduct",
+      "text": "Larrow Viaduct",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/topics/cycling",
+      "text": "Cycling",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/topics/larrowdale-district-council",
+      "text": "Larrowdale District Council",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/topics/heritage",
+      "text": "Heritage",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/topics/stannerby",
+      "text": "Stannerby",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/privacy",
+      "text": "privacy notice",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/news/transport/2026/02/quarry-lorries-to-be-rerouted-away-from-stannerby-road",
+      "text": "Quarry lorries to be rerouted away from Stannerby Road after review",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/news/transport/2026/01/number-14-bus-reduced-to-two-journeys-a-day",
+      "text": "Bus cuts: number 14 service reduced to two journeys a day",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/news/community/2025/10/friends-of-larrow-viaduct-ten-years",
+      "text": "Friends group marks ten years of clearing the viaduct by hand",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/opinion/2026/03/a-path-across-the-valley-is-worth-more-than-a-car-park",
+      "text": "Opinion: A path across the valley is worth more than a car park",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://account.calderwickherald.example/sign-in?return=%2Fnews%2Ftransport%2F2026%2F03%2Flarrow-viaduct-walking-cycling-route-approved%23comments",
+      "text": "Sign in",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/community-guidelines",
+      "text": "community guidelines",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/report?comment=551902",
+      "text": "Report",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/report?comment=551917",
+      "text": "Report",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/report?comment=551960",
+      "text": "Report",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/news/transport/2026/03/larrow-viaduct-walking-cycling-route-approved?page=2#comments",
+      "text": "Show older comments",
+      "rel": [
+        "next"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/news/business/2026/03/market-hall-roof-repairs-to-close-indoor-stalls",
+      "text": "Market Hall roof repairs to close indoor stalls for six weeks",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/sport/football/2026/03/calderwick-town-held-to-goalless-draw",
+      "text": "Calderwick Town held to goalless draw in county cup semi-final",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/news/weather/2026/03/flood-warning-lifted-for-lower-larrow",
+      "text": "Flood warning lifted for lower Larrow after river peaks overnight",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/news/education/2026/03/new-head-teacher-named-for-stannerby-primary",
+      "text": "New head teacher named for Stannerby Primary School",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/news/planning/2026/03/inspector-rejects-140-home-scheme-at-hollin-fields",
+      "text": "Planning inspector rejects 140-home scheme at Hollin Fields",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/about",
+      "text": "About the Herald",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://advertising.calderwickherald.example/rates",
+      "text": "Advertise with us",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/archive?year=2026&month=03",
+      "text": "Archive",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/complaints",
+      "text": "Complaints and corrections",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/terms",
+      "text": "Terms & conditions",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/privacy",
+      "text": "Privacy notice",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://chirp.example.com/CalderwickHerald",
+      "text": "Chirp",
+      "rel": [
+        "noopener",
+        "noreferrer"
+      ],
+      "same_site": false
+    },
+    {
+      "url": "https://townsquare.example.net/calderwickherald",
+      "text": "Townsquare",
+      "rel": [
+        "noopener",
+        "noreferrer"
+      ],
+      "same_site": false
+    },
+    {
+      "url": "https://www.calderwickherald.example/feeds/news/transport.xml",
+      "text": "RSS",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/news/transport/2026/03/larrow-viaduct-walking-cycling-route-approved?utm_source=newsletter&ref=home#main-content",
+      "text": "Back to top",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.calderwickherald.example/cookies",
+      "text": "cookie policy",
+      "rel": [],
+      "same_site": true
+    }
+  ],
+  "links_truncated": false,
+  "headings": [
+    {
+      "level": 1,
+      "text": "Larrow Viaduct to reopen as walking and cycling route after council backs £6.2m plan",
+      "id": null
+    },
+    {
+      "level": 2,
+      "text": "What the engineers found",
+      "id": "what-the-engineers-found"
+    }
+  ],
+  "text": "Transport\n\nLarrow Viaduct to reopen as walking and cycling route after council backs £6.2m plan\n\nForty years after the last freight train crossed it, the eleven-arch viaduct above Calderwick will carry people again, with work due to start in the autumn and the first section opening in spring 2028\n\nThe eleven arches of Larrow Viaduct seen from the water meadows at dawn. The structure has been fenced off since the late 1980s. Photograph: Ines Marchetti-Lowe/Calderwick Herald\n\nCouncillors have approved a £6.2 million plan to turn the disused Larrow Viaduct into a traffic-free route for walkers and cyclists, ending a campaign that began when the structure was fenced off in the late 1980s. Larrowdale District Council’s cabinet voted seven to two on Wednesday evening to release the money, after a three-hour meeting in which residents, engineers and a small group of objectors all had their say.\n\nThe viaduct, built in 1871 to carry the Calderwick and Stannerby branch line across the River Larrow, has been closed to the public since the track was lifted. Its eleven brick arches stand 28 metres above the valley floor and have become a familiar landmark for anyone arriving in the town from the north, even though nobody has been allowed to walk across them for two generations.\n\nUnder the approved scheme, the deck will be waterproofed and resurfaced, the parapets raised to 1.4 metres, and new ramps built at both ends so that wheelchairs, pushchairs and adapted cycles can reach the top without using steps. The council says the finished path will link the town centre with Stannerby in under fifteen minutes by bike, a journey that currently means sharing a narrow, unlit road with quarry lorries. The main points of the scheme, as set out in the cabinet papers, are these:\n\nThe route will run for 3.4 kilometres, from Mill Lane in Calderwick to the old goods yard at Stannerby.\nConstruction is expected to take eighteen months, beginning in October 2026.\nThe council will pay £2.1 million, with the remaining £4.1 million coming from a national active travel grant.\n\nHollis Penhallow, who chairs the Friends of Larrow Viaduct, told the meeting that volunteers had spent more than a decade clearing saplings from the brickwork and counting the bats that roost under the third arch. “We have filled in every form, answered every survey and turned up to every consultation,” he said. “People in this town have waited long enough, and tonight they have been heard.”\n\nRead more: Rare bats found roosting in viaduct arches, survey confirms\n\nNot everyone was persuaded. Two cabinet members voted against the proposal, arguing that the authority should not commit capital to a new path while it is cutting bus subsidies elsewhere in the district. Councillor Edrik Vasmer said he admired the campaigners but feared that maintenance of a Victorian structure would become an open-ended bill, and asked for a written guarantee that inspection costs would not fall on parish councils.\n\nWhat the engineers found\n\nA structural survey carried out last summer by the consultancy Brackwell & Marsh concluded that the viaduct was in better condition than its appearance suggested. Inspectors abseiled down each pier, tested mortar samples and used ground radar to look for voids behind the arch rings. They found water damage in three spans and loose coping stones along the eastern parapet, but no sign of movement in the foundations.\n\nPriya Lindqvist, the engineer who led the survey, said the repairs were routine for a structure of its age. “Brick viaducts are remarkably forgiving if you keep the water out,” she said. “The biggest risk here is not collapse, it is another twenty years of doing nothing, because every winter of frost opens the joints a little further and makes the eventual repair more expensive.”\n\n“The biggest risk here is not collapse, it is another twenty years of doing nothing.”\n\nThe report also sets out how the work will avoid disturbing wildlife. Repointing of the third and fourth arches will be limited to the months when the bat colony is absent, and a licensed ecologist will be on site whenever scaffolding is moved. Nesting boxes for swifts are to be fitted beneath the new parapet, at the suggestion of pupils from Stannerby Primary School who wrote to the council last year.\n\nVolunteers from the Friends of Larrow Viaduct clearing brambles from the northern approach last autumn. Photograph: Friends of Larrow Viaduct\n\nShopkeepers on Mill Lane, where the southern ramp will begin, gave the decision a cautious welcome. Several said they hoped the route would bring visitors past their doors, but worried about losing the twelve parking spaces that the ramp will replace. The council has promised a further round of talks before the detailed design is fixed, and says a loading bay will be kept for deliveries.\n\nFor older residents the vote carried a different weight. Winifred Tolland, 84, who remembers waving to the guard on the afternoon goods train as a child, sat through the whole meeting in the public gallery. She said afterwards that she had never expected to see the viaduct opened in her lifetime, and that she intended to be the first across it, “on foot, slowly, and with a flask of tea”.\n\nWork is due to begin in October, once contractors have been appointed and the grant agreement signed. The southern half of the route, from Mill Lane to the middle of the viaduct, is expected to open in spring 2028, with the full path to Stannerby following by the end of that summer. The council says it will publish progress reports every three months and hold site open days during construction.",
+  "markdown": "[Transport](https://www.calderwickherald.example/news/transport)\n\n# Larrow Viaduct to reopen as walking and cycling route after council backs £6.2m plan\n\nForty years after the last freight train crossed it, the eleven-arch viaduct above Calderwick will carry people again, with work due to start in the autumn and the first section opening in spring 2028\n\n![A brick railway viaduct of eleven arches crossing a misty river valley at dawn](https://media.calderwickherald.example/images/2026/03/larrow-viaduct-dawn-1200x675.jpg)\n\nThe eleven arches of Larrow Viaduct seen from the water meadows at dawn. The structure has been fenced off since the late 1980s. Photograph: Ines Marchetti-Lowe/Calderwick Herald\n\nCouncillors have approved a £6.2 million plan to turn the disused Larrow Viaduct into a traffic-free route for walkers and cyclists, ending a campaign that began when the structure was fenced off in the late 1980s. Larrowdale District Council’s cabinet voted seven to two on Wednesday evening to release the money, after a three-hour meeting in which residents, engineers and a small group of objectors all had their say.\n\nThe viaduct, built in 1871 to carry the Calderwick and Stannerby branch line across the River Larrow, has been closed to the public since the track was lifted. Its eleven brick arches stand 28 metres above the valley floor and have become a familiar landmark for anyone arriving in the town from the north, even though nobody has been allowed to walk across them for two generations.\n\nUnder the approved scheme, the deck will be waterproofed and resurfaced, the parapets raised to 1.4 metres, and new ramps built at both ends so that wheelchairs, pushchairs and adapted cycles can reach the top without using steps. The council says the finished path will link the town centre with Stannerby in under fifteen minutes by bike, a journey that currently means sharing a narrow, unlit road with quarry lorries. The main points of the scheme, as set out in the [cabinet papers](https://www.larrowdale.example.org/meetings/cabinet/2026-03-11/item-6), are these:\n\n- The route will run for 3.4 kilometres, from Mill Lane in Calderwick to the old goods yard at Stannerby.\n- Construction is expected to take eighteen months, beginning in October 2026.\n- The council will pay £2.1 million, with the remaining £4.1 million coming from a national active travel grant.\n\nHollis Penhallow, who chairs the Friends of Larrow Viaduct, told the meeting that volunteers had spent more than a decade clearing saplings from the brickwork and counting the bats that roost under the third arch. “We have filled in every form, answered every survey and turned up to every consultation,” he said. “People in this town have waited long enough, and tonight they have been heard.”\n\n**Read more:** [Rare bats found roosting in viaduct arches, survey confirms](https://www.calderwickherald.example/news/environment/2026/02/rare-bats-found-roosting-in-viaduct-arches)\n\nNot everyone was persuaded. Two cabinet members voted against the proposal, arguing that the authority should not commit capital to a new path while it is cutting bus subsidies elsewhere in the district. Councillor Edrik Vasmer said he admired the campaigners but feared that maintenance of a Victorian structure would become an open-ended bill, and asked for a written guarantee that inspection costs would not fall on parish councils.\n\n## What the engineers found\n\nA [structural survey](https://www.calderwickherald.example/news/transport/2025/09/viaduct-survey-finds-structure-sound) carried out last summer by the consultancy Brackwell & Marsh concluded that the viaduct was in better condition than its appearance suggested. Inspectors abseiled down each pier, tested mortar samples and used ground radar to look for voids behind the arch rings. They found water damage in three spans and loose coping stones along the eastern parapet, but no sign of movement in the foundations.\n\nPriya Lindqvist, the engineer who led the survey, said the repairs were routine for a structure of its age. “Brick viaducts are remarkably forgiving if you keep the water out,” she said. “The biggest risk here is not collapse, it is another twenty years of doing nothing, because every winter of frost opens the joints a little further and makes the eventual repair more expensive.”\n\n> “The biggest risk here is not collapse, it is another twenty years of doing nothing.”\n\nThe report also sets out how the work will avoid disturbing wildlife. Repointing of the third and fourth arches will be limited to the months when the bat colony is absent, and a licensed ecologist will be on site whenever scaffolding is moved. Nesting boxes for swifts are to be fitted beneath the new parapet, at the suggestion of pupils from Stannerby Primary School who wrote to the council last year.\n\n![Four people in high-visibility jackets cutting back brambles beside a brick parapet](https://media.calderwickherald.example/images/2026/03/friends-clearing-northern-approach-640x427.jpg)\n\nVolunteers from the Friends of Larrow Viaduct clearing brambles from the northern approach last autumn. Photograph: Friends of Larrow Viaduct\n\nShopkeepers on Mill Lane, where the southern ramp will begin, gave the decision a cautious welcome. Several said they hoped the route would bring visitors past their doors, but worried about losing the twelve parking spaces that the ramp will replace. The council has promised a further round of talks before the detailed design is fixed, and says a loading bay will be kept for deliveries.\n\nFor older residents the vote carried a different weight. Winifred Tolland, 84, who remembers waving to the guard on the afternoon goods train as a child, sat through the whole meeting in the public gallery. She said afterwards that she had never expected to see the viaduct opened in her lifetime, and that she intended to be the first across it, “on foot, slowly, and with a flask of tea”.\n\nWork is due to begin in October, once contractors have been appointed and the grant agreement signed. The southern half of the route, from Mill Lane to the middle of the viaduct, is expected to open in spring 2028, with the full path to Stannerby following by the end of that summer. The council says it will publish progress reports every three months and hold site open days during construction.",
+  "word_count": 940,
+  "thin_content": false
+}

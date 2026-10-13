@@ -1,0 +1,791 @@
+{
+  "title": "Dunmarrow Head Lighthouse - Ostrelpedia",
+  "description": null,
+  "canonical": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse",
+  "lang": "en",
+  "published_at": "2009-05-18T16:42:07Z",
+  "modified_at": "2026-10-02T09:14:00Z",
+  "meta": {
+    "format-detection": [
+      "telephone=no"
+    ],
+    "generator": [
+      "MediaWiki 1.45.0-wmf.9"
+    ],
+    "robots": [
+      "max-image-preview:standard"
+    ]
+  },
+  "opengraph": {
+    "og:image": [
+      "https://media.ostrelpedia.example/thumb/4/4b/Dunmarrow_Head_Lighthouse.jpg/1200px-Dunmarrow_Head_Lighthouse.jpg"
+    ],
+    "og:title": [
+      "Dunmarrow Head Lighthouse - Ostrelpedia"
+    ],
+    "og:type": [
+      "website"
+    ]
+  },
+  "twitter": {},
+  "jsonld": [
+    {
+      "@context": "https://schema.org",
+      "@type": "Article",
+      "author": {
+        "@type": "Organization",
+        "name": "Contributors to Ostrelpedia"
+      },
+      "dateModified": "2026-10-02T09:14:00Z",
+      "datePublished": "2009-05-18T16:42:07Z",
+      "headline": "lighthouse on Varrasay in the Ostrel Isles",
+      "image": "https://media.ostrelpedia.example/4/4b/Dunmarrow_Head_Lighthouse.jpg",
+      "mainEntity": "https://data.ostrelpedia.example/entity/Q482913",
+      "name": "Dunmarrow Head Lighthouse",
+      "publisher": {
+        "@type": "Organization",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://static.ostrelpedia.example/images/trust-logo.png"
+        },
+        "name": "Ostrel Compendium Trust"
+      },
+      "sameAs": "https://data.ostrelpedia.example/entity/Q482913",
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse"
+    }
+  ],
+  "jsonld_skipped": 0,
+  "links": [
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#bodyContent",
+      "text": "Jump to content",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Main_Page",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/w/index.php?title=Special:CreateAccount&returnto=Dunmarrow+Head+Lighthouse",
+      "text": "Create account",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/w/index.php?title=Special:UserLogin&returnto=Dunmarrow+Head+Lighthouse",
+      "text": "Log in",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#",
+      "text": "(Top)",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#History",
+      "text": "1 History",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#Construction",
+      "text": "1.1 Construction",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#Automation",
+      "text": "1.2 Automation",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#Design",
+      "text": "2 Design",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#Tower",
+      "text": "2.1 Tower",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#Lantern_and_optic",
+      "text": "2.2 Lantern and optic",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#Operation",
+      "text": "3 Operation",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#Wildlife_and_conservation",
+      "text": "4 Wildlife and conservation",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#Access",
+      "text": "5 Access",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#See_also",
+      "text": "6 See also",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#References",
+      "text": "7 References",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#External_links",
+      "text": "8 External links",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://da.ostrelpedia.example/wiki/Dunmarrow_Head_Fyr",
+      "text": "Dansk",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://de.ostrelpedia.example/wiki/Leuchtturm_Dunmarrow_Head",
+      "text": "Deutsch",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://es.ostrelpedia.example/wiki/Faro_de_Dunmarrow_Head",
+      "text": "Español",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://fr.ostrelpedia.example/wiki/Phare_de_Dunmarrow_Head",
+      "text": "Français",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://ga.ostrelpedia.example/wiki/Teach_Solais_Dunmarrow",
+      "text": "Gaeilge",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://it.ostrelpedia.example/wiki/Faro_di_Dunmarrow_Head",
+      "text": "Italiano",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://nl.ostrelpedia.example/wiki/Vuurtoren_van_Dunmarrow_Head",
+      "text": "Nederlands",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://nb.ostrelpedia.example/wiki/Dunmarrow_Head_fyr",
+      "text": "Norsk bokmål",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://pl.ostrelpedia.example/wiki/Latarnia_Dunmarrow_Head",
+      "text": "Polski",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://pt.ostrelpedia.example/wiki/Farol_de_Dunmarrow_Head",
+      "text": "Português",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://fi.ostrelpedia.example/wiki/Dunmarrow_Headin_majakka",
+      "text": "Suomi",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://sv.ostrelpedia.example/wiki/Dunmarrow_Heads_fyr",
+      "text": "Svenska",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse",
+      "text": "Article",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Talk:Dunmarrow_Head_Lighthouse",
+      "text": "Talk",
+      "rel": [
+        "discussion"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse",
+      "text": "Read",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/w/index.php?title=Dunmarrow_Head_Lighthouse&action=edit",
+      "text": "Edit",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/w/index.php?title=Dunmarrow_Head_Lighthouse&action=history",
+      "text": "View history",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow",
+      "text": "Dunmarrow",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/File:Dunmarrow_Head_Lighthouse.jpg",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Varrasay",
+      "text": "Varrasay",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Varrasay",
+      "text": "Varrasay",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Ostrel_Isles",
+      "text": "Ostrel Isles",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Halvard_Renwick",
+      "text": "Halvard Renwick",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Marrow_Sound",
+      "text": "Marrow Sound",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_note-1",
+      "text": "[ 1 ]",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Ostrel_Lights_Board",
+      "text": "Ostrel Lights Board",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Carrowmere",
+      "text": "Carrowmere",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_note-2",
+      "text": "[ 2 ]",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/w/index.php?title=Dunmarrow_Head_Lighthouse&action=edit&section=1",
+      "text": "edit",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_note-3",
+      "text": "[ 3 ]",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/w/index.php?title=Estrild_(barque)&action=edit&redlink=1",
+      "text": "Estrild",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/w/index.php?title=Dunmarrow_Head_Lighthouse&action=edit&section=2",
+      "text": "edit",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/File:Dunmarrow_Head_landing.jpg",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Tormore_quarry",
+      "text": "Tormore quarry",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_note-4",
+      "text": "[ 4 ]",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/w/index.php?title=Dunmarrow_Head_Lighthouse&action=edit&section=3",
+      "text": "edit",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_note-5",
+      "text": "[ 5 ]",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/w/index.php?title=Ansel_Corrigan&action=edit&redlink=1",
+      "text": "Ansel Corrigan",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_note-6",
+      "text": "[ 6 ]",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/w/index.php?title=Dunmarrow_Head_Lighthouse&action=edit&section=4",
+      "text": "edit",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Corran_Skerry_Lighthouse",
+      "text": "Corran Skerry",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/w/index.php?title=Dunmarrow_Head_Lighthouse&action=edit&section=5",
+      "text": "edit",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/List_of_lighthouses_in_the_Ostrel_Isles",
+      "text": "lighthouses of the Ostrel Isles",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_note-7",
+      "text": "[ 7 ]",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/w/index.php?title=Dunmarrow_Head_Lighthouse&action=edit&section=6",
+      "text": "edit",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/w/index.php?title=Pellow_and_Garth&action=edit&redlink=1",
+      "text": "Pellow and Garth",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dioptric_lens",
+      "text": "dioptric lens",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Carrowmere_Maritime_Museum",
+      "text": "Carrowmere Maritime Museum",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_note-8",
+      "text": "[ 8 ]",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/w/index.php?title=Dunmarrow_Head_Lighthouse&action=edit&section=7",
+      "text": "edit",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/w/index.php?title=Dunmarrow_Head_Lighthouse&action=edit&section=8",
+      "text": "edit",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Guillemot",
+      "text": "guillemots",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Kittiwake",
+      "text": "kittiwakes",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Varrasay_Bird_Observatory",
+      "text": "Varrasay Bird Observatory",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/w/index.php?title=Dunmarrow_Head_Lighthouse&action=edit&section=9",
+      "text": "edit",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow",
+      "text": "Dunmarrow",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/w/index.php?title=Dunmarrow_Head_Lighthouse&action=edit&section=10",
+      "text": "edit",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/List_of_lighthouses_in_the_Ostrel_Isles",
+      "text": "List of lighthouses in the Ostrel Isles",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Corran_Skerry_Lighthouse",
+      "text": "Corran Skerry Lighthouse",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Ostrel_Lights_Board",
+      "text": "Ostrel Lights Board",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Shipwrecks_of_Marrow_Sound",
+      "text": "Shipwrecks of Marrow Sound",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/w/index.php?title=Dunmarrow_Head_Lighthouse&action=edit&section=11",
+      "text": "edit",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_ref-1",
+      "text": "^",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_ref-2",
+      "text": "^",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_ref-3",
+      "text": "^",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_ref-4",
+      "text": "^",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_ref-5",
+      "text": "^",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_ref-6",
+      "text": "^",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_ref-7",
+      "text": "^",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_ref-8",
+      "text": "^",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/w/index.php?title=Dunmarrow_Head_Lighthouse&action=edit&section=12",
+      "text": "edit",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.ostrellights.example/stations/dunmarrow-head",
+      "text": "Dunmarrow Head",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": false
+    },
+    {
+      "url": "https://varrasaybirds.example/field-station",
+      "text": "Field station at Dunmarrow Head",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": false
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/List_of_lighthouses_in_the_Ostrel_Isles",
+      "text": "Lighthouses of the Ostrel Isles",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Tormore_Point",
+      "text": "Tormore Point",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Carrowmere_Pier",
+      "text": "Carrowmere Pier",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Skellan_Beacon",
+      "text": "Skellan Beacon",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Easter_Holm",
+      "text": "Easter Holm",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Runa_Ness",
+      "text": "Runa Ness",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Corran_Skerry_Lighthouse",
+      "text": "Corran Skerry",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Halda_Stack",
+      "text": "Halda Stack",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Ness_of_Vey",
+      "text": "Ness of Vey",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Outer_Grind",
+      "text": "Outer Grind",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Sule_Varr",
+      "text": "Sule Varr",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Whalsa_Holm",
+      "text": "Whalsa Holm",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Muckle_Fenn",
+      "text": "Muckle Fenn",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Ardlen_Point",
+      "text": "Ardlen Point",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Cove_of_Marr",
+      "text": "Cove of Marr",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Dornet_Bay",
+      "text": "Dornet Bay",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Eilrig_Mor",
+      "text": "Eilrig Mor",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Plenna_Light",
+      "text": "Plenna",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Strovay_Light",
+      "text": "Strovay",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Haskerry_Light",
+      "text": "Haskerry",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/w/index.php?title=Dunmarrow_Head_Lighthouse&oldid=1184027",
+      "text": "https://en.ostrelpedia.example/w/index.php?title=Dunmarrow_Head_Lighthouse&oldid=1184027",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Help:Category",
+      "text": "Categories",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Category:Lighthouses_in_the_Ostrel_Isles",
+      "text": "Lighthouses in the Ostrel Isles",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Category:Lighthouses_completed_in_1874",
+      "text": "Lighthouses completed in 1874",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Category:Buildings_and_structures_on_Varrasay",
+      "text": "Buildings and structures on Varrasay",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Ostrelpedia:Privacy_policy",
+      "text": "Privacy policy",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Ostrelpedia:About",
+      "text": "About Ostrelpedia",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://en.ostrelpedia.example/wiki/Ostrelpedia:General_disclaimer",
+      "text": "Disclaimers",
+      "rel": [],
+      "same_site": true
+    }
+  ],
+  "links_truncated": false,
+  "headings": [
+    {
+      "level": 3,
+      "text": "Lantern and optic",
+      "id": "Lantern_and_optic"
+    },
+    {
+      "level": 2,
+      "text": "Wildlife and conservation",
+      "id": "Wildlife_and_conservation"
+    }
+  ],
+  "text": "From Ostrelpedia, the free gazetteer of the outer isles\n\nDunmarrow Head Lighthouse\nThe lighthouse from the south-west in 2023\nLocation Dunmarrow Head, Varrasay, Ostrel Isles\nConstructed 1871–1874\nDesigned by Halvard Renwick\nConstruction granite tower\nAutomated 1989\nHeight 34 m (112 ft)\nFocal height 62 m (203 ft)\nCharacteristic Fl (3) W 20s\n\nDunmarrow Head Lighthouse is an active lighthouse on Dunmarrow Head, the north-western tip of Varrasay in the Ostrel Isles. Completed in 1874 to a design by the engineer Halvard Renwick, it marks the northern entrance to Marrow Sound and warns shipping away from the Skellan Rocks, a reef that lies a little over two kilometres offshore.[1]\n\nThe granite tower stands 34 metres tall, and its light, 62 metres above mean high water, can be seen for 24 nautical miles in clear weather. The station was staffed by resident keepers until 1989, when it was converted to automatic operation, and it is now monitored remotely by the Ostrel Lights Board from its depot at Carrowmere.[2]\n\nBesides its role in navigation, the headland is one of the most important seabird sites in the archipelago, and the former keepers' cottages now house a small field station. The tower, the cottages and the boundary walls have been protected as a listed monument since 1978.\n\nDunmarrow Head had a poor reputation among sailors long before a light was built on it. The tidal race off the point runs at up to seven knots, and in the fifty years before 1870 at least nineteen vessels were recorded as lost on or near the Skellan Rocks.[3] The wreck of the barque Estrild in November 1866, with the loss of twenty-three lives, finally moved the island's merchants to petition for a lighthouse.\n\nThe landing place and the remains of the 1872 jetty, seen from the gallery\n\nThe Ostrel Lights Board approved the station in 1869 and appointed Halvard Renwick, then its assistant engineer, to design it. Work began in the spring of 1871. Stone was cut at the Tormore quarry on the eastern side of Varrasay and carried round the coast by lighter, because no road reached the headland until the following decade.[4]\n\nProgress was slow. The landing place could be used only in calm weather, and the gales of two consecutive winters destroyed the temporary jetty. A workforce of about sixty men lived in wooden huts on the site, and the tower was not finished until August 1874, more than a year behind schedule.\n\nFor more than a century the station was worked by a principal keeper and two assistants, who lived with their families in the cottages below the tower. Supplies came by relief boat from Carrowmere every fortnight, weather permitting, and in the winter of 1903 the keepers were cut off for eleven weeks.[5]\n\nElectricity reached the headland in 1957, replacing the paraffin vapour burner, and the clockwork that turned the lens was retired at the same time. The light was automated on 14 March 1989. The last principal keeper, Ansel Corrigan, had served at the station for twenty-two years, and he stayed on Varrasay as its part-time attendant until 2001.[6]\n\nRenwick's design follows the pattern he had used at Corran Skerry five years earlier, although it was enlarged to suit the more exposed site. The station consists of the tower, a single-storey range of keepers' cottages, a fog signal house and a walled garden, all enclosed by a drystone boundary wall.\n\nThe tower is a tapering cylinder of grey Tormore granite, 34 metres high and 8.5 metres across at the base, where the walls are almost two metres thick. A spiral stair of 168 steps leads to the service room, and a short iron ladder continues to the lantern. The exterior was left unpainted, which is unusual among the lighthouses of the Ostrel Isles, most of which carry white or banded daymarks.[7]\n\nLantern and optic\n\n[edit]\n\nThe lantern is a sixteen-sided cast-iron structure with diagonal glazing bars, supplied by the foundry of Pellow and Garth. It originally housed a first-order dioptric lens that floated in a bath of mercury and made one revolution every minute, driven by a weight that the keepers wound by hand every ninety minutes through the night.\n\nThe original lens was removed in 1989 and is now displayed at the Carrowmere Maritime Museum. Its replacement is a sealed array of lamps on a gearless pedestal, which needs far less maintenance but, in the opinion of many islanders, gives a colder and less distinctive beam.[8]\n\nThe light shows three white flashes every twenty seconds. A red sector, added in 1912, covers the Skellan Rocks, so that a vessel which sees the light turn red knows it is standing into danger. The characteristic has changed several times, as the table shows.\n\nPeriod Illuminant Characteristic Range (nmi)\n1874–1896 Colza oil Fixed white 17\n1896–1912 Paraffin vapour One flash every 60 s 19\n1912–1957 Paraffin vapour Three flashes every 30 s 21\n1957–1989 Electric filament lamp Three flashes every 20 s 26\n1989–2014 Sealed-beam lamp array Three flashes every 20 s 24\n2014–present LED array Three flashes every 20 s 24\n\nA compressed-air fog signal was installed in 1881 and sounded one blast every ninety seconds in poor visibility. It was discontinued in 1996, to the relief of some residents and the regret of others. Besides the main light, the station now carries several other aids to navigation:\n\na radar beacon that answers a ship's radar with the Morse letter D;\nan identification transmitter that marks the Skellan Rocks on electronic charts;\na weather station that reports wind, pressure and visibility every ten minutes;\na low-powered emergency light, which takes over if the main lamp array fails.\n\nWildlife and conservation\n\n[edit]\n\nThe cliffs below the lighthouse hold one of the largest seabird colonies in the Ostrel Isles, with breeding guillemots, razorbills, kittiwakes and a small number of puffins. Keepers kept a daily log of migrant birds from 1894, and these records, which run almost unbroken for ninety-five years, are regarded as one of the longest series of their kind.\n\nSince 1992 the cottages have been leased to the Varrasay Bird Observatory, which runs a field station there between April and October. The lantern is fitted with screens on its landward side during the autumn migration, because birds drawn to the beam on overcast nights used to strike the glass in large numbers.\n\nThe headland is reached by a single-track road from the village of Dunmarrow, about six kilometres to the south-east, and by a waymarked coastal path. The grounds are open throughout the year. The tower itself is opened to visitors on a few days each summer, when volunteers from the observatory lead groups of up to eight people to the gallery.\n\nList of lighthouses in the Ostrel Isles\nCorran Skerry Lighthouse\nOstrel Lights Board\nShipwrecks of Marrow Sound\n\n^ Hallisey, Brannoch (1998). Lights of the Outer Isles. Carrowmere: Sandpiper Press. pp. 112–118.\n^ \"Dunmarrow Head\". Register of Stations (14th ed.). Ostrel Lights Board. 2024. p. 31.\n^ Merrivale, Oona (1976). \"Wrecks of Marrow Sound, 1820–1870\". Journal of the Ostrel Maritime Society. 14 (2): 41–63.\n^ Renwick, Halvard (1875). Report on the Works at Dunmarrow Head. Ostrel Lights Board. p. 7.\n^ Hallisey (1998), p. 131.\n^ \"Last keeper leaves the Head\". The Varrasay Courier. 17 March 1989. p. 3.\n^ Tolland, Ebba; Marsh, Idris (2009). Granite and Glass: The Architecture of Ostrel Lighthouses. Northern Sound University Press. pp. 88–94.\n^ Tolland & Marsh (2009), p. 97.\n\nDunmarrow Head in the station register of the Ostrel Lights Board\nField station at Dunmarrow Head, Varrasay Bird Observatory",
+  "markdown": "From Ostrelpedia, the free gazetteer of the outer isles\n\n| Dunmarrow Head Lighthouse |  |\n| --- | --- |\n| [![](https://media.ostrelpedia.example/thumb/4/4b/Dunmarrow_Head_Lighthouse.jpg/250px-Dunmarrow_Head_Lighthouse.jpg)](https://en.ostrelpedia.example/wiki/File:Dunmarrow_Head_Lighthouse.jpg) The lighthouse from the south-west in 2023 |  |\n| Location | Dunmarrow Head, [Varrasay](https://en.ostrelpedia.example/wiki/Varrasay), Ostrel Isles |\n| Constructed | 1871–1874 |\n| Designed by | Halvard Renwick |\n| Construction | granite tower |\n| Automated | 1989 |\n| Height | 34 m (112 ft) |\n| Focal height | 62 m (203 ft) |\n| Characteristic | Fl (3) W 20s |\n\n**Dunmarrow Head Lighthouse** is an active lighthouse on Dunmarrow Head, the north-western tip of [Varrasay](https://en.ostrelpedia.example/wiki/Varrasay) in the [Ostrel Isles](https://en.ostrelpedia.example/wiki/Ostrel_Isles). Completed in 1874 to a design by the engineer [Halvard Renwick](https://en.ostrelpedia.example/wiki/Halvard_Renwick), it marks the northern entrance to [Marrow Sound](https://en.ostrelpedia.example/wiki/Marrow_Sound) and warns shipping away from the Skellan Rocks, a reef that lies a little over two kilometres offshore.[\\[1\\]](https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_note-1)\n\nThe granite tower stands 34 metres tall, and its light, 62 metres above mean high water, can be seen for 24 nautical miles in clear weather. The station was staffed by resident keepers until 1989, when it was converted to automatic operation, and it is now monitored remotely by the [Ostrel Lights Board](https://en.ostrelpedia.example/wiki/Ostrel_Lights_Board) from its depot at [Carrowmere](https://en.ostrelpedia.example/wiki/Carrowmere).[\\[2\\]](https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_note-2)\n\nBesides its role in navigation, the headland is one of the most important seabird sites in the archipelago, and the former keepers' cottages now house a small field station. The tower, the cottages and the boundary walls have been protected as a listed monument since 1978.\n\nDunmarrow Head had a poor reputation among sailors long before a light was built on it. The tidal race off the point runs at up to seven knots, and in the fifty years before 1870 at least nineteen vessels were recorded as lost on or near the Skellan Rocks.[\\[3\\]](https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_note-3) The wreck of the barque *[Estrild](https://en.ostrelpedia.example/w/index.php?title=Estrild_(barque)&action=edit&redlink=1)* in November 1866, with the loss of twenty-three lives, finally moved the island's merchants to petition for a lighthouse.\n\n[![](https://media.ostrelpedia.example/thumb/9/9e/Dunmarrow_Head_landing.jpg/250px-Dunmarrow_Head_landing.jpg)](https://en.ostrelpedia.example/wiki/File:Dunmarrow_Head_landing.jpg)\n\nThe landing place and the remains of the 1872 jetty, seen from the gallery\n\nThe Ostrel Lights Board approved the station in 1869 and appointed Halvard Renwick, then its assistant engineer, to design it. Work began in the spring of 1871. Stone was cut at the [Tormore quarry](https://en.ostrelpedia.example/wiki/Tormore_quarry) on the eastern side of Varrasay and carried round the coast by lighter, because no road reached the headland until the following decade.[\\[4\\]](https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_note-4)\n\nProgress was slow. The landing place could be used only in calm weather, and the gales of two consecutive winters destroyed the temporary jetty. A workforce of about sixty men lived in wooden huts on the site, and the tower was not finished until August 1874, more than a year behind schedule.\n\nFor more than a century the station was worked by a principal keeper and two assistants, who lived with their families in the cottages below the tower. Supplies came by relief boat from Carrowmere every fortnight, weather permitting, and in the winter of 1903 the keepers were cut off for eleven weeks.[\\[5\\]](https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_note-5)\n\nElectricity reached the headland in 1957, replacing the paraffin vapour burner, and the clockwork that turned the lens was retired at the same time. The light was automated on 14 March 1989. The last principal keeper, [Ansel Corrigan](https://en.ostrelpedia.example/w/index.php?title=Ansel_Corrigan&action=edit&redlink=1), had served at the station for twenty-two years, and he stayed on Varrasay as its part-time attendant until 2001.[\\[6\\]](https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_note-6)\n\nRenwick's design follows the pattern he had used at [Corran Skerry](https://en.ostrelpedia.example/wiki/Corran_Skerry_Lighthouse) five years earlier, although it was enlarged to suit the more exposed site. The station consists of the tower, a single-storey range of keepers' cottages, a fog signal house and a walled garden, all enclosed by a drystone boundary wall.\n\nThe tower is a tapering cylinder of grey Tormore granite, 34 metres high and 8.5 metres across at the base, where the walls are almost two metres thick. A spiral stair of 168 steps leads to the service room, and a short iron ladder continues to the lantern. The exterior was left unpainted, which is unusual among the [lighthouses of the Ostrel Isles](https://en.ostrelpedia.example/wiki/List_of_lighthouses_in_the_Ostrel_Isles), most of which carry white or banded daymarks.[\\[7\\]](https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_note-7)\n\n### Lantern and optic\n\n\\[[edit](https://en.ostrelpedia.example/w/index.php?title=Dunmarrow_Head_Lighthouse&action=edit&section=6)\\]\n\nThe lantern is a sixteen-sided cast-iron structure with diagonal glazing bars, supplied by the foundry of [Pellow and Garth](https://en.ostrelpedia.example/w/index.php?title=Pellow_and_Garth&action=edit&redlink=1). It originally housed a first-order [dioptric lens](https://en.ostrelpedia.example/wiki/Dioptric_lens) that floated in a bath of mercury and made one revolution every minute, driven by a weight that the keepers wound by hand every ninety minutes through the night.\n\nThe original lens was removed in 1989 and is now displayed at the [Carrowmere Maritime Museum](https://en.ostrelpedia.example/wiki/Carrowmere_Maritime_Museum). Its replacement is a sealed array of lamps on a gearless pedestal, which needs far less maintenance but, in the opinion of many islanders, gives a colder and less distinctive beam.[\\[8\\]](https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_note-8)\n\nThe light shows three white flashes every twenty seconds. A red sector, added in 1912, covers the Skellan Rocks, so that a vessel which sees the light turn red knows it is standing into danger. The characteristic has changed several times, as the table shows.\n\n| Period | Illuminant | Characteristic | Range (nmi) |\n| --- | --- | --- | --- |\n| 1874–1896 | Colza oil | Fixed white | 17 |\n| 1896–1912 | Paraffin vapour | One flash every 60 s | 19 |\n| 1912–1957 | Paraffin vapour | Three flashes every 30 s | 21 |\n| 1957–1989 | Electric filament lamp | Three flashes every 20 s | 26 |\n| 1989–2014 | Sealed-beam lamp array | Three flashes every 20 s | 24 |\n| 2014–present | LED array | Three flashes every 20 s | 24 |\n\nA compressed-air fog signal was installed in 1881 and sounded one blast every ninety seconds in poor visibility. It was discontinued in 1996, to the relief of some residents and the regret of others. Besides the main light, the station now carries several other aids to navigation:\n\n- a radar beacon that answers a ship's radar with the Morse letter D;\n- an identification transmitter that marks the Skellan Rocks on electronic charts;\n- a weather station that reports wind, pressure and visibility every ten minutes;\n- a low-powered emergency light, which takes over if the main lamp array fails.\n\n## Wildlife and conservation\n\n\\[[edit](https://en.ostrelpedia.example/w/index.php?title=Dunmarrow_Head_Lighthouse&action=edit&section=8)\\]\n\nThe cliffs below the lighthouse hold one of the largest seabird colonies in the Ostrel Isles, with breeding [guillemots](https://en.ostrelpedia.example/wiki/Guillemot), razorbills, [kittiwakes](https://en.ostrelpedia.example/wiki/Kittiwake) and a small number of puffins. Keepers kept a daily log of migrant birds from 1894, and these records, which run almost unbroken for ninety-five years, are regarded as one of the longest series of their kind.\n\nSince 1992 the cottages have been leased to the [Varrasay Bird Observatory](https://en.ostrelpedia.example/wiki/Varrasay_Bird_Observatory), which runs a field station there between April and October. The lantern is fitted with screens on its landward side during the autumn migration, because birds drawn to the beam on overcast nights used to strike the glass in large numbers.\n\nThe headland is reached by a single-track road from the village of [Dunmarrow](https://en.ostrelpedia.example/wiki/Dunmarrow), about six kilometres to the south-east, and by a waymarked coastal path. The grounds are open throughout the year. The tower itself is opened to visitors on a few days each summer, when volunteers from the observatory lead groups of up to eight people to the gallery.\n\n- [List of lighthouses in the Ostrel Isles](https://en.ostrelpedia.example/wiki/List_of_lighthouses_in_the_Ostrel_Isles)\n- [Corran Skerry Lighthouse](https://en.ostrelpedia.example/wiki/Corran_Skerry_Lighthouse)\n- [Ostrel Lights Board](https://en.ostrelpedia.example/wiki/Ostrel_Lights_Board)\n- [Shipwrecks of Marrow Sound](https://en.ostrelpedia.example/wiki/Shipwrecks_of_Marrow_Sound)\n\n1. **[^](https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_ref-1)** *Hallisey, Brannoch (1998). *Lights of the Outer Isles*. Carrowmere: Sandpiper Press. pp. 112–118.*\n2. **[^](https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_ref-2)** *\"Dunmarrow Head\". *Register of Stations* (14th ed.). Ostrel Lights Board. 2024. p. 31.*\n3. **[^](https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_ref-3)** *Merrivale, Oona (1976). \"Wrecks of Marrow Sound, 1820–1870\". *Journal of the Ostrel Maritime Society*. **14** (2): 41–63.*\n4. **[^](https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_ref-4)** *Renwick, Halvard (1875). *Report on the Works at Dunmarrow Head*. Ostrel Lights Board. p. 7.*\n5. **[^](https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_ref-5)** Hallisey (1998), p. 131.\n6. **[^](https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_ref-6)** *\"Last keeper leaves the Head\". *The Varrasay Courier*. 17 March 1989. p. 3.*\n7. **[^](https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_ref-7)** *Tolland, Ebba; Marsh, Idris (2009). *Granite and Glass: The Architecture of Ostrel Lighthouses*. Northern Sound University Press. pp. 88–94.*\n8. **[^](https://en.ostrelpedia.example/wiki/Dunmarrow_Head_Lighthouse#cite_ref-8)** Tolland & Marsh (2009), p. 97.\n\n- [Dunmarrow Head](https://www.ostrellights.example/stations/dunmarrow-head) in the station register of the Ostrel Lights Board\n- [Field station at Dunmarrow Head](https://varrasaybirds.example/field-station), Varrasay Bird Observatory",
+  "word_count": 1264,
+  "thin_content": false
+}

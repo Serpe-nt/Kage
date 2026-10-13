@@ -1,0 +1,552 @@
+{
+  "title": "Configuration file | Wendril",
+  "description": "Where Wendril looks for wendril.toml, which keys the file accepts, how retries are tuned and how to check the file before a run.",
+  "canonical": "https://docs.wendril.example/docs/configuration/config-file",
+  "lang": "en",
+  "published_at": null,
+  "modified_at": null,
+  "meta": {
+    "description": [
+      "Where Wendril looks for wendril.toml, which keys the file accepts, how retries are tuned and how to check the file before a run."
+    ],
+    "docsearch:docusaurus_tag": [
+      "docs-default-current"
+    ],
+    "docsearch:language": [
+      "en"
+    ],
+    "docsearch:version": [
+      "current"
+    ],
+    "docusaurus_locale": [
+      "en"
+    ],
+    "docusaurus_tag": [
+      "docs-default-current"
+    ],
+    "docusaurus_version": [
+      "current"
+    ],
+    "generator": [
+      "Docusaurus v3.5.2"
+    ],
+    "viewport": [
+      "width=device-width,initial-scale=1"
+    ]
+  },
+  "opengraph": {
+    "og:description": [
+      "Where Wendril looks for wendril.toml, which keys the file accepts, how retries are tuned and how to check the file before a run."
+    ],
+    "og:image": [
+      "https://docs.wendril.example/img/wendril-social-card.png"
+    ],
+    "og:locale": [
+      "en"
+    ],
+    "og:title": [
+      "Configuration file | Wendril"
+    ],
+    "og:url": [
+      "https://docs.wendril.example/docs/configuration/config-file"
+    ]
+  },
+  "twitter": {
+    "twitter:card": [
+      "summary_large_image"
+    ],
+    "twitter:image": [
+      "https://docs.wendril.example/img/wendril-social-card.png"
+    ]
+  },
+  "jsonld": [
+    {
+      "@context": "https://schema.org",
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "item": "https://docs.wendril.example/docs/category/configuration",
+          "name": "Configuration",
+          "position": 1
+        },
+        {
+          "@type": "ListItem",
+          "item": "https://docs.wendril.example/docs/configuration/config-file",
+          "name": "Configuration file",
+          "position": 2
+        }
+      ]
+    }
+  ],
+  "jsonld_skipped": 0,
+  "links": [
+    {
+      "url": "https://docs.wendril.example/docs/configuration/config-file#__docusaurus_skipToContent_fallback",
+      "text": "Skip to main content",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/blog/wendril-2-4-released",
+      "text": "Read the release notes",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/",
+      "text": "Wendril",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/intro",
+      "text": "Docs",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/cli/run",
+      "text": "CLI reference",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/blog",
+      "text": "Blog",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/community",
+      "text": "Community",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/intro",
+      "text": "2.4",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/next/configuration/config-file",
+      "text": "Next",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/configuration/config-file",
+      "text": "2.4",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/2.3/configuration/config-file",
+      "text": "2.3",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/1.9/configuration",
+      "text": "1.9",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/intro",
+      "text": "Introduction",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/category/getting-started",
+      "text": "Getting started",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/category/configuration",
+      "text": "Configuration",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/configuration/config-file",
+      "text": "Configuration file",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/configuration/profiles",
+      "text": "Profiles",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/configuration/remotes",
+      "text": "Remotes",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/configuration/ignore-rules",
+      "text": "Ignore rules",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/configuration/environment",
+      "text": "Environment variables",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/configuration/secrets",
+      "text": "Secrets",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/category/cli-reference",
+      "text": "CLI reference",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/category/guides",
+      "text": "Guides",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/category/troubleshooting",
+      "text": "Troubleshooting",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/faq",
+      "text": "FAQ",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/changelog",
+      "text": "Changelog",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/category/configuration",
+      "text": "Configuration",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/configuration/profiles",
+      "text": "profile",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/configuration/config-file#file-location",
+      "text": "​",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/cli/check",
+      "text": "the CLI reference",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/configuration/config-file#top-level-options",
+      "text": "​",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/configuration/config-file#paths-and-patterns",
+      "text": "​",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/configuration/ignore-rules",
+      "text": "ignore rules",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/configuration/config-file#environment-overrides",
+      "text": "​",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/configuration/config-file#retries",
+      "text": "​",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/configuration/config-file#backoff",
+      "text": "​",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/cli/run",
+      "text": "wendril run",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/configuration/config-file#giving-up",
+      "text": "​",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/configuration/config-file#validating-the-file",
+      "text": "​",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/guides/running-in-ci",
+      "text": "Running in CI",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/configuration/config-file#retries",
+      "text": "retries",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/configuration/profiles",
+      "text": "Profiles",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://code.wendril.example/wendril/wendril/issues/412",
+      "text": "issue 412",
+      "rel": [
+        "noopener",
+        "noreferrer"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://code.wendril.example/wendril/docs/edit/main/docs/configuration/config-file.md",
+      "text": "Edit this page",
+      "rel": [
+        "noopener",
+        "noreferrer"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/getting-started/upgrading",
+      "text": "Previous Upgrading",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/configuration/profiles",
+      "text": "Next Profiles",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/configuration/config-file#file-location",
+      "text": "File location",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/configuration/config-file#top-level-options",
+      "text": "Top-level options",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/configuration/config-file#paths-and-patterns",
+      "text": "Paths and patterns",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/configuration/config-file#environment-overrides",
+      "text": "Environment overrides",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/configuration/config-file#retries",
+      "text": "Retries",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/configuration/config-file#backoff",
+      "text": "Backoff",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/configuration/config-file#giving-up",
+      "text": "Giving up",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/configuration/config-file#validating-the-file",
+      "text": "Validating the file",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/intro",
+      "text": "Introduction",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/getting-started/quick-start",
+      "text": "Quick start",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/configuration/config-file",
+      "text": "Configuration",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/cli/run",
+      "text": "CLI reference",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://forum.wendril.example/",
+      "text": "Forum",
+      "rel": [
+        "noopener",
+        "noreferrer"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://chat.wendril.example/invite",
+      "text": "Chat",
+      "rel": [
+        "noopener",
+        "noreferrer"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/community/contributing",
+      "text": "Contributing",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/blog",
+      "text": "Blog",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://docs.wendril.example/docs/changelog",
+      "text": "Changelog",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://code.wendril.example/wendril/wendril",
+      "text": "Source code",
+      "rel": [
+        "noopener",
+        "noreferrer"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://status.wendril.example/",
+      "text": "Service status",
+      "rel": [
+        "noopener",
+        "noreferrer",
+        "nofollow"
+      ],
+      "same_site": true
+    }
+  ],
+  "links_truncated": false,
+  "headings": [
+    {
+      "level": 1,
+      "text": "Configuration file",
+      "id": null
+    },
+    {
+      "level": 2,
+      "text": "File location",
+      "id": "file-location"
+    },
+    {
+      "level": 2,
+      "text": "Top-level options",
+      "id": "top-level-options"
+    },
+    {
+      "level": 3,
+      "text": "Paths and patterns",
+      "id": "paths-and-patterns"
+    },
+    {
+      "level": 3,
+      "text": "Environment overrides",
+      "id": "environment-overrides"
+    },
+    {
+      "level": 2,
+      "text": "Retries",
+      "id": "retries"
+    },
+    {
+      "level": 3,
+      "text": "Backoff",
+      "id": "backoff"
+    },
+    {
+      "level": 3,
+      "text": "Giving up",
+      "id": "giving-up"
+    },
+    {
+      "level": 2,
+      "text": "Validating the file",
+      "id": "validating-the-file"
+    }
+  ],
+  "text": "Configuration file\n\nWendril reads its settings from a single TOML file named wendril.toml. The file describes what to mirror, where to send it, and how patiently the tool should behave when a remote is slow or unreachable. Everything in it can also be set per profile, so most projects keep one file and switch behaviour with --profile.\n\nFile location\n\nWhen you start wendril run, the tool looks for a configuration file before it does anything else. It does not merge files: the first one it finds wins, and the rest are ignored.\n\nThe path given with --config, if the flag is present.\nThe path in the WENDRIL_CONFIG environment variable.\nA file named wendril.toml in the current directory, then in each parent directory in turn.\nThe search stops at the first directory that holds a .git folder.\nSymbolic links are followed, but never out of your home directory.\nThe per-user file at ~/.config/wendril/wendril.toml.\n\nIf none of these exist, Wendril stops with exit code 78 and prints the places it looked. You can see the same list at any time with wendril check --where, which is described in the CLI reference.\n\nwendril.toml\n\n# What to mirror and where to put it\nsource = \"./public\"\nremote = \"depot://assets-eu/site\"\n\n[transfer]\nworkers = 4\nchunk_size = \"8MiB\"\n\nA minimal file needs only source and remote; every other key has a default. The example above also raises the number of parallel workers, which helps when the tree is made of many small files.\n\nTop-level options\n\nThe keys below sit at the top of the file, outside any table such as [retry]. They apply to every profile unless a profile sets its own value.\n\nOption Type Default Description\nsource string none Directory to mirror, relative to the configuration file.\nremote string none Address of the destination, such as depot://bucket/prefix.\ndelete_extra boolean false Remove remote objects that no longer exist locally.\nfollow_symlinks boolean true Copy the target of a link instead of the link itself.\nlog_level string \"info\" One of error, warn, info, debug or trace.\n\nUnknown keys are an error, not a warning. This is deliberate: a misspelled delete_extra that was silently ignored would leave stale objects behind for months before anyone noticed.\n\nPaths and patterns\n\nRelative paths are resolved against the directory that holds the configuration file, never against the directory you happened to run the command from. That makes a checked-in wendril.toml behave the same on every machine and in every CI job.\n\nThe include and exclude keys take lists of glob patterns. A pattern that ends in a slash matches a directory and everything under it, while ** crosses directory boundaries; the full grammar is on the ignore rules page.\n\nEnvironment overrides\n\nAny key can be overridden for a single run by an environment variable. The name is the key in upper case with a WENDRIL_ prefix, and a double underscore stands for the dot between a table and its key, so transfer.workers becomes WENDRIL_TRANSFER__WORKERS.\n\nnote\n\nOverrides are applied after the file is parsed and before it is validated. A value that is fine in the file but out of range in the environment still fails, and the error message names the variable rather than a line number.\n\nRetries\n\nRemote stores fail in boring ways: a connection is reset, a request times out, a rate limit is hit. The [retry] table controls how Wendril reacts, and its defaults are tuned for a home connection rather than a data centre.\n\n[retry]\nmax_attempts = 5\ninitial_delay = \"500ms\"\nmax_delay = \"30s\"\njitter = true\nretry_on = [\"timeout\", \"reset\", \"throttled\"]\n\nBackoff\n\nThe delay doubles after every failed attempt, starting at initial_delay and never exceeding max_delay. With jitter switched on, each delay is multiplied by a random factor between 0.5 and 1.5, so that a fleet of jobs that failed together does not retry together.\n\nThe random factor comes from a generator that is seeded once per run. Pass --seed to wendril run if you need to reproduce the exact timing of an earlier run while debugging.\n\nGiving up\n\nAfter max_attempts the file is marked as failed and the run carries on with the next one. The summary at the end lists every failed path, and the exit code is 3 when at least one file could not be transferred.\n\nwarning\n\nSetting max_attempts = 0 does not mean “retry forever”. It disables retries altogether, and a single dropped connection will fail the file.\n\nIf you really want unbounded retries, use a large number together with a sensible max_delay, and keep an eye on the run with wendril status.\n\nValidating the file\n\nYou can check a configuration file without touching the remote. wendril check parses the file, applies environment overrides, resolves every path and reports what a run would use; it exits with 0 when the file is valid and with 65 when it is not, which makes it a convenient first step in a pipeline. See Running in CI for a complete job definition, and the section on retries above for the keys that most often need tuning there.\n\nsource = \"./dist\"\nremote = \"depot://releases/nightly\"\ndelete_extra = true\nexclude = [\"*.map\", \"tmp/\"]\n\n[profile.staging]\nremote = \"depot://releases-staging/nightly\"\nlog_level = \"debug\"\n\nThis file mirrors ./dist to the nightly prefix and, when run with --profile staging, sends the same tree to a separate bucket with more verbose logging. How a profile inherits from the top level is explained under Profiles.\n\nWhy TOML and not YAML?\n\nEarly versions of Wendril read YAML. It was easy to write and just as easy to get wrong: an unquoted no became a boolean, and one stray space moved a key into the wrong table.\n\nTOML is stricter about types and has no significant indentation, so a file either means what it says or fails to parse. Version 2.0 dropped YAML support, and wendril migrate-config converts an old file in place; the discussion that led to the change is kept in issue 412.",
+  "markdown": "# Configuration file\n\nWendril reads its settings from a single TOML file named `wendril.toml`. The file describes what to mirror, where to send it, and how patiently the tool should behave when a remote is slow or unreachable. Everything in it can also be set per [profile](https://docs.wendril.example/docs/configuration/profiles), so most projects keep one file and switch behaviour with `--profile`.\n\n## File location\n\nWhen you start `wendril run`, the tool looks for a configuration file before it does anything else. It does not merge files: the first one it finds wins, and the rest are ignored.\n\n1. The path given with `--config`, if the flag is present.\n2. The path in the `WENDRIL_CONFIG` environment variable.\n3. A file named `wendril.toml` in the current directory, then in each parent directory in turn.\n\n   - The search stops at the first directory that holds a `.git` folder.\n   - Symbolic links are followed, but never out of your home directory.\n4. The per-user file at `~/.config/wendril/wendril.toml`.\n\nIf none of these exist, Wendril stops with exit code `78` and prints the places it looked. You can see the same list at any time with `wendril check --where`, which is described in [the CLI reference](https://docs.wendril.example/docs/cli/check).\n\nwendril.toml\n\n```toml\n# What to mirror and where to put it\nsource = \"./public\"\nremote = \"depot://assets-eu/site\"\n\n[transfer]\nworkers = 4\nchunk_size = \"8MiB\"\n```\n\nA minimal file needs only `source` and `remote`; every other key has a default. The example above also raises the number of parallel workers, which helps when the tree is made of many small files.\n\n## Top-level options\n\nThe keys below sit at the top of the file, outside any table such as `[retry]`. They apply to every profile unless a profile sets its own value.\n\n| Option | Type | Default | Description |\n| --- | --- | --- | --- |\n| `source` | string | none | Directory to mirror, relative to the configuration file. |\n| `remote` | string | none | Address of the destination, such as `depot://bucket/prefix`. |\n| `delete_extra` | boolean | `false` | Remove remote objects that no longer exist locally. |\n| `follow_symlinks` | boolean | `true` | Copy the target of a link instead of the link itself. |\n| `log_level` | string | `\"info\"` | One of `error`, `warn`, `info`, `debug` or `trace`. |\n\nUnknown keys are an error, not a warning. This is deliberate: a misspelled `delete_extra` that was silently ignored would leave stale objects behind for months before anyone noticed.\n\n### Paths and patterns\n\nRelative paths are resolved against the directory that holds the configuration file, never against the directory you happened to run the command from. That makes a checked-in `wendril.toml` behave the same on every machine and in every CI job.\n\nThe `include` and `exclude` keys take lists of glob patterns. A pattern that ends in a slash matches a directory and everything under it, while `**` crosses directory boundaries; the full grammar is on the [ignore rules](https://docs.wendril.example/docs/configuration/ignore-rules) page.\n\n### Environment overrides\n\nAny key can be overridden for a single run by an environment variable. The name is the key in upper case with a `WENDRIL_` prefix, and a double underscore stands for the dot between a table and its key, so `transfer.workers` becomes `WENDRIL_TRANSFER__WORKERS`.\n\nnote\n\nOverrides are applied after the file is parsed and before it is validated. A value that is fine in the file but out of range in the environment still fails, and the error message names the variable rather than a line number.\n\n## Retries\n\nRemote stores fail in boring ways: a connection is reset, a request times out, a rate limit is hit. The `[retry]` table controls how Wendril reacts, and its defaults are tuned for a home connection rather than a data centre.\n\n```toml\n[retry]\nmax_attempts = 5\ninitial_delay = \"500ms\"\nmax_delay = \"30s\"\njitter = true\nretry_on = [\"timeout\", \"reset\", \"throttled\"]\n```\n\n### Backoff\n\nThe delay doubles after every failed attempt, starting at `initial_delay` and never exceeding `max_delay`. With `jitter` switched on, each delay is multiplied by a random factor between 0.5 and 1.5, so that a fleet of jobs that failed together does not retry together.\n\nThe random factor comes from a generator that is seeded once per run. Pass `--seed` to [`wendril run`](https://docs.wendril.example/docs/cli/run) if you need to reproduce the exact timing of an earlier run while debugging.\n\n### Giving up\n\nAfter `max_attempts` the file is marked as failed and the run carries on with the next one. The summary at the end lists every failed path, and the exit code is `3` when at least one file could not be transferred.\n\nwarning\n\nSetting `max_attempts = 0` does not mean “retry forever”. It disables retries altogether, and a single dropped connection will fail the file.\n\nIf you really want unbounded retries, use a large number together with a sensible `max_delay`, and keep an eye on the run with `wendril status`.\n\n## Validating the file\n\nYou can check a configuration file without touching the remote. `wendril check` parses the file, applies environment overrides, resolves every path and reports what a run would use; it exits with `0` when the file is valid and with `65` when it is not, which makes it a convenient first step in a pipeline. See [Running in CI](https://docs.wendril.example/docs/guides/running-in-ci) for a complete job definition, and the section on [retries](https://docs.wendril.example/docs/configuration/config-file#retries) above for the keys that most often need tuning there.\n\n```toml\nsource = \"./dist\"\nremote = \"depot://releases/nightly\"\ndelete_extra = true\nexclude = [\"*.map\", \"tmp/\"]\n\n[profile.staging]\nremote = \"depot://releases-staging/nightly\"\nlog_level = \"debug\"\n```\n\nThis file mirrors `./dist` to the nightly prefix and, when run with `--profile staging`, sends the same tree to a separate bucket with more verbose logging. How a profile inherits from the top level is explained under [Profiles](https://docs.wendril.example/docs/configuration/profiles).\n\nWhy TOML and not YAML?\n\nEarly versions of Wendril read YAML. It was easy to write and just as easy to get wrong: an unquoted `no` became a boolean, and one stray space moved a key into the wrong table.\n\nTOML is stricter about types and has no significant indentation, so a file either means what it says or fails to parse. Version 2.0 dropped YAML support, and `wendril migrate-config` converts an old file in place; the discussion that led to the change is kept in [issue 412](https://code.wendril.example/wendril/wendril/issues/412).",
+  "word_count": 987,
+  "thin_content": false
+}

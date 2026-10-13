@@ -1,0 +1,623 @@
+{
+  "title": "Building a Cold Frame from Old Sash Windows | Fern Hollow Notes",
+  "description": "How I turned four old sash windows from a neighbour's cottage into a cold frame for under fifty pounds, with a materials list, the steps and a week of temperature readings.",
+  "canonical": "https://blog.fernhollow.example/2016/02/cold-frame-from-old-sash-windows/",
+  "lang": "en-US",
+  "published_at": "2016-02-21T09:14:07Z",
+  "modified_at": "2016-02-24T18:40:52Z",
+  "meta": {
+    "description": [
+      "How I turned four old sash windows from a neighbour's cottage into a cold frame for under fifty pounds, with a materials list, the steps and a week of temperature readings."
+    ],
+    "generator": [
+      "WordPress 4.4.2"
+    ],
+    "viewport": [
+      "width=device-width, initial-scale=1"
+    ]
+  },
+  "opengraph": {
+    "og:image": [
+      "https://blog.fernhollow.example/wp-content/uploads/2016/02/cold-frame-finished.jpg"
+    ],
+    "og:title": [
+      "Building a Cold Frame from Old Sash Windows"
+    ],
+    "og:type": [
+      "article"
+    ],
+    "og:url": [
+      "https://blog.fernhollow.example/2016/02/cold-frame-from-old-sash-windows/"
+    ]
+  },
+  "twitter": {},
+  "jsonld": [],
+  "jsonld_skipped": 0,
+  "links": [
+    {
+      "url": "https://blog.fernhollow.example/#content",
+      "text": "Skip to content",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/",
+      "text": "Fern Hollow Notes",
+      "rel": [
+        "home"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/",
+      "text": "Home",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/about/",
+      "text": "About",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/category/garden/",
+      "text": "Garden",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/category/kitchen/",
+      "text": "Kitchen",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/projects/",
+      "text": "Projects",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/contact/",
+      "text": "Contact",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2016/02/cold-frame-from-old-sash-windows/",
+      "text": "February 21, 2016 February 24, 2016",
+      "rel": [
+        "bookmark"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/author/bryony/",
+      "text": "Bryony",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2016/02/cold-frame-from-old-sash-windows/#comments",
+      "text": "4 Comments",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://www.hardyplotsociety.example.org/advice/cold-frames/",
+      "text": "The Hardy Plot Society’s guide",
+      "rel": [],
+      "same_site": false
+    },
+    {
+      "url": "https://blog.fernhollow.example/2015/11/tools-i-actually-use/",
+      "text": "an older post",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/wp-content/uploads/2016/02/sash-windows-scraped.jpg",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/wp-content/uploads/2016/02/cold-frame-finished.jpg",
+      "text": "",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "http://oldhouserepair.example.net/forum/lead-paint-basics",
+      "text": "this renovation forum thread",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": false
+    },
+    {
+      "url": "https://blog.fernhollow.example/projects/coldframe-logger/",
+      "text": "the projects page",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2016/01/sowing-calendar/",
+      "text": "sowing calendar",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/tag/garden/",
+      "text": "garden",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2016/02/cold-frame-from-old-sash-windows/?share=email",
+      "text": "Email",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2016/02/cold-frame-from-old-sash-windows/?share=murmur",
+      "text": "Murmur",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2016/02/cold-frame-from-old-sash-windows/?share=loopline",
+      "text": "Loopline 3",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2016/02/cold-frame-from-old-sash-windows/?share=pinwall",
+      "text": "Pinwall",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2015/11/tools-i-actually-use/",
+      "text": "",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2015/11/tools-i-actually-use/",
+      "text": "The Tools I Actually Use",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2016/01/sowing-calendar/",
+      "text": "",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2016/01/sowing-calendar/",
+      "text": "A Sowing Calendar for a Cold Garden",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2015/10/a-compost-bin-from-pallets/",
+      "text": "",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2015/10/a-compost-bin-from-pallets/",
+      "text": "A Compost Bin from Pallets",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/category/garden/",
+      "text": "Garden",
+      "rel": [
+        "category",
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/category/projects/",
+      "text": "Projects",
+      "rel": [
+        "category",
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/tag/cold-frame/",
+      "text": "cold frame",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/tag/garden/",
+      "text": "garden",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/tag/recycling/",
+      "text": "recycling",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/tag/seedlings/",
+      "text": "seedlings",
+      "rel": [
+        "tag"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2016/02/the-seed-order-arrives/",
+      "text": "← The Seed Order Arrives",
+      "rel": [
+        "prev"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2016/03/first-sowings-of-the-year/",
+      "text": "First Sowings of the Year →",
+      "rel": [
+        "next"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "http://pardoe-allotment.example.org/",
+      "text": "Oswin Pardoe",
+      "rel": [
+        "external",
+        "nofollow"
+      ],
+      "same_site": false
+    },
+    {
+      "url": "https://blog.fernhollow.example/2016/02/cold-frame-from-old-sash-windows/#comment-1907",
+      "text": "February 21, 2016 at 2:31 pm",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2016/02/cold-frame-from-old-sash-windows/?replytocom=1907#respond",
+      "text": "Reply",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/",
+      "text": "Bryony",
+      "rel": [
+        "external",
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2016/02/cold-frame-from-old-sash-windows/#comment-1909",
+      "text": "February 21, 2016 at 6:05 pm",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2016/02/cold-frame-from-old-sash-windows/?replytocom=1909#respond",
+      "text": "Reply",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2016/02/cold-frame-from-old-sash-windows/#comment-1914",
+      "text": "February 23, 2016 at 8:47 am",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2016/02/cold-frame-from-old-sash-windows/?replytocom=1914#respond",
+      "text": "Reply",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "http://thaddeus-makes.example.com/",
+      "text": "Thaddeus",
+      "rel": [
+        "external",
+        "nofollow"
+      ],
+      "same_site": false
+    },
+    {
+      "url": "https://blog.fernhollow.example/2016/02/cold-frame-from-old-sash-windows/#comment-1921",
+      "text": "February 25, 2016 at 9:12 pm",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2016/02/cold-frame-from-old-sash-windows/?replytocom=1921#respond",
+      "text": "Reply",
+      "rel": [
+        "nofollow"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2016/03/first-sowings-of-the-year/",
+      "text": "First Sowings of the Year",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2016/02/cold-frame-from-old-sash-windows/",
+      "text": "Building a Cold Frame from Old Sash Windows",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2016/02/the-seed-order-arrives/",
+      "text": "The Seed Order Arrives",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2016/01/marmalade-take-three/",
+      "text": "Marmalade, Take Three",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2016/01/sowing-calendar/",
+      "text": "A Sowing Calendar for a Cold Garden",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2015/12/what-the-frost-left-behind/",
+      "text": "What the Frost Left Behind",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2016/03/",
+      "text": "March 2016",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2016/02/",
+      "text": "February 2016",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2016/01/",
+      "text": "January 2016",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2015/12/",
+      "text": "December 2015",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2015/11/",
+      "text": "November 2015",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/2015/10/",
+      "text": "October 2015",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/category/garden/",
+      "text": "Garden",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/category/kitchen/",
+      "text": "Kitchen",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/category/projects/",
+      "text": "Projects",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/category/shed-life/",
+      "text": "Shed Life",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/category/uncategorized/",
+      "text": "Uncategorized",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/tag/allotment/",
+      "text": "allotment",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/tag/bees/",
+      "text": "bees",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/tag/broad-beans/",
+      "text": "broad beans",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/tag/cold-frame/",
+      "text": "cold frame",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/tag/compost/",
+      "text": "compost",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/tag/garden/",
+      "text": "garden",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/tag/greenhouse/",
+      "text": "greenhouse",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/tag/jam/",
+      "text": "jam",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/tag/lettuce/",
+      "text": "lettuce",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/tag/recycling/",
+      "text": "recycling",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/tag/seedlings/",
+      "text": "seedlings",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/tag/slugs/",
+      "text": "slugs",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/tag/sweet-peas/",
+      "text": "sweet peas",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/tag/tomatoes/",
+      "text": "tomatoes",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/tag/weather/",
+      "text": "weather",
+      "rel": [],
+      "same_site": true
+    },
+    {
+      "url": "https://blog.fernhollow.example/",
+      "text": "Fern Hollow Notes",
+      "rel": [
+        "home"
+      ],
+      "same_site": true
+    },
+    {
+      "url": "https://hedgerowthemes.example.com/",
+      "text": "Hedgerow Themes",
+      "rel": [
+        "designer"
+      ],
+      "same_site": false
+    },
+    {
+      "url": "https://blog.fernhollow.example/feed/",
+      "text": "Entries RSS",
+      "rel": [],
+      "same_site": true
+    }
+  ],
+  "links_truncated": false,
+  "headings": [
+    {
+      "level": 2,
+      "text": "What you will need",
+      "id": null
+    },
+    {
+      "level": 2,
+      "text": "Putting it together",
+      "id": null
+    },
+    {
+      "level": 3,
+      "text": "Does it actually work?",
+      "id": null
+    }
+  ],
+  "text": "Every February I promise myself that this will be the year I stop balancing seed trays on the kitchen windowsill, and every February the windowsill wins. This time I finally did something about it. When our neighbour replaced the sash windows in her cottage she offered me the old ones, and I spent two cold weekends turning four of them into a cold frame that now sits against the south wall of the shed.\n\nIf you have never used one, a cold frame is simply a bottomless box with a glass lid. It traps the warmth of the day, keeps the wind off and gives young plants a halfway house between the kitchen and the open ground. The Hardy Plot Society’s guide explains the idea far better than I can, and it is where I found the rule that the back should stand about fifteen centimetres taller than the front, so that rain runs off and the low winter sun gets in.\n\nWhat you will need\n\nAlmost everything came from the shed or from a skip, which is the whole point. I already had a saw, a drill and a tape measure, so the shopping list was short. If you are starting from nothing, I wrote about the handful of tools worth owning in an older post.\n\nFour old sash windows, roughly 60 by 90 centimetres each, with the glass intact\nSix pressure-treated boards, 15 centimetres wide, for the back, front and sides\nEight galvanised hinges and a box of 40 millimetre exterior screws\nA tin of water-based wood preserver and an old brush\n\nThe four windows after a morning of scraping. The one on the left had the worst of the old putty.\n\nFor anyone wondering whether it is worth the bother, here is what it cost me. Shop-bought frames of the same size start at well over a hundred pounds, and most of them are glazed with thin plastic that goes cloudy within a couple of summers.\n\nItem Cost\nSash windows (four) Free\nTimber boards £23.50\nHinges, screws and preserver £19.20\nTotal £42.70\n\nPutting it together\n\nThe build itself is not complicated, though I managed to make it so by cutting the first side panel upside down. Measure twice, as they say, and then go and have a cup of tea before you pick up the saw. These are the steps, in the order I should have done them.\n\nScrape the loose paint and putty from the windows, wearing a dust mask, and wash the glass.\nCut the boards to make a back 45 centimetres tall, a front 30 centimetres tall and two sloping sides.\nScrew the box together at the corners and brush on two coats of preserver, letting each one dry overnight.\nHinge the windows to the back board so that each one lifts separately.\nSet the frame on level ground facing south, and prop the lids open on mild days.\n\nFinished and in place against the shed, with the first trays of lettuce and sweet peas inside.\n\nA word about old paint. Windows of this age were almost certainly painted with lead at some point, so I scraped them outdoors, swept up the flakes and did not sand them at all. There is sensible advice on dealing with it in this renovation forum thread, and if in doubt I would simply seal the frames with fresh paint and leave the old layers where they are.\n\nDoes it actually work?\n\nI am the sort of person who needs numbers, so I wired a pair of cheap temperature probes to a little single-board computer, one inside the frame and one outside, and left them logging for a week. The script is nothing clever, and I have put it on the projects page for anyone who wants it. This is what a typical clear day looked like:\n\n$ ./coldframe-log.sh --day 2016-02-18\n06:00  outside -2.1C  inside  3.4C\n12:00  outside  6.3C  inside 17.8C\n18:00  outside  1.0C  inside  7.2C\n\nSo the frame was five or six degrees warmer than the garden before dawn, which is the difference between a frost and no frost, and almost too warm by midday. That midday figure is the one to watch. On a sunny afternoon in April a closed frame will cook seedlings in an hour, which is why step five matters more than all the others put together.\n\nA cold frame asks only two things of its keeper: that the lid be opened in the morning, and that it be closed again at night. Agnes Thornbury, The Frugal Kitchen Garden\n\nMy grandmother’s copy of that book has lived on the shelf by the back door for as long as I can remember, and she was right about most things. I have already forgotten the evening half of the rule once, and lost a tray of basil to it, so there is now a note stuck to the kettle.\n\nThe lettuce I sowed on the first of the month is up, the sweet peas are a hand tall, and the broad beans that sulked on the windowsill last year look positively cheerful. Next on the list are the tomatoes, which I will start indoors and move out in April, following the timings in my sowing calendar.\n\nIf you build one of your own, I would love to see it. Leave a comment below, or have a look through everything else filed under garden for more of my mistakes. And if you happen to know a kinder way of getting eighty-year-old putty off glass, please tell me before I start on the greenhouse.",
+  "markdown": "Every February I promise myself that this will be the year I stop balancing seed trays on the kitchen windowsill, and every February the windowsill wins. This time I finally did something about it. When our neighbour replaced the sash windows in her cottage she offered me the old ones, and I spent two cold weekends turning four of them into a cold frame that now sits against the south wall of the shed.\n\nIf you have never used one, a cold frame is simply a bottomless box with a glass lid. It traps the warmth of the day, keeps the wind off and gives young plants a halfway house between the kitchen and the open ground. [The Hardy Plot Society’s guide](https://www.hardyplotsociety.example.org/advice/cold-frames/) explains the idea far better than I can, and it is where I found the rule that the back should stand about fifteen centimetres taller than the front, so that rain runs off and the low winter sun gets in.\n\n## What you will need\n\nAlmost everything came from the shed or from a skip, which is the whole point. I already had a saw, a drill and a tape measure, so the shopping list was short. If you are starting from nothing, I wrote about the handful of tools worth owning in [an older post](https://blog.fernhollow.example/2015/11/tools-i-actually-use/).\n\n- Four old sash windows, roughly 60 by 90 centimetres each, with the glass intact\n- Six pressure-treated boards, 15 centimetres wide, for the back, front and sides\n- Eight galvanised hinges and a box of 40 millimetre exterior screws\n- A tin of water-based wood preserver and an old brush\n\n[![Four old wooden sash windows leaning against a shed wall](https://blog.fernhollow.example/wp-content/uploads/2016/02/sash-windows-scraped-1024x683.jpg)](https://blog.fernhollow.example/wp-content/uploads/2016/02/sash-windows-scraped.jpg)\n\nThe four windows after a morning of scraping. The one on the left had the worst of the old putty.\n\nFor anyone wondering whether it is worth the bother, here is what it cost me. Shop-bought frames of the same size start at well over a hundred pounds, and most of them are glazed with thin plastic that goes cloudy within a couple of summers.\n\n| Item | Cost |\n| --- | --- |\n| Sash windows (four) | Free |\n| Timber boards | £23.50 |\n| Hinges, screws and preserver | £19.20 |\n| Total | £42.70 |\n\n## Putting it together\n\nThe build itself is not complicated, though I managed to make it so by cutting the first side panel upside down. Measure twice, as they say, and then go and have a cup of tea before you pick up the saw. These are the steps, in the order I should have done them.\n\n1. Scrape the loose paint and putty from the windows, wearing a dust mask, and wash the glass.\n2. Cut the boards to make a back 45 centimetres tall, a front 30 centimetres tall and two sloping sides.\n3. Screw the box together at the corners and brush on two coats of preserver, letting each one dry overnight.\n4. Hinge the windows to the back board so that each one lifts separately.\n5. Set the frame on level ground facing south, and prop the lids open on mild days.\n\n[![A wooden cold frame with four glazed lids standing against a shed](https://blog.fernhollow.example/wp-content/uploads/2016/02/cold-frame-finished-1024x683.jpg)](https://blog.fernhollow.example/wp-content/uploads/2016/02/cold-frame-finished.jpg)\n\nFinished and in place against the shed, with the first trays of lettuce and sweet peas inside.\n\nA word about old paint. Windows of this age were almost certainly painted with lead at some point, so I scraped them outdoors, swept up the flakes and did not sand them at all. There is sensible advice on dealing with it in [this renovation forum thread](http://oldhouserepair.example.net/forum/lead-paint-basics), and if in doubt I would simply seal the frames with fresh paint and leave the old layers where they are.\n\n### Does it actually work?\n\nI am the sort of person who needs numbers, so I wired a pair of cheap temperature probes to a little single-board computer, one inside the frame and one outside, and left them logging for a week. The script is nothing clever, and I have put it on [the projects page](https://blog.fernhollow.example/projects/coldframe-logger/) for anyone who wants it. This is what a typical clear day looked like:\n\n```\n$ ./coldframe-log.sh --day 2016-02-18\n06:00  outside -2.1C  inside  3.4C\n12:00  outside  6.3C  inside 17.8C\n18:00  outside  1.0C  inside  7.2C\n```\n\nSo the frame was five or six degrees warmer than the garden before dawn, which is the difference between a frost and no frost, and almost too warm by midday. That midday figure is the one to watch. On a sunny afternoon in April a closed frame will cook seedlings in an hour, which is why step five matters more than all the others put together.\n\n> A cold frame asks only two things of its keeper: that the lid be opened in the morning, and that it be closed again at night. *Agnes Thornbury, The Frugal Kitchen Garden*\n\nMy grandmother’s copy of that book has lived on the shelf by the back door for as long as I can remember, and she was right about most things. I have already forgotten the evening half of the rule once, and lost a tray of basil to it, so there is now a note stuck to the kettle.\n\nThe lettuce I sowed on the first of the month is up, the sweet peas are a hand tall, and the broad beans that sulked on the windowsill last year look positively cheerful. Next on the list are the tomatoes, which I will start indoors and move out in April, following the timings in my [sowing calendar](https://blog.fernhollow.example/2016/01/sowing-calendar/).\n\nIf you build one of your own, I would love to see it. Leave a comment below, or have a look through everything else filed under [garden](https://blog.fernhollow.example/tag/garden/) for more of my mistakes. And if you happen to know a kinder way of getting eighty-year-old putty off glass, please tell me before I start on the greenhouse.",
+  "word_count": 927,
+  "thin_content": false
+}

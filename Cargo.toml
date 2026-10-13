@@ -155,6 +155,9 @@ scraper = { version = "=0.27.0" }
 # The version scraper 0.27.0 is built against, so their types are the same.
 # 0.40.1 exists; move both together.
 html5ever = { version = "=0.39.0" }
+# The tree scraper keeps a page in, at the version scraper 0.27.0 locks:
+# kage-extract names its node ids.
+ego-tree = { version = "=0.11.0" }
 robotstxt = { version = "=0.3.0" }
 quick-xml = { version = "=0.42.0" }
 
