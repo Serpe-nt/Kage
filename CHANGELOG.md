@@ -55,6 +55,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     `kage_extract_duration_seconds`, `kage_robots_requests_total`,
     `kage_robots_denied_total`, `kage_cache_requests_total`. Migration
     0015.
+  - The API test client reads what a result gained (`extractOf`,
+    `cachedAt`, `robotsDenial`); `tests/e2e/extract.sh` runs all of the
+    above by real personas of both engines and checks it against the
+    fixture site's own request log: the essay asked for once per fetch
+    and not at all while the cache answered, `robots.txt` asked for once
+    by an address that read no page, the page it disallows never asked
+    for, the sitemap it names read in place of the guess.
 
 - M10, the crawler:
   - `POST /v1/jobs` takes `type: "crawl"` (the `crawl` scope besides
