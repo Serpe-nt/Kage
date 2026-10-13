@@ -3318,7 +3318,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/BehaviorView",
-                "description": "What the persona did on the page; for a browser attempt, in the\nanswer of `POST /v1/fetch` only."
+                "description": "What the persona did on the page, for a browser attempt. For a\nresult served from the cache: on the visit that got the page."
               },
               {
                 "type": "null"
@@ -3356,7 +3356,7 @@
             "items": {
               "$ref": "#/components/schemas/ConsoleView"
             },
-            "description": "The browser's log; with `include: [\"console\"]`, in the answer of\n`POST /v1/fetch` only."
+            "description": "The browser's log; with `include: [\"console\"]`. At most the first\n1000 entries, each text cut at 4096 bytes."
           },
           "created_at": {
             "type": "string",
@@ -3415,7 +3415,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/PacingView",
-                "description": "The pacing that applied; in the answer of `POST /v1/fetch` only."
+                "description": "The pacing that applied to the request. For a result served from\nthe cache it is the request's own, which waited for nobody."
               },
               {
                 "type": "null"

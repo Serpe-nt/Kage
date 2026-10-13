@@ -368,6 +368,7 @@ struct ResultRow {
     cached: bool,
     cached_at: Option<DateTime<Utc>>,
     reason: Option<String>,
+    visit: Option<serde_json::Value>,
     created_at: DateTime<Utc>,
 }
 
@@ -393,6 +394,8 @@ impl TryFrom<ResultRow> for FetchRecord {
             cached: row.cached,
             cached_at: row.cached_at,
             reason: row.reason,
+            // A row stored before the column, or one that keeps nothing.
+            visit: from_json_opt((TABLE, "visit"), row.visit)?.unwrap_or_default(),
             created_at: row.created_at,
         })
     }
@@ -409,9 +412,9 @@ impl ResultRepo<'_> {
         sqlx::query!(
             "INSERT INTO results (id, request_id, outcome, status, headers, final_url, redirects,
                                   extract, xhr, artifacts, persona, block, robots, cached,
-                                  cached_at, reason, created_at)
+                                  cached_at, reason, visit, created_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
-                     $17)",
+                     $17, $18)",
             record.id.as_uuid(),
             record.request_id.as_uuid(),
             record.outcome.as_str(),
@@ -428,6 +431,10 @@ impl ResultRepo<'_> {
             record.cached,
             record.cached_at,
             record.reason,
+            to_json_opt(
+                (TABLE, "visit"),
+                Some(&record.visit).filter(|visit| !visit.is_empty()),
+            )?,
             record.created_at,
         )
         .execute(self.pool)
@@ -444,7 +451,8 @@ impl ResultRepo<'_> {
         sqlx::query_as!(
             ResultRow,
             "SELECT id, request_id, outcome, status, headers, final_url, redirects, extract, xhr,
-                    artifacts, persona, block, robots, cached, cached_at, reason, created_at
+                    artifacts, persona, block, robots, cached, cached_at, reason, visit,
+                    created_at
              FROM results WHERE id = $1",
             id.as_uuid(),
         )
@@ -466,7 +474,8 @@ impl ResultRepo<'_> {
         sqlx::query_as!(
             ResultRow,
             "SELECT id, request_id, outcome, status, headers, final_url, redirects, extract, xhr,
-                    artifacts, persona, block, robots, cached, cached_at, reason, created_at
+                    artifacts, persona, block, robots, cached, cached_at, reason, visit,
+                    created_at
              FROM results WHERE request_id = $1",
             request_id.as_uuid(),
         )

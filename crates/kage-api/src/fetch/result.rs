@@ -2,11 +2,14 @@
 //!
 //! The same document answers `POST /v1/fetch` and `GET /v1/results/{id}`.
 //! The first is built from what the pipeline just did, the second from
-//! what was stored; what is not stored (`pacing`, `behavior`, `console`,
-//! `side_effects`) is null in the second. A fetch that was answered from
-//! the response cache is the second kind from the start: the stored result
-//! of the visit that filled the cache, under the request's own id, with
-//! `cached: true` and no attempts.
+//! what was stored, and both say the same: what the answer says of the
+//! visit besides the page (`pacing`, `behavior`, `console`,
+//! `side_effects`) is stored with the result (follow-up F36). A fetch that
+//! was answered from the response cache is the second kind from the
+//! start: the stored result of the visit that filled the cache, under the
+//! request's own id, with `cached: true` and no attempts; what the
+//! persona did on the page, the browser's log and what a capture fired
+//! are that visit's, the pacing is the request's own.
 //!
 //! What a result shows of the pool depends on who asks (spec §19). A key
 //! without the `admin` scope sees its persona as a handle
@@ -19,12 +22,13 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use kage_browser::contract::{BodyEncoding, PageResult, ScrollEnd};
 use kage_core::domain::{
-    ArtifactKind, ArtifactRef, Attempt, ClaimedOs, FetchRecord, Header, PersonaSummary, Render,
-    RobotsVerdict, Timing,
+    ArtifactKind, ArtifactRef, Attempt, BehaviorDone, ClaimedOs, ConsoleEntry, FetchRecord, Header,
+    PacingApplied, PersonaSummary, Render, RobotsVerdict, Timing, Visit,
 };
 use kage_core::ids::{ApiKeyId, ArtifactId, PersonaId, RequestId};
 use kage_core::outcome::{Block, Outcome};
-use kage_scheduler::{BehaviorApplied, FetchReport};
+use kage_core::seed::Seed;
+use kage_scheduler::FetchReport;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
@@ -292,6 +296,18 @@ impl ScrollEndField {
         }
     }
 
+    /// What a result keeps as the end of the scrolling, by its name.
+    /// Kage gives every page a patience, so the time to reach the page
+    /// (a browser's `budget`) never ends it and is not kept.
+    pub(crate) fn named(name: &str) -> Option<Self> {
+        match name {
+            "depth" => Some(Self::Depth),
+            "patience" => Some(Self::Patience),
+            "page" => Some(Self::Page),
+            _ => None,
+        }
+    }
+
     /// Its name.
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
@@ -418,8 +434,8 @@ pub(crate) struct FetchResult {
     pub(crate) extract: Option<ExtractView>,
     /// The responses the page's scripts fetched; with `include: ["xhr"]`.
     pub(crate) xhr: Option<XhrView>,
-    /// The browser's log; with `include: ["console"]`, in the answer of
-    /// `POST /v1/fetch` only.
+    /// The browser's log; with `include: ["console"]`. At most the first
+    /// 1000 entries, each text cut at 4096 bytes.
     pub(crate) console: Option<Vec<ConsoleView>>,
     /// What was stored of the page, by kind (`dom_html`, `raw_body`,
     /// `screenshot`, `pdf`): ids for `GET /v1/artifacts/{id}`.
@@ -438,10 +454,11 @@ pub(crate) struct FetchResult {
     /// What the site's `robots.txt` says of the address. Null for a
     /// request that ended before it was looked at (a refused URL).
     pub(crate) robots: Option<RobotsView>,
-    /// The pacing that applied; in the answer of `POST /v1/fetch` only.
+    /// The pacing that applied to the request. For a result served from
+    /// the cache it is the request's own, which waited for nobody.
     pub(crate) pacing: Option<PacingView>,
-    /// What the persona did on the page; for a browser attempt, in the
-    /// answer of `POST /v1/fetch` only.
+    /// What the persona did on the page, for a browser attempt. For a
+    /// result served from the cache: on the visit that got the page.
     pub(crate) behavior: Option<BehaviorView>,
     /// The session the request was made in.
     pub(crate) session_id: Option<String>,
@@ -731,39 +748,82 @@ fn bodies_of_page(page: &PageResult) -> Bodies {
     }
 }
 
-fn behavior_of(
-    applied: &BehaviorApplied,
-    page: Option<&PageResult>,
-    viewer: &Viewer<'_>,
-) -> BehaviorView {
-    let done = page.and_then(|page| page.behavior.as_ref());
+/// The pacing a result keeps, as the API shows it.
+fn pacing_of(kept: &PacingApplied) -> PacingView {
+    PacingView {
+        applied: kept.applied.clone(),
+        request_ignored: kept.request_ignored,
+        waited_ms: kept.waited_ms,
+    }
+}
+
+/// What a result keeps of the persona's behavior, as the API shows it.
+/// `seed` is the seed of the attempt it was drawn from.
+fn behavior_of(kept: &BehaviorDone, seed: Option<Seed>, viewer: &Viewer<'_>) -> BehaviorView {
     BehaviorView {
-        applied: if applied.from_request {
+        applied: if kept.from_request {
             BehaviorSource::Request
         } else {
             BehaviorSource::Policy
         },
-        request_ignored: applied.request_ignored,
-        // No scrolling is a depth of 0, as a request asks for it.
-        scroll_depth: Some(applied.scroll_depth.unwrap_or(0.0)),
-        scroll_reached: done.and_then(|done| done.scroll_reached),
-        scroll_ended_by: done
-            .and_then(|done| done.scroll_ended_by)
-            .and_then(ScrollEndField::of),
-        // What the page was given; a browser that reports it says the same.
-        patience_ms: applied
-            .patience
-            .and_then(|patience| u64::try_from(patience.as_millis()).ok()),
-        // What the sidecar says it dwelt; else what it was asked for.
-        dwell_ms: done.map(|done| done.dwell_ms).or_else(|| {
-            applied
-                .dwell
-                .and_then(|dwell| u64::try_from(dwell.as_millis()).ok())
-        }),
-        referer_strategy: applied.referer_strategy.into(),
-        moves: done.map(|done| done.moves),
-        notches: done.map(|done| done.notches),
-        seed: viewer.admin.then(|| applied.seed.to_string()),
+        request_ignored: kept.request_ignored,
+        scroll_depth: kept.scroll_depth,
+        scroll_reached: kept.scroll_reached,
+        scroll_ended_by: kept
+            .scroll_ended_by
+            .as_deref()
+            .and_then(ScrollEndField::named),
+        patience_ms: kept.patience_ms,
+        dwell_ms: kept.dwell_ms,
+        referer_strategy: kept.referer_strategy.into(),
+        moves: kept.moves,
+        notches: kept.notches,
+        seed: seed.filter(|_| viewer.admin).map(|seed| seed.to_string()),
+    }
+}
+
+/// The browser's log a result keeps, as the API shows it.
+fn console_of(kept: &[ConsoleEntry]) -> Vec<ConsoleView> {
+    kept.iter()
+        .map(|entry| ConsoleView {
+            level: entry.level.clone(),
+            source: entry.source.clone(),
+            text: entry.text.clone(),
+            url: entry.url.clone(),
+        })
+        .collect()
+}
+
+/// What a result says of the visit besides the page: the same for the
+/// answer of a fetch and for the stored result.
+struct VisitViews {
+    pacing: Option<PacingView>,
+    behavior: Option<BehaviorView>,
+    console: Option<Vec<ConsoleView>>,
+    side_effects: Vec<String>,
+}
+
+fn visit_of(
+    kept: &Visit,
+    attempts: &[Attempt],
+    include: &Included,
+    viewer: &Viewer<'_>,
+) -> VisitViews {
+    // The behavior on a page was drawn from the seed of its attempt, the
+    // last one. An answer from the cache has no attempt of its own.
+    let seed = attempts.last().and_then(|attempt| attempt.seed);
+    VisitViews {
+        pacing: kept.pacing.as_ref().map(pacing_of),
+        behavior: kept
+            .behavior
+            .as_ref()
+            .map(|kept| behavior_of(kept, seed, viewer)),
+        console: kept
+            .console
+            .as_deref()
+            .filter(|_| include.has(Include::Console))
+            .map(console_of),
+        side_effects: kept.side_effects.clone(),
     }
 }
 
@@ -787,6 +847,7 @@ pub(crate) fn from_report(
         bodies.raw_body = String::from_utf8(fetched.body.to_vec()).ok();
     }
     let wants_raw = include.has(Include::Raw) || (include.has(Include::Dom) && fetched.is_some());
+    let visit = visit_of(&report.visit, &report.attempts, include, viewer);
     FetchResult {
         id: report.request,
         state: ResultState::Finished,
@@ -803,26 +864,9 @@ pub(crate) fn from_report(
         raw_body: bodies.raw_body.filter(|_| wants_raw),
         extract: extract_of(report.extract.as_ref()).filter(|_| include.has(Include::Extract)),
         xhr: xhr_of(report.xhr.as_ref()),
-        console: page
-            .filter(|_| include.has(Include::Console) && readable)
-            .map(|page| {
-                page.console
-                    .iter()
-                    .map(|entry| ConsoleView {
-                        level: entry.level.as_str().to_owned(),
-                        source: entry.source.clone(),
-                        text: entry.text.clone(),
-                        url: entry.url.clone(),
-                    })
-                    .collect()
-            }),
+        console: visit.console,
         artifacts: artifacts_of(&report.artifacts),
-        side_effects: page.map_or_else(Vec::new, |page| {
-            page.side_effects
-                .iter()
-                .map(|effect| effect.as_str().to_owned())
-                .collect()
-        }),
+        side_effects: visit.side_effects,
         timing: last.map(|last| last.timing.into()).unwrap_or_default(),
         persona: report
             .persona
@@ -835,14 +879,8 @@ pub(crate) fn from_report(
             .collect(),
         block: report.block.as_ref().map(BlockView::from),
         robots: report.robots.as_ref().map(RobotsView::from),
-        pacing: Some(PacingView {
-            applied: report.pacing.applied.clone(),
-            request_ignored: report.pacing.request_ignored,
-            waited_ms: u64::try_from(report.pacing.waited.as_millis()).unwrap_or(u64::MAX),
-        }),
-        behavior: last
-            .and_then(|last| last.behavior.as_ref())
-            .map(|applied| behavior_of(applied, page, viewer)),
+        pacing: visit.pacing,
+        behavior: visit.behavior,
         session_id: session.map(str::to_owned),
         cached: false,
         cached_at: None,
@@ -864,6 +902,7 @@ pub(crate) fn from_stored(
     let last = attempts.last();
     let on_http = last.is_some_and(|attempt| attempt.render == Render::Http);
     let wants_raw = include.has(Include::Raw) || (include.has(Include::Dom) && on_http);
+    let visit = visit_of(&record.visit, attempts, include, viewer);
     FetchResult {
         id: record.request_id,
         state: ResultState::Finished,
@@ -880,9 +919,9 @@ pub(crate) fn from_stored(
         raw_body: bodies.raw_body.filter(|_| wants_raw),
         extract: extract_of(record.extract.as_ref()).filter(|_| include.has(Include::Extract)),
         xhr: xhr_of(record.xhr.as_ref()),
-        console: None,
+        console: visit.console,
         artifacts: artifacts_of(&record.artifacts),
-        side_effects: Vec::new(),
+        side_effects: visit.side_effects,
         timing: last
             .map(|attempt| attempt.timing.into())
             .unwrap_or_default(),
@@ -896,8 +935,8 @@ pub(crate) fn from_stored(
             .collect(),
         block: record.block.as_ref().map(BlockView::from),
         robots: record.robots.as_ref().map(RobotsView::from),
-        pacing: None,
-        behavior: None,
+        pacing: visit.pacing,
+        behavior: visit.behavior,
         session_id: session.map(str::to_owned),
         cached: record.cached,
         cached_at: record.cached_at,

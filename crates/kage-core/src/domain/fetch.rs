@@ -10,6 +10,7 @@ use super::{ClaimedOs, CountryCode, Engine, Render, RenderMode, SessionId};
 use crate::ids::{ApiKeyId, ArtifactId, AttemptId, JobId, PersonaId, RequestId, ResultId};
 use crate::macros::string_enum;
 use crate::outcome::{Block, Outcome};
+use crate::policy::RefererStrategy;
 use crate::seed::Seed;
 
 /// One fetch request as it was accepted, whether synchronous or a job item.
@@ -319,6 +320,142 @@ pub struct ArtifactRef {
     pub id: ArtifactId,
 }
 
+/// The most entries of a browser's log a result keeps. A page can log
+/// without end; what a result holds is bounded.
+pub const MAX_CONSOLE_ENTRIES: usize = 1000;
+
+/// The most bytes of one log entry's text a result keeps.
+pub const MAX_CONSOLE_TEXT_BYTES: usize = 4096;
+
+/// The pacing that applied to a request (spec §11, §16.5).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PacingApplied {
+    /// The profile's name; `custom` for one sent with the request.
+    pub applied: String,
+    /// Whether the request asked for pacing that the policy's lock
+    /// overrode.
+    #[serde(default)]
+    pub request_ignored: bool,
+    /// How long the request waited for personas and their slots, in
+    /// milliseconds.
+    #[serde(default)]
+    pub waited_ms: u64,
+}
+
+/// What the persona did on the page of the last browser attempt (spec
+/// §10.4, §16.5): what it was asked to do, and what the browser says it
+/// did. The seed all of it was drawn from is the attempt's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BehaviorDone {
+    /// Whether any of it was the request's, and not the policy's.
+    #[serde(default)]
+    pub from_request: bool,
+    /// Whether the request asked for behavior that the policy's lock
+    /// overrode.
+    #[serde(default)]
+    pub request_ignored: bool,
+    /// How far the persona meant to scroll the page, from 0 to 1; 0 for no
+    /// scrolling.
+    #[serde(default)]
+    pub scroll_depth: Option<f64>,
+    /// How far down the document it came; `None` when the page was not
+    /// scrolled or the browser did not say.
+    #[serde(default)]
+    pub scroll_reached: Option<f64>,
+    /// Why the scrolling ended: `depth`, `patience` or `page`.
+    #[serde(default)]
+    pub scroll_ended_by: Option<String>,
+    /// The patience the persona had with the page, in milliseconds.
+    #[serde(default)]
+    pub patience_ms: Option<u64>,
+    /// The time spent on the page after it loaded, in milliseconds.
+    #[serde(default)]
+    pub dwell_ms: Option<u64>,
+    /// How the page was arrived at.
+    pub referer_strategy: RefererStrategy,
+    /// Movements of the pointer.
+    #[serde(default)]
+    pub moves: Option<u64>,
+    /// Notches of the wheel.
+    #[serde(default)]
+    pub notches: Option<u64>,
+}
+
+/// One entry of the browser's log (spec §10.2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConsoleEntry {
+    /// `log`, `info`, `warning`, `error` or `debug`.
+    pub level: String,
+    /// Where the browser says the entry comes from.
+    pub source: String,
+    /// The text, cut at [`MAX_CONSOLE_TEXT_BYTES`].
+    pub text: String,
+    /// The URL it names, if any.
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+impl ConsoleEntry {
+    /// An entry with its text cut to what a result keeps, at a character
+    /// boundary.
+    pub fn bounded(level: &str, source: &str, text: &str, url: Option<&str>) -> Self {
+        // The end of the last character that still fits.
+        let end = text
+            .char_indices()
+            .map(|(start, character)| start + character.len_utf8())
+            .take_while(|end| *end <= MAX_CONSOLE_TEXT_BYTES)
+            .last()
+            .unwrap_or(0);
+        Self {
+            level: level.to_owned(),
+            source: source.to_owned(),
+            text: text[..end].to_owned(),
+            url: url.map(str::to_owned),
+        }
+    }
+}
+
+/// What a result keeps of the visit that got its page, besides the page
+/// itself (spec §16.5, follow-up F36): the pacing that applied to the
+/// request, what the persona did on the page, the browser's log and the
+/// events a capture fired in the page. `GET /v1/results/{id}` and an
+/// answer from the response cache show them as the fetch's own answer did.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct Visit {
+    /// The pacing that applied; `None` for a result that is no fetch's
+    /// (a capture point of a flow).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pacing: Option<PacingApplied>,
+    /// What the persona did on the page; `None` when no browser attempt
+    /// was made.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub behavior: Option<BehaviorDone>,
+    /// The browser's log, when the request asked for it: the first
+    /// [`MAX_CONSOLE_ENTRIES`] entries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub console: Option<Vec<ConsoleEntry>>,
+    /// Events a capture fired in the page (`resize`, `beforeprint`,
+    /// `afterprint`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub side_effects: Vec<String>,
+}
+
+impl Visit {
+    /// Whether nothing is kept: such a visit is stored as no document.
+    pub fn is_empty(&self) -> bool {
+        self.pacing.is_none()
+            && self.behavior.is_none()
+            && self.console.is_none()
+            && self.side_effects.is_empty()
+    }
+
+    /// The log entries a result keeps of what a browser logged: the first
+    /// [`MAX_CONSOLE_ENTRIES`].
+    pub fn console_of(entries: impl IntoIterator<Item = ConsoleEntry>) -> Vec<ConsoleEntry> {
+        entries.into_iter().take(MAX_CONSOLE_ENTRIES).collect()
+    }
+}
+
 /// The stored result of a request (spec §5 "Result", §16.5).
 ///
 /// Bodies are not inlined: they live in the artifact store and are listed in
@@ -359,6 +496,9 @@ pub struct FetchRecord {
     /// Why the request ended without the site's verdict, as a stable
     /// `snake_case` name: for example `domain_paused` (spec §8.3).
     pub reason: Option<String>,
+    /// What is kept of the visit besides the page: the pacing, what the
+    /// persona did, the browser's log, what a capture fired.
+    pub visit: Visit,
     /// When the result was stored.
     pub created_at: DateTime<Utc>,
 }
@@ -376,16 +516,19 @@ impl FetchRecord {
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
+    use serde_json::json;
 
     use super::{
-        ArtifactEncoding, ArtifactKind, ArtifactRef, ContentHash, FetchRecord, Header,
-        InvalidContentHash, PersonaSummary, REDACTED_COOKIE, RobotsVerdict, Timing,
+        ArtifactEncoding, ArtifactKind, ArtifactRef, BehaviorDone, ConsoleEntry, ContentHash,
+        FetchRecord, Header, InvalidContentHash, MAX_CONSOLE_ENTRIES, MAX_CONSOLE_TEXT_BYTES,
+        PacingApplied, PersonaSummary, REDACTED_COOKIE, RobotsVerdict, Timing, Visit,
         redact_set_cookie,
     };
     use crate::domain::{ClaimedOs, Engine};
     use crate::ids::{ArtifactId, PersonaId, RequestId, ResultId};
     use crate::macros::test_support::assert_string_enum;
     use crate::outcome::Outcome;
+    use crate::policy::RefererStrategy;
 
     #[test]
     fn enum_names_are_stable() {
@@ -552,11 +695,114 @@ mod tests {
             cached: false,
             cached_at: None,
             reason: None,
+            visit: Visit::default(),
             created_at: Utc::now(),
         };
 
         assert_eq!(record.artifact(ArtifactKind::DomHtml), Some(dom));
         assert_eq!(record.artifact(ArtifactKind::Screenshot), Some(shot));
         assert_eq!(record.artifact(ArtifactKind::Pdf), None);
+    }
+
+    #[test]
+    fn a_visit_is_stored_as_what_it_holds_and_read_back_from_less() {
+        // Nothing kept is no member at all: an older row has none either.
+        let nothing = Visit::default();
+        assert!(nothing.is_empty());
+        assert_eq!(serde_json::to_value(&nothing).unwrap(), json!({}));
+        assert_eq!(serde_json::from_value::<Visit>(json!({})).unwrap(), nothing);
+
+        let visit = Visit {
+            pacing: Some(PacingApplied {
+                applied: "human".to_owned(),
+                request_ignored: false,
+                waited_ms: 3900,
+            }),
+            behavior: Some(BehaviorDone {
+                from_request: true,
+                request_ignored: false,
+                scroll_depth: Some(0.8),
+                scroll_reached: Some(0.76),
+                scroll_ended_by: Some("depth".to_owned()),
+                patience_ms: Some(38_000),
+                dwell_ms: Some(6100),
+                referer_strategy: RefererStrategy::Direct,
+                moves: Some(87),
+                notches: Some(12),
+            }),
+            console: Some(vec![ConsoleEntry::bounded(
+                "error",
+                "network",
+                "Failed to load resource",
+                Some("https://example.org/missing.js"),
+            )]),
+            side_effects: vec!["resize".to_owned()],
+        };
+        assert!(!visit.is_empty());
+        let stored = serde_json::to_value(&visit).unwrap();
+        assert_eq!(stored["pacing"]["waited_ms"], 3900);
+        assert_eq!(stored["behavior"]["scroll_ended_by"], "depth");
+        assert_eq!(
+            stored["console"][0]["url"],
+            "https://example.org/missing.js"
+        );
+        assert_eq!(stored["side_effects"], json!(["resize"]));
+        assert_eq!(serde_json::from_value::<Visit>(stored).unwrap(), visit);
+        // Each part alone makes a visit one that is kept.
+        for part in ["pacing", "behavior", "console", "side_effects"] {
+            let mut one = Visit::default();
+            match part {
+                "pacing" => one.pacing.clone_from(&visit.pacing),
+                "behavior" => one.behavior.clone_from(&visit.behavior),
+                "console" => one.console = Some(Vec::new()),
+                _ => one.side_effects.clone_from(&visit.side_effects),
+            }
+            assert!(!one.is_empty(), "{part}");
+        }
+        // What a later version leaves out of a part reads as nothing said.
+        let sparse: Visit = serde_json::from_value(json!({
+            "pacing": { "applied": "fast" },
+            "behavior": { "referer_strategy": "none" },
+        }))
+        .unwrap();
+        assert_eq!(sparse.pacing.unwrap().waited_ms, 0);
+        let behavior = sparse.behavior.unwrap();
+        assert_eq!((behavior.dwell_ms, behavior.moves), (None, None));
+        assert!(!behavior.from_request);
+    }
+
+    #[test]
+    fn a_result_keeps_a_bounded_part_of_a_browsers_log() {
+        // The numbers themselves: a constant that is wrong moves with the
+        // tests that name it.
+        assert_eq!((MAX_CONSOLE_ENTRIES, MAX_CONSOLE_TEXT_BYTES), (1000, 4096));
+        let entry = |n: usize| ConsoleEntry::bounded("log", "console", &format!("line {n}"), None);
+        let kept = Visit::console_of((0..1500).map(entry));
+        assert_eq!(kept.len(), 1000);
+        assert_eq!(
+            (kept[0].text.as_str(), kept[999].text.as_str()),
+            ("line 0", "line 999")
+        );
+        assert_eq!(Visit::console_of((0..1000).map(entry)).len(), 1000);
+        assert_eq!(Visit::console_of((0..3).map(entry)).len(), 3);
+
+        // A text is cut at the bound, never inside a character.
+        let short = ConsoleEntry::bounded("log", "console", &"a".repeat(4096), None);
+        assert_eq!(short.text.len(), 4096);
+        let long = ConsoleEntry::bounded("log", "console", &"a".repeat(4097), None);
+        assert_eq!(long.text.len(), 4096);
+        // "é" is two bytes: 4095 bytes of text and one that would be cut.
+        let split = format!("{}é", "a".repeat(4095));
+        let cut = ConsoleEntry::bounded("warning", "security", &split, Some("https://a.example/"));
+        assert_eq!(cut.text, "a".repeat(4095));
+        assert_eq!(
+            (cut.level.as_str(), cut.source.as_str(), cut.url.as_deref()),
+            ("warning", "security", Some("https://a.example/"))
+        );
+        let whole = format!("{}é", "a".repeat(4094));
+        assert_eq!(
+            ConsoleEntry::bounded("log", "console", &whole, None).text,
+            whole
+        );
     }
 }

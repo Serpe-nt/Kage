@@ -89,6 +89,14 @@ async function main(): Promise<unknown> {
     assert.equal(stored.outcome, 'ok');
     assert.equal(stored.dom_html, fetched.dom_html);
     assert.deepEqual(stored.artifacts, fetched.artifacts);
+    // What the answer said of the visit is stored with the result: the
+    // pacing that applied, what the persona did on the page and what the
+    // screenshot fired in it.
+    assert.ok(fetched.pacing, `${engine}: the answer names no pacing`);
+    assert.deepEqual(stored.pacing, fetched.pacing);
+    assert.ok(typeof fetched.behavior.dwell_ms === 'number', `${engine}: no dwell was reported`);
+    assert.deepEqual(stored.behavior, fetched.behavior);
+    assert.deepEqual(stored.side_effects, fetched.side_effects);
 
     pages.push({
       engine,

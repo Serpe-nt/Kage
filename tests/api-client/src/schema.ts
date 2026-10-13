@@ -1482,8 +1482,8 @@ export interface components {
              */
             cached_at?: string | null;
             /**
-             * @description The browser's log; with `include: ["console"]`, in the answer of
-             *     `POST /v1/fetch` only.
+             * @description The browser's log; with `include: ["console"]`. At most the first
+             *     1000 entries, each text cut at 4096 bytes.
              */
             console?: components["schemas"]["ConsoleView"][] | null;
             /**

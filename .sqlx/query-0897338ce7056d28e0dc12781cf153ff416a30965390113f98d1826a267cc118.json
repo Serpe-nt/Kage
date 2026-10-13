@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, request_id, outcome, status, headers, final_url, redirects, extract, xhr,\n                    artifacts, persona, block, robots, cached, cached_at, reason, created_at\n             FROM results WHERE id = $1",
+  "query": "SELECT id, request_id, outcome, status, headers, final_url, redirects, extract, xhr,\n                    artifacts, persona, block, robots, cached, cached_at, reason, visit,\n                    created_at\n             FROM results WHERE request_id = $1",
   "describe": {
     "columns": [
       {
@@ -181,6 +181,17 @@
       },
       {
         "ordinal": 16,
+        "name": "visit",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "results",
+            "name": "visit"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -213,8 +224,9 @@
       false,
       true,
       true,
+      true,
       false
     ]
   },
-  "hash": "e724f7a809d4f155c9491a5c98219c18af2901a04b0a5249b8f097d1fbf4e79e"
+  "hash": "0897338ce7056d28e0dc12781cf153ff416a30965390113f98d1826a267cc118"
 }

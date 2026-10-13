@@ -1609,8 +1609,10 @@ minute like any call.
   `cached: true`, `cached_at` (when the page was fetched), no attempts,
   the stored extraction and robots verdict, artifact rows of its own that
   point at the stored bodies, and the persona handle only for the key
-  that had the page fetched. Purge and retention of one key take nothing
-  from another.
+  that had the page fetched. What the persona did on the page, the
+  browser's log and what a capture fired in it are the stored visit's;
+  the pacing is the hit's own, which waited for nobody (F36). Purge and
+  retention of one key take nothing from another.
 - **Storage.** `response_cache`; an entry goes with the result it serves
   and is swept when it expires.
 - **Not built**: two identical requests in flight at the same moment are
@@ -1864,8 +1866,11 @@ As built (the OpenAPI document is the contract):
   `scroll_reached`, `scroll_ended_by`: `depth`, `patience` or `page`,
   `patience_ms`, `dwell_ms`, `referer_strategy`, `moves`, `notches`) say
   what applied.
-  They, `console` and `side_effects` are in the answer of `POST /v1/fetch`
-  only; a stored result has them null.
+  They, `console` and `side_effects` are kept with the result (F36): the
+  answer of `POST /v1/fetch`, `GET /v1/results/{id}` and an item's result
+  in a job say the same. A result keeps at most the first 1000 entries of
+  a browser's log, each text cut at 4096 bytes; the seed in `behavior` is
+  the last attempt's and for a key with the admin scope only.
 - `extract` is the object of §14, with `include: ["extract"]`; null for a
   fetch that did not get its page and for a response that is no HTML
   document. `robots` is `{ fetched, allowed, matched_rule, crawl_delay }`
@@ -1879,9 +1884,11 @@ As built (the OpenAPI document is the contract):
   nobody can ask for it, and `robots_enforced` or `robots_ignored` when a
   policy changed under a job's request.
 - `cached: true` says the result was served from the response cache:
-  `cached_at` is when its page was fetched, `attempts` is empty, `pacing`
-  and `behavior` are null, and `persona` is shown only to the key that
-  had the page fetched. Its `artifacts` are its own.
+  `cached_at` is when its page was fetched, `attempts` is empty, and
+  `persona` is shown only to the key that had the page fetched. The page
+  is the one that visit got, so `behavior`, `console` and `side_effects`
+  are that visit's; `pacing` is the request's own, with `waited_ms: 0`:
+  it waited for nobody. Its `artifacts` are its own.
 - A result and its artifacts are a key's own: another key gets `404`, a
   key with the admin scope reads all. Both live for
   `artifacts.retention_days`.
@@ -2170,7 +2177,10 @@ entry expires; an entry goes with its result and is swept when it
 expires. A result served from the cache has `cached` and `cached_at`
 (both or neither), and artifact rows of its own that point at the stored
 bodies; the daily page budget counts requests whose result is not
-`cached`.
+`cached`. A result keeps what its answer says of the visit besides the
+page in `results.visit`, one document with a member for each part that
+has something to say: `pacing`, `behavior`, `console`, `side_effects`
+(§16.5; null for a result that keeps none of it).
 Migrations in `crates/kage-store/migrations`, applied by `kage migrate` and
 checked in CI (`sqlx migrate info`, offline query data committed). Bodies and
 artifacts live on disk under `artifacts/` keyed by content hash with a
