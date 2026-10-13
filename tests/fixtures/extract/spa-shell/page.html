@@ -1,0 +1,366 @@
+<!doctype html>
+<!-- Fixture: a generated page with invented names; no real site. -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Tidewater Tracker</title>
+    <meta name="description" content="Tidewater Tracker keeps tide tables, mooring bookings and passage plans for small harbours in one place." />
+    <meta name="theme-color" content="#0b3954" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="application-name" content="Tidewater Tracker" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon-180x180.png" />
+    <link rel="canonical" href="https://app.tidewatertracker.example/" />
+    <meta property="og:title" content="Tidewater Tracker" />
+    <meta property="og:description" content="Tide tables, mooring bookings and passage plans for small harbours, in one place." />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="https://app.tidewatertracker.example/social/share-1200x630.png" />
+    <meta property="og:url" content="https://app.tidewatertracker.example/" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://api.tidewatertracker.example" crossorigin />
+    <link rel="preconnect" href="https://tiles.tidewatertracker.example" crossorigin />
+    <script>
+      (function () {
+        var root = document.documentElement;
+        try {
+          var stored = window.localStorage.getItem("tt:theme");
+          var dark = stored ? stored === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
+          root.classList.add(dark ? "theme-dark" : "theme-light");
+        } catch (err) {
+          root.classList.add("theme-light");
+        }
+      })();
+    </script>
+    <script>
+      window.__APP_CONFIG__ = {
+        "release": "2026.10.2",
+        "commit": "b7x2kq9d41c",
+        "environment": "production",
+        "apiBase": "/api/v3",
+        "endpoints": {
+          "session": "/api/v3/session",
+          "harbours": "/api/v3/harbours",
+          "tides": "/api/v3/harbours/:harbourId/tides",
+          "moorings": "/api/v3/harbours/:harbourId/moorings",
+          "bookings": "/api/v3/bookings",
+          "passages": "/api/v3/passages",
+          "notices": "/api/v3/notices?scope=local",
+          "events": "/api/v3/events/stream"
+        },
+        "tiles": "https://tiles.tidewatertracker.example/v2/{z}/{x}/{y}.pbf",
+        "features": { "offlineTables": true, "passageSharing": true, "berthMap": false },
+        "defaults": { "units": "metric", "datum": "chart", "locale": "en-GB", "refreshSeconds": 300 },
+        "sentry": null
+      };
+    </script>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "Tidewater Tracker",
+        "url": "https://app.tidewatertracker.example/",
+        "description": "Tidewater Tracker keeps tide tables, mooring bookings and passage plans for small harbours in one place.",
+        "applicationCategory": "UtilitiesApplication",
+        "operatingSystem": "Any",
+        "browserRequirements": "Requires JavaScript and a browser released after 2022.",
+        "inLanguage": "en",
+        "image": "https://app.tidewatertracker.example/social/share-1200x630.png",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "EUR" },
+        "publisher": {
+          "@type": "Organization",
+          "name": "Tidewater Tracker Cooperative",
+          "url": "https://www.tidewatertracker.example/"
+        }
+      }
+    </script>
+    <style>
+      /* critical: inlined by the build so that the splash paints before the bundle arrives */
+      :root {
+        --tt-font-sans: "Tidewater Sans Variable", "Tidewater Sans", system-ui, ui-sans-serif, sans-serif;
+        --tt-font-mono: "Tidewater Mono Variable", "Tidewater Mono", ui-monospace, monospace;
+        --tt-radius-sm: 4px;
+        --tt-radius-md: 8px;
+        --tt-radius-lg: 16px;
+        --tt-space-1: 0.25rem;
+        --tt-space-2: 0.5rem;
+        --tt-space-3: 0.75rem;
+        --tt-space-4: 1rem;
+        --tt-space-6: 1.5rem;
+        --tt-space-8: 2rem;
+        --tt-header-height: 3.5rem;
+        --tt-rail-width: 4.5rem;
+        --tt-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+        --tt-duration-fast: 120ms;
+        --tt-duration-slow: 420ms;
+      }
+      :root,
+      :root.theme-light {
+        --tt-color-bg: #f3f7fa;
+        --tt-color-surface: #ffffff;
+        --tt-color-surface-raised: #ffffff;
+        --tt-color-border: #d5e0e8;
+        --tt-color-text: #10222e;
+        --tt-color-text-muted: #567080;
+        --tt-color-accent: #0b6e8f;
+        --tt-color-accent-strong: #0b3954;
+        --tt-color-flood: #1b9aaa;
+        --tt-color-ebb: #e07a2f;
+        --tt-color-skeleton: #e3ebf0;
+        --tt-color-skeleton-shine: #f4f8fa;
+        --tt-shadow-1: 0 1px 2px rgba(16, 34, 46, 0.08), 0 2px 8px rgba(16, 34, 46, 0.06);
+      }
+      :root.theme-dark {
+        --tt-color-bg: #08161f;
+        --tt-color-surface: #0f2330;
+        --tt-color-surface-raised: #15303f;
+        --tt-color-border: #21404f;
+        --tt-color-text: #e6f0f5;
+        --tt-color-text-muted: #8fa9b8;
+        --tt-color-accent: #4cc3d9;
+        --tt-color-accent-strong: #9be3f0;
+        --tt-color-flood: #4cc3d9;
+        --tt-color-ebb: #f2a65a;
+        --tt-color-skeleton: #173140;
+        --tt-color-skeleton-shine: #1f4052;
+        --tt-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.3);
+      }
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+      html {
+        height: 100%;
+        -webkit-text-size-adjust: 100%;
+        text-size-adjust: 100%;
+        font-family: var(--tt-font-sans);
+        line-height: 1.5;
+        color: var(--tt-color-text);
+        background-color: var(--tt-color-bg);
+      }
+      body {
+        margin: 0;
+        min-height: 100%;
+        min-height: 100dvh;
+        overflow-x: hidden;
+        background-color: var(--tt-color-bg);
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+      }
+      #root {
+        isolation: isolate;
+        min-height: 100dvh;
+      }
+      #root:empty {
+        display: none;
+      }
+      #root:not(:empty) + #splash {
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+        transition: opacity var(--tt-duration-slow) var(--tt-ease-out), visibility 0s linear var(--tt-duration-slow);
+      }
+      #splash {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483000;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: var(--tt-space-4);
+        padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+        background-color: var(--tt-color-bg);
+        color: var(--tt-color-text-muted);
+        font-size: 0.875rem;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        user-select: none;
+      }
+      .splash__mark {
+        width: 96px;
+        height: 96px;
+        color: var(--tt-color-accent);
+      }
+      .splash__ring {
+        transform-origin: 48px 48px;
+        animation: tt-spin 1.1s linear infinite;
+      }
+      .splash__wave {
+        animation: tt-swell 2.4s ease-in-out infinite;
+      }
+      .splash__wave--back {
+        opacity: 0.45;
+        animation-delay: -1.2s;
+      }
+      .splash__label {
+        font-family: var(--tt-font-mono);
+        font-variant-numeric: tabular-nums;
+      }
+      @keyframes tt-spin {
+        from {
+          transform: rotate(0deg);
+        }
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @keyframes tt-swell {
+        0%,
+        100% {
+          transform: translateY(0);
+        }
+        50% {
+          transform: translateY(-3px);
+        }
+      }
+      @keyframes tt-shimmer {
+        from {
+          background-position: 200% 0;
+        }
+        to {
+          background-position: -200% 0;
+        }
+      }
+      /* first frame of the shell: these rules are used by the header and rail the bundle renders */
+      .app-shell {
+        display: grid;
+        grid-template-columns: var(--tt-rail-width) minmax(0, 1fr);
+        grid-template-rows: var(--tt-header-height) minmax(0, 1fr);
+        grid-template-areas: "rail header" "rail main";
+        min-height: 100dvh;
+      }
+      .app-shell__header {
+        grid-area: header;
+        display: flex;
+        align-items: center;
+        gap: var(--tt-space-4);
+        padding: 0 var(--tt-space-6);
+        background-color: var(--tt-color-surface);
+        border-bottom: 1px solid var(--tt-color-border);
+      }
+      .app-shell__rail {
+        grid-area: rail;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: var(--tt-space-2);
+        padding: var(--tt-space-3) 0;
+        background-color: var(--tt-color-accent-strong);
+      }
+      .app-shell__main {
+        grid-area: main;
+        padding: var(--tt-space-6);
+        overflow: auto;
+      }
+      .skeleton {
+        display: block;
+        border-radius: var(--tt-radius-sm);
+        background-color: var(--tt-color-skeleton);
+        background-image: linear-gradient(90deg, var(--tt-color-skeleton) 0%, var(--tt-color-skeleton-shine) 50%, var(--tt-color-skeleton) 100%);
+        background-size: 200% 100%;
+        animation: tt-shimmer 1.6s linear infinite;
+      }
+      .skeleton--title {
+        width: 14rem;
+        height: 1.5rem;
+      }
+      .skeleton--row {
+        width: 100%;
+        height: 2.75rem;
+        margin-top: var(--tt-space-2);
+      }
+      .skeleton--chart {
+        width: 100%;
+        height: 14rem;
+        border-radius: var(--tt-radius-md);
+      }
+      .visually-hidden {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        margin: -1px;
+        padding: 0;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+      @media (max-width: 48rem) {
+        .app-shell {
+          grid-template-columns: minmax(0, 1fr);
+          grid-template-rows: var(--tt-header-height) minmax(0, 1fr) var(--tt-rail-width);
+          grid-template-areas: "header" "main" "rail";
+        }
+        .app-shell__rail {
+          flex-direction: row;
+          justify-content: space-around;
+          padding: 0 var(--tt-space-3) env(safe-area-inset-bottom);
+        }
+        .app-shell__main {
+          padding: var(--tt-space-4);
+        }
+        .splash__mark {
+          width: 72px;
+          height: 72px;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .splash__ring,
+        .splash__wave,
+        .skeleton {
+          animation: none;
+        }
+        #root:not(:empty) + #splash {
+          transition: none;
+        }
+      }
+      @media print {
+        #splash {
+          display: none;
+        }
+      }
+    </style>
+    <link rel="modulepreload" crossorigin href="/assets/vendor-react-DqT4n1Zs.js" />
+    <link rel="modulepreload" crossorigin href="/assets/vendor-charts-Bm0Yw8Le.js" />
+    <link rel="stylesheet" crossorigin href="/assets/index-Cf3pV0aL.css" />
+  </head>
+  <body>
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"></div>
+    <div id="splash" aria-hidden="true">
+      <svg class="splash__mark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96" fill="none" focusable="false">
+        <circle cx="48" cy="48" r="42" stroke="currentColor" stroke-opacity="0.18" stroke-width="4" />
+        <g class="splash__ring" stroke="currentColor" stroke-width="4" stroke-linecap="round">
+          <path d="M48 6a42 42 0 0 1 36.37 21" />
+          <path d="M90 48a42 42 0 0 1-5.63 21" stroke-opacity="0.55" />
+          <path d="M69 84.37A42 42 0 0 1 48 90" stroke-opacity="0.3" />
+        </g>
+        <g stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-opacity="0.5">
+          <path d="M48 14v5" />
+          <path d="M65 18.56l-2.5 4.33" />
+          <path d="M77.44 31l-4.33 2.5" />
+          <path d="M82 48h-5" />
+          <path d="M77.44 65l-4.33-2.5" />
+          <path d="M65 77.44l-2.5-4.33" />
+          <path d="M48 82v-5" />
+          <path d="M31 77.44l2.5-4.33" />
+          <path d="M18.56 65l4.33-2.5" />
+          <path d="M14 48h5" />
+          <path d="M18.56 31l4.33 2.5" />
+          <path d="M31 18.56l2.5 4.33" />
+        </g>
+        <path class="splash__wave splash__wave--back" d="M26 50c3.67-4 7.33-4 11 0s7.33 4 11 0 7.33-4 11 0 7.33 4 11 0" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
+        <path class="splash__wave" d="M26 58c3.67-4 7.33-4 11 0s7.33 4 11 0 7.33-4 11 0 7.33 4 11 0" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
+        <path d="M48 30v12" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
+        <path d="M43 35l5-5 5 5" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
+      <span class="splash__label">Loading…</span>
+    </div>
+    <script type="module" crossorigin src="/assets/index-B7x2Kq9d.js"></script>
+  </body>
+</html>

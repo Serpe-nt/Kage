@@ -1,0 +1,6 @@
+{
+  "url": "https://lecarnet.example/tourte-aux-poireaux/",
+  "kind": "Recipe post on a food blog in French; WordPress theme with block content and a recipe card in the style of WP Recipe Maker",
+  "render": "browser",
+  "thin": false
+}

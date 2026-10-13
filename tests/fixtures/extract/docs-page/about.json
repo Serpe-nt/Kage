@@ -1,0 +1,6 @@
+{
+  "url": "https://docs.wendril.example/docs/configuration/config-file",
+  "kind": "software documentation page (configuration reference of a command-line tool) in Docusaurus 3 markup, as rendered in a browser",
+  "render": "browser",
+  "thin": false
+}

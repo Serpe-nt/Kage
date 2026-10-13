@@ -1,0 +1,6 @@
+{
+  "url": "https://app.tidewatertracker.example/",
+  "kind": "single-page application shell as an HTTP client without JavaScript gets it; Vite + React build output (empty #root, noscript fallback, splash placeholder)",
+  "render": "http",
+  "thin": true
+}

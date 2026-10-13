@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<!-- Fixture: a generated page with invented names; no real site. -->
+<html dir="ltr" lang="en-gb">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nightly backup stops at exactly 4 GB on external drive - Brindlebox Community Forum</title>
+<link rel="alternate" type="application/atom+xml" title="Feed - Brindlebox Community Forum" href="/app.php/feed?sid=4f0c9a27d1e8b6530c7a2f9be41d6a83">
+<link rel="alternate" type="application/atom+xml" title="Feed - Forum - Backup and Restore" href="/app.php/feed/forum/7?sid=4f0c9a27d1e8b6530c7a2f9be41d6a83">
+<link rel="alternate" type="application/atom+xml" title="Feed - Topic - Nightly backup stops at exactly 4 GB on external drive" href="/app.php/feed/topic/3184?sid=4f0c9a27d1e8b6530c7a2f9be41d6a83">
+<link rel="canonical" href="https://forum.brindlebox.example/viewtopic.php?f=7&amp;t=3184">
+<meta name="description" content="Hello all, I have been running Brindlebox 4.2 on a small home server for just over a year, and the nightly backup has suddenly started failing, always">
+<link href="./assets/css/font-awesome.min.css?assets_version=64" rel="stylesheet">
+<link href="./styles/prosilver/theme/stylesheet.css?assets_version=64" rel="stylesheet">
+<link href="./styles/prosilver/theme/en/stylesheet.css?assets_version=64" rel="stylesheet">
+<script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "DiscussionForumPosting",
+  "@id": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184",
+  "url": "https://forum.brindlebox.example/viewtopic.php?f=7&t=3184",
+  "headline": "Nightly backup stops at exactly 4 GB on external drive",
+  "articleSection": "Backup and Restore",
+  "datePublished": "2026-03-02T19:41:07+00:00",
+  "author": {
+    "@type": "Person",
+    "name": "marlow_k",
+    "url": "https://forum.brindlebox.example/memberlist.php?mode=viewprofile&u=1532"
+  },
+  "text": "Hello all, I have been running Brindlebox 4.2 on a small home server for just over a year, and the nightly backup has suddenly started failing, always at exactly the same point.",
+  "interactionStatistic": [
+    {
+      "@type": "InteractionCounter",
+      "interactionType": "https://schema.org/ReplyAction",
+      "userInteractionCount": 19
+    },
+    {
+      "@type": "InteractionCounter",
+      "interactionType": "https://schema.org/ViewAction",
+      "userInteractionCount": 1463
+    }
+  ],
+  "comment": [
+    {
+      "@type": "Comment",
+      "url": "https://forum.brindlebox.example/viewtopic.php?p=41875#p41875",
+      "datePublished": "2026-03-02T20:03:44+00:00",
+      "author": { "@type": "Person", "name": "Halvard" },
+      "text": "Welcome to the forum, and thank you for posting the log as text. That byte count is the giveaway."
+    },
+    {
+      "@type": "Comment",
+      "url": "https://forum.brindlebox.example/viewtopic.php?p=41883#p41883",
+      "datePublished": "2026-03-02T21:37:19+00:00",
+      "author": { "@type": "Person", "name": "quietfern" },
+      "text": "That explains it. FAT32 cannot hold a single file larger than 4 GB, however big the drive is."
+    }
+  ]
+}</script>
+<style>
+.ad-slot { min-height: 90px; margin: 4px 0; text-align: center; }
+.postprofile .profile-rank { font-style: italic; }
+.codebox code { max-height: 300px; }
+</style>
+</head>
+<body id="phpbb" class="hasjs notouch section-viewtopic ltr">
+
+<div id="wrap" class="wrap">
+	<a id="top" class="top-anchor" accesskey="t"></a>
+	<div id="page-header">
+		<div class="headerbar" role="banner">
+			<div class="inner">
+
+			<div id="site-description" class="site-description">
+				<a id="logo" class="logo" href="./index.php?sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" title="Board index"><span class="site_logo"></span></a>
+				<h1>Brindlebox Community Forum</h1>
+				<p>Help, ideas and show-and-tell for people who run Brindlebox at home</p>
+				<p class="skiplink"><a href="#start_here">Skip to content</a></p>
+			</div>
+
+			<div id="search-box" class="search-box search-header" role="search">
+				<form action="./search.php?sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" method="get" id="search">
+				<fieldset>
+					<input name="keywords" id="keywords" type="search" maxlength="128" title="Search for keywords" class="inputbox search tiny" size="20" value="" placeholder="Search…">
+					<button class="button button-search" type="submit" title="Search">
+						<i class="icon fa-search fa-fw" aria-hidden="true"></i><span class="sr-only">Search</span>
+					</button>
+					<a href="./search.php?sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" class="button button-search-end" title="Advanced search">
+						<i class="icon fa-cog fa-fw" aria-hidden="true"></i><span class="sr-only">Advanced search</span>
+					</a>
+					<input type="hidden" name="sid" value="4f0c9a27d1e8b6530c7a2f9be41d6a83">
+				</fieldset>
+				</form>
+			</div>
+
+			</div>
+		</div>
+		<div class="navbar" role="navigation">
+	<div class="inner">
+
+	<ul id="nav-main" class="nav-main linklist" role="menubar">
+		<li id="quick-links" class="quick-links dropdown-container responsive-menu" data-skip-responsive="true">
+			<a href="javascript:void(0)" class="dropdown-trigger">
+				<i class="icon fa-bars fa-fw" aria-hidden="true"></i><span>Quick links</span>
+			</a>
+			<div class="dropdown">
+				<div class="pointer"><div class="pointer-inner"></div></div>
+				<ul class="dropdown-contents" role="menu">
+					<li class="separator"></li>
+					<li><a href="./search.php?search_id=unanswered&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" role="menuitem"><i class="icon fa-file-o fa-fw icon-gray" aria-hidden="true"></i><span>Unanswered topics</span></a></li>
+					<li><a href="./search.php?search_id=active_topics&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" role="menuitem"><i class="icon fa-file-o fa-fw icon-blue" aria-hidden="true"></i><span>Active topics</span></a></li>
+					<li class="separator"></li>
+				</ul>
+			</div>
+		</li>
+		<li data-skip-responsive="true">
+			<a href="./faq.php?sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" rel="help" title="Frequently Asked Questions" role="menuitem">
+				<i class="icon fa-question-circle fa-fw" aria-hidden="true"></i><span>FAQ</span>
+			</a>
+		</li>
+		<li class="rightside" data-skip-responsive="true">
+			<a href="./ucp.php?mode=login&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" title="Login" accesskey="x" role="menuitem" rel="nofollow">
+				<i class="icon fa-power-off fa-fw" aria-hidden="true"></i><span>Login</span>
+			</a>
+		</li>
+		<li class="rightside" data-skip-responsive="true">
+			<a href="./ucp.php?mode=register&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" role="menuitem" rel="nofollow">
+				<i class="icon fa-pencil-square-o fa-fw" aria-hidden="true"></i><span>Register</span>
+			</a>
+		</li>
+	</ul>
+
+	<ul id="nav-breadcrumbs" class="nav-breadcrumbs linklist navlinks" role="menubar">
+		<li class="breadcrumbs">
+			<span class="crumb"><a href="https://www.brindlebox.example/" data-navbar-reference="home"><i class="icon fa-home fa-fw" aria-hidden="true"></i><span>Brindlebox home</span></a></span>
+			<span class="crumb"><a href="./index.php?sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" accesskey="h" data-navbar-reference="index"><span>Board index</span></a></span>
+			<span class="crumb" data-forum-id="3"><a href="./viewforum.php?f=3&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83"><span>Support</span></a></span>
+			<span class="crumb" data-forum-id="7"><a href="./viewforum.php?f=7&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83"><span>Backup and Restore</span></a></span>
+		</li>
+	</ul>
+
+	</div>
+</div>
+	</div>
+
+	<a id="start_here" class="anchor"></a>
+	<div id="page-body" class="page-body" role="main">
+
+<h2 class="topic-title"><a href="./viewtopic.php?f=7&amp;t=3184&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83">Nightly backup stops at exactly 4 GB on external drive</a></h2>
+<!-- NOTE: remove the style="display: none" when you want to have the forum description on the topic body -->
+<div style="display: none !important;">Scheduled jobs, archives, restores and moving a library to new hardware<br></div>
+
+<div class="action-bar bar-top">
+	<a href="./posting.php?mode=reply&amp;f=7&amp;t=3184&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" class="button" title="Post a reply">
+		<span>Post Reply</span> <i class="icon fa-reply fa-fw" aria-hidden="true"></i>
+	</a>
+
+	<div class="dropdown-container dropdown-button-control topic-tools">
+		<span title="Topic tools" class="button button-secondary dropdown-trigger dropdown-select">
+			<i class="icon fa-wrench fa-fw" aria-hidden="true"></i>
+			<span class="caret"><i class="icon fa-sort-down fa-fw" aria-hidden="true"></i></span>
+		</span>
+		<div class="dropdown">
+			<div class="pointer"><div class="pointer-inner"></div></div>
+			<ul class="dropdown-contents">
+				<li><a href="./viewtopic.php?f=7&amp;t=3184&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&amp;view=print" title="Print view" accesskey="p"><i class="icon fa-print fa-fw" aria-hidden="true"></i><span>Print view</span></a></li>
+			</ul>
+		</div>
+	</div>
+
+	<div class="pagination">
+		20 posts
+		<ul>
+			<li class="dropdown-container dropdown-button-control dropdown-page-jump page-jump">
+				<a class="button button-icon-only dropdown-trigger" href="#" title="Click to jump to page…" role="button"><i class="icon fa-level-down fa-rotate-270" aria-hidden="true"></i><span class="sr-only">Page <strong>1</strong> of <strong>3</strong></span></a>
+			</li>
+			<li class="active"><span>1</span></li>
+			<li><a class="button" href="./viewtopic.php?f=7&amp;t=3184&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&amp;start=7" role="button">2</a></li>
+			<li><a class="button" href="./viewtopic.php?f=7&amp;t=3184&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&amp;start=14" role="button">3</a></li>
+			<li class="arrow next"><a class="button button-icon-only" href="./viewtopic.php?f=7&amp;t=3184&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&amp;start=7" rel="next" role="button"><i class="icon fa-chevron-right fa-fw" aria-hidden="true"></i><span class="sr-only">Next</span></a></li>
+		</ul>
+	</div>
+</div>
+
+<div id="p41872" class="post has-profile bg2">
+	<div class="inner">
+	<dl class="postprofile" id="profile41872">
+		<dt class="has-profile-rank has-avatar">
+			<div class="avatar-container">
+				<a href="./memberlist.php?mode=viewprofile&amp;u=1532&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" class="avatar"><img class="avatar" src="./download/file.php?avatar=1532_1741958122.png" width="80" height="80" alt="User avatar"></a>
+			</div>
+			<a href="./memberlist.php?mode=viewprofile&amp;u=1532&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" class="username">marlow_k</a>
+		</dt>
+		<dd class="profile-rank">Member</dd>
+		<dd class="profile-posts"><strong>Posts:</strong> <a href="./search.php?author_id=1532&amp;sr=posts&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83">87</a></dd>
+		<dd class="profile-joined"><strong>Joined:</strong> Fri Mar 14, 2025 9:02 am</dd>
+	</dl>
+	<div class="postbody">
+		<div id="post_content41872">
+		<h3 class="first"><a href="#p41872">Nightly backup stops at exactly 4 GB on external drive</a></h3>
+		<ul class="post-buttons">
+			<li><a href="./posting.php?mode=quote&amp;f=7&amp;p=41872&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" title="Reply with quote" class="button button-icon-only"><i class="icon fa-quote-left fa-fw" aria-hidden="true"></i><span class="sr-only">Quote</span></a></li>
+		</ul>
+		<p class="author">
+			<a class="unread" href="./viewtopic.php?p=41872&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83#p41872" title="Post"><i class="icon fa-file fa-fw icon-lightgray icon-md" aria-hidden="true"></i><span class="sr-only">Post</span></a>
+			<span class="responsive-hide">by <strong><a href="./memberlist.php?mode=viewprofile&amp;u=1532&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" class="username">marlow_k</a></strong> » </span><time datetime="2026-03-02T19:41:07+00:00">Mon Mar 02, 2026 7:41 pm</time>
+		</p>
+		<div class="content">Hello all, I have been running Brindlebox 4.2 on a small home server for just over a year, and the nightly backup has suddenly started failing, always at exactly the same point.<br>
+<br>
+The job copies the library database and the artwork cache to an external USB drive. Since last Thursday it stops when the archive reaches 4 GB, and the log shows the lines below. Smaller jobs, such as the settings-only backup, still finish without complaint.<br>
+<br>
+<div class="codebox"><p>Code: <a href="#" onclick="selectCode(this); return false;">Select all</a></p><pre><code>[02:00:04] backup: starting job nightly-full
+[02:00:05] backup: target /mnt/usb-backup/brindlebox
+[02:23:51] backup: wrote 4294967295 bytes to nightly-full.bbx
+[02:23:51] backup: ERROR archive closed unexpectedly (code 27)</code></pre></div>
+So far I have restarted the server, run the job by hand and checked the drive, which has more than 400 GB free. It is the same drive I have always used, although I did wipe and reformat it a couple of weeks ago, after it started making odd clicking noises on another machine.<br>
+<br>
+Nothing else has changed that I can think of. Is there a size limit somewhere in the settings that I have managed to switch on, or is this a bug in 4.2? Any pointers would be very welcome, because I would rather not go a second week without a full backup.</div>
+		</div>
+	</div>
+	<div class="back2top">
+		<a href="#top" class="top" title="Top"><i class="icon fa-chevron-circle-up fa-fw icon-gray" aria-hidden="true"></i><span class="sr-only">Top</span></a>
+	</div>
+	</div>
+</div>
+<hr class="divider">
+<div class="ad-slot adsbox ad-after-first-post" id="ad-slot-post-1"></div>
+
+<div id="p41875" class="post has-profile bg1">
+	<div class="inner">
+	<dl class="postprofile" id="profile41875">
+		<dt class="has-profile-rank has-avatar">
+			<div class="avatar-container">
+				<a href="./memberlist.php?mode=viewprofile&amp;u=12&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" class="avatar"><img class="avatar" src="./download/file.php?avatar=12_1515521407.jpg" width="90" height="90" alt="User avatar"></a>
+			</div>
+			<a href="./memberlist.php?mode=viewprofile&amp;u=12&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" style="color: #00AA00;" class="username-coloured">Halvard</a>
+		</dt>
+		<dd class="profile-rank">Moderator</dd>
+		<dd class="profile-posts"><strong>Posts:</strong> <a href="./search.php?author_id=12&amp;sr=posts&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83">4318</a></dd>
+		<dd class="profile-joined"><strong>Joined:</strong> Tue Jan 09, 2018 6:20 pm</dd>
+		<dd class="profile-custom-field profile-phpbb_location"><strong>Location:</strong> Somewhere with good coffee</dd>
+	</dl>
+	<div class="postbody">
+		<div id="post_content41875">
+		<h3><a href="#p41875">Re: Nightly backup stops at exactly 4 GB on external drive</a></h3>
+		<ul class="post-buttons">
+			<li><a href="./posting.php?mode=quote&amp;f=7&amp;p=41875&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" title="Reply with quote" class="button button-icon-only"><i class="icon fa-quote-left fa-fw" aria-hidden="true"></i><span class="sr-only">Quote</span></a></li>
+		</ul>
+		<p class="author">
+			<a class="unread" href="./viewtopic.php?p=41875&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83#p41875" title="Post"><i class="icon fa-file fa-fw icon-lightgray icon-md" aria-hidden="true"></i><span class="sr-only">Post</span></a>
+			<span class="responsive-hide">by <strong><a href="./memberlist.php?mode=viewprofile&amp;u=12&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" style="color: #00AA00;" class="username-coloured">Halvard</a></strong> » </span><time datetime="2026-03-02T20:03:44+00:00">Mon Mar 02, 2026 8:03 pm</time>
+		</p>
+		<div class="content">Welcome to the forum, and thank you for posting the log as text.<br>
+<br>
+That byte count is the giveaway. 4294967295 is one byte short of 4 GB, which is the largest single file that some filesystems can hold, so the job is hitting a wall rather than failing at random. Brindlebox has no size limit of its own.<br>
+<br>
+Can you tell us how the drive is formatted now? Open Storage in the admin panel, pick the backup drive and post what it says next to Filesystem.</div>
+		<div id="sig41875" class="signature">Please post logs as text, not screenshots. New here? Read the <a href="https://forum.brindlebox.example/viewtopic.php?f=7&amp;t=11" class="postlink">backup checklist</a> before you ask.</div>
+		</div>
+	</div>
+	<div class="back2top">
+		<a href="#top" class="top" title="Top"><i class="icon fa-chevron-circle-up fa-fw icon-gray" aria-hidden="true"></i><span class="sr-only">Top</span></a>
+	</div>
+	</div>
+</div>
+<hr class="divider">
+
+<div id="p41879" class="post has-profile bg2">
+	<div class="inner">
+	<dl class="postprofile" id="profile41879">
+		<dt class="has-profile-rank has-avatar">
+			<div class="avatar-container">
+				<a href="./memberlist.php?mode=viewprofile&amp;u=1532&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" class="avatar"><img class="avatar" src="./download/file.php?avatar=1532_1741958122.png" width="80" height="80" alt="User avatar"></a>
+			</div>
+			<a href="./memberlist.php?mode=viewprofile&amp;u=1532&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" class="username">marlow_k</a>
+		</dt>
+		<dd class="profile-rank">Member</dd>
+		<dd class="profile-posts"><strong>Posts:</strong> <a href="./search.php?author_id=1532&amp;sr=posts&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83">87</a></dd>
+		<dd class="profile-joined"><strong>Joined:</strong> Fri Mar 14, 2025 9:02 am</dd>
+	</dl>
+	<div class="postbody">
+		<div id="post_content41879">
+		<h3><a href="#p41879">Re: Nightly backup stops at exactly 4 GB on external drive</a></h3>
+		<ul class="post-buttons">
+			<li><a href="./posting.php?mode=quote&amp;f=7&amp;p=41879&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" title="Reply with quote" class="button button-icon-only"><i class="icon fa-quote-left fa-fw" aria-hidden="true"></i><span class="sr-only">Quote</span></a></li>
+		</ul>
+		<p class="author">
+			<a class="unread" href="./viewtopic.php?p=41879&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83#p41879" title="Post"><i class="icon fa-file fa-fw icon-lightgray icon-md" aria-hidden="true"></i><span class="sr-only">Post</span></a>
+			<span class="responsive-hide">by <strong><a href="./memberlist.php?mode=viewprofile&amp;u=1532&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" class="username">marlow_k</a></strong> » </span><time datetime="2026-03-02T20:52:10+00:00">Mon Mar 02, 2026 8:52 pm</time>
+		</p>
+		<div class="content"><blockquote><div><cite>Halvard wrote:</cite>Can you tell us how the drive is formatted now?</div></blockquote>
+It says FAT32, which surprised me. I let the other machine choose the format when I wiped the drive and never looked at what it had picked. Before that I am fairly sure it was ext4, because I set it up by following the install guide word for word.<br>
+<br>
+So is the answer simply to reformat it again?</div>
+		<div class="notice">
+			Last edited by <a href="./memberlist.php?mode=viewprofile&amp;u=1532&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" class="username">marlow_k</a> on Mon Mar 02, 2026 9:02 pm, edited 1 time in total.
+		</div>
+		</div>
+	</div>
+	<div class="back2top">
+		<a href="#top" class="top" title="Top"><i class="icon fa-chevron-circle-up fa-fw icon-gray" aria-hidden="true"></i><span class="sr-only">Top</span></a>
+	</div>
+	</div>
+</div>
+<hr class="divider">
+
+<div id="p41883" class="post has-profile bg1">
+	<div class="inner">
+	<dl class="postprofile" id="profile41883">
+		<dt class="has-profile-rank has-avatar">
+			<div class="avatar-container">
+				<a href="./memberlist.php?mode=viewprofile&amp;u=873&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" class="avatar"><img class="avatar" src="./download/file.php?avatar=873_1598010455.gif" width="64" height="64" alt="User avatar"></a>
+			</div>
+			<a href="./memberlist.php?mode=viewprofile&amp;u=873&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" class="username">quietfern</a>
+		</dt>
+		<dd class="profile-rank">Regular</dd>
+		<dd class="profile-posts"><strong>Posts:</strong> <a href="./search.php?author_id=873&amp;sr=posts&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83">1234</a></dd>
+		<dd class="profile-joined"><strong>Joined:</strong> Fri Aug 21, 2020 11:47 am</dd>
+	</dl>
+	<div class="postbody">
+		<div id="post_content41883">
+		<h3><a href="#p41883">Re: Nightly backup stops at exactly 4 GB on external drive</a></h3>
+		<ul class="post-buttons">
+			<li><a href="./posting.php?mode=quote&amp;f=7&amp;p=41883&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" title="Reply with quote" class="button button-icon-only"><i class="icon fa-quote-left fa-fw" aria-hidden="true"></i><span class="sr-only">Quote</span></a></li>
+		</ul>
+		<p class="author">
+			<a class="unread" href="./viewtopic.php?p=41883&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83#p41883" title="Post"><i class="icon fa-file fa-fw icon-lightgray icon-md" aria-hidden="true"></i><span class="sr-only">Post</span></a>
+			<span class="responsive-hide">by <strong><a href="./memberlist.php?mode=viewprofile&amp;u=873&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" class="username">quietfern</a></strong> » </span><time datetime="2026-03-02T21:37:19+00:00">Mon Mar 02, 2026 9:37 pm</time>
+		</p>
+		<div class="content">That explains it. FAT32 cannot hold a single file larger than 4 GB, however big the drive is. You have three ways out, roughly in order of effort:<br>
+<ul>
+<li>Turn on archive splitting under Settings, Backup, Advanced, and set the part size to 2 GB.</li>
+<li>Reformat the drive as ext4 or exFAT, and let the job write one large file again.</li>
+<li>Point the nightly job at a network share instead, and keep the USB drive for a weekly copy.</li>
+</ul>
+I would choose the second if nothing else lives on that drive. Splitting works, but restoring from a dozen parts is slower, and one missing part spoils the lot. The steps are in <a href="https://docs.brindlebox.example/backup/splitting" class="postlink" rel="nofollow noopener">the manual</a> if you want to try it.</div>
+		</div>
+	</div>
+	<div class="back2top">
+		<a href="#top" class="top" title="Top"><i class="icon fa-chevron-circle-up fa-fw icon-gray" aria-hidden="true"></i><span class="sr-only">Top</span></a>
+	</div>
+	</div>
+</div>
+<hr class="divider">
+
+<div id="p41890" class="post has-profile bg2">
+	<div class="inner">
+	<dl class="postprofile" id="profile41890">
+		<dt class="has-profile-rank has-avatar">
+			<div class="avatar-container">
+				<a href="./memberlist.php?mode=viewprofile&amp;u=2291&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" class="avatar"><img class="avatar" src="./download/file.php?avatar=2291_1667747702.jpg" width="90" height="72" alt="User avatar"></a>
+			</div>
+			<a href="./memberlist.php?mode=viewprofile&amp;u=2291&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" class="username">Oda_Brennick</a>
+		</dt>
+		<dd class="profile-rank">Member</dd>
+		<dd class="profile-posts"><strong>Posts:</strong> <a href="./search.php?author_id=2291&amp;sr=posts&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83">412</a></dd>
+		<dd class="profile-joined"><strong>Joined:</strong> Sun Nov 06, 2022 3:15 pm</dd>
+	</dl>
+	<div class="postbody">
+		<div id="post_content41890">
+		<h3><a href="#p41890">Re: Nightly backup stops at exactly 4 GB on external drive</a></h3>
+		<ul class="post-buttons">
+			<li><a href="./posting.php?mode=quote&amp;f=7&amp;p=41890&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" title="Reply with quote" class="button button-icon-only"><i class="icon fa-quote-left fa-fw" aria-hidden="true"></i><span class="sr-only">Quote</span></a></li>
+		</ul>
+		<p class="author">
+			<a class="unread" href="./viewtopic.php?p=41890&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83#p41890" title="Post"><i class="icon fa-file fa-fw icon-lightgray icon-md" aria-hidden="true"></i><span class="sr-only">Post</span></a>
+			<span class="responsive-hide">by <strong><a href="./memberlist.php?mode=viewprofile&amp;u=2291&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" class="username">Oda_Brennick</a></strong> » </span><time datetime="2026-03-03T07:15:32+00:00">Tue Mar 03, 2026 7:15 am</time>
+		</p>
+		<div class="content"><blockquote><div><cite>quietfern wrote:</cite>Splitting works, but restoring from a dozen parts is slower, and one missing part spoils the lot.</div></blockquote>
+True, although 4.2 verifies split archives part by part, so a damaged part is at least reported on the night it is written rather than discovered during a restore. I ran split backups to a FAT32 stick for most of last year without any trouble.<br>
+<br>
+I still agree that reformatting is the cleaner fix. If you go that way, exFAT has one advantage over ext4: the drive stays readable on an ordinary laptop if the server itself ever dies.</div>
+		</div>
+	</div>
+	<div class="back2top">
+		<a href="#top" class="top" title="Top"><i class="icon fa-chevron-circle-up fa-fw icon-gray" aria-hidden="true"></i><span class="sr-only">Top</span></a>
+	</div>
+	</div>
+</div>
+<hr class="divider">
+
+<div id="p41894" class="post has-profile bg1">
+	<div class="inner">
+	<dl class="postprofile" id="profile41894">
+		<dt class="has-profile-rank has-avatar">
+			<div class="avatar-container">
+				<a href="./memberlist.php?mode=viewprofile&amp;u=12&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" class="avatar"><img class="avatar" src="./download/file.php?avatar=12_1515521407.jpg" width="90" height="90" alt="User avatar"></a>
+			</div>
+			<a href="./memberlist.php?mode=viewprofile&amp;u=12&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" style="color: #00AA00;" class="username-coloured">Halvard</a>
+		</dt>
+		<dd class="profile-rank">Moderator</dd>
+		<dd class="profile-posts"><strong>Posts:</strong> <a href="./search.php?author_id=12&amp;sr=posts&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83">4318</a></dd>
+		<dd class="profile-joined"><strong>Joined:</strong> Tue Jan 09, 2018 6:20 pm</dd>
+		<dd class="profile-custom-field profile-phpbb_location"><strong>Location:</strong> Somewhere with good coffee</dd>
+	</dl>
+	<div class="postbody">
+		<div id="post_content41894">
+		<h3><a href="#p41894">Re: Nightly backup stops at exactly 4 GB on external drive</a></h3>
+		<ul class="post-buttons">
+			<li><a href="./posting.php?mode=quote&amp;f=7&amp;p=41894&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" title="Reply with quote" class="button button-icon-only"><i class="icon fa-quote-left fa-fw" aria-hidden="true"></i><span class="sr-only">Quote</span></a></li>
+		</ul>
+		<p class="author">
+			<a class="unread" href="./viewtopic.php?p=41894&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83#p41894" title="Post"><i class="icon fa-file fa-fw icon-lightgray icon-md" aria-hidden="true"></i><span class="sr-only">Post</span></a>
+			<span class="responsive-hide">by <strong><a href="./memberlist.php?mode=viewprofile&amp;u=12&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" style="color: #00AA00;" class="username-coloured">Halvard</a></strong> » </span><time datetime="2026-03-03T08:40:05+00:00">Tue Mar 03, 2026 8:40 am</time>
+		</p>
+		<div class="content">One caution before you reformat anything. The clicking noises you mentioned worry me more than the filesystem does. Run a full surface check on the drive first, and if it reports even a handful of reallocated sectors, retire it.<br>
+<br>
+A backup drive that is quietly failing is worse than no backup at all, because it lets you believe you are covered.</div>
+		<div id="sig41894" class="signature">Please post logs as text, not screenshots. New here? Read the <a href="https://forum.brindlebox.example/viewtopic.php?f=7&amp;t=11" class="postlink">backup checklist</a> before you ask.</div>
+		</div>
+	</div>
+	<div class="back2top">
+		<a href="#top" class="top" title="Top"><i class="icon fa-chevron-circle-up fa-fw icon-gray" aria-hidden="true"></i><span class="sr-only">Top</span></a>
+	</div>
+	</div>
+</div>
+<hr class="divider">
+
+<div id="p41901" class="post has-profile bg2">
+	<div class="inner">
+	<dl class="postprofile" id="profile41901">
+		<dt class="has-profile-rank has-avatar">
+			<div class="avatar-container">
+				<a href="./memberlist.php?mode=viewprofile&amp;u=1532&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" class="avatar"><img class="avatar" src="./download/file.php?avatar=1532_1741958122.png" width="80" height="80" alt="User avatar"></a>
+			</div>
+			<a href="./memberlist.php?mode=viewprofile&amp;u=1532&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" class="username">marlow_k</a>
+		</dt>
+		<dd class="profile-rank">Member</dd>
+		<dd class="profile-posts"><strong>Posts:</strong> <a href="./search.php?author_id=1532&amp;sr=posts&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83">87</a></dd>
+		<dd class="profile-joined"><strong>Joined:</strong> Fri Mar 14, 2025 9:02 am</dd>
+	</dl>
+	<div class="postbody">
+		<div id="post_content41901">
+		<h3><a href="#p41901">Re: Nightly backup stops at exactly 4 GB on external drive</a></h3>
+		<ul class="post-buttons">
+			<li><a href="./posting.php?mode=quote&amp;f=7&amp;p=41901&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" title="Reply with quote" class="button button-icon-only"><i class="icon fa-quote-left fa-fw" aria-hidden="true"></i><span class="sr-only">Quote</span></a></li>
+		</ul>
+		<p class="author">
+			<a class="unread" href="./viewtopic.php?p=41901&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83#p41901" title="Post"><i class="icon fa-file fa-fw icon-lightgray icon-md" aria-hidden="true"></i><span class="sr-only">Post</span></a>
+			<span class="responsive-hide">by <strong><a href="./memberlist.php?mode=viewprofile&amp;u=1532&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" class="username">marlow_k</a></strong> » </span><time datetime="2026-03-03T18:26:48+00:00">Tue Mar 03, 2026 6:26 pm</time>
+		</p>
+		<div class="content">Thank you, all three of you. The surface check is running now and says it needs about five hours for a drive this size, so I will leave it going overnight.<br>
+<br>
+If it comes back clean I will reformat as ext4 tomorrow evening and run the job by hand before I trust the schedule again. In the meantime I have switched on splitting at 2 GB, so that tonight's backup at least has a chance of finishing. I will report back either way.</div>
+		</div>
+	</div>
+	<div class="back2top">
+		<a href="#top" class="top" title="Top"><i class="icon fa-chevron-circle-up fa-fw icon-gray" aria-hidden="true"></i><span class="sr-only">Top</span></a>
+	</div>
+	</div>
+</div>
+<hr class="divider">
+
+<div class="action-bar bar-bottom">
+	<a href="./posting.php?mode=reply&amp;f=7&amp;t=3184&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" class="button" title="Post a reply">
+		<span>Post Reply</span> <i class="icon fa-reply fa-fw" aria-hidden="true"></i>
+	</a>
+
+	<div class="pagination">
+		20 posts
+		<ul>
+			<li class="active"><span>1</span></li>
+			<li><a class="button" href="./viewtopic.php?f=7&amp;t=3184&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&amp;start=7" role="button">2</a></li>
+			<li><a class="button" href="./viewtopic.php?f=7&amp;t=3184&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&amp;start=14" role="button">3</a></li>
+			<li class="arrow next"><a class="button button-icon-only" href="./viewtopic.php?f=7&amp;t=3184&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83&amp;start=7" rel="next" role="button"><i class="icon fa-chevron-right fa-fw" aria-hidden="true"></i><span class="sr-only">Next</span></a></li>
+		</ul>
+	</div>
+</div>
+
+<form method="post" action="./posting.php?mode=reply&amp;f=7&amp;t=3184&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" id="qr_postform">
+	<div class="panel">
+		<div class="inner">
+			<h2 class="quickreply-title">Quick Reply</h2>
+			<fieldset class="fields1">
+				<dl style="clear: left;">
+					<dt><label for="subject">Subject:</label></dt>
+					<dd><input type="text" name="subject" id="subject" size="45" maxlength="124" tabindex="2" value="Re: Nightly backup stops at exactly 4 GB on external drive" class="inputbox autowidth"></dd>
+				</dl>
+				<div id="message-box">
+					<textarea style="height: 9em;" name="message" rows="7" cols="76" tabindex="3" class="inputbox"></textarea>
+				</div>
+			</fieldset>
+			<fieldset class="submit-buttons">
+				<input type="hidden" name="topic_cur_post_id" value="41958">
+				<input type="hidden" name="creation_time" value="1772562811">
+				<input type="hidden" name="form_token" value="c7b1e09a4d2f58631be07a94cd25f0e8a61b3d47">
+				<input type="submit" accesskey="f" tabindex="6" name="preview" value="Full Editor &amp; Preview" class="button2" id="qr_full_editor">&nbsp;
+				<input type="submit" accesskey="s" tabindex="7" name="post" value="Submit" class="button1">&nbsp;
+			</fieldset>
+		</div>
+	</div>
+</form>
+
+<div class="action-bar actions-jump">
+	<p class="jumpbox-return">
+		<a href="./viewforum.php?f=7&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" class="left-box arrow-left" accesskey="r">
+			<i class="icon fa-angle-left fa-fw icon-black" aria-hidden="true"></i><span>Return to “Backup and Restore”</span>
+		</a>
+	</p>
+	<div class="jumpbox dropdown-container dropdown-container-right dropdown-up dropdown-left dropdown-button-control" id="jumpbox">
+		<span title="Jump to" class="button button-secondary dropdown-trigger dropdown-select">
+			<span>Jump to</span>
+			<span class="caret"><i class="icon fa-sort-down fa-fw" aria-hidden="true"></i></span>
+		</span>
+		<div class="dropdown">
+			<div class="pointer"><div class="pointer-inner"></div></div>
+			<ul class="dropdown-contents">
+				<li><a href="./viewforum.php?f=1&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" class="jumpbox-cat-link"><span>Announcements</span></a></li>
+				<li><a href="./viewforum.php?f=3&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" class="jumpbox-cat-link"><span>Support</span></a></li>
+				<li><a href="./viewforum.php?f=5&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" class="jumpbox-sub-link"><span class="spacer"></span><span>↳&nbsp; Installation and Upgrades</span></a></li>
+				<li><a href="./viewforum.php?f=7&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" class="jumpbox-sub-link"><span class="spacer"></span><span>↳&nbsp; Backup and Restore</span></a></li>
+				<li><a href="./viewforum.php?f=9&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" class="jumpbox-forum-link"><span>Show Your Setup</span></a></li>
+			</ul>
+		</div>
+	</div>
+</div>
+
+<div class="stat-block online-list">
+	<h3><a href="./viewonline.php?sid=4f0c9a27d1e8b6530c7a2f9be41d6a83">Who is online</a></h3>
+	<p>Users browsing this forum: <a href="./memberlist.php?mode=viewprofile&amp;u=12&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" style="color: #00AA00;" class="username-coloured">Halvard</a>, <a href="./memberlist.php?mode=viewprofile&amp;u=873&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" class="username">quietfern</a> and 5 guests</p>
+</div>
+
+	</div>
+
+<div id="page-footer" class="page-footer" role="contentinfo">
+	<div class="navbar" role="navigation">
+	<div class="inner">
+
+	<ul id="nav-footer" class="nav-footer linklist" role="menubar">
+		<li class="breadcrumbs">
+			<span class="crumb"><a href="https://www.brindlebox.example/" data-navbar-reference="home"><i class="icon fa-home fa-fw" aria-hidden="true"></i><span>Brindlebox home</span></a></span>
+			<span class="crumb"><a href="./index.php?sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" data-navbar-reference="index"><span>Board index</span></a></span>
+		</li>
+		<li class="rightside">All times are <span title="UTC">UTC</span></li>
+		<li class="rightside" data-last-responsive="true">
+			<a href="./ucp.php?mode=delete_cookies&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" data-ajax="true" data-refresh="true" role="menuitem" rel="nofollow">
+				<i class="icon fa-trash fa-fw" aria-hidden="true"></i><span>Delete cookies</span>
+			</a>
+		</li>
+		<li class="rightside" data-last-responsive="true">
+			<a href="./memberlist.php?mode=contactadmin&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" role="menuitem">
+				<i class="icon fa-envelope fa-fw" aria-hidden="true"></i><span>Contact us</span>
+			</a>
+		</li>
+	</ul>
+
+	</div>
+</div>
+
+	<div class="copyright">
+		<p class="footer-row">
+			<span class="footer-copyright">Powered by <a href="https://www.larkboard.example.org/">Larkboard</a>® Forum Software © Larkboard Collective</span>
+		</p>
+		<p class="footer-row">
+			<span class="footer-copyright">This board is run by volunteers. Problems with the forum itself can be sent to <a href="mailto:forum-admin@brindlebox.example">forum-admin@brindlebox.example</a>.</span>
+		</p>
+		<p class="footer-row">
+			<a class="footer-link" href="./ucp.php?mode=privacy&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" title="Privacy" role="menuitem"><span class="footer-link-text">Privacy</span></a>
+			|
+			<a class="footer-link" href="./ucp.php?mode=terms&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" title="Terms" role="menuitem"><span class="footer-link-text">Terms</span></a>
+		</p>
+	</div>
+
+	<div id="darkenwrapper" class="darkenwrapper" data-ajax-error-title="AJAX error" data-ajax-error-text="Something went wrong when processing your request.">
+		<div id="darken" class="darken">&nbsp;</div>
+	</div>
+
+	<div id="phpbb_alert" class="phpbb_alert" data-l-err="Error" data-l-timeout-processing-req="Request timed out.">
+		<a href="#" class="alert_close"><i class="icon fa-times-circle fa-fw" aria-hidden="true"></i></a>
+		<h3 class="alert_title">&nbsp;</h3><p class="alert_text"></p>
+	</div>
+</div>
+
+</div>
+
+<div>
+	<a id="bottom" class="anchor" accesskey="z"></a>
+	<img src="./cron.php?cron_type=cron.task.core.tidy_cache&amp;sid=4f0c9a27d1e8b6530c7a2f9be41d6a83" width="1" height="1" alt="cron">
+</div>
+
+<script src="./assets/javascript/jquery.min.js?assets_version=64"></script>
+<script src="./assets/javascript/core.js?assets_version=64"></script>
+<script src="./styles/prosilver/template/forum_fn.js?assets_version=64"></script>
+<script src="./styles/prosilver/template/ajax.js?assets_version=64"></script>
+<script>
+var jump_page = 'Enter the page number you wish to go to:';
+var on_page = 1;
+var per_page = 7;
+var base_url = './viewtopic.php?f=7&t=3184&sid=4f0c9a27d1e8b6530c7a2f9be41d6a83';
+var style_cookie_settings = '; path=/; domain=forum.brindlebox.example; secure';
+function selectCode(a) {
+	var code = a.parentNode.parentNode.getElementsByTagName('code')[0];
+	if (window.getSelection) { var range = document.createRange(); range.selectNodeContents(code); var s = window.getSelection(); s.removeAllRanges(); s.addRange(range); }
+}
+</script>
+</body>
+</html>

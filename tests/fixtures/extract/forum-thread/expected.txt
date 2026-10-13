@@ -1,0 +1,26 @@
+Nightly backup stops at exactly 4 GB on external drive
+Hello all, I have been running Brindlebox 4.2 on a small home server for just over a year, and the nightly backup has suddenly started failing, always at exactly the same point.
+The job copies the library database and the artwork cache to an external USB drive. Since last Thursday it stops when the archive reaches 4 GB, and the log shows the lines below. Smaller jobs, such as the settings-only backup, still finish without complaint.
+[02:00:04] backup: starting job nightly-full [02:00:05] backup: target /mnt/usb-backup/brindlebox [02:23:51] backup: wrote 4294967295 bytes to nightly-full.bbx [02:23:51] backup: ERROR archive closed unexpectedly (code 27)
+So far I have restarted the server, run the job by hand and checked the drive, which has more than 400 GB free. It is the same drive I have always used, although I did wipe and reformat it a couple of weeks ago, after it started making odd clicking noises on another machine.
+Nothing else has changed that I can think of. Is there a size limit somewhere in the settings that I have managed to switch on, or is this a bug in 4.2? Any pointers would be very welcome, because I would rather not go a second week without a full backup.
+Welcome to the forum, and thank you for posting the log as text.
+That byte count is the giveaway. 4294967295 is one byte short of 4 GB, which is the largest single file that some filesystems can hold, so the job is hitting a wall rather than failing at random. Brindlebox has no size limit of its own.
+Can you tell us how the drive is formatted now? Open Storage in the admin panel, pick the backup drive and post what it says next to Filesystem.
+Halvard wrote:
+Can you tell us how the drive is formatted now?
+It says FAT32, which surprised me. I let the other machine choose the format when I wiped the drive and never looked at what it had picked. Before that I am fairly sure it was ext4, because I set it up by following the install guide word for word.
+So is the answer simply to reformat it again?
+That explains it. FAT32 cannot hold a single file larger than 4 GB, however big the drive is. You have three ways out, roughly in order of effort:
+Turn on archive splitting under Settings, Backup, Advanced, and set the part size to 2 GB.
+Reformat the drive as ext4 or exFAT, and let the job write one large file again.
+Point the nightly job at a network share instead, and keep the USB drive for a weekly copy.
+I would choose the second if nothing else lives on that drive. Splitting works, but restoring from a dozen parts is slower, and one missing part spoils the lot. The steps are in the manual if you want to try it.
+quietfern wrote:
+Splitting works, but restoring from a dozen parts is slower, and one missing part spoils the lot.
+True, although 4.2 verifies split archives part by part, so a damaged part is at least reported on the night it is written rather than discovered during a restore. I ran split backups to a FAT32 stick for most of last year without any trouble.
+I still agree that reformatting is the cleaner fix. If you go that way, exFAT has one advantage over ext4: the drive stays readable on an ordinary laptop if the server itself ever dies.
+One caution before you reformat anything. The clicking noises you mentioned worry me more than the filesystem does. Run a full surface check on the drive first, and if it reports even a handful of reallocated sectors, retire it.
+A backup drive that is quietly failing is worse than no backup at all, because it lets you believe you are covered.
+Thank you, all three of you. The surface check is running now and says it needs about five hours for a drive this size, so I will leave it going overnight.
+If it comes back clean I will reformat as ext4 tomorrow evening and run the job by hand before I trust the schedule again. In the meantime I have switched on splitting at 2 GB, so that tonight's backup at least has a chance of finishing. I will report back either way.

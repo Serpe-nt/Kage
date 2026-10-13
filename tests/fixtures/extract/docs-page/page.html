@@ -1,0 +1,212 @@
+<!doctype html>
+<!-- Fixture: a generated page with invented names; no real site. -->
+<html lang="en" dir="ltr" class="docs-wrapper plugin-docs plugin-id-default docs-version-current docs-doc-page" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="generator" content="Docusaurus v3.5.2">
+<title data-rh="true">Configuration file | Wendril</title>
+<meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1">
+<meta data-rh="true" name="twitter:card" content="summary_large_image">
+<meta data-rh="true" property="og:image" content="https://docs.wendril.example/img/wendril-social-card.png">
+<meta data-rh="true" name="twitter:image" content="https://docs.wendril.example/img/wendril-social-card.png">
+<meta data-rh="true" property="og:url" content="https://docs.wendril.example/docs/configuration/config-file">
+<meta data-rh="true" property="og:locale" content="en">
+<meta data-rh="true" name="docusaurus_locale" content="en">
+<meta data-rh="true" name="docsearch:language" content="en">
+<meta data-rh="true" name="docusaurus_version" content="current">
+<meta data-rh="true" name="docusaurus_tag" content="docs-default-current">
+<meta data-rh="true" name="docsearch:version" content="current">
+<meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current">
+<meta data-rh="true" property="og:title" content="Configuration file | Wendril">
+<meta data-rh="true" name="description" content="Where Wendril looks for wendril.toml, which keys the file accepts, how retries are tuned and how to check the file before a run.">
+<meta data-rh="true" property="og:description" content="Where Wendril looks for wendril.toml, which keys the file accepts, how retries are tuned and how to check the file before a run.">
+<link data-rh="true" rel="icon" href="/img/favicon.svg">
+<link data-rh="true" rel="canonical" href="https://docs.wendril.example/docs/configuration/config-file">
+<link data-rh="true" rel="alternate" href="https://docs.wendril.example/docs/configuration/config-file" hreflang="en">
+<link data-rh="true" rel="alternate" href="https://docs.wendril.example/docs/configuration/config-file" hreflang="x-default">
+<link data-rh="true" rel="preconnect" href="https://search.wendril.example" crossorigin="anonymous">
+<script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Configuration","item":"https://docs.wendril.example/docs/category/configuration"},{"@type":"ListItem","position":2,"name":"Configuration file","item":"https://docs.wendril.example/docs/configuration/config-file"}]}</script>
+<link rel="search" type="application/opensearchdescription+xml" title="Wendril" href="/opensearch.xml">
+<link rel="alternate" type="application/rss+xml" href="/blog/rss.xml" title="Wendril RSS Feed">
+<link rel="stylesheet" href="/assets/css/styles.4c7d1e9b.css">
+<script src="/assets/js/runtime~main.b3f0a6d2.js" defer="defer"></script>
+<script src="/assets/js/main.71e5c8fa.js" defer="defer"></script>
+<style>.navbar__logo img{height:100%}.theme-code-block{margin-bottom:var(--ifm-leading)}.theme-announcement-bar{font-size:.9rem}</style>
+</head>
+<body class="navigation-with-keyboard">
+<script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"light")}()</script>
+<div id="__docusaurus">
+<div role="region" aria-label="Skip to main content"><a class="skipToContent_fXgn" href="#__docusaurus_skipToContent_fallback">Skip to main content</a></div>
+<div class="theme-announcement-bar announcementBar_mb4j" style="background-color:#f3f0e6;color:#1c1e21" role="banner"><div class="announcementBarPlaceholder_vyr4"></div><div class="content_knG7 announcementBarContent_xLdY">Wendril 2.4 is out. <a href="/blog/wendril-2-4-released">Read the release notes</a>.</div><button type="button" aria-label="Close" class="clean-btn close closeButton_CVFx announcementBarClose_gvF7"><svg viewBox="0 0 15 15" width="14" height="14"><g stroke="currentColor" stroke-width="3.1"><path d="M.75.75l13.5 13.5M14.25.75L.75 14.25"></path></g></svg></button></div>
+<nav aria-label="Main" class="navbar navbar--fixed-top"><div class="navbar__inner"><div class="navbar__items"><button aria-label="Toggle navigation bar" aria-expanded="false" class="navbar__toggle clean-btn" type="button"><svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><path stroke="currentColor" stroke-linecap="round" stroke-miterlimit="10" stroke-width="2" d="M4 7h22M4 15h22M4 23h22"></path></svg></button><a class="navbar__brand" href="/"><div class="navbar__logo"><img src="/img/wendril-mark.svg" alt="Wendril logo" class="themedComponent_mlkZ themedComponent--light_NVdE"></div><b class="navbar__title text--truncate">Wendril</b></a><a aria-current="page" class="navbar__item navbar__link navbar__link--active" href="/docs/intro">Docs</a><a class="navbar__item navbar__link" href="/docs/cli/run">CLI reference</a><a class="navbar__item navbar__link" href="/blog">Blog</a><a class="navbar__item navbar__link" href="/community">Community</a></div><div class="navbar__items navbar__items--right"><div class="navbar__item dropdown dropdown--hoverable dropdown--right"><a class="navbar__link" aria-haspopup="true" aria-expanded="false" role="button" href="/docs/intro">2.4</a><ul class="dropdown__menu"><li><a class="dropdown__link" href="/docs/next/configuration/config-file">Next</a></li><li><a aria-current="page" class="dropdown__link dropdown__link--active" href="/docs/configuration/config-file">2.4</a></li><li><a class="dropdown__link" href="/docs/2.3/configuration/config-file">2.3</a></li><li><a class="dropdown__link" href="/docs/1.9/configuration">1.9</a></li></ul></div><div class="toggle_vylO colorModeToggle_DEke"><button class="clean-btn toggleButton_gllP" type="button" title="Switch between dark and light mode (currently light mode)" aria-label="Switch between dark and light mode (currently light mode)" aria-live="polite"><svg viewBox="0 0 24 24" width="24" height="24" class="lightToggleIcon_pyhR"><circle cx="12" cy="12" r="5" fill="currentColor"></circle><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"></path></svg></button></div><div class="navbar__search searchBox_ZlJk"><button type="button" class="DocSearch DocSearch-Button" aria-label="Search (Ctrl+K)"><span class="DocSearch-Button-Container"><svg width="20" height="20" class="DocSearch-Search-Icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" fill="none" stroke-width="1.6"></circle><path d="M13 13l5 5" stroke="currentColor" fill="none" stroke-width="1.6" stroke-linecap="round"></path></svg><span class="DocSearch-Button-Placeholder">Search</span></span><span class="DocSearch-Button-Keys"><kbd class="DocSearch-Button-Key">Ctrl</kbd><kbd class="DocSearch-Button-Key">K</kbd></span></button></div></div></div><div role="presentation" class="navbar-sidebar__backdrop"></div></nav>
+<div id="__docusaurus_skipToContent_fallback" class="main-wrapper mainWrapper_z2l0">
+<div class="docsWrapper_hBAB"><button aria-label="Scroll back to top" class="clean-btn theme-back-to-top-button backToTopButton_sjWU" type="button"></button>
+<div class="docRoot_UBD9">
+<aside class="theme-doc-sidebar-container docSidebarContainer_YfHR"><div class="sidebarViewport_aRkj"><div class="sidebar_njMd"><nav aria-label="Docs sidebar" class="menu thin-scrollbar menu_SIkG">
+<ul class="theme-doc-sidebar-menu menu__list">
+<li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/docs/intro">Introduction</a></li>
+<li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/docs/category/getting-started">Getting started</a></div>
+<ul style="display:none;overflow:hidden;height:0px" class="menu__list">
+<li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="-1" href="/docs/getting-started/installation">Installation</a></li>
+<li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="-1" href="/docs/getting-started/quick-start">Quick start</a></li>
+<li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="-1" href="/docs/getting-started/first-mirror">Your first mirror</a></li>
+<li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="-1" href="/docs/getting-started/upgrading">Upgrading</a></li>
+</ul></li>
+<li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret menu__link--active" role="button" aria-expanded="true" href="/docs/category/configuration">Configuration</a></div>
+<ul style="display:block;overflow:visible;height:auto" class="menu__list">
+<li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link menu__link--active" aria-current="page" tabindex="0" href="/docs/configuration/config-file">Configuration file</a></li>
+<li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/configuration/profiles">Profiles</a></li>
+<li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/configuration/remotes">Remotes</a></li>
+<li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/configuration/ignore-rules">Ignore rules</a></li>
+<li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/configuration/environment">Environment variables</a></li>
+<li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/configuration/secrets">Secrets</a></li>
+</ul></li>
+<li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/docs/category/cli-reference">CLI reference</a></div>
+<ul style="display:none;overflow:hidden;height:0px" class="menu__list">
+<li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="-1" href="/docs/cli/run">wendril run</a></li>
+<li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="-1" href="/docs/cli/plan">wendril plan</a></li>
+<li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="-1" href="/docs/cli/check">wendril check</a></li>
+<li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="-1" href="/docs/cli/status">wendril status</a></li>
+<li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="-1" href="/docs/cli/prune">wendril prune</a></li>
+<li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="-1" href="/docs/cli/completions">wendril completions</a></li>
+</ul></li>
+<li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/docs/category/guides">Guides</a></div>
+<ul style="display:none;overflow:hidden;height:0px" class="menu__list">
+<li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="-1" href="/docs/guides/mirroring-to-a-bucket">Mirroring to a bucket</a></li>
+<li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="-1" href="/docs/guides/scheduled-runs">Scheduled runs</a></li>
+<li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="-1" href="/docs/guides/bandwidth-limits">Bandwidth limits</a></li>
+<li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="-1" href="/docs/guides/running-in-ci">Running in CI</a></li>
+<li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="-1" href="/docs/guides/large-trees">Large trees</a></li>
+</ul></li>
+<li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/docs/category/troubleshooting">Troubleshooting</a></div>
+<ul style="display:none;overflow:hidden;height:0px" class="menu__list">
+<li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="-1" href="/docs/troubleshooting/common-errors">Common errors</a></li>
+<li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="-1" href="/docs/troubleshooting/debug-logs">Debug logs</a></li>
+<li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="-1" href="/docs/troubleshooting/exit-codes">Exit codes</a></li>
+</ul></li>
+<li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/docs/faq">FAQ</a></li>
+<li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/docs/changelog">Changelog</a></li>
+</ul>
+</nav></div></div></aside>
+<main class="docMainContainer_TBSr">
+<div class="container padding-top--md padding-bottom--lg">
+<div class="row">
+<div class="col docItemCol_VOVn">
+<div class="docItemContainer_Djhp">
+<article>
+<nav class="theme-doc-breadcrumbs breadcrumbsContainer_Z_bl" aria-label="Breadcrumbs"><ul class="breadcrumbs"><li class="breadcrumbs__item"><a aria-label="Home page" class="breadcrumbs__link" href="/"><svg viewBox="0 0 24 24" class="breadcrumbHomeIcon_YNFT"><path d="M4 11l8-7 8 7v8a1 1 0 0 1-1 1h-4v-6h-6v6H5a1 1 0 0 1-1-1z" fill="currentColor"></path></svg></a></li><li class="breadcrumbs__item"><a class="breadcrumbs__link" href="/docs/category/configuration"><span>Configuration</span></a></li><li class="breadcrumbs__item breadcrumbs__item--active"><span class="breadcrumbs__link">Configuration file</span></li></ul></nav>
+<span class="theme-doc-version-badge badge badge--secondary">Version: 2.4</span>
+<div class="tocCollapsible_ETCw theme-doc-toc-mobile tocMobile_ITEo"><button type="button" class="clean-btn tocCollapsibleButton_TO0P">On this page</button></div>
+<div class="theme-doc-markdown markdown">
+<header><h1>Configuration file</h1></header>
+<p>Wendril reads its settings from a single TOML file named <code>wendril.toml</code>. The file describes what to mirror, where to send it, and how patiently the tool should behave when a remote is slow or unreachable. Everything in it can also be set per <a href="/docs/configuration/profiles">profile</a>, so most projects keep one file and switch behaviour with <code>--profile</code>.</p>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="file-location">File location<a href="#file-location" class="hash-link" aria-label="Direct link to File location" title="Direct link to File location">​</a></h2>
+<p>When you start <code>wendril run</code>, the tool looks for a configuration file before it does anything else. It does not merge files: the first one it finds wins, and the rest are ignored.</p>
+<ol>
+<li>The path given with <code>--config</code>, if the flag is present.</li>
+<li>The path in the <code>WENDRIL_CONFIG</code> environment variable.</li>
+<li>A file named <code>wendril.toml</code> in the current directory, then in each parent directory in turn.
+<ul>
+<li>The search stops at the first directory that holds a <code>.git</code> folder.</li>
+<li>Symbolic links are followed, but never out of your home directory.</li>
+</ul>
+</li>
+<li>The per-user file at <code>~/.config/wendril/wendril.toml</code>.</li>
+</ol>
+<p>If none of these exist, Wendril stops with exit code <code>78</code> and prints the places it looked. You can see the same list at any time with <code>wendril check --where</code>, which is described in <a href="../cli/check">the CLI reference</a>.</p>
+<div class="language-toml codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockTitle_Ktv7">wendril.toml</div><div class="codeBlockContent_biex"><pre tabindex="0" class="prism-code language-toml codeBlock_bY9V thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#393A34"><span class="token comment" style="color:#999988;font-style:italic"># What to mirror and where to put it</span><br></span><span class="token-line" style="color:#393A34"><span class="token key property" style="color:#36acaa">source</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">=</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">"./public"</span><br></span><span class="token-line" style="color:#393A34"><span class="token key property" style="color:#36acaa">remote</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">=</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">"depot://assets-eu/site"</span><br></span><span class="token-line" style="color:#393A34"><span class="token plain" style="display:inline-block"></span><br></span><span class="token-line" style="color:#393A34"><span class="token punctuation" style="color:#393A34">[</span><span class="token table class-name">transfer</span><span class="token punctuation" style="color:#393A34">]</span><br></span><span class="token-line" style="color:#393A34"><span class="token key property" style="color:#36acaa">workers</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">=</span><span class="token plain"> </span><span class="token number" style="color:#36acaa">4</span><br></span><span class="token-line" style="color:#393A34"><span class="token key property" style="color:#36acaa">chunk_size</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">=</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">"8MiB"</span><br></span></code></pre><div class="buttonGroup__atx"><button type="button" aria-label="Copy code to clipboard" title="Copy" class="clean-btn copyButton_wuS7"><svg viewBox="0 0 24 24" class="copyButtonIcon_y97N" aria-hidden="true"><path fill="currentColor" d="M8 7h11v14H8zM5 3h11v2H7v12H5z"></path></svg>Copy</button></div></div></div>
+<p>A minimal file needs only <code>source</code> and <code>remote</code>; every other key has a default. The example above also raises the number of parallel workers, which helps when the tree is made of many small files.</p>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="top-level-options">Top-level options<a href="#top-level-options" class="hash-link" aria-label="Direct link to Top-level options" title="Direct link to Top-level options">​</a></h2>
+<p>The keys below sit at the top of the file, outside any table such as <code>[retry]</code>. They apply to every profile unless a profile sets its own value.</p>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>source</code></td>
+<td>string</td>
+<td>none</td>
+<td>Directory to mirror, relative to the configuration file.</td>
+</tr>
+<tr>
+<td><code>remote</code></td>
+<td>string</td>
+<td>none</td>
+<td>Address of the destination, such as <code>depot://bucket/prefix</code>.</td>
+</tr>
+<tr>
+<td><code>delete_extra</code></td>
+<td>boolean</td>
+<td><code>false</code></td>
+<td>Remove remote objects that no longer exist locally.</td>
+</tr>
+<tr>
+<td><code>follow_symlinks</code></td>
+<td>boolean</td>
+<td><code>true</code></td>
+<td>Copy the target of a link instead of the link itself.</td>
+</tr>
+<tr>
+<td><code>log_level</code></td>
+<td>string</td>
+<td><code>"info"</code></td>
+<td>One of <code>error</code>, <code>warn</code>, <code>info</code>, <code>debug</code> or <code>trace</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>Unknown keys are an error, not a warning. This is deliberate: a misspelled <code>delete_extra</code> that was silently ignored would leave stale objects behind for months before anyone noticed.</p>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="paths-and-patterns">Paths and patterns<a href="#paths-and-patterns" class="hash-link" aria-label="Direct link to Paths and patterns" title="Direct link to Paths and patterns">​</a></h3>
+<p>Relative paths are resolved against the directory that holds the configuration file, never against the directory you happened to run the command from. That makes a checked-in <code>wendril.toml</code> behave the same on every machine and in every CI job.</p>
+<p>The <code>include</code> and <code>exclude</code> keys take lists of glob patterns. A pattern that ends in a slash matches a directory and everything under it, while <code>**</code> crosses directory boundaries; the full grammar is on the <a href="./ignore-rules">ignore rules</a> page.</p>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="environment-overrides">Environment overrides<a href="#environment-overrides" class="hash-link" aria-label="Direct link to Environment overrides" title="Direct link to Environment overrides">​</a></h3>
+<p>Any key can be overridden for a single run by an environment variable. The name is the key in upper case with a <code>WENDRIL_</code> prefix, and a double underscore stands for the dot between a table and its key, so <code>transfer.workers</code> becomes <code>WENDRIL_TRANSFER__WORKERS</code>.</p>
+<div class="theme-admonition theme-admonition-note admonition_xJq3 alert alert--secondary"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M7 1a7 7 0 1 0 0 14A7 7 0 0 0 7 1zm-.75 3.5h1.5V6h-1.5zm0 3h1.5v4h-1.5z"></path></svg></span>note</div><div class="admonitionContent_BuS1">
+<p>Overrides are applied after the file is parsed and before it is validated. A value that is fine in the file but out of range in the environment still fails, and the error message names the variable rather than a line number.</p>
+</div></div>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="retries">Retries<a href="#retries" class="hash-link" aria-label="Direct link to Retries" title="Direct link to Retries">​</a></h2>
+<p>Remote stores fail in boring ways: a connection is reset, a request times out, a rate limit is hit. The <code>[retry]</code> table controls how Wendril reacts, and its defaults are tuned for a home connection rather than a data centre.</p>
+<div class="language-toml codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_biex"><pre tabindex="0" class="prism-code language-toml codeBlock_bY9V thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#393A34"><span class="token punctuation" style="color:#393A34">[</span><span class="token table class-name">retry</span><span class="token punctuation" style="color:#393A34">]</span><br></span><span class="token-line" style="color:#393A34"><span class="token key property" style="color:#36acaa">max_attempts</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">=</span><span class="token plain"> </span><span class="token number" style="color:#36acaa">5</span><br></span><span class="token-line" style="color:#393A34"><span class="token key property" style="color:#36acaa">initial_delay</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">=</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">"500ms"</span><br></span><span class="token-line" style="color:#393A34"><span class="token key property" style="color:#36acaa">max_delay</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">=</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">"30s"</span><br></span><span class="token-line" style="color:#393A34"><span class="token key property" style="color:#36acaa">jitter</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">=</span><span class="token plain"> </span><span class="token boolean" style="color:#36acaa">true</span><br></span><span class="token-line" style="color:#393A34"><span class="token key property" style="color:#36acaa">retry_on</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">=</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">[</span><span class="token string" style="color:#e3116c">"timeout"</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">"reset"</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">"throttled"</span><span class="token punctuation" style="color:#393A34">]</span><br></span></code></pre><div class="buttonGroup__atx"><button type="button" aria-label="Copy code to clipboard" title="Copy" class="clean-btn copyButton_wuS7"><svg viewBox="0 0 24 24" class="copyButtonIcon_y97N" aria-hidden="true"><path fill="currentColor" d="M8 7h11v14H8zM5 3h11v2H7v12H5z"></path></svg>Copy</button></div></div></div>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="backoff">Backoff<a href="#backoff" class="hash-link" aria-label="Direct link to Backoff" title="Direct link to Backoff">​</a></h3>
+<p>The delay doubles after every failed attempt, starting at <code>initial_delay</code> and never exceeding <code>max_delay</code>. With <code>jitter</code> switched on, each delay is multiplied by a random factor between 0.5 and 1.5, so that a fleet of jobs that failed together does not retry together.</p>
+<p>The random factor comes from a generator that is seeded once per run. Pass <code>--seed</code> to <a href="../cli/run"><code>wendril run</code></a> if you need to reproduce the exact timing of an earlier run while debugging.</p>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="giving-up">Giving up<a href="#giving-up" class="hash-link" aria-label="Direct link to Giving up" title="Direct link to Giving up">​</a></h3>
+<p>After <code>max_attempts</code> the file is marked as failed and the run carries on with the next one. The summary at the end lists every failed path, and the exit code is <code>3</code> when at least one file could not be transferred.</p>
+<div class="theme-admonition theme-admonition-warning admonition_xJq3 alert alert--warning"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8 1l7 13H1zm-.75 5v4h1.5V6zm0 5.5V13h1.5v-1.5z"></path></svg></span>warning</div><div class="admonitionContent_BuS1">
+<p>Setting <code>max_attempts = 0</code> does not mean “retry forever”. It disables retries altogether, and a single dropped connection will fail the file.</p>
+<p>If you really want unbounded retries, use a large number together with a sensible <code>max_delay</code>, and keep an eye on the run with <code>wendril status</code>.</p>
+</div></div>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="validating-the-file">Validating the file<a href="#validating-the-file" class="hash-link" aria-label="Direct link to Validating the file" title="Direct link to Validating the file">​</a></h2>
+<p>You can check a configuration file without touching the remote. <code>wendril check</code> parses the file, applies environment overrides, resolves every path and reports what a run would use; it exits with <code>0</code> when the file is valid and with <code>65</code> when it is not, which makes it a convenient first step in a pipeline. See <a href="/docs/guides/running-in-ci">Running in CI</a> for a complete job definition, and the section on <a href="#retries">retries</a> above for the keys that most often need tuning there.</p>
+<div class="language-toml codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_biex"><pre tabindex="0" class="prism-code language-toml codeBlock_bY9V thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#393A34"><span class="token key property" style="color:#36acaa">source</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">=</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">"./dist"</span><br></span><span class="token-line" style="color:#393A34"><span class="token key property" style="color:#36acaa">remote</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">=</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">"depot://releases/nightly"</span><br></span><span class="token-line" style="color:#393A34"><span class="token key property" style="color:#36acaa">delete_extra</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">=</span><span class="token plain"> </span><span class="token boolean" style="color:#36acaa">true</span><br></span><span class="token-line" style="color:#393A34"><span class="token key property" style="color:#36acaa">exclude</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">=</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">[</span><span class="token string" style="color:#e3116c">"*.map"</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">"tmp/"</span><span class="token punctuation" style="color:#393A34">]</span><br></span><span class="token-line" style="color:#393A34"><span class="token plain" style="display:inline-block"></span><br></span><span class="token-line" style="color:#393A34"><span class="token punctuation" style="color:#393A34">[</span><span class="token table class-name">profile.staging</span><span class="token punctuation" style="color:#393A34">]</span><br></span><span class="token-line" style="color:#393A34"><span class="token key property" style="color:#36acaa">remote</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">=</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">"depot://releases-staging/nightly"</span><br></span><span class="token-line" style="color:#393A34"><span class="token key property" style="color:#36acaa">log_level</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">=</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">"debug"</span><br></span></code></pre><div class="buttonGroup__atx"><button type="button" aria-label="Copy code to clipboard" title="Copy" class="clean-btn copyButton_wuS7"><svg viewBox="0 0 24 24" class="copyButtonIcon_y97N" aria-hidden="true"><path fill="currentColor" d="M8 7h11v14H8zM5 3h11v2H7v12H5z"></path></svg>Copy</button></div></div></div>
+<p>This file mirrors <code>./dist</code> to the nightly prefix and, when run with <code>--profile staging</code>, sends the same tree to a separate bucket with more verbose logging. How a profile inherits from the top level is explained under <a href="./profiles">Profiles</a>.</p>
+<details class="details_lb9f alert alert--info details_b_Ee" data-collapsed="false" open=""><summary>Why TOML and not YAML?</summary><div><div class="collapsibleContent_i85q">
+<p>Early versions of Wendril read YAML. It was easy to write and just as easy to get wrong: an unquoted <code>no</code> became a boolean, and one stray space moved a key into the wrong table.</p>
+<p>TOML is stricter about types and has no significant indentation, so a file either means what it says or fails to parse. Version 2.0 dropped YAML support, and <code>wendril migrate-config</code> converts an old file in place; the discussion that led to the change is kept in <a href="https://code.wendril.example/wendril/wendril/issues/412" target="_blank" rel="noopener noreferrer">issue 412</a>.</p>
+</div></div></details>
+</div>
+<footer class="theme-doc-footer docusaurus-mt-lg"><div class="row margin-top--sm theme-doc-footer-edit-meta-row"><div class="col"><a href="https://code.wendril.example/wendril/docs/edit/main/docs/configuration/config-file.md" target="_blank" rel="noopener noreferrer" class="theme-edit-this-page"><svg fill="currentColor" height="20" width="20" viewBox="0 0 40 40" class="iconEdit_Z9Sw" aria-hidden="true"><g><path d="M6 28.5V34h5.5l16-16-5.5-5.5zM33 12.5a1.5 1.5 0 0 0 0-2.1l-3.4-3.4a1.5 1.5 0 0 0-2.1 0l-2.7 2.7 5.5 5.5z"></path></g></svg>Edit this page</a></div><div class="col lastUpdated_JAkA"><span class="theme-last-updated">Last updated<!-- --> on <b><time datetime="2026-09-03T00:00:00.000Z">Sep 3, 2026</time></b> by <b>Tobin Hale</b></span></div></div></footer>
+</article>
+<nav class="pagination-nav docusaurus-mt-lg" aria-label="Docs pages"><a class="pagination-nav__link pagination-nav__link--prev" href="/docs/getting-started/upgrading"><div class="pagination-nav__sublabel">Previous</div><div class="pagination-nav__label">Upgrading</div></a><a class="pagination-nav__link pagination-nav__link--next" href="/docs/configuration/profiles"><div class="pagination-nav__sublabel">Next</div><div class="pagination-nav__label">Profiles</div></a></nav>
+</div>
+</div>
+<div class="col col--3"><div class="tableOfContents_bqdL thin-scrollbar theme-doc-toc-desktop"><ul class="table-of-contents table-of-contents__left-border"><li><a href="#file-location" class="table-of-contents__link toc-highlight table-of-contents__link--active">File location</a></li><li><a href="#top-level-options" class="table-of-contents__link toc-highlight">Top-level options</a><ul><li><a href="#paths-and-patterns" class="table-of-contents__link toc-highlight">Paths and patterns</a></li><li><a href="#environment-overrides" class="table-of-contents__link toc-highlight">Environment overrides</a></li></ul></li><li><a href="#retries" class="table-of-contents__link toc-highlight">Retries</a><ul><li><a href="#backoff" class="table-of-contents__link toc-highlight">Backoff</a></li><li><a href="#giving-up" class="table-of-contents__link toc-highlight">Giving up</a></li></ul></li><li><a href="#validating-the-file" class="table-of-contents__link toc-highlight">Validating the file</a></li></ul></div></div>
+</div>
+</div>
+</main>
+</div>
+</div>
+</div>
+<footer class="footer footer--dark"><div class="container container-fluid"><div class="row footer__links">
+<div class="col footer__col"><div class="footer__title">Docs</div><ul class="footer__items clean-list"><li class="footer__item"><a class="footer__link-item" href="/docs/intro">Introduction</a></li><li class="footer__item"><a class="footer__link-item" href="/docs/getting-started/quick-start">Quick start</a></li><li class="footer__item"><a class="footer__link-item" href="/docs/configuration/config-file">Configuration</a></li><li class="footer__item"><a class="footer__link-item" href="/docs/cli/run">CLI reference</a></li></ul></div>
+<div class="col footer__col"><div class="footer__title">Community</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://forum.wendril.example/" target="_blank" rel="noopener noreferrer" class="footer__link-item">Forum</a></li><li class="footer__item"><a href="https://chat.wendril.example/invite" target="_blank" rel="noopener noreferrer" class="footer__link-item">Chat</a></li><li class="footer__item"><a class="footer__link-item" href="/community/contributing">Contributing</a></li><li class="footer__item"><a href="mailto:docs@wendril.example" class="footer__link-item">Write to the docs team</a></li></ul></div>
+<div class="col footer__col"><div class="footer__title">More</div><ul class="footer__items clean-list"><li class="footer__item"><a class="footer__link-item" href="/blog">Blog</a></li><li class="footer__item"><a class="footer__link-item" href="/docs/changelog">Changelog</a></li><li class="footer__item"><a href="https://code.wendril.example/wendril/wendril" target="_blank" rel="noopener noreferrer" class="footer__link-item">Source code</a></li><li class="footer__item"><a href="https://status.wendril.example/" target="_blank" rel="noopener noreferrer nofollow" class="footer__link-item">Service status</a></li></ul></div>
+</div><div class="footer__bottom text--center"><div class="footer__copyright">Copyright © 2026 The Wendril contributors. Documentation is released under an open licence.</div></div></div></footer>
+</div>
+</body>
+</html>

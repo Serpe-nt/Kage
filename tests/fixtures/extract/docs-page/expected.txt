@@ -1,0 +1,48 @@
+Configuration file
+Wendril reads its settings from a single TOML file named wendril.toml. The file describes what to mirror, where to send it, and how patiently the tool should behave when a remote is slow or unreachable. Everything in it can also be set per profile, so most projects keep one file and switch behaviour with --profile.
+File location
+When you start wendril run, the tool looks for a configuration file before it does anything else. It does not merge files: the first one it finds wins, and the rest are ignored.
+The path given with --config, if the flag is present.
+The path in the WENDRIL_CONFIG environment variable.
+A file named wendril.toml in the current directory, then in each parent directory in turn.
+The search stops at the first directory that holds a .git folder.
+Symbolic links are followed, but never out of your home directory.
+The per-user file at ~/.config/wendril/wendril.toml.
+If none of these exist, Wendril stops with exit code 78 and prints the places it looked. You can see the same list at any time with wendril check --where, which is described in the CLI reference.
+wendril.toml
+# What to mirror and where to put it source = "./public" remote = "depot://assets-eu/site" [transfer] workers = 4 chunk_size = "8MiB"
+A minimal file needs only source and remote; every other key has a default. The example above also raises the number of parallel workers, which helps when the tree is made of many small files.
+Top-level options
+The keys below sit at the top of the file, outside any table such as [retry]. They apply to every profile unless a profile sets its own value.
+Option Type Default Description
+source string none Directory to mirror, relative to the configuration file.
+remote string none Address of the destination, such as depot://bucket/prefix.
+delete_extra boolean false Remove remote objects that no longer exist locally.
+follow_symlinks boolean true Copy the target of a link instead of the link itself.
+log_level string "info" One of error, warn, info, debug or trace.
+Unknown keys are an error, not a warning. This is deliberate: a misspelled delete_extra that was silently ignored would leave stale objects behind for months before anyone noticed.
+Paths and patterns
+Relative paths are resolved against the directory that holds the configuration file, never against the directory you happened to run the command from. That makes a checked-in wendril.toml behave the same on every machine and in every CI job.
+The include and exclude keys take lists of glob patterns. A pattern that ends in a slash matches a directory and everything under it, while ** crosses directory boundaries; the full grammar is on the ignore rules page.
+Environment overrides
+Any key can be overridden for a single run by an environment variable. The name is the key in upper case with a WENDRIL_ prefix, and a double underscore stands for the dot between a table and its key, so transfer.workers becomes WENDRIL_TRANSFER__WORKERS.
+note
+Overrides are applied after the file is parsed and before it is validated. A value that is fine in the file but out of range in the environment still fails, and the error message names the variable rather than a line number.
+Retries
+Remote stores fail in boring ways: a connection is reset, a request times out, a rate limit is hit. The [retry] table controls how Wendril reacts, and its defaults are tuned for a home connection rather than a data centre.
+[retry] max_attempts = 5 initial_delay = "500ms" max_delay = "30s" jitter = true retry_on = ["timeout", "reset", "throttled"]
+Backoff
+The delay doubles after every failed attempt, starting at initial_delay and never exceeding max_delay. With jitter switched on, each delay is multiplied by a random factor between 0.5 and 1.5, so that a fleet of jobs that failed together does not retry together.
+The random factor comes from a generator that is seeded once per run. Pass --seed to wendril run if you need to reproduce the exact timing of an earlier run while debugging.
+Giving up
+After max_attempts the file is marked as failed and the run carries on with the next one. The summary at the end lists every failed path, and the exit code is 3 when at least one file could not be transferred.
+warning
+Setting max_attempts = 0 does not mean “retry forever”. It disables retries altogether, and a single dropped connection will fail the file.
+If you really want unbounded retries, use a large number together with a sensible max_delay, and keep an eye on the run with wendril status.
+Validating the file
+You can check a configuration file without touching the remote. wendril check parses the file, applies environment overrides, resolves every path and reports what a run would use; it exits with 0 when the file is valid and with 65 when it is not, which makes it a convenient first step in a pipeline. See Running in CI for a complete job definition, and the section on retries above for the keys that most often need tuning there.
+source = "./dist" remote = "depot://releases/nightly" delete_extra = true exclude = ["*.map", "tmp/"] [profile.staging] remote = "depot://releases-staging/nightly" log_level = "debug"
+This file mirrors ./dist to the nightly prefix and, when run with --profile staging, sends the same tree to a separate bucket with more verbose logging. How a profile inherits from the top level is explained under Profiles.
+Why TOML and not YAML?
+Early versions of Wendril read YAML. It was easy to write and just as easy to get wrong: an unquoted no became a boolean, and one stray space moved a key into the wrong table.
+TOML is stricter about types and has no significant indentation, so a file either means what it says or fails to parse. Version 2.0 dropped YAML support, and wendril migrate-config converts an old file in place; the discussion that led to the change is kept in issue 412.

@@ -1,0 +1,33 @@
+Building a Cold Frame from Old Sash Windows
+Every February I promise myself that this will be the year I stop balancing seed trays on the kitchen windowsill, and every February the windowsill wins. This time I finally did something about it. When our neighbour replaced the sash windows in her cottage she offered me the old ones, and I spent two cold weekends turning four of them into a cold frame that now sits against the south wall of the shed.
+If you have never used one, a cold frame is simply a bottomless box with a glass lid. It traps the warmth of the day, keeps the wind off and gives young plants a halfway house between the kitchen and the open ground. The Hardy Plot Society’s guide explains the idea far better than I can, and it is where I found the rule that the back should stand about fifteen centimetres taller than the front, so that rain runs off and the low winter sun gets in.
+What you will need
+Almost everything came from the shed or from a skip, which is the whole point. I already had a saw, a drill and a tape measure, so the shopping list was short. If you are starting from nothing, I wrote about the handful of tools worth owning in an older post.
+Four old sash windows, roughly 60 by 90 centimetres each, with the glass intact
+Six pressure-treated boards, 15 centimetres wide, for the back, front and sides
+Eight galvanised hinges and a box of 40 millimetre exterior screws
+A tin of water-based wood preserver and an old brush
+The four windows after a morning of scraping. The one on the left had the worst of the old putty.
+For anyone wondering whether it is worth the bother, here is what it cost me. Shop-bought frames of the same size start at well over a hundred pounds, and most of them are glazed with thin plastic that goes cloudy within a couple of summers.
+Item Cost
+Sash windows (four) Free
+Timber boards £23.50
+Hinges, screws and preserver £19.20
+Total £42.70
+Putting it together
+The build itself is not complicated, though I managed to make it so by cutting the first side panel upside down. Measure twice, as they say, and then go and have a cup of tea before you pick up the saw. These are the steps, in the order I should have done them.
+Scrape the loose paint and putty from the windows, wearing a dust mask, and wash the glass.
+Cut the boards to make a back 45 centimetres tall, a front 30 centimetres tall and two sloping sides.
+Screw the box together at the corners and brush on two coats of preserver, letting each one dry overnight.
+Hinge the windows to the back board so that each one lifts separately.
+Set the frame on level ground facing south, and prop the lids open on mild days.
+Finished and in place against the shed, with the first trays of lettuce and sweet peas inside.
+A word about old paint. Windows of this age were almost certainly painted with lead at some point, so I scraped them outdoors, swept up the flakes and did not sand them at all. There is sensible advice on dealing with it in this renovation forum thread, and if in doubt I would simply seal the frames with fresh paint and leave the old layers where they are.
+Does it actually work?
+I am the sort of person who needs numbers, so I wired a pair of cheap temperature probes to a little single-board computer, one inside the frame and one outside, and left them logging for a week. The script is nothing clever, and I have put it on the projects page for anyone who wants it. This is what a typical clear day looked like:
+$ ./coldframe-log.sh --day 2016-02-18 06:00 outside -2.1C inside 3.4C 12:00 outside 6.3C inside 17.8C 18:00 outside 1.0C inside 7.2C
+So the frame was five or six degrees warmer than the garden before dawn, which is the difference between a frost and no frost, and almost too warm by midday. That midday figure is the one to watch. On a sunny afternoon in April a closed frame will cook seedlings in an hour, which is why step five matters more than all the others put together.
+A cold frame asks only two things of its keeper: that the lid be opened in the morning, and that it be closed again at night. Agnes Thornbury, The Frugal Kitchen Garden
+My grandmother’s copy of that book has lived on the shelf by the back door for as long as I can remember, and she was right about most things. I have already forgotten the evening half of the rule once, and lost a tray of basil to it, so there is now a note stuck to the kettle.
+The lettuce I sowed on the first of the month is up, the sweet peas are a hand tall, and the broad beans that sulked on the windowsill last year look positively cheerful. Next on the list are the tomatoes, which I will start indoors and move out in April, following the timings in my sowing calendar.
+If you build one of your own, I would love to see it. Leave a comment below, or have a look through everything else filed under garden for more of my mistakes. And if you happen to know a kinder way of getting eighty-year-old putty off glass, please tell me before I start on the greenhouse.
