@@ -1507,7 +1507,10 @@ impl Crawl {
             site: &site,
         };
         match end {
-            ItemEnd::Finished(report) => self.page_fetched(runner, item, landed, &report).await,
+            ItemEnd::Finished(report) => {
+                super::page_ended_on(&mut self.held, &site);
+                self.page_fetched(runner, item, landed, &report).await
+            }
             ItemEnd::Stored {
                 outcome,
                 reason,

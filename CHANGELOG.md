@@ -560,6 +560,21 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A batch or a crawl with several visitors no longer stands still for
+  the long break of one of them while another reads (F54). The planner
+  told a page that would rather be refused than wait five minutes to
+  come back when the resting visitor did, as if the visitors in the
+  middle of a page were not there, and the job worker then left the
+  whole site alone until that time. Now a visitor that is reading counts
+  from its slot, one that an earlier page waits for counts too, and a
+  page is refused only when nobody it may have could start in time; a
+  site left alone for `no_persona` is asked again when one of its pages
+  ends. In the simulation of the load test, 200 pages under `human` with
+  three visitors took a median of 146 minutes and take 61, as long as
+  when every page may wait as long as it must; 50 pages took up to 79
+  minutes (p95) and take 14. Outside batches the same rule holds: a
+  request that would rather be refused waits for a persona that is in
+  the middle of a page.
 - The sidecar images keep no setuid or setgid file (Chrome's
   `chrome-sandbox`, the base image's `su`, `passwd`, `mount` and the
   rest). `no-new-privileges` already kept them from raising anything;

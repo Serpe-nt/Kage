@@ -404,6 +404,11 @@ struct Possible<'a> {
     view: &'a PersonaView,
     /// When it could start; `None` while that hangs on something in flight.
     at: Option<DateTime<Utc>>,
+    /// When it could start once what is in flight lets it: `at` when
+    /// nothing does. For one in the middle of a page that is the end of
+    /// the page and the rest after it, which nobody knows before the page
+    /// ends, and never earlier than this.
+    after: DateTime<Utc>,
     awake: bool,
     /// Whether it is visiting the domain and nothing but its own pacing
     /// stands between it and its next page.
@@ -857,17 +862,32 @@ impl Planner {
             }
         }
 
-        // Nobody can start now: wait for the first who can.
-        let first = possible
+        // Nobody can start now: wait for the first who can. Work is given
+        // up only for a wait that is known to be too long: one who is
+        // making an attempt counts from what it waits for besides, and one
+        // whose slot is open waits for nothing but the end of its page,
+        // which nobody knows before it comes; one that earlier work waits
+        // for counts from its slot, after which the work behind may have
+        // it. A job used to give up on its visitors for the long break of
+        // one of them while the others were reading, and its site stood
+        // still for that break (follow-up F54).
+        let waiting_for = possible
             .iter()
+            .filter(|one| room || one.visiting || work.priority == Priority::Sync);
+        let first = waiting_for
+            .clone()
             .filter(|one| !claimed.contains(&one.view.id))
-            .filter(|one| room || one.visiting || work.priority == Priority::Sync)
             .filter_map(|one| one.at)
             .min();
-        match first {
-            Some(at) => self.wait_or_give_up(work, Some(at)),
+        let back = waiting_for.map(|one| one.after).min();
+        match back {
+            Some(back) if back > now => match self.wait_or_give_up(work, Some(back)) {
+                // The end of an attempt plans again by itself.
+                Looked::Wait(_) => Looked::Wait(first),
+                refused => refused,
+            },
             // Everyone who could is making an attempt, or is spoken for.
-            None => Looked::Wait(None),
+            _ => Looked::Wait(first),
         }
     }
 
@@ -981,6 +1001,7 @@ impl Planner {
             possible.push(Possible {
                 view,
                 at: (!in_use).then_some(at),
+                after: at,
                 awake,
                 visiting: !held_back
                     && cadence.is_some_and(|cadence| self.is_visiting(view.id, cadence, now)),

@@ -318,6 +318,23 @@ fn later(now: DateTime<Utc>, wait: Duration) -> DateTime<Utc> {
         .unwrap_or(now)
 }
 
+/// A page of `site` ended: a hold on the site that waits for a persona is
+/// lifted, and its item asks again. What the item was told was true before
+/// the page ended, and the page's end can change it: the one who read it
+/// may be the visitor the site waits for, or one that was turned away
+/// makes room for another. The site stood still for the long break of one
+/// visitor while the others read on (follow-up F54). A hold for anything
+/// else keeps its time: the budget, the bandwidth, the breaker and the
+/// robots file have clocks of their own.
+fn page_ended_on(held: &mut HashMap<String, (DateTime<Utc>, String)>, site: &str) {
+    if held
+        .get(site)
+        .is_some_and(|(_, reason)| reason == Refusal::NoPersona.as_str())
+    {
+        held.remove(site);
+    }
+}
+
 /// What an item that failed says: the reason the scheduler gave, else the
 /// outcome's name.
 fn error_of(outcome: Outcome, reason: Option<&str>) -> Option<String> {
@@ -1065,6 +1082,7 @@ impl Runner {
         } = ended;
         match end {
             ItemEnd::Finished(report) => {
+                page_ended_on(held, &site);
                 let known = visitors.entry(site).or_default();
                 if Self::learn(known, &report, most) {
                     self.store()
@@ -1854,7 +1872,9 @@ mod tests {
     use kage_core::outcome::Outcome;
     use tokio::sync::watch;
 
-    use super::{Signal, default_wait, error_of, later, raise};
+    use std::collections::HashMap;
+
+    use super::{Signal, default_wait, error_of, later, page_ended_on, raise};
 
     #[test]
     fn a_signal_only_ever_rises() {
@@ -1883,6 +1903,30 @@ mod tests {
             error_of(Outcome::ProviderError, Some("no_persona")).as_deref(),
             Some("no_persona")
         );
+    }
+
+    /// Follow-up F54.
+    #[test]
+    fn a_page_that_ends_lifts_its_sites_wait_for_a_persona_and_nothing_else() {
+        let noon = Utc.with_ymd_and_hms(2026, 10, 11, 12, 0, 0).unwrap();
+        let waits_for = |reason: &str| (noon + chrono::Duration::hours(1), reason.to_owned());
+        let mut sites = HashMap::from([
+            ("a.example".to_owned(), waits_for("no_persona")),
+            ("b.example".to_owned(), waits_for("no_persona")),
+            ("c.example".to_owned(), waits_for("budget_exhausted")),
+            ("d.example".to_owned(), waits_for("domain_paused")),
+            ("e.example".to_owned(), waits_for("robots_unavailable")),
+        ]);
+
+        page_ended_on(&mut sites, "a.example");
+        for site in ["c.example", "d.example", "e.example", "f.example"] {
+            page_ended_on(&mut sites, site);
+        }
+
+        let mut left: Vec<&str> = sites.keys().map(String::as_str).collect();
+        left.sort_unstable();
+        assert_eq!(left, ["b.example", "c.example", "d.example", "e.example"]);
+        assert_eq!(sites["b.example"], waits_for("no_persona"));
     }
 
     #[test]
