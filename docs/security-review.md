@@ -6,7 +6,7 @@ running the tests that hold each claim. It covers every road a request
 can take into a network, every secret, the limits of the API, the
 forwarder, the sidecars and the operator on the same host. Each finding
 says what became of it: fixed (with its commit), accepted (with the
-reason), or a follow-up for after 1.0.
+reason), or a follow-up for after 1.0, numbered by the planner.
 
 Reviewed on 2026-10-17 at the M12 branch; the fixes are commits of the
 same branch. Severities: **high**, Kage's master key or another party's
@@ -182,19 +182,19 @@ and in no release.
 | S4 | medium | an answer of a sidecar was read whole, without a bound | fixed in `f3c944f` |
 | G6 | low | an IPv4-translated address (`::ffff:0:a.b.c.d`) was not judged by its IPv4 address | fixed in `72a2ffe` |
 | C1 | low | the provider's and AbuseIPDB's API roots accepted plain `http` to any host, which would send their keys in clear | fixed in `a04983c` |
-| G1 | low | with `resolve_on_host`, a browser's own requests (and the sitemaps and `robots.txt` a scout reads in one) are judged by URL only: a name that resolves into the operator's network passes the forwarder | follow-up F56: the forwarder resolves names when `resolve_on_host` is on, and `kage config check` warns about a static list of proxies without it |
+| G1 | low | with `resolve_on_host`, a browser's own requests (and the sitemaps and `robots.txt` a scout reads in one) are judged by URL only: a name that resolves into the operator's network passes the forwarder | follow-up after 1.0: the forwarder resolves names when `resolve_on_host` is on, and `kage config check` warns about a static list of proxies without it |
 | G2 | info | between the host's lookup and the proxy's own, a name can change its answer | accepted: the proxy resolves where it connects, and only it could close this; with a residential provider the operator's networks are out of the exit's reach |
-| G3 | low | any port but 0 may be asked for: an API consumer can send an HTTP request through an exit to a port that serves something else | follow-up F57: the http path refuses the ports the browsers themselves refuse (their "unsafe ports") |
-| G5 | low | the forwarder checks its own parse of a request's target but relays the target as the client wrote it; a proxy that parses it otherwise could connect elsewhere | follow-up F58: relay the authority that was checked. Low because the `url` crate is stricter than proxies at recognising an address, and names are the proxy's to resolve either way |
+| G3 | low | any port but 0 may be asked for: an API consumer can send an HTTP request through an exit to a port that serves something else | follow-up after 1.0: the http path refuses the ports the browsers themselves refuse (their "unsafe ports") |
+| G5 | low | the forwarder checks its own parse of a request's target but relays the target as the client wrote it; a proxy that parses it otherwise could connect elsewhere | follow-up after 1.0: relay the authority that was checked. Low because the `url` crate is stricter than proxies at recognising an address, and names are the proxy's to resolve either way |
 | S2 | info | secrets are environment variables in compose | accepted: `docker inspect` needs root's access anyway; every secret has a `_FILE` form for Docker secrets |
 | S3 | — | no test showed that logs and traces hold no secret | resolved: the redaction audit of the observability end-to-end test |
 | S5 | info | copies of the master key's bytes are not zeroed | accepted: they live as long as the process, which holds the key anyway |
 | L1 | info | the API's global rate is spent before the key is checked | accepted, by design: it bounds the key lookups an unauthenticated flood causes; a deployment that serves other machines limits clients at its reverse proxy |
-| L2 | low | jobs have global limits only: one key can queue many jobs | follow-up F59: a per-key limit of open jobs and items |
-| L3 | low | the `domain` label of the request and attempt metrics grows with every domain asked for | follow-up F60: a bound on distinct domains, the rest as `other`; until then, drop the label in Prometheus' relabelling where many domains are fetched |
+| L2 | low | jobs have global limits only: one key can queue many jobs | follow-up after 1.0: a per-key limit of open jobs and items |
+| L3 | low | the `domain` label of the request and attempt metrics grows with every domain asked for | follow-up after 1.0: a bound on distinct domains, the rest as `other`; until then, drop the label in Prometheus' relabelling where many domains are fetched |
 | L5 | info | the forwarder binds `0.0.0.0` by default | accepted: it opens nothing without a persona's credential and is never published; a bare `kage serve` on a host names `forwarder.bind` |
 | D1 | info | the database connection has no TLS by default | accepted: compose's Postgres is on the stack's own network; a remote database takes `sslmode=verify-full` in `database.url` (sqlx over rustls with the webpki roots; a private CA is named with `sslrootcert`) |
-| V1 | low | the artifacts volume is shared: a sidecar that was taken over can read and delete stored artifacts | follow-up F61: a volume of their own for the sidecars' files, mounted below `sidecar/` in kage |
+| V1 | low | the artifacts volume is shared: a sidecar that was taken over can read and delete stored artifacts | follow-up after 1.0: a volume of their own for the sidecars' files, mounted below `sidecar/` in kage |
 
 ## Accepted exceptions
 
@@ -210,4 +210,4 @@ and in no release.
 - **The browser's redirect check is after the fact** (§19): the request to
   a refused hop has left through the proxy; nothing read from it is
   returned or stored.
-- **The `domain` metric label** is unbounded until F60.
+- **The `domain` metric label** is unbounded until its follow-up (L3).
