@@ -13,6 +13,7 @@
 //! never does.
 
 use std::io::Write;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{Context, bail};
@@ -28,10 +29,13 @@ use kage_http::{ClientFactory, HttpSettings, StoreCookies};
 use kage_persona::identity::http_spec;
 use kage_persona::manager::REASON_OPERATOR;
 use kage_persona::selftest::{BrowserRun, HttpRun, Verdict, pages};
-use kage_persona::{PersonaError, PersonaManager, PersonaParts, Sidecars};
+use kage_persona::{Egress, PersonaError, PersonaManager, PersonaParts, Sidecars};
 use kage_proxy::Pool;
+use kage_scheduler::{Forwarder, ForwarderSettings, PoolRoutes, Routes, Tokens};
 use kage_store::Store;
 use serde_json::{Value, json};
+use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use url::Url;
 
 use crate::proxy_cmd::{Session, table};
@@ -134,6 +138,81 @@ where
     let session = Session::open(config).await?;
     let result = match manager(&session, config) {
         Ok(manager) => work(&session, &manager).await,
+        Err(error) => Err(error),
+    };
+    session.close().await;
+    result
+}
+
+/// A forwarder of a command's own, on a free port of the address the
+/// server's forwarder listens on, which the sidecars reach this process at
+/// too. A persona's browser and http client are handed it under the
+/// persona's credential, as the server hands them its own: the provider's
+/// credentials stay in this process (spec §7.5, security review G4).
+struct OwnForwarder {
+    forwarder: Arc<Forwarder>,
+    stop: oneshot::Sender<()>,
+    task: JoinHandle<()>,
+}
+
+impl OwnForwarder {
+    async fn start(config: &Config, session: &Session) -> anyhow::Result<Self> {
+        let key = config
+            .secrets
+            .master_key_bytes()
+            .context("secrets.master_key is not 32 bytes of hexadecimal")?;
+        let routes: Arc<dyn Routes> = Arc::new(PoolRoutes::new(
+            session.store.clone(),
+            Arc::clone(&session.pool),
+        ));
+        let bind = SocketAddr::new(config.forwarder.bind.ip(), 0);
+        let (forwarder, listener) = Forwarder::bind(
+            bind,
+            ForwarderSettings::from_config(config),
+            Tokens::new(&key),
+            routes,
+        )
+        .await
+        .with_context(|| format!("cannot bind a forwarder to {bind}"))?;
+        let (stop, stopped) = oneshot::channel::<()>();
+        let task = tokio::spawn(Arc::clone(&forwarder).serve(listener, async move {
+            let _ = stopped.await;
+        }));
+        Ok(Self {
+            forwarder,
+            stop,
+            task,
+        })
+    }
+
+    fn egress(&self) -> Arc<dyn Egress> {
+        Arc::new(self.forwarder.egress())
+    }
+
+    async fn stop(self) {
+        let _ = self.stop.send(());
+        if let Err(error) = self.task.await {
+            tracing::warn!(%error, "the command's forwarder ended badly");
+        }
+    }
+}
+
+/// [`with_manager`] for work that opens a persona's browser or sends its
+/// http client out: the manager hands out a forwarder of the command's own.
+async fn with_forwarded_manager<T, F>(config: &Config, work: F) -> anyhow::Result<T>
+where
+    F: AsyncFnOnce(&Session, &PersonaManager) -> anyhow::Result<T>,
+{
+    let session = Session::open(config).await?;
+    let result = match OwnForwarder::start(config, &session).await {
+        Ok(own) => {
+            let result = match manager(&session, config) {
+                Ok(manager) => work(&session, &manager.with_egress(own.egress())).await,
+                Err(error) => Err(error),
+            };
+            own.stop().await;
+            result
+        }
         Err(error) => Err(error),
     };
     session.close().await;
@@ -804,7 +883,7 @@ pub(crate) async fn selftest(
     options: &SelftestOptions,
     out: &mut impl Write,
 ) -> anyhow::Result<()> {
-    with_manager(config, async |session, manager| {
+    with_forwarded_manager(config, async |session, manager| {
         let persona = manager.get(options.id).await?;
         let tested = run_selftests(config, manager, options).await?;
         let verdicts = tested.verdicts();

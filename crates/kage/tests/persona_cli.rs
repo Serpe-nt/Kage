@@ -201,6 +201,14 @@ async fn the_persona_commands_inspect_test_replace_and_retire_personas() {
     let opened = sidecar.with(|state| state.opened.clone());
     assert_eq!(opened[0]["fingerprint"], german.fingerprint);
     assert_eq!(opened[0]["profile_dir"], json!(german.profile_dir));
+    // The context was handed the command's own forwarder under the
+    // persona's credential, never the provider's proxy and its password
+    // (security review G4).
+    assert_eq!(opened[0]["proxy"]["username"], german_id.as_str());
+    let server = opened[0]["proxy"]["server"].as_str().unwrap();
+    assert!(server.starts_with("http://kage:"), "{server}");
+    assert_ne!(server, "http://kage:8899");
+    assert!(!opened[0].to_string().contains("secret-pass-91aa"));
     let runs = harness.store().selftest_runs();
     assert_eq!(runs.count(german.id, Render::Browser).await.unwrap(), 1);
     assert_eq!(runs.count(german.id, Render::Http).await.unwrap(), 0);

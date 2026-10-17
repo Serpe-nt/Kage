@@ -613,9 +613,12 @@ a bare `403`, a refused plain request is closed without an answer, so no
 page ever reads a response Kage wrote. A missing or wrong credential gets
 `407`, as from any proxy. Health probes do not pass the forwarder: they
 present the provider's credentials themselves. A CLI command that opens a
-context in its own process (`kage fetch`) binds a forwarder of its own on
-a free port; `kage persona selftest` and the stand-in self-tests hand the
-sidecar the provider's proxy as before M7.
+context in its own process (`kage fetch`, `kage persona selftest`, `kage
+selftest http|browser --persona`) binds a forwarder of its own on a free
+port. The stand-in self-tests of a proxy (`kage selftest http|browser
+--proxy`) have no persona the forwarder could name and hand the sidecar
+the provider's proxy: an operator's command, on demand, against the pages
+it names (the one exception; `docs/security-review.md`).
 
 **Bandwidth budget (decision D5).** The counts are written to
 `bandwidth_usage` by the hour (`bandwidth.flush_interval`, default 30 s).
@@ -2335,7 +2338,8 @@ are gzip-compressed on disk.
   limit of a check that does not intercept requests. WebRTC sends no UDP
   outside the proxy.
 - **Forwarder.** The provider's proxy credentials never leave the kage
-  process: browsers and sidecars hold a per-persona credential that opens
+  process (but for the stand-in self-tests of a proxy, §7.5): browsers and
+  sidecars hold a per-persona credential that opens
   only that persona's own proxy, through the forwarder, which refuses what
   the SSRF guard refuses (§7.5). It is the one place where a browser's own
   background traffic and a page's redirect to the compose network would
