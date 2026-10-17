@@ -1995,7 +1995,18 @@ visitor that sleeps or is on a break, the bandwidth term, the key's daily
 page budget: the item goes back into the queue with the time to come back,
 its site is left alone until then, and a job whose every remaining item
 waits is `paused` in the store (`paused.reason`, `paused.until`) and in
-nobody's hands until that time. A job may wait `jobs.max_age` (7 days)
+nobody's hands until that time. An item waits in the scheduler for its
+visitor for up to five minutes and is told to come back only when nobody
+it may have could start in that time: a visitor in the middle of a page
+counts from its slot (the end of the page and the rest after it are not
+known before the page ends), and one that an earlier page waits for counts
+too. A site left alone for want of a persona (`no_persona`) is asked again
+as soon as one of its pages ends, which can change the answer; the other
+reasons keep their time. With several visitors a site therefore never
+stands still for the long break of one of them while another reads
+(follow-up F54: 200 pages under `human` with three visitors took a median
+of 146 minutes in the simulation of the release's load test, and take
+61, as long as when every page may wait as long as it must). A job may wait `jobs.max_age` (7 days)
 from its acceptance; past that deadline it ends with what it has, and the
 items left fail with `expired: <what they waited for>`.
 

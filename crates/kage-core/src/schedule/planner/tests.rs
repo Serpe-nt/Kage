@@ -632,8 +632,9 @@ fn a_cooling_persona_is_passed_over_and_waited_for_when_it_is_the_only_one() {
     assert_eq!(sim.log[0].1.persona, id(1));
 
     // The other persona is busy for hours: the next request waits for the
-    // cooldown of the first, and is refused when it would rather not wait
-    // that long.
+    // cooldown of the first. One that would rather be refused than wait
+    // past ten minutes waits as well, for the busy one: nobody knows before
+    // its page ends that it takes so long (follow-up F54).
     sim.submit(work("example.org"));
     let impatient = sim.submit(Work {
         give_up_at: Some(noon() + Duration::minutes(10)),
@@ -641,15 +642,21 @@ fn a_cooling_persona_is_passed_over_and_waited_for_when_it_is_the_only_one() {
     });
     sim.settle();
     assert_eq!(sim.planner.wake_at(), Some(until));
-    assert_eq!(
-        sim.refused,
-        [(noon(), impatient, Refusal::NoPersona, Some(until))]
-    );
+    assert_eq!(sim.refused, []);
 
     sim.run_until(until + secs(1));
     assert_eq!(sim.log.len(), 2);
     assert_eq!(sim.log[1].0, until);
     assert_eq!(sim.log[1].1.persona, id(0));
+    // Past its ten minutes it is still not refused: both are reading, and
+    // the slot of one of them is open.
+    assert_eq!(sim.refused, []);
+    sim.run_until(noon() + Duration::hours(3) + secs(1));
+    assert_eq!(sim.log.len(), 3);
+    assert_eq!(sim.log[2].1.work, impatient);
+    assert_eq!(sim.log[2].0, noon() + Duration::hours(3));
+    assert_eq!(sim.log[2].1.persona, id(1));
+    assert_eq!(sim.refused, []);
     // A cooldown that is over at this very moment does not hold anyone.
     let mut sim = Sim::new(personas(1));
     sim.state(id(0), "example.org").cooldown_until = Some(noon());
@@ -2661,6 +2668,285 @@ fn work_that_would_rather_be_refused_is_told_when_its_visitor_is_back() {
     assert!(back < sim.now + Duration::hours(8), "{back}");
     // Nobody else was sent in its place.
     assert_eq!(sim.log.len(), 3);
+}
+
+// --- Follow-up F54: a batch does not stand still for one visitor -------
+
+/// Persona 0 lives in Los Angeles, where it is three in the morning at
+/// noon in Berlin; 1 and 2 are in Berlin, 3 and 4 are no visitors of the
+/// batch.
+fn a_night_owl_and_two_readers() -> Sim {
+    let night_owl = PersonaView {
+        timezone: "America/Los_Angeles".to_owned(),
+        ..persona(0)
+    };
+    let mut sim = Sim::new(vec![
+        night_owl,
+        persona(1),
+        persona(2),
+        persona(3),
+        persona(4),
+    ]);
+    sim.takes = Box::new(|_| secs(20));
+    sim
+}
+
+/// A page of a batch whose visitors are personas 0, 1 and 2, as the job
+/// worker asks for it: rather refused than waiting past five minutes.
+fn a_page_of_the_batch(sim: &Sim, pacing: PacingProfile) -> Work {
+    Work {
+        pacing,
+        active_hours: ActiveHoursMode::Prefer,
+        visitors: Some(Visitors {
+            known: vec![id(0), id(1), id(2)],
+            max: 3,
+        }),
+        give_up_at: Some(sim.now + Duration::minutes(5)),
+        ..work("example.org")
+    }
+}
+
+/// Follow-up F54. Of a batch's three visitors one sleeps and two are in
+/// the middle of a page. The next page waits for one of the two, who are
+/// back at the end of their page and the rest after it. It used to be
+/// refused with the sleeper's morning, and the job worker then left the
+/// whole site alone until that morning.
+#[test]
+fn a_batch_waits_for_a_visitor_in_the_middle_of_a_page_rather_than_give_up_for_one_asleep() {
+    let mut sim = a_night_owl_and_two_readers();
+    for _ in 0..2 {
+        let page = a_page_of_the_batch(&sim, brisk());
+        sim.submit(page);
+    }
+    sim.run_until(noon() + secs(10));
+    let reading: BTreeSet<PersonaId> = sim.log.iter().map(|(_, d)| d.persona).collect();
+    assert_eq!(reading, BTreeSet::from([id(1), id(2)]));
+    assert_eq!(sim.ended.len(), 0);
+
+    let page = a_page_of_the_batch(&sim, brisk());
+    let third = sim.submit(page);
+    sim.run_until(noon() + Duration::minutes(2));
+
+    assert!(sim.refused.is_empty(), "{:?}", sim.refused);
+    let (at, dispatch) = sim.log.iter().find(|(_, d)| d.work == third).unwrap();
+    assert!([id(1), id(2)].contains(&dispatch.persona));
+    // As soon as the first of the two is done with its page.
+    let first_back = sim.ended.first().unwrap().0;
+    assert!(*at >= first_back && *at < first_back + secs(5), "{at}");
+    assert_eq!(sim.log.len(), 3);
+}
+
+/// Follow-up F54. The same batch when neither reader may start another
+/// page for ten minutes: the page is refused, and told to come back at the
+/// first of their slots, not at the sleeper's morning.
+#[test]
+fn a_batch_that_would_rather_be_refused_comes_back_at_the_first_slot_of_its_readers() {
+    let slow = PacingProfile {
+        gap_ms: Distribution::Uniform(Uniform {
+            min: 600_000.0,
+            max: 600_000.0,
+        }),
+        ..brisk()
+    };
+    let mut sim = a_night_owl_and_two_readers();
+    for _ in 0..2 {
+        let page = a_page_of_the_batch(&sim, slow);
+        sim.submit(page);
+    }
+    sim.run_until(noon() + secs(10));
+    assert_eq!(sim.log.len(), 2);
+
+    let page = a_page_of_the_batch(&sim, slow);
+    let third = sim.submit(page);
+    sim.settle();
+
+    let (_, refused, reason, retry_at) = sim.refused.last().copied().unwrap();
+    assert_eq!((refused, reason), (third, Refusal::NoPersona));
+    assert_eq!(retry_at, Some(sim.log[0].0 + Duration::minutes(10)));
+}
+
+/// Follow-up F54. A batch whose one reader is awake: while it waits out
+/// the gap before its next page, the page that has it waits for it, and
+/// the page behind waits its turn after that one instead of being refused
+/// with the sleeper's morning.
+#[test]
+fn a_page_of_a_batch_waits_its_turn_behind_another_for_the_same_visitor() {
+    let half_a_minute = PacingProfile {
+        gap_ms: Distribution::Uniform(Uniform {
+            min: 30_000.0,
+            max: 30_000.0,
+        }),
+        ..brisk()
+    };
+    let mut sim = a_night_owl_and_two_readers();
+    sim.takes = Box::new(|_| secs(1));
+    let ask = |sim: &mut Sim| {
+        let page = Work {
+            visitors: Some(Visitors {
+                known: vec![id(0), id(1)],
+                max: 2,
+            }),
+            ..a_page_of_the_batch(sim, half_a_minute)
+        };
+        sim.submit(page)
+    };
+    ask(&mut sim);
+    sim.run_until(noon() + secs(5));
+    assert_eq!(sim.log.len(), 1);
+    assert_eq!(sim.ended.len(), 1);
+
+    // Two pages wait: the first for the reader's slot, the second behind it.
+    let second = ask(&mut sim);
+    let third = ask(&mut sim);
+    sim.run_until(noon() + Duration::minutes(2));
+
+    assert!(sim.refused.is_empty(), "{:?}", sim.refused);
+    let order: Vec<(Ticket, PersonaId)> =
+        sim.log.iter().map(|(_, d)| (d.work, d.persona)).collect();
+    assert_eq!(order[1..], [(second, id(1)), (third, id(1))]);
+    assert_eq!(sim.log[1].0, noon() + secs(30));
+    assert_eq!(sim.log[2].0, noon() + secs(60));
+}
+
+/// A batch of `total` pages of one domain worked the way the job worker
+/// works one: at most `max` of its pages in the scheduler at a time, each
+/// naming the batch's visitors so far and rather refused than waiting past
+/// five minutes; a refused page is first in line again, and the site is
+/// left alone until the time it was told or until a page of the site
+/// ends, whichever comes first. Returns when the last page ended.
+fn run_batch_as_the_worker_does(
+    sim: &mut Sim,
+    domain: &str,
+    total: usize,
+    max: u32,
+    until: DateTime<Utc>,
+) -> DateTime<Utc> {
+    let keep = usize::try_from(max).unwrap();
+    let mut submitted = 0_usize;
+    let mut seen_refused = 0_usize;
+    let mut seen_ended = 0_usize;
+    let mut held: Option<DateTime<Utc>> = None;
+    let mut give_up: HashMap<Ticket, DateTime<Utc>> = HashMap::new();
+    loop {
+        loop {
+            let before = (sim.log.len(), sim.ended.len(), sim.refused.len(), submitted);
+            while seen_refused < sim.refused.len() {
+                let (at, ticket, _, retry_at) = sim.refused[seen_refused];
+                seen_refused += 1;
+                // Refused only when nobody it may have is reading a page
+                // after which it could start in time.
+                let limit = give_up[&ticket];
+                let reading = sim
+                    .flying
+                    .iter()
+                    .any(|(_, dispatch)| dispatch.next_slot <= limit);
+                assert!(at > limit || !reading, "refused at {at}");
+                submitted -= 1;
+                let back = retry_at.unwrap_or(at + Duration::minutes(1));
+                held = Some(held.map_or(back, |held| held.max(back)));
+            }
+            if seen_ended < sim.ended.len() {
+                // What the refused page was told no longer holds.
+                seen_ended = sim.ended.len();
+                held = None;
+            }
+            let mut known: Vec<PersonaId> = Vec::new();
+            for (_, dispatch, outcome) in &sim.ended {
+                known.retain(|persona| *persona != dispatch.persona);
+                if dispatch.domain == domain && outcome.is_success() {
+                    known.push(dispatch.persona);
+                }
+            }
+            if known.len() > keep {
+                known.drain(..known.len() - keep);
+            }
+            let now = sim.now;
+            while held.is_none_or(|held| held <= now)
+                && submitted < total
+                && sim.planner.depth(Priority::Job) + sim.flying.len() < keep
+            {
+                let ticket = sim.submit(Work {
+                    pacing: human(),
+                    active_hours: ActiveHoursMode::Prefer,
+                    visitors: Some(Visitors {
+                        known: known.clone(),
+                        max,
+                    }),
+                    give_up_at: Some(now + Duration::minutes(5)),
+                    ..work(domain)
+                });
+                give_up.insert(ticket, now + Duration::minutes(5));
+                submitted += 1;
+            }
+            sim.settle();
+            if (sim.log.len(), sim.ended.len(), sim.refused.len(), submitted) == before {
+                break;
+            }
+        }
+        let last = sim.ended.last().map(|(at, _, _)| *at);
+        if sim.ended.len() >= total {
+            return last.unwrap_or(sim.now);
+        }
+        let held = held.filter(|held| *held > sim.now);
+        let next = match (sim.next_event(), held) {
+            (Some(event), Some(held)) => event.min(held),
+            (event, held) => event.or(held).unwrap_or(until),
+        };
+        if next >= until {
+            return last.unwrap_or(sim.now);
+        }
+        assert!(next > sim.now, "{next} at {}", sim.now);
+        sim.now = next;
+    }
+}
+
+/// Follow-up F54, measured: 200 pages of one site, three visitors under
+/// `human`, worked as the job worker works a batch, take as long as the
+/// planner takes when every page may wait for as long as it must. They
+/// used to take twice as long (a median of 192 minutes against 93 over 200
+/// runs): the batch stood still for the whole long break of one visitor
+/// whenever the other two were reading.
+#[test]
+fn a_batch_of_three_visitors_does_not_stand_still_for_the_long_break_of_one() {
+    let start = noon();
+    let world = |k: u64| {
+        let views: Vec<PersonaView> = (0..3_u8)
+            .map(|number| PersonaView {
+                seed: Seed::from_u64(10_000 + 97 * k + u64::from(number)),
+                ..persona(number)
+            })
+            .collect();
+        let mut sim = Sim::new(views.clone());
+        sim.planner = Planner::new(rules(), Seed::from_u64(500_000 + k));
+        sim.planner.set_personas(views);
+        sim.takes = Box::new(browsing);
+        sim
+    };
+    let mut worked = Vec::new();
+    let mut alone = Vec::new();
+    for k in 0..12 {
+        let mut sim = world(k);
+        let ended = run_batch_as_the_worker_does(
+            &mut sim,
+            "example.org",
+            200,
+            3,
+            start + Duration::hours(30),
+        );
+        assert_eq!(sim.ended.len(), 200, "run {k}");
+        // Refused only while all three are away: a handful of times.
+        assert!(sim.refused.len() < 40, "run {k}: {}", sim.refused.len());
+        worked.push((ended - start).num_seconds());
+
+        let mut sim = world(k);
+        run_batch(&mut sim, "example.org", 200, 3, start + Duration::hours(30));
+        assert_eq!(sim.ended.len(), 200, "run {k}");
+        alone.push((sim.ended.last().unwrap().0 - start).num_seconds());
+    }
+    worked.sort_unstable();
+    alone.sort_unstable();
+    let (worked, alone) = (percentile(&worked, 0.5), percentile(&alone, 0.5));
+    assert!(worked * 10 <= alone * 11, "{worked} s against {alone} s");
 }
 
 /// `bare` with the rest of the shipped `human` profile.

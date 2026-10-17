@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use axum::http::{Method, StatusCode};
 use chrono::{DateTime, Utc};
-use common::sched::lab::{LENIENT_FAST, article};
+use common::sched::lab::{LENIENT_FAST, SITE, article};
 use common::{Api, Background, ask, request};
 use hmac::{Hmac, KeyInit, Mac};
 use kage_api::jobs::webhook::retry_wait;
@@ -303,6 +303,56 @@ async fn a_batch_is_read_in_order_by_one_visitor_and_every_item_has_its_result()
 /// A request that is refused: its body, the code, and what the problem
 /// names beside it.
 type Case = (Value, &'static str, Option<(&'static str, Value)>);
+
+/// Follow-up F54. A batch of two visitors, and of the pool's two personas
+/// one cools on the site for an hour: the other reads every page, one
+/// after another, and the batch never waits for the hour. The second page
+/// used to be refused with the end of that cooldown while the first was
+/// being read, and the job worker then left the site alone until then.
+#[tokio::test]
+async fn a_batch_waits_for_its_reader_and_not_for_a_persona_that_cools() {
+    let mut api = Api::start_with(2, 149, LENIENT_FAST, quick).await;
+    // Pages that take a moment: the second is asked for while the first
+    // is being read.
+    pages(
+        &api,
+        "/w",
+        page("A page").set_delay(Duration::from_millis(700)),
+    )
+    .await;
+    sqlx::query(
+        "INSERT INTO persona_domain_state (persona_id, domain, cooldown_until)          VALUES ($1, $2, now() + interval '1 hour')          ON CONFLICT (persona_id, domain) DO UPDATE SET cooldown_until = EXCLUDED.cooldown_until",
+    )
+    .bind(api.lab.personas[0].id.as_uuid())
+    .bind(SITE)
+    .execute(api.lab.store().pool())
+    .await
+    .unwrap();
+    let token = api.key(&[Scope::Jobs]).await;
+    let batch = json!({
+        "type": "batch",
+        "urls": urls("/w", 4),
+        "visitors": 2,
+        "defaults": { "render": "http" },
+    });
+    let reply = api.post(&token, "/v1/jobs", &batch).await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.json());
+    let id = reply.json()["id"].as_str().unwrap().to_owned();
+
+    let work = api.work();
+    let done = api
+        .job_until(&token, &id, |job| ended(job) || job["state"] == "paused")
+        .await;
+
+    assert_eq!(done["state"], "succeeded", "{done}");
+    let reader = api.lab.personas[1].id.to_string();
+    for item in api.job_items(&token, &id).await {
+        assert_eq!(personas_of(&api, &item).await, [reader.as_str()]);
+    }
+    assert_eq!(asked(&api, "/w/").await.len(), 4);
+    work.stop().await;
+    api.shut_down().await;
+}
 
 #[tokio::test]
 async fn a_job_is_accepted_whole_or_not_at_all() {
