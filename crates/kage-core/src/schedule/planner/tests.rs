@@ -34,11 +34,16 @@ const SHIPPED: &str = include_str!(concat!(
     "/../../policies/pacing-profiles.yaml"
 ));
 
+/// Parsed once: a reading of YAML runs on a thread of its own with a deep
+/// stack, and the simulations ask for the profile at every page.
 fn human() -> PacingProfile {
-    *PacingProfiles::from_yaml(SHIPPED)
-        .unwrap()
-        .require("human")
-        .unwrap()
+    static HUMAN: std::sync::LazyLock<PacingProfile> = std::sync::LazyLock::new(|| {
+        *PacingProfiles::from_yaml(SHIPPED)
+            .unwrap()
+            .require("human")
+            .unwrap()
+    });
+    *HUMAN
 }
 
 /// `human` without visits, a rest, caps and limits: one persona's bare
