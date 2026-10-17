@@ -355,6 +355,12 @@ async fn metrics_expose_the_series_of_the_specification() {
         "kage_breaker_open",
         &["domain=\"walled.kage.test\"", " 1"],
     );
+    // What the alert compares a domain's blocks with: its policy's.
+    expect(
+        &text,
+        "kage_policy_breaker_threshold",
+        &["domain=\"walled.kage.test\"", " 2"],
+    );
     expect(&text, "kage_bandwidth_bytes_total", &["direction=\"up\""]);
     expect(&text, "kage_bandwidth_bytes_total", &["direction=\"down\""]);
     expect(&text, "kage_bandwidth_budget_ratio", &[]);
