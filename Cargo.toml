@@ -150,10 +150,9 @@ chrono-tz = { version = "=0.10.4" }
 flate2 = { version = "=1.1.10" }
 
 # --- Extraction, crawl ----------------------------------------------------
+# html5ever comes through scraper (0.39.0, held by Cargo.lock; no crate of
+# ours names it): move scraper and check the lockfile's html5ever with it.
 scraper = { version = "=0.27.0" }
-# The version scraper 0.27.0 is built against, so their types are the same.
-# 0.40.1 exists; move both together.
-html5ever = { version = "=0.39.0" }
 # The tree scraper keeps a page in, at the version scraper 0.27.0 locks:
 # kage-extract names its node ids.
 ego-tree = { version = "=0.11.0" }

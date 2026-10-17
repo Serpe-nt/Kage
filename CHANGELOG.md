@@ -73,7 +73,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     (F37), and `just deny` now fails on a pin in
     `[workspace.dependencies]` that no crate of the workspace uses
     (`scripts/check-workspace-pins.mjs`; what is declared on purpose is
-    listed there with its reason).
+    listed there with its reason). The workspace entry of `html5ever`,
+    which no crate of ours names, is gone too: it comes through `scraper`
+    at 0.39.0, held by `Cargo.lock`.
 
 - M11, extraction, `robots.txt` and the response cache:
   - `include: ["extract"]` returns what a page says: `title`,
