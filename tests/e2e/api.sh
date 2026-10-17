@@ -73,10 +73,11 @@ fail() {
     exit 1
 }
 
-# A sidecar's node reads JSON, so the host needs no JSON tool.
+# A helper's node reads JSON, so the host needs no JSON tool (a sidecar
+# cannot be the helper: it reaches nothing but kage).
 # value <json> <expression over d>: prints the expression's value.
 value() {
-    printf '%s' "$1" | "${compose[@]}" exec -T browser-chromium node -e \
+    printf '%s' "$1" | "${compose[@]}" exec -T world node -e \
         "let t = ''; process.stdin.on('data', (c) => (t += c)).on('end', () => { const d = JSON.parse(t); const v = ($2); console.log(typeof v === 'string' ? v : JSON.stringify(v)); });"
 }
 # check <what> <json> <expression over d>: fails unless the expression holds.

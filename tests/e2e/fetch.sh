@@ -79,10 +79,11 @@ fail() {
     exit 1
 }
 
-# A sidecar's node reads JSON, so the host needs no JSON tool.
+# A helper's node reads JSON, so the host needs no JSON tool (a sidecar
+# cannot be the helper: it reaches nothing but kage).
 # value <json> <expression over d>: prints the expression's value.
 value() {
-    printf '%s' "$1" | "${compose[@]}" exec -T browser-chromium node -e \
+    printf '%s' "$1" | "${compose[@]}" exec -T world node -e \
         "let t = ''; process.stdin.on('data', (c) => (t += c)).on('end', () => { const d = JSON.parse(t); const v = ($2); console.log(typeof v === 'string' ? v : JSON.stringify(v)); });"
 }
 # check <what> <json> <expression over d>: fails unless the expression holds.
@@ -91,7 +92,7 @@ check() {
 }
 # got <url>: the JSON a helper serves, asked from inside the network.
 got() {
-    "${compose[@]}" exec -T browser-chromium node -e \
+    "${compose[@]}" exec -T world node -e \
         "fetch('$1').then((r) => r.text()).then((t) => console.log(t), (e) => { console.error(String(e)); process.exit(1); })"
 }
 kage() {
@@ -212,6 +213,14 @@ case "${by_domain}" in
     *) fail "the bytes are not counted toward the sites that were fetched: ${by_domain}" ;;
 esac
 
+echo "==> a browser's container reaches neither the fixture site nor a proxy itself, only kage"
+for target in http://fixture:8088/__kage/requests http://proxy-a:3128/__stats http://world:8089/ip; do
+    reached="$("${compose[@]}" exec -T browser-chromium node -e \
+        "fetch('${target}').then(() => console.log('reached'), () => console.log('unreachable'))")"
+    [ "${reached}" = unreachable ] || fail "browser-chromium reached ${target} by itself"
+done
+echo "    the fixture site, proxy-a and the world echo are out of a sidecar's reach"
+
 echo "==> what the forwarder adds to a connection across the compose bridge"
 # shellcheck disable=SC1091
 . deploy/.env
@@ -221,7 +230,7 @@ latency="$("${compose[@]}" exec -T \
     --env FORWARDER=kage:8899 --env PROXY=proxy-a:3128 \
     --env PROXY_USER=provider-a --env PROXY_PASS=e2e-only-a \
     --env TARGET=http://world.kage.test:8089/ip --env SAMPLES=40 \
-    browser-chromium node --input-type=module - < tests/e2e/latency.mjs)" \
+    world node --input-type=module - < tests/e2e/latency.mjs)" \
     || fail "the latency measurement failed"
 echo "    ${latency}"
 check "the forwarder adds little" "${latency}" "d.added_median_ms < 50"

@@ -65,7 +65,7 @@ fail() {
     exit 1
 }
 value() {
-    printf '%s' "$1" | "${compose[@]}" exec -T browser-chromium node -e \
+    printf '%s' "$1" | "${compose[@]}" exec -T world node -e \
         "let t = ''; process.stdin.on('data', (c) => (t += c)).on('end', () => { const d = JSON.parse(t); const v = ($2); console.log(typeof v === 'string' ? v : JSON.stringify(v)); });"
 }
 check() {
@@ -73,7 +73,7 @@ check() {
 }
 # got <url>: a GET from inside the compose network.
 got() {
-    "${compose[@]}" exec -T browser-chromium node -e \
+    "${compose[@]}" exec -T world node -e \
         "fetch('$1').then((r) => r.text()).then((t) => console.log(t), (e) => { console.error(String(e)); process.exit(1); })"
 }
 kage() {
