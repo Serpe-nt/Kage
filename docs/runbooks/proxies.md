@@ -118,6 +118,21 @@ TLS handshake through it took (`TLS`). Every new connection a persona opens
 pays the first two again, so a proxy with a slow tunnel is slow on every
 first request to a host, however quickly it answers afterwards.
 
+## Adding proxies
+
+More proxies of the same provider need nothing of Kage: buy them at
+Webshare and the next sync adopts them (every `proxies.sync_interval`,
+10 min; `kage proxy list --sync` at once). Each arrives `new`, is probed,
+becomes `healthy`, and the server makes it a persona of its own, drawn
+under `personas.mix` from the country the proxy was observed in, which
+warms up over its first hours ([personas.md](personas.md)). Check the
+bandwidth budget first: `bandwidth.monthly_cap_gb` is the plan's, not the
+pool's, and more personas spend it faster.
+
+With a static list, add the lines to the list and recreate `kage`
+(`docker compose --file deploy/compose.yaml up --detach --wait kage`); a line
+taken out of the list is retired after `proxies.missing_syncs` syncs.
+
 ## States
 
 ```
@@ -168,8 +183,13 @@ replaced, and says why:
 | the proxy is `replacing` or `retired` | A replacement is already under way, or done |
 | the provider refused: ... | Webshare's own reason follows. One replacement runs at a time: wait for the pending one |
 
-The replaced proxy is `retired` and its row stays as history. The new address
-arrives as `new`.
+The replaced proxy is `retired` and its row stays as history. Its persona
+is retired with it: one persona lives on one address and never moves to
+another, so its profile is archived and deleted after
+`personas.retention_days`, and its cookies and sessions end. The new
+address arrives as `new` and gets a new persona that knows nothing of the
+old one. A site therefore sees one household leave and another arrive,
+never one browser change its address.
 
 ## Alerts
 
