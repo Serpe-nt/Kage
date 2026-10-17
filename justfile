@@ -252,6 +252,9 @@ mutants jobs="1":
         unset CARGO_TARGET_DIR
         flags=(--jobs "{{ jobs }}" --no-shuffle --timeout-multiplier 6 --minimum-test-timeout 120)
     fi
+    # cargo-mutants creates its output directory but not the parent of it,
+    # which a fresh checkout does not have.
+    mkdir -p target
     # cargo-mutants exits non-zero when any mutant survives; the score decides.
     cargo mutants --package kage-core --output target/mutants ${flags[@]+"${flags[@]}"} || true
     node scripts/check-mutation-score.mjs target/mutants/mutants.out 70
