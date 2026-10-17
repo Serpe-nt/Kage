@@ -990,6 +990,73 @@ pub(crate) async fn reload_policies(State(state): State<ApiState>) -> ApiResult<
     Ok(noted(Json(view), note))
 }
 
+// --- Sites ------------------------------------------------------------------
+
+/// A site's scout, after the operator gave the site another one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub(crate) struct SiteScoutView {
+    /// The site: the registrable domain of the host that was named.
+    pub(crate) site: String,
+    /// The persona that asks the site for its `robots.txt` and its
+    /// sitemaps from now on.
+    #[schema(value_type = String, format = Uuid)]
+    pub(crate) scout: PersonaId,
+    /// The scout the site had, when it had one that lives. Once it has
+    /// asked the site, it is one of its readers.
+    #[schema(value_type = Option<String>, format = Uuid)]
+    pub(crate) previous: Option<PersonaId>,
+}
+
+/// Give a site another scout: the persona that asks it for its
+/// `robots.txt` and its sitemaps. For a site whose scout is not ready (its
+/// proxy is down, it is cooling) and that enforces its file, so is closed
+/// until the scout is back. The new one is chosen as Kage chooses a scout,
+/// never the one the site had: one address more has then asked the site.
+#[utoipa::path(
+    post,
+    path = "/v1/admin/sites/{site}/scout",
+    tag = "admin",
+    operation_id = "replace_site_scout",
+    params(("site" = String, Path, description = "A host of the site, or the site itself (`example.org`).")),
+    responses(
+        (status = 200, description = "The site's new scout.", body = SiteScoutView),
+        (status = 409, description = "`no_matching_persona`: nobody else may ask the site (every other persona that may read it is needed to read it, read it lately, or is not ready); the site keeps the scout it has.", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "`validation_failed`: what was named is no host.", body = Problem, content_type = "application/problem+json"),
+        (status = 503, description = "`unavailable`: no proxy pool is configured.", body = Problem, content_type = "application/problem+json"),
+    ),
+    security(("api_key" = ["admin"]))
+)]
+pub(crate) async fn replace_site_scout(
+    State(state): State<ApiState>,
+    Path(site): Path<String>,
+) -> ApiResult<Response> {
+    let host = kage_core::policy::normalize_host(&site)
+        .ok_or_else(|| ApiError::new(ErrorCode::ValidationFailed, "a site is named by a host"))?;
+    let site = kage_crawl::site::of_host(&host);
+    let engine = engine(&state)?;
+    let Some(new) = engine
+        .pipeline
+        .replace_scout(&site)
+        .await
+        .map_err(|error| ApiError::internal(&error))?
+    else {
+        return Err(ApiError::new(
+            ErrorCode::NoMatchingPersona,
+            "nobody else may ask the site: every other persona that may read it is needed to              read it, read it lately, or is not ready; the site keeps the scout it has",
+        ));
+    };
+    let note = AuditNote::about(&site).with(json!({
+        "scout": new.scout,
+        "previous": new.previous,
+    }));
+    let view = SiteScoutView {
+        site,
+        scout: new.scout,
+        previous: new.previous,
+    };
+    Ok(noted(Json(view), note))
+}
+
 // --- API keys ---------------------------------------------------------------
 
 /// What an API key may do.

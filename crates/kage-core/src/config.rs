@@ -42,7 +42,10 @@ pub use crawl::{
     CrawlConfig, DEFAULT_SKIPPED_EXTENSIONS, MAX_BACK_LIMIT, MAX_CRAWL_DEPTH, MAX_CRAWL_SEEDS,
     MAX_NEAR_DUPLICATE_BITS,
 };
-pub use extract::{CacheConfig, ExtractConfig, MAX_ROBOTS_AGENTS, MAX_ROBOTS_BYTES, RobotsConfig};
+pub use extract::{
+    CacheConfig, ExtractConfig, MAX_ROBOTS_AGENTS, MAX_ROBOTS_BYTES, MAX_SCOUT_QUARANTINE,
+    RobotsConfig,
+};
 pub use http::{
     BrowserSelftestConfig, ChromiumEngineConfig, EngineConfig, EnginesConfig, HttpConfig,
     HttpSelftestConfig, MAX_REDIRECTS_LIMIT, MAX_SELFTEST_PAGES, MAX_SUBRESOURCE_CONCURRENCY,

@@ -673,6 +673,11 @@ robots:
   # The product tokens Kage answers to besides "*": a group that names one
   # of them applies in place of the group for everybody.
   agents: [kage]
+  # How long a persona that read a page of a site is kept from asking it
+  # for its robots.txt as its scout (1d to 3650d). After that one address
+  # may both have read the site and asked, which is better than a site
+  # that nobody may ask once every persona has read it.
+  scout_quarantine: 30d
 
 # The response cache (spec §15). A result is served from it only to a request
 # that asks (cache_ttl_s, or the cache.ttl of the site's policy), and by

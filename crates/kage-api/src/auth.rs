@@ -274,6 +274,7 @@ pub(crate) fn action_of(method: &Method, route: &str) -> String {
         ("POST", "proxies/{id}/health") => "proxy.health",
         ("GET", "pool") => "pool.show",
         ("POST", "policies/reload") => "policy.reload",
+        ("POST", "sites/{site}/scout") => "site.scout",
         ("GET", "keys") => "key.list",
         ("POST", "keys") => "key.create",
         ("DELETE", "keys/{id}") => "key.revoke",
@@ -285,14 +286,15 @@ pub(crate) fn action_of(method: &Method, route: &str) -> String {
     format!("admin.{name}")
 }
 
-/// What a request names in the place of its route's `{id}`: the target of
-/// an admin call whose handler left none, because it refused or failed. A
-/// trail that says who tried to retire something should say what.
+/// What a request names in the place of its route's `{id}` or `{site}`:
+/// the target of an admin call whose handler left none, because it refused
+/// or failed. A trail that says who tried to retire something should say
+/// what.
 pub(crate) fn target_of(route: &str, path: &str) -> Option<String> {
     route
         .split('/')
         .zip(path.split('/'))
-        .find(|(pattern, _)| *pattern == "{id}")
+        .find(|(pattern, _)| matches!(*pattern, "{id}" | "{site}"))
         .map(|(_, named)| named.to_owned())
         .filter(|named| !named.is_empty() && named.len() <= 64)
 }
@@ -432,6 +434,11 @@ mod tests {
                 "/v1/admin/policies/reload",
                 "admin.policy.reload",
             ),
+            (
+                Method::POST,
+                "/v1/admin/sites/{site}/scout",
+                "admin.site.scout",
+            ),
             (Method::POST, "/v1/admin/keys", "admin.key.create"),
             (Method::DELETE, "/v1/admin/keys/{id}", "admin.key.revoke"),
             (
@@ -463,6 +470,14 @@ mod tests {
         assert_eq!(
             target_of("/v1/admin/keys/{id}", "/v1/admin/keys/nothing").as_deref(),
             Some("nothing")
+        );
+        assert_eq!(
+            target_of(
+                "/v1/admin/sites/{site}/scout",
+                "/v1/admin/sites/www.example.org/scout"
+            )
+            .as_deref(),
+            Some("www.example.org")
         );
         // A route without an id has no target; what is no id is not kept.
         assert_eq!(target_of("/v1/admin/pool", "/v1/admin/pool"), None);

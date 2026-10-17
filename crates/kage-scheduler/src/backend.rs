@@ -129,9 +129,13 @@ pub trait Backend: Send + Sync + fmt::Debug {
         at: DateTime<Utc>,
     ) -> Result<(), SchedulerError>;
 
-    /// The personas that asked a host of a site for a page and are not its
-    /// scout.
-    async fn readers(&self, site: &str) -> Result<Vec<PersonaId>, SchedulerError>;
+    /// The personas that asked a host of a site for a page after `since`
+    /// and are not its scout.
+    async fn readers(
+        &self,
+        site: &str,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<PersonaId>, SchedulerError>;
 
     /// The entry of the response cache under a key that has not expired
     /// by `now`, with its result.
@@ -349,8 +353,12 @@ impl Backend for StoreBackend {
         Ok(self.store.site_scouts().set(site, persona, at).await?)
     }
 
-    async fn readers(&self, site: &str) -> Result<Vec<PersonaId>, SchedulerError> {
-        Ok(self.store.site_scouts().readers(site).await?)
+    async fn readers(
+        &self,
+        site: &str,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<PersonaId>, SchedulerError> {
+        Ok(self.store.site_scouts().readers(site, since).await?)
     }
 
     async fn cached(

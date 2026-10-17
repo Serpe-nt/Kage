@@ -13,6 +13,10 @@ pub const MAX_ROBOTS_BYTES: u64 = 4 * 1024 * 1024;
 /// The most product tokens Kage may answer to in a `robots.txt`.
 pub const MAX_ROBOTS_AGENTS: usize = 16;
 
+/// The longest `robots.scout_quarantine` may be: ten years, which is
+/// never for a pool.
+pub const MAX_SCOUT_QUARANTINE: Duration = Duration::from_hours(3650 * 24);
+
 /// Extraction: what `include: ["extract"]` returns (spec §14).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -59,6 +63,12 @@ pub struct RobotsConfig {
     /// everybody. Letters, `-` and `_`.
     #[serde(default = "default_agents")]
     pub agents: Vec<String>,
+    /// How long a persona that read a page of a site is kept from being
+    /// its scout: one address that both read the site and asked it for
+    /// its `robots.txt` is the price of a site that would otherwise never
+    /// have a scout again once every persona has read it.
+    #[serde(default = "default_scout_quarantine")]
+    pub scout_quarantine: HumanDuration,
 }
 
 const fn default_ttl() -> HumanDuration {
@@ -77,6 +87,10 @@ fn default_agents() -> Vec<String> {
     vec!["kage".to_owned()]
 }
 
+const fn default_scout_quarantine() -> HumanDuration {
+    HumanDuration::from_hours(30 * 24)
+}
+
 impl Default for RobotsConfig {
     fn default() -> Self {
         Self {
@@ -84,6 +98,7 @@ impl Default for RobotsConfig {
             error_ttl: default_error_ttl(),
             max_bytes: default_max_bytes(),
             agents: default_agents(),
+            scout_quarantine: default_scout_quarantine(),
         }
     }
 }
@@ -158,6 +173,13 @@ pub(super) fn validate(
              underscores"
         ));
     }
+    let quarantine = robots.scout_quarantine.get();
+    if quarantine < Duration::from_hours(24) || quarantine > MAX_SCOUT_QUARANTINE {
+        return Err(
+            "robots.scout_quarantine must be between 1d and 3650d: a persona that read a site              is kept from scouting it for that long"
+                .to_owned(),
+        );
+    }
     if cache.max_ttl.get() < Duration::from_secs(1) {
         return Err("cache.max_ttl must be at least 1s".to_owned());
     }
@@ -194,6 +216,7 @@ mod tests {
         assert_eq!(robots.error_ttl.get(), Duration::from_hours(1));
         assert_eq!(robots.max_bytes, 512 * 1024);
         assert_eq!(robots.agents, ["kage"]);
+        assert_eq!(robots.scout_quarantine.get(), Duration::from_hours(720));
         assert_eq!(cache.max_ttl.get(), Duration::from_hours(24));
         assert_eq!(check(|_| {}, 14), Ok(()));
         // An empty section is the defaults, and an unknown key is refused.
@@ -225,7 +248,7 @@ mod tests {
     #[test]
     fn every_key_out_of_range_is_named() {
         type Change = fn(&mut Sections);
-        let cases: [(Change, &str); 13] = [
+        let cases: [(Change, &str); 15] = [
             (|sections| sections.0.thin_words = 0, "extract.thin_words"),
             (
                 |sections| sections.0.thin_words = 10_001,
@@ -265,6 +288,17 @@ mod tests {
                 "robots.agents",
             ),
             (
+                |sections| sections.1.scout_quarantine = HumanDuration::from_secs(86_399),
+                "robots.scout_quarantine",
+            ),
+            (
+                |sections| {
+                    sections.1.scout_quarantine =
+                        HumanDuration::new(super::MAX_SCOUT_QUARANTINE + Duration::from_secs(1));
+                },
+                "robots.scout_quarantine",
+            ),
+            (
                 |sections| sections.2.max_ttl = HumanDuration::new(Duration::from_millis(999)),
                 "cache.max_ttl",
             ),
@@ -278,7 +312,11 @@ mod tests {
             assert!(said.starts_with(key), "{said}");
         }
         // The edges are inside.
-        let edges: [Change; 9] = [
+        let edges: [Change; 11] = [
+            |sections| sections.1.scout_quarantine = HumanDuration::from_hours(24),
+            |sections| {
+                sections.1.scout_quarantine = HumanDuration::new(super::MAX_SCOUT_QUARANTINE);
+            },
             |sections| sections.0.thin_words = 1,
             |sections| sections.0.thin_words = 10_000,
             |sections| sections.1.ttl = HumanDuration::from_mins(1),

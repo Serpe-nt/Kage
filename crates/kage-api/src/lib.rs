@@ -217,6 +217,7 @@ fn keyed() -> OpenApiRouter<ApiState> {
         .routes(routes!(admin::replace_proxy))
         .routes(routes!(admin::pool))
         .routes(routes!(admin::reload_policies))
+        .routes(routes!(admin::replace_site_scout))
         .routes(routes!(admin::list_keys, admin::create_key))
         .routes(routes!(admin::revoke_key))
         .routes(routes!(admin::rotate_key))
@@ -430,6 +431,7 @@ mod tests {
             "POST /v1/admin/proxies/{id}/health",
             "GET /v1/admin/pool",
             "POST /v1/admin/policies/reload",
+            "POST /v1/admin/sites/{site}/scout",
             "GET /v1/admin/keys",
             "POST /v1/admin/keys",
             "DELETE /v1/admin/keys/{id}",

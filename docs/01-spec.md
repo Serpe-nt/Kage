@@ -1525,10 +1525,21 @@ never fetch what the file disallows, keep to its `Crawl-delay`).
   remembered (`site_scouts`), so that one address is marked and no other.
   The scout is, in this order: the persona that asked before; a ready
   persona the site's policy keeps from reading anyway (another country or
-  engine), which costs the site no reader; a ready persona that never
-  read a page of the site, as long as the readers the fetch needs stay;
-  nobody. Never a persona that read the site. Among equals a Firefox goes
-  first, and then the site's name draws.
+  engine), which costs the site no reader; a ready persona that has not
+  read a page of the site for `robots.scout_quarantine` (30 days), as
+  long as the readers the fetch needs stay, first one whose engine keeps
+  another persona that may read the site (ready or not), so that a site's
+  only Firefox stays its reader while a Chrome can ask (F51); nobody.
+  Never a persona that read the site within the quarantine: after it, one
+  address that both read the site and asked it is the price of a site
+  that would otherwise have no scout for good once every persona has read
+  it. Among equals a Firefox goes first, and then the site's name draws.
+  A scout that is not ready (its proxy down, the persona cooling) closes
+  a site that enforces its file until it is back or retired;
+  `POST /v1/admin/sites/{site}/scout` gives the site another one, chosen
+  by the same rule for one reader and never the one it had (`409
+  no_matching_persona`, and the site keeps its scout, when nobody else
+  may ask).
 - **How.** Through the scheduler like any page, in the scout's browser,
   the address typed, once (no retry from another address), with the dwell
   of any visit; the request is Kage's own and no key's. Measured in
@@ -1726,6 +1737,7 @@ scope included), and every change at the command line is written to
 | `GET /v1/admin/proxies[?all=]`, `POST …/{id}/replace`, `POST …/{id}/health` | admin | Never a proxy's user name or password |
 | `GET /v1/admin/pool` | admin | Pool and bandwidth summary |
 | `POST /v1/admin/policies/reload` | admin | Force reload; an invalid file changes nothing and is `422` |
+| `POST /v1/admin/sites/{site}/scout` | admin | Give a site another scout (§14); `409 no_matching_persona` when nobody else may ask |
 | `GET/POST /v1/admin/keys`, `DELETE …/{id}`, `POST …/{id}/rotate` | admin | Key management; a token is in the answer of a creation and of a rotation only, with `Cache-Control: no-store` |
 | `GET /v1/admin/audit?cursor=&limit=` | admin | Newest first, at most 200 a page |
 | `POST /v1/admin/purge` | admin | `{ key_id, before? }`: deletes what a key fetched before a moment (now unless said): its finished jobs with everything of theirs, and every other result, its attempts and its artifacts, before their retention ends. What is still somebody's work stays: a request that has not ended, and the request an open item of a job waits on. Answers with how many requests, jobs and artifacts went; on the audit log as `admin.data.purge` (F33) |
@@ -2104,8 +2116,8 @@ drawn from, §10.4), `crawl` (`default_max_depth` 3, `default_max_pages`
 100, `max_seeds` 100, `max_frontier` 50 000, `back_limit` 3,
 `near_duplicate_bits` 6, `max_sitemaps` 10, `max_sitemap_urls` 50 000,
 `skipped_extensions`; §13), `extract` (`thin_words` 80; §14), `robots`
-(`ttl` 24 h, `error_ttl` 1 h, `max_bytes` 512 KiB, `agents` `["kage"]`;
-§14), `cache` (`max_ttl` 24 h, never longer than
+(`ttl` 24 h, `error_ttl` 1 h, `max_bytes` 512 KiB, `agents` `["kage"]`,
+`scout_quarantine` 30 d; §14), `cache` (`max_ttl` 24 h, never longer than
 `artifacts.retention_days`; §15), `bandwidth` and `forwarder` (§7.5).
 `kage config check` reports the scheduler's caps, the budget and the
 forwarder. `server` holds what the API's listener enforces (§19): `bind`

@@ -686,6 +686,123 @@ async fn nobody_scouts_a_site_that_every_persona_reads() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_persona_that_has_not_read_a_site_for_a_month_may_scout_it() {
+    // Both personas read the site; one of them 29 days ago. Nobody asks.
+    let mut world = World::new(2, SITES);
+    robots_txt(&world, |url| file(url, 200, RULES));
+    let read = |world: &World, number: u8, days: i64| {
+        let at = world.now() - Span::days(days);
+        world
+            .backend
+            .with_domain_state(id(number), "enforced.example", |state| {
+                state.last_request_at = Some(at);
+            });
+    };
+    read(&world, 0, 29);
+    read(&world, 1, 1);
+    let report = world
+        .pipeline
+        .fetch(get("https://enforced.example/a"))
+        .await
+        .unwrap();
+    assert_eq!(report.reason.as_deref(), Some(ROBOTS_NO_SCOUT));
+    assert_eq!(world.script.seen().len(), 0);
+    world.shut_down().await;
+
+    // A day later than that its reading is 30 days old
+    // (`robots.scout_quarantine`): it may ask, and the other one reads.
+    let mut world = World::new(2, SITES);
+    robots_txt(&world, |url| file(url, 200, RULES));
+    read(&world, 0, 30);
+    read(&world, 1, 1);
+    let report = world
+        .pipeline
+        .fetch(get("https://enforced.example/a"))
+        .await
+        .unwrap();
+    assert_eq!(report.outcome, Outcome::Ok);
+    let (files, pages) = asked(&world);
+    assert_eq!(
+        files,
+        [("https://enforced.example/robots.txt".to_owned(), id(0))]
+    );
+    assert_eq!(pages[0].1, id(1));
+    assert_eq!(world.backend.scout_of("enforced.example"), Some(id(0)));
+    world.shut_down().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_operator_gives_a_site_whose_scout_is_not_ready_another_one() {
+    let mut world = World::new(3, SITES);
+    robots_txt(&world, |url| file(url, 200, RULES));
+    let report = world
+        .pipeline
+        .fetch(get("https://enforced.example/a"))
+        .await
+        .unwrap();
+    assert_eq!(report.outcome, Outcome::Ok);
+    let first = world.backend.scout_of("enforced.example").unwrap();
+    let reader = asked(&world).1[0].1;
+
+    // The scout's proxy is down: nothing of another origin of the site is
+    // fetched, for nobody else may ask it.
+    let number = (0..3).find(|number| id(*number) == first).unwrap();
+    world.backend.put_persona(
+        common::persona(number, true),
+        false,
+        common::network(number),
+    );
+    let closed = world
+        .pipeline
+        .fetch(get("https://www.enforced.example/a"))
+        .await
+        .unwrap();
+    assert_eq!(closed.outcome, Outcome::RobotsDenied);
+    assert_eq!(closed.reason.as_deref(), Some(ROBOTS_UNAVAILABLE));
+
+    // The operator gives the site another scout: neither the one it had
+    // nor its reader. It asks from then on.
+    let new = world
+        .pipeline
+        .replace_scout("enforced.example")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(new.previous, Some(first));
+    assert_ne!(new.scout, first);
+    assert_ne!(new.scout, reader);
+    assert_eq!(world.backend.scout_of("enforced.example"), Some(new.scout));
+    let open = world
+        .pipeline
+        .fetch(get("https://www.enforced.example/a"))
+        .await
+        .unwrap();
+    assert_eq!(open.outcome, Outcome::Ok);
+    let (files, pages) = asked(&world);
+    assert_eq!(
+        files.last(),
+        Some(&(
+            "https://www.enforced.example/robots.txt".to_owned(),
+            new.scout
+        ))
+    );
+    assert_ne!(pages.last().unwrap().1, new.scout);
+
+    // Nobody else may ask now (the first scout is not ready, the third
+    // persona reads): the site keeps the scout it has.
+    assert_eq!(
+        world
+            .pipeline
+            .replace_scout("enforced.example")
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(world.backend.scout_of("enforced.example"), Some(new.scout));
+    world.shut_down().await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_crawl_is_told_what_is_known_and_reads_the_sitemaps_a_file_names() {
     let mut world = World::new(4, SITES);
     robots_txt(&world, |url| file(url, 200, RULES));

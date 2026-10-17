@@ -118,6 +118,15 @@ pub struct ScoutNeed {
     pub patience: Option<Duration>,
 }
 
+/// A site's new scout, given by [`Pipeline::replace_scout`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NewScout {
+    /// The scout the site had, when it had one that lives.
+    pub previous: Option<PersonaId>,
+    /// The persona that asks the site from now on.
+    pub scout: PersonaId,
+}
+
 /// One request for an origin's `robots.txt`.
 #[derive(Debug)]
 pub(super) struct Call {
@@ -149,6 +158,16 @@ impl Pipeline {
         chrono::Duration::from_std(wait)
             .ok()
             .and_then(|wait| self.now().checked_add_signed(wait))
+    }
+
+    /// The moment after which a persona that read a site is its reader
+    /// and may not scout it (`robots.scout_quarantine`): one that read it
+    /// that long ago or longer may.
+    fn lately(&self) -> DateTime<Utc> {
+        chrono::Duration::from_std(self.robots.scout_quarantine)
+            .ok()
+            .and_then(|quarantine| self.now().checked_sub_signed(quarantine))
+            .unwrap_or(DateTime::<Utc>::MIN_UTC)
     }
 
     /// The scout of a site, when it has one: the persona that reads none
@@ -253,7 +272,7 @@ impl Pipeline {
         let _one = self.desk.choosing.lock().await;
         let remembered = self.backend().scout(site).await?;
         let personas = self.backend().personas().await?;
-        let mut all_readers = self.backend().readers(site).await?;
+        let mut all_readers = self.backend().readers(site, self.lately()).await?;
         all_readers.extend_from_slice(readers);
         let policy = self.verdicts.policies().current().domains.resolve(host);
         let picked = robots::pick_scout(
@@ -272,6 +291,33 @@ impl Pipeline {
         }
         self.desk.note_scout(site, picked.or(remembered));
         Ok(picked)
+    }
+
+    /// Gives a site another scout, on the operator's word (F51): a scout
+    /// that is not ready closes a site that enforces its file until it is
+    /// back or retired. The new one is chosen as [`robots::pick_scout`]
+    /// chooses, for a site that needs one reader, and never the scout the
+    /// site had, which reads the site like anybody once it has asked it.
+    /// `None`, and the site keeps the scout it has, when nobody else may
+    /// ask.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the backend fails.
+    pub async fn replace_scout(&self, site: &str) -> Result<Option<NewScout>, SchedulerError> {
+        let _one = self.desk.choosing.lock().await;
+        let previous = self.backend().scout(site).await?;
+        let personas = self.backend().personas().await?;
+        let mut readers = self.backend().readers(site, self.lately()).await?;
+        readers.extend(previous);
+        let policy = self.verdicts.policies().current().domains.resolve(site);
+        let Some(scout) = robots::pick_scout(site, None, &personas, &readers, &policy, 1) else {
+            return Ok(None);
+        };
+        self.backend().set_scout(site, scout, self.now()).await?;
+        self.desk.note_scout(site, Some(scout));
+        tracing::info!(site, persona = %scout, "a site has another scout, on the operator's word");
+        Ok(Some(NewScout { previous, scout }))
     }
 
     /// Sends the site's scout for an origin's `robots.txt` and keeps what

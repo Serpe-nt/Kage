@@ -59,8 +59,8 @@ pub use forwarder::{Forwarder, ForwarderEgress, ForwarderSettings, Meter, Routes
 pub use memory::MemoryBackend;
 pub use pipeline::{
     CachePlan, Capture, CrawlReading, Deferred, FetchOrder, FetchReport, INTERRUPTED, JobFetch,
-    Kept, PacingReport, Peek, Pipeline, PipelineSettings, ROBOTS_NO_SCOUT, ROBOTS_UNAVAILABLE,
-    ReadLink, RobotsRead, Running, ScoutNeed, Stop, Synchronous, WoundDown,
+    Kept, NewScout, PacingReport, Peek, Pipeline, PipelineSettings, ROBOTS_NO_SCOUT,
+    ROBOTS_UNAVAILABLE, ReadLink, RobotsRead, Running, ScoutNeed, Stop, Synchronous, WoundDown,
 };
 pub use robots::{Conflict, RobotsSettings, RobotsWish};
 pub use scheduler::{Grant, Refused, Scheduler, SchedulerGate};
@@ -122,6 +122,7 @@ pub fn describe(config: &Config) -> serde_json::Value {
             "error_ttl_s": config.robots.error_ttl.get().as_secs(),
             "max_bytes": config.robots.max_bytes,
             "agents": config.robots.agents,
+            "scout_quarantine_s": config.robots.scout_quarantine.get().as_secs(),
         },
         "cache": {
             "max_ttl_s": config.cache.max_ttl.get().as_secs(),
@@ -195,6 +196,7 @@ mod tests {
         assert_eq!(described["robots"]["error_ttl_s"], 3600);
         assert_eq!(described["robots"]["max_bytes"], 524_288);
         assert_eq!(described["robots"]["agents"], serde_json::json!(["kage"]));
+        assert_eq!(described["robots"]["scout_quarantine_s"], 2_592_000);
         assert_eq!(described["cache"]["max_ttl_s"], 86_400);
         assert_eq!(described["extract"]["thin_words"], 80);
     }

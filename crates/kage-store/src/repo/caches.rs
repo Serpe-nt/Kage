@@ -138,22 +138,28 @@ impl SiteScoutRepo<'_> {
         Ok(())
     }
 
-    /// The personas that have asked a host of a site for a page and are
-    /// not its scout: its readers. A host belongs to a site when it is the
-    /// site's registrable domain or ends in a dot and it.
+    /// The personas that have asked a host of a site for a page after
+    /// `since` and are not its scout: its readers. A host belongs to
+    /// a site when it is the site's registrable domain or ends in a dot and
+    /// it.
     ///
     /// # Errors
     ///
     /// Fails when the query fails.
-    pub async fn readers(&self, site: &str) -> Result<Vec<PersonaId>, StoreError> {
+    pub async fn readers(
+        &self,
+        site: &str,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<PersonaId>, StoreError> {
         let readers = sqlx::query_scalar!(
             "SELECT DISTINCT state.persona_id FROM persona_domain_state state
-             WHERE state.last_request_at IS NOT NULL
+             WHERE state.last_request_at > $2
                AND (state.domain = $1 OR right(state.domain, length($1) + 1) = '.' || $1)
                AND NOT EXISTS (SELECT 1 FROM site_scouts scout
                                WHERE scout.site = $1 AND scout.persona_id = state.persona_id)
              ORDER BY state.persona_id",
             site,
+            since,
         )
         .fetch_all(self.pool)
         .await?;

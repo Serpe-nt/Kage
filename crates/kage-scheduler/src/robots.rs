@@ -117,6 +117,8 @@ pub struct RobotsSettings {
     pub max_bytes: u64,
     /// The product tokens Kage answers to besides `*`.
     pub agents: Vec<String>,
+    /// How long a persona that read a site is kept from scouting it.
+    pub scout_quarantine: Duration,
 }
 
 impl RobotsSettings {
@@ -131,6 +133,7 @@ impl RobotsSettings {
             error_ttl: robots.error_ttl.get(),
             max_bytes: robots.max_bytes,
             agents: robots.agents.clone(),
+            scout_quarantine: robots.scout_quarantine.get(),
         }
     }
 }
@@ -334,13 +337,17 @@ pub fn gap_floor(verdict: &RobotsVerdict) -> Option<Duration> {
 ///    second address is never marked while the first one lives;
 /// 2. a ready persona the site's policy keeps from reading it anyway
 ///    (another country, another engine), which costs the site no reader;
-/// 3. a ready persona that never read a page of the site, as long as
-///    `readers_needed` others that may read it stay.
+/// 3. a ready persona that has not read a page of the site lately, as
+///    long as `readers_needed` others that may read it stay; first one
+///    whose engine keeps another persona that may read the site (ready
+///    or not: a cooling persona reads again), so that the site's only
+///    Firefox is not its scout while a Chrome can ask.
 ///
-/// Never a persona that read the site (`readers`). Among equals a Firefox
-/// goes first (it shows a gzipped sitemap where Chrome saves it as a
-/// file), and then the choice is drawn from the site's name, so that the
-/// scouts of many sites are not one persona. `None` when nobody can ask.
+/// Never a persona that read the site lately (`readers`: since
+/// `robots.scout_quarantine`). Among equals a Firefox goes first (it
+/// shows a gzipped sitemap where Chrome saves it as a file), and then the
+/// choice is drawn from the site's name, so that the scouts of many sites
+/// are not one persona. `None` when nobody can ask.
 pub fn pick_scout(
     site: &str,
     remembered: Option<PersonaId>,
@@ -384,8 +391,13 @@ pub fn pick_scout(
     if able <= readers_needed {
         return None;
     }
+    let last_of_its_engine = |view: &PersonaView| {
+        !personas
+            .iter()
+            .any(|other| other.id != view.id && other.engine == view.engine && admitted(other))
+    };
     free.iter()
-        .min_by_key(|view| rank(view))
+        .min_by_key(|view| (last_of_its_engine(view), rank(view)))
         .map(|view| view.id)
 }
 
@@ -516,6 +528,7 @@ mod tests {
             error_ttl: Duration::from_hours(1),
             max_bytes: 512 * 1024,
             agents: vec!["kage".to_owned()],
+            scout_quarantine: Duration::from_hours(720),
         }
     }
 
@@ -950,6 +963,74 @@ mod tests {
             chosen.insert(scout);
         }
         assert!(chosen.len() >= 6, "{chosen:?}");
+    }
+
+    #[test]
+    fn a_scout_of_the_sites_own_leaves_each_of_its_engines_a_reader_while_it_can() {
+        let open = DomainPolicies::default().resolve("example.org");
+        // The site's only Firefox stays its reader: the preference for a
+        // Firefox goes to none, and a Chrome asks, whichever the site is.
+        let one_firefox = [
+            view(0, Engine::Chromium, "DE", true),
+            view(1, Engine::Chromium, "DE", true),
+            view(2, Engine::Firefox, "DE", true),
+        ];
+        for number in 0..32 {
+            let site = format!("site{number}.example");
+            let picked = pick_scout(&site, None, &one_firefox, &[], &open, 1);
+            assert!(
+                picked.is_some_and(|scout| scout != id(2)),
+                "{site}: {picked:?}"
+            );
+        }
+        // With a second Firefox, one of the two asks.
+        let two_firefoxes = [
+            view(0, Engine::Chromium, "DE", true),
+            view(1, Engine::Firefox, "DE", true),
+            view(2, Engine::Firefox, "DE", true),
+        ];
+        let picked = pick_scout("example.org", None, &two_firefoxes, &[], &open, 1);
+        assert!(picked.is_some_and(|scout| scout != id(0)), "{picked:?}");
+        // A Firefox that is not ready now reads the site again later: the
+        // ready one beside it is not the last.
+        let one_cooling = [
+            view(0, Engine::Chromium, "DE", true),
+            view(1, Engine::Chromium, "DE", true),
+            view(2, Engine::Firefox, "DE", true),
+            view(3, Engine::Firefox, "DE", false),
+        ];
+        assert_eq!(
+            pick_scout("example.org", None, &one_cooling, &[], &open, 1),
+            Some(id(2))
+        );
+        // A Firefox that reads the site is one of its Firefox readers.
+        let firefox_reader = [
+            view(0, Engine::Chromium, "DE", true),
+            view(1, Engine::Chromium, "DE", true),
+            view(2, Engine::Firefox, "DE", true),
+            view(3, Engine::Firefox, "DE", true),
+        ];
+        assert_eq!(
+            pick_scout("example.org", None, &firefox_reader, &[id(3)], &open, 1),
+            Some(id(2))
+        );
+        // When every one that could ask is the last of its engine, one asks
+        // all the same: a site without a scout is closed where it enforces
+        // its file, and one with a reader less is not.
+        let pair = [
+            view(0, Engine::Chromium, "DE", true),
+            view(1, Engine::Firefox, "DE", true),
+        ];
+        assert!(pick_scout("example.org", None, &pair, &[], &open, 1).is_some());
+        // An outsider of the policy costs the site no reader at all.
+        let chrome_only =
+            DomainPolicies::from_yaml("domains:\n  example.org: { engines: [chromium] }\n")
+                .unwrap()
+                .resolve("example.org");
+        assert_eq!(
+            pick_scout("example.org", None, &one_firefox, &[], &chrome_only, 1),
+            Some(id(2))
+        );
     }
 
     #[tokio::test(start_paused = true)]

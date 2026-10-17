@@ -69,6 +69,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     answers itself ends the wait after 1.5 s, and a file is no page
     (`aborted`). A client-routed site still costs a click and a typed
     load per page: documented in spec §10.4, not solved.
+  - A site's scout has an end to its rule and the operator a way to give
+    a site another one (F51). A persona that read a site is kept from
+    scouting it for `robots.scout_quarantine` (new, 30 days, 1 to 3650
+    days), no longer for good, so a site whose every persona had read it
+    once gets a scout again. Among the site's own personas the scout is
+    first one whose engine keeps another reader of the site, so the
+    preference for a Firefox no longer takes a site's only Firefox while
+    a Chrome can ask. `POST /v1/admin/sites/{site}/scout` gives a site
+    whose scout is not ready (and which, enforcing its file, is closed
+    until the scout is back) another one, chosen by the same rule and
+    never the one it had; the audit trail names the site, the new scout
+    and the one before.
   - The pin of `hickory-resolver`, which no crate ever used, is gone
     (F37), and `just deny` now fails on a pin in
     `[workspace.dependencies]` that no crate of the workspace uses

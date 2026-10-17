@@ -2002,9 +2002,12 @@ async fn a_site_has_one_scout_and_everybody_else_who_asked_it_is_a_reader() {
     let deep_reader = common::seed_persona(&db.store).await;
     let stranger = common::seed_persona(&db.store).await;
     let at = now();
+    // Readers are those that asked since a moment: before it, a persona
+    // may scout the site again (`robots.scout_quarantine`).
+    let lately = at - Duration::days(30);
 
     assert_eq!(scouts.get("example.org").await.unwrap(), None);
-    assert_eq!(scouts.readers("example.org").await.unwrap(), []);
+    assert_eq!(scouts.readers("example.org", lately).await.unwrap(), []);
 
     scouts.set("example.org", scout.id, at).await.unwrap();
     assert_eq!(scouts.get("example.org").await.unwrap(), Some(scout.id));
@@ -2044,8 +2047,21 @@ async fn a_site_has_one_scout_and_everybody_else_who_asked_it_is_a_reader() {
     }
     let mut expected = vec![reader.id, deep_reader.id];
     expected.sort();
-    assert_eq!(scouts.readers("example.org").await.unwrap(), expected);
-    assert_eq!(scouts.readers("example.net").await.unwrap(), []);
+    assert_eq!(
+        scouts.readers("example.org", lately).await.unwrap(),
+        expected
+    );
+    assert_eq!(scouts.readers("example.net", lately).await.unwrap(), []);
+    // A reader is one that asked after the moment: a second before what
+    // they asked, and not at the moment itself.
+    assert_eq!(
+        scouts
+            .readers("example.org", at - Duration::seconds(1))
+            .await
+            .unwrap(),
+        expected
+    );
+    assert_eq!(scouts.readers("example.org", at).await.unwrap(), []);
 
     // Another persona takes the scout's place: the one before is a reader
     // like any other from then on, for it has asked.
@@ -2056,7 +2072,10 @@ async fn a_site_has_one_scout_and_everybody_else_who_asked_it_is_a_reader() {
     assert_eq!(scouts.get("example.org").await.unwrap(), Some(stranger.id));
     let mut expected = vec![scout.id, reader.id, deep_reader.id];
     expected.sort();
-    assert_eq!(scouts.readers("example.org").await.unwrap(), expected);
+    assert_eq!(
+        scouts.readers("example.org", lately).await.unwrap(),
+        expected
+    );
 
     // A retired persona is nobody's scout, and the row goes with it.
     db.store
