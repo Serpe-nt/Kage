@@ -546,6 +546,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The sidecars' process metrics (`process_*`, `nodejs_*`) carry their
+  `engine`: Kage merges both sidecars' metrics into one exposition, where
+  each of these series was there twice, once from each sidecar, with
+  nothing to tell them apart.
 - RUSTSEC-2026-0367, -0368 and -0369 against `zip` 8.6.0 are ignored in
   `deny.toml` and `.cargo/audit.toml` until 2026-12-31 or the first
   `utoipa-swagger-ui` on `zip` 9: `zip` only unpacks the vendored Swagger
