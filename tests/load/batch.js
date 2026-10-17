@@ -43,6 +43,7 @@ const addresses = new Gauge('load_addresses');
 const pagesSeen = new Gauge('load_pages_seen');
 const leastGapMs = new Gauge('load_least_gap_ms');
 const mostInAMinute = new Gauge('load_site_most_in_60s');
+const leastSpanOf21 = new Gauge('load_site_least_span_of_21_ms');
 
 http.setResponseCallback(http.expectedStatuses({ min: 200, max: 299 }));
 
@@ -165,6 +166,9 @@ export default function () {
     most = Math.max(most, i - j + 1);
   }
   mostInAMinute.add(most);
+  let span = Number.MAX_SAFE_INTEGER;
+  for (let i = 20; i < times.length; i += 1) span = Math.min(span, times[i] - times[i - 20]);
+  leastSpanOf21.add(span === Number.MAX_SAFE_INTEGER ? -1 : span);
   check(seen, {
     'the site saw every page exactly once': (all) =>
       all.length === PAGES && new Set(all.map((request) => request.path)).size === PAGES,
