@@ -445,6 +445,116 @@ async fn where_a_robots_txt_is_enforced_a_scout_asks_and_what_it_disallows_is_no
 }
 
 #[tokio::test]
+async fn the_operator_gives_a_site_another_scout_and_the_trail_says_so() {
+    let mut api = Api::start(3, 155, ENFORCED).await;
+    let token = api.key(&[Scope::Fetch]).await;
+    let admin = api.key(&[Scope::Admin]).await;
+    show_file(&api, "/robots.txt", "User-agent: *\nAllow: /\n");
+    show(&api, "/open", &article("Open", &[]), &[]);
+    let fetched = api
+        .post(
+            &token,
+            "/v1/fetch",
+            &json!({
+                "url": Api::url("/open"),
+                "behavior": { "scroll_depth": 0, "dwell_ms": 1000 },
+                "max_retries": 0,
+            }),
+        )
+        .await;
+    assert_eq!(fetched.json()["outcome"], "ok", "{:?}", fetched.json());
+    let scout_row = || async {
+        sqlx::query_scalar::<_, uuid::Uuid>(
+            "SELECT persona_id FROM site_scouts WHERE site = 'kage.test'",
+        )
+        .fetch_one(api.lab.store().pool())
+        .await
+        .unwrap()
+        .to_string()
+    };
+    let first = scout_row().await;
+    // Who asked a host of the site: the scout for the file, the reader for
+    // the page.
+    let asked: Vec<String> = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT persona_id FROM persona_domain_state WHERE last_request_at IS NOT NULL",
+    )
+    .fetch_all(api.lab.store().pool())
+    .await
+    .unwrap()
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    assert_eq!(asked.len(), 2, "{asked:?}");
+    assert!(asked.contains(&first));
+
+    // Named by any of its hosts, the site gets a scout that is neither the
+    // one it had nor its reader.
+    let reply = api
+        .post(&admin, "/v1/admin/sites/Shop.Kage.Test/scout", &json!({}))
+        .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.json());
+    let changed = reply.json();
+    assert_eq!(changed["site"], "kage.test");
+    assert_eq!(changed["previous"], first.as_str());
+    let second = changed["scout"].as_str().unwrap().to_owned();
+    assert!(!asked.contains(&second), "{second} asked the site before");
+    assert_eq!(scout_row().await, second);
+
+    // Nobody else may ask now: the one before asked the site and reads it
+    // like anybody, and the third read it. The site keeps its scout.
+    let problem = api
+        .post(&admin, "/v1/admin/sites/kage.test/scout", &json!({}))
+        .await
+        .problem(StatusCode::CONFLICT, "no_matching_persona");
+    assert!(
+        problem["detail"]
+            .as_str()
+            .unwrap()
+            .contains("keeps the scout")
+    );
+    assert_eq!(scout_row().await, second);
+    api.post(&admin, "/v1/admin/sites/a%20b/scout", &json!({}))
+        .await
+        .problem(StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+    // Only an admin key may.
+    api.post(&token, "/v1/admin/sites/kage.test/scout", &json!({}))
+        .await
+        .problem(StatusCode::FORBIDDEN, "scope_missing");
+
+    let reply = api.get(&admin, "/v1/admin/audit?limit=20").await;
+    let events = reply.json()["events"].as_array().unwrap().clone();
+    let scouted: Vec<&Value> = events
+        .iter()
+        .filter(|event| event["action"] == "admin.site.scout")
+        .collect();
+    assert_eq!(scouted.len(), 4, "{events:?}");
+    // Newest first; a call that was refused still names what it was
+    // aimed at, as the path said it.
+    let said: Vec<(&str, &str, &Value)> = scouted
+        .iter()
+        .map(|event| {
+            (
+                event["outcome"].as_str().unwrap(),
+                event["target"].as_str().unwrap(),
+                &event["details"]["code"],
+            )
+        })
+        .collect();
+    assert_eq!(
+        said,
+        [
+            ("denied", "kage.test", &json!("scope_missing")),
+            ("failure", "a%20b", &json!("validation_failed")),
+            ("failure", "kage.test", &json!("no_matching_persona")),
+            ("success", "kage.test", &Value::Null),
+        ]
+    );
+    assert_eq!(scouted[3]["details"]["result"]["scout"], second.as_str());
+    assert_eq!(scouted[3]["details"]["result"]["previous"], first.as_str());
+    api.shut_down().await;
+}
+
+#[tokio::test]
 async fn a_crawl_keeps_to_an_enforced_robots_txt_and_reads_the_sitemaps_it_names() {
     let mut api = Api::start_with(3, 155, ENFORCED, quick).await;
     let token = api.key(&[Scope::Jobs, Scope::Crawl, Scope::Fetch]).await;

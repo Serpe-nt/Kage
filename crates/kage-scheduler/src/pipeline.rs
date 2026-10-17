@@ -87,7 +87,7 @@ use url::Url;
 
 pub use self::cache::CachePlan;
 use self::gate::Gate;
-pub use self::gate::{Peek, ROBOTS_NO_SCOUT, ROBOTS_UNAVAILABLE, RobotsRead, ScoutNeed};
+pub use self::gate::{NewScout, Peek, ROBOTS_NO_SCOUT, ROBOTS_UNAVAILABLE, RobotsRead, ScoutNeed};
 pub use self::read::{CrawlReading, ReadLink};
 use self::wind_down::UnderWay;
 pub use self::wind_down::{INTERRUPTED, WoundDown};

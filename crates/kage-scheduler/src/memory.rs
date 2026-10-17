@@ -312,7 +312,11 @@ impl Backend for MemoryBackend {
         Ok(())
     }
 
-    async fn readers(&self, site: &str) -> Result<Vec<PersonaId>, SchedulerError> {
+    async fn readers(
+        &self,
+        site: &str,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<PersonaId>, SchedulerError> {
         let state = self.state();
         let scout = state.scouts.get(site);
         let below = format!(".{site}");
@@ -321,7 +325,10 @@ impl Backend for MemoryBackend {
             .iter()
             .filter(|(domain, _)| domain.as_str() == site || domain.ends_with(&below))
             .flat_map(|(_, facts)| facts.states.values())
-            .filter(|domain| domain.last_request_at.is_some() && Some(&domain.persona_id) != scout)
+            .filter(|domain| {
+                domain.last_request_at.is_some_and(|at| at > since)
+                    && Some(&domain.persona_id) != scout
+            })
             .map(|domain| domain.persona_id)
             .collect();
         readers.sort_unstable();

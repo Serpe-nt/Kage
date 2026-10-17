@@ -302,8 +302,11 @@ domains:
   own browser, as a person who typed the address, and never reads a page
   of that site. One address per site is marked, not two. A site
   therefore needs a persona to spare: with a single persona, or when
-  every persona has read the site, nobody asks
-  (`reason: "robots_no_scout"` under `enforce`).
+  every persona has read the site within the last 30 days
+  (`robots.scout_quarantine`), nobody asks (`reason: "robots_no_scout"`
+  under `enforce`). After the 30 days a persona that read the site may
+  become its scout. A site's only Firefox is not taken as its scout while
+  another persona can ask.
 - The file is kept for about a day (`robots.ttl`) and asked for again
   only when a request needs it. A `404` is "no file": everything is
   allowed. A server error, a timeout or a block is "unreachable" for an
@@ -319,8 +322,17 @@ domains:
   for the file (`robots_ignored`): a request does not make Kage ask a
   site the operator left alone.
 - To make Kage ask again before the day is over, delete the origin's row
-  from `robots_cache`; it is noticed within half a minute. To give a site
-  another scout, retire the persona (`site_scouts` names it).
+  from `robots_cache`; it is noticed within half a minute.
+- A scout that is not ready (its proxy is down, it is cooling) closes a
+  site that enforces its file until it is back: its fetches answer
+  `robots_unavailable` and a job's pages of the site wait. To give the
+  site another scout, `POST /v1/admin/sites/{site}/scout` (any host of
+  the site will do). The answer names the new scout and the one before,
+  which from then on reads the site like any persona that asked it. One
+  address more has then asked the site for its file: do it for a scout
+  that will not be back soon. `409 no_matching_persona` says nobody else
+  may ask, and the site keeps its scout; retiring the scout also frees
+  the site, and the next fetch chooses a new one.
 
 `kage_robots_requests_total{result}` counts what came of asking (`file`,
 `missing`, `unreachable`, `not_asked` for a proxy or sidecar failure,
@@ -739,6 +751,7 @@ same trail with the actor `cli`.
 | `POST /v1/admin/proxies/{id}/replace` | Ask the provider for a replacement, inside the budget (`docs/runbooks/proxies.md`); the answer says what became of it. |
 | `GET /v1/admin/pool` | Proxies by state, personas by state and engine, open browsers, the bandwidth budget. |
 | `POST /v1/admin/policies/reload` | Read the policy files again now. A file that is invalid changes nothing and is `422`. |
+| `POST /v1/admin/sites/{site}/scout` | Give a site another scout (above, under `robots.txt`); `409 no_matching_persona` when nobody else may ask. |
 
 ### A self-test of a persona
 

@@ -359,6 +359,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/sites/{site}/scout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Give a site another scout: the persona that asks it for its
+         *     `robots.txt` and its sitemaps. For a site whose scout is not ready (its
+         *     proxy is down, it is cooling) and that enforces its file, so is closed
+         *     until the scout is back. The new one is chosen as Kage chooses a scout,
+         *     never the one the site had: one address more has then asked the site.
+         */
+        post: operations["replace_site_scout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/artifacts/{id}": {
         parameters: {
             query?: never;
@@ -2662,6 +2685,23 @@ export interface components {
             /** @description The persona every request of the session is made by. */
             persona: components["schemas"]["PersonaView"];
         };
+        /** @description A site's scout, after the operator gave the site another one. */
+        SiteScoutView: {
+            /**
+             * Format: uuid
+             * @description The scout the site had, when it had one that lives. Once it has
+             *     asked the site, it is one of its readers.
+             */
+            previous?: string | null;
+            /**
+             * Format: uuid
+             * @description The persona that asks the site for its `robots.txt` and its
+             *     sitemaps from now on.
+             */
+            scout: string;
+            /** @description The site: the registrable domain of the host that was named. */
+            site: string;
+        };
         /** @description How reading one sitemap file went. */
         SitemapView: {
             /**
@@ -3512,6 +3552,56 @@ export interface operations {
             };
             /** @description `before` lies in the future. */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    replace_site_scout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A host of the site, or the site itself (`example.org`). */
+                site: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The site's new scout. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SiteScoutView"];
+                };
+            };
+            /** @description `no_matching_persona`: nobody else may ask the site (every other persona that may read it is needed to read it, read it lately, or is not ready); the site keeps the scout it has. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description `validation_failed`: what was named is no host. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description `unavailable`: no proxy pool is configured. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
