@@ -11,6 +11,11 @@ name: nightly-live
 # the Chromium sidecar image built here). Since M5 the browser self-test
 # runs for the Firefox engine as well, through the same two proxies, in the
 # Firefox sidecar image built here. The workflow is fully wired in M12.
+#
+# Beside it, every night and needing no secret: the load test's design B
+# (`just test-load`, M12), 200 queued fetches of the fixture site under the
+# test-only `load` profile at the shipped caps, in the fixture world of the
+# end-to-end tests. It reaches no proxy and no site of anyone's.
 
 on:
   schedule:
@@ -25,6 +30,21 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  load:
+    name: load test (design B)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-just
+      - name: Let Chrome's sandbox create user namespaces
+        run: sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
+      - run: just build-images
+      - name: 200 queued fetches under the test-only load profile, 540 s to 720 s
+        run: just test-load
+
   live:
     name: live suite
     # The schedule stays quiet until the owner opts in with the repository

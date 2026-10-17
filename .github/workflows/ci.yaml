@@ -91,6 +91,8 @@ jobs:
         run: sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
       - run: just fmt-check-node
       - run: just lint-node
+      - name: The dashboards and the alert rules of the observability profile
+        run: just lint-observability
       - name: The committed OpenAPI document is current and breaks no client
         env:
           KAGE_BASE_REF: ${{ github.event.pull_request.base.sha || 'origin/main' }}
@@ -123,6 +125,8 @@ jobs:
       - uses: ./.github/actions/setup-node
       - name: cargo-deny, cargo-audit, pnpm audit, license policy, openssl-sys check
         run: just deny
+      - name: The container checklist on the Dockerfiles and every compose file
+        run: just hardening
       - name: gitleaks
         run: just secrets
       - name: CycloneDX SBOMs
@@ -135,7 +139,8 @@ jobs:
   images:
     name: images
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # The images, then seven end-to-end scripts and the load test's design A.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -147,11 +152,13 @@ jobs:
         # The smoke test opens a browser context in the hardened container.
         run: sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
       - run: just build-images
+      - name: The container checklist on the built images
+        run: just hardening-images
       - name: Trivy
         run: just scan-images
       - name: CycloneDX SBOM per image
         run: just sbom-images
-      - name: Stack smoke test, the fetch pipeline and the API, end to end
+      - name: The stack end to end, and 200 queued fetches under fast (load test A)
         run: just test-e2e
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

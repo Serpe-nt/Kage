@@ -4,6 +4,13 @@ name: release
 # image, records their digests and creates the GitHub release (spec §21).
 # The digests go into deploy/compose.yaml in a follow-up PR.
 #
+# The tag must be annotated and signed by a key that .github/allowed_signers
+# on main lists (the owner's SSH signing key). Each image is scanned, signed
+# by digest with cosign under this workflow's own identity (keyless, through
+# GitHub's OIDC token; the signature is in Sigstore's transparency log), and
+# carries two attestations bound to its digest: the SLSA build provenance
+# and its CycloneDX SBOM. docs/runbooks/repo.md says how to verify them.
+#
 # The Firefox sidecar image is not published (ADR 0008): operators build it
 # from the tagged source with `just build-images`.
 
@@ -49,6 +56,24 @@ jobs:
             exit 1
           fi
 
+      - name: The tag must be signed by a key that main lists
+        run: |
+          git fetch --force --no-tags origin "+refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          if [ "$(git cat-file -t "refs/tags/${GITHUB_REF_NAME}")" != tag ]; then
+            echo "::error::${GITHUB_REF_NAME} is a lightweight tag; a release is tagged with git tag --sign"
+            exit 1
+          fi
+          # The list as main holds it now: a key taken off it counts no more.
+          signers="${RUNNER_TEMP}/allowed_signers"
+          git show origin/main:.github/allowed_signers > "${signers}"
+          if ! grep -Eqv '^[[:space:]]*(#|$)' "${signers}"; then
+            echo "::error::.github/allowed_signers on main lists no key (docs/runbooks/repo.md, Releases)"
+            exit 1
+          fi
+          git config gpg.format ssh
+          git config gpg.ssh.allowedSignersFile "${signers}"
+          git verify-tag "${GITHUB_REF_NAME}"
+
       - name: Lowercase the image namespace
         id: names
         run: echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
@@ -58,9 +83,13 @@ jobs:
     needs: verify
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    # Signing and attesting need the workflow's OIDC token and may write
+    # attestations; only this job has either.
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: true
       matrix:
@@ -124,6 +153,33 @@ jobs:
             echo "\`${IMAGE}@${DIGEST}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Trivy on the pushed image (fixable HIGH and CRITICAL)
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          # The registry login of this job lets Trivy pull the new image.
+          docker run --rm --volume "${PWD}/.trivyignore:/.trivyignore:ro" \
+            --volume "${HOME}/.docker/config.json:/root/.docker/config.json:ro" \
+            "ghcr.io/aquasecurity/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa" image \
+            --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed \
+            --ignorefile /.trivyignore --exit-code 1 --no-progress "${IMAGE}@${DIGEST}"
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+
+      - name: Sign the image by its digest, keyless
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      - name: SLSA build provenance, bound to the digest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
       - name: CycloneDX SBOM of the pushed image
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
@@ -131,6 +187,14 @@ jobs:
           format: cyclonedx-json
           output-file: release/${{ matrix.name }}.cdx.json
           upload-artifact: false
+
+      - name: The SBOM, bound to the digest
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          sbom-path: release/${{ matrix.name }}.cdx.json
+          push-to-registry: true
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -170,7 +234,9 @@ jobs:
             echo
             echo "The Firefox sidecar image is not published (docs/adr/0008). Build it from this tag with \`just build-images\`."
             echo
-            echo "A CycloneDX SBOM per image is attached. See CHANGELOG.md for the curated change list."
+            echo "A CycloneDX SBOM per image is attached. Each image is signed with cosign by this workflow and carries its SLSA provenance and its SBOM as attestations; docs/runbooks/repo.md (Releases) has the commands that verify them."
+            echo
+            echo "See CHANGELOG.md for the curated change list."
           } > release/notes.md
           gh release create "${GITHUB_REF_NAME}" \
             --verify-tag \
