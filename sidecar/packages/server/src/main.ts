@@ -10,6 +10,7 @@ import { startAudioServer } from '@kage/engine-core';
 import { buildApp } from './app.js';
 import { loadConfig } from './config.js';
 import { loadEngine } from './engine-loader.js';
+import { createTracer } from './tracing.js';
 
 try {
   const config = loadConfig(process.env);
@@ -40,8 +41,11 @@ try {
     selftestPages: config.selftestPages,
     log,
   });
+  // The OpenTelemetry packages are loaded only when traces are sent.
+  const tracer = await createTracer(config.otlpEndpoint, config.serviceName);
   const { server } = buildApp({
     engine,
+    tracer,
     token: config.token,
     artifactsDir: config.artifactsDir,
     maxContexts: config.maxContexts,

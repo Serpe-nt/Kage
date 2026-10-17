@@ -30,11 +30,20 @@ import {
   type OperationEnv,
 } from '@kage/engine-core';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
+import type { DestinationStream } from 'pino';
 import type { z } from 'zod';
 
 import type { LogLevel } from './config.js';
 import { ContextManager } from './context-manager.js';
 import { SidecarMetrics } from './metrics.js';
+import {
+  currentTrace,
+  noTracer,
+  parseTraceparent,
+  traceFields,
+  type ActiveSpan,
+  type Tracer,
+} from './tracing.js';
 
 /** What the server needs to run. */
 export interface AppOptions {
@@ -55,6 +64,35 @@ export interface AppOptions {
   readonly now?: () => number;
   /** Collect process metrics; default true. Tests that build many apps turn it off. */
   readonly processMetrics?: boolean;
+  /** Makes the spans of navigations and flows (spec §20); default: none sent. The app shuts it down. */
+  readonly tracer?: Tracer;
+  /** Where the log goes; default stdout. */
+  readonly logStream?: DestinationStream;
+}
+
+/**
+ * Runs the work of a request of Kage's in a span of its own, the child of
+ * the span Kage named in `traceparent`; every line of the log written
+ * meanwhile carries the span's ids.
+ */
+async function traced<T>(
+  tracer: Tracer,
+  name: string,
+  request: FastifyRequest,
+  attributes: Readonly<Record<string, string>>,
+  work: () => Promise<T>,
+  ended: (result: T, span: ActiveSpan) => boolean,
+): Promise<T> {
+  const span = tracer.start(name, parseTraceparent(request.headers['traceparent']), attributes);
+  try {
+    const result = await currentTrace.run({ trace_id: span.traceId, span_id: span.spanId }, work);
+    span.end(ended(result, span));
+    return result;
+  } catch (error) {
+    span.set({ outcome: error instanceof EngineError ? error.code : 'error' });
+    span.end(true);
+    throw error;
+  }
 }
 
 /** The server and the parts tests and the entry point reach into. */
@@ -104,7 +142,7 @@ function parse<Schema extends z.ZodType>(schema: Schema, value: unknown): z.infe
  * cannot drift from the document Kage was built against.
  */
 export function buildApp(options: AppOptions): App {
-  const { engine, now = Date.now } = options;
+  const { engine, now = Date.now, tracer = noTracer } = options;
   const server = Fastify({
     bodyLimit: options.bodyLimitBytes ?? 16_777_216,
     logger:
@@ -115,7 +153,18 @@ export function buildApp(options: AppOptions): App {
             // Requests are logged by method and path. The secret header and
             // request bodies (which hold proxy passwords) never are.
             redact: [`req.headers["${TOKEN_HEADER}"]`, 'req.headers.authorization'],
+            // A line written in a span carries its ids (spec §20).
+            mixin: (_merge, _level, logger) => traceFields(logger.bindings()),
+            ...(options.logStream === undefined ? {} : { stream: options.logStream }),
           },
+    // Every line of a request of Kage's carries Kage's trace id.
+    childLoggerFactory: (logger, bindings, childOptions, raw) => {
+      const parent = parseTraceparent(raw.headers['traceparent']);
+      return logger.child(
+        parent === null ? bindings : { ...bindings, trace_id: parent.traceId },
+        childOptions,
+      );
+    },
   });
   const log: EngineLog = {
     info: (fields, message) => {
@@ -287,8 +336,19 @@ export function buildApp(options: AppOptions): App {
       const id = contextId(request);
       const began = now();
       try {
-        const result = await manager.run(id, true, (context) =>
-          context.navigate(body, operationEnv(id)),
+        const result = await traced(
+          tracer,
+          'sidecar.navigate',
+          request,
+          { engine: engine.name, context: id },
+          () => manager.run(id, true, (context) => context.navigate(body, operationEnv(id))),
+          (page, span) => {
+            span.set({
+              outcome: page.error?.code ?? 'ok',
+              ...(page.status === null ? {} : { status: page.status }),
+            });
+            return page.error !== null;
+          },
         );
         metrics.navigated(result.error?.code ?? 'ok', (now() - began) / 1000);
         return result;
@@ -329,7 +389,17 @@ export function buildApp(options: AppOptions): App {
       reply.raw.write(`${JSON.stringify(checked.data)}\n`);
     };
     try {
-      await manager.run(id, true, (context) => context.flow(body, operationEnv(id), emit));
+      await traced(
+        tracer,
+        'sidecar.flow',
+        request,
+        { engine: engine.name, context: id },
+        () => manager.run(id, true, (context) => context.flow(body, operationEnv(id), emit)),
+        (_done, span) => {
+          span.set({ outcome: stream.ok ? 'ok' : 'failed' });
+          return !stream.ok;
+        },
+      );
       metrics.flowed(stream.ok ? 'ok' : 'failed');
     } catch (error) {
       metrics.flowed('error');
@@ -374,6 +444,8 @@ export function buildApp(options: AppOptions): App {
   server.addHook('onClose', async () => {
     await manager.closeAll();
     await engine.close();
+    // What is still queued is sent once the last navigation has ended.
+    await tracer.shutdown();
   });
 
   return { server, contexts: manager, metrics };

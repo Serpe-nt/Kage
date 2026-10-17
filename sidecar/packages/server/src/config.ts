@@ -50,6 +50,27 @@ const EnvironmentSchema = z.object({
   SIDECAR_SELFTEST_PROBE_URL: url,
   SIDECAR_SELFTEST_ECHO_URL: url,
   SIDECAR_BODY_LIMIT_BYTES: z.coerce.number().int().min(1024).max(268_435_456).default(16_777_216),
+  // Where traces go (spec §20): the collector's address with its path.
+  SIDECAR_OTLP_ENDPOINT: z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    z
+      .url({ protocol: /^https?$/ })
+      .refine((value) => new URL(value).pathname.endsWith('/v1/traces'), {
+        message: 'the address is taken as written and must end in /v1/traces',
+      })
+      .refine(
+        (value) => {
+          const url = new URL(value);
+          return url.username === '' && url.password === '' && url.search === '';
+        },
+        { message: 'the address holds no credentials and no query' },
+      )
+      .optional(),
+  ),
+  SIDECAR_SERVICE_NAME: z
+    .string()
+    .regex(/^[A-Za-z0-9._-]{1,64}$/)
+    .optional(),
 });
 
 /** Validated server configuration. */
@@ -88,6 +109,10 @@ export interface ServerConfig {
   readonly selftestPages: readonly SelftestPage[];
   /** Largest request body. */
   readonly bodyLimitBytes: number;
+  /** Where traces are sent; none when unset (spec §20). */
+  readonly otlpEndpoint?: string;
+  /** The `service.name` of the sidecar's spans: `kage-sidecar-<engine>` unless set. */
+  readonly serviceName: string;
 }
 
 /** The environment does not describe a valid server configuration. */
@@ -168,5 +193,9 @@ export function loadConfig(
     audio: data.SIDECAR_AUDIO,
     selftestPages,
     bodyLimitBytes: data.SIDECAR_BODY_LIMIT_BYTES,
+    ...(data.SIDECAR_OTLP_ENDPOINT === undefined
+      ? {}
+      : { otlpEndpoint: data.SIDECAR_OTLP_ENDPOINT }),
+    serviceName: data.SIDECAR_SERVICE_NAME ?? `kage-sidecar-${data.ENGINE}`,
   };
 }

@@ -80,6 +80,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     path or query, an address, a seed, a token or a fingerprint.
     `deny.toml` bans `reqwest`, which `opentelemetry-otlp` brings with its
     default features.
+  - The sidecars' half of the traces: a navigation and a flow are spans of
+    their own, the children of the span Kage names in the `traceparent` of
+    its request, sent as OTLP over HTTP with protobuf when
+    `SIDECAR_OTLP_ENDPOINT` is set (`SIDECAR_SERVICE_NAME`, default
+    `kage-sidecar-<engine>`). The five `@opentelemetry/*` packages are
+    loaded only then, and patch nothing. Every line of a request of Kage's
+    carries its `trace_id`, and a line written during a navigation or a
+    flow its `span_id`. `@opentelemetry/sdk-node`, planned since M0, is not
+    used.
   - Two identical requests under way at the same moment are one visit
     (F52): of two fetches or batch items with one cache key in one
     process, the second waits for the first and is answered from the
