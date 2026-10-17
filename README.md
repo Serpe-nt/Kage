@@ -52,7 +52,7 @@ The settled decisions behind these limits are in
 ## Quick start
 
 On a Linux machine (or WSL2) with Docker Engine 27 or newer, Compose v2,
-git and curl, and nothing else:
+git, curl and bash, and nothing else:
 
 ```bash
 git clone https://github.com/Serpe-nt/Kage.git kage && cd kage
@@ -63,7 +63,8 @@ curl http://127.0.0.1:8080/healthz
 
 `scripts/dev-secrets.sh` writes random local secrets into `deploy/.env`
 (ignored by git). The first build compiles Kage and fetches the pinned
-Chrome and Camoufox: count 20 to 40 minutes. The stack applies the
+Chrome and Camoufox: about ten minutes on 32 cores, up to 40 on a small
+machine. The stack applies the
 database migrations in a one-shot `migrate` service before `kage` starts,
 and publishes one port, on loopback only: the API speaks plain HTTP, and a
 deployment that serves other machines puts a reverse proxy that terminates
