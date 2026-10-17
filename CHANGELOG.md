@@ -589,6 +589,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   password, which then sat in the sidecar for the run. The stand-in
   self-tests of a proxy (`--proxy`), which have no persona the forwarder
   could name, remain the one exception.
+- The sidecars are on an internal network of their own, `browsers`, with
+  kage alone (security review L4). They were on the stack's default
+  network, where a browser that was taken over could reach Postgres and,
+  past the forwarder, the internet. Docker gives an internal network no
+  gateway: a browser's only way out is kage's forwarder. `just hardening`
+  refuses a sidecar on a network with a way out, the smoke test checks
+  the running stack, the observability profile puts its collector on both
+  networks, and `deploy/compose.dev.yaml` (kage on the host) keeps the
+  sidecars on the default network too.
 
 ### Fixed
 
