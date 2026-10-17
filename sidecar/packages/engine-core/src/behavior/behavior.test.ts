@@ -497,12 +497,24 @@ describe('the pace of a flow', () => {
   });
 });
 
-/** A mouse, a keyboard and a clock that only write down what was asked of them. */
+/**
+ * A mouse, a keyboard and a clock that only write down what was asked of
+ * them. `dark` is a spell of the rig's time, from its start, in which the
+ * page draws nothing: the wheel turned then moves no page.
+ */
 function rig(
-  options: { scrollHeight?: number; boxes?: Record<string, Box>; notchPx?: number } = {},
+  options: {
+    scrollHeight?: number;
+    boxes?: Record<string, Box>;
+    notchPx?: number;
+    dark?: readonly [number, number];
+  } = {},
 ) {
   const log: string[] = [];
+  const paints: number[] = [];
   let now = 1000;
+  const dark = options.dark;
+  const drawing = () => dark === undefined || now - 1000 < dark[0] || now - 1000 >= dark[1];
   let pointer: Point = { x: 960, y: 540 };
   let scrollY = 0;
   const viewport = { width: 1200, height: 800 };
@@ -533,10 +545,15 @@ function rig(
       return Promise.resolve();
     },
     wheelNotch: (direction) => {
-      scrollY = Math.max(
-        0,
-        Math.min(scrollHeight - viewport.height, scrollY + (direction === 'down' ? notch : -notch)),
-      );
+      if (drawing()) {
+        scrollY = Math.max(
+          0,
+          Math.min(
+            scrollHeight - viewport.height,
+            scrollY + (direction === 'down' ? notch : -notch),
+          ),
+        );
+      }
       log.push(`wheel ${direction}`);
       return Promise.resolve();
     },
@@ -565,6 +582,17 @@ function rig(
       const box = boxes[selector];
       return Promise.resolve(box === undefined ? null : { ...box, y: box.y - scrollY });
     },
+    painted: (limitMs) => {
+      // Two frames of 16 ms, after the dark spell when they fall into it.
+      let ready = now + 33;
+      if (dark !== undefined && now - 1000 < dark[1] && ready - 1000 > dark[0]) {
+        ready = Math.max(ready, 1000 + dark[1] + 33);
+      }
+      const drawn = ready - now <= limitMs;
+      now = drawn ? ready : now + limitMs;
+      paints.push(now - 1000);
+      return Promise.resolve(drawn);
+    },
   };
   const human = new Human({
     device,
@@ -576,6 +604,7 @@ function rig(
   return {
     human,
     log,
+    paints,
     pointer: () => pointer,
     scrollY: () => scrollY,
     elapsed: () => now - 1000,
@@ -661,7 +690,32 @@ describe('a persona at its mouse and keyboard', () => {
     expect(short.human.counts.notches).toBe(0);
     const frozen = rig({ scrollHeight: 5000, notchPx: 0 });
     await frozen.human.scrollTo(0.5);
-    expect(frozen.human.counts.notches).toBeLessThanOrEqual(6);
+    // One flick, and one more once the page has drawn.
+    expect(frozen.human.counts.notches).toBeLessThanOrEqual(12);
+    expect(frozen.paints).toHaveLength(2);
+  });
+
+  it('turns the wheel once the page draws, and again when a flick moved nothing', async () => {
+    // A new document draws nothing for its first 700 ms: the hand waits
+    // for it before it touches the mouse.
+    const late = rig({ scrollHeight: 12_000, dark: [0, 700] });
+    expect(await late.human.scrollTo(0.8)).toBe('depth');
+    expect(late.paints[0]).toBe(733);
+    expect(late.scrollY()).toBeGreaterThanOrEqual((12_000 - 800) * 0.8 - 40);
+    // A page that stops drawing after it was first seen loses the first
+    // flick; the hand waits for it to draw and goes on to the depth.
+    const stalled = rig({ scrollHeight: 12_000, dark: [100, 1500] });
+    expect(await stalled.human.scrollTo(0.8)).toBe('depth');
+    expect(stalled.paints.slice(0, 2)).toEqual([33, 1533]);
+    expect(stalled.scrollY()).toBeGreaterThanOrEqual((12_000 - 800) * 0.8 - 40);
+    // A page that never draws is waited for twice, at most two seconds
+    // each time, and then it is a page that does not scroll.
+    const dead = rig({ scrollHeight: 12_000, dark: [0, 3_600_000] });
+    expect(await dead.human.scrollTo(0.8)).toBe('page');
+    expect(dead.paints).toHaveLength(2);
+    expect(dead.paints[0]).toBe(2000);
+    expect((dead.paints[1] ?? 0) - 2000).toBeGreaterThanOrEqual(2000);
+    expect(dead.scrollY()).toBe(0);
   });
 
   it('says why the scrolling ended: the depth, the deadline, or the page', async () => {

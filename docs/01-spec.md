@@ -1050,11 +1050,17 @@ persona's seed and the request's seed, which the result records.
   stop when `behavior.patience_ms` is used up, whichever comes first. The
   result says how far down the document the page was and which of the two
   ended it (`depth`, `patience`, or `page` for a page that does not go
-  further). Kage draws the patience anew for every page from the attempt's
-  seed (`browser.patience`: a shifted log-normal, floor 6 s, median 38 s,
-  p95 110 s, redrawn above 4 min, scaled by the persona's pace) and sends
-  it with every navigation it makes: a fetch, an item of a batch, a page of
-  a crawl, a warm-up visit. With it, `timeout_ms` bounds reaching the page
+  further). The hand acts on a page once it draws (two animation frames,
+  waited for at most 2 s, read where the page cannot see it): a browser
+  hands a page its pointer moves and its wheel with its frames and loses
+  the wheel turned while it draws none, which a new document on a slow
+  machine does for half a second and more. A flick that moves nothing is
+  turned once more after the page has drawn before the page counts as
+  one that does not go further. Kage draws the patience anew for every
+  page from the attempt's seed (`browser.patience`: a shifted log-normal,
+  floor 6 s, median 38 s, p95 110 s, redrawn above 4 min, scaled by the
+  persona's pace) and sends it with every navigation it makes: a fetch,
+  an item of a batch, a page of a crawl, a warm-up visit. With it, `timeout_ms` bounds reaching the page
   only and the dwell follows in full. Nobody's request sets it (F44): a
   consumer that needs the bottom of a tall page uses a flow's `scroll`
   step.
