@@ -1,0 +1,14 @@
+# Grafana's dashboards in the `observability` profile: the files of
+# deploy/grafana/dashboards, written by scripts/grafana-dashboards.mjs.
+# Changes in the UI are not kept; change the definitions in the script.
+apiVersion: 1
+
+providers:
+  - name: kage
+    folder: Kage
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 60
+    options:
+      path: /etc/grafana/dashboards

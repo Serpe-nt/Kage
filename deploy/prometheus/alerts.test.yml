@@ -1,0 +1,154 @@
+# Unit tests of deploy/prometheus/alerts.yml, run by `just test-alerts` with
+# the promtool of the pinned Prometheus image. Each rule fires on what it is
+# about, and stays quiet just short of it.
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: kage cannot be scraped
+    interval: 1m
+    input_series:
+      - series: 'up{job="kage",instance="kage:9464"}'
+        values: '1 1 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: KageDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KageDown
+        exp_alerts:
+          - exp_labels: { severity: critical, job: kage, instance: "kage:9464" }
+            exp_annotations:
+              summary: Prometheus cannot scrape kage
+              runbook: docs/runbooks/observability.md
+
+  - name: no proxy can be used
+    interval: 1m
+    input_series:
+      - series: 'kage_proxy_state{state="healthy"}'
+        values: '3 3 0x20'
+      - series: 'kage_proxy_state{state="degraded"}'
+        values: '0x22'
+      - series: 'kage_proxy_state{state="backoff"}'
+        values: '0 0 3x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: KagePoolUnavailable
+        exp_alerts: []
+      - eval_time: 13m
+        alertname: KagePoolUnavailable
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: No proxy of the pool can be used
+              runbook: docs/runbooks/proxies.md
+
+  - name: a degraded proxy is still usable
+    interval: 1m
+    input_series:
+      - series: 'kage_proxy_state{state="healthy"}'
+        values: '0x20'
+      - series: 'kage_proxy_state{state="degraded"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: KagePoolUnavailable
+        exp_alerts: []
+
+  - name: the bandwidth budget is at 80 percent
+    interval: 1m
+    input_series:
+      - series: 'kage_bandwidth_budget_ratio{job="kage"}'
+        values: '0.79x5 0.85x10'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: KageBandwidthBudget
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: KageBandwidthBudget
+        exp_alerts:
+          - exp_labels: { severity: warning, job: kage }
+            exp_annotations:
+              summary: "85% of the plan's bandwidth is used"
+              runbook: docs/runbooks/fetching.md
+
+  - name: a breaker opens
+    interval: 1m
+    input_series:
+      - series: 'kage_breaker_open{domain="shop.example"}'
+        values: '0 0 1 1 1'
+      - series: 'kage_breaker_open{domain="news.example"}'
+        values: '0x4'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: KageBreakerOpen
+        exp_alerts:
+          - exp_labels: { severity: warning, domain: shop.example }
+            exp_annotations:
+              summary: "shop.example is paused: its breaker opened on blocks"
+              runbook: docs/runbooks/block-report.md
+
+  - name: blocks reach a domain's threshold
+    interval: 1m
+    input_series:
+      # Six blocks in the first half hour on shop.example, whose policy
+      # allows five per hour; two on news.example, which allows five too.
+      - series: 'kage_attempts_total{domain="shop.example",render="browser",outcome="forbidden",vendor="cloudflare"}'
+        values: '0+0.2x30'
+      - series: 'kage_attempts_total{domain="shop.example",render="browser",outcome="ok",vendor=""}'
+        values: '0+10x30'
+      - series: 'kage_attempts_total{domain="news.example",render="http",outcome="captcha",vendor=""}'
+        values: '0 0 0 1 1 1 2x24'
+      - series: 'kage_policy_breaker_threshold{domain="shop.example"}'
+        values: '5x30'
+      - series: 'kage_policy_breaker_threshold{domain="news.example"}'
+        values: '5x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: KageBlockRateAboveThreshold
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: KageBlockRateAboveThreshold
+        exp_alerts:
+          - exp_labels: { severity: warning, domain: shop.example }
+            exp_annotations:
+              summary: "shop.example was blocked as often in the last hour as its policy allows before it pauses the domain"
+              runbook: docs/runbooks/block-report.md
+
+  - name: a persona is retired
+    interval: 1m
+    input_series:
+      - series: 'kage_persona_state{state="retired"}'
+        values: '2x10 3x10'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: KagePersonaRetired
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: KagePersonaRetired
+        exp_alerts:
+          - exp_labels: { severity: info }
+            exp_annotations:
+              summary: A persona was retired in the last 30 minutes
+              runbook: docs/runbooks/personas.md
+
+  - name: a webhook fails for good
+    interval: 1m
+    input_series:
+      - series: 'kage_webhook_deliveries_total{event="job.finished",result="failed"}'
+        values: '0x5 1x10'
+      - series: 'kage_webhook_deliveries_total{event="job.finished",result="retry"}'
+        values: '0+1x15'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: KageWebhookFailing
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: KageWebhookFailing
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: A webhook delivery failed for good in the last 30 minutes
+              runbook: docs/runbooks/api.md

@@ -23,6 +23,9 @@ rust_tools := "cargo-deny@" + cargo_deny_version + ",cargo-audit@" + cargo_audit
 # Scanners run from images pinned by digest, so no host install is needed.
 gitleaks_image := "ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"
 trivy_image := "ghcr.io/aquasecurity/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa"
+# The Prometheus of the observability profile (deploy/compose.observability.yaml),
+# for promtool; the two pins move together.
+prometheus_image := "prom/prometheus:v3.13.4-distroless@sha256:f11bbfb615cf24aa9ef28d2cb527ef81e3bcaa1a0ff13c0ec5b11edd9b351bdc"
 syft_image := "ghcr.io/anchore/syft:v1.54.1@sha256:3eb5379ba7b409c3f4069b686110527af0c47df993fa5c10d13e7cf34f49b1aa"
 
 # --- Project settings --------------------------------------------------------
@@ -136,7 +139,7 @@ fmt-check-node:
 # --- Lint --------------------------------------------------------------------
 
 # clippy -D warnings, eslint, tsc.
-lint: lint-rust lint-node
+lint: lint-rust lint-node lint-observability
 
 lint-rust:
     cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
@@ -145,6 +148,14 @@ lint-rust:
 lint-node:
     cd sidecar && pnpm run build && pnpm run typecheck && pnpm run lint
     cd tests/api-client && pnpm run typecheck
+
+# The observability profile: the dashboards are what
+# scripts/grafana-dashboards.mjs makes and name only metrics that exist, and
+# the alert rules pass their tests in the pinned Prometheus image.
+lint-observability:
+    node scripts/grafana-dashboards.mjs --check
+    docker run --rm --volume "$PWD/deploy/prometheus:/rules:ro" --workdir /rules --entrypoint promtool {{ prometheus_image }} check rules alerts.yml
+    docker run --rm --volume "$PWD/deploy/prometheus:/rules:ro" --workdir /rules --entrypoint promtool {{ prometheus_image }} test rules alerts.test.yml
 
 # The sidecar contract: the committed OpenAPI document is what the zod
 # schemas emit, and it breaks no client of the document on the base branch
@@ -205,6 +216,7 @@ test-e2e: setup-env
     tests/e2e/jobs.sh
     tests/e2e/crawl.sh
     tests/e2e/extract.sh
+    tests/e2e/observability.sh
 
 # Gated live suite: needs KAGE_LIVE=1 and secrets, never runs in PR CI.
 test-live:

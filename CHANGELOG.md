@@ -89,6 +89,20 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     carries its `trace_id`, and a line written during a navigation or a
     flow its `span_id`. `@opentelemetry/sdk-node`, planned since M0, is not
     used.
+  - The `observability` profile (`deploy/compose.observability.yaml`): an
+    OpenTelemetry Collector, Jaeger, Prometheus and Grafana at pinned
+    digests, hardened like the rest of the stack, with Grafana alone
+    published, on loopback. Seven dashboards (pool and personas, pacing
+    and visits, blocks and breakers, jobs and crawls, webhooks, bandwidth
+    against the plan's cap, cache and robots.txt), written by
+    `scripts/grafana-dashboards.mjs`; seven alert rules (Kage down, no
+    usable proxy, 80 % of the bandwidth budget, a breaker open, a domain's
+    blocks at its policy's threshold, a persona retired, a webhook failing
+    for good) with `promtool` tests. `just lint` checks the dashboards and
+    the rules; `tests/e2e/observability.sh` reads one trace from the API
+    to the browser back from Jaeger and greps every log line and span for
+    the stack's secrets. Runbooks: `observability.md`, `block-report.md`,
+    `field-campaign.md` (the owner's M13 campaign).
   - Two identical requests under way at the same moment are one visit
     (F52): of two fetches or batch items with one cache key in one
     process, the second waits for the first and is answered from the
