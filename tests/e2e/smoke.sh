@@ -67,6 +67,17 @@ without_token="$(reach "{}")"
 [ "${without_token}" = 401 ] || fail "browser-chromium answered ${without_token} to a call without the token"
 echo "    with the token: ${with_token}, without: ${without_token}"
 
+echo "==> a sidecar reaches kage and nothing else: its network has no way out, Postgres is not on it"
+internal="$(docker network inspect --format '{{.Internal}}' "${KAGE_E2E_PROJECT:-kage-e2e}_browsers")"
+[ "${internal}" = true ] || fail "the browsers network is not internal: ${internal}"
+lookup() {
+    "${compose[@]}" exec -T browser-firefox node -e \
+        "require('node:dns').promises.lookup('$1').then(() => console.log('known'), () => console.log('unknown'))"
+}
+[ "$(lookup kage)" = known ] || fail "a sidecar cannot find kage"
+[ "$(lookup postgres)" = unknown ] || fail "a sidecar can find Postgres"
+echo "    browsers is internal; kage is known there, Postgres is not"
+
 # What spec §19 asks of a sidecar's container, on one line: the user, a
 # read-only root, every capability dropped and none added, not privileged.
 hardening_of() {

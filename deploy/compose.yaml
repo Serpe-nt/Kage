@@ -5,6 +5,12 @@
 #
 # Only kage publishes a port. Images built from this repository are tagged
 # :dev; a release records pushed image digests here.
+#
+# Two networks: `default`, where kage meets Postgres and has its way out to
+# the proxies and the provider, and `browsers`, internal, where kage meets
+# its sidecars. A sidecar is on `browsers` alone: a browser reaches nothing
+# but kage (its forwarder, which every page's traffic passes), not Postgres,
+# not the host, not the internet (spec §19; `just hardening` checks it).
 name: kage
 
 x-hardening: &hardening
@@ -15,6 +21,8 @@ x-hardening: &hardening
 
 x-sidecar: &sidecar
   <<: *hardening
+  # Kage and the other sidecar, and nothing else (see the top of this file).
+  networks: [browsers]
   # Reaps the browsers' child processes.
   init: true
   # Browsers keep shared memory in /dev/shm; the 64 MB default crashes tabs.
@@ -100,6 +108,8 @@ services:
       # provider's credentials stay in this container.
       KAGE__FORWARDER__BIND: 0.0.0.0:8899
       KAGE__FORWARDER__ADVERTISE: http://kage:8899
+    # Its way out on `default`, its sidecars on `browsers`.
+    networks: [default, browsers]
     ports:
       # Loopback by default (spec §19). Every request but /healthz, /readyz
       # and /openapi.json needs an API key, but the connection is plain
@@ -261,6 +271,12 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
+
+networks:
+  default:
+  # No way out: Docker gives an internal network no gateway.
+  browsers:
+    internal: true
 
 secrets:
   postgres_password:

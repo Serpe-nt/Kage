@@ -2320,7 +2320,10 @@ are gzip-compressed on disk.
   decrypts on demand and writes an audit event. API key secrets hashed;
   sidecar token constant-time compared; never logged (tracing field
   redaction tested).
-- **Isolation.** Sidecars listen only on the compose network; browsers run
+- **Isolation.** Sidecars are on an internal network of their own
+  (`browsers`) with kage and nothing else: no way out but kage's
+  forwarder, no Postgres, no host, nothing published (`just hardening`
+  checks the compose files, the smoke test the running stack); browsers run
   as non-root with every capability dropped, `no-new-privileges`, read-only
   root FS except profile and artifact mounts and `/tmp`; Chrome sandbox
   stays enabled (no `--no-sandbox`); the Kage container has no browser.

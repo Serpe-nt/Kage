@@ -35,6 +35,12 @@ const EXCEPTIONS = {
     published: "the fingerprint echo must be reached by the proxies' exits (docs/runbooks/fingerprint-echo.md)",
   },
 };
+/**
+ * Services that reach nothing but kage: on internal networks only, so that
+ * a browser has no way out that does not pass kage's forwarder, and no way
+ * to Postgres (spec §19, security review L4).
+ */
+const BEHIND_KAGE = new Set(['browser-chromium', 'browser-firefox']);
 /** Services that may run without a Docker healthcheck, and why. */
 const NO_HEALTHCHECK = {
   migrate: 'it runs once and exits; kage waits for it to complete',
@@ -172,6 +178,14 @@ for (const stack of STACKS) {
       if (port.host_ip !== '127.0.0.1' && exception.published === undefined) {
         note(at, `publishes ${port.target} beyond loopback`);
       }
+    }
+    if (BEHIND_KAGE.has(name)) {
+      for (const network of Object.keys(service.networks ?? { default: null })) {
+        if (config.networks?.[network]?.internal !== true) {
+          note(at, `is on the network ${network}, which has a way out`);
+        }
+      }
+      if ((service.ports ?? []).length > 0) note(at, 'publishes a port');
     }
   }
 }
