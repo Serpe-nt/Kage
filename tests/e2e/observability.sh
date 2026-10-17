@@ -37,6 +37,20 @@ export KAGE_PERSONAS_WARMUP=false
 policies="$(mktemp -d)"
 export KAGE_E2E_POLICIES="${policies}"
 cp policies/*.yaml "${policies}/"
+# The batch is a job, and a job never wakes a persona that sleeps: at
+# night in the personas' time zones it would wait for the morning.
+cat >> "${policies}/domains.yaml" << 'EOF'
+
+# Added by tests/e2e/observability.sh.
+domains:
+  fixture.kage.test:
+    active_hours: ignore
+EOF
+# A `domains: {}` of the shipped file would be a second key of that name.
+if [ "$(grep --count '^domains:' "${policies}/domains.yaml")" -ne 1 ]; then
+    grep --invert-match '^domains: {}$' "${policies}/domains.yaml" > "${policies}/domains.tmp"
+    mv "${policies}/domains.tmp" "${policies}/domains.yaml"
+fi
 chmod --recursive a+rX "${policies}"
 scratch="$(mktemp -d)"
 evidence="${KAGE_E2E_EVIDENCE:-${scratch}}"
