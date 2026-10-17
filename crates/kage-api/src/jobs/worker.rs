@@ -265,10 +265,12 @@ enum ItemEnd {
     /// It was fetched now.
     Finished(Box<FetchReport>),
     /// Its result was stored already: the job changed hands between the
-    /// result and the item.
+    /// result and the item. `reading` is what a crawl took from the page,
+    /// when the result keeps it (follow-up F49).
     Stored {
         outcome: Outcome,
         reason: Option<String>,
+        reading: Option<Value>,
     },
     /// It cannot be attempted now.
     Deferred {
@@ -412,6 +414,7 @@ impl Work {
             return Ok(Err(ItemEnd::Stored {
                 outcome: record.outcome,
                 reason: record.reason,
+                reading: record.reading,
             }));
         }
         if store.requests().get(id).await?.is_none() {
@@ -1069,7 +1072,9 @@ impl Runner {
                 self.finish_item(item, state, Some(report.outcome), error)
                     .await?;
             }
-            ItemEnd::Stored { outcome, reason } => {
+            ItemEnd::Stored {
+                outcome, reason, ..
+            } => {
                 let state = if outcome.is_success() {
                     JobItemState::Succeeded
                 } else {
@@ -1147,7 +1152,12 @@ impl Runner {
                     self.finish_item(item, done, Some(report.outcome), error)
                         .await?;
                 }
-                (_, ItemEnd::Stored { outcome, reason }) => {
+                (
+                    _,
+                    ItemEnd::Stored {
+                        outcome, reason, ..
+                    },
+                ) => {
                     let done = if outcome.is_success() {
                         JobItemState::Succeeded
                     } else {
@@ -1320,7 +1330,9 @@ impl Runner {
                     self.finalize(None).await?;
                     return Ok(());
                 }
-                ItemEnd::Stored { outcome, reason } => {
+                ItemEnd::Stored {
+                    outcome, reason, ..
+                } => {
                     // The flow's own result was stored and its steps were
                     // not written: what they did is not known any more.
                     let last = open.len().saturating_sub(1);

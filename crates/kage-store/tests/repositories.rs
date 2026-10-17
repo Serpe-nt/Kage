@@ -1121,6 +1121,7 @@ async fn a_keys_requests_are_counted_since_a_moment() {
             cached_at: cached.then_some(at),
             reason: None,
             visit: Visit::default(),
+            reading: None,
             created_at: request.created_at,
         };
         store.results().insert(&record).await.unwrap();
@@ -1352,6 +1353,13 @@ async fn requests_attempts_and_results_round_trip() {
             )]),
             side_effects: vec!["resize".to_owned()],
         },
+        // What a crawl took from the page, until it recorded it (F49).
+        reading: Some(serde_json::json!({
+            "final_url": "https://example.org/listing?page=2",
+            "links": [{ "url": "https://example.org/listing?page=3", "hidden": false, "furniture": false }],
+            "links_truncated": false,
+            "text": "Listing, page two",
+        })),
         created_at: now(),
     };
     store.results().insert(&record).await.unwrap();
@@ -1369,6 +1377,26 @@ async fn requests_attempts_and_results_round_trip() {
     assert_eq!(visit["behavior"]["scroll_ended_by"], "patience");
     assert_eq!(visit["console"][0]["source"], "network");
     assert_eq!(visit["side_effects"], serde_json::json!(["resize"]));
+    // Once the crawl has recorded the page, what it took is forgotten, and
+    // nothing else of the result.
+    assert!(store.results().forget_reading(request.id).await.unwrap());
+    assert!(!store.results().forget_reading(request.id).await.unwrap());
+    assert!(
+        !store
+            .results()
+            .forget_reading(RequestId::new())
+            .await
+            .unwrap()
+    );
+    let forgotten = store.results().get(record.id).await.unwrap().unwrap();
+    assert_eq!(
+        forgotten,
+        FetchRecord {
+            reading: None,
+            ..record.clone()
+        }
+    );
+    let record = forgotten;
     assert_eq!(
         store.results().get_by_request(request.id).await.unwrap(),
         Some(record.clone())
@@ -1417,6 +1445,7 @@ async fn requests_attempts_and_results_round_trip() {
         cached_at: Some(now()),
         reason: Some("domain_paused".to_owned()),
         visit: Visit::default(),
+        reading: None,
         created_at: now(),
     };
     store.results().insert(&blocked_record).await.unwrap();
@@ -2078,6 +2107,7 @@ async fn the_response_cache_serves_an_entry_until_it_expires() {
         cached_at: None,
         reason: None,
         visit: Visit::default(),
+        reading: None,
         created_at: fetched_at,
     };
     db.store.results().insert(&record).await.unwrap();

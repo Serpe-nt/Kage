@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE results SET reading = NULL WHERE request_id = $1 AND reading IS NOT NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d86a8b6f8da8b01ee8b57a18fa5d9065954a40bc1279c32ce86e30ecba5ec4f9"
+}

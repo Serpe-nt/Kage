@@ -182,6 +182,7 @@ impl Pipeline {
             cached_at: Some(hit.entry.cached_at),
             reason: None,
             visit: visit::of_cached(stored.visit, visit::pacing(&pacing)),
+            reading: None,
             created_at: now,
         };
         self.backend().finish(&record).await?;
@@ -211,6 +212,7 @@ impl Pipeline {
             extract: record.extract.clone(),
             robots: record.robots.clone(),
             page: None,
+            reading: None,
             visit: record.visit.clone(),
             cached: Some(Box::new(record)),
         }))
@@ -298,6 +300,7 @@ mod tests {
             cached_at: None,
             reason: None,
             visit: Visit::default(),
+            reading: None,
             created_at: at(),
         };
         for (outcome, status) in [

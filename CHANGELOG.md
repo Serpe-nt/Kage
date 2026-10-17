@@ -32,6 +32,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     capture fired as the visit that got the page had them, and its own
     pacing with `waited_ms: 0`. A result keeps at most the first 1000
     entries of a browser's log, each text cut at 4096 bytes.
+  - A page of a crawl that changed hands between its stored result and
+    its item keeps its links (F49). What the crawl takes from a page
+    (where it ended, its links with whether a reader can see each, its
+    text) is stored with the result (`results.reading`, migration 0016)
+    and forgotten once the crawl has recorded the page; a worker that
+    takes the job up reads on along those links instead of recording the
+    page as read without any. The rule that turns a page into what the
+    crawl takes moved into the pipeline, so that a page read now and one
+    taken up later are read alike.
   - A server that stops finishes the pages that are being read (F39).
     Until now a fetch that was carried on as a job ran in a task nobody
     waited for, the job worker waited 20 s for pages that take one to two

@@ -23,7 +23,7 @@ use common::{Api, request};
 use kage_core::config::Config;
 use kage_core::domain::Scope;
 use kage_core::duration::HumanDuration;
-use kage_core::ids::RequestId;
+use kage_core::ids::{JobId, RequestId};
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
@@ -943,6 +943,108 @@ async fn a_cancel_stops_a_crawl_within_one_page_and_a_crawl_goes_on_after_a_rest
     assert_eq!(items.len(), 9);
     assert!(items.iter().all(|item| item["state"] == "succeeded"));
     work.stop().await;
+    api.shut_down().await;
+}
+
+#[tokio::test]
+async fn a_page_whose_result_was_stored_when_the_crawl_changed_hands_keeps_its_links() {
+    let mut api = Api::start_with(2, 149, LENIENT_FAST, quick).await;
+    // A home page that takes a while and leads to two pages; one of its
+    // links nobody can see.
+    let mut home = leaf("/", &["/s/1", "/s/2"]);
+    home.hidden = vec!["/trap"];
+    let rest = [leaf("/s/1", &[]), leaf("/s/2", &[]), leaf("/trap", &[])];
+    serve(&api, &[home], Duration::from_millis(2500)).await;
+    serve(&api, &rest, Duration::from_millis(50)).await;
+    let token = api.key(&[Scope::Jobs, Scope::Crawl]).await;
+    let body = json!({
+        "type": "crawl", "seeds": [Api::url("/")], "defaults": { "render": "http" },
+    });
+    let reply = api.post(&token, "/v1/jobs", &body).await;
+    let id = reply.json()["id"].as_str().unwrap().to_owned();
+    let job: JobId = id.parse().unwrap();
+    let pool = api.lab.store().pool().clone();
+    let work = api.work();
+
+    // The home page is being read.
+    for _ in 0..200 {
+        if asked(&api).await.len() == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(asked(&api).await, ["/"]);
+
+    // The job changes hands while the page is under way: another worker's
+    // name is on it, and the first one cannot renew its lease.
+    sqlx::query(
+        "UPDATE jobs SET worker = gen_random_uuid(), lease_until = now() + interval '1 hour'
+         WHERE id = $1",
+    )
+    .bind(job.as_uuid())
+    .execute(&pool)
+    .await
+    .unwrap();
+    // The first worker's fetch ends and its result is stored; the job
+    // being another's, it writes nothing of the page into the crawl.
+    let stored = "SELECT count(*) FROM results r JOIN job_items i ON i.request_id = r.request_id
+                  WHERE i.job_id = $1";
+    for _ in 0..300 {
+        let results: i64 = sqlx::query_scalar(stored)
+            .bind(job.as_uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        if results == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    work.stop().await;
+    let items = api.job_items(&token, &id).await;
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["state"], "running", "{items:?}");
+    let reading: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM crawl_frontier WHERE job_id = $1 AND state = 'fetching'",
+    )
+    .bind(job.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(reading, 1);
+    assert_eq!(asked(&api).await, ["/"]);
+
+    // Whoever has the job now takes it up: the page was read, its result
+    // is there, and what it links to is known from what was stored with
+    // it. The crawl goes on along those links, never asks for the page a
+    // second time, and never for the link nobody could see.
+    sqlx::query("UPDATE jobs SET lease_until = now() - interval '1 second' WHERE id = $1")
+        .bind(job.as_uuid())
+        .execute(&pool)
+        .await
+        .unwrap();
+    let restarted = api.restarted_state();
+    let again = common::Background::worker_only(&restarted);
+    let done = api.job_until(&token, &id, ended).await;
+    assert_eq!(done["state"], "succeeded", "{done}");
+    assert_eq!(done["crawl"]["ended"], "completed");
+    assert_eq!(done["crawl"]["fetched"], 3, "{done}");
+    assert_eq!(done["crawl"]["skipped"]["hidden"], 1, "{done}");
+    assert_eq!(asked(&api).await, ["/", "/s/1", "/s/2"]);
+    let items = api.job_items(&token, &id).await;
+    assert_eq!(paths(&items), ["/", "/s/1", "/s/2"]);
+    assert!(items.iter().all(|item| item["state"] == "succeeded"));
+    // What was stored for the hand-over is not kept beyond it.
+    let kept: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM results r JOIN job_items i ON i.request_id = r.request_id
+         WHERE i.job_id = $1 AND r.reading IS NOT NULL",
+    )
+    .bind(job.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(kept, 0);
+    again.stop().await;
     api.shut_down().await;
 }
 

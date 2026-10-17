@@ -1443,7 +1443,11 @@ in memory by the one worker that holds the job's lease and written
 through before it acts. A page is claimed for its item with `SELECT …
 FOR UPDATE SKIP LOCKED` before the item is added, so no page is asked for
 twice even when a job changed hands, and a crawl that changes hands goes
-on where it stands. There is no second worker: the job worker of §16.6
+on where it stands. What the crawl takes from a page (where it ended, its
+links with whether a reader can see each, its text) is stored with the
+page's result (`results.reading`) and forgotten once the crawl has
+recorded the page: a crawl that changed hands between the two takes the
+page's links from there and reads on from it (F49). There is no second worker: the job worker of §16.6
 works crawls.
 
 ---
@@ -2205,7 +2209,9 @@ bodies; the daily page budget counts requests whose result is not
 `cached`. A result keeps what its answer says of the visit besides the
 page in `results.visit`, one document with a member for each part that
 has something to say: `pacing`, `behavior`, `console`, `side_effects`
-(§16.5; null for a result that keeps none of it).
+(§16.5; null for a result that keeps none of it), and, for a page of a
+crawl until the crawl has recorded it, what the crawl took from the page
+in `results.reading` (§13).
 Migrations in `crates/kage-store/migrations`, applied by `kage migrate` and
 checked in CI (`sqlx migrate info`, offline query data committed). Bodies and
 artifacts live on disk under `artifacts/` keyed by content hash with a
