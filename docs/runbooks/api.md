@@ -262,13 +262,18 @@ page (how far it was scrolled matters for what the document holds);
   visited is not open in the tab, and its links cannot be clicked. A
   second crawl of a site visits every page again.
 - A flow has no part in the cache.
+- Two identical requests at the same moment are one visit: the second
+  waits for the first and is answered from what it stored (`cached:
+  true`, `cached_at` the first one's). When the first one's page is none
+  the cache keeps, the second makes its own visit.
 
 An operator sets the bounds: `cache.max_ttl` in `kage.yaml` for every
 site, and per site in `policies/domains.yaml`
 (`cache: { shared, max_ttl, ttl }`, where `ttl` is what a request gets
 that does not name `cache_ttl_s`). `kage_cache_requests_total{result}`
-counts `hit`, `miss`, `stored` and `bypass` (a result the cache does not
-keep).
+counts `hit`, `miss`, `stored`, `bypass` (a result the cache does not
+keep) and `joined` (a request that waited for an identical one under
+way; it is then a `hit` or, when that one kept nothing, a `miss`).
 
 ### `robots.txt`
 

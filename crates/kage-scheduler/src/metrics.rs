@@ -13,7 +13,7 @@
 //! | `kage_breaker_open` | `domain` | 1 while a domain is paused |
 //! | `kage_bandwidth_bytes_total` | `direction` | bytes through the forwarder |
 //! | `kage_bandwidth_budget_ratio` | | the share of the bandwidth cap that is used |
-//! | `kage_cache_requests_total` | `result` | what the response cache did for a request: `hit`, `miss`, `stored`, `bypass` |
+//! | `kage_cache_requests_total` | `result` | what the response cache did for a request: `hit`, `miss`, `stored`, `bypass`, `joined` |
 //! | `kage_robots_requests_total` | `result` | what came of asking for a `robots.txt`: `file`, `missing`, `unreachable`, `not_asked`, `no_scout` |
 //! | `kage_robots_denied_total` | `reason` | fetches that ended `robots_denied`: `rule`, `robots_unavailable`, `robots_no_scout`, `robots_enforced`, `robots_ignored` |
 //! | `kage_extract_duration_seconds` | | how long reading a page's document took |
@@ -118,9 +118,10 @@ pub fn budget(share: f64) {
 }
 
 /// What the response cache did for a request: `hit` (served from it),
-/// `miss` (asked, and nothing young enough was there), `stored` (its
-/// result was put in), `bypass` (it named a lifetime and its result is
-/// none the cache keeps).
+/// `miss` (asked, nothing young enough was there, and it is fetched),
+/// `stored` (its result was put in), `bypass` (it named a lifetime and its
+/// result is none the cache keeps), `joined` (it waits for an identical
+/// request under way).
 pub fn cache(result: &'static str) {
     metrics::counter!("kage_cache_requests_total", "result" => result).increment(1);
 }

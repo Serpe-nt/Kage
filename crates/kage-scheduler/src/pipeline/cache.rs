@@ -61,7 +61,7 @@ fn worth_keeping(record: &FetchRecord, thin: bool) -> bool {
 /// Whether an order has anything to do with the cache at all: a flow is a
 /// script in a browser, what a session sees depends on its cookies, and a
 /// scout's files are kept elsewhere.
-fn plan_of(order: &FetchOrder) -> Option<&CachePlan> {
+pub(super) fn plan_of(order: &FetchOrder) -> Option<&CachePlan> {
     order
         .cache
         .as_ref()
@@ -126,7 +126,9 @@ impl Pipeline {
     }
 
     /// Answers a request from the cache when it may be and the cache has
-    /// its page: stores the result under the request and reports it.
+    /// its page: stores the result under the request and reports it. A
+    /// miss is counted by whoever then fetches the page
+    /// ([`Pipeline::board`]).
     pub(super) async fn serve_cached(
         &self,
         course: &Course,
@@ -136,7 +138,6 @@ impl Pipeline {
             return Ok(None);
         }
         let Some(hit) = self.hit(order).await? else {
-            metrics::cache("miss");
             return Ok(None);
         };
         // The bodies: rows of this request that point at what is stored,
@@ -145,13 +146,11 @@ impl Pipeline {
         let mut artifacts = Vec::with_capacity(hit.record.artifacts.len());
         for artifact in &hit.record.artifacts {
             let Some(linked) = self.link(course, *artifact).await else {
-                metrics::cache("miss");
                 return Ok(None);
             };
             artifacts.push(linked);
         }
         let Some(xhr) = self.link_xhr(course, hit.record.xhr.as_ref()).await else {
-            metrics::cache("miss");
             return Ok(None);
         };
         let now = self.now();

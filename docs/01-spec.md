@@ -1645,9 +1645,19 @@ minute like any call.
   retention of one key take nothing from another.
 - **Storage.** `response_cache`; an entry goes with the result it serves
   and is swept when it expires.
-- **Not built**: two identical requests in flight at the same moment are
-  both fetched; the same crawl asked for again inside the lifetime visits
-  every page again.
+- **Two at once (F52).** Of two requests with one key under way at the
+  same moment in one process, the second waits for the first and is
+  answered from the cache with what the first one stored, the moment it
+  stored it: one visit. When the first stored nothing (a block, a
+  failure, thin content) the second makes its own visit. It waits as
+  long as the request waits for anything: a job's fetch stops with its
+  job, a synchronous one that outlasts the wall time is carried on as a
+  job and still waits. A crawl's page holds its key for others and
+  waits for nobody. Two processes each fetch.
+- **Not built**: the same crawl asked for again inside the lifetime
+  visits every page again; serving it would be all or nothing (the
+  earlier job's pages as a whole), which needs an identity of crawls and
+  items that point at another job's results.
 
 ---
 
@@ -2386,8 +2396,9 @@ are gzip-compressed on disk.
   `file`, `missing`, `unreachable`, `not_asked`, `no_scout`),
   `kage_robots_denied_total{reason}` (`rule`, `robots_unavailable`,
   `robots_no_scout`, `robots_enforced`, `robots_ignored`) and
-  `kage_cache_requests_total{result}` (`hit`, `miss`, `stored`, and
-  `bypass` for a result the cache does not keep). The scheduler's `kage_queue_depth{kind}` and
+  `kage_cache_requests_total{result}` (`hit`, `miss`, `stored`,
+  `bypass` for a result the cache does not keep, and `joined` for a
+  request that waited for an identical one under way). The scheduler's `kage_queue_depth{kind}` and
   `kage_scheduler_wait_seconds{kind}` have a `job` kind for what jobs have
   in the queue.
   `/metrics` is one exposition: the process's recorder (histograms of

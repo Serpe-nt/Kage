@@ -50,6 +50,7 @@
 //! says the site was asked (follow-up F39).
 
 mod cache;
+mod flights;
 mod gate;
 mod read;
 mod visit;
@@ -86,6 +87,7 @@ use kage_http::RequestKind;
 use url::Url;
 
 pub use self::cache::CachePlan;
+use self::flights::{Boarded, Flight, Flights};
 use self::gate::Gate;
 pub use self::gate::{NewScout, Peek, ROBOTS_NO_SCOUT, ROBOTS_UNAVAILABLE, RobotsRead, ScoutNeed};
 pub use self::read::{CrawlReading, ReadLink};
@@ -470,6 +472,9 @@ pub struct Pipeline {
     desk: Arc<Desk>,
     /// The attempts that are under way, for a server that stops.
     under_way: Arc<UnderWay>,
+    /// The fetches under way that put their page into the cache, which an
+    /// identical one waits for.
+    flights: Arc<Flights>,
 }
 
 /// Counts an attempt and writes its line in the log.
@@ -558,6 +563,9 @@ struct Course {
     robots: Option<RobotsVerdict>,
     /// The gap an enforced `Crawl-delay` asks for.
     gap_floor: Option<Duration>,
+    /// The request's hold on its cache key while it is fetched: an
+    /// identical one waits until the course ends.
+    flight: Option<Flight>,
 }
 
 impl Course {
@@ -615,6 +623,7 @@ impl Pipeline {
             robots: Arc::new(RobotsSettings::default()),
             desk: Arc::new(Desk::default()),
             under_way: Arc::new(UnderWay::default()),
+            flights: Arc::new(Flights::default()),
         }
     }
 
@@ -817,6 +826,7 @@ impl Pipeline {
             robots_due: None,
             robots: None,
             gap_floor: None,
+            flight: None,
         })
     }
 
@@ -1107,11 +1117,14 @@ impl Pipeline {
         stop: Option<&Stop>,
     ) -> Result<Result<Course, Ran>, SchedulerError> {
         let finished = |report| Ok(Err(Ran::Finished(Box::new(report))));
-        // A page the cache holds is no visit: nothing is asked of anybody.
-        if course.attempts.is_empty()
-            && let Some(report) = self.serve_cached(&course).await?
-        {
-            return finished(report);
+        // A page the cache holds is no visit: nothing is asked of anybody;
+        // nor is a page an identical fetch under way is about to keep.
+        if course.attempts.is_empty() {
+            match self.board(&mut course, stop).await? {
+                Boarded::Served(report) => return Ok(Err(Ran::Finished(report))),
+                Boarded::Stopped => return Ok(Err(Ran::Stopped)),
+                Boarded::Go => {}
+            }
         }
         let (outcome, reason, retry_at) = match self.robots_gate(&mut course, stop).await? {
             Gate::Open => return Ok(Ok(course)),
