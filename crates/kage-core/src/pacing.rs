@@ -651,8 +651,13 @@ fast:
   domain_rpm: 300
 ";
 
+    /// Parsed once: a reading of YAML runs on a thread of its own with a
+    /// deep stack, and some tests ask for a profile tens of thousands of
+    /// times.
     fn profiles() -> PacingProfiles {
-        PacingProfiles::from_yaml(SPEC_YAML).unwrap()
+        static PARSED: std::sync::LazyLock<PacingProfiles> =
+            std::sync::LazyLock::new(|| PacingProfiles::from_yaml(SPEC_YAML).unwrap());
+        PARSED.clone()
     }
 
     fn human() -> PacingProfile {
