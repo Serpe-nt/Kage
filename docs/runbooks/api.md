@@ -53,7 +53,8 @@ Scopes are independent. `admin` opens the admin endpoints, `/metrics` and
 |---|---|
 | `fetch` | `POST /v1/fetch`, `GET /v1/results/{id}`, `GET /v1/artifacts/{id}`, `GET /v1/policies/domains/{domain}` |
 | `sessions` | `/v1/sessions`, and `session_id` in a fetch (beside `fetch`) |
-| `jobs`, `crawl` | Nothing yet (M9, M10) |
+| `jobs` | `POST /v1/jobs` for a batch or a flow, `GET /v1/jobs/{id}`, its items, `POST /v1/jobs/{id}/cancel` |
+| `crawl` | `POST /v1/jobs` for a crawl (beside `jobs`) |
 | `admin` | `/v1/admin/…`, `/metrics`, `/docs` |
 
 A key that leaked: `kage key rotate <id>` when its holder should keep
