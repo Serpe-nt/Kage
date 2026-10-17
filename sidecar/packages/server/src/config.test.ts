@@ -25,6 +25,7 @@ describe('loadConfig', () => {
         audio: 'none',
         selftestPages: [],
         bodyLimitBytes: 16_777_216,
+        serviceName: `kage-sidecar-${engine}`,
       });
     },
   );
@@ -47,6 +48,8 @@ describe('loadConfig', () => {
       SIDECAR_SELFTEST_PROBE_URL: 'https://echo.example.org/probe/',
       SIDECAR_SELFTEST_ECHO_URL: 'https://echo.example.org/',
       SIDECAR_BODY_LIMIT_BYTES: '1048576',
+      SIDECAR_OTLP_ENDPOINT: 'http://otel-collector:4318/v1/traces',
+      SIDECAR_SERVICE_NAME: 'sidecar-ff_2',
     });
     expect(config).toMatchObject({
       engine: 'firefox',
@@ -62,6 +65,8 @@ describe('loadConfig', () => {
       gl: 'host',
       audio: 'pulse',
       bodyLimitBytes: 1_048_576,
+      otlpEndpoint: 'http://otel-collector:4318/v1/traces',
+      serviceName: 'sidecar-ff_2',
     });
     // The default self-test pages are Kage's own, never a third party's.
     expect(config.selftestPages).toEqual([
@@ -162,6 +167,26 @@ describe('loadConfig', () => {
       'an echo URL with another scheme',
       { SIDECAR_SELFTEST_ECHO_URL: 'ftp://echo.example.org/' },
       /SIDECAR_SELFTEST_ECHO_URL/,
+    ],
+    [
+      'a collector without the path of traces',
+      { SIDECAR_OTLP_ENDPOINT: 'http://otel-collector:4318' },
+      /SIDECAR_OTLP_ENDPOINT.*\/v1\/traces/,
+    ],
+    [
+      'a collector with credentials',
+      { SIDECAR_OTLP_ENDPOINT: 'http://user:pass@otel-collector:4318/v1/traces' },
+      /SIDECAR_OTLP_ENDPOINT.*credentials/,
+    ],
+    [
+      'a collector of another scheme',
+      { SIDECAR_OTLP_ENDPOINT: 'ftp://otel-collector/v1/traces' },
+      /SIDECAR_OTLP_ENDPOINT/,
+    ],
+    [
+      'a service name with a space',
+      { SIDECAR_SERVICE_NAME: 'kage sidecar' },
+      /SIDECAR_SERVICE_NAME/,
     ],
   ])('rejects %s', (_label, env, variable) => {
     expect(() => loadConfig({ ...base, ...env })).toThrow(ConfigError);

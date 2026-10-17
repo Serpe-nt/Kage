@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { buildApp, sameSecret, type App, type AppOptions } from './app.js';
 import { TEST_TOKEN, createFakeEngine, exampleOf, type FakeEngine } from './testing/fake-engine.js';
+import { noTracer, type SpanAttributes, type TraceParent, type Tracer } from './tracing.js';
 
 const apps: App[] = [];
 const AUTH = { 'x-kage-sidecar-token': TEST_TOKEN };
@@ -587,5 +588,86 @@ describe('lifecycle and metrics', () => {
     expect(
       (await app.server.inject({ method: 'GET', url: '/v1/health', headers: AUTH })).statusCode,
     ).toBe(200);
+  });
+});
+
+describe('traces', () => {
+  const TRACE = '4bf92f3577b34da6a3ce929d0e0e4736';
+  const TRACEPARENT = `00-${TRACE}-00f067aa0ba902b7-01`;
+
+  it("makes a navigation a span under the one Kage named, and every line of it carries Kage's trace", async () => {
+    const lines: Record<string, unknown>[] = [];
+    const logStream = {
+      write: (line: string) => {
+        lines.push(JSON.parse(line) as Record<string, unknown>);
+      },
+    };
+    const started: {
+      name: string;
+      parent: TraceParent | null;
+      attributes: SpanAttributes;
+      told: SpanAttributes[];
+      failed?: boolean | undefined;
+    }[] = [];
+    const tracer: Tracer = {
+      start(name, parent, attributes) {
+        const span = {
+          name,
+          parent,
+          attributes,
+          told: [] as SpanAttributes[],
+        } as (typeof started)[number];
+        started.push(span);
+        return {
+          traceId: parent?.traceId ?? 'f'.repeat(32),
+          spanId: 'b'.repeat(16),
+          set: (more) => span.told.push(more),
+          end: (failed) => {
+            span.failed = failed;
+          },
+        };
+      },
+      shutdown: () => Promise.resolve(),
+    };
+    const { app } = await start({ tracer, logLevel: 'info', logStream });
+    const id = await open(app);
+    const response = await post(app, `/v1/contexts/${id}/navigate`, exampleOf('NavigateRequest'), {
+      ...AUTH,
+      traceparent: TRACEPARENT,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(started).toEqual([
+      {
+        name: 'sidecar.navigate',
+        parent: { traceId: TRACE, spanId: '00f067aa0ba902b7', sampled: true },
+        attributes: { engine: 'chromium', context: id },
+        told: [{ outcome: 'ok', status: 200 }],
+        failed: false,
+      },
+    ]);
+    // The request that opened the context came without a trace; the
+    // navigation's lines all carry it, and none the shared secret.
+    const completed = lines.filter((line) => line['msg'] === 'request completed');
+    expect(completed).toHaveLength(2);
+    expect(completed[0]?.['trace_id']).toBeUndefined();
+    expect(completed[1]?.['trace_id']).toBe(TRACE);
+    const keys = Object.keys(completed[1] ?? {});
+    expect(keys.filter((key) => key === 'trace_id')).toHaveLength(1);
+    expect(JSON.stringify(lines)).not.toContain(TEST_TOKEN);
+  });
+
+  it('shuts its tracer down with the server', async () => {
+    let shut = 0;
+    const { app } = await start({
+      tracer: {
+        start: (name, parent, attributes) => noTracer.start(name, parent, attributes),
+        shutdown: () => {
+          shut += 1;
+          return Promise.resolve();
+        },
+      },
+    });
+    await app.server.close();
+    expect(shut).toBe(1);
   });
 });
