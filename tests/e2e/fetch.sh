@@ -134,9 +134,12 @@ for engine in chromium firefox; do
     check "the page was fetched in the browser" "${report}" \
         "d.outcome === 'ok' && d.status === 200 && d.attempts.length === 1 && d.attempts[0].render === 'browser' && d.attempts[0].engine === '${engine}' && d.title === 'Fixture home'"
     # The behavior of a person was asked for with the attempt's own seed,
-    # and the browser reports having performed it.
+    # and the browser reports having performed it. The dwell is the
+    # persona's own draw, never below the hand's 600 ms (a request's
+    # `dwell_ms` is what `min_dwell` bounds); 1000 failed on GitHub for a
+    # draw of 932 ms.
     check "human behavior, from the attempt's seed" "${report}" \
-        "d.behavior !== null && d.behavior.seed === d.attempts[0].seed && d.behavior.dwell_ms >= 1000 && d.behavior.entry.strategy === 'direct' && d.behavior.positions > 0"
+        "d.behavior !== null && d.behavior.seed === d.attempts[0].seed && d.behavior.dwell_ms >= 600 && d.behavior.entry.strategy === 'direct' && d.behavior.positions > 0"
     check "the policy's pacing applied" "${report}" "d.pacing.applied === 'human' && d.pacing.request_ignored === false"
     check "bytes were relayed and counted" "${report}" "d.relayed_bytes.down > d.document_bytes && d.relayed_bytes.up > 0"
     # The site saw a browser: the document, its script, and what the
