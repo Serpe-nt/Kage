@@ -801,6 +801,19 @@ M12 that made it, newest first within each kind of change.
 
 ### Fixed
 
+- On a slow machine a persona scrolls pages again. A browser hands a
+  page its pointer moves and its wheel with the frames it draws, and a
+  new document draws none for a while when the software renderer
+  compiles its shaders: a quarter of a second on a workstation, more
+  than half a second on a four-core cloud runner. The hand turned the
+  wheel in that time, saw the page not move, and took it for a page that
+  does not scroll: every page ended after its first flick with nothing
+  read, and the page saw a pointer path of four moves. Now the hand acts
+  on a page once it has drawn two frames (waited for at most 2 s, from
+  the reader's world), and a flick that moves nothing is turned once
+  more after the page draws before the page counts as one that does not
+  go further. Found by the engines' parity suites on GitHub's runners;
+  reproduced here with the browser's CPUs held to 0.6 of one.
 - A batch or a crawl with several visitors no longer stands still for
   the long break of one of them while another reads (F54). The planner
   told a page that would rather be refused than wait five minutes to

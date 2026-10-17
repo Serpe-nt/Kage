@@ -297,6 +297,18 @@ const READ_WORDS = `(() => {
   return Math.round(words);
 })()`;
 
+/**
+ * Two frames of the page, or false at `limitMs`: from the reader's world,
+ * whose animation frames and timers the page cannot see.
+ */
+const readPainted = (limitMs: number) => `new Promise((resolve) => {
+  const limit = setTimeout(() => resolve(false), ${Math.max(0, Math.round(limitMs))});
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    clearTimeout(limit);
+    resolve(true);
+  }));
+})`;
+
 const boxExpression = (find: string) => `(() => {
   const element = ${find};
   if (!element) return null;
@@ -1072,6 +1084,7 @@ export class PageSession {
         boxExpression(`document.querySelector(${JSON.stringify(selector)})`),
       );
     },
+    painted: (limitMs: number) => this.read<boolean>(readPainted(limitMs)),
   };
 
   /**

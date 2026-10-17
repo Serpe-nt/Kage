@@ -69,6 +69,8 @@ export type ScrollOutcome = 'depth' | 'deadline' | 'page';
 const SCROLL_SETTLE_MS = 260;
 /** Most flicks one scroll may take: a bound, not a behavior. */
 const MAX_FLICKS = 400;
+/** The longest the hand waits for a page to draw before it acts on it all the same. */
+const PAINT_WAIT_MS = 2000;
 
 /**
  * One persona at the mouse and keyboard of its own display for the length
@@ -167,6 +169,18 @@ export class Human {
     }
   }
 
+  /**
+   * Waits until the page draws, at most {@link PAINT_WAIT_MS}. A browser
+   * hands a page its pointer moves and its wheel with the frames it draws,
+   * and a page that draws none for a while (a new document while a
+   * software renderer compiles its shaders, on a slow machine for half a
+   * second and more) loses the wheel turned meanwhile. A person, too, acts
+   * on a page once it is there to see.
+   */
+  private async seeing(): Promise<void> {
+    await this.parts.surface.painted(PAINT_WAIT_MS).catch(() => false);
+  }
+
   private async flick(direction: 'up' | 'down', remaining: number): Promise<number> {
     const flick = planFlick(
       direction,
@@ -193,6 +207,7 @@ export class Human {
    */
   private async reveal(selector: string): Promise<{ box: Box; metrics: SurfaceMetrics }> {
     const { surface, random } = this.parts;
+    await this.seeing();
     for (let attempt = 0; attempt < 60; attempt += 1) {
       const [box, metrics] = await Promise.all([surface.boxOf(selector), surface.metrics()]);
       if (box === null) {
@@ -263,8 +278,10 @@ export class Human {
    */
   async scrollTo(depth: number, deadline = Number.POSITIVE_INFINITY): Promise<ScrollOutcome> {
     const { surface, profile, random } = this.parts;
+    await this.seeing();
     let metrics = await surface.metrics();
     await this.overPage(metrics);
+    let stuck = false;
     for (let count = 0; count < MAX_FLICKS; count += 1) {
       const scrollable = Math.max(0, metrics.scrollHeight - metrics.viewport.height);
       const remaining = scrollable * depth - metrics.scrollY;
@@ -280,9 +297,18 @@ export class Human {
       metrics = await surface.metrics();
       const moved = metrics.scrollY - before;
       if (moved <= 0) {
-        // The page does not scroll any further (or at all).
-        return 'page';
+        // The page does not scroll any further (or at all), or it drew
+        // nothing while the wheel turned: once it draws, one more flick
+        // tells the two apart.
+        if (stuck) {
+          return 'page';
+        }
+        stuck = true;
+        await this.seeing();
+        metrics = await surface.metrics();
+        continue;
       }
+      stuck = false;
       this.notchPx = Math.max(20, moved / notches);
       // A rest never outlasts the time the scrolling was given: whoever set
       // the deadline has something to do after it. (The draws are the same

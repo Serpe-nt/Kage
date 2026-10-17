@@ -76,6 +76,14 @@ export interface PageSurface {
   visibleWords(): Promise<number>;
   /** The box of the first element a CSS selector matches, in viewport pixels; `null` without one. */
   boxOf(selector: string): Promise<Box | null>;
+  /**
+   * Waits until the page has drawn two frames, at most `limitMs`. A
+   * browser hands a page its pointer moves and its wheel with the frames
+   * it draws, and loses what came while it drew none.
+   *
+   * @returns false when the limit came first.
+   */
+  painted(limitMs: number): Promise<boolean>;
 }
 
 /** Time, injectable so that tests do not wait. */

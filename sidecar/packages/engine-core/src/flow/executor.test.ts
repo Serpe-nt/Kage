@@ -475,6 +475,7 @@ function pacedRig(options: { seed?: string; persona?: string; leaves?: readonly 
       }),
     visibleWords: () => Promise.resolve(120),
     boxOf: () => Promise.resolve({ x: 500, y: 300, width: 140, height: 40 }),
+    painted: () => Promise.resolve(true),
   };
   const human = new Human({
     device,
