@@ -204,7 +204,7 @@ stored="$(psql "SELECT count(*) FROM jobs WHERE idempotency_key IS NOT NULL")"
 [ "${stored}" -eq 1 ] || fail "${stored} jobs are stored under the batch's Idempotency-Key, expected 1"
 echo "    $(value "${seen}" "d.filter((r) => r.path.startsWith('/listing?page=1')).length") listing pages asked for; one job under the Idempotency-Key"
 
-echo "==> the batch's events arrived signed, from Kage's own address, the first one after a retry"
+echo "==> the batch's events arrived signed, from Kage's own address, the first one refused and then retried or overtaken"
 deliveries=''
 for _ in $(seq 1 30); do
     deliveries="$(got 'http://hooks.kage.test:8090/__deliveries')"
@@ -215,8 +215,16 @@ for _ in $(seq 1 30); do
 done
 check "every delivery was verified by the receiver" "${deliveries}" \
     "d.length >= 3 && d.every((e) => e.verified && e.method === 'POST' && e.path === '/kage' && e.content_type === 'application/json' && /^kage\//.test(e.user_agent) && e.forwarded.length === 0 && e.age_s < 60)"
-check "the first delivery was refused and came again under the same id" "${deliveries}" \
-    "d[0].answered === 503 && d.filter((e) => e.delivery === d[0].delivery).length === 2 && d.filter((e) => e.delivery === d[0].delivery)[1].answered === 204"
+# The receiver refuses the first event. It comes again under its own id
+# after the first retry's wait (2 s here), unless it is a `job.progress` and
+# the batch queued a newer one first: then it is dropped (`superseded`,
+# spec §16.6) and the receiver is told the newer figure. A batch that reads
+# ten pages in less than the wait and the sender's poll does the second.
+first="$(value "${deliveries}" "d[0].delivery")"
+first_state="$(psql "SELECT state FROM webhook_deliveries WHERE id = '${first}'")"
+check "the first delivery was refused, then came again under its own id or was overtaken by newer progress" "${deliveries}" \
+    "d[0].answered === 503 && ((d.filter((e) => e.delivery === d[0].delivery).length === 2 && d.filter((e) => e.delivery === d[0].delivery)[1].answered === 204 && '${first_state}' === 'delivered') || (d[0].event === 'job.progress' && d.filter((e) => e.delivery === d[0].delivery).length === 1 && '${first_state}' === 'superseded'))"
+echo "    the first event was refused, then ${first_state}"
 check "one job.completed for the batch, with the job as its key sees it and nothing of what was fetched" "${deliveries}" \
     "d.filter((e) => e.event === 'job.completed' && e.body.job.id === '${batch}').length === 1 && d.some((e) => e.event === 'job.completed' && e.body.job.state === 'succeeded' && e.body.job.items.succeeded === 50 && e.body.type === 'job.completed' && e.body.id === e.delivery) && !JSON.stringify(d.map((e) => e.body)).includes('listing')"
 check "progress was reported on the way" "${deliveries}" \
@@ -227,8 +235,8 @@ for proxy in proxy-a proxy-b proxy-c; do
 done
 call GET "/v1/jobs/${batch}" "${client}"
 expect 200 "GET /v1/jobs/{id}"
-check "the delivery log shows the retry, and of the receiver only its host" "${body}" \
-    "d.webhook.host === 'hooks.kage.test' && d.webhook.deliveries.some((e) => e.attempts === 2 && e.state === 'delivered' && e.last_status === 204) && d.webhook.deliveries.every((e) => e.state === 'delivered' || e.state === 'superseded') && !JSON.stringify(d).includes('${hook_secret}')"
+check "the delivery log shows the refused event as it ended, and of the receiver only its host" "${body}" \
+    "d.webhook.host === 'hooks.kage.test' && d.webhook.deliveries.some((e) => '${first_state}' === 'delivered' ? (e.attempts === 2 && e.state === 'delivered' && e.last_status === 204) : (e.attempts === 1 && e.state === 'superseded' && e.last_status === 503)) && d.webhook.deliveries.every((e) => e.state === 'delivered' || e.state === 'superseded') && !JSON.stringify(d).includes('${hook_secret}')"
 sealed="$(psql "SELECT count(*) FROM jobs WHERE webhook_secret IS NOT NULL AND position('${hook_secret}' in encode(webhook_secret, 'escape')) > 0")"
 [ "${sealed}" -eq 0 ] || fail "a webhook secret is stored in the clear"
 echo "    $(value "${deliveries}" "d.length + ' deliveries: ' + d.map((e) => e.event.replace('job.', '') + ' ' + e.answered).join(', ')")"
