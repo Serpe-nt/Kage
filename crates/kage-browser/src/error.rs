@@ -79,6 +79,21 @@ pub enum BrowserError {
 }
 
 impl BrowserError {
+    /// What went wrong, in a word: the contract's code for a refusal, else
+    /// what kind of failure it was. For a span or a metric label; it holds
+    /// nothing of the request.
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Self::Setup(_) => "setup",
+            Self::Connect { .. } => "unreachable",
+            Self::Timeout { .. } => "timeout",
+            Self::Transport { .. } => "transport",
+            Self::Refused { code, .. } => code.as_str(),
+            Self::Unexpected { .. } => "unexpected",
+            Self::FlowInterrupted { .. } => "flow_interrupted",
+        }
+    }
+
     /// The contract's error code, when the sidecar refused the request.
     pub const fn code(&self) -> Option<ErrorCode> {
         match self {

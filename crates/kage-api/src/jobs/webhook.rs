@@ -66,6 +66,7 @@ use sha2::Sha256;
 use subtle::ConstantTimeEq;
 use tokio::sync::Notify;
 use tokio::task::JoinSet;
+use tracing::Instrument;
 use url::{Host, Url};
 
 use super::view::JobView;
@@ -603,8 +604,24 @@ impl WebhookSender {
         })
     }
 
-    /// One attempt at one delivery, written into the log.
+    /// One attempt at one delivery, written into the log, in a span of its
+    /// own (spec §20): the delivery, its job and its event, never its
+    /// receiver's address or its body.
     async fn attempt(&self, delivery: WebhookDelivery) -> Sent {
+        let span = tracing::info_span!(
+            "webhook.deliver",
+            otel.kind = "client",
+            delivery = %delivery.id,
+            job = %delivery.job_id,
+            event = delivery.event.as_str(),
+            n = delivery.attempts.saturating_add(1),
+            status = tracing::field::Empty,
+            result = tracing::field::Empty,
+        );
+        self.attempt_in_span(delivery).instrument(span).await
+    }
+
+    async fn attempt_in_span(&self, delivery: WebhookDelivery) -> Sent {
         let started_at = self.clock.now();
         let n = delivery.attempts.saturating_add(1);
         let (status, error, retry_after, final_failure) = match self.outgoing(&delivery).await {
@@ -640,6 +657,11 @@ impl WebhookSender {
             AttemptEnd::Retry(_) => "retry",
             AttemptEnd::Failed => "failed",
         };
+        let span = tracing::Span::current();
+        span.record("result", result);
+        if let Some(status) = status {
+            span.record("status", status);
+        }
         metrics::counter!(
             "kage_webhook_deliveries_total",
             "event" => delivery.event.as_str(),

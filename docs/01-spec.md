@@ -2131,7 +2131,8 @@ drawn from, §10.4), `crawl` (`default_max_depth` 3, `default_max_pages`
 `near_duplicate_bits` 6, `max_sitemaps` 10, `max_sitemap_urls` 50 000,
 `skipped_extensions`; §13), `extract` (`thin_words` 80; §14), `robots`
 (`ttl` 24 h, `error_ttl` 1 h, `max_bytes` 512 KiB, `agents` `["kage"]`,
-`scout_quarantine` 30 d; §14), `cache` (`max_ttl` 24 h, never longer than
+`scout_quarantine` 30 d; §14), `telemetry` (`otlp_endpoint` none,
+`service_name` `kage`, `export_timeout` 10 s; §20), `cache` (`max_ttl` 24 h, never longer than
 `artifacts.retention_days`; §15), `bandwidth` and `forwarder` (§7.5).
 `kage config check` reports the scheduler's caps, the budget and the
 forwarder. `server` holds what the API's listener enforces (§19): `bind`
@@ -2411,8 +2412,21 @@ are gzip-compressed on disk.
   sidecar's own `/v1/metrics` merged in by family; a sidecar that does not
   answer is missing from the scrape. No label is a secret, a token or a
   proxy's address.
-- Traces: OTLP from both processes; one trace per request spanning API →
-  scheduler → attempt → sidecar navigate.
+- Traces: OTLP over HTTP with protobuf from both processes, to the
+  collector `telemetry.otlp_endpoint` names (Kage, through wreq, never
+  through a proxy) and `SIDECAR_OTLP_ENDPOINT` (a sidecar); without one
+  nothing is sent. One trace per request: `api.request` (the route as its
+  pattern, the method, the status, the key's id) → `pipeline.fetch` (the
+  request's id, its domain, the render asked for, how it ended) →
+  `scheduler.wait` → `attempt` (its number, its render, the persona's id,
+  outcome and vendor) → `sidecar.navigate` or `sidecar.flow`, on Kage's side
+  as the client and on the sidecar's as the server, joined by the W3C
+  `traceparent` of Kage's own request to the sidecar. A job's page is a
+  trace of its own from `job.item`; a webhook attempt is `webhook.deliver`.
+  No span holds a URL's path or query, an address, a seed, a token, a
+  fingerprint or a body. Every JSON line of Kage and of a sidecar written
+  inside a span carries `trace_id` and `span_id`, also when nothing is
+  sent.
 - Dashboards (optional profile): overview, per-domain block rate, persona
   health, pool, sidecar resources.
 

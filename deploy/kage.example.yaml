@@ -686,3 +686,16 @@ cache:
   # The longest a result may be served from the cache, whatever a policy or
   # a request says; never longer than artifacts.retention_days.
   max_ttl: 1d
+
+# Traces (spec §20). Every request is a trace across Kage and the sidecar,
+# and every log line carries its trace_id and span_id, also when nothing is
+# sent. With the observability profile (deploy/compose.observability.yaml)
+# the spans go to its collector: KAGE__TELEMETRY__OTLP_ENDPOINT.
+telemetry:
+  # OTLP over HTTP with protobuf, the address with its path; asked
+  # directly, never through a proxy. null sends nothing.
+  otlp_endpoint: null
+  # The service.name of the traces of this process.
+  service_name: kage
+  # The longest one export to the collector may take.
+  export_timeout: 10s

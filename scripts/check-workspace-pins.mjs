@@ -15,13 +15,7 @@ const root = resolve(process.argv[2] ?? '.');
 // Pins that are declared on purpose although no crate inherits them, each
 // with its reason. An entry that a crate starts to use, or that is gone
 // from Cargo.toml, fails the check too: the list holds no stale excuse.
-const DECLARED_ONLY = new Map([
-  // Pinned since M0 for the traces of spec §20; first used by M12.
-  ['tracing-opentelemetry', 'pinned for the traces of spec §20'],
-  ['opentelemetry', 'pinned for the traces of spec §20'],
-  ['opentelemetry_sdk', 'pinned for the traces of spec §20'],
-  ['opentelemetry-otlp', 'pinned for the traces of spec §20'],
-]);
+const DECLARED_ONLY = new Map([]);
 
 /** The keys of one table of a manifest: `name = ...` lines until the next table. */
 function keysOf(manifest, table) {

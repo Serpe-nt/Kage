@@ -51,6 +51,9 @@ deny = [
     { crate = "openssl-sys", reason = "conflicts with BoringSSL; use rustls or wreq" },
     { crate = "openssl", reason = "conflicts with BoringSSL; use rustls or wreq" },
     { crate = "native-tls", reason = "links OpenSSL on Linux; use rustls" },
+    # Every outbound request in Rust goes through wreq; opentelemetry-otlp
+    # brings reqwest with its default features (M12).
+    { crate = "reqwest", reason = "all outbound HTTP in Rust goes through wreq" },
 ]
 
 [sources]

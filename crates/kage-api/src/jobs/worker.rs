@@ -66,6 +66,7 @@ use kage_store::StoreError;
 use serde_json::{Value, json};
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, watch};
 use tokio::task::JoinSet;
+use tracing::Instrument;
 use uuid::Uuid;
 
 use super::request::{
@@ -471,10 +472,18 @@ impl Work {
         earlier: Option<Vec<kage_core::domain::Attempt>>,
         stop: Stop,
     ) -> ItemEnd {
+        // A job's page is a trace of its own (spec §20).
+        let span = tracing::info_span!(
+            "job.item",
+            otel.kind = "consumer",
+            job = %self.job,
+            request = %request,
+        );
         match self
             .engine
             .pipeline
             .fetch_for_job(request, order, earlier, stop)
+            .instrument(span)
             .await
         {
             Ok(JobFetch::Finished(report)) => ItemEnd::Finished(report),

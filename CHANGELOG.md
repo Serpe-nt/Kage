@@ -69,6 +69,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     answers itself ends the wait after 1.5 s, and a file is no page
     (`aborted`). A client-routed site still costs a click and a typed
     load per page: documented in spec §10.4, not solved.
+  - Traces (spec §20): every request is a trace, `api.request` →
+    `pipeline.fetch` → `scheduler.wait` → `attempt` → `sidecar.navigate` or
+    `sidecar.flow`, and every page of a job one from `job.item`; webhook
+    attempts are `webhook.deliver`. With `telemetry.otlp_endpoint` set the
+    spans go to that collector as OTLP over HTTP with protobuf, through
+    wreq and never a proxy; without it nothing leaves the process. Every
+    JSON log line written inside a span carries `trace_id` and `span_id`,
+    and a request to a sidecar its `traceparent`. No span holds a URL's
+    path or query, an address, a seed, a token or a fingerprint.
+    `deny.toml` bans `reqwest`, which `opentelemetry-otlp` brings with its
+    default features.
   - Two identical requests under way at the same moment are one visit
     (F52): of two fetches or batch items with one cache key in one
     process, the second waits for the first and is answered from the

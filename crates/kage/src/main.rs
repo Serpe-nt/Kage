@@ -24,6 +24,7 @@ mod proxy_cmd;
 mod selftest_browser;
 mod selftest_cmd;
 mod serve;
+mod telemetry;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -34,7 +35,6 @@ use kage_core::config::process_env;
 use kage_core::domain::{Engine, PersonaState, ProxyState, RenderMode, Scope};
 use kage_core::duration::HumanDuration;
 use kage_core::ids::{ApiKeyId, PersonaId, ProxyId};
-use tracing_subscriber::EnvFilter;
 
 /// Library crates composed into this binary, reported once at startup.
 const COMPONENTS: [&str; 10] = [
@@ -542,15 +542,9 @@ async fn key(
 /// Installs the global JSON log subscriber. The level comes from `RUST_LOG`
 /// and defaults to `info`. Commands that print their result on stdout log
 /// to stderr.
+/// Installs the log subscriber of a command that sends no traces.
 fn init_tracing(to_stderr: bool) -> anyhow::Result<()> {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let builder = tracing_subscriber::fmt().json().with_env_filter(filter);
-    let installed = if to_stderr {
-        builder.with_writer(std::io::stderr).try_init()
-    } else {
-        builder.try_init()
-    };
-    installed.map_err(|error| anyhow::anyhow!("failed to install the log subscriber: {error}"))
+    telemetry::install(to_stderr, &kage_core::config::TelemetryConfig::default()).map(drop)
 }
 
 /// `kage selftest`. What was found is shown even when the self-test then
@@ -680,6 +674,21 @@ async fn main() -> anyhow::Result<()> {
         return print_openapi();
     }
 
+    // The server sends its traces where its configuration says, so its
+    // subscriber is installed once the configuration is read.
+    if let Command::Serve { bind } = cli.command {
+        let config = config_cmd::load(config_file.as_deref(), process_env())?;
+        let telemetry = telemetry::install(false, &config.telemetry)?;
+        tracing::info!(
+            version = env!("CARGO_PKG_VERSION"),
+            components = ?COMPONENTS,
+            traces = config.telemetry.otlp_endpoint.is_some(),
+            "kage starting"
+        );
+        let served = serve::run(config, bind).await.context("serve failed");
+        telemetry.shut_down().await;
+        return served;
+    }
     init_tracing(matches!(
         cli.command,
         Command::Proxy { .. }
@@ -706,15 +715,6 @@ async fn main() -> anyhow::Result<()> {
             let result = Box::pin(fetch_cmd::fetch(&config, &options, &mut out)).await;
             shown(&out, result)
         }
-        Command::Serve { bind } => {
-            let config = config_cmd::load(config_file.as_deref(), process_env())?;
-            tracing::info!(
-                version = env!("CARGO_PKG_VERSION"),
-                components = ?COMPONENTS,
-                "kage starting"
-            );
-            serve::run(config, bind).await.context("serve failed")
-        }
         Command::Healthcheck { addr } => healthcheck::run(addr).await.context("healthcheck failed"),
         Command::Migrate { check } => {
             let config = config_cmd::load(config_file.as_deref(), process_env())?;
@@ -727,7 +727,8 @@ async fn main() -> anyhow::Result<()> {
         Command::Config {
             command: ConfigCommand::Check,
         }
-        | Command::Openapi => Ok(()),
+        | Command::Openapi
+        | Command::Serve { .. } => Ok(()),
         Command::Key { command } => {
             let config = config_cmd::load(config_file.as_deref(), process_env())?;
             let mut out = Vec::new();

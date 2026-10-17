@@ -90,11 +90,14 @@ async-trait = { version = "=0.1.92" }
 tracing = { version = "=0.1.44" }
 tracing-subscriber = { version = "=0.3.23", default-features = false }
 tracing-opentelemetry = { version = "=0.34.0", default-features = false }
-opentelemetry = { version = "=0.33.0", default-features = false }
-opentelemetry_sdk = { version = "=0.33.0", default-features = false }
-# Default features are off on purpose: the exporter transport is chosen in
-# M12 and must use rustls, never OpenSSL.
-opentelemetry-otlp = { version = "=0.33.0", default-features = false }
+# Traces (spec §20). 0.33.1 for its fixes to a parent context and to
+# `Context` on drop. Default features are off on purpose: with them the
+# exporter brings reqwest; Kage sends OTLP/HTTP protobuf through wreq.
+opentelemetry = { version = "=0.33.1", default-features = false }
+opentelemetry_sdk = { version = "=0.33.1", default-features = false }
+opentelemetry-otlp = { version = "=0.33.1", default-features = false }
+# The exporter's HTTP client trait, which the binary implements over wreq.
+opentelemetry-http = { version = "=0.33.1", default-features = false }
 metrics = { version = "=0.24.6" }
 metrics-exporter-prometheus = { version = "=0.18.3", default-features = false }
 

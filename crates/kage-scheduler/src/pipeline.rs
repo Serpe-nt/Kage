@@ -84,6 +84,7 @@ use kage_core::ssrf::{SsrfPolicy, check_url};
 use kage_crawl::html::Page;
 use kage_extract::Options as ExtractOptions;
 use kage_http::RequestKind;
+use tracing::Instrument;
 use url::Url;
 
 pub use self::cache::CachePlan;
@@ -407,6 +408,29 @@ pub struct Kept {
 /// that is under way is not cut by it.
 pub type Stop = tokio::sync::watch::Receiver<bool>;
 
+/// The span of one request through the pipeline (spec §20): its id, its
+/// domain and the render it asked for, never its address.
+fn fetch_span(id: RequestId, order: &FetchOrder) -> tracing::Span {
+    tracing::info_span!(
+        "pipeline.fetch",
+        request = %id,
+        domain = order.url.host_str().unwrap_or_default(),
+        render = order.render.as_str(),
+        outcome = tracing::field::Empty,
+    )
+}
+
+/// Writes down on the current span how a run of the pipeline ended.
+fn note_ending(ran: &Result<Ran, SchedulerError>) {
+    let ending = match ran {
+        Ok(Ran::Finished(report)) => report.outcome.as_str(),
+        Ok(Ran::Deferred(_)) => "deferred",
+        Ok(Ran::Stopped) => "stopped",
+        Err(_) => "error",
+    };
+    tracing::Span::current().record("outcome", ending);
+}
+
 /// Resolves when the signal says stop; never when its sender is gone.
 async fn stopped(stop: &mut Stop) {
     if stop.wait_for(|stop| *stop).await.is_err() {
@@ -705,11 +729,17 @@ impl Pipeline {
         let pipeline = self.clone();
         let overflowed = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&overflowed);
-        let mut task = tokio::spawn(async move {
-            let mut course = pipeline.begin(request, order, None, None).await?;
-            course.overflowed = Some(flag);
-            Box::pin(pipeline.run(course, None)).await
-        });
+        let span = fetch_span(request, &order);
+        let mut task = tokio::spawn(
+            async move {
+                let mut course = pipeline.begin(request, order, None, None).await?;
+                course.overflowed = Some(flag);
+                let ran = Box::pin(pipeline.run(course, None)).await;
+                note_ending(&ran);
+                ran
+            }
+            .instrument(span),
+        );
         let Ok(finished) = tokio::time::timeout(wall, &mut task).await else {
             // From here on the fetch is a job's.
             overflowed.store(true, Ordering::Relaxed);
@@ -836,8 +866,16 @@ impl Pipeline {
         order: FetchOrder,
         give_up_at: Option<DateTime<Utc>>,
     ) -> Result<FetchReport, SchedulerError> {
-        let course = self.begin(id, order, give_up_at, None).await?;
-        match Box::pin(self.run(course, None)).await? {
+        let span = fetch_span(id, &order);
+        let ran = async {
+            let course = self.begin(id, order, give_up_at, None).await?;
+            let ran = Box::pin(self.run(course, None)).await;
+            note_ending(&ran);
+            ran
+        }
+        .instrument(span)
+        .await;
+        match ran? {
             Ran::Finished(report) => Ok(*report),
             // Without a stop signal nothing is deferred and nothing stops.
             Ran::Deferred(_) | Ran::Stopped => Err(SchedulerError::ShuttingDown),
@@ -859,8 +897,16 @@ impl Pipeline {
         earlier: Option<Vec<Attempt>>,
         stop: Stop,
     ) -> Result<JobFetch, SchedulerError> {
-        let course = self.begin(id, order, None, earlier).await?;
-        Ok(match Box::pin(self.run(course, Some(stop))).await? {
+        let span = fetch_span(id, &order);
+        let ran = async {
+            let course = self.begin(id, order, None, earlier).await?;
+            let ran = Box::pin(self.run(course, Some(stop))).await;
+            note_ending(&ran);
+            ran
+        }
+        .instrument(span)
+        .await;
+        Ok(match ran? {
             Ran::Finished(report) => JobFetch::Finished(report),
             Ran::Deferred(deferred) => JobFetch::Deferred(deferred),
             Ran::Stopped => JobFetch::Stopped,
@@ -1008,7 +1054,15 @@ impl Pipeline {
         };
 
         loop {
-            let acquiring = self.scheduler.acquire(self.work(&course));
+            // Waiting for a persona and its turn (spec §20).
+            let acquiring =
+                self.scheduler
+                    .acquire(self.work(&course))
+                    .instrument(tracing::info_span!(
+                        "scheduler.wait",
+                        kind = ?course.order.priority,
+                        n = course.progress.attempts() + 1,
+                    ));
             let granted = match &mut stop {
                 Some(stop) => tokio::select! {
                     granted = acquiring => granted,
@@ -1300,10 +1354,27 @@ impl Pipeline {
         // Under way from here until it is written down: a server that
         // stops waits for it, and cuts it only when the wait is over.
         let _under_way = self.under_way.begin();
+        // The attempt (spec §20): the persona by its id, which is no
+        // secret; never its seed, its address or its fingerprint.
+        let span = tracing::info_span!(
+            "attempt",
+            n,
+            render = course.progress.render().as_str(),
+            persona = %persona.id,
+            outcome = tracing::field::Empty,
+            vendor = tracing::field::Empty,
+        );
         let started_at = self.now();
-        let output = self.under_way.until_cut(self.executor.run(&job)).await;
+        let output = self
+            .under_way
+            .until_cut(self.executor.run(&job).instrument(span.clone()))
+            .await;
         let finished_at = self.now();
         let outcome = output.outcome();
+        span.record("outcome", outcome.as_str());
+        if let Some(vendor) = output.classification.vendors.first() {
+            span.record("vendor", vendor.as_str());
+        }
         let verdict = AttemptVerdict::of(&output.classification);
         let ruling = course.progress.record(persona.id, verdict);
 
