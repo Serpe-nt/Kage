@@ -154,10 +154,19 @@ and `btls-sys` only, and no `openssl-sys`, `openssl`, `native-tls` or
 `reqwest`. That check caught the two held-back pins above.
 
 Advisories: `cargo deny` fails on every advisory against the lockfile,
-"unmaintained" included. None is ignored. The one that was, RUSTSEC-2024-0449
-(`unsafe-libyaml`, through `figment` and `serde_yaml`, ignored from M10), went
-with that parser in M12 (F45). An ignore is a decision recorded in
-`deny.toml` and here, never a way to get a gate past a vulnerability.
+"unmaintained" included, and so does `cargo audit` on every vulnerability.
+The one ignored from M10, RUSTSEC-2024-0449 (`unsafe-libyaml`, through
+`figment` and `serde_yaml`), went with that parser in M12 (F45). Three are
+ignored since M12, in `deny.toml` and in `.cargo/audit.toml`, decided with
+the planning session: RUSTSEC-2026-0367, -0368 and -0369 against `zip`
+8.6.0 (2026-10-09/10, fixed in `zip` 9). `zip` is only a build dependency of
+`utoipa-swagger-ui` 10.0.1, the newest, which requires `zip ^8.6`; its build
+script unpacks the vendored Swagger UI bundle, pinned by checksum in
+`Cargo.lock`, once at compile time, and nothing opens an archive at run
+time, while the advisories are about extracting an attacker's archive.
+Review by 2026-12-31, or drop them with the first `utoipa-swagger-ui` on
+`zip` 9 (follow-up F55). An ignore is a decision recorded in `deny.toml`
+and here, never a way to get a gate past a vulnerability.
 
 Hard rule: `cargo tree -i openssl-sys` must be empty. `just deny` enforces it
 three ways: `scripts/check-no-openssl.sh` (lockfile and `cargo tree`), and a
