@@ -56,6 +56,49 @@ pull requests (decision D30); the first push to `origin` fast-forwards
 `main` by those commits, and `ci.yaml` runs on that push. From then on
 every change goes through a pull request.
 
+## Actions, the token and the scanners
+
+Set once, with branch protection, by an admin of the repository:
+
+| Setting | Value |
+|---|---|
+| Actions permissions | GitHub's own actions and the listed ones: `Swatinem/rust-cache@*`, `anchore/sbom-action@*`, `docker/build-push-action@*`, `docker/login-action@*`, `docker/metadata-action@*`, `docker/setup-buildx-action@*`, `pnpm/action-setup@*`, `sigstore/cosign-installer@*`, `taiki-e/install-action@*` |
+| Require actions to be pinned to a full-length commit SHA | on (every action is pinned so already) |
+| Default `GITHUB_TOKEN` permissions | read only; a workflow asks for more per job |
+| Allow GitHub Actions to create and approve pull requests | off |
+| Fork pull requests | approval required for every outside contributor before a run |
+| Secret scanning, push protection | on |
+| Dependabot alerts | on; version updates off (pins move in a pull request of their own, the fingerprint-critical ones never by a bot, `docs/versions.md`) |
+
+```bash
+gh api --method PUT repos/Serpe-nt/Kage/actions/permissions \
+  --field enabled=true --field allowed_actions=selected --field sha_pinning_required=true
+gh api --method PUT repos/Serpe-nt/Kage/actions/permissions/selected-actions --input - <<'JSON'
+{
+  "github_owned_allowed": true,
+  "verified_allowed": false,
+  "patterns_allowed": [
+    "Swatinem/rust-cache@*", "anchore/sbom-action@*", "docker/build-push-action@*",
+    "docker/login-action@*", "docker/metadata-action@*", "docker/setup-buildx-action@*",
+    "pnpm/action-setup@*", "sigstore/cosign-installer@*", "taiki-e/install-action@*"
+  ]
+}
+JSON
+gh api --method PUT repos/Serpe-nt/Kage/actions/permissions/workflow \
+  --field default_workflow_permissions=read --field can_approve_pull_request_reviews=false
+gh api --method PUT repos/Serpe-nt/Kage/actions/permissions/fork-pr-contributor-approval \
+  --field approval_policy=all_external_contributors
+gh api --method PATCH repos/Serpe-nt/Kage --input - <<'JSON'
+{ "security_and_analysis": {
+    "secret_scanning": { "status": "enabled" },
+    "secret_scanning_push_protection": { "status": "enabled" } } }
+JSON
+gh api --method PUT repos/Serpe-nt/Kage/vulnerability-alerts
+```
+
+A new action in a workflow needs its owner in the list above, here and in
+the setting, or its run fails before the first step.
+
 ## Commits
 
 Commit subjects and pull request titles follow
