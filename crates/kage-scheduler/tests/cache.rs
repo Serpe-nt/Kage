@@ -164,6 +164,81 @@ async fn a_page_the_cache_holds_is_no_visit() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn two_identical_fetches_under_way_at_once_are_one_visit() {
+    let mut world = World::new(3, BROWSER);
+    world.script.takes(Duration::from_secs(20));
+    let url = "https://shop.example/a";
+
+    // The second asks while the first is being read: it waits for it and
+    // is answered with what the first one stored, the moment it stored it.
+    let pipeline = world.pipeline.clone();
+    let first = tokio::spawn(async move { pipeline.fetch(cached(url, "k1", 10)).await });
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let second = world.pipeline.fetch(cached(url, "k1", 10)).await.unwrap();
+    let first = first.await.unwrap().unwrap();
+    assert_eq!(world.script.seen().len(), 1);
+    assert!(first.cached.is_none());
+    assert!(second.attempts.is_empty() && second.last.is_none());
+    assert_ne!(second.request, first.request);
+    let served = second.cached.as_deref().unwrap();
+    assert_eq!(served.cached_at, Some(first.finished_at));
+    assert_eq!(second.finished_at, first.finished_at);
+    // Its pacing is its own: it waited for no persona.
+    assert_eq!(second.pacing.waited, Duration::ZERO);
+
+    // Another key is another page: both are visits.
+    let pipeline = world.pipeline.clone();
+    let one = tokio::spawn(async move { pipeline.fetch(cached(url, "k2", 10)).await });
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let other = world.pipeline.fetch(cached(url, "k3", 10)).await.unwrap();
+    assert!(one.await.unwrap().unwrap().cached.is_none());
+    assert!(other.cached.is_none());
+    assert_eq!(world.script.seen().len(), 3);
+
+    // A first whose page is not one the cache keeps: the second, woken,
+    // makes its own visit.
+    world.script.then(blocked(Outcome::Forbidden, 1.0));
+    let pipeline = world.pipeline.clone();
+    let refused = tokio::spawn(async move {
+        pipeline
+            .fetch(FetchOrder {
+                max_retries: Some(0),
+                ..cached("https://shop.example/b", "k4", 10)
+            })
+            .await
+    });
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let own = world
+        .pipeline
+        .fetch(cached("https://shop.example/b", "k4", 10))
+        .await
+        .unwrap();
+    assert_eq!(refused.await.unwrap().unwrap().outcome, Outcome::Forbidden);
+    assert_eq!(own.outcome, Outcome::Ok);
+    assert!(own.cached.is_none());
+    assert_eq!(world.script.seen().len(), 5);
+
+    // A job's fetch that waits for one under way stops when its worker
+    // stops, with nothing asked of the site and its request still open.
+    let pipeline = world.pipeline.clone();
+    let leading = tokio::spawn(async move { pipeline.fetch(cached(url, "k5", 10)).await });
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let (stopping, stop) = watch::channel(false);
+    let pipeline = world.pipeline.clone();
+    let waiting = tokio::spawn(async move {
+        pipeline
+            .fetch_for_job(RequestId::new(), cached(url, "k5", 10), None, stop)
+            .await
+    });
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    stopping.send(true).unwrap();
+    assert!(matches!(waiting.await.unwrap().unwrap(), JobFetch::Stopped));
+    assert!(leading.await.unwrap().unwrap().cached.is_none());
+    assert_eq!(world.script.seen().len(), 6);
+    world.shut_down().await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn the_cache_answers_while_the_site_is_paused_and_for_a_job() {
     let mut world = World::new(3, BROWSER);
     let url = "https://shop.example/a";

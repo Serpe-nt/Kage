@@ -69,6 +69,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     answers itself ends the wait after 1.5 s, and a file is no page
     (`aborted`). A client-routed site still costs a click and a typed
     load per page: documented in spec §10.4, not solved.
+  - Two identical requests under way at the same moment are one visit
+    (F52): of two fetches or batch items with one cache key in one
+    process, the second waits for the first and is answered from the
+    cache with what it stored; when the first kept nothing, the second
+    makes its own visit. `kage_cache_requests_total{result="joined"}`
+    counts the waits. The same crawl asked for again inside the lifetime
+    still visits every page again.
   - A site's scout has an end to its rule and the operator a way to give
     a site another one (F51). A persona that read a site is kept from
     scouting it for `robots.scout_quarantine` (new, 30 days, 1 to 3650
