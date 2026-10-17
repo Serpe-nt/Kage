@@ -292,9 +292,11 @@ mod tests {
                 "robots.scout_quarantine",
             ),
             (
+                // Ten years and a second, written out: the bound itself.
                 |sections| {
-                    sections.1.scout_quarantine =
-                        HumanDuration::new(super::MAX_SCOUT_QUARANTINE + Duration::from_secs(1));
+                    sections.1.scout_quarantine = HumanDuration::new(
+                        Duration::from_hours(3650 * 24) + Duration::from_secs(1),
+                    );
                 },
                 "robots.scout_quarantine",
             ),
@@ -314,9 +316,7 @@ mod tests {
         // The edges are inside.
         let edges: [Change; 11] = [
             |sections| sections.1.scout_quarantine = HumanDuration::from_hours(24),
-            |sections| {
-                sections.1.scout_quarantine = HumanDuration::new(super::MAX_SCOUT_QUARANTINE);
-            },
+            |sections| sections.1.scout_quarantine = HumanDuration::from_hours(3650 * 24),
             |sections| sections.0.thin_words = 1,
             |sections| sections.0.thin_words = 10_000,
             |sections| sections.1.ttl = HumanDuration::from_mins(1),

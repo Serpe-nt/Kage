@@ -174,6 +174,8 @@ mod tests {
         let unknown =
             from_str::<Sample>("name: x\ncountries: []\nhosts: {}\nextra: 1\n").unwrap_err();
         assert!(unknown.contains("extra"), "{unknown}");
+        // Where it was read: the document, not a default.
+        assert!(unknown.contains("YAML source string"), "{unknown}");
 
         let missing = from_str::<Sample>("name: x\n").unwrap_err();
         assert!(missing.contains("countries"), "{missing}");
@@ -240,12 +242,27 @@ mod tests {
             "{:?}",
             started.elapsed()
         );
+        // 16 MiB of text, keys counted: one key of a byte and its value.
+        let text = |bytes: usize| format!("x: \"{}\"\n", "x".repeat(bytes - 1));
+        assert!(from_str::<BTreeMap<String, Value>>(&text(16 * 1024 * 1024)).is_ok());
+        let said = from_str::<BTreeMap<String, Value>>(&text(16 * 1024 * 1024 + 1)).unwrap_err();
+        assert!(said.contains("ScalarBytes"), "{said}");
         // One string of 100 KiB repeated by aliases to more than 16 MiB.
         let mut amplified = format!("big: &big \"{}\"\nmany: [", "x".repeat(100 * 1024));
         amplified.push_str(&vec!["*big"; 200].join(", "));
         amplified.push_str("]\n");
         let said = from_str::<BTreeMap<String, Value>>(&amplified).unwrap_err();
-        assert!(said.to_lowercase().contains("budget"), "{said}");
+        assert!(said.contains("ScalarBytes"), "{said}");
+        // Nine levels of ten aliases each, a billion strings: refused for the
+        // events it would replay.
+        let laughs: String = std::iter::once("a0: &a0 \"lol\"\n".to_owned())
+            .chain((1..=9).map(|level| {
+                let below = vec![format!("*a{}", level - 1); 10].join(", ");
+                format!("a{level}: &a{level} [{below}]\n")
+            }))
+            .collect();
+        let said = from_str::<BTreeMap<String, Value>>(&laughs).unwrap_err();
+        assert!(said.contains("RecordedAnchorEvents"), "{said}");
     }
 
     #[test]
