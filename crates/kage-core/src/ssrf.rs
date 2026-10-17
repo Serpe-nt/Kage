@@ -49,7 +49,8 @@
 //! RFC 1918, CGNAT, multicast, IPv6 unique-local, cloud metadata) plus the
 //! other ranges that are never a public web server: unspecified, broadcast,
 //! reserved, documentation and benchmarking networks, and IPv4 addresses
-//! embedded in IPv4-mapped, IPv4-compatible, NAT64 and 6to4 IPv6 addresses.
+//! embedded in IPv4-mapped, IPv4-translated, IPv4-compatible, NAT64 and
+//! 6to4 IPv6 addresses.
 
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -205,9 +206,11 @@ const DENIED_V6: [(Ipv6Net, DeniedRange); 13] = [
 ];
 
 /// IPv6 prefixes that carry an IPv4 address in their last 32 bits.
-const EMBEDS_V4_LOW: [Ipv6Net; 3] = [
+const EMBEDS_V4_LOW: [Ipv6Net; 4] = [
     // IPv4-mapped.
     v6([0, 0, 0, 0, 0, 0xffff, 0, 0], 96),
+    // IPv4-translated (SIIT, RFC 2765).
+    v6([0, 0, 0, 0, 0xffff, 0, 0, 0], 96),
     // IPv4-compatible, deprecated.
     v6([0, 0, 0, 0, 0, 0, 0, 0], 96),
     // Well-known NAT64 prefix.
@@ -761,6 +764,11 @@ mod tests {
             // IPv4-compatible
             ("::10.0.0.1", Some(DeniedRange::Private)),
             ("::93.184.216.34", None),
+            // IPv4-translated (SIIT, RFC 2765): security review G6
+            ("::ffff:0:7f00:1", Some(DeniedRange::Loopback)),
+            ("::ffff:0:a00:1", Some(DeniedRange::Private)),
+            ("::ffff:0:a9fe:a9fe", Some(DeniedRange::CloudMetadata)),
+            ("::ffff:0:5db8:d822", None),
             // NAT64 well-known prefix
             ("64:ff9b::7f00:1", Some(DeniedRange::Loopback)),
             ("64:ff9b::c0a8:101", Some(DeniedRange::Private)),
