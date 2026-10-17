@@ -16,9 +16,6 @@ const root = resolve(process.argv[2] ?? '.');
 // with its reason. An entry that a crate starts to use, or that is gone
 // from Cargo.toml, fails the check too: the list holds no stale excuse.
 const DECLARED_ONLY = new Map([
-  // docs/versions.md: the version `scraper` is built against, recorded
-  // beside it; kage-crawl and kage-extract reach it through `scraper`.
-  ['html5ever', 'the version scraper is built against, recorded beside it'],
   // Pinned since M0 for the traces of spec §20; first used by M12.
   ['tracing-opentelemetry', 'pinned for the traces of spec §20'],
   ['opentelemetry', 'pinned for the traces of spec §20'],
