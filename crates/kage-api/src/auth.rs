@@ -31,6 +31,7 @@ use axum::response::{IntoResponse, Response};
 use kage_core::domain::{ApiKey, AuditActor, AuditEvent, AuditOutcome, Scope};
 use kage_core::ids::{AuditEventId, RequestId};
 use serde_json::{Value, json};
+use tracing::Instrument;
 
 use crate::error::{ApiError, ApiResult, Carried, ErrorCode, respond};
 use crate::extract::BodyDeadline;
@@ -109,6 +110,18 @@ pub(crate) async fn observe(
     let started = Instant::now();
     let method = request.method().clone();
     let route = route_of(&request);
+    // The trace of the request (spec §20): its route as the pattern, never
+    // the path a client sent, and the key once it is known.
+    let span = tracing::info_span!(
+        "api.request",
+        otel.kind = "server",
+        route = %route,
+        method = %method,
+        request = %id,
+        key = tracing::field::Empty,
+        status = tracing::field::Empty,
+        otel.status_code = tracing::field::Empty,
+    );
     request.extensions_mut().insert(id);
     request
         .extensions_mut()
@@ -128,9 +141,14 @@ pub(crate) async fn observe(
         )
         .into_response()
     } else {
-        next.run(request).await
+        next.run(request).instrument(span.clone()).await
     };
     crate::metrics::in_flight(-1.0);
+    let status = response.status();
+    span.record("status", status.as_u16());
+    if status.is_server_error() {
+        span.record("otel.status_code", "error");
+    }
 
     // A problem learns the request's id here: the one place that knows it
     // for every route, the unmatched ones included.
@@ -202,6 +220,7 @@ pub(crate) async fn authenticate(
             return error.into_response();
         }
     };
+    tracing::Span::current().record("key", tracing::field::display(key.id));
     let admitted = match state.limits().admit(&key) {
         Ok(admitted) => admitted,
         Err(error) => {

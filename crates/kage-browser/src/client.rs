@@ -1,5 +1,6 @@
 //! The client for one sidecar.
 
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use kage_core::config::Config;
@@ -8,6 +9,7 @@ use kage_core::secret::Secret;
 use kage_core::ssrf::SsrfPolicy;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use tracing::Instrument;
 use url::Url;
 use uuid::Uuid;
 
@@ -19,6 +21,20 @@ use crate::contract::{
 };
 use crate::error::BrowserError;
 use crate::ssrf::{self, DeniedHop};
+
+/// Where the client finds the trace context of a request it makes: the
+/// `traceparent` of the span the request is made in (spec §20). Set once by
+/// the binary when it installs its tracer; unset, no header is sent.
+static TRACE_CONTEXT: OnceLock<fn() -> Option<String>> = OnceLock::new();
+
+/// Names where the client finds the W3C `traceparent` it sends with every
+/// request to a sidecar, so that a sidecar's spans join the trace of the
+/// request that asked. The header travels on the compose network to the
+/// sidecar alone: a sidecar never hands it to a page or a target. Only the
+/// first call counts; whether it did is returned.
+pub fn trace_context_from(source: fn() -> Option<String>) -> bool {
+    TRACE_CONTEXT.set(source).is_ok()
+}
 
 /// What the client sends as `User-Agent`: a sidecar is Kage's own service,
 /// not a target.
@@ -234,6 +250,9 @@ impl SidecarClient {
                 .http
                 .request(method.clone(), url.as_str())
                 .header(TOKEN_HEADER, self.token.expose());
+            if let Some(traceparent) = TRACE_CONTEXT.get().and_then(|source| source()) {
+                request = request.header("traceparent", traceparent);
+            }
             if let Some(within) = within {
                 request = request.timeout(within);
             }
@@ -436,28 +455,56 @@ impl SidecarClient {
         request: &NavigateRequest,
     ) -> Result<PageResult, BrowserError> {
         const OPERATION: &str = "navigate";
-        // A navigation is waited for as long as this one may take, not as
-        // long as every call may: a page a persona has the patience to read
-        // for minutes is not cut off at the client's own timeout.
-        let path = format!("/v1/contexts/{context}/navigate");
-        let body = Self::body(OPERATION, request)?;
-        let (status, bytes) = self
-            .send_within(
-                OPERATION,
-                wreq::Method::POST,
-                &path,
-                Some(body),
-                Some(navigation_bound(request)),
-            )
-            .await?;
-        if !(200..300).contains(&status) {
-            return Err(Self::refusal(OPERATION, status, &bytes));
+        let span = tracing::info_span!(
+            "sidecar.navigate",
+            otel.kind = "client",
+            context = %context,
+            outcome = tracing::field::Empty,
+            status = tracing::field::Empty,
+        );
+        let answered = async {
+            // A navigation is waited for as long as this one may take, not
+            // as long as every call may: a page a persona has the patience
+            // to read for minutes is not cut off at the client's own timeout.
+            let path = format!("/v1/contexts/{context}/navigate");
+            let body = Self::body(OPERATION, request)?;
+            let (status, bytes) = self
+                .send_within(
+                    OPERATION,
+                    wreq::Method::POST,
+                    &path,
+                    Some(body),
+                    Some(navigation_bound(request)),
+                )
+                .await?;
+            if !(200..300).contains(&status) {
+                return Err(Self::refusal(OPERATION, status, &bytes));
+            }
+            serde_json::from_slice::<PageResult>(&bytes).map_err(|error| BrowserError::Unexpected {
+                operation: OPERATION,
+                status,
+                detail: error.to_string(),
+            })
         }
-        serde_json::from_slice(&bytes).map_err(|error| BrowserError::Unexpected {
-            operation: OPERATION,
-            status,
-            detail: error.to_string(),
-        })
+        .instrument(span.clone())
+        .await;
+        match &answered {
+            Ok(page) => {
+                span.record(
+                    "outcome",
+                    page.error
+                        .as_ref()
+                        .map_or("ok", |error| error.code.as_str()),
+                );
+                if let Some(status) = page.status {
+                    span.record("status", status);
+                }
+            }
+            Err(error) => {
+                span.record("outcome", error.kind());
+            }
+        }
+        answered
     }
 
     /// Navigates, then checks every hop the browser followed against the
@@ -518,19 +565,38 @@ impl SidecarClient {
         context: Uuid,
         request: &FlowRequest,
     ) -> Result<Vec<FlowEvent>, BrowserError> {
-        let body = Self::body("flow", request)?;
-        let (status, bytes) = self
-            .send(
-                "flow",
-                wreq::Method::POST,
-                &format!("/v1/contexts/{context}/flow"),
-                Some(body),
-            )
-            .await?;
-        if !(200..300).contains(&status) {
-            return Err(Self::refusal("flow", status, &bytes));
+        let span = tracing::info_span!(
+            "sidecar.flow",
+            otel.kind = "client",
+            context = %context,
+            outcome = tracing::field::Empty,
+        );
+        let answered = async {
+            let body = Self::body("flow", request)?;
+            let (status, bytes) = self
+                .send(
+                    "flow",
+                    wreq::Method::POST,
+                    &format!("/v1/contexts/{context}/flow"),
+                    Some(body),
+                )
+                .await?;
+            if !(200..300).contains(&status) {
+                return Err(Self::refusal("flow", status, &bytes));
+            }
+            flow_events(status, &bytes)
         }
-        flow_events(status, &bytes)
+        .instrument(span.clone())
+        .await;
+        let outcome = match &answered {
+            Ok(events) => match events.last() {
+                Some(FlowEvent::Final { ok: true, .. }) => "ok",
+                _ => "failed",
+            },
+            Err(error) => error.kind(),
+        };
+        span.record("outcome", outcome);
+        answered
     }
 
     /// `POST /v1/contexts/{id}/state/export`: cookies and storage of an origin.

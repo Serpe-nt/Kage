@@ -36,6 +36,7 @@ mod personas;
 mod proxies;
 mod scheduler;
 mod server;
+mod telemetry;
 
 pub use crawl::{
     CrawlConfig, DEFAULT_SKIPPED_EXTENSIONS, MAX_BACK_LIMIT, MAX_CRAWL_DEPTH, MAX_CRAWL_SEEDS,
@@ -71,6 +72,7 @@ pub use scheduler::{
 pub use server::{
     MAX_API_BODY_BYTES, MAX_HEADER_BYTES, MIN_HEADER_BYTES, SecurityConfig, ServerConfig,
 };
+pub use telemetry::TelemetryConfig;
 
 /// Length of the master key in bytes; it is written as twice as many
 /// hexadecimal characters.
@@ -458,6 +460,9 @@ pub struct Config {
     /// URL normalization.
     #[serde(default)]
     pub urls: NormalizeOptions,
+    /// Traces: where the spans of the process go.
+    #[serde(default)]
+    pub telemetry: TelemetryConfig,
 }
 
 impl Config {
@@ -621,6 +626,7 @@ impl Config {
         .map_err(ConfigError::Invalid)?;
         jobs::validate(&self.jobs, &self.webhooks).map_err(ConfigError::Invalid)?;
         crawl::validate(&self.crawl).map_err(ConfigError::Invalid)?;
+        telemetry::validate(&self.telemetry).map_err(ConfigError::Invalid)?;
         extract::validate(
             self.extract,
             &self.robots,
