@@ -2232,6 +2232,7 @@ name = "kage-browser"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "http-body-util",
  "kage-core",
  "serde",
  "serde_json",

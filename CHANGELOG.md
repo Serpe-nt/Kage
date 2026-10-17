@@ -578,6 +578,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `webshare.base_url` and `reputation.base_url`, the roots the provider's
   and AbuseIPDB's keys are sent to, must use `https`; plain `http` is
   accepted only to `localhost` and the loopback addresses.
+- Kage reads at most 128 MiB of a sidecar's answer (`MAX_ANSWER_BYTES`):
+  one that says it is longer is refused unread, one that does not say is
+  cut off at the limit, and the call fails as an answer the contract does
+  not describe. Until now an answer was read whole, so a sidecar that was
+  taken over could fill Kage's memory.
 
 ### Fixed
 

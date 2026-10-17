@@ -56,8 +56,8 @@ pub mod contract {
 }
 
 pub use client::{
-    Closed, IMPLEMENTED_OPERATIONS, Navigation, SidecarClient, SidecarSettings, navigation_bound,
-    trace_context_from,
+    Closed, IMPLEMENTED_OPERATIONS, MAX_ANSWER_BYTES, Navigation, SidecarClient, SidecarSettings,
+    navigation_bound, trace_context_from,
 };
 pub use error::BrowserError;
 
