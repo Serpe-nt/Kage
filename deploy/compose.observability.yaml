@@ -41,8 +41,11 @@ services:
 
   # OTLP over HTTP in on 4318, traces out to Jaeger. Runs as 10001 and needs
   # no writable path. The image is one binary without a shell or a health
-  # command: its health is the health_check extension on 13133 and
-  # `up{job="otel-collector"}` in Prometheus, and nothing waits for it.
+  # command, and defines no healthcheck: its health is the health_check
+  # extension on 13133 and `up{job="otel-collector"}` in Prometheus, and
+  # nothing waits for it. No `healthcheck: disable` either: a disabled
+  # healthcheck is a healthcheck without a status, which `compose up --wait`
+  # of Compose 2 refuses (seen on GitHub's runner).
   otel-collector:
     <<: *hardening
     profiles: [observability]
@@ -56,8 +59,6 @@ services:
     depends_on:
       jaeger:
         condition: service_healthy
-    healthcheck:
-      disable: true
     mem_limit: 256m
     cpus: 1
     pids_limit: 128
