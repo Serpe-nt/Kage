@@ -468,7 +468,20 @@ async fn a_cooldown_is_the_policys_scaled_by_how_sure_the_signature_is() {
 
 #[tokio::test(start_paused = true)]
 async fn server_errors_in_a_row_pause_the_domain_and_cool_nobody() {
-    let mut world = World::new(8, DEFAULT_DOMAINS);
+    // The retry pause is a log-normal without a ceiling: by default one
+    // pause in twenty is longer than 20 s, and some longer than the half
+    // minute this test tells apart from it (3 % of runs failed on that).
+    // Here nineteen in twenty are below 8 s and none comes near 30 s.
+    let mut world = World::with(
+        8,
+        true,
+        DEFAULT_DOMAINS,
+        &[
+            ("KAGE__SCHEDULER__RETRY_PAUSE__MIN", "2s"),
+            ("KAGE__SCHEDULER__RETRY_PAUSE__MEDIAN", "6s"),
+            ("KAGE__SCHEDULER__RETRY_PAUSE__P95", "8s"),
+        ],
+    );
     for _ in 0..4 {
         world.script.then(server_error(503));
     }
