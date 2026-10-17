@@ -162,13 +162,18 @@ read -r overlapping least_rest_ms personas_used attempts <<< "$(psql "
            coalesce(min(round(extract(epoch FROM started_at - before) * 1000)), -1)::bigint,
            count(DISTINCT persona_id), count(*)
     FROM a")"
+least_span_of_21_ms="$(psql "
+    SELECT coalesce(min(round(extract(epoch FROM later - started_at) * 1000)), -1)::bigint FROM (
+        SELECT a.started_at, lead(a.started_at, 20) OVER (ORDER BY a.started_at) AS later
+        FROM attempts a JOIN requests r ON r.id = a.request_id
+        WHERE r.job_id = '${job}') starts WHERE later IS NOT NULL")"
 most_in_a_minute="$(psql "
     SELECT max(n) FROM (
         SELECT count(*) OVER (ORDER BY a.started_at
                               RANGE BETWEEN CURRENT ROW AND interval '59.999999 seconds' FOLLOWING) AS n
         FROM attempts a JOIN requests r ON r.id = a.request_id
         WHERE r.job_id = '${job}') starts")"
-echo "    ${attempts} attempts by ${personas_used} personas; ${overlapping} overlapping; at least ${least_rest_ms} ms from the end of a page to the next of its persona; at most ${most_in_a_minute} starts in any 60 s"
+echo "    ${attempts} attempts by ${personas_used} personas; ${overlapping} overlapping; at least ${least_rest_ms} ms from the end of a page to the next of its persona; at most ${most_in_a_minute} starts in any 60 s; 21 starts in a row span at least ${least_span_of_21_ms} ms (the site: $(gauge load_site_least_span_of_21_ms) ms)"
 [ "${attempts}" = 200 ] || fail "${attempts} attempts, not 200"
 [ "${personas_used}" -le 3 ] || fail "${personas_used} personas read the batch"
 [ "${overlapping}" = 0 ] || fail "a persona began a page before its last one ended"
@@ -179,6 +184,6 @@ else
     [ "${most_in_a_minute}" -le 300 ] || fail "${most_in_a_minute} starts in a minute"
 fi
 cat > "${evidence}/load-${design}.json" << EOF
-{"design":"${design}","seconds":${total},"bounds":[${min_s},${max_s}],"attempts":${attempts},"personas":${personas_used},"overlapping":${overlapping},"least_rest_ms":${least_rest_ms},"most_starts_in_60s":${most_in_a_minute},"site_pages":$(gauge load_pages_seen),"site_addresses":$(gauge load_addresses),"site_least_gap_ms":$(gauge load_least_gap_ms),"site_most_in_60s":$(gauge load_site_most_in_60s)}
+{"design":"${design}","seconds":${total},"bounds":[${min_s},${max_s}],"attempts":${attempts},"personas":${personas_used},"overlapping":${overlapping},"least_rest_ms":${least_rest_ms},"most_starts_in_60s":${most_in_a_minute},"site_pages":$(gauge load_pages_seen),"site_addresses":$(gauge load_addresses),"site_least_gap_ms":$(gauge load_least_gap_ms),"site_most_in_60s":$(gauge load_site_most_in_60s),"least_span_of_21_ms":${least_span_of_21_ms},"site_least_span_of_21_ms":$(gauge load_site_least_span_of_21_ms)}
 EOF
 echo "load test (${design}) passed"
