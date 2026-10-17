@@ -120,7 +120,7 @@ psl = { version = "=2.1.239" }
 # The fingerprint echo (kage-http) terminates TLS with rustls on ring, the
 # stack sqlx already links. Never the aws-lc-rs provider: that is one more C
 # library next to BoringSSL.
-rustls = { version = "=0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 tokio-rustls = { version = "=0.26.6", default-features = false, features = ["ring", "tls12"] }
 
 # --- Crypto, ids, time ----------------------------------------------------

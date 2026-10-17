@@ -526,6 +526,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `rustls` 0.23.46 in place of 0.23.45 (RUSTSEC-2026-0346 to -0349,
+  published 2026-10-14): the TLS of the fingerprint echo and of the
+  database connection. Outbound requests to targets are wreq's and never
+  used it.
 - A job with `webhook.progress_every` was accepted and then failed in the
   worker with `validation_failed` when it was a flow, because the worker
   read the stored job back as a request and the stored job carries what
