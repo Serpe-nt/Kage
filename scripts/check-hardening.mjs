@@ -162,9 +162,9 @@ for (const stack of STACKS) {
     if (!service.pids_limit && !service.deploy?.resources?.limits?.pids) note(at, 'has no limit of processes');
     if (!service.restart) note(at, 'has no restart policy');
     const health = service.healthcheck;
-    if (health === undefined) {
+    if (health === undefined && NO_HEALTHCHECK[name] === undefined) {
       note(at, 'has no healthcheck');
-    } else if (health.disable === true && NO_HEALTHCHECK[name] === undefined) {
+    } else if (health?.disable === true && NO_HEALTHCHECK[name] === undefined) {
       note(at, 'disables its healthcheck without a reason in scripts/check-hardening.mjs');
     }
     for (const volume of service.volumes ?? []) {
