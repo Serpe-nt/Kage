@@ -583,6 +583,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cut off at the limit, and the call fails as an answer the contract does
   not describe. Until now an answer was read whole, so a sidecar that was
   taken over could fill Kage's memory.
+- `kage persona selftest` and `kage selftest http|browser --persona`
+  bind a forwarder of their own, as `kage fetch` does (security review
+  G4). They handed the persona's browser the provider's proxy with its
+  password, which then sat in the sidecar for the run. The stand-in
+  self-tests of a proxy (`--proxy`), which have no persona the forwarder
+  could name, remain the one exception.
 
 ### Fixed
 
