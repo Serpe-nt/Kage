@@ -31,6 +31,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { ArtifactWriter } from '../artifacts.js';
 import { HUMAN_BOUNDS, motorProfile } from '../behavior/profile.js';
+import { allowedCpus } from '../cpus.js';
 import {
   silentLog,
   type Engine,
@@ -195,6 +196,18 @@ export function defineParitySuite(subject: ParitySubject): void {
       appendFileSync(file, `${JSON.stringify({ engine: subject.name, what, ...values })}\n`);
     }
   };
+
+  /** How many events of each type a recorder saw, and when the first and last came. */
+  const kinds = (events: readonly { type: string; t: number }[]) => ({
+    count: Object.fromEntries(
+      [...new Set(events.map((event) => event.type))].map((type) => [
+        type,
+        events.filter((event) => event.type === type).length,
+      ]),
+    ),
+    first_t: events[0]?.t ?? null,
+    last_t: events.at(-1)?.t ?? null,
+  });
 
   const probe = async (context: EngineContext): Promise<ProbeReport> => {
     const result = await go(context, secure('/probe/'), {
@@ -510,17 +523,49 @@ export function defineParitySuite(subject: ParitySubject): void {
     });
 
     it('shows the same browser on every open of one fingerprint', async () => {
-      const first = await withContext('same-1', probe);
-      const second = await withContext('same-2', probe);
+      const seen = async (context: EngineContext) => ({
+        ...(await probe(context)),
+        applied: context.applied,
+      });
+      const first = await withContext('same-1', seen);
+      measured('the window of a persona', {
+        applied: first.applied,
+        hardware_concurrency: first.scopes.window.hardware_concurrency,
+        screen: first.scopes.window.screen,
+        webgl: first.scopes.window.webgl,
+      });
+      const second = await withContext('same-2', seen);
       expect(second.scopes).toEqual(first.scopes);
       expect(second.environment).toEqual(first.environment);
-      // Another persona is another browser.
-      const other = await withContext('same-3', probe, {
+      // Another persona is another browser: each window shows what was
+      // applied for its persona, and that is the persona's own document,
+      // but that a browser that counts the CPUs it runs on (Chrome) has no
+      // more of them than the host. Two personas that differ only in their
+      // CPUs, and ask for more than a small host has, look alike there.
+      const other = await withContext('same-3', seen, {
         document: otherPersona,
         change: { persona_id: '0199c1f2-6b7a-7c3e-9d41-2f8a5b6c7d8f' },
       });
-      expect(other.scopes.window.user_agent).toBe(first.scopes.window.user_agent);
-      expect(JSON.stringify(other.scopes.window)).not.toBe(JSON.stringify(first.scopes.window));
+      expect(otherPersona.native).not.toEqual(persona.native);
+      const host = allowedCpus().length;
+      for (const [one, document] of [
+        [first, persona],
+        [other, otherPersona],
+      ] as const) {
+        expect(one.applied.screen).toEqual(document.native.screen);
+        const asked = document.native.hardware_concurrency;
+        expect(one.applied.hardware_concurrency).toBeGreaterThanOrEqual(Math.min(asked, host));
+        expect(one.applied.hardware_concurrency).toBeLessThanOrEqual(asked);
+        expect(one.scopes.window).toMatchObject({
+          user_agent: first.scopes.window.user_agent,
+          hardware_concurrency: one.applied.hardware_concurrency,
+          screen: {
+            width: one.applied.screen.width,
+            height: one.applied.screen.height,
+            color_depth: one.applied.screen.color_depth,
+          },
+        });
+      }
     });
 
     it('passes the coherence probe in the window, every frame and both workers', async () => {
@@ -1571,6 +1616,7 @@ export function defineParitySuite(subject: ParitySubject): void {
         // The budget of the request (six seconds) is for reaching the page:
         // the visit takes the patience and the dwell, which is more.
         const short = await visit(tall, { scroll_depth: 0.9, patience_ms: 5000 });
+        measured('patience, the first visit', { took_ms: short.took, behavior: short.behavior });
         expect(short.result.error).toBeNull();
         expect(short.behavior).toMatchObject({
           patience_ms: 5000,
@@ -1680,18 +1726,25 @@ export function defineParitySuite(subject: ParitySubject): void {
       expect(behavior).toMatchObject({ seed: SEEDS.first, entry: null, clicks: 0, keys: 0 });
       expect(behavior?.notches).toBeGreaterThanOrEqual(3);
       expect(behavior?.dwell_ms).toBeGreaterThanOrEqual(5000);
-      const measured = inputStatistics(result.report);
-      expect(measured.untrusted).toBe(0);
+      const statistics = inputStatistics(result.report);
+      measured('a wheel on a page', {
+        behavior,
+        window: result.report.window,
+        events: kinds(result.report.events),
+        wheel: statistics.wheel,
+        scroll_events: statistics.scrollEvents,
+      });
+      expect(statistics.untrusted).toBe(0);
       // A wheel turns by the browser's own notch, and the page glides.
       // Chrome hands a page two notches of one frame as one event of twice
       // the size; the distance per notch is what both browsers agree on.
       const notches = behavior?.notches ?? 0;
-      expect(measured.wheel.count).toBeLessThanOrEqual(notches);
-      expect(measured.wheel.count).toBeGreaterThanOrEqual(notches / 2);
-      expect(measured.wheel.modes).toEqual([0]);
-      expect(measured.wheel.total / notches).toBeGreaterThanOrEqual(90);
-      expect(measured.wheel.total / notches).toBeLessThanOrEqual(130);
-      expect(measured.scrollEvents).toBeGreaterThan(measured.wheel.count);
+      expect(statistics.wheel.count).toBeLessThanOrEqual(notches);
+      expect(statistics.wheel.count).toBeGreaterThanOrEqual(notches / 2);
+      expect(statistics.wheel.modes).toEqual([0]);
+      expect(statistics.wheel.total / notches).toBeGreaterThanOrEqual(90);
+      expect(statistics.wheel.total / notches).toBeLessThanOrEqual(130);
+      expect(statistics.scrollEvents).toBeGreaterThan(statistics.wheel.count);
       const reached = result.report.window.scroll_top;
       const scrollable = result.report.window.scroll_height - result.report.window.inner[1];
       expect(reached / scrollable).toBeGreaterThan(0.3);
@@ -2012,6 +2065,13 @@ export function defineParitySuite(subject: ParitySubject): void {
       expect(bare.steps.map((step) => step.paced_ms)).toEqual([null, null, null, null]);
       expect(bare.final.behavior).toMatchObject({ dwell_ms: 0, clicks: 1 });
       const hasty = inputReportOf(bare.steps.at(-1)?.capture?.dom_html ?? null).events;
+      measured('a click without a pace', {
+        floor_ms: floor,
+        events: kinds(hasty),
+        moves: hasty
+          .filter((event) => event.type === 'mousemove')
+          .map((event) => [event.t, event.x, event.y]),
+      });
       // On its way at once, and there long before the paced one has set out.
       expect(hasty.find((event) => event.type === 'click')?.t).toBeLessThan(floor);
       expect(
