@@ -1,0 +1,9 @@
+# The keys that may sign a release tag (docs/runbooks/repo.md, Releases).
+# release.yaml reads this file as main holds it and refuses a tag that no
+# key here signed. One line per key, in the format of ssh-keygen's
+# ALLOWED SIGNERS:
+#
+#   <e-mail of the tagger> namespaces="git" <key type> <public key>
+#
+# The owner adds their own signing key here in a pull request of its own.
+# No key is listed yet, so no release can be made until one is.

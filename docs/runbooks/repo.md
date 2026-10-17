@@ -19,7 +19,8 @@ conventional commits enforced by a check.
 | Require conversation resolution | on |
 | Allow force pushes, allow deletions | off |
 | Apply to administrators | on |
-| Allowed merge methods | squash and rebase; merge commits off |
+| Allowed merge methods | squash and rebase; merge commits off (a milestone's pull request is merged with rebase, so that its commits stay as they were made) |
+| Require signed commits | off for 1.0 (recommended below) |
 
 `ci-ok` is the last job of `ci.yaml`. It fails unless the `commits`, `rust`,
 `node`, `security` and `images` jobs all passed, so it is the only check that
@@ -49,9 +50,11 @@ gh api --method PATCH repos/Serpe-nt/Kage \
   --field delete_branch_on_merge=true
 ```
 
-M0 did not apply these settings: it documents them. Apply them once the M0
-pull request is merged, because `ci-ok` only exists as a check after
-`ci.yaml` is on `main`.
+Apply them once `ci-ok` has run on `main`: a required check must exist
+before it can be required. The milestones M0 to M11 reached `main` without
+pull requests (decision D30); the first push to `origin` fast-forwards
+`main` by those commits, and `ci.yaml` runs on that push. From then on
+every change goes through a pull request.
 
 ## Commits
 
@@ -65,6 +68,25 @@ Commit subjects and pull request titles follow
 - In CI, the `commits` job checks the pull request title and every commit
   the pull request adds.
 
+Every commit records its author's name and e-mail address, and a public
+repository shows them. To keep an address out of new commits, turn on
+"Keep my email addresses private" in GitHub's e-mail settings (and "Block
+command line pushes that expose my email") and commit with the address
+GitHub gives there:
+
+```bash
+git config user.email "<id>+<user>@users.noreply.github.com"
+```
+
+The commits made before stay as they are. Signed commits are not required;
+to sign them anyway with the same SSH key as the release tags:
+
+```bash
+git config gpg.format ssh
+git config user.signingkey ~/.ssh/id_ed25519.pub
+git config commit.gpgsign true
+```
+
 ## What CI runs
 
 `ci.yaml` runs on every pull request, on pushes to `main` and in the merge
@@ -75,10 +97,10 @@ queue. Each job calls the same `just` targets a developer runs locally, and
 |---|---|---|
 | `commits` | `scripts/check-conventional-commits.sh` | PR title and commit subjects |
 | `rust` | `fmt-check-rust`, `lint-rust`, `setup-sqlx`, `sqlx-check`, `test-rust`, `cov-rust` | rustfmt, clippy `-D warnings`, migrations and committed query data, tests, 80 % line coverage on the gated crates |
-| `node` | `fmt-check-node`, `lint-node`, `test-node`, `cov-node` | prettier, tsc, eslint, vitest, 80 % line coverage on `engine-core` |
-| `security` | `deny`, `secrets`, `sbom` | cargo-deny, cargo-audit, pnpm audit, sidecar license policy, `openssl-sys` check, gitleaks, CycloneDX SBOMs |
-| `images` | `build-images`, `scan-images`, `sbom-images`, `test-e2e` | image builds, Trivy (fixable HIGH and CRITICAL), SBOM per image, stack smoke test |
-| `mutants` | `mutants` | report only until M7 |
+| `node` | `fmt-check-node`, `lint-node`, `lint-observability`, `contract-check`, `test-node`, `cov-node` | prettier, tsc, eslint, the dashboards and alert rules (promtool), the sidecar contract, vitest, 80 % line coverage on `engine-core` |
+| `security` | `deny`, `hardening`, `secrets`, `sbom` | cargo-deny, cargo-audit, pnpm audit, sidecar license policy, `openssl-sys` check, the container checklist on the Dockerfiles and compose files, gitleaks, CycloneDX SBOMs |
+| `images` | `build-images`, `hardening-images`, `scan-images`, `sbom-images`, `test-e2e` | image builds, the container checklist on the images, Trivy (fixable HIGH and CRITICAL), SBOM per image, the stack end to end and the load test's design A |
+| `mutants` | `mutants` | reported on every pull request; the gate (70 % on `kage-core`) is run before a milestone is merged |
 | `ci-ok` | none | fails unless all required jobs passed |
 
 Coverage gates:
@@ -125,6 +147,13 @@ is its own pull request and is never auto-merged.
 proxies and only ever hits the echo and detection test pages listed in
 configuration, never a real target site.
 
+Beside it, every night and without a secret, the `load` job runs the load
+test's design B (`just test-load`): 200 queued fetches of the fixture site
+under the test-only `load` profile at the shipped caps, in 540 s to 720 s,
+in the fixture world of the end-to-end tests. It reaches no proxy and no
+site of anyone's. Run it by hand, once, on the commit a release is tagged
+on.
+
 - The nightly schedule is skipped until the repository variable
   `KAGE_LIVE_ENABLED` is set to `true`.
 - A manual run (`workflow_dispatch`) always executes and fails with a clear
@@ -157,16 +186,58 @@ KAGE_LIVE=1 KAGE__WEBSHARE__API_KEY=... KAGE__SECRETS__MASTER_KEY=... just test-
 1. On `main`, set the version in `[workspace.package]` of `Cargo.toml`, move
    the Unreleased entries of `CHANGELOG.md` under the new version, and merge
    that pull request.
-2. Tag the merge commit `vX.Y.Z` and push the tag.
-3. `release.yaml` checks that the tag is on `main` and matches the workspace
-   version, builds and pushes `ghcr.io/serpe-nt/kage` and
-   `ghcr.io/serpe-nt/kage-browser-chromium`, and creates the GitHub release
-   with each image digest and a CycloneDX SBOM per image.
-4. Open a follow-up pull request that records the digests in
+2. Wait for `ci` on the merge commit, and run the `load` job of
+   `nightly-live.yaml` on it once by hand.
+3. Tag the merge commit with an annotated tag signed by the owner's SSH key,
+   and push the tag:
+
+   ```bash
+   git config gpg.format ssh
+   git config user.signingkey ~/.ssh/id_ed25519.pub
+   git tag --sign --message "Kage X.Y.Z" vX.Y.Z <merge commit>
+   git push origin vX.Y.Z
+   ```
+
+   The public half of the key is listed in `.github/allowed_signers` on
+   `main`, one line per key, with the tagger's e-mail address:
+   `<e-mail> namespaces="git" ssh-ed25519 AAAA...`. Check a tag before it is
+   pushed with `git -c gpg.ssh.allowedSignersFile=.github/allowed_signers
+   verify-tag vX.Y.Z`.
+4. `release.yaml` refuses a tag that is lightweight, unsigned, signed by a
+   key the list on `main` does not hold, not on `main`, or not the
+   workspace version. Then, for `ghcr.io/serpe-nt/kage` and
+   `ghcr.io/serpe-nt/kage-browser-chromium`, it builds and pushes the image,
+   scans it with Trivy, signs it by digest with cosign (keyless: the
+   signature is made under the workflow's own identity, from GitHub's OIDC
+   token, and is recorded in Sigstore's transparency log), and attests its
+   SLSA build provenance and its CycloneDX SBOM to the digest. The GitHub
+   release has each digest and each SBOM.
+5. Open a follow-up pull request that records the digests in
    `deploy/compose.yaml`.
+
+Only the `images` job of `release.yaml` holds `id-token: write` and
+`attestations: write`; no job holds a signing key, and no repository secret
+is needed to release.
+
+Verify an image before it is run, for the tag `vX.Y.Z` and the digest of
+its release:
+
+```bash
+cosign verify ghcr.io/serpe-nt/kage@sha256:<digest> \
+  --certificate-identity "https://github.com/Serpe-nt/Kage/.github/workflows/release.yaml@refs/tags/vX.Y.Z" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+gh attestation verify oci://ghcr.io/serpe-nt/kage@sha256:<digest> \
+  --repo Serpe-nt/Kage --signer-workflow Serpe-nt/Kage/.github/workflows/release.yaml
+gh attestation verify oci://ghcr.io/serpe-nt/kage@sha256:<digest> \
+  --repo Serpe-nt/Kage --predicate-type https://cyclonedx.org/bom
+```
+
+The same three for `ghcr.io/serpe-nt/kage-browser-chromium`.
 
 The Firefox sidecar image is not published (ADR 0008, outcome of M5): the
 Camoufox build it unpacks bundles Microsoft's and Apple's font files, and a
 public image would redistribute them. An operator builds it where it runs
 (`just build-images`); CI builds and scans it on every pull request.
-Signed tags and signed images are part of M12.
+Repository secrets: `KAGE_WEBSHARE_API_KEY` and `KAGE_SECRETS_MASTER_KEY`
+for the live suite only. Repository variables: `KAGE_LIVE_ENABLED`,
+`KAGE_LIVE_EXPECT_PROXIES`, `KAGE_LIVE_ENGINES`.
