@@ -22,6 +22,7 @@ use kage_core::secret::Secret;
 use kage_core::ssrf::{DEFAULT_MAX_REDIRECTS, SsrfPolicy};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpListener;
 use uuid::Uuid;
 use wiremock::matchers::{header, method, path};
@@ -884,4 +885,60 @@ fn a_client_is_only_built_for_an_http_url() {
         let error = SidecarClient::new(&settings(url)).unwrap_err();
         assert!(matches!(error, BrowserError::Setup(_)), "{url}: {error:?}");
     }
+}
+
+/// Security review: a sidecar that was taken over cannot make Kage read an
+/// answer without end. One that says it is longer than the limit is
+/// refused unread, one that does not say is cut off at the limit.
+#[tokio::test]
+async fn an_answer_longer_than_the_limit_is_not_read() {
+    let server = MockServer::start().await;
+    let page = serde_json::to_vec(&example_json("PageResult", 0)).unwrap();
+    Mock::given(method("POST"))
+        .and(path(format!("/v1/contexts/{CONTEXT}/navigate")))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(page.clone(), "application/json"))
+        .mount(&server)
+        .await;
+    let request = example::<NavigateRequest>("NavigateRequest", 0);
+
+    let roomy = client(&server).with_answer_limit(page.len());
+    assert!(roomy.navigate(context(), &request).await.is_ok());
+    let tight = client(&server).with_answer_limit(page.len() - 1);
+    let error = tight.navigate(context(), &request).await.unwrap_err();
+    assert!(
+        matches!(error, BrowserError::Unexpected { .. }),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("longer than"), "{error}");
+
+    // An answer that does not say how long it is: a mebibyte of spaces in
+    // chunks, read only up to the limit.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut head = vec![0; 4096];
+        let _ = stream.read(&mut head).await;
+        let start = b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ntransfer-encoding: chunked\r\n\r\n";
+        if stream.write_all(start).await.is_err() {
+            return;
+        }
+        let chunk = [b' '; 1024];
+        for _ in 0..1024 {
+            let framed = [b"400\r\n".as_slice(), &chunk, b"\r\n"].concat();
+            if stream.write_all(&framed).await.is_err() {
+                return;
+            }
+        }
+        let _ = stream.write_all(b"0\r\n\r\n").await;
+    });
+    let endless = SidecarClient::new(&settings(&format!("http://{address}")))
+        .unwrap()
+        .with_answer_limit(16 * 1024);
+    let error = endless.health().await.unwrap_err();
+    assert!(
+        matches!(error, BrowserError::Unexpected { .. }),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("longer than"), "{error}");
 }

@@ -3,6 +3,7 @@
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use http_body_util::BodyExt as _;
 use kage_core::config::Config;
 use kage_core::domain::Engine;
 use kage_core::secret::Secret;
@@ -45,6 +46,12 @@ const FIRST_BACKOFF: Duration = Duration::from_millis(200);
 
 /// Longest wait between two connection attempts.
 const MAX_BACKOFF: Duration = Duration::from_secs(2);
+
+/// The most of an answer a sidecar may send. A page result with its
+/// document, the responses it captured and its log is a few MiB, a flow a
+/// few of those. More comes only from a sidecar that is broken or was
+/// taken over, and is not read into memory (security review).
+pub const MAX_ANSWER_BYTES: usize = 128 * 1024 * 1024;
 
 /// What a navigation has to reach its page when the request does not say:
 /// the contract's default.
@@ -163,6 +170,7 @@ pub struct SidecarClient {
     base: Url,
     token: Secret,
     connect_retries: u32,
+    max_answer: usize,
 }
 
 impl std::fmt::Debug for SidecarClient {
@@ -171,6 +179,7 @@ impl std::fmt::Debug for SidecarClient {
             .field("base", &self.base.as_str())
             .field("token", &self.token)
             .field("connect_retries", &self.connect_retries)
+            .field("max_answer", &self.max_answer)
             .finish_non_exhaustive()
     }
 }
@@ -205,7 +214,55 @@ impl SidecarClient {
             base,
             token: settings.token.clone(),
             connect_retries: settings.connect_retries,
+            max_answer: MAX_ANSWER_BYTES,
         })
+    }
+
+    /// The same client, reading at most `bytes` of an answer instead of
+    /// [`MAX_ANSWER_BYTES`].
+    #[must_use]
+    pub const fn with_answer_limit(mut self, bytes: usize) -> Self {
+        self.max_answer = bytes;
+        self
+    }
+
+    /// Reads an answer up to the client's limit.
+    async fn read_answer(
+        &self,
+        operation: &'static str,
+        response: wreq::Response,
+    ) -> Result<(u16, Vec<u8>), BrowserError> {
+        let status = response.status().as_u16();
+        let too_long = || BrowserError::Unexpected {
+            operation,
+            status,
+            detail: format!("the answer is longer than {} bytes", self.max_answer),
+        };
+        let declared = response.content_length().unwrap_or(0);
+        if usize::try_from(declared).map_or(true, |declared| declared > self.max_answer) {
+            return Err(too_long());
+        }
+        let mut body = Box::pin(response);
+        let mut bytes = Vec::new();
+        while let Some(frame) = body.frame().await {
+            let frame = match frame {
+                Ok(frame) => frame,
+                Err(error) if error.is_timeout() => {
+                    return Err(BrowserError::Timeout { operation });
+                }
+                Err(source) => return Err(BrowserError::Transport { operation, source }),
+            };
+            // Trailers carry no content.
+            let Ok(data) = frame.into_data() else {
+                continue;
+            };
+            if data.len() > self.max_answer - bytes.len() {
+                // Dropping the response abandons the rest of it.
+                return Err(too_long());
+            }
+            bytes.extend_from_slice(&data);
+        }
+        Ok((status, bytes))
     }
 
     /// The sidecar's base URL.
@@ -262,16 +319,7 @@ impl SidecarClient {
                     .body(body.clone());
             }
             let failure = match request.send().await {
-                Ok(response) => {
-                    let status = response.status().as_u16();
-                    return match response.bytes().await {
-                        Ok(bytes) => Ok((status, bytes.to_vec())),
-                        Err(error) if error.is_timeout() => {
-                            Err(BrowserError::Timeout { operation })
-                        }
-                        Err(source) => Err(BrowserError::Transport { operation, source }),
-                    };
-                }
+                Ok(response) => return self.read_answer(operation, response).await,
                 Err(error) => error,
             };
             if failure.is_connect() {
