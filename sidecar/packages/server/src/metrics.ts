@@ -81,7 +81,9 @@ export class SidecarMetrics implements ContextEvents {
       registers,
     });
     if (processMetrics) {
-      collectDefaultMetrics({ register: this.registry });
+      // Under the engine they are of: Kage merges both sidecars' metrics into
+      // one exposition, where a series without it would be there twice.
+      collectDefaultMetrics({ register: this.registry, labels: { engine } });
     }
   }
 

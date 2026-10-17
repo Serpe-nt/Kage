@@ -568,9 +568,17 @@ describe('lifecycle and metrics', () => {
     expect(text).not.toMatch(/persona|example\.org/);
   });
 
-  it('collects the process metrics unless told not to', async () => {
+  it('collects the process metrics unless told not to, under the engine they are of', async () => {
     const { app } = await start({ processMetrics: true });
-    expect(await app.metrics.render()).toContain('process_cpu_user_seconds_total');
+    const text = await app.metrics.render();
+    expect(text).toContain('process_cpu_user_seconds_total');
+    // Kage merges both sidecars' metrics into one exposition: a series
+    // without its engine would be there twice.
+    const samples = text.split('\n').filter((line) => /^(process|nodejs)_/.test(line));
+    expect(samples.length).toBeGreaterThan(10);
+    for (const sample of samples) {
+      expect(sample).toMatch(/engine="chromium"/);
+    }
   });
 
   it('closes every context and the engine when the server closes', async () => {
