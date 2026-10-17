@@ -11,7 +11,10 @@
 #                            profile, `human`'s shape at a fifth of its times
 #                            with its tails bounded and the shipped caps
 #                            (3 at once, 20 a minute); 540 s to 720 s, the
-#                            cap reached and never exceeded
+#                            cap reached and never exceeded on Kage's clock
+#                            (21 starts in a row never within 59.9 s; the
+#                            site may see one or two more in a minute, by
+#                            how long a persona takes to type the address)
 #
 # Both: every item `ok` with 200 at its first attempt in a browser and not
 # from the cache, every page asked for once, by at most three addresses,
@@ -179,7 +182,10 @@ echo "    ${attempts} attempts by ${personas_used} personas; ${overlapping} over
 [ "${overlapping}" = 0 ] || fail "a persona began a page before its last one ended"
 if [ "${design}" = load ]; then
     [ "${least_rest_ms}" -ge 100 ] || fail "a persona went on ${least_rest_ms} ms after the end of a page"
-    [ "${most_in_a_minute}" = 20 ] || fail "${most_in_a_minute} starts in a minute, not the cap of 20"
+    # The cap is on starts as Kage dispatches them: 21 in a row span 60 s
+    # less the moment it takes to write one down (spec §11).
+    [ "${least_span_of_21_ms}" -ge 59900 ] || fail "21 starts within ${least_span_of_21_ms} ms: the cap of 20 a minute was exceeded"
+    [ "${most_in_a_minute}" -ge 20 ] || fail "at most ${most_in_a_minute} starts in a minute: the load never reached the cap of 20"
 else
     [ "${most_in_a_minute}" -le 300 ] || fail "${most_in_a_minute} starts in a minute"
 fi
