@@ -6,12 +6,13 @@ person on a household connection would present: a static residential IP, one
 long-lived persona per IP, a real browser (patched Chromium or Camoufox) in an
 anti-detect sidecar, and a wreq-based HTTP path for lenient sites.
 
-**Status: foundations (milestone M1).** The domain model, configuration,
-policy files, block classifier, SSRF guard and the Postgres store exist and
-pass every quality gate, but nothing fetches a page yet. `kage` serves
-`/healthz`, each sidecar serves `/v1/health`, and the engines are stubs. The
-contract is in [docs/01-spec.md](docs/01-spec.md) and the road to 1.0 in
-[docs/02-plan.md](docs/02-plan.md).
+**Status: 1.0.0.** Kage fetches pages through its pool of personas, in
+both browsers and on the http path, alone or as batches, scripted flows and
+crawls, with extraction, `robots.txt` per site, a response cache, webhooks,
+sessions, an admin API, metrics, traces and an optional observability
+stack. The contract is [docs/01-spec.md](docs/01-spec.md), the settled
+decisions [docs/00-decisions.md](docs/00-decisions.md), and what changed
+[CHANGELOG.md](CHANGELOG.md).
 
 ## Responsible use
 
@@ -50,45 +51,49 @@ The settled decisions behind these limits are in
 
 ## Quick start
 
-Kage is developed and run on Linux. On Windows, work inside WSL2.
-
-Prerequisites:
-
-- Docker Engine 27 or newer with Compose v2
-- [rustup](https://rustup.rs) (the toolchain is pinned in `rust-toolchain.toml`)
-- Node.js 24 LTS (see `sidecar/.nvmrc`) with corepack
-- [just](https://just.systems) 1.58 or newer
-- To compile outside Docker: `cmake`, `clang`, `libclang-dev`, `nasm`, `perl` and `go`,
-  which the BoringSSL build inside wreq needs
+On a Linux machine (or WSL2) with Docker Engine 27 or newer, Compose v2,
+git and curl, and nothing else:
 
 ```bash
-just setup
-docker compose --file deploy/compose.yaml up --build --wait
+git clone https://github.com/Serpe-nt/Kage.git kage && cd kage
+scripts/dev-secrets.sh
+docker compose --file deploy/compose.yaml up --build --detach --wait
 curl http://127.0.0.1:8080/healthz
 ```
 
-`just setup` installs the pinned toolchains and tools, the sidecar
-dependencies, the pinned Chrome with Xvfb for the sidecar's browser tests
-(through apt, with sudo; Debian or Ubuntu) and the git hooks, and creates
-`deploy/.env` with random local secrets. The stack applies the database migrations in a one-shot `migrate`
-service before `kage` starts, and publishes one port, on loopback only:
-the API speaks plain HTTP, and a deployment that serves other machines
-puts a reverse proxy that terminates TLS in front of it.
+`scripts/dev-secrets.sh` writes random local secrets into `deploy/.env`
+(ignored by git). The first build compiles Kage and fetches the pinned
+Chrome and Camoufox: count 20 to 40 minutes. The stack applies the
+database migrations in a one-shot `migrate` service before `kage` starts,
+and publishes one port, on loopback only: the API speaks plain HTTP, and a
+deployment that serves other machines puts a reverse proxy that terminates
+TLS in front of it.
 
-The API needs a key. Make the first one at the command line, then fetch:
+Kage fetches only through proxies. Put `KAGE_WEBSHARE_API_KEY=<key>` into
+`deploy/.env` (or give `kage` a static list,
+[docs/runbooks/proxies.md](docs/runbooks/proxies.md)) and run the `up`
+again: every proxy gets a persona within minutes. Then make a key and fetch
+a page of a site you may fetch:
 
 ```bash
 docker compose --file deploy/compose.yaml exec kage \
     kage key create --name operator --scope admin --scope fetch
 curl http://127.0.0.1:8080/v1/fetch \
-    --header "Authorization: Bearer ${KAGE_KEY}" \
+    --header "Authorization: Bearer <token>" \
     --header 'Content-Type: application/json' \
     --data '{"url": "https://example.org/"}'
 ```
 
-[docs/runbooks/api.md](docs/runbooks/api.md) is the guide to keys, limits,
-what a request may ask for, sessions and the admin endpoints; the contract
-is `/openapi.json` ([crates/kage-api/openapi.json](crates/kage-api/openapi.json)).
+[docs/runbooks/first-start.md](docs/runbooks/first-start.md) is the whole
+first start, [docs/runbooks/api.md](docs/runbooks/api.md) the guide to
+keys, limits, jobs, crawls, sessions and the admin endpoints, and
+[docs/runbooks/observability.md](docs/runbooks/observability.md) the
+dashboards and alerts. The API's contract is `/openapi.json`
+([crates/kage-api/openapi.json](crates/kage-api/openapi.json)).
+
+Building and testing Kage itself needs more: rustup, Node.js 24 with
+corepack, and [just](https://just.systems) 1.58 or newer (`just setup`
+installs the rest; see Development below).
 
 ## Configuration
 
@@ -148,7 +153,7 @@ them all.
 |---|---|
 | `just setup` | Install toolchains, pnpm dependencies, the pinned Chrome, git hooks, local secrets |
 | `just fmt` | rustfmt and prettier |
-| `just lint` | clippy with warnings denied, eslint, tsc |
+| `just lint` | clippy with warnings denied, eslint, tsc, the dashboards and the alert rules of the observability profile |
 | `just test` | Rust tests (the store tests start Postgres in Docker) and sidecar vitest (the Chromium engine's tests start the real browser; not as root) |
 | `just contract-check` | The committed sidecar OpenAPI document is current and breaks no client |
 | `just openapi` | Regenerate the sidecar OpenAPI document from its zod schemas |
@@ -157,9 +162,11 @@ them all.
 | `just sqlx-prepare` | Regenerate `.sqlx/` after a query or a migration changed |
 | `just cov` | Coverage reports with thresholds |
 | `just deny` | cargo-deny, cargo-audit, pnpm audit, license policy, openssl-sys check |
+| `just hardening` | The container checklist on the Dockerfiles and every compose file (`hardening-images` on the built images) |
 | `just sbom` | CycloneDX SBOMs |
 | `just build-images` | Images for kage and both sidecar variants |
-| `just test-e2e` | Compose-based end-to-end suite |
+| `just test-e2e` | Compose-based end-to-end suite, with the load test's design A (200 queued fetches under `fast`) |
+| `just test-load` | The load test's design B: 200 queued fetches under the test-only `load` profile at the shipped caps, about 12 minutes |
 | `just test-live` | Gated live suite through the real proxies; needs `KAGE_LIVE=1` and secrets |
 | `just dev` | Postgres and sidecars in compose, `kage serve` natively |
 | `just migrate` | Apply the migrations to the development database |
@@ -168,13 +175,12 @@ them all.
 
 House rules for contributors and coding agents are in
 [CLAUDE.md](CLAUDE.md). Repository settings, CI jobs and the release
-procedure are in [docs/runbooks/repo.md](docs/runbooks/repo.md); running the
-proxy pool is in [docs/runbooks/proxies.md](docs/runbooks/proxies.md), the
-personas are in [docs/runbooks/personas.md](docs/runbooks/personas.md),
-the fingerprint echo and the http self-test are in
-[docs/runbooks/fingerprint-echo.md](docs/runbooks/fingerprint-echo.md), and
-the Chromium engine, its container and the browser self-test are in
-[docs/runbooks/engine-chromium.md](docs/runbooks/engine-chromium.md).
+procedure are in [docs/runbooks/repo.md](docs/runbooks/repo.md). The
+runbooks of [docs/runbooks/](docs/runbooks/) cover the first start, the
+proxy pool, the personas, fetching, the API, rotating keys, upgrading an
+engine, reading a block report, the fingerprint echo, observability and the
+owner's field campaign; the security review is
+[docs/security-review.md](docs/security-review.md).
 
 ## Layout
 
