@@ -1375,6 +1375,7 @@ impl Pipeline {
         if let Some(vendor) = output.classification.vendors.first() {
             span.record("vendor", vendor.as_str());
         }
+        metrics::breaker_threshold(&course.domain, dispatch.breaker.threshold);
         let verdict = AttemptVerdict::of(&output.classification);
         let ruling = course.progress.record(persona.id, verdict);
 

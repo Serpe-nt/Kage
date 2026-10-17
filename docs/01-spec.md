@@ -2376,6 +2376,8 @@ are gzip-compressed on disk.
   `kage_proxy_state{state}`, `kage_scheduler_wait_seconds{kind}`,
   `kage_queue_depth{kind}`, `kage_scheduler_in_flight{render}`,
   `kage_scheduler_refusals_total{reason}`, `kage_breaker_open{domain}`,
+  `kage_policy_breaker_threshold{domain}` (the blocks per hour that pause a
+  domain under its policy, set at each attempt there),
   `kage_bandwidth_bytes_total{direction}`, `kage_bandwidth_budget_ratio`
   (the scheduler's are recorded through the `metrics` facade since M7 and
   exported with the API's since M8),

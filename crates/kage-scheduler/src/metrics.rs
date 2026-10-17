@@ -11,6 +11,7 @@
 //! | `kage_scheduler_in_flight` | `render` | attempts in flight |
 //! | `kage_scheduler_refusals_total` | `reason` | requests answered without an attempt |
 //! | `kage_breaker_open` | `domain` | 1 while a domain is paused |
+//! | `kage_policy_breaker_threshold` | `domain` | the blocks per hour that pause a domain under its policy, set at each attempt there |
 //! | `kage_bandwidth_bytes_total` | `direction` | bytes through the forwarder |
 //! | `kage_bandwidth_budget_ratio` | | the share of the bandwidth cap that is used |
 //! | `kage_cache_requests_total` | `result` | what the response cache did for a request: `hit`, `miss`, `stored`, `bypass`, `joined` |
@@ -95,6 +96,13 @@ pub fn in_flight(browser: u32, http: u32) {
 /// A request was answered without an attempt.
 pub fn refused(reason: Refusal) {
     metrics::counter!("kage_scheduler_refusals_total", "reason" => reason.as_str()).increment(1);
+}
+
+/// The blocks per hour that pause a domain under its policy (spec §11),
+/// for the alert that compares a domain's blocks with it (spec §20).
+pub fn breaker_threshold(domain: &str, threshold: u32) {
+    metrics::gauge!("kage_policy_breaker_threshold", "domain" => domain.to_owned())
+        .set(f64::from(threshold));
 }
 
 /// A domain's breaker opened or closed.
