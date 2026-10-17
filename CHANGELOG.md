@@ -571,6 +571,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and without waiting on a pipe), hold at most 128 MiB, and have the size
   and the SHA-256 named; anything else is not taken. `libc` is a direct
   dependency of `kage-scheduler` on Unix for the two flags.
+- The SSRF guard judges an IPv4-translated IPv6 address
+  (`::ffff:0:a.b.c.d`, RFC 2765) by the IPv4 address inside it, as it
+  already judged the IPv4-mapped, IPv4-compatible, NAT64 and 6to4 forms:
+  `http://[::ffff:0:7f00:1]/` is loopback (security review G6).
 
 ### Fixed
 
