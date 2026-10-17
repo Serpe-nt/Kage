@@ -1240,7 +1240,14 @@ a burst is `gap_ms` plus `burst_break_ms`, so the gap floor holds everywhere.
 
 Resolution order: request `pacing` → domain policy `pacing` → global default
 `human`. A domain policy may set `pacing_locked: true`, which makes the
-request value ignored (the response reports `pacing.applied`). Global caps:
+request value ignored (the response reports `pacing.applied`).
+`domain_concurrency` and `domain_rpm` hold on the scheduler's own clock:
+never more than `domain_rpm` starts within a minute as Kage dispatches
+them. A site can see a request or two more within a sliding minute,
+because between the start and the request a persona types the address
+and loads the page in a time of its own (measured in M12's load test at
+20 a minute: 21 starts in a row never within 60 s at Kage, within 57.3 s
+at the site). Global caps:
 `scheduler.max_browser_sessions` (default 6), `scheduler.max_http_inflight`
 (default 20). The scheduler is a priority queue (sync requests and an
 operator's self-test, then jobs, then the manager's own warm-up and
