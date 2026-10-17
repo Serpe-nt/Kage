@@ -420,9 +420,17 @@ household reading. That is slow on purpose:
 | 50 pages, one visitor (the default) | about an hour (median 61 min) | 1 |
 | 300 pages, one visitor | a working day (about 8 h): the daily cap of one persona | 1 |
 | 50 pages, `"visitors": 3` | about 20 minutes | 3 to 4 |
+| 200 pages, `"visitors": 3` | about an hour (median 61 min) | 3 |
 
-(Simulated with the scheduler's own planner over 30 seeds; a batch that
-meets the night ends in the morning.)
+(Simulated with the scheduler's own planner over 30 seeds, the last row
+over 200; a batch that meets the night ends in the morning.)
+
+Whatever the pace, `domain_rpm` caps the pages begun on a site within a
+minute as Kage begins them. The site may see a request or two more inside
+a sliding minute: between the start and the request a persona types the
+address and loads the page, in a time of its own. The load test measured
+it at the cap of 20 a minute: 21 starts in a row never within 60 s at
+Kage, within 57.3 s at the site.
 
 `visitors` is the way to trade stealth for time: up to the
 `domain_concurrency` of the pacing in force for the site (3 under
