@@ -207,9 +207,13 @@ RUN --mount=type=cache,id=kage-camoufox,target=/var/cache/kage,sharing=locked \
 
 # The runtime needs node only: drop the package managers. The user has the
 # same numeric identity as in the kage image, so both can share the artifacts
-# volume.
+# volume. No file keeps a setuid or setgid bit (the base image's su, passwd
+# and mount, Chrome's chrome-sandbox): nothing here may change its user, and
+# Chrome sandboxes its renderers with namespaces, which no-new-privileges
+# would keep a setuid helper from doing anyway (scripts/check-hardening.mjs).
 RUN rm -rf /usr/local/lib/node_modules /usr/local/bin/npm /usr/local/bin/npx \
         /usr/local/bin/corepack /usr/local/bin/yarn /usr/local/bin/yarnpkg /opt/yarn-* \
+    && find / -xdev -perm /6000 -type f -exec chmod a-s {} + \
     && groupadd --gid 65532 kage \
     && useradd --uid 65532 --gid 65532 --no-create-home --home-dir /nonexistent \
         --shell /usr/sbin/nologin kage \

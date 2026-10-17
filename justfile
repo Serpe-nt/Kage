@@ -314,6 +314,18 @@ sbom:
 build-images: setup-env
     {{ compose }} build
 
+# The container hardening checklist (spec §19, §22) on both Dockerfiles and
+# every compose file as Compose resolves it: digests, a non-root user,
+# read-only roots, no capabilities, no new privileges, limits, healthchecks,
+# loopback ports. The exceptions are in the script with their reasons.
+hardening:
+    node scripts/check-hardening.mjs
+
+# The same on the built images: a non-root user, a healthcheck, and no
+# setuid or setgid file.
+hardening-images:
+    node scripts/check-hardening.mjs --images
+
 # Trivy scan of every image: fails on fixable HIGH or CRITICAL findings.
 scan-images:
     #!/usr/bin/env bash
@@ -403,5 +415,5 @@ commits:
     fi
 
 # Everything a PR runs.
-ci: commits fmt-check lint contract-check sqlx-check test cov deny secrets sbom build-images scan-images sbom-images test-e2e
+ci: commits fmt-check lint contract-check sqlx-check test cov deny hardening secrets sbom build-images hardening-images scan-images sbom-images test-e2e
     @echo "ci: all gates passed"
