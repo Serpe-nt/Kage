@@ -126,7 +126,7 @@ to sign them anyway with the same SSH key as the release tags:
 
 ```bash
 git config gpg.format ssh
-git config user.signingkey ~/.ssh/id_ed25519.pub
+git config user.signingkey ~/.ssh/kage_release_signing_ed25519.pub
 git config commit.gpgsign true
 ```
 
@@ -236,7 +236,7 @@ KAGE_LIVE=1 KAGE__WEBSHARE__API_KEY=... KAGE__SECRETS__MASTER_KEY=... just test-
 
    ```bash
    git config gpg.format ssh
-   git config user.signingkey ~/.ssh/id_ed25519.pub
+   git config user.signingkey ~/.ssh/kage_release_signing_ed25519.pub
    git tag --sign --message "Kage X.Y.Z" vX.Y.Z <merge commit>
    git push origin vX.Y.Z
    ```
