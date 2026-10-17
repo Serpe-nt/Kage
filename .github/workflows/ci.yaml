@@ -98,6 +98,10 @@ jobs:
           KAGE_BASE_REF: ${{ github.event.pull_request.base.sha || 'origin/main' }}
         run: just contract-check
       - run: just test-node
+        env:
+          # What the engines' parity suites measured (timings, input events
+          # a page saw): the runner's numbers next to a workstation's.
+          KAGE_PARITY_NOTES: ${{ runner.temp }}/parity-notes.jsonl
       - name: Coverage with the per-package gates
         run: just cov-node
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -105,6 +109,12 @@ jobs:
         with:
           name: sidecar-coverage
           path: sidecar/coverage/
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: parity-notes
+          path: ${{ runner.temp }}/parity-notes.jsonl
           if-no-files-found: ignore
 
   security:
@@ -169,7 +179,10 @@ jobs:
     name: mutants (report only)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    # Reported on every PR; it becomes a gate in M7 (spec §21).
+    # Report only: the gate (70 % on kage-core, spec §21) runs before a
+    # milestone is merged (docs/runbooks/repo.md). A whole run takes more
+    # than an hour on 32 CPUs, so here it stops at the timeout and the
+    # artifact holds the mutants it reached.
     continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
