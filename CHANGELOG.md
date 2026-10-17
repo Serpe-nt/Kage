@@ -575,6 +575,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`::ffff:0:a.b.c.d`, RFC 2765) by the IPv4 address inside it, as it
   already judged the IPv4-mapped, IPv4-compatible, NAT64 and 6to4 forms:
   `http://[::ffff:0:7f00:1]/` is loopback (security review G6).
+- `webshare.base_url` and `reputation.base_url`, the roots the provider's
+  and AbuseIPDB's keys are sent to, must use `https`; plain `http` is
+  accepted only to `localhost` and the loopback addresses.
 
 ### Fixed
 

@@ -685,6 +685,7 @@ pub(super) fn validate(
     let second = Duration::from_secs(1);
 
     http_url("webshare.base_url", &webshare.base_url, true)?;
+    keyed_url("webshare.base_url", &webshare.base_url)?;
     if !(1..=100).contains(&webshare.page_size) {
         return fail("webshare.page_size must be between 1 and 100");
     }
@@ -707,6 +708,7 @@ pub(super) fn validate(
     accepted_settings(&webshare.accepted_auto_replace)?;
 
     http_url("reputation.base_url", &reputation.base_url, true)?;
+    keyed_url("reputation.base_url", &reputation.base_url)?;
     if reputation.interval.get() < Duration::from_hours(1) {
         return fail("reputation.interval must be at least 1h");
     }
@@ -782,6 +784,27 @@ pub(super) fn validate(
     Ok(())
 }
 
+/// An API root that a key is sent to: `https`, or plain `http` only to
+/// this machine (a stand-in in a test). A key sent in clear to another
+/// host would be anyone's on the way.
+fn keyed_url(key: &str, value: &str) -> Result<(), String> {
+    let parsed =
+        url::Url::parse(value).map_err(|_| format!("{key} must be an absolute http(s) URL"))?;
+    let local = match parsed.host() {
+        Some(url::Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(address)) => address.is_loopback(),
+        Some(url::Host::Ipv6(address)) => address.is_loopback(),
+        None => false,
+    };
+    if parsed.scheme() == "https" || local {
+        Ok(())
+    } else {
+        Err(format!(
+            "{key} must use https: the provider's key is sent to it (plain http only to localhost)"
+        ))
+    }
+}
+
 /// An absolute http(s) URL with a host; API roots must end with a slash so
 /// that paths can be appended.
 fn http_url(key: &str, value: &str, root: bool) -> Result<(), String> {
@@ -821,6 +844,31 @@ mod tests {
             ResolvedProvider::as_str,
             &["webshare", "static", "none"],
         );
+    }
+
+    /// Security review: plain http is accepted for a stand-in on this
+    /// machine only.
+    #[test]
+    fn an_api_root_on_this_machine_may_be_plain_http() {
+        for root in [
+            "http://127.0.0.1:8080/api/",
+            "http://[::1]:8080/api/",
+            "http://localhost:8080/api/",
+        ] {
+            let webshare = WebshareConfig {
+                base_url: root.to_owned(),
+                ..WebshareConfig::default()
+            };
+            let reputation = ReputationConfig {
+                base_url: root.to_owned(),
+                ..ReputationConfig::default()
+            };
+            assert_eq!(
+                validate(&webshare, &reputation, &ProxiesConfig::default()),
+                Ok(()),
+                "{root}"
+            );
+        }
     }
 
     #[test]
@@ -866,6 +914,13 @@ mod tests {
             }),
             ("webshare.base_url must not carry", |w, _, _| {
                 w.base_url = "https://user:pw@proxy.webshare.io/api/".to_owned();
+            }),
+            // Security review: the root carries the provider's key.
+            ("webshare.base_url must use https", |w, _, _| {
+                w.base_url = "http://proxy.webshare.io/api/".to_owned();
+            }),
+            ("reputation.base_url must use https", |_, r, _| {
+                r.base_url = "http://10.0.0.5/api/v2/".to_owned();
             }),
             ("webshare.page_size", |w, _, _| w.page_size = 0),
             ("webshare.page_size", |w, _, _| w.page_size = 101),
