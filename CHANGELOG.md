@@ -55,6 +55,20 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     `deploy/compose.yaml`. A request that waited for a persona when the
     signal came is answered `shutting_down` at once instead of waiting
     out the grace.
+  - The `link` and `search_engine` entries that load a page to start
+    from click as the entry from the open page does (F48). Their result
+    said `ttfb_ms` 0 and counted the hand's way to the link into the
+    times; a link over two lines was missed in Chrome (the hand aimed at
+    the rectangle around both lines); a link under something else was
+    clicked through it in Firefox; a link for another tab was clicked; a
+    click answered by a page that draws itself waited 15 s; and a file
+    the browser saved was `arrived` with the start page's document under
+    the file's address. Now the times count from the click, only a link
+    a reader can see that leads on in this tab is clicked, on the largest
+    of its boxes and only when the pointer rests on it, a page that
+    answers itself ends the wait after 1.5 s, and a file is no page
+    (`aborted`). A client-routed site still costs a click and a typed
+    load per page: documented in spec §10.4, not solved.
   - The pin of `hickory-resolver`, which no crate ever used, is gone
     (F37), and `just deny` now fails on a pin in
     `[workspace.dependencies]` that no crate of the workspace uses

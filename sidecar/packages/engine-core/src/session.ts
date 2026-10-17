@@ -308,30 +308,33 @@ const boxExpression = (find: string) => `(() => {
 /**
  * A selector the session understands besides CSS: the link an entry clicks.
  * What follows the prefix is JSON: the target, and how the link is
- * recognized (`exact` and `host` on a page the entry loaded, see
- * {@link linkExpression}; `open` on the page that is open, see
- * {@link openLinkExpression}).
+ * recognized ({@link LinkMode}, see {@link linkExpression}).
  */
 const LINK_PREFIX = 'kage-link:';
 
-/** Finds the anchor an entry is after. `mode` says how it is recognized. */
-function linkExpression(target: string, mode: 'exact' | 'host'): string {
-  return `(() => {
-    const target = new URL(${JSON.stringify(target)});
-    const plain = (url) => url.origin + url.pathname.replace(/\\/$/, '') + url.search;
-    const visible = (anchor) => { const r = anchor.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
-    const anchors = Array.from(document.querySelectorAll('a[href]')).filter(visible);
-    const parsed = anchors.map((anchor) => { try { return [anchor, new URL(anchor.href)]; } catch { return null; } }).filter(Boolean);
-    const exact = parsed.find(([, url]) => plain(url) === plain(target));
-    if (exact || ${JSON.stringify(mode)} === 'exact') return exact ? exact[0] : null;
-    const sameHost = (url) => url.hostname === target.hostname && url.hostname !== location.hostname;
-    const result = parsed.find(([, url]) => sameHost(url));
-    return result ? result[0] : null;
-  })()`;
-}
+/**
+ * How an entry recognizes its link: `exact`, a link to the target itself
+ * (the `link` entry); `host`, that one or else a link to another page of
+ * the target's site (a result of a `search_engine` entry).
+ */
+type LinkMode = 'exact' | 'host';
 
 /** An address as a link is compared by: without its fragment, and without the slash a path may end on. */
 const PLAIN = `(url) => url.origin + url.pathname.replace(/\\/$/, '') + url.search`;
+
+/**
+ * Statements that define, for a target, `exactly(url)`: whether an address
+ * is the target as a link is compared ({@link PLAIN}); and `leads(url)`:
+ * whether a link to it is one the entry may click, by {@link LinkMode}. A
+ * result leads to the target's site from a page of another site.
+ */
+const leadsTo = (target: string, mode: LinkMode) => `
+  const plain = ${PLAIN};
+  const wanted = new URL(${JSON.stringify(target)});
+  const exactly = (url) => plain(url) === plain(wanted);
+  const onSite = (url) => url.hostname === wanted.hostname && url.hostname !== location.hostname;
+  const leads = (url) => exactly(url) || (${JSON.stringify(mode === 'host')} && onSite(url));
+`;
 
 /**
  * An address as the link of an entry is compared by: its origin, its path
@@ -447,47 +450,50 @@ const READ_LINKS = `(() => {
 })()`;
 
 /**
- * Finds the link of the open page a reader would click to get to the
- * target, and gives the box to aim at: the first anchor to exactly that
- * address that a reader can see ({@link SEEN}) and that leads on in this
- * tab (not a download, not another window), and of its boxes the largest.
- * A link that runs over two lines has two boxes, and the rectangle around
- * both holds text that is no part of it.
+ * Finds the link a reader would click to get to the target, and gives the
+ * box to aim at: of the anchors a reader can see ({@link SEEN}) that lead
+ * on in this tab (not a download, not another window), the first to
+ * exactly that address, or with `host` when there is none the first that
+ * leads to the target's site ({@link leadsTo}); and of its boxes the
+ * largest. A link that runs over two lines has two boxes, and the
+ * rectangle around both holds text that is no part of it.
  */
-function openLinkExpression(target: string): string {
+function linkExpression(target: string, mode: LinkMode): string {
   return `(() => {
     if (!document.documentElement) return null;
     ${SEEN}
+    ${leadsTo(target, mode)}
     const href = ${HREF};
-    const plain = ${PLAIN};
-    const wanted = plain(new URL(${JSON.stringify(target)}));
     const base = document.querySelector('base[target]');
     const here = (anchor) => {
       const name = (anchor.getAttribute('target') || (base && base.getAttribute('target')) || '').toLowerCase();
       return !anchor.hasAttribute('download') && ['', '_self', '_top', '_parent'].includes(name);
     };
-    for (const anchor of document.querySelectorAll('a[href]')) {
-      let url;
-      try { url = href(anchor); } catch (error) { continue; }
-      if (plain(url) !== wanted || !here(anchor)) continue;
-      const seen = boxes(anchor);
-      if (seen.length === 0) continue;
-      const box = seen.reduce((best, rect) => (rect.width * rect.height > best.width * best.height ? rect : best));
-      return { x: box.x, y: box.y, width: box.width, height: box.height };
-    }
-    return null;
+    const first = (wanted) => {
+      for (const anchor of document.querySelectorAll('a[href]')) {
+        let url;
+        try { url = href(anchor); } catch (error) { continue; }
+        if (!wanted(url) || !here(anchor)) continue;
+        const seen = boxes(anchor);
+        if (seen.length === 0) continue;
+        const box = seen.reduce((best, rect) => (rect.width * rect.height > best.width * best.height ? rect : best));
+        return { x: box.x, y: box.y, width: box.width, height: box.height };
+      }
+      return null;
+    };
+    return first(exactly) || first(leads);
   })()`;
 }
 
-/** Whether what lies at a point of the viewport is a link to the target, or a part of one. */
-function linkAtExpression(target: string, at: Point): string {
+/** Whether what lies at a point of the viewport is a link the entry may click ({@link leadsTo}), or a part of one. */
+function linkAtExpression(target: string, mode: LinkMode, at: Point): string {
   return `(() => {
+    ${leadsTo(target, mode)}
     const href = ${HREF};
-    const plain = ${PLAIN};
     const hit = document.elementFromPoint(${Math.round(at.x)}, ${Math.round(at.y)});
     const anchor = hit && typeof hit.closest === 'function' ? hit.closest('a[href]') : null;
     if (!anchor) return false;
-    try { return plain(href(anchor)) === plain(new URL(${JSON.stringify(target)})); } catch (error) { return false; }
+    try { return leads(href(anchor)); } catch (error) { return false; }
   })()`;
 }
 
@@ -1058,13 +1064,9 @@ export class PageSession {
       if (selector.startsWith(LINK_PREFIX)) {
         const { target, mode } = JSON.parse(selector.slice(LINK_PREFIX.length)) as {
           target: string;
-          mode: 'exact' | 'host' | 'open';
+          mode: LinkMode;
         };
-        return this.read<Box | null>(
-          mode === 'open'
-            ? openLinkExpression(target)
-            : boxExpression(linkExpression(target, mode)),
-        );
+        return this.read<Box | null>(linkExpression(target, mode));
       }
       return this.read<Box | null>(
         boxExpression(`document.querySelector(${JSON.stringify(selector)})`),
@@ -1178,8 +1180,12 @@ export class PageSession {
   /**
    * Arrives at the target the way the entry says (spec §10.4): loads the
    * page to start from as a typed navigation, finds the link to the target
-   * and clicks it. The `Referer` is whatever the browser sends for that
-   * click; nothing is ever forged.
+   * and clicks it as on a page the persona has been reading
+   * ({@link Session.clickThrough}). The `Referer` is whatever the browser
+   * sends for that click; nothing is ever forged.
+   *
+   * @throws {ArrivalTimeout} when the page the link leads to was asked for and did not come in time.
+   * @throws {NoPage} when the click was answered with no page.
    */
   private async enter(
     entry: Entry,
@@ -1209,31 +1215,105 @@ export class PageSession {
       // typed or clicked on it.
       return report('blocked', null);
     }
-    const selector =
-      LINK_PREFIX +
-      JSON.stringify({ target, mode: entry.strategy === 'search_engine' ? 'host' : 'exact' });
-    if ((await this.surface.boxOf(selector)) === null) {
-      return report(
-        entry.strategy === 'search_engine' ? 'result_not_found' : 'link_not_found',
-        null,
-      );
+    const mode: LinkMode = entry.strategy === 'search_engine' ? 'host' : 'exact';
+    const notFound = mode === 'host' ? 'result_not_found' : 'link_not_found';
+    if ((await this.surface.boxOf(LINK_PREFIX + JSON.stringify({ target, mode }))) === null) {
+      return report(notFound, null);
     }
     // A person looks at a page before clicking on it.
     await human.dwell(Math.min(human.drawDwell() / 4, left() / 4), { wander: false });
-    const previous = this.document.response;
-    this.freshOnNavigation = 'once';
-    const clicked = Date.now();
-    await human.click(selector);
-    if (!(await this.afterClick(previous, until, deadline))) {
-      return report(
-        entry.strategy === 'search_engine' ? 'result_not_found' : 'link_not_found',
-        null,
-      );
+    if (Date.now() >= deadline) {
+      throw this.notCome('the time of the navigation ran out before the link was clicked');
     }
-    // Times of the result count from the click: that is when the target was asked for.
-    this.document.started = clicked;
+    const arrived = await this.clickThrough(target, mode, until, human, deadline);
+    return arrived === null ? report(notFound, null) : report('arrived', arrived.referer);
+  }
+
+  /**
+   * Clicks the link to the target on the page that is open, as its reader
+   * would, and waits for what the click brings: the page the link leads to,
+   * whose times count from the click; nothing, when the page answers the
+   * click itself; or no page, when the browser saves the answer as a file.
+   *
+   * @returns the `Referer` the browser sent for the page that came, or
+   *   `null` when there was nothing to click or the click asked for no
+   *   document.
+   * @throws {ArrivalTimeout} when the page the link leads to was asked for and did not come in time.
+   * @throws {NoPage} when the click was answered with no page.
+   */
+  private async clickThrough(
+    target: string,
+    mode: LinkMode,
+    until: WaitUntil,
+    human: Human,
+    deadline: number,
+  ): Promise<{ referer: string | null } | null> {
+    const selector = LINK_PREFIX + JSON.stringify({ target, mode });
+    const previous = this.document.response;
+    const asked = this.documentsAsked;
+    const before = this.page.url();
+    const shown = await this.read<{ born: number }>(READ_SHOWN).catch(() => null);
+    this.freshOnNavigation = 'once';
+    let onLink = false;
+    try {
+      // The pointer goes to the link, and the page is asked what it rests
+      // on. A page that was still gliding when the hand set out has moved
+      // the link a little: the hand goes again, as a hand does. What it
+      // rests on after that lies over the link, and a click there would be
+      // a click on that, so the hand does not click.
+      for (let attempt = 0; attempt < HOVER_ATTEMPTS && !onLink; attempt += 1) {
+        await human.hover(selector);
+        onLink = await this.pointerOnLink(target, mode);
+      }
+    } catch (thrown) {
+      if (!(thrown instanceof BehaviorError)) {
+        throw thrown;
+      }
+      // The link went away, or cannot be brought into view.
+    }
+    if (!onLink) {
+      this.freshOnNavigation = 'never';
+      return null;
+    }
+    await human.pressButton();
+    const clicked = Date.now();
+    // A click is watched for a moment whatever the budget says: whether it
+    // asked for a document decides between a link that leads nowhere and a
+    // page that is late.
+    const limit = Math.max(deadline, clicked + SOFT_NAVIGATION_MS);
+    const idle = () =>
+      Date.now() > clicked + SOFT_NAVIGATION_MS &&
+      this.documentsAsked === asked &&
+      this.page.url() !== before;
+    const arrived = await this.afterClick(previous, until, limit, idle).finally(() => {
+      if (this.document.response !== null && this.document.response !== previous) {
+        // Times of the result count from the click: that is when the
+        // target was asked for. Also for a page that came and did not
+        // finish loading in time.
+        countFrom(this.document, clicked);
+      }
+    });
+    if (!arrived) {
+      if (this.documentsAsked !== asked) {
+        throw this.notCome('the page the link leads to did not answer in time');
+      }
+      // The click asked for no document: the link leads nowhere in this
+      // tab, or the page drew something itself.
+      this.freshOnNavigation = 'never';
+      return null;
+    }
     const referer = this.document.response?.request().headers()['referer'] ?? null;
-    return report('arrived', referer);
+    if (shown !== null && !(await this.replaced(shown.born))) {
+      // An answer came and the page is the document it was: the browser
+      // saves the answer as a file, or it held no document. Measured in
+      // Chrome 155 and Camoufox 152: the driver reports the response of a
+      // download like one of a page, and the page that was open stays.
+      // Reported as arrived, the result would be that page under the
+      // target's address.
+      this.document = newDocument();
+      throw new NoPage();
+    }
+    return { referer };
   }
 
   /**
@@ -1250,7 +1330,7 @@ export class PageSession {
   }
 
   /** Whether the pointer rests on a link to the target: on the link, and not on something that lies over it. */
-  private async pointerOnLink(target: string): Promise<boolean> {
+  private async pointerOnLink(target: string, mode: LinkMode): Promise<boolean> {
     const device = this.input;
     if (device === null) {
       return false;
@@ -1261,7 +1341,7 @@ export class PageSession {
         this.surface.metrics(),
       ]);
       return await this.read<boolean>(
-        linkAtExpression(target, {
+        linkAtExpression(target, mode, {
           x: pointer.x - metrics.origin.x,
           y: pointer.y - metrics.origin.y,
         }),
@@ -1351,76 +1431,16 @@ export class PageSession {
       // on it, and nothing is typed after it.
       return report('blocked');
     }
-    const selector = LINK_PREFIX + JSON.stringify({ target, mode: 'open' });
-    if ((await this.surface.boxOf(selector)) === null) {
+    if (
+      (await this.surface.boxOf(LINK_PREFIX + JSON.stringify({ target, mode: 'exact' }))) === null
+    ) {
       return notFound();
     }
     if (Date.now() >= deadline) {
       throw this.notCome('the time of the navigation ran out before the link was clicked');
     }
-    const previous = this.document.response;
-    const asked = this.documentsAsked;
-    const before = this.page.url();
-    const shown = await this.read<{ born: number }>(READ_SHOWN).catch(() => null);
-    this.freshOnNavigation = 'once';
-    let onLink = false;
-    try {
-      // The pointer goes to the link, and the page is asked what it rests
-      // on. A page that was still gliding when the hand set out has moved
-      // the link a little: the hand goes again, as a hand does. What it
-      // rests on after that lies over the link, and a click there would be
-      // a click on that, so the hand does not click.
-      for (let attempt = 0; attempt < HOVER_ATTEMPTS && !onLink; attempt += 1) {
-        await human.hover(selector);
-        onLink = await this.pointerOnLink(target);
-      }
-    } catch (thrown) {
-      if (!(thrown instanceof BehaviorError)) {
-        throw thrown;
-      }
-      // The link went away, or cannot be brought into view.
-    }
-    if (!onLink) {
-      return notFound();
-    }
-    await human.pressButton();
-    const clicked = Date.now();
-    // A click is watched for a moment whatever the budget says: whether it
-    // asked for a document decides between a link that leads nowhere and a
-    // page that is late.
-    const limit = Math.max(deadline, clicked + SOFT_NAVIGATION_MS);
-    const idle = () =>
-      Date.now() > clicked + SOFT_NAVIGATION_MS &&
-      this.documentsAsked === asked &&
-      this.page.url() !== before;
-    const arrived = await this.afterClick(previous, until, limit, idle).finally(() => {
-      if (this.document.response !== null && this.document.response !== previous) {
-        // Times of the result count from the click: that is when the
-        // target was asked for. Also for a page that came and did not
-        // finish loading in time.
-        countFrom(this.document, clicked);
-      }
-    });
-    if (!arrived) {
-      if (this.documentsAsked !== asked) {
-        throw this.notCome('the page the link leads to did not answer in time');
-      }
-      // The click asked for no document: the link leads nowhere in this
-      // tab, or the page drew something itself.
-      return notFound();
-    }
-    const referer = this.document.response?.request().headers()['referer'] ?? null;
-    if (shown !== null && !(await this.replaced(shown.born))) {
-      // An answer came and the page is the document it was: the browser
-      // saves the answer as a file, or it held no document. Measured in
-      // Chrome 155 and Camoufox 152: the driver reports the response of a
-      // download like one of a page, and the page that was open stays.
-      // Reported as arrived, the result would be that page under the
-      // target's address.
-      this.document = newDocument();
-      throw new NoPage();
-    }
-    return report('arrived', referer, backs);
+    const arrived = await this.clickThrough(target, 'exact', until, human, deadline);
+    return arrived === null ? notFound() : report('arrived', arrived.referer, backs);
   }
 
   /**

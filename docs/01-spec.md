@@ -1070,6 +1070,21 @@ persona's seed and the request's seed, which the result records.
   browser kept the page); the report says how many (`backs`). A tab that
   does not hold the page, or a page without the link, and `fallback`
   decides. This is how a crawl reaches its next page (§13, F28).
+  Every entry clicks as a reader does, on a page it loaded or on the page
+  that is open (F48): only a link a reader can see (as `capture.links`
+  says it) that leads on in this tab (no `download` attribute, no other
+  window), aimed at the largest of its boxes (a link over two lines is
+  clicked on one of them), and not clicked when the pointer comes to rest
+  on something that lies over it. The times of the result count from the
+  click. A click the browser answers by saving a file is no page: the
+  result is `aborted` with no entry report, and nothing is typed after it.
+  A page that answers the click itself (`history.pushState`, a
+  client-routed site) asks for no document: the wait for one ends about
+  1.5 s after the click, the outcome is `link_not_found`, and with
+  `fallback: none` the address is typed. On such a site every page costs
+  a click and a typed load; this is known and not solved in 1.0. Not
+  seen as hidden: a link clipped by an ancestor's `overflow`; not found
+  at all: links inside shadow roots.
 - Links: with `capture.links` the result lists the links of the document
   to `http` and `https` addresses in document order, read in the isolated
   world like the document, each with `visible` (rendered, with a box, on
