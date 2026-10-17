@@ -558,6 +558,20 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     checks it with a context open.
   - Runbook `docs/runbooks/engine-chromium.md`.
 
+### Security
+
+- Kage takes a file a sidecar wrote only as the sidecar describes it
+  (security review S1, `docs/security-review.md`). Until now it read
+  whatever path below the artifacts directory a sidecar named, following
+  links, and ignored the size and the SHA-256 the sidecar sent with it: a
+  sidecar that was taken over could name a link to Kage's own
+  `/proc/self/environ` or a secret file, and Kage stored that file as the
+  request's screenshot. Now the file must lie below `sidecar/` with a real
+  path that stays there, be a plain file (opened without following a link
+  and without waiting on a pipe), hold at most 128 MiB, and have the size
+  and the SHA-256 named; anything else is not taken. `libc` is a direct
+  dependency of `kage-scheduler` on Unix for the two flags.
+
 ### Fixed
 
 - A batch or a crawl with several visitors no longer stands still for

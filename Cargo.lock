@@ -2407,6 +2407,7 @@ dependencies = [
  "kage-persona",
  "kage-proxy",
  "kage-store",
+ "libc",
  "metrics",
  "serde",
  "serde_json",

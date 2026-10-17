@@ -11,8 +11,9 @@ use std::time::Duration;
 use axum::http::{Method, StatusCode};
 use common::sched::lab::{LENIENT_FAST, article};
 use common::{Api, ask, request};
-use kage_core::domain::Scope;
+use kage_core::domain::{ContentHash, Scope};
 use serde_json::{Value, json};
+use sha2::{Digest as _, Sha256};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
@@ -257,6 +258,7 @@ async fn a_page_is_fetched_in_a_browser_with_what_was_asked_for() {
     let dir = api.lab.config.artifacts.dir.join("sidecar/ctx");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("shot.webp"), &shot).unwrap();
+    let digest = sha256_of(&shot);
     let url = Api::url("/listing");
     api.lab.chromium.with(|sidecar| {
         sidecar.pages.insert(
@@ -281,7 +283,7 @@ async fn a_page_is_fetched_in_a_browser_with_what_was_asked_for() {
                 "screenshot": {
                     "path": "sidecar/ctx/shot.webp",
                     "bytes": shot.len(),
-                    "sha256": "0".repeat(64),
+                    "sha256": digest,
                     "content_type": "image/webp",
                 },
                 "side_effects": ["resize"],
@@ -448,6 +450,75 @@ async fn a_page_is_fetched_in_a_browser_with_what_was_asked_for() {
     assert_ne!(scrolled["patience_ms"], behavior["patience_ms"]);
     assert!(plain["attempts"][0]["seed"].is_string());
     api.shut_down().await;
+}
+
+/// Security review S1. A sidecar that was taken over names as its
+/// screenshot a link to a file of the host outside the artifacts
+/// directory, and describes that file truly. Kage does not take it: the
+/// answer has no screenshot, and the file stays where it was.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_sidecar_cannot_hand_over_a_file_outside_its_part_of_the_artifacts_directory() {
+    let mut api = Api::start(2, 155, BROWSER_FAST).await;
+    let token = api.key(&[Scope::Fetch]).await;
+    let host = tempfile::tempdir().unwrap();
+    let secret = b"KAGE__SERVER__MASTER_KEY=not-a-real-key".to_vec();
+    std::fs::write(host.path().join("environ"), &secret).unwrap();
+    let dir = api.lab.config.artifacts.dir.join("sidecar/ctx");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::os::unix::fs::symlink(host.path().join("environ"), dir.join("shot.webp")).unwrap();
+    let digest = sha256_of(&secret);
+    let url = Api::url("/leak");
+    api.lab.chromium.with(|sidecar| {
+        sidecar.pages.insert(
+            url.clone(),
+            json!({
+                "title": "Leak",
+                "dom_html": article("Leak"),
+                "headers": [{ "name": "content-type", "value": "text/html; charset=utf-8" }],
+                "screenshot": {
+                    "path": "sidecar/ctx/shot.webp",
+                    "bytes": secret.len(),
+                    "sha256": digest,
+                    "content_type": "image/webp",
+                },
+            }),
+        );
+    });
+
+    let reply = api
+        .post(
+            &token,
+            "/v1/fetch",
+            &json!({
+                "url": url,
+                "include": ["screenshot"],
+                "screenshot": { "full_page": true, "format": "webp" },
+                "max_retries": 0,
+            }),
+        )
+        .await;
+
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.json());
+    let result = reply.json();
+    assert_eq!(result["outcome"], "ok");
+    assert_eq!(result["artifacts"]["screenshot"], Value::Null, "{result}");
+    assert_eq!(count_artifacts(&api).await, 0);
+    assert_eq!(std::fs::read(host.path().join("environ")).unwrap(), secret);
+    api.shut_down().await;
+}
+
+/// The SHA-256 of `bytes`, as a sidecar names it.
+fn sha256_of(bytes: &[u8]) -> String {
+    ContentHash::from_digest(Sha256::digest(bytes).into()).to_string()
+}
+
+/// How many artifacts the store holds.
+async fn count_artifacts(api: &Api) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM artifacts")
+        .fetch_one(api.lab.store().pool())
+        .await
+        .unwrap()
 }
 
 #[tokio::test]

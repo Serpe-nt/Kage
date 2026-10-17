@@ -48,6 +48,11 @@ tracing = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+# A file a sidecar wrote is opened without following a link and without
+# waiting on a pipe.
+libc = { workspace = true }
+
 [dev-dependencies]
 sqlx = { workspace = true }
 tempfile = { workspace = true }
