@@ -8,6 +8,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The load test of the release (`tests/e2e/load.sh`, `tests/load/batch.js`):
+  200 queued fetches, one batch job of three visitors, of the fixture site,
+  driven by k6 from its pinned image with its usage report off. Under
+  `fast` (design A, in `just test-e2e`) it must end in 45 to 240 s;
+  under the test-only `load` profile, `human`'s shape at a fifth of its
+  times at the shipped caps (design B, `just test-load`, before a release
+  and in the nightly), in 540 to 720 s with the cap of 20 starts a minute
+  reached and never exceeded. Both: every item `ok` with 200 at its first
+  attempt in a browser and not from the cache, every page asked for once,
+  by at most three addresses and without a forwarding header, no persona
+  on two pages at once, the job never `paused`; B also at least 100 ms
+  from the end of a page to the persona's next.
 - M12, the follow-ups carried into the release:
   - `kage fetch` takes `--extract`, `--cache-ttl <duration>` and
     `--robots policy|report|enforce|ignore` and shows what they return:

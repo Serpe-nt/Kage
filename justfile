@@ -217,6 +217,14 @@ test-e2e: setup-env
     tests/e2e/crawl.sh
     tests/e2e/extract.sh
     tests/e2e/observability.sh
+    tests/e2e/load.sh
+
+# The load test's design B (M12): 200 pages under the test-only `load`
+# profile, at the shipped caps, in 540 s to 720 s; about 12 minutes. Before
+# a release and in the nightly, not in the PR gate (design A, under `fast`,
+# is in test-e2e).
+test-load: setup-env
+    tests/e2e/load.sh load
 
 # Gated live suite: needs KAGE_LIVE=1 and secrets, never runs in PR CI.
 test-live:

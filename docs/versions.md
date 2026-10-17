@@ -246,6 +246,7 @@ Every image is pinned by tag and digest.
 | `ghcr.io/gitleaks/gitleaks:v8.30.1` | `sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f` | `just secrets` |
 | `ghcr.io/aquasecurity/trivy:0.75.0` | `sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa` | `just scan-images` |
 | `ghcr.io/anchore/syft:v1.54.1` | `sha256:3eb5379ba7b409c3f4069b686110527af0c47df993fa5c10d13e7cf34f49b1aa` | `just sbom`, `just sbom-images` |
+| `grafana/k6:2.3.0` | `sha256:9c2dee7f8ed74d317e4027c06a10f169b625638189de8d4555d0b3486a5aeb34` | the load test (`tests/e2e/load.sh`: `just test-e2e`, `just test-load`). AGPL-3.0, a test tool run unmodified from its image like Grafana (M12 consult 5b); `K6_NO_USAGE_REPORT=true`, or it reports usage to the internet. Never in an image Kage ships. |
 
 ## GitHub Actions
 
