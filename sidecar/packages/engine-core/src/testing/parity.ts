@@ -752,6 +752,13 @@ export function defineParitySuite(subject: ParitySubject): void {
           },
         });
         expect(linked.dom_html).toContain(`<p id="referer">${secure('/')}</p>`);
+        // The times of the result count from the click, when the target was
+        // asked for: its first byte came some milliseconds after it.
+        expect(linked.timing.ttfb_ms ?? 0).toBeGreaterThan(1);
+        expect(linked.timing.ttfb_ms ?? Number.NaN).toBeLessThanOrEqual(
+          linked.timing.load_ms ?? Number.NaN,
+        );
+        measured('a click on a page the entry loaded', { ttfb_ms: linked.timing.ttfb_ms });
         const arrived = await lastRequest('/listing?page=2');
         expect(headerOf(arrived, 'referer')).toBe(secure('/'));
         expect(headerOf(arrived, 'sec-fetch-site')).toBe('same-origin');
@@ -811,6 +818,105 @@ export function defineParitySuite(subject: ParitySubject): void {
         expect(direct.behavior?.entry).toMatchObject({ strategy: 'direct', outcome: 'arrived' });
         expect(headerOf(await lastRequest('/landing?direct'), 'referer')).toBeNull();
         expect(headerOf(await lastRequest('/landing?direct'), 'sec-fetch-site')).toBe('none');
+      });
+    });
+
+    it('clicks on a page it loaded to start from as on the page that is open: over two lines, not under a cover or for another tab, and no page of a page that answers itself or of a file', async () => {
+      await withContext('entry-odd', async (context) => {
+        const odd = (run: string) => secure(`/leave/odd?run=${run}`);
+        const enter = async (
+          run: string,
+          landing: string,
+          fallback: 'stop' | 'none' = 'stop',
+          seed: string = SEEDS.first,
+        ) => {
+          await site.reset();
+          const began = Date.now();
+          const result = await go(context, secure(landing), {
+            behavior: { seed, entry: { strategy: 'link', from_url: odd(run), fallback } },
+          });
+          return { result, took: Date.now() - began };
+        };
+        /** Leaves the page, so that it says what it saw. */
+        const left = async (run: string) => {
+          await go(context, secure('/landing?from=elsewhere'));
+          return leaveReport(run);
+        };
+
+        // A link that runs over the end of a line is clicked on one of its
+        // lines, not in the rectangle around them, which holds other text;
+        // wherever on it the hand of either seed aims.
+        for (const seed of [SEEDS.first, SEEDS.other]) {
+          const wrapped = await enter('wrapped', '/landing?from=wrapped', 'stop', seed);
+          expect(wrapped.result.error, seed).toBeNull();
+          expect(wrapped.result.behavior?.entry, seed).toMatchObject({
+            outcome: 'arrived',
+            from_url: odd('wrapped'),
+            referer: odd('wrapped'),
+          });
+          expect(pressesOf(await leaveReport('wrapped')), seed).toEqual([
+            ['mousedown', true, 'wrapped'],
+            ['mouseup', true, 'wrapped'],
+            ['click', true, 'wrapped'],
+          ]);
+        }
+
+        // Something lies over the link: the hand goes there and does not click.
+        const covered = await enter('covered', '/landing?from=covered');
+        expect(covered.result.error).toMatchObject({ code: 'aborted' });
+        expect(covered.result.behavior).toMatchObject({
+          clicks: 0,
+          entry: { outcome: 'link_not_found', referer: null },
+        });
+        expect(await askedFor('/landing?from=covered')).toEqual([]);
+        expect(pressesOf(await left('covered'))).toEqual([]);
+
+        // A link that opens another tab is none for this one: no tab is opened.
+        const otherTab = await enter('tab', '/landing?from=tab');
+        expect(otherTab.result.error).toMatchObject({ code: 'aborted' });
+        expect(otherTab.result.behavior).toMatchObject({
+          clicks: 0,
+          moves: 0,
+          entry: { outcome: 'link_not_found' },
+        });
+        expect(await askedFor('/landing?from=tab')).toEqual([]);
+        expect(pressesOf(await left('tab'))).toEqual([]);
+
+        // A page that answers the click itself: no page came of it, and the
+        // wait for one ends soon, not after the quarter minute a document is
+        // given (the request itself is shorter than that). With the fallback
+        // the address is then typed.
+        const soft = await enter('soft', '/landing?from=soft');
+        expect(soft.result.error).toMatchObject({ code: 'aborted' });
+        expect(soft.result.behavior).toMatchObject({
+          clicks: 1,
+          entry: { outcome: 'link_not_found', referer: null },
+        });
+        expect(soft.took).toBeLessThan(15_000);
+        expect(await askedFor('/landing?from=soft')).toEqual([]);
+        expect(pressesOf(await left('soft')).at(-1)).toEqual(['click', true, 'soft']);
+        const softTyped = await enter('soft-typed', '/landing?from=soft', 'none');
+        expect(softTyped.result).toMatchObject({ status: 200, error: null, title: 'Landing' });
+        expect(softTyped.result.behavior?.entry).toMatchObject({ outcome: 'fell_back' });
+        expect(await askedFor('/landing?from=soft')).toEqual(['/landing?from=soft']);
+        measured('a link the page answers itself, on a page the entry loaded', {
+          took_ms: soft.took,
+        });
+
+        // A link the browser answers by saving a file: the result is of no
+        // page, not of the page that was open under the address of the file,
+        // and nothing is typed after it, whatever the fallback says.
+        const file = await enter('file', '/download?from=odd', 'none');
+        expect(file.result.error).toMatchObject({ code: 'aborted' });
+        expect(file.result).toMatchObject({
+          status: null,
+          title: null,
+          final_url: secure('/download?from=odd'),
+        });
+        expect(file.result.behavior).toMatchObject({ clicks: 1, entry: null });
+        expect(await askedFor('/download')).toEqual(['/download?from=odd']);
+        expect(headerOf(await lastRequest('/download?from=odd'), 'referer')).toBe(odd('file'));
+        expect(pressesOf(await left('file')).at(-1)).toEqual(['click', true, 'file']);
       });
     });
 
