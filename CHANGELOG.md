@@ -560,6 +560,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The sidecar images keep no setuid or setgid file (Chrome's
+  `chrome-sandbox`, the base image's `su`, `passwd`, `mount` and the
+  rest). `no-new-privileges` already kept them from raising anything;
+  they are no longer there. `just hardening` checks the Dockerfiles and
+  every compose file against the container checklist, `just
+  hardening-images` the built images, both in `just ci`.
 - The sidecars' process metrics (`process_*`, `nodejs_*`) carry their
   `engine`: Kage merges both sidecars' metrics into one exposition, where
   each of these series was there twice, once from each sidecar, with
