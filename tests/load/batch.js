@@ -80,11 +80,19 @@ function items(id) {
 
 export default function () {
   http.get(`${SITE_HELPER}/__kage/reset`, { tags: { name: 'site reset' } });
-  const urls = Array.from({ length: PAGES }, (_, i) => `${SITE}/listing?page=${FIRST_PAGE + i}`);
+  const paths = Array.from({ length: PAGES }, (_, i) => `/listing?page=${FIRST_PAGE + i}`);
+  const urls = paths.map((path) => `${SITE}${path}`);
 
   const created = http.post(
     `${KAGE}/v1/jobs`,
-    JSON.stringify({ type: 'batch', urls, visitors: VISITORS, defaults: { render: 'browser' } }),
+    // The pages as the end-to-end tests read them: no scrolling, a dwell of
+    // 600 ms over the policy's floor of 500 ms.
+    JSON.stringify({
+      type: 'batch',
+      urls,
+      visitors: VISITORS,
+      defaults: { render: 'browser', behavior: { scroll_depth: 0, dwell_ms: 600 } },
+    }),
     { ...asKey, tags: { name: 'create' } },
   );
   if (!check(created, { 'the batch is accepted': (r) => r.status === 201 })) {
@@ -131,7 +139,7 @@ export default function () {
 
   // What the site saw of the batch's pages: the documents, not what they
   // load.
-  const asked = new Set(urls.map((url) => new URL(url).pathname + new URL(url).search));
+  const asked = new Set(paths);
   const seen = http
     .get(`${SITE_HELPER}/__kage/requests`, { tags: { name: 'site log' } })
     .json()
