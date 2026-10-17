@@ -478,6 +478,12 @@ pub struct FetchRecord {
     pub redirects: Vec<String>,
     /// Extraction output (spec §14), when requested.
     pub extract: Option<serde_json::Value>,
+    /// What a crawl took from the page (where it ended, its links, its
+    /// text), kept until the crawl has recorded the page: a crawl that
+    /// changes hands between the result and the page still knows the
+    /// page's links (follow-up F49). `None` for every other result and
+    /// once the crawl has recorded it.
+    pub reading: Option<serde_json::Value>,
     /// Captured XHR and fetch responses, when requested.
     pub xhr: Option<serde_json::Value>,
     /// Bodies, screenshots and PDFs.
@@ -696,6 +702,7 @@ mod tests {
             cached_at: None,
             reason: None,
             visit: Visit::default(),
+            reading: None,
             created_at: Utc::now(),
         };
 

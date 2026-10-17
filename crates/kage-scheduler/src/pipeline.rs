@@ -88,6 +88,7 @@ use url::Url;
 pub use self::cache::CachePlan;
 use self::gate::Gate;
 pub use self::gate::{Peek, ROBOTS_NO_SCOUT, ROBOTS_UNAVAILABLE, RobotsRead, ScoutNeed};
+pub use self::read::{CrawlReading, ReadLink};
 use self::wind_down::UnderWay;
 pub use self::wind_down::{INTERRUPTED, WoundDown};
 
@@ -285,6 +286,9 @@ pub struct FetchReport {
     pub robots: Option<RobotsVerdict>,
     /// What a crawl reads from the page, when the order asked for it.
     pub page: Option<Page>,
+    /// What a crawl takes from the page, when the order asked for what a
+    /// crawl reads and the fetch got its page: stored with the result.
+    pub reading: Option<CrawlReading>,
     /// The stored result, when the fetch was answered from the response
     /// cache: nothing was asked of the site, and there are no attempts.
     pub cached: Option<Box<FetchRecord>>,
@@ -952,6 +956,7 @@ impl Pipeline {
             // A capture point of a flow is no visit of its own: the flow's
             // last result says what applied.
             visit: Visit::default(),
+            reading: None,
             created_at: now,
         };
         self.backend().finish(&record).await?;
@@ -1391,6 +1396,19 @@ impl Pipeline {
         }
     }
 
+    /// The headers of the last response as a result shows them: the
+    /// values of the cookies a site set left out unless the configuration
+    /// exposes them.
+    fn shown_headers(&self, last: Option<&AttemptOutput>) -> Vec<Header> {
+        last.map_or_else(Vec::new, |last| {
+            if self.settings.expose_set_cookie {
+                last.headers.clone()
+            } else {
+                redact_set_cookie(&last.headers)
+            }
+        })
+    }
+
     /// Keeps what a request asked to keep of its last attempt.
     async fn keep(&self, request: RequestId, keep: Keep, last: Option<&AttemptOutput>) -> Archived {
         match (&self.archive, last) {
@@ -1422,13 +1440,7 @@ impl Pipeline {
             .and_then(|last| last.classification.block.clone())
             .or_else(|| recorded.and_then(|attempt| attempt.block.clone()))
             .filter(|_| outcome.is_block());
-        let headers = last.as_ref().map_or_else(Vec::<Header>::new, |last| {
-            if self.settings.expose_set_cookie {
-                last.headers.clone()
-            } else {
-                redact_set_cookie(&last.headers)
-            }
-        });
+        let headers = self.shown_headers(last.as_ref());
         let archived = self
             .keep(course.request.id, course.order.keep, last.as_ref())
             .await;
@@ -1459,6 +1471,7 @@ impl Pipeline {
                 .as_ref()
                 .map_or_else(Vec::new, |last| last.redirects.clone()),
             extract: reading.extract.clone(),
+            reading: reading.stored_crawl(),
             xhr: archived.xhr.clone(),
             artifacts: archived.artifacts.clone(),
             persona: persona.clone(),
@@ -1505,6 +1518,7 @@ impl Pipeline {
             extract: reading.extract,
             robots: course.robots,
             page: reading.page,
+            reading: reading.crawl,
             cached: None,
             visit: kept,
         })

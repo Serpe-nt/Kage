@@ -442,3 +442,110 @@ async fn no_more_personas_read_a_site_at_once_than_its_pacing_allows() {
     assert!(most >= 2, "{most}");
     world.shut_down().await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn what_a_crawl_takes_from_a_page_is_stored_with_its_result() {
+    let mut world = World::new(3, DEFAULT_DOMAINS);
+    let url = "https://shop.example/list";
+    let html = "<html><head><title>List</title></head><body><nav><a href=\"/menu\">Menu</a></nav>\
+                <main><p>Some words a reader reads.</p><a href=\"/a\">a</a>\
+                <a href=\"/hid\" style=\"display:none\">hid</a></main></body></html>";
+    let crawling = || FetchOrder {
+        render: RenderMode::Browser,
+        read_page: true,
+        ..FetchOrder::get(Url::parse(url).unwrap(), Priority::Job)
+    };
+
+    // The browser brought its links: those are what the crawl takes, with
+    // whether a reader can see each.
+    world.script.then(common::page_with(
+        url,
+        &serde_json::json!({
+            "dom_html": html,
+            "links": [
+                { "url": "https://shop.example/menu", "text": "Menu", "rel": [], "visible": true, "furniture": true },
+                { "url": "https://shop.example/a", "text": "a", "rel": [], "visible": true, "furniture": false },
+                { "url": "https://shop.example/hid", "text": "hid", "rel": [], "visible": false, "furniture": false },
+            ],
+            "links_truncated": false,
+        }),
+    ));
+    let report = world.pipeline.fetch(crawling()).await.unwrap();
+    assert_eq!(report.outcome, Outcome::Ok);
+    let reading = report
+        .reading
+        .clone()
+        .expect("a crawl's page has a reading");
+    assert_eq!(reading.final_url.as_deref(), Some(url));
+    let seen: Vec<(&str, bool, bool)> = reading
+        .links
+        .iter()
+        .map(|link| (link.url.as_str(), link.hidden, link.furniture))
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            ("https://shop.example/menu", false, true),
+            ("https://shop.example/a", false, false),
+            ("https://shop.example/hid", true, false),
+        ]
+    );
+    assert!(
+        reading.text.contains("Some words a reader reads."),
+        "{reading:?}"
+    );
+    // The text two pages are compared by: the page's main text.
+    assert_eq!(reading.text, report.page.as_ref().unwrap().main_text);
+    // The same is stored with the result, for a crawl that changes hands.
+    let stored = world.backend.records().pop().unwrap();
+    assert_eq!(stored.request_id, report.request);
+    assert_eq!(
+        stored.reading,
+        Some(serde_json::to_value(&reading).unwrap())
+    );
+
+    // Without the browser's links, the markup's, with its own hiding.
+    world.script.then(common::document(url, html));
+    let report = world.pipeline.fetch(crawling()).await.unwrap();
+    let marked: Vec<(String, bool, bool)> = report
+        .reading
+        .unwrap()
+        .links
+        .into_iter()
+        .map(|link| (link.url, link.hidden, link.furniture))
+        .collect();
+    assert_eq!(
+        marked,
+        [
+            ("https://shop.example/menu".to_owned(), false, true),
+            ("https://shop.example/a".to_owned(), false, false),
+            ("https://shop.example/hid".to_owned(), true, false),
+        ]
+    );
+
+    // A fetch that is no crawl's keeps nothing of the kind, and neither does
+    // a page that was not got.
+    world.script.then(common::document(url, html));
+    let plain = world
+        .pipeline
+        .fetch(FetchOrder {
+            read_page: false,
+            ..crawling()
+        })
+        .await
+        .unwrap();
+    assert_eq!(plain.reading, None);
+    assert_eq!(world.backend.records().pop().unwrap().reading, None);
+    world.script.then(blocked(Outcome::Forbidden, 0.95));
+    let walled = world
+        .pipeline
+        .fetch(FetchOrder {
+            max_retries: Some(0),
+            ..crawling()
+        })
+        .await
+        .unwrap();
+    assert_eq!(walled.outcome, Outcome::Forbidden);
+    assert_eq!(walled.reading, None);
+    world.shut_down().await;
+}

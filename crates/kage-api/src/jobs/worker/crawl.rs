@@ -50,8 +50,8 @@ use kage_crawl::frontier::{
 };
 use kage_crawl::{site, sitemap};
 use kage_scheduler::{
-    Arrival, FetchOrder, FetchReport, Peek, Reached, RobotsRead, RobotsWish, SchedulerError,
-    ScoutNeed, robots,
+    Arrival, CrawlReading, FetchOrder, FetchReport, Peek, Reached, RobotsRead, RobotsWish,
+    SchedulerError, ScoutNeed, robots,
 };
 use kage_store::StoreError;
 use serde_json::{Map, Value, json};
@@ -215,57 +215,46 @@ fn scroll_of(page: &PageResult) -> Option<ScrollView> {
     })
 }
 
-/// A page as the crawl takes it from a fetch that got it: where it ended,
-/// what it links to and what it says. The links are the browser's own
-/// when it brought them (with whether a reader can see each), else those
-/// of the markup.
-fn page_of(report: &FetchReport, asked: &Url) -> PageRead {
-    let last = report.last.as_ref();
-    let landed = last
-        .and_then(|last| last.final_url.as_deref())
-        .and_then(|url| Url::parse(url).ok())
-        .unwrap_or_else(|| asked.clone());
-    // What the pipeline read from the page's document: the tree is parsed
-    // once, for this and for what the request asked to have extracted.
-    let read = report.page.as_ref();
-    let seen = last.and_then(|last| last.page.as_ref()).and_then(|page| {
-        page.links
-            .as_ref()
-            .map(|links| (links, page.links_truncated))
-    });
-    let (links, links_truncated) = match (seen, read) {
-        (Some((links, truncated)), _) => (
-            links
-                .iter()
-                .filter_map(|link| {
-                    Some(FoundLink {
-                        url: Url::parse(&link.url).ok()?,
-                        hidden: !link.visible,
-                        furniture: link.furniture,
-                    })
-                })
-                .collect(),
-            truncated,
-        ),
-        (None, Some(read)) => (
-            read.links
-                .iter()
-                .map(|link| FoundLink {
-                    url: link.url.clone(),
+/// A page as the crawl takes it from what the pipeline read of it:
+/// where it ended, what it links to and what it says. The links are the
+/// browser's own when it brought them (with whether a reader can see
+/// each), else those of the markup (`kage_scheduler::CrawlReading`). The
+/// same for a page that was fetched now and for one whose reading was
+/// stored with its result before the crawl changed hands (follow-up F49).
+fn page_read(reading: Option<&CrawlReading>, asked: &Url) -> PageRead {
+    let Some(reading) = reading else {
+        return PageRead {
+            final_url: asked.clone(),
+            links: Vec::new(),
+            links_truncated: false,
+            text: String::new(),
+        };
+    };
+    PageRead {
+        final_url: reading
+            .final_url
+            .as_deref()
+            .and_then(|url| Url::parse(url).ok())
+            .unwrap_or_else(|| asked.clone()),
+        links: reading
+            .links
+            .iter()
+            .filter_map(|link| {
+                Some(FoundLink {
+                    url: Url::parse(&link.url).ok()?,
                     hidden: link.hidden,
                     furniture: link.furniture,
                 })
-                .collect(),
-            read.links_truncated,
-        ),
-        (None, None) => (Vec::new(), false),
-    };
-    PageRead {
-        final_url: landed,
-        links,
-        links_truncated,
-        text: read.map(|read| read.main_text.clone()).unwrap_or_default(),
+            })
+            .collect(),
+        links_truncated: reading.links_truncated,
+        text: reading.text.clone(),
     }
+}
+
+/// A page as the crawl takes it from a fetch that got it.
+fn page_of(report: &FetchReport, asked: &Url) -> PageRead {
+    page_read(report.reading.as_ref(), asked)
 }
 
 /// The body of the main response of a page a browser loaded, as bytes.
@@ -1437,7 +1426,9 @@ impl Crawl {
         self.read_at.insert(entry, crate::stored(runner.now()));
         // The page is recorded before its item is ended: a crawl that
         // changes hands between the two ends the item as the page ended.
+        // What its result kept for such a hand-over is not needed after.
         self.persist(runner).await?;
+        forget_reading(runner, &item).await;
         item.output = Some(view.stored());
         let state = if read {
             JobItemState::Succeeded
@@ -1452,7 +1443,9 @@ impl Crawl {
     }
 
     /// Records a page that ended without a fetch at hand, and ends its
-    /// item: its result was stored before, or it could not be run at all.
+    /// item: its result was stored before (with what the crawl took from
+    /// it, `reading`, when the result kept that), or it could not be run
+    /// at all.
     async fn page_ended(
         &mut self,
         runner: &Runner,
@@ -1460,6 +1453,7 @@ impl Crawl {
         landed: Landed<'_>,
         outcome: Option<Outcome>,
         error: Option<String>,
+        reading: Option<&CrawlReading>,
     ) -> Result<(), WorkError> {
         let Landed {
             entry,
@@ -1468,18 +1462,12 @@ impl Crawl {
         } = landed;
         let read = outcome.is_some_and(Outcome::is_success);
         if read {
-            // It was read and what it held is not at hand any more: the
-            // crawl knows the page and none of its links.
+            // It was read: what it held is known from what was stored with
+            // its result; without that, the crawl knows the page and none
+            // of its links.
             if let Some(asked) = self.frontier.entry(entry).map(|entry| entry.url.clone()) {
-                self.frontier.record_read(
-                    entry,
-                    &PageRead {
-                        final_url: asked,
-                        links: Vec::new(),
-                        links_truncated: false,
-                        text: String::new(),
-                    },
-                );
+                self.frontier
+                    .record_read(entry, &page_read(reading, &asked));
             }
         } else {
             self.frontier.record_failed(entry);
@@ -1488,6 +1476,7 @@ impl Crawl {
         self.kept.flights.remove(&position(entry));
         self.read_at.insert(entry, crate::stored(runner.now()));
         self.persist(runner).await?;
+        forget_reading(runner, &item).await;
         item.output = Some(self.view(entry, None, None, None).stored());
         let state = if read {
             JobItemState::Succeeded
@@ -1519,13 +1508,20 @@ impl Crawl {
         };
         match end {
             ItemEnd::Finished(report) => self.page_fetched(runner, item, landed, &report).await,
-            ItemEnd::Stored { outcome, reason } => {
+            ItemEnd::Stored {
+                outcome,
+                reason,
+                reading,
+            } => {
                 let error = error_of(outcome, reason.as_deref());
-                self.page_ended(runner, item, landed, Some(outcome), error)
+                // What the crawl took from the page was stored with its
+                // result: the page keeps its links (follow-up F49).
+                let reading = reading.and_then(|stored| serde_json::from_value(stored).ok());
+                self.page_ended(runner, item, landed, Some(outcome), error, reading.as_ref())
                     .await
             }
             ItemEnd::Failed { error, outcome } => {
-                self.page_ended(runner, item, landed, outcome, Some(error))
+                self.page_ended(runner, item, landed, outcome, Some(error), None)
                     .await
             }
             ItemEnd::Deferred { reason, until } => {
@@ -1681,6 +1677,19 @@ impl Crawl {
 }
 
 /// The address a report's request asked for, when it says.
+/// Forgets what a crawl took from the page of an item's request, once
+/// the crawl has recorded the page: it was kept for a hand-over between
+/// the two. What cannot be forgotten now goes with the result's
+/// retention.
+async fn forget_reading(runner: &Runner, item: &JobItem) {
+    let Some(request) = item.request_id else {
+        return;
+    };
+    if let Err(error) = runner.store().results().forget_reading(request).await {
+        tracing::warn!(%request, %error, "what a crawl took from a page could not be forgotten");
+    }
+}
+
 fn report_url(report: &FetchReport) -> Option<Url> {
     report
         .last

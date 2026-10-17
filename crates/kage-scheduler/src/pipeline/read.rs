@@ -7,6 +7,7 @@ use kage_core::domain::Header;
 use kage_core::outcome::Outcome;
 use kage_crawl::html::Page;
 use kage_extract::{Document, Options};
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 use super::{FetchOrder, Pipeline};
@@ -18,10 +19,99 @@ use crate::metrics;
 pub(super) struct Reading {
     /// What a crawl reads.
     pub page: Option<Page>,
+    /// What a crawl takes from the page, as it is stored with the result.
+    pub crawl: Option<CrawlReading>,
     /// The extraction (spec §14), as it is stored.
     pub extract: Option<serde_json::Value>,
     /// Whether the extraction found next to nothing.
     pub thin: bool,
+}
+
+impl Reading {
+    /// What a crawl took from the page, as it is stored with the result.
+    pub(super) fn stored_crawl(&self) -> Option<serde_json::Value> {
+        self.crawl
+            .as_ref()
+            .and_then(|crawl| serde_json::to_value(crawl).ok())
+    }
+}
+
+/// What a crawl takes from a page it got: where it ended, what it links
+/// to and what it says (spec §13). It is stored with the page's result
+/// until the crawl has recorded the page, so that a crawl that changes
+/// hands between the two still knows the page's links (follow-up F49).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CrawlReading {
+    /// The address the page ended on, after redirects; `None` when the
+    /// attempt did not say.
+    #[serde(default)]
+    pub final_url: Option<String>,
+    /// Its links, in document order: the browser's own when it brought
+    /// them (with whether a reader can see each), else those of the
+    /// markup.
+    #[serde(default)]
+    pub links: Vec<ReadLink>,
+    /// Whether the page held more links than were read.
+    #[serde(default)]
+    pub links_truncated: bool,
+    /// The text two pages are compared by: the main text, without what
+    /// the site repeats on every page.
+    #[serde(default)]
+    pub text: String,
+}
+
+/// One link of a page as a crawl takes it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReadLink {
+    /// Where it leads, as written, fragment included.
+    pub url: String,
+    /// Whether a reader cannot see it.
+    #[serde(default)]
+    pub hidden: bool,
+    /// Whether it stands in what the site repeats on every page.
+    #[serde(default)]
+    pub furniture: bool,
+}
+
+/// What a crawl takes from the last attempt of a fetch that got its page
+/// and from the tree its document was parsed into.
+fn crawl_reading(last: &AttemptOutput, page: Option<&Page>) -> CrawlReading {
+    let seen = last.page.as_ref().and_then(|seen| {
+        seen.links
+            .as_ref()
+            .map(|links| (links, seen.links_truncated))
+    });
+    let (links, links_truncated) = match (seen, page) {
+        (Some((links, truncated)), _) => (
+            links
+                .iter()
+                .map(|link| ReadLink {
+                    url: link.url.clone(),
+                    hidden: !link.visible,
+                    furniture: link.furniture,
+                })
+                .collect(),
+            truncated,
+        ),
+        (None, Some(page)) => (
+            page.links
+                .iter()
+                .map(|link| ReadLink {
+                    url: link.url.to_string(),
+                    hidden: link.hidden,
+                    furniture: link.furniture,
+                })
+                .collect(),
+            page.links_truncated,
+        ),
+        (None, None) => (Vec::new(), false),
+    };
+    CrawlReading {
+        final_url: last.final_url.clone(),
+        links,
+        links_truncated,
+        text: page.map(|page| page.main_text.clone()).unwrap_or_default(),
+    }
 }
 
 /// Whether a response says it is an HTML document. One that does not say
@@ -73,6 +163,7 @@ pub(super) async fn read_document(
     match read {
         Ok((page, extract)) => Reading {
             page,
+            crawl: None,
             thin: extract.as_ref().is_some_and(|extract| extract.thin_content),
             extract: extract.and_then(|extract| serde_json::to_value(extract).ok()),
         },
@@ -110,7 +201,12 @@ impl Pipeline {
             .as_deref()
             .and_then(|url| Url::parse(url).ok())
             .unwrap_or_else(|| order.url.clone());
-        read_document(document, loaded_from, order.read_page, options).await
+        let mut reading = read_document(document, loaded_from, order.read_page, options).await;
+        // What a crawl takes from a page it got, to be stored with the
+        // page's result.
+        reading.crawl = (order.read_page && outcome.is_success())
+            .then(|| crawl_reading(last, reading.page.as_ref()));
+        reading
     }
 }
 

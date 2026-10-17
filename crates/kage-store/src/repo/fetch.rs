@@ -360,6 +360,7 @@ struct ResultRow {
     final_url: Option<String>,
     redirects: Vec<String>,
     extract: Option<serde_json::Value>,
+    reading: Option<serde_json::Value>,
     xhr: Option<serde_json::Value>,
     artifacts: serde_json::Value,
     persona: Option<serde_json::Value>,
@@ -386,6 +387,7 @@ impl TryFrom<ResultRow> for FetchRecord {
             final_url: row.final_url,
             redirects: row.redirects,
             extract: row.extract,
+            reading: row.reading,
             xhr: row.xhr,
             artifacts: from_json((TABLE, "artifacts"), row.artifacts)?,
             persona: from_json_opt((TABLE, "persona"), row.persona)?,
@@ -412,9 +414,9 @@ impl ResultRepo<'_> {
         sqlx::query!(
             "INSERT INTO results (id, request_id, outcome, status, headers, final_url, redirects,
                                   extract, xhr, artifacts, persona, block, robots, cached,
-                                  cached_at, reason, visit, created_at)
+                                  cached_at, reason, visit, reading, created_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
-                     $17, $18)",
+                     $17, $18, $19)",
             record.id.as_uuid(),
             record.request_id.as_uuid(),
             record.outcome.as_str(),
@@ -435,6 +437,7 @@ impl ResultRepo<'_> {
                 (TABLE, "visit"),
                 Some(&record.visit).filter(|visit| !visit.is_empty()),
             )?,
+            record.reading,
             record.created_at,
         )
         .execute(self.pool)
@@ -452,7 +455,7 @@ impl ResultRepo<'_> {
             ResultRow,
             "SELECT id, request_id, outcome, status, headers, final_url, redirects, extract, xhr,
                     artifacts, persona, block, robots, cached, cached_at, reason, visit,
-                    created_at
+                    reading, created_at
              FROM results WHERE id = $1",
             id.as_uuid(),
         )
@@ -460,6 +463,23 @@ impl ResultRepo<'_> {
         .await?
         .map(FetchRecord::try_from)
         .transpose()
+    }
+
+    /// Forgets what a crawl took from the page of a request's result, once
+    /// the crawl has recorded the page. Returns whether there was
+    /// something to forget.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the query fails.
+    pub async fn forget_reading(&self, request_id: RequestId) -> Result<bool, StoreError> {
+        let done = sqlx::query!(
+            "UPDATE results SET reading = NULL WHERE request_id = $1 AND reading IS NOT NULL",
+            request_id.as_uuid(),
+        )
+        .execute(self.pool)
+        .await?;
+        Ok(done.rows_affected() > 0)
     }
 
     /// The result of this request.
@@ -475,7 +495,7 @@ impl ResultRepo<'_> {
             ResultRow,
             "SELECT id, request_id, outcome, status, headers, final_url, redirects, extract, xhr,
                     artifacts, persona, block, robots, cached, cached_at, reason, visit,
-                    created_at
+                    reading, created_at
              FROM results WHERE request_id = $1",
             request_id.as_uuid(),
         )

@@ -822,6 +822,7 @@ async fn fetched(
         cached_at: None,
         reason: None,
         visit: Visit::default(),
+        reading: None,
         created_at: at,
     };
     store.results().insert(&record).await.unwrap();

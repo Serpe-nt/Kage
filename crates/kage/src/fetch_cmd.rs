@@ -805,6 +805,7 @@ domains:
             extract: None,
             robots: None,
             page: None,
+            reading: None,
             cached: None,
             visit: kage_core::domain::Visit::default(),
         }
@@ -1290,6 +1291,7 @@ domains:
             cached_at: Some(at),
             reason: None,
             visit: kage_core::domain::Visit::default(),
+            reading: None,
             created_at: at,
         }));
         let served = Shown {
