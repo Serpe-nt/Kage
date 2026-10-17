@@ -8,10 +8,20 @@ all-features = true
 
 [advisories]
 yanked = "deny"
-# Each ignored advisory needs a comment with the reason and a review date.
-# None is ignored: RUSTSEC-2024-0449 (`unsafe-libyaml`) went with the YAML
-# parser it came with (F45, M12).
-ignore = []
+# Each ignored advisory needs a comment with the reason and a review date,
+# and the same ignore in .cargo/audit.toml. RUSTSEC-2024-0449
+# (`unsafe-libyaml`) went with the YAML parser it came with (F45, M12).
+ignore = [
+    # `zip` 8.6.0 is a build dependency of utoipa-swagger-ui 10.0.1 (the
+    # newest; it requires zip ^8.6), whose build script unpacks the vendored
+    # Swagger UI bundle, pinned by checksum in Cargo.lock, once at compile
+    # time. The advisories are about extracting an attacker's archive;
+    # nothing opens an archive at run time. Review by 2026-12-31, or drop
+    # them with the first utoipa-swagger-ui on zip 9 (F55, M12).
+    { id = "RUSTSEC-2026-0367", reason = "zip extracts only the checksummed Swagger UI bundle at compile time; review by 2026-12-31 or with utoipa-swagger-ui on zip 9 (F55)" },
+    { id = "RUSTSEC-2026-0368", reason = "zip extracts only the checksummed Swagger UI bundle at compile time; review by 2026-12-31 or with utoipa-swagger-ui on zip 9 (F55)" },
+    { id = "RUSTSEC-2026-0369", reason = "zip extracts only the checksummed Swagger UI bundle at compile time; review by 2026-12-31 or with utoipa-swagger-ui on zip 9 (F55)" },
+]
 
 [licenses]
 confidence-threshold = 0.9

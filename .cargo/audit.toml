@@ -1,0 +1,16 @@
+# cargo-audit configuration (`just audit`). Every ignored advisory is also
+# ignored in deny.toml with the same reason and review date, and recorded in
+# docs/versions.md and docs/security-review.md.
+
+[advisories]
+ignore = [
+    # `zip` 8.6.0 is a build dependency of utoipa-swagger-ui 10.0.1 (the
+    # newest; it requires zip ^8.6), whose build script unpacks the vendored
+    # Swagger UI bundle, pinned by checksum in Cargo.lock, once at compile
+    # time. The advisories are about extracting an attacker's archive;
+    # nothing opens an archive at run time. Review by 2026-12-31, or drop
+    # them with the first utoipa-swagger-ui on zip 9 (F55).
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
+]

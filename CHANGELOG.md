@@ -546,6 +546,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- RUSTSEC-2026-0367, -0368 and -0369 against `zip` 8.6.0 are ignored in
+  `deny.toml` and `.cargo/audit.toml` until 2026-12-31 or the first
+  `utoipa-swagger-ui` on `zip` 9: `zip` only unpacks the vendored Swagger
+  UI bundle, pinned by checksum, when Kage is compiled, and the advisories
+  are about extracting an attacker's archive.
 - `rustls` 0.23.46 in place of 0.23.45 (RUSTSEC-2026-0346 to -0349,
   published 2026-10-14): the TLS of the fingerprint echo and of the
   database connection. Outbound requests to targets are wreq's and never
