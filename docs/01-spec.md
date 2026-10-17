@@ -2092,7 +2092,11 @@ admin purge (§16.3) does the same for one key before that time.
 
 ## 17. Configuration
 
-`kage.yaml` layered with env `KAGE__SECTION__KEY=value` (figment). Secrets
+`kage.yaml` layered with env `KAGE__SECTION__KEY=value` (figment, with
+`serde-saphyr` reading the YAML: a repeated key and a merge key are errors
+with line and column, depth 128, a million nodes and 16 MiB of scalars at
+most, only `true` and `false` are booleans, and text that reads as a number
+is written in quotes where text is expected; F45). Secrets
 MUST come only from env or files mounted via Docker secrets:
 `KAGE__WEBSHARE__API_KEY`, `KAGE__DATABASE__URL`, `KAGE__SIDECAR__TOKEN`,
 `KAGE__SECRETS__MASTER_KEY` (for encrypting proxy credentials at rest;

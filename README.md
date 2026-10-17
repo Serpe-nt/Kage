@@ -129,6 +129,16 @@ Per-domain behaviour is data in [policies/](policies/): `domains.yaml`
 and `block-signatures.yaml`. `kage` reloads them when they change; an
 invalid file keeps the last good policy in force and raises an alert.
 
+Every YAML file Kage reads (`kage.yaml`, the policies, the YAML form of the
+static proxy list) is read as YAML 1.2 with three rules of Kage's own: a
+key said twice in one mapping is an error that gives its line and column,
+a merge key (`<<`) is an error, and a document nests at most 128 levels,
+has at most a million nodes and 16 MiB of text. Only `true` and `false`
+are booleans, so `NO` is Norway. **Write in quotes what is text but reads
+as a number**: a password of digits, an id with a leading zero, `1_000`
+(`password: "0123"`); unquoted, it is refused where text is expected, and
+`kage config check` names the key and says so.
+
 ## Development
 
 Every dev and CI command is a `just` target. `just` without arguments lists

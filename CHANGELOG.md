@@ -583,6 +583,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The YAML of `kage.yaml`, the policy files and the static proxy list is
+  read by `serde-saphyr` 1.3.0 instead of `serde_yaml` over
+  `unsafe-libyaml` (F45; RUSTSEC-2024-0449, which `deny.toml` no longer
+  ignores). A file that loaded before can fail now, and the message says
+  why: a key said twice in one mapping is an error with its line and
+  column (the last one won before, silently); a merge key `<<` is an error;
+  unquoted text that YAML reads as a number (`0123456`, `007`, `1_000`) is
+  refused where text is expected, and `kage config check` names the key and
+  says to write it in quotes; `1e400` and `.inf` are refused. A byte order
+  mark is accepted now. A document nests at most 128 levels and holds at
+  most a million nodes and 16 MiB of text, and a hostile one is refused in
+  milliseconds. On a hot reload an invalid file keeps the last good policy
+  and the alert gives the line. The shipped files read exactly as before.
 - The shipped default of a domain's `robots` is `ignore` (it was
   `report`, which nothing acted on before M11). A reader never asks for
   `/robots.txt`, so with `report` as the default every site Kage is ever
