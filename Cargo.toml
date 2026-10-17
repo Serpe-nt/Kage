@@ -128,6 +128,9 @@ tokio-rustls = { version = "=0.26.6", default-features = false, features = ["rin
 
 # --- Crypto, ids, time ----------------------------------------------------
 sha2 = { version = "=0.11.0" }
+# O_NOFOLLOW and O_NONBLOCK, for reading a file a sidecar wrote (kage-scheduler,
+# on Unix). In the lockfile already, below tokio.
+libc = { version = "=0.2.190" }
 hmac = { version = "=0.13.0" }
 # API keys: the secret is 32 bytes from the operating system, written as
 # base64url; its hash is compared in constant time. All three at the

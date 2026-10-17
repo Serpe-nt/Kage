@@ -12,8 +12,17 @@
 //! Only what the request asked for is kept ([`Keep`]), nothing of an
 //! attempt the SSRF guard refused, and a body that cannot be stored is a
 //! warning in the log, never a failed fetch.
+//!
+//! A file the sidecar wrote is taken only as the sidecar describes it: in
+//! the sidecars' part of the artifacts directory, a plain file and no link,
+//! pipe or device, of the size and the SHA-256 it names (security review
+//! S1). A sidecar that was taken over cannot make Kage read anything else
+//! into a result: not Kage's environment or secrets, whose content it does
+//! not know, nor a file that never ends.
 
+use std::ffi::OsStr;
 use std::fmt;
+use std::io::Read as _;
 use std::path::{Component, Path, PathBuf};
 
 use async_trait::async_trait;
@@ -21,12 +30,13 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use chrono::{DateTime, Utc};
 use kage_browser::contract::{ArtifactRef as SidecarFile, BodyEncoding, CapturedBody, PageResult};
-use kage_core::domain::{ArtifactKind, ArtifactRef, Header};
+use kage_core::domain::{ArtifactKind, ArtifactRef, ContentHash, Header};
 use kage_core::ids::RequestId;
 use kage_core::outcome::Outcome;
 use kage_http::Fetched;
 use kage_store::{ArtifactStore, NewArtifact};
 use serde_json::{Value, json};
+use sha2::{Digest as _, Sha256};
 
 use crate::executor::AttemptOutput;
 
@@ -34,6 +44,15 @@ use crate::executor::AttemptOutput;
 /// inside the result itself. A larger one, and one that is not text, is an
 /// artifact of its own.
 pub const INLINE_XHR_BYTES: usize = 256 * 1024;
+
+/// The largest file a sidecar hands over: a full-page screenshot or the PDF
+/// of a long page is a few tens of MiB.
+pub const MAX_SIDECAR_FILE_BYTES: u64 = 128 * 1024 * 1024;
+
+/// Where below the artifacts directory the sidecars write their files
+/// (`sidecar/<id>/...`). The store keeps its own blobs below the same
+/// directory, under two hexadecimal digits.
+const SIDECAR_AREA: &str = "sidecar";
 
 /// Which parts of a page a request asked to keep.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -120,14 +139,97 @@ pub(crate) fn bytes_of(body: &CapturedBody) -> Option<Vec<u8>> {
 }
 
 /// Where a file the sidecar named lies below the artifacts directory, or
-/// `None` for a path that would leave it.
+/// `None` for a path that would leave the sidecars' part of it.
 fn below(root: &Path, relative: &str) -> Option<PathBuf> {
     let relative = Path::new(relative);
-    let inside = !relative.as_os_str().is_empty()
+    let mut components = relative.components();
+    let inside = components.next() == Some(Component::Normal(OsStr::new(SIDECAR_AREA)))
+        && components.next().is_some()
         && relative
             .components()
             .all(|component| matches!(component, Component::Normal(_)));
     inside.then(|| root.join(relative))
+}
+
+/// Why a file a sidecar named was not taken.
+#[derive(Debug, thiserror::Error)]
+enum NotTaken {
+    /// It says it is larger than [`MAX_SIDECAR_FILE_BYTES`].
+    #[error("the sidecar says it is larger than a sidecar's file may be")]
+    TooLarge,
+    /// A link leads out of the sidecars' part of the artifacts directory.
+    #[error("it lies outside the sidecars' part of the artifacts directory")]
+    Outside,
+    /// A link, a pipe, a device, a directory.
+    #[error("it is not a plain file")]
+    NotAFile,
+    /// Not the size the sidecar named.
+    #[error("it is not as long as the sidecar says")]
+    Length,
+    /// Not the content the sidecar named.
+    #[error("its content is not what the sidecar says it is")]
+    Content,
+    /// It could not be read.
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
+/// Opens a file to read without following a link at its last step, and
+/// without waiting for a writer when it is a pipe.
+#[cfg(unix)]
+fn open_plain(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+}
+
+/// Opens a file to read; a link at its last step is refused.
+#[cfg(not(unix))]
+fn open_plain(path: &Path) -> std::io::Result<std::fs::File> {
+    if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(std::io::Error::other("a link"));
+    }
+    std::fs::File::open(path)
+}
+
+/// Reads the file at `path` as `file` describes it, and says where it
+/// really is, for removing it once it is stored.
+fn read_described(
+    root: &Path,
+    path: &Path,
+    file: &SidecarFile,
+) -> Result<(PathBuf, Vec<u8>), NotTaken> {
+    if file.bytes > MAX_SIDECAR_FILE_BYTES {
+        return Err(NotTaken::TooLarge);
+    }
+    let area = root.join(SIDECAR_AREA).canonicalize()?;
+    let real = path.canonicalize()?;
+    if !real.starts_with(&area) {
+        return Err(NotTaken::Outside);
+    }
+    let opened = open_plain(&real)?;
+    let metadata = opened.metadata()?;
+    if !metadata.is_file() {
+        return Err(NotTaken::NotAFile);
+    }
+    if metadata.len() != file.bytes {
+        return Err(NotTaken::Length);
+    }
+    let mut bytes = Vec::new();
+    opened
+        .take(file.bytes.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if u64::try_from(bytes.len()).ok() != Some(file.bytes) {
+        return Err(NotTaken::Length);
+    }
+    let digest = ContentHash::from_digest(Sha256::digest(&bytes).into());
+    if !digest.as_str().eq_ignore_ascii_case(&file.sha256) {
+        return Err(NotTaken::Content);
+    }
+    Ok((real, bytes))
 }
 
 impl StoreArchive {
@@ -171,13 +273,18 @@ impl StoreArchive {
         now: DateTime<Utc>,
     ) -> Option<ArtifactRef> {
         let Some(path) = below(self.store.root(), &file.path) else {
-            tracing::warn!(%request, kind = kind.as_str(), "a sidecar named a file outside the artifacts directory");
+            tracing::warn!(%request, kind = kind.as_str(), "a sidecar named a file outside its part of the artifacts directory");
             return None;
         };
-        let bytes = match tokio::fs::read(&path).await {
-            Ok(bytes) => bytes,
+        let root = self.store.root().to_path_buf();
+        let described = file.clone();
+        let read = tokio::task::spawn_blocking(move || read_described(&root, &path, &described))
+            .await
+            .map_err(|error| NotTaken::Io(std::io::Error::other(error)));
+        let (path, bytes) = match read.and_then(|read| read) {
+            Ok(read) => read,
             Err(error) => {
-                tracing::warn!(%request, kind = kind.as_str(), %error, "a file the sidecar wrote cannot be read");
+                tracing::warn!(%request, kind = kind.as_str(), %error, "a file the sidecar wrote is not taken");
                 return None;
             }
         };
@@ -363,7 +470,10 @@ mod tests {
     use kage_browser::contract::{BodyEncoding, CapturedBody};
     use kage_core::domain::Header;
 
-    use super::{Keep, below, bytes_of, content_type_of};
+    use super::{
+        Keep, MAX_SIDECAR_FILE_BYTES, NotTaken, SidecarFile, below, bytes_of, content_type_of,
+        read_described,
+    };
 
     #[test]
     fn nothing_is_kept_unless_a_part_is_named() {
@@ -408,9 +518,120 @@ mod tests {
             "sidecar/../../etc/passwd",
             "/etc/passwd",
             "./sidecar/shot.webp",
+            // The store's own blobs, and the area itself.
+            "ab/cd/abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+            "sidecar",
+            "sidecars/shot.webp",
         ] {
             assert_eq!(below(root, outside), None, "{outside:?}");
         }
+    }
+
+    /// Security review S1.
+    #[cfg(unix)]
+    #[test]
+    fn a_sidecars_file_is_taken_only_as_the_sidecar_describes_it() {
+        use std::os::unix::fs::symlink;
+
+        use kage_core::domain::ContentHash;
+        use sha2::{Digest as _, Sha256};
+
+        let root = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let area = root.path().join("sidecar/ctx");
+        std::fs::create_dir_all(&area).unwrap();
+        let describe = |name: &str, content: &[u8]| SidecarFile {
+            path: format!("sidecar/ctx/{name}"),
+            bytes: u64::try_from(content.len()).unwrap(),
+            sha256: ContentHash::from_digest(Sha256::digest(content).into())
+                .as_str()
+                .to_owned(),
+            content_type: "image/webp".to_owned(),
+        };
+        let read = |file: &SidecarFile| {
+            let path = below(root.path(), &file.path).unwrap();
+            read_described(root.path(), &path, file)
+        };
+
+        let shot = b"RIFF\x10\x00\x00\x00WEBPVP8 a picture";
+        std::fs::write(area.join("shot.webp"), shot).unwrap();
+        let (found, bytes) = read(&describe("shot.webp", shot)).unwrap();
+        assert_eq!(bytes, shot);
+        assert_eq!(found, area.join("shot.webp").canonicalize().unwrap());
+
+        // Another content, another length.
+        let mut wrong = describe("shot.webp", b"RIFF\x10\x00\x00\x00WEBPVP8 a pictur!");
+        assert!(
+            matches!(read(&wrong), Err(NotTaken::Content)),
+            "{:?}",
+            read(&wrong)
+        );
+        wrong = describe("shot.webp", b"a picture");
+        assert!(
+            matches!(read(&wrong), Err(NotTaken::Length)),
+            "{:?}",
+            read(&wrong)
+        );
+        wrong = SidecarFile {
+            bytes: MAX_SIDECAR_FILE_BYTES + 1,
+            ..describe("shot.webp", shot)
+        };
+        assert!(
+            matches!(read(&wrong), Err(NotTaken::TooLarge)),
+            "{:?}",
+            read(&wrong)
+        );
+
+        // A secret of the host, described as it is: a link to it is no
+        // file of the sidecar's, at its last step or before it.
+        let secret = b"KAGE_MASTER_KEY=0123";
+        std::fs::write(elsewhere.path().join("environ"), secret).unwrap();
+        symlink(elsewhere.path().join("environ"), area.join("environ")).unwrap();
+        let file = describe("environ", secret);
+        assert!(
+            matches!(read(&file), Err(NotTaken::Outside)),
+            "{:?}",
+            read(&file)
+        );
+        symlink(elsewhere.path(), area.join("out")).unwrap();
+        let file = describe("out/environ", secret);
+        assert!(
+            matches!(read(&file), Err(NotTaken::Outside)),
+            "{:?}",
+            read(&file)
+        );
+        // A link that stays inside is read for what it leads to; a link
+        // put in place of a file after that check is not opened.
+        symlink(area.join("shot.webp"), area.join("again.webp")).unwrap();
+        let (found, _) = read(&describe("again.webp", shot)).unwrap();
+        assert_eq!(found, area.join("shot.webp").canonicalize().unwrap());
+        assert!(super::open_plain(&area.join("again.webp")).is_err());
+
+        // A directory, and a pipe nobody writes to: refused at once.
+        std::fs::create_dir(area.join("dir")).unwrap();
+        let file = describe("dir", b"");
+        assert!(
+            matches!(read(&file), Err(NotTaken::NotAFile)),
+            "{:?}",
+            read(&file)
+        );
+        let made = std::process::Command::new("mkfifo")
+            .arg(area.join("pipe"))
+            .status()
+            .is_ok_and(|status| status.success());
+        if made {
+            let file = describe("pipe", b"");
+            assert!(
+                matches!(read(&file), Err(NotTaken::NotAFile)),
+                "{:?}",
+                read(&file)
+            );
+        }
+        // Nothing of the host was touched.
+        assert_eq!(
+            std::fs::read(elsewhere.path().join("environ")).unwrap(),
+            secret
+        );
     }
 
     #[test]

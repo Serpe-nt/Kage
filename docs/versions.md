@@ -118,7 +118,8 @@ the comparison.
 | rcgen | 0.14.10 | locked (`kage-http`, `kage`) | Added in M3. Test only. Makes a throwaway certificate authority and a server certificate for the tests that run the fingerprint echo, at run time; no key is committed. Brings `x509-parser` 0.18.1, `yasna` 0.6.0, `pem` 4.0.0 and their ASN.1 crates into the lockfile, none into a release build. |
 | proptest | 1.11.0 | locked (`kage-proxy`, `kage-core`) | Added in M2. Test only. Property tests of the pool state machine. Default features off (`std` only): no process forking. Since M10 also the properties of URL normalization in `kage-core` (spec §13). |
 | testcontainers, testcontainers-modules | 0.27.3, 0.15.0 | locked (`kage-store`, `kage-http`, `kage`) | Test only. testcontainers 0.28.0 exists, but testcontainers-modules 0.15.0 requires `^0.27`; the two move together. Default features off: the Docker socket needs no TLS stack. |
-| tempfile | 3.27.0 | locked (`kage-core`, `kage-store`, `kage`) | Added in M1. Test only. |
+| tempfile | 3.27.0 | locked (`kage-core`, `kage-store`, `kage`, `kage-scheduler`) | Added in M1. Test only. |
+| libc | 0.2.190 | locked (`kage-scheduler`, on Unix; direct since M12) | In the lockfile already, below tokio. `O_NOFOLLOW` and `O_NONBLOCK` for opening a file a sidecar wrote: no link at its last step, no wait on a pipe (security review S1). No `unsafe`: only the two constants. |
 
 M2 added 27 packages to `Cargo.lock` (427 to 454): the cipher and its
 traits, the response decoders behind wreq, wiremock and proptest with their

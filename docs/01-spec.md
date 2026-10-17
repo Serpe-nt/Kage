@@ -866,10 +866,17 @@ main body, captured XHR/fetch responses (filtered by content-type and size),
 console entries, timing, challenge signals (vendor scripts seen,
 interstitial detected and whether it auto-resolved within
 `challenge_wait_ms`), screenshots and PDFs as artifact references (sidecar
-writes them to the shared artifacts volume and returns paths). A navigation
-that fails is a page result too, with a typed `error` (`timeout`,
-`navigation_failed`, `proxy_failed`, `aborted`) and whatever was captured
-until then.
+writes them to the shared artifacts volume, below `sidecar/<id>/`, and
+returns their paths, sizes and SHA-256). Kage takes such a file only as it
+is described: below `sidecar/`, with a real path that stays there, a plain
+file (no link at its last step, no pipe, device or directory), at most
+128 MiB, of the size and the SHA-256 the sidecar named; anything else is
+a warning in the log and no artifact. A sidecar that was taken over
+cannot make Kage read a file of its own host into a result, since it does
+not know the content of Kage's environment or secrets (security review
+S1). A navigation that fails is a page result too, with a typed `error`
+(`timeout`, `navigation_failed`, `proxy_failed`, `aborted`) and whatever
+was captured until then.
 
 Captures must not change what the page experiences. Bodies come from
 network events, never from request interception; the DOM is read in an
