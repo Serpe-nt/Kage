@@ -1,0 +1,61 @@
+# Jaeger v2 of the `observability` profile (spec §20): one process, OTLP
+# over HTTP in on 4318 from the collector, the query API and UI on 16686
+# (read through Grafana's Jaeger data source; not published). Traces are
+# kept in an embedded Badger store on the `jaeger-data` volume for seven
+# days.
+service:
+  extensions: [jaeger_storage, jaeger_query, healthcheckv2]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [jaeger_storage_exporter]
+  telemetry:
+    resource:
+      service.name: jaeger
+    metrics:
+      level: normal
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+    logs:
+      level: info
+
+extensions:
+  healthcheckv2:
+    use_v2: true
+    http:
+      endpoint: 0.0.0.0:13133
+  jaeger_query:
+    storage:
+      traces: kage_traces
+  jaeger_storage:
+    backends:
+      kage_traces:
+        badger:
+          # Under /tmp: the one directory of the image that its user
+          # (10001) may write, which the volume is mounted on. A volume
+          # anywhere else is owned by root, and without CAP_CHOWN Badger
+          # cannot write it.
+          directories:
+            keys: /tmp/jaeger/keys
+            values: /tmp/jaeger/values
+          ephemeral: false
+          ttl:
+            spans: 168h
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+
+exporters:
+  jaeger_storage_exporter:
+    trace_storage: kage_traces

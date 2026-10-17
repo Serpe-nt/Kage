@@ -1,0 +1,19 @@
+# Grafana's data sources in the `observability` profile (spec §20): the
+# profile's Prometheus and Jaeger, on the compose network. Not editable in
+# the UI; this file is what they are.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+  - name: Jaeger
+    type: jaeger
+    uid: jaeger
+    access: proxy
+    url: http://jaeger:16686
+    editable: false

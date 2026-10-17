@@ -1,0 +1,160 @@
+# The `observability` profile (spec §3.3, §20): an OpenTelemetry Collector,
+# Jaeger, Prometheus and Grafana beside the stack of deploy/compose.yaml,
+# and kage and the sidecars told where their traces go.
+#
+#   docker compose --file deploy/compose.yaml --file deploy/compose.observability.yaml \
+#     --profile observability up --detach --wait
+#
+# Grafana is published on loopback (KAGE_GRAFANA_PORT, 3000), with the
+# admin password of deploy/.env (KAGE_GRAFANA_ADMIN_PASSWORD, which
+# `just setup` creates). Nothing else is published. Traces are kept seven
+# days, metrics fifteen. docs/runbooks/observability.md says what is where.
+#
+# Every image by tag and index digest, every service under the hardening of
+# deploy/compose.yaml.
+
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+
+x-traced: &traced
+  # The collector on the compose network; never asked through a proxy.
+  SIDECAR_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
+
+services:
+  kage:
+    environment:
+      KAGE__TELEMETRY__OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
+      # /metrics and /healthz without a key, on the compose network only,
+      # for Prometheus. Never publish this port.
+      KAGE__SERVER__METRICS_BIND: 0.0.0.0:9464
+
+  browser-chromium:
+    environment:
+      <<: *traced
+
+  browser-firefox:
+    environment:
+      <<: *traced
+
+  # OTLP over HTTP in on 4318, traces out to Jaeger. Runs as 10001 and needs
+  # no writable path. The image is one binary without a shell or a health
+  # command: its health is the health_check extension on 13133 and
+  # `up{job="otel-collector"}` in Prometheus, and nothing waits for it.
+  otel-collector:
+    <<: *hardening
+    profiles: [observability]
+    image: otel/opentelemetry-collector:0.162.0@sha256:310a800ad69ee430e7c541796852a242c9c7db97aaad4daa5ccf843c525fbdb2
+    command: ["--config", "/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel/collector.yaml:/etc/otelcol/config.yaml:ro
+    depends_on:
+      jaeger:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    mem_limit: 256m
+    cpus: 1
+    pids_limit: 128
+
+  # The trace backend: OTLP over HTTP in on 4318, the query API and UI on
+  # 16686 (through Grafana). Runs as 10001; Badger keeps seven days.
+  jaeger:
+    <<: *hardening
+    profiles: [observability]
+    image: jaegertracing/jaeger:2.22.0@sha256:836b967b5abcf1f7758066aa6b348619267a2f1459f72d472840570f9bd88a17
+    command: ["--config", "/etc/jaeger/config.yaml"]
+    volumes:
+      - ./otel/jaeger.yaml:/etc/jaeger/config.yaml:ro
+      # /tmp is the one directory of the image that its user may write
+      # (otel/jaeger.yaml); the volume there also keeps Docker from making an
+      # anonymous one for the image's `VOLUME /tmp` at every `up`.
+      - jaeger-data:/tmp
+    healthcheck:
+      test: [CMD, wget, -q, --spider, "http://127.0.0.1:13133/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    mem_limit: 512m
+    cpus: 1
+    pids_limit: 128
+
+  # The LTS line (3.13, supported until 2027-07-31), distroless: runs as
+  # 65532 without a shell; promtool is its health check.
+  prometheus:
+    <<: *hardening
+    profiles: [observability]
+    image: prom/prometheus:v3.13.4-distroless@sha256:f11bbfb615cf24aa9ef28d2cb527ef81e3bcaa1a0ff13c0ec5b11edd9b351bdc
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    healthcheck:
+      test: [CMD, promtool, check, healthy]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    mem_limit: 512m
+    cpus: 1
+    pids_limit: 128
+
+  # Grafana OSS, run unmodified from its image (AGPL-3.0, docs/versions.md).
+  # Runs as 472. The full image: the -slim variants carry no data source
+  # plugin and would download them.
+  grafana:
+    <<: *hardening
+    profiles: [observability]
+    image: grafana/grafana:13.2.4@sha256:dbbc38ea21103cefb50396340cd88afec779c7e070b0a7bf5a75b4ce46651d3f
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${KAGE_GRAFANA_ADMIN_PASSWORD:?run 'just setup' to create deploy/.env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      # Without this Grafana downloads five app plugins from grafana.com at
+      # its first start, at whatever version is newest: unpinned code.
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      # Jaeger 2.22 answers only its v3 API for searches and services (the
+      # v1 /api/services and /api/traces?service= are gone); the Jaeger data
+      # source asks the v1 paths unless this is on.
+      GF_FEATURE_TOGGLES_ENABLE: jaegerEnableGrpcEndpoint
+    # Each bundled data source plugin is a process of its own with a socket
+    # under /tmp; with a read-only /tmp none of them starts.
+    tmpfs: [/tmp]
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:${KAGE_GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      jaeger:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, wget, -q, --spider, "http://127.0.0.1:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    mem_limit: 768m
+    cpus: 2
+    # About 110 processes and threads at rest: one process per plugin.
+    pids_limit: 256
+
+volumes:
+  jaeger-data:
+  prometheus-data:
+  grafana-data:

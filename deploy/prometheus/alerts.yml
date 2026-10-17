@@ -1,0 +1,72 @@
+# Alert rules of the `observability` profile (spec §20). They show in
+# Prometheus and in Grafana; route them on with an Alertmanager of your own.
+# Each one names the runbook that says what to do. Tested by
+# `just test-alerts` against deploy/prometheus/alerts.test.yml.
+groups:
+  - name: kage
+    rules:
+      - alert: KageDown
+        expr: up{job="kage"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Prometheus cannot scrape kage
+          runbook: docs/runbooks/observability.md
+
+      # A proxy is usable while it is healthy or degraded; without one,
+      # nothing is fetched.
+      - alert: KagePoolUnavailable
+        expr: sum(kage_proxy_state{state=~"healthy|degraded"}) == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: No proxy of the pool can be used
+          runbook: docs/runbooks/proxies.md
+
+      - alert: KageBandwidthBudget
+        expr: kage_bandwidth_budget_ratio >= 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of the plan's bandwidth is used"
+          runbook: docs/runbooks/fetching.md
+
+      - alert: KageBreakerOpen
+        expr: kage_breaker_open == 1
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.domain }} is paused: its breaker opened on blocks"
+          runbook: docs/runbooks/block-report.md
+
+      # The blocks of the last hour on a domain against the blocks per hour
+      # its policy allows before it pauses the domain (breaker_threshold).
+      - alert: KageBlockRateAboveThreshold
+        expr: >-
+          sum by (domain) (increase(kage_attempts_total{outcome=~"rate_limited|forbidden|captcha|challenge_failed|soft_block"}[1h]))
+          >= on (domain) max by (domain) (kage_policy_breaker_threshold)
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.domain }} was blocked as often in the last hour as its policy allows before it pauses the domain"
+          runbook: docs/runbooks/block-report.md
+
+      - alert: KagePersonaRetired
+        expr: sum(delta(kage_persona_state{state="retired"}[30m])) > 0
+        labels:
+          severity: info
+        annotations:
+          summary: A persona was retired in the last 30 minutes
+          runbook: docs/runbooks/personas.md
+
+      - alert: KageWebhookFailing
+        expr: sum(increase(kage_webhook_deliveries_total{result="failed"}[30m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: A webhook delivery failed for good in the last 30 minutes
+          runbook: docs/runbooks/api.md

@@ -29,3 +29,5 @@ ensure KAGE_POSTGRES_PASSWORD 24
 ensure KAGE_SIDECAR_TOKEN 32
 # Key that encrypts proxy credentials at rest: 32 random bytes, hex-encoded.
 ensure KAGE_MASTER_KEY 32
+# The Grafana admin of the observability profile (deploy/compose.observability.yaml).
+ensure KAGE_GRAFANA_ADMIN_PASSWORD 16

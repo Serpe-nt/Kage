@@ -1,0 +1,51 @@
+# OpenTelemetry Collector (core distribution) of the `observability` profile
+# (deploy/compose.observability.yaml, spec §20). OTLP over HTTP in on 4318
+# from kage and the sidecars, on the compose network only; traces out to
+# Jaeger over OTLP/HTTP. Nothing else, and nothing leaves the host.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Refuses spans before the container's memory limit (256m) is reached.
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 192
+    spike_limit_mib: 48
+  batch:
+    timeout: 1s
+    send_batch_size: 512
+
+exporters:
+  otlp_http/jaeger:
+    endpoint: http://jaeger:4318
+    tls:
+      insecure: true
+
+extensions:
+  # For a probe from outside: the image has no shell and no health command.
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp_http/jaeger]
+  telemetry:
+    logs:
+      level: info
+      encoding: json
+    # Its own metrics, for Prometheus (spans received, sent, refused).
+    metrics:
+      level: normal
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
