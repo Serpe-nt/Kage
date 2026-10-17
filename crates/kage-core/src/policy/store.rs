@@ -554,6 +554,20 @@ rules:
         store.reload().unwrap();
         assert_eq!(render_of(&store, "example.org"), RenderMode::Http);
         assert_eq!(alerts.alerts().len(), 1);
+
+        // A domain said twice is an error (F45): the policy in force stays,
+        // and the alert says on which line.
+        std::fs::write(
+            dir.path().join(DOMAINS_FILE),
+            "domains:\n  example.org: { render: browser }\n  example.org: { render: http }\n",
+        )
+        .unwrap();
+        assert!(store.reload().is_err());
+        assert_eq!(render_of(&store, "example.org"), RenderMode::Http);
+        let raised = alerts.alerts();
+        assert_eq!(raised.len(), 2);
+        let said = raised[1].details["error"].as_str().unwrap();
+        assert!(said.contains("line 3"), "{said}");
     }
 
     #[test]

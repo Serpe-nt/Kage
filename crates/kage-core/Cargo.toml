@@ -16,14 +16,18 @@ workspace = true
 chrono = { workspace = true }
 # A persona's local day and its waking hours (personas, pacing counters).
 chrono-tz = { workspace = true }
-# YAML for kage.yaml and the policy files, plus KAGE__SECTION__KEY layering.
-figment = { workspace = true, features = ["env", "yaml"] }
+# KAGE__SECTION__KEY layering over kage.yaml; `parse-value` reads an
+# environment value as figment's own grammar.
+figment = { workspace = true, features = ["parse-value"] }
 ipnet = { workspace = true }
 notify = { workspace = true }
 rand = { workspace = true, features = ["chacha"] }
 regex = { workspace = true }
 secrecy = { workspace = true }
 serde = { workspace = true }
+# YAML for kage.yaml, the policy files and the static proxy list, behind
+# figment (`yaml.rs`).
+serde-saphyr = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }

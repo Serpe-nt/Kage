@@ -542,7 +542,9 @@ impl StaticProxy {
         let document: StaticListDocument = crate::yaml::from_str(text).map_err(|_| {
             StaticListError(
                 "the YAML form must be `proxies:` with a list of entries that have host, \
-                 port, username and password, optionally id, country, city and asn"
+                 port, username and password, optionally id, country, city and asn; a \
+                 password or a name that YAML reads as a number (`0123`, `12345`) is \
+                 written in quotes"
                     .to_owned(),
             )
         })?;

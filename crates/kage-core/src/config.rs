@@ -22,7 +22,6 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use figment::Figment;
-use figment::providers::{Format, Yaml};
 use serde::{Deserialize, Serialize};
 
 use crate::duration::HumanDuration;
@@ -480,7 +479,7 @@ impl Config {
                 path: path.to_path_buf(),
                 source,
             })?;
-            let from_file = Figment::from(Yaml::string(&text));
+            let from_file = Figment::from(crate::yaml::Yaml::string(&text));
             for secret in SECRETS {
                 if from_file.find_value(secret.key).is_ok() {
                     return Err(ConfigError::SecretInFile {
@@ -543,7 +542,7 @@ impl Config {
 
         let config: Self = figment
             .extract()
-            .map_err(|error| ConfigError::Invalid(error.to_string()))?;
+            .map_err(|error| ConfigError::Invalid(crate::yaml::explain(error)))?;
         config.validate()?;
         Ok(config)
     }
@@ -1339,6 +1338,21 @@ reputation:
                 with(&[("KAGE__URLS__TRAILING_SLASH", "sometimes")])
             ))
             .contains("trailing_slash")
+        );
+
+        // A key said twice is an error that says where (F45), and text that
+        // YAML reads as a number names its key and says to quote it.
+        let twice = write(
+            &dir,
+            "twice.yaml",
+            "server:\n  bind: 127.0.0.1:1\n  bind: 127.0.0.1:2\n",
+        );
+        assert!(invalid(Config::load(Some(&twice), required())).contains("line 3"));
+        let numeric = write(&dir, "numeric.yaml", "forwarder:\n  advertise: 0123\n");
+        let said = invalid(Config::load(Some(&numeric), required()));
+        assert!(
+            said.contains("forwarder.advertise") && said.contains("in quotes"),
+            "{said}"
         );
 
         let broken = write(&dir, "broken.yaml", "server: [");
