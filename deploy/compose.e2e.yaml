@@ -55,6 +55,13 @@ services:
         proxy-a:3128:provider-a:e2e-only-a:DE
         proxy-b:3128:provider-b:e2e-only-b:DE
         proxy-c:3128:provider-c:e2e-only-c:DE
+      # The tests need a persona of each engine. Three personas of one
+      # country drawn under the shipped mix (40/45/15) are all Firefox in
+      # 4.54 % of worlds (measured with the draw itself, 200 000 worlds),
+      # and five of the six scripts would then fail for nothing they test.
+      # With Chromium at half, the draw's own rule gives a world of three
+      # both engines every time; all three entries stay possible.
+      KAGE__PERSONAS__MIX: '[{engine="chromium",os="linux",weight=50},{engine="firefox",os="windows",weight=30},{engine="firefox",os="macos",weight=20}]'
       KAGE__PROXIES__HEALTH__ECHO_URL: http://world.kage.test:8089/ip
       KAGE__PROXIES__HEALTH__CONFIRM_URL: http://world.kage.test:8089/ip
       KAGE__PROXIES__HEALTH__GEO_URL: http://world.kage.test:8089/geo
