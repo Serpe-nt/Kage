@@ -1785,16 +1785,27 @@ export function defineParitySuite(subject: ParitySubject): void {
       );
       expect(run.final).toMatchObject({ ok: true });
       const report = inputReportOf(run.steps.at(-1)?.capture?.dom_html ?? null);
-      const measured = inputStatistics(report);
+      const statistics = inputStatistics(report);
       // Everything a page can check about where input comes from.
-      expect(measured.untrusted).toBe(0);
-      expect(measured.pointerTypes).toEqual(['mouse']);
+      expect(statistics.untrusted).toBe(0);
+      expect(statistics.pointerTypes).toEqual(['mouse']);
       expect(report.field).toBe(text);
       expect(report.choice).toBe('three');
-      const clicked = report.events
-        .filter((event) => event.type === 'click')
-        .map((event) => event.target);
-      expect(clicked).toEqual(expect.arrayContaining(['target', 'field', 'choice', 'bottom']));
+      measured('a select by the hand and the keyboard', {
+        events: report.events
+          .filter((event) => event.target === 'choice' && event.type !== 'mousemove')
+          .map((event) => [event.type, Math.round(event.t)]),
+      });
+      const targets = (type: string) =>
+        report.events.filter((event) => event.type === type).map((event) => event.target);
+      // The hand pressed on each of the four. A `<select>` opens its list
+      // on the press, and the list may take the release, as it would a
+      // person's: on GitHub's runners Firefox's page saw no click on it in
+      // three runs of five. What the page saw on it is written down above.
+      expect(targets('mousedown')).toEqual(
+        expect.arrayContaining(['target', 'field', 'choice', 'bottom']),
+      );
+      expect(targets('click')).toEqual(expect.arrayContaining(['target', 'field', 'bottom']));
       // The keyboard is a German one: Z and Y change places, and capitals
       // and @ need their modifier keys.
       const keys = report.events
@@ -1806,8 +1817,8 @@ export function defineParitySuite(subject: ParitySubject): void {
       expect(keys.indexOf('Shift/ShiftLeft')).toBeLessThan(keys.indexOf('Z/KeyY'));
       expect(keys.some((key) => key.startsWith('AltGraph/'))).toBe(true);
       // Movements are curves at a mouse's pace, never lines at a script's.
-      expect(measured.moves.length).toBeGreaterThanOrEqual(3);
-      for (const move of measured.moves) {
+      expect(statistics.moves.length).toBeGreaterThanOrEqual(3);
+      for (const move of statistics.moves) {
         expect(move.straightness).toBeGreaterThan(1);
         expect(move.duration).toBeGreaterThan(120);
         expect(move.duration).toBeLessThan(3200);
@@ -1816,17 +1827,17 @@ export function defineParitySuite(subject: ParitySubject): void {
       // Typing and clicking keep a person's times: the spec's 60 to 220 ms
       // between keys (with the slack of a busy machine), a rest before each
       // click, a button that stays down for a moment.
-      expect(measured.keyIntervals.length).toBeGreaterThanOrEqual(text.length - 2);
+      expect(statistics.keyIntervals.length).toBeGreaterThanOrEqual(text.length - 2);
       const [low, high] = HUMAN_BOUNDS.keyIntervalMs;
-      for (const interval of measured.keyIntervals) {
+      for (const interval of statistics.keyIntervals) {
         expect(interval).toBeGreaterThan(low - 25);
         expect(interval).toBeLessThan(high + 90);
       }
-      for (const hold of measured.buttonHolds) {
+      for (const hold of statistics.buttonHolds) {
         expect(hold).toBeGreaterThan(30);
         expect(hold).toBeLessThan(260);
       }
-      for (const hover of measured.hovers) {
+      for (const hover of statistics.hovers) {
         expect(hover).toBeGreaterThan(40);
       }
       expect(run.final.behavior).toMatchObject({
