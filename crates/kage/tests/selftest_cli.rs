@@ -773,7 +773,7 @@ async fn the_browser_self_test_of_firefox_asks_its_own_sidecar_for_a_windows_per
     let stray = sidecar(
         &FIREFOX,
         firefox_persona("macos"),
-        context,
+        context.clone(),
         contract_example("SelftestResponse"),
     )
     .await;
@@ -785,11 +785,34 @@ async fn the_browser_self_test_of_firefox_asks_its_own_sidecar_for_a_windows_per
         "{table}"
     );
     stray.verify().await;
+
+    // A stand-in asked to claim macOS is generated and judged as one, in a
+    // profile of its own: a profile belongs to one device.
+    let mut mac_context = context.clone();
+    mac_context["profile_dir"] = json!(format!("selftest/firefox-macos/{id}"));
+    let mac = sidecar(
+        &StandIn {
+            claimed_os: "macos",
+            ..FIREFOX
+        },
+        firefox_persona("macos"),
+        mac_context,
+        contract_example("SelftestResponse"),
+    )
+    .await;
+    env.pop();
+    env.push(("KAGE__SIDECAR__FIREFOX_URL".to_owned(), mac.uri()));
+    let table = ok(&env, &[&arguments[..], &["--claimed-os", "macos"]].concat()).await;
+    assert!(
+        table.starts_with(&format!("firefox 156.0.1 on macos through proxy {id}")),
+        "{table}"
+    );
+    mac.verify().await;
     chromium.verify().await;
 
-    // Both runs are in the audit log under the engine that ran.
+    // Every run is in the audit log under the engine that ran.
     let filter = "action = 'selftest.browser' AND outcome = 'success' \
                   AND details ->> 'engine' = 'firefox' \
                   AND details ->> 'browser_version' = '156.0.1'";
-    assert_eq!(count(&db, "audit_events", filter).await, 2);
+    assert_eq!(count(&db, "audit_events", filter).await, 3);
 }

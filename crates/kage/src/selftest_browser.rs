@@ -17,7 +17,10 @@
 //! run and keeps one profile directory per engine
 //! (`selftest/<engine>/<proxy id>`). The stand-in claims the operating
 //! system its engine claims by default: Linux on chromium, Windows on
-//! firefox. Its time zone, locale and languages are what a persona behind
+//! firefox. `--claimed-os` names another (macOS on firefox; a chromium
+//! sidecar refuses anything but Linux, docs/adr/0009), which keeps a
+//! profile directory of its own (`selftest/<engine>-<os>/<proxy id>`).
+//! Its time zone, locale and languages are what a persona behind
 //! that proxy would get: derived from the proxy's observed geo record and
 //! the stock language list of that browser in that country
 //! (`kage_core::persona::locale`), unless they are named.
@@ -33,7 +36,7 @@ use kage_browser::contract::{
 };
 use kage_browser::{BrowserError, SidecarClient, SidecarSettings};
 use kage_core::config::{Config, SelftestPageConfig};
-use kage_core::domain::{AuditOutcome, Engine, Proxy, ProxyEndpoint};
+use kage_core::domain::{AuditOutcome, ClaimedOs as DomainOs, Engine, Proxy, ProxyEndpoint};
 use kage_core::ids::ProxyId;
 use kage_core::persona::locale;
 use kage_core::seed::Seed;
@@ -48,6 +51,9 @@ pub(crate) struct BrowserSelftestOptions {
     pub(crate) proxy: ProxyId,
     /// The engine whose sidecar runs the test.
     pub(crate) engine: Engine,
+    /// The system the stand-in persona claims; `None` for its engine's
+    /// own (`stand_in_os`).
+    pub(crate) claimed_os: Option<DomainOs>,
     /// The IANA time zone of the stand-in persona; `None` for the one of
     /// the proxy's geo record.
     pub(crate) timezone: Option<String>,
@@ -125,11 +131,28 @@ const fn stand_in_os(engine: Engine) -> ClaimedOs {
     }
 }
 
+/// The system the stand-in persona of a run claims: the one asked for,
+/// else its engine's own.
+const fn claim_of(options: &BrowserSelftestOptions) -> ClaimedOs {
+    match options.claimed_os {
+        None => stand_in_os(options.engine),
+        Some(DomainOs::Windows) => ClaimedOs::Windows,
+        Some(DomainOs::Macos) => ClaimedOs::Macos,
+        Some(DomainOs::Linux) => ClaimedOs::Linux,
+    }
+}
+
 /// The profile directory of the stand-in persona of a proxy on an engine,
 /// below the personas volume. The two sidecars share that volume and one
-/// browser cannot open the other's profile, so each engine has its own.
-fn profile_dir_of(engine: Engine, proxy: ProxyId) -> String {
-    format!("selftest/{}/{proxy}", engine.as_str())
+/// browser cannot open the other's profile, so each engine has its own;
+/// a stand-in that claims another system than its engine's own has one of
+/// its own as well, since a profile belongs to one device.
+fn profile_dir_of(engine: Engine, claim: ClaimedOs, proxy: ProxyId) -> String {
+    if claim == stand_in_os(engine) {
+        format!("selftest/{}/{proxy}", engine.as_str())
+    } else {
+        format!("selftest/{}-{}/{proxy}", engine.as_str(), claim.as_str())
+    }
 }
 
 /// What an echo page must report: the capture recorded for this browser.
@@ -190,7 +213,7 @@ async fn converse(
     seed: &str,
     pages: Vec<SelftestPage>,
 ) -> anyhow::Result<(PersonaSummary, Result<SelftestResponse, BrowserError>)> {
-    let claimed_os = stand_in_os(options.engine);
+    let claimed_os = claim_of(options);
     let persona = client
         .generate_persona(&GeneratePersonaRequest {
             browser_major: None,
@@ -209,7 +232,7 @@ async fn converse(
             languages: identity.languages.clone(),
             locale: identity.locale.clone(),
             persona_id: endpoint.id.as_uuid(),
-            profile_dir: profile_dir_of(options.engine, endpoint.id),
+            profile_dir: profile_dir_of(options.engine, claimed_os, endpoint.id),
             proxy: ContextProxy {
                 password: endpoint.password.expose().to_owned(),
                 server: endpoint.url(),
@@ -412,14 +435,15 @@ mod tests {
     };
     use kage_core::config::{Config, SelftestPageConfig, SelftestPageKind};
     use kage_core::domain::{
-        Engine, GeoRecord, Proxy, ProxyHealth, ProxyProviderKind, ProxyScheme, ProxyState,
+        ClaimedOs as DomainOs, Engine, GeoRecord, Proxy, ProxyHealth, ProxyProviderKind,
+        ProxyScheme, ProxyState,
     };
     use kage_core::ids::ProxyId;
     use kage_core::secret::SealedSecret;
 
     use super::{
-        BrowserSelftestOptions, echo_expectation, pages_of, profile_dir_of, seed_of, stand_in_os,
-        write_report,
+        BrowserSelftestOptions, claim_of, echo_expectation, pages_of, profile_dir_of, seed_of,
+        stand_in_os, write_report,
     };
 
     fn config() -> Config {
@@ -458,6 +482,7 @@ mod tests {
                 .parse::<ProxyId>()
                 .expect("a proxy id"),
             engine: Engine::Chromium,
+            claimed_os: None,
             timezone: Some("Europe/Berlin".to_owned()),
             languages: vec!["de-DE".to_owned(), "de".to_owned()],
             third_party: true,
@@ -647,12 +672,34 @@ mod tests {
         // share the personas volume.
         let proxy = options(false).proxy;
         assert_eq!(
-            profile_dir_of(Engine::Chromium, proxy),
+            profile_dir_of(Engine::Chromium, ClaimedOs::Linux, proxy),
             "selftest/chromium/0199c1f2-6b7a-7c3e-9d41-2f8a5b6c7d8e"
         );
         assert_eq!(
-            profile_dir_of(Engine::Firefox, proxy),
+            profile_dir_of(Engine::Firefox, ClaimedOs::Windows, proxy),
             "selftest/firefox/0199c1f2-6b7a-7c3e-9d41-2f8a5b6c7d8e"
+        );
+        // Another claim is another device, with a profile of its own.
+        assert_eq!(
+            profile_dir_of(Engine::Firefox, ClaimedOs::Macos, proxy),
+            "selftest/firefox-macos/0199c1f2-6b7a-7c3e-9d41-2f8a5b6c7d8e"
+        );
+        let claimed = |engine, claimed_os| {
+            claim_of(&BrowserSelftestOptions {
+                engine,
+                claimed_os,
+                ..options(false)
+            })
+        };
+        assert_eq!(claimed(Engine::Firefox, None), ClaimedOs::Windows);
+        assert_eq!(claimed(Engine::Chromium, None), ClaimedOs::Linux);
+        assert_eq!(
+            claimed(Engine::Firefox, Some(DomainOs::Macos)),
+            ClaimedOs::Macos
+        );
+        assert_eq!(
+            claimed(Engine::Chromium, Some(DomainOs::Windows)),
+            ClaimedOs::Windows
         );
     }
 

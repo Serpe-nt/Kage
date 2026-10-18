@@ -154,6 +154,7 @@ kage selftest browser --persona <persona id> --third-party
 | `--proxy` | The proxy to leave through, with a stand-in persona. A retired proxy is refused. |
 | `--persona` | Run the test as this persona instead, in its own context: its fingerprint, its profile, its proxy. The run is recorded for the persona (`docs/runbooks/personas.md`). Not with `--engine`, `--timezone` or `--language`. |
 | `--engine` | `chromium` (default) or `firefox`. A Firefox stand-in persona claims Windows; see `engine-firefox.md`. |
+| `--claimed-os` | The system the stand-in persona claims, in place of its engine's own: `macos` (or `windows`) on Firefox. A Chromium sidecar refuses anything but `linux` (ADR 0009). A stand-in of another claim keeps a profile of its own, `selftest/<engine>-<os>/<proxy id>`. Not with `--persona`. |
 | `--timezone`, `--language` | Override the identity of the stand-in persona. By default its time zone, locale and languages are what a persona behind that proxy would get: the proxy's observed geo record and the list the engine's browser ships with in that country. |
 | `--third-party` | Also load `selftest.browser.third_party_pages`. |
 | `--idle-before` | Keep the context open and untouched for this long (for example `10m`) before the pages load. For measuring what the browser sends by itself; the sidecar's `SIDECAR_CONTEXT_IDLE_MS` must be longer, or it closes the context meanwhile. |

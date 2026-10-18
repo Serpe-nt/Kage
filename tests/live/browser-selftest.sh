@@ -25,11 +25,16 @@
 #   KAGE_LIVE_ENGINES        the engines to check, in this order;
 #                            "chromium firefox" when not set
 #   KAGE_LIVE_SELFTEST_DAY   overrides the day number that picks the pair
+#   KAGE_LIVE_FIREFOX_CLAIMS the systems the two Firefox stand-ins claim, in
+#                            the pair's order; "windows windows" when not
+#                            set ("windows macos" checks both claims)
 #   KAGE_LIVE_RECORD=1       records the findings as the regression baseline
 #                            of each engine checked
 #                            (tests/fixtures/selftest/<engine>-<major>-live.json);
 #                            review, then commit. An engine without a
-#                            baseline fails the check until one is recorded.
+#                            baseline fails the check until one is recorded;
+#                            a recording run of a new major is judged
+#                            against the previous major's baseline first.
 #   KAGE_LIVE_EVIDENCE_DIR   keeps the pages' text and screenshots there, in
 #                            one directory per engine; they are evidence for
 #                            a person, never committed
@@ -77,6 +82,13 @@ fail() {
 }
 
 read -ra engines <<< "${KAGE_LIVE_ENGINES:-chromium firefox}"
+read -ra firefox_claims <<< "${KAGE_LIVE_FIREFOX_CLAIMS:-windows windows}"
+for claim in "${firefox_claims[@]}"; do
+    case "${claim}" in
+        windows | macos) ;;
+        *) fail "KAGE_LIVE_FIREFOX_CLAIMS: a Firefox stand-in claims windows or macos, not ${claim}" ;;
+    esac
+done
 [ "${#engines[@]}" -gt 0 ] || fail "KAGE_LIVE_ENGINES names no engine"
 for engine in "${engines[@]}"; do
     case "${engine}" in
@@ -206,13 +218,20 @@ for engine in "${engines[@]}"; do
             idle_flags+=(--idle-before "${idle}s")
             echo "    the first context stays idle for ${idle} s before its pages load"
         fi
-        echo "    ${engine} through proxy ${run} of the pair (${country})"
+        claim_flags=()
+        if [ "${engine}" = firefox ]; then
+            claim="${firefox_claims[$((run - 1))]:-windows}"
+            claim_flags+=(--claimed-os "${claim}")
+            echo "    ${engine} through proxy ${run} of the pair (${country}), claiming ${claim}"
+        else
+            echo "    ${engine} through proxy ${run} of the pair (${country})"
+        fi
         # The time zone and the languages are the stand-in's own: what a
         # persona of this engine behind this proxy would get.
         # A failing self-test still prints its report; the judge reads it.
         # stdin is the list of the loop: the command must not read from it.
         kage selftest browser --proxy "${proxy}" --engine "${engine}" \
-            "${idle_flags[@]}" --third-party --json \
+            "${claim_flags[@]}" "${idle_flags[@]}" --third-party --json \
             < /dev/null > "${workdir}/${engine}-report-${run}.json" || status=1
     done < "${workdir}/pair.txt"
 
