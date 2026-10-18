@@ -110,7 +110,11 @@ if [ -z "${unpacked}" ]; then
     # not mix.
     ${sudo} rm -rf "${dir}"
     ${sudo} install --directory "${dir}"
-    ${sudo} unzip -q "${archive}" -d "${dir}"
+    # unzip exits 1 for warnings with every file extracted (Debian's warns
+    # that the 156 archive's Hiragino font names differ between the local
+    # and the central header, and takes the central one); above 1 is an
+    # error.
+    ${sudo} unzip -q "${archive}" -d "${dir}" || [ "$?" -eq 1 ]
     ${sudo} chmod -R a+rX,go-w "${dir}"
     printf '%s\n' "${stamp}" | ${sudo} tee "${dir}/version.json" > /dev/null
 fi
