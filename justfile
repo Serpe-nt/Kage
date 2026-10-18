@@ -267,6 +267,9 @@ cov: cov-rust cov-node
 # Runs the Rust tests instrumented, then enforces the per-crate threshold.
 cov-rust:
     mkdir -p target/coverage
+    # The instrumented binaries of an older build (a CI cache of another
+    # commit) would be counted too, with their own lines of the same files.
+    cargo llvm-cov clean --workspace
     cargo llvm-cov --workspace --all-features --locked --no-report
     cargo llvm-cov report --lcov --output-path target/coverage/rust.lcov
     cargo llvm-cov report --json --summary-only --output-path target/coverage/rust.json
