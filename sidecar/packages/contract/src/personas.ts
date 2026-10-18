@@ -140,3 +140,37 @@ export const GeneratePersonaResponseSchema = z
   })
   .meta({ id: 'GeneratePersonaResponse', description: 'A generated persona fingerprint.' });
 export type GeneratePersonaResponse = z.infer<typeof GeneratePersonaResponseSchema>;
+
+/** Body of `POST /v1/personas/upgrade` (1.4.0). */
+export const UpgradePersonaRequestSchema = z
+  .strictObject({
+    fingerprint: z
+      .record(z.string(), z.unknown())
+      .describe(
+        'The fingerprint document as Kage stored it: generated, or moved before, by an engine of the same kind.',
+      ),
+  })
+  .meta({
+    id: 'UpgradePersonaRequest',
+    description: "A stored fingerprint to move to the browser major the engine's sidecar runs.",
+  });
+export type UpgradePersonaRequest = z.infer<typeof UpgradePersonaRequestSchema>;
+
+/** Response of `POST /v1/personas/upgrade` (1.4.0). */
+export const UpgradePersonaResponseSchema = z
+  .strictObject({
+    fingerprint: z
+      .record(z.string(), z.unknown())
+      .describe(
+        "The document for the browser the engine runs: the same device and seeds, with the browser's version moved as the browser's own update moves it. The same request gives the same document, byte for byte; a document of that version comes back unchanged.",
+      ),
+    summary: PersonaSummarySchema.describe('The moved fingerprint in a few fields.'),
+    upgraded: z
+      .boolean()
+      .describe('Whether the document changed: false when it was of the engine’s browser already.'),
+  })
+  .meta({
+    id: 'UpgradePersonaResponse',
+    description: 'A persona fingerprint for the browser major the engine runs.',
+  });
+export type UpgradePersonaResponse = z.infer<typeof UpgradePersonaResponseSchema>;

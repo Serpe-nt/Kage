@@ -62,7 +62,7 @@ describe('the OpenAPI document', () => {
         expect(response['description']).toContain(`\`${code}\``);
       }
     }
-    expect(Object.keys(document.paths)).toHaveLength(10);
+    expect(Object.keys(document.paths)).toHaveLength(11);
   });
 
   it('answers metrics as text, a flow as NDJSON and a close with nothing', () => {

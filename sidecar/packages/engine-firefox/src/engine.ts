@@ -7,6 +7,8 @@ import type {
   GeneratePersonaRequest,
   GeneratePersonaResponse,
   OpenContextRequest,
+  UpgradePersonaRequest,
+  UpgradePersonaResponse,
 } from '@kage/contract';
 import {
   DisplayPool,
@@ -24,9 +26,10 @@ import {
 import { firefox, type BrowserContext } from 'playwright-core';
 
 import { FirefoxContext } from './context.js';
-import { generateFingerprint } from './fingerprint.js';
+import { generateFingerprint, upgradeFingerprint } from './fingerprint.js';
 import type { HostFacts } from './host.js';
 import { cpuListOf, launchPlan } from './launch-plan.js';
+import { keepBeforeUpgrade } from './upgrade.js';
 
 /** The wrapper that starts the browser under the persona's CPU affinity mask. */
 export const CAMOUFOX_WRAPPER = fileURLToPath(
@@ -99,6 +102,18 @@ export class FirefoxEngine implements Engine {
     }
   }
 
+  upgradePersona(request: UpgradePersonaRequest): Promise<UpgradePersonaResponse> {
+    try {
+      const { document, upgraded } = upgradeFingerprint(
+        parseFingerprint(request.fingerprint),
+        this.host.version,
+      );
+      return Promise.resolve({ fingerprint: document, summary: summarize(document), upgraded });
+    } catch (error) {
+      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
   async openContext(request: OpenContextRequest): Promise<EngineContext> {
     const document = parseFingerprint(request.fingerprint);
     if (document.engine !== 'firefox') {
@@ -110,12 +125,35 @@ export class FirefoxEngine implements Engine {
     if (majorOfVersion(document.browser_version) !== majorOfVersion(this.host.version)) {
       throw new EngineError(
         'browser_major_mismatch',
-        `the fingerprint was generated for Firefox ${document.browser_version}, the engine runs ${this.host.version}: generate it again from its seed`,
+        `the fingerprint is of Firefox ${document.browser_version}, the engine runs ${this.host.version}: move it with POST /v1/personas/upgrade first`,
       );
     }
     const profileDir = path.join(this.options.personasDir, ...request.profile_dir.split('/'));
     const paths = profilePaths(profileDir);
     const plan = launchPlan(document, request, this.host, paths.pdf);
+    // The first start under a newer Firefox moves the profile for good: the
+    // profile as it was is kept first, or the browser does not start.
+    const kept = await keepBeforeUpgrade({
+      personasDir: this.options.personasDir,
+      personaId: request.persona_id,
+      profileDir,
+      relativeProfileDir: request.profile_dir,
+      userData: paths.userData,
+      hostVersion: this.host.version,
+      now: new Date(),
+    }).catch((error: unknown) => {
+      throw new EngineError(
+        'browser_launch_failed',
+        `the profile could not be kept before its first start under Firefox ${this.host.version}: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      );
+    });
+    if (kept !== null) {
+      this.options.log.info(
+        { persona_id: request.persona_id, kept },
+        'the profile starts under a newer Firefox: the profile as it was is kept',
+      );
+    }
     for (const directory of [paths.userData, paths.fontconfig, path.dirname(paths.pdf)]) {
       await mkdir(directory, { recursive: true, mode: 0o700 });
     }

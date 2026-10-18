@@ -126,7 +126,11 @@ fn the_constants_are_the_documents() {
         Some(("POST", "/v1/contexts/{id}/navigate"))
     );
     assert_eq!(by_id("flow"), Some(("POST", "/v1/contexts/{id}/flow")));
-    assert_eq!(OPERATIONS.len(), 10);
+    assert_eq!(
+        by_id("upgrade_persona"),
+        Some(("POST", "/v1/personas/upgrade"))
+    );
+    assert_eq!(OPERATIONS.len(), 11);
 }
 
 #[test]

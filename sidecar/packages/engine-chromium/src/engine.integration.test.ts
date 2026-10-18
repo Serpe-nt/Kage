@@ -33,7 +33,13 @@ import {
 } from '@kage/engine-core';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { ChromiumEngine, detectHost, profilePaths, type HostFacts } from './index.js';
+import {
+  ChromiumEngine,
+  chromeUserAgentOf,
+  detectHost,
+  profilePaths,
+  type HostFacts,
+} from './index.js';
 import {
   startFixtureSite,
   startTestProxy,
@@ -1046,6 +1052,23 @@ describe('the browser stays inside its limits', () => {
     }
     expect(engine.status()).toEqual({ browserVersion: host.chromeVersion });
     expect(engine.name).toBe('chromium');
+  });
+
+  it('moves a document of an older Chrome to this one, and none of another engine', async () => {
+    const major = Number(host.chromeVersion.split('.')[0]);
+    const older = {
+      ...linux,
+      browser_version: `${String(major - 1)}.0.8000.1`,
+      user_agent: chromeUserAgentOf(linux.user_agent, major, major - 1),
+    };
+    const moved = await engine.upgradePersona({ fingerprint: older });
+    expect(moved.upgraded).toBe(true);
+    // A persona that moves is one made new on this Chrome.
+    expect(moved.fingerprint).toEqual(linux);
+    expect(await engine.upgradePersona({ fingerprint: linux })).toMatchObject({ upgraded: false });
+    await expect(
+      engine.upgradePersona({ fingerprint: { ...linux, engine: 'firefox' } }),
+    ).rejects.toMatchObject({ code: 'invalid_request' });
   });
 
   it('closes every open context when the engine closes, and closing twice is fine', async () => {

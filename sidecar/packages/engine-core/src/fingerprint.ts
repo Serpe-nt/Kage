@@ -30,7 +30,10 @@ export const FingerprintDocumentSchema = z.strictObject({
   generator: z.string().min(1),
   seed: z.string().regex(/^[0-9a-f]{64}$/),
   claimed_os: ClaimedOsSchema,
-  /** The installed browser's full version when the fingerprint was generated; never the generator's. */
+  /**
+   * The installed browser's full version when the fingerprint was generated,
+   * or last moved to a new browser ({@link moveToVersion}); never the generator's.
+   */
   browser_version: z.string().regex(/^\d+(\.\d+){1,3}$/),
   user_agent: z.string().min(1),
   platform: z.string().min(1),
@@ -66,6 +69,54 @@ export function parseFingerprint(value: unknown): FingerprintDocument {
     );
   }
   return parsed.data;
+}
+
+/**
+ * Moves a fingerprint document to the browser an engine runs, as a
+ * browser's own update moves a person's (contract 1.4.0, spec §6.2): the
+ * browser's version and its `User-Agent` change; the device, the seeds,
+ * the screen and everything the generator drew stay as they were, and so
+ * does the profile the document belongs to.
+ *
+ * Deterministic: the same document and version give the same result, and a
+ * document of that version comes back unchanged (`upgraded` false).
+ *
+ * @param rewrite turns the document's `User-Agent` of one major into the
+ *   same browser's of another; it throws when it does not recognize it.
+ * @throws {EngineError} `browser_major_mismatch` when the document is of a
+ *   newer major than the engine's (a browser does not go back), `internal`
+ *   when either version has no major.
+ */
+export function moveToVersion(
+  document: FingerprintDocument,
+  version: string,
+  rewrite: (userAgent: string, from: number, to: number) => string,
+): { document: FingerprintDocument; upgraded: boolean } {
+  const from = majorOfVersion(document.browser_version);
+  const to = majorOfVersion(version);
+  if (from === null || to === null) {
+    throw new EngineError(
+      'internal',
+      `no browser major in ${document.browser_version} or in ${version}`,
+    );
+  }
+  if (from > to) {
+    throw new EngineError(
+      'browser_major_mismatch',
+      `the fingerprint is of browser ${document.browser_version}, newer than the engine's ${version}: a browser does not go back to an older major`,
+    );
+  }
+  if (document.browser_version === version) {
+    return { document, upgraded: false };
+  }
+  return {
+    document: {
+      ...document,
+      browser_version: version,
+      user_agent: from === to ? document.user_agent : rewrite(document.user_agent, from, to),
+    },
+    upgraded: true,
+  };
 }
 
 /** The summary of a fingerprint, as `POST /v1/personas/generate` returns it. */

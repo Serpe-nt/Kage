@@ -17,6 +17,7 @@ export {
   GENERATOR_ID,
   HOST_BOUND,
   buildInjection,
+  chromeUserAgentOf,
   generateFingerprint,
   suiteVersion,
 } from './fingerprint.js';

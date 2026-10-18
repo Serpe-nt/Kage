@@ -8,6 +8,7 @@ import {
   FINGERPRINT_SCHEMA,
   SeededRandom,
   majorOfVersion,
+  moveToVersion,
   osOfWebglRenderer,
   withSeededMathRandom,
   type FingerprintDocument,
@@ -351,6 +352,63 @@ export function generateFingerprint(
     host_bound: [...HOST_BOUND],
     inject: 'none',
     generated: generated as unknown as Record<string, unknown>,
+  };
+}
+
+/**
+ * A Firefox `User-Agent` of one major as the same browser's of another:
+ * Firefox names its major twice (`rv:152.0` and `Firefox/152.0`).
+ *
+ * @throws {EngineError} `invalid_request` when it is not a Firefox
+ *   `User-Agent` of that major.
+ */
+export function firefoxUserAgentOf(userAgent: string, from: number, to: number): string {
+  const moved = userAgent
+    .replace(`rv:${from}.0)`, `rv:${to}.0)`)
+    .replace(new RegExp(`Firefox/${from}\\.0$`), `Firefox/${to}.0`);
+  if (!moved.includes(`rv:${to}.0)`) || !moved.endsWith(`Firefox/${to}.0`)) {
+    throw new EngineError('invalid_request', `not a User-Agent of Firefox ${from}: ${userAgent}`);
+  }
+  return moved;
+}
+
+/**
+ * Moves a Firefox persona's document to the build the engine runs, as
+ * Firefox's own update moves a person's browser (contract 1.4.0): the
+ * version, and the `User-Agent` in the two places it is, the document's and
+ * the configuration's. The device the generator drew, the seeds and the
+ * graphics card stay; the keys the new build no longer reads stay in the
+ * document too, and the launch plan leaves them out.
+ *
+ * Generating from the same seed on the new build gives the same document as
+ * moving one from the old build (the generator is the same; the unit tests
+ * hold it), so a persona that moves and one made new are alike.
+ *
+ * @throws {EngineError} `invalid_request` for a document of another engine,
+ *   `browser_major_mismatch` for one of a newer major.
+ */
+export function upgradeFingerprint(
+  document: FingerprintDocument,
+  version: string,
+): { document: FingerprintDocument; upgraded: boolean } {
+  if (document.engine !== 'firefox') {
+    throw new EngineError(
+      'invalid_request',
+      `a ${document.engine} fingerprint is not moved by the firefox engine`,
+    );
+  }
+  const generated = generatedOf(document);
+  const moved = moveToVersion(document, version, firefoxUserAgentOf);
+  if (!moved.upgraded) {
+    return moved;
+  }
+  const next: GeneratedFirefox = {
+    ...generated,
+    config: { ...generated.config, 'navigator.userAgent': moved.document.user_agent },
+  };
+  return {
+    document: { ...moved.document, generated: next as unknown as Record<string, unknown> },
+    upgraded: true,
   };
 }
 

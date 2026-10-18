@@ -234,6 +234,11 @@ export const EXAMPLES: Readonly<Record<string, readonly unknown[]>> = {
     },
   ],
   GeneratePersonaResponse: [{ fingerprint, summary }],
+  UpgradePersonaRequest: [{ fingerprint }],
+  UpgradePersonaResponse: [
+    { fingerprint, summary, upgraded: true },
+    { fingerprint, summary, upgraded: false },
+  ],
   OpenContextRequest: [
     {
       persona_id: PERSONA_ID,
