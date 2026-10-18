@@ -41,7 +41,7 @@ impl Cli {
             &config,
             format!(
                 "sidecar:\n  chromium_url: {}\n  firefox_url: {}\n\
-                 engines:\n  chromium:\n    browser_major: 149\n  firefox:\n    browser_major: 152\n\
+                 engines:\n  chromium:\n    browser_major: 149\n  firefox:\n    browser_major: 156\n\
                  personas:\n  warmup:\n    enabled: false\n\
                  scheduler:\n  retry_pause: {{ min: 50ms, median: 100ms, p95: 200ms }}\n  \
                  visit_start_spacing: {{ min: 10ms, median: 20ms, p95: 40ms }}\n\

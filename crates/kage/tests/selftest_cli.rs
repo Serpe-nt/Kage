@@ -505,8 +505,8 @@ const CHROMIUM: StandIn = StandIn {
 
 const FIREFOX: StandIn = StandIn {
     claimed_os: "windows",
-    browser_major: 152,
-    ja4: "t13d1617h2_86a278354501_3cbfd9057e0d",
+    browser_major: 156,
+    ja4: "t13d1517h2_8daaf6152771_3cbfd9057e0d",
 };
 
 /// The persona the Firefox sidecar generates: the contract's example with
@@ -516,8 +516,8 @@ fn firefox_persona(claimed_os: &str) -> Value {
     for (key, value) in [
         ("engine", json!("firefox")),
         ("claimed_os", json!(claimed_os)),
-        ("browser_version", json!("152.0.4")),
-        ("browser_major", json!(152)),
+        ("browser_version", json!("156.0.1")),
+        ("browser_major", json!(156)),
     ] {
         persona["summary"][key] = value;
     }
@@ -700,7 +700,7 @@ async fn the_browser_self_test_opens_a_context_through_the_proxy_and_closes_it_a
 
 /// The same command on the other engine: the Firefox sidecar is asked, for a
 /// persona that claims Windows, and the browser is judged against the
-/// capture of Firefox 152.
+/// capture of Firefox 156.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_browser_self_test_of_firefox_asks_its_own_sidecar_for_a_windows_persona() {
     let db = TestDb::migrated().await;
@@ -761,7 +761,7 @@ async fn the_browser_self_test_of_firefox_asks_its_own_sidecar_for_a_windows_per
     assert_eq!(report["engine"], "firefox");
     assert_eq!(report["persona"]["engine"], "firefox");
     assert_eq!(report["persona"]["claimed_os"], "windows");
-    assert_eq!(report["persona"]["browser_major"], 152);
+    assert_eq!(report["persona"]["browser_major"], 156);
     assert_eq!(report["passed"], true);
     passing.verify().await;
     drop(passing);
@@ -781,7 +781,7 @@ async fn the_browser_self_test_of_firefox_asks_its_own_sidecar_for_a_windows_per
     env.push(("KAGE__SIDECAR__FIREFOX_URL".to_owned(), stray.uri()));
     let table = ok(&env, &arguments).await;
     assert!(
-        table.starts_with(&format!("firefox 152.0.4 on macos through proxy {id}")),
+        table.starts_with(&format!("firefox 156.0.1 on macos through proxy {id}")),
         "{table}"
     );
     stray.verify().await;
@@ -790,6 +790,6 @@ async fn the_browser_self_test_of_firefox_asks_its_own_sidecar_for_a_windows_per
     // Both runs are in the audit log under the engine that ran.
     let filter = "action = 'selftest.browser' AND outcome = 'success' \
                   AND details ->> 'engine' = 'firefox' \
-                  AND details ->> 'browser_version' = '152.0.4'";
+                  AND details ->> 'browser_version' = '156.0.1'";
     assert_eq!(count(&db, "audit_events", filter).await, 2);
 }

@@ -707,7 +707,7 @@ const CHROME_FETCH: &[Slot] = &[
 ];
 
 /// Firefox, a `fetch()` or an `XMLHttpRequest` of a page's script, as
-/// Firefox 152 was captured sending them. The same rule as for Chrome: a
+/// Firefox 152 and 156 were captured sending them. The same rule as for Chrome: a
 /// header the table does not name is refused.
 const FIREFOX_FETCH: &[Slot] = &[
     H("host", "Host"),
@@ -2099,7 +2099,7 @@ mod tests {
     fn a_fetch_and_an_xhr_go_out_as_the_real_browsers_were_captured_sending_them() {
         let chrome = identity("chrome_149", ClaimedOs::Linux, &DEFAULT_LANGUAGES);
         let firefox = firefox();
-        for (engine, major, identity) in [("chromium", 155, &chrome), ("firefox", 152, &firefox)] {
+        for (engine, major, identity) in [("chromium", 155, &chrome), ("firefox", 156, &firefox)] {
             for (request, kind, post) in [
                 ("fetch_get", RequestKind::Fetch, false),
                 ("fetch_post_json", RequestKind::Fetch, true),

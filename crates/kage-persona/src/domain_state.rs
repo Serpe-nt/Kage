@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn a_cooldown_and_the_daily_cap_keep_a_persona_away() {
-        let mut persona = persona(Engine::Firefox, 152);
+        let mut persona = persona(Engine::Firefox, 156);
         persona.timezone = "Europe/Berlin".to_owned();
         // 22:30 in Berlin on a summer evening.
         let now = Utc.with_ymd_and_hms(2026, 7, 14, 20, 30, 0).unwrap();

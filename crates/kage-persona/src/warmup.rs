@@ -451,7 +451,7 @@ mod tests {
 
     #[test]
     fn a_visit_is_typed_read_and_scrolled_and_captures_nothing() {
-        let persona = persona(Engine::Firefox, 152);
+        let persona = persona(Engine::Firefox, 156);
         let visit = |number| PlannedVisit {
             number,
             url: "https://de.wikipedia.org/wiki/Special:Random"
@@ -509,7 +509,7 @@ mod tests {
             .unwrap();
         assert_ne!(other_visit.seed, behavior.seed);
         assert_ne!(other_visit.patience_ms, behavior.patience_ms);
-        let other = self::persona(Engine::Firefox, 152);
+        let other = self::persona(Engine::Firefox, 156);
         let other_persona = visit_request(&other, &visit(2), Some(45_000), &patience);
         assert_ne!(other_persona.behavior.unwrap().seed, behavior.seed);
     }

@@ -546,15 +546,15 @@ pub struct Harness {
 
 impl Harness {
     /// A harness with the default test configuration and both engines at
-    /// the majors of this release (Chrome 155, Firefox 152).
+    /// the majors of this release (Chrome 155, Firefox 156).
     pub async fn start() -> Self {
-        Self::with(155, 152, |_| {}).await
+        Self::with(155, 156, |_| {}).await
     }
 
     /// A harness at the majors of this release, with `change` applied to
     /// the configuration.
     pub async fn start_with(change: impl FnOnce(&mut Config)) -> Self {
-        Self::with(155, 152, change).await
+        Self::with(155, 156, change).await
     }
 
     /// A harness whose engines bundle the given majors, with `change`

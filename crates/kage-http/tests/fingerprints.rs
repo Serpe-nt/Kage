@@ -383,7 +383,7 @@ async fn a_derived_profile_keeps_the_transport_and_presents_the_engines_major() 
 
     for (family, major, base) in [
         (Family::Chrome, 156, "chrome_149-windows"),
-        (Family::Firefox, 152, "firefox_151-windows"),
+        (Family::Firefox, 156, "firefox_151-windows"),
     ] {
         let resolved = profile::derive(family, major, ClaimedOs::Windows).unwrap();
         let spec = ClientSpec::new(resolved.choice.clone()).with_identity(IdentityOverride {
@@ -468,13 +468,15 @@ fn navigation_header<'a>(capture: &'a BrowserCapture, name: &str) -> Option<&'a 
         .map(|(_, value)| value.as_str())
 }
 
-/// What the capture of Firefox 152 was recorded to differ in, in detail:
+/// What the capture of Firefox 156 was recorded to differ in, in detail:
 /// the cipher list, and the value of one header.
-fn firefox_152_differs_as_recorded(capture: &BrowserCapture) {
-    // `c009` is gone from the ciphers the profile offers.
+fn firefox_156_differs_as_recorded(capture: &BrowserCapture) {
+    // `c009` (gone since 152) and `c00a` (gone since 156) are missing
+    // from the ciphers the profile offers.
     let ciphers = capture.ja4_r.split('_').nth(1).unwrap_or_default();
-    assert_eq!(ciphers.split(',').count(), 16, "{ciphers}");
+    assert_eq!(ciphers.split(',').count(), 15, "{ciphers}");
     assert!(!ciphers.contains("c009"), "{ciphers}");
+    assert!(!ciphers.contains("c00a"), "{ciphers}");
     // The part of the JA4 that hashes the extensions and the signature
     // algorithms is the profile's.
     let newest = read_fixture("firefox_151-windows").unwrap();
@@ -617,11 +619,11 @@ async fn every_browser_capture_is_accounted_for() {
             // signature algorithms. HTTP/2 and the header order are equal.
             assert_eq!(differing, ["ja4"], "{}", capture.ja4_r);
         }
-        if (engine, major) == (Engine::Firefox, 152) {
-            // The recorded reason: one cipher suite fewer. HTTP/2 and the
+        if (engine, major) == (Engine::Firefox, 156) {
+            // The recorded reason: two cipher suites fewer. HTTP/2 and the
             // header order are equal.
             assert_eq!(differing, ["ja4"], "{}", capture.ja4_r);
-            firefox_152_differs_as_recorded(&capture);
+            firefox_156_differs_as_recorded(&capture);
         }
     }
 

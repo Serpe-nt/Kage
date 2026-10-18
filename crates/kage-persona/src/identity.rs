@@ -259,8 +259,10 @@ mod tests {
         // The engines of this release: a capture proved that no profile
         // fits, so their personas are browser-only.
         assert_eq!(profile_for(Engine::Chromium, 155, ClaimedOs::Linux), None);
+        assert_eq!(profile_for(Engine::Firefox, 156, ClaimedOs::Windows), None);
+        assert_eq!(profile_for(Engine::Firefox, 156, ClaimedOs::Macos), None);
+        // Nor did the one before.
         assert_eq!(profile_for(Engine::Firefox, 152, ClaimedOs::Windows), None);
-        assert_eq!(profile_for(Engine::Firefox, 152, ClaimedOs::Macos), None);
     }
 
     #[test]
@@ -338,7 +340,7 @@ mod tests {
         let directory = Directory::new();
         assert!(directory.is_empty());
         let chrome = persona(Engine::Chromium, 149);
-        let mut browser_only = persona(Engine::Firefox, 152);
+        let mut browser_only = persona(Engine::Firefox, 156);
         browser_only.wreq_profile = None;
 
         directory.record(&chrome);

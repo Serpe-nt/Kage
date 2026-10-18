@@ -423,8 +423,9 @@ pub struct EnginesConfig {
     /// patchright with real Chrome.
     #[serde(default)]
     pub chromium: ChromiumEngineConfig,
-    /// Camoufox. M5 pinned Camoufox 152.0.4, which is built from Firefox
-    /// 152.
+    /// Camoufox. The Camoufox 156 milestone pinned Camoufox
+    /// 156.0.1-beta.39, which is built from Firefox 156.0.1 (M5 pinned
+    /// 152.0.4).
     #[serde(default)]
     pub firefox: EngineConfig,
 }

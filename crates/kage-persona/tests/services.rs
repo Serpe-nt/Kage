@@ -832,14 +832,14 @@ async fn scheduled_self_tests_load_only_the_operators_pages_and_cool_a_failing_p
     assert_eq!(
         tested[0]["expected"],
         json!({
-            "browser_major": 152,
+            "browser_major": 156,
             "claimed_os": "windows",
             "languages": ["de", "en-US", "en"],
             "timezone": "Europe/Vienna",
         })
     );
     assert_eq!(tested[0]["min_score"], json!(90.0));
-    // Camoufox 152 has a recorded capture for an echo page.
+    // Camoufox 156 has a recorded capture for an echo page.
     assert!(tested[0]["echo"]["ja4"].is_string());
     let stored = runs().await;
     assert_eq!(stored.len(), 1);

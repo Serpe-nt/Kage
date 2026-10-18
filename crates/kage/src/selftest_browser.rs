@@ -637,7 +637,7 @@ mod tests {
         assert_eq!(stand_in_os(Engine::Firefox), ClaimedOs::Windows);
         // Each is the system the engine's capture was recorded with, so the
         // stand-in is the browser the echo expectation describes.
-        for (engine, major) in [(Engine::Chromium, 155), (Engine::Firefox, 152)] {
+        for (engine, major) in [(Engine::Chromium, 155), (Engine::Firefox, 156)] {
             let capture = kage_http::selftest::browser_capture(engine.as_str(), major)
                 .expect("a capture of the engine's browser");
             assert_eq!(capture.os, stand_in_os(engine).as_str(), "{engine}");
@@ -665,8 +665,8 @@ mod tests {
         assert!(echo_expectation(Engine::Chromium, u64::MAX).is_none());
 
         // The firefox engine is judged against its own capture.
-        let firefox = echo_expectation(Engine::Firefox, 152).expect("a capture of Firefox 152");
-        assert_eq!(firefox.ja4, "t13d1617h2_86a278354501_3cbfd9057e0d");
+        let firefox = echo_expectation(Engine::Firefox, 156).expect("a capture of Firefox 156");
+        assert_eq!(firefox.ja4, "t13d1517h2_8daaf6152771_3cbfd9057e0d");
         assert_eq!(
             firefox.akamai,
             "1:65536;2:0;4:131072;5:16384|12517377|0|m,p,a,s"
@@ -680,7 +680,7 @@ mod tests {
         // A capture belongs to its engine: the major of one is nothing to
         // the other.
         assert!(echo_expectation(Engine::Firefox, 155).is_none());
-        assert!(echo_expectation(Engine::Chromium, 152).is_none());
+        assert!(echo_expectation(Engine::Chromium, 156).is_none());
     }
 
     #[test]
@@ -715,8 +715,8 @@ mod tests {
         for (key, value) in [
             ("engine", serde_json::json!("firefox")),
             ("claimed_os", serde_json::json!("windows")),
-            ("browser_version", serde_json::json!("152.0.4")),
-            ("browser_major", serde_json::json!(152)),
+            ("browser_version", serde_json::json!("156.0.1")),
+            ("browser_major", serde_json::json!(156)),
         ] {
             persona["summary"][key] = value;
         }
@@ -730,7 +730,7 @@ mod tests {
         write_report(&mut table, &firefox, "seed", &persona.summary, &report).expect("a table");
         let table = String::from_utf8(table).expect("text");
         assert!(
-            table.starts_with("firefox 152.0.4 on windows through proxy"),
+            table.starts_with("firefox 156.0.1 on windows through proxy"),
             "{table}"
         );
     }
