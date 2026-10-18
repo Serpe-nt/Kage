@@ -813,7 +813,10 @@ M12 that made it, newest first within each kind of change.
   the reader's world), and a flick that moves nothing is turned once
   more after the page draws before the page counts as one that does not
   go further. Found by the engines' parity suites on GitHub's runners;
-  reproduced here with the browser's CPUs held to 0.6 of one.
+  reproduced here with the browser's CPUs held to 0.6 of one. For the
+  same reason a Chrome screenshot taken right after a load could fail
+  with "Unable to capture screenshot": it now asks again for up to 2 s
+  while the page has no frame to give.
 - A batch or a crawl with several visitors no longer stands still for
   the long break of one of them while another reads (F54). The planner
   told a page that would rather be refused than wait five minutes to

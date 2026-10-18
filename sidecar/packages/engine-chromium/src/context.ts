@@ -55,6 +55,35 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 /** The page Chrome shows in place of a document it could not load. */
 const ERROR_PAGE = 'chrome-error://';
 
+/** What Chrome answers for a screenshot of a page that has no frame to give. */
+const NO_FRAME = 'Unable to capture screenshot';
+/** How long a screenshot waits for the page's first frame, and how often it asks. */
+const SCREENSHOT_WAIT_MS = 2000;
+const SCREENSHOT_RETRY_MS = 100;
+
+/**
+ * Takes a screenshot, and while Chrome answers that it cannot (the page
+ * has drawn no frame yet: a new document on a slow machine, for half a
+ * second and more) asks again, for at most `limitMs`. Any other failure
+ * is thrown at once.
+ */
+export async function captureWhenDrawn<T>(
+  capture: () => Promise<T>,
+  limitMs = SCREENSHOT_WAIT_MS,
+  wait: (ms: number) => Promise<void> = sleep,
+): Promise<T> {
+  for (let waited = 0; ; waited += SCREENSHOT_RETRY_MS) {
+    try {
+      return await capture();
+    } catch (error) {
+      if (waited >= limitMs || !(error instanceof Error) || !error.message.includes(NO_FRAME)) {
+        throw error;
+      }
+      await wait(SCREENSHOT_RETRY_MS);
+    }
+  }
+}
+
 /**
  * Turns what the driver threw for a navigation into the contract's error.
  * The browser's own error name (`net::ERR_...`) decides: a proxy failure is
@@ -184,16 +213,26 @@ export class ChromiumContext implements EngineContext, SessionDriver {
         : { format: options.format, quality: options.quality ?? 80 };
     if (!options.full_page) {
       // The viewport as it is: nothing in the page changes or fires.
-      const shot = await this.parts.session.send('Page.captureScreenshot', image);
+      const shot = await captureWhenDrawn(() =>
+        this.parts.session.send('Page.captureScreenshot', image),
+      );
       return { data: Buffer.from(shot.data, 'base64'), sideEffects: [], format: options.format };
     }
     const metrics = await this.parts.session.send('Page.getLayoutMetrics');
     const size = metrics.cssContentSize;
-    const shot = await this.parts.session.send('Page.captureScreenshot', {
-      ...image,
-      captureBeyondViewport: true,
-      clip: { x: 0, y: 0, width: Math.ceil(size.width), height: Math.ceil(size.height), scale: 1 },
-    });
+    const shot = await captureWhenDrawn(() =>
+      this.parts.session.send('Page.captureScreenshot', {
+        ...image,
+        captureBeyondViewport: true,
+        clip: {
+          x: 0,
+          y: 0,
+          width: Math.ceil(size.width),
+          height: Math.ceil(size.height),
+          scale: 1,
+        },
+      }),
+    );
     // Capturing beyond the viewport fires resize in the page, once or twice.
     return {
       data: Buffer.from(shot.data, 'base64'),
