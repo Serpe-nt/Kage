@@ -19,6 +19,8 @@
 //! - [`warmup`]: the first visits of a new persona.
 //! - [`selftest`]: the self-tests of one persona, on demand and scheduled.
 //! - [`archive`]: the profile directory of a retired persona.
+//! - [`upgrade`]: a persona's move to the browser major its engine runs,
+//!   and the profile copies kept for the way back.
 //!
 //! Nothing here chooses a persona for a request: that is the scheduler's
 //! (M7). What a persona is drawn from (the mix, the locale and screen
@@ -38,6 +40,7 @@ pub mod manager;
 pub mod selftest;
 pub mod sessions;
 pub mod sidecar;
+pub mod upgrade;
 pub mod warmup;
 
 #[cfg(test)]

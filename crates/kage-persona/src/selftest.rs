@@ -350,24 +350,9 @@ impl PersonaManager {
                     .to_owned(),
             ));
         }
-        let persona = self.get(id).await?;
+        let mut persona = self.get(id).await?;
         let (_, endpoint) = self.egress(&persona, Via::Browser).await?;
         let config = &self.config.selftest.browser;
-        let request = SelftestRequest {
-            artifact_prefix: None,
-            echo: echo_expectation(persona.engine, persona.browser_major),
-            // What the persona is stored as, not what a sidecar says it
-            // is: a context that shows anything else must fail the test.
-            expected: ExpectedIdentity {
-                browser_major: u64::from(persona.browser_major),
-                claimed_os: contract_os(persona.claimed_os),
-                languages: persona.languages.clone(),
-                timezone: persona.timezone.clone(),
-            },
-            min_score: Some(f64::from(config.min_score)),
-            pages: Some(pages),
-            timeout_ms: u64::try_from(config.page_timeout.get().as_millis()).ok(),
-        };
         let sidecar = self.sidecars.of(persona.engine);
 
         // With a scheduler its gate decides whether the persona and a
@@ -385,7 +370,28 @@ impl PersonaManager {
         };
         let started_at = self.now();
         let outcome = {
-            let lease = self.contexts().acquire(&persona, &endpoint).await?;
+            let (lease, moved) = self.open_browser(&persona, &endpoint).await?;
+            // A persona whose engine runs a newer browser is tested as it
+            // was moved and stored.
+            if let Some(moved) = moved {
+                persona = moved;
+            }
+            let request = SelftestRequest {
+                artifact_prefix: None,
+                echo: echo_expectation(persona.engine, persona.browser_major),
+                // What the persona is stored as, not what a sidecar says
+                // it is: a context that shows anything else must fail the
+                // test.
+                expected: ExpectedIdentity {
+                    browser_major: u64::from(persona.browser_major),
+                    claimed_os: contract_os(persona.claimed_os),
+                    languages: persona.languages.clone(),
+                    timezone: persona.timezone.clone(),
+                },
+                min_score: Some(f64::from(config.min_score)),
+                pages: Some(pages),
+                timeout_ms: u64::try_from(config.page_timeout.get().as_millis()).ok(),
+            };
             let outcome = sidecar.selftest(lease.context(), &request).await;
             // The test's own browser is closed again; one that real work
             // had open stays open.

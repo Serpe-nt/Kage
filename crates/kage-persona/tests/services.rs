@@ -980,3 +980,287 @@ async fn scheduled_self_tests_load_only_the_operators_pages_and_cool_a_failing_p
     assert_eq!(harness.manager.selftests_due().await.unwrap(), 0);
     assert_eq!(harness.firefox.with(|state| state.selftested.len()), before);
 }
+
+fn probe_page() -> Vec<SelftestPageConfig> {
+    vec![SelftestPageConfig {
+        id: "probe".to_owned(),
+        kind: SelftestPageKind::Probe,
+        url: "https://fixture.kage.test/probe/".to_owned(),
+    }]
+}
+
+#[tokio::test]
+async fn a_persona_moves_with_its_engine_to_a_newer_browser_and_keeps_what_it_has() {
+    // The configuration names no major: the engine's own is the one.
+    let harness = Harness::with(155, 152, |config| {
+        config.personas.mix = only(Engine::Firefox, ClaimedOs::Windows);
+        config.engines.firefox.browser_major = None;
+        config.selftest.browser.pages = probe_page();
+    })
+    .await;
+    let (proxy, persona) = harness.persona("DE").await;
+    assert_eq!(persona.browser_major, 152);
+    assert_eq!(persona.wreq_profile, None);
+    // What the persona has: a session, cookies in its jar, a record on a
+    // site.
+    let key = harness.api_key("mover").await;
+    let session = harness
+        .manager
+        .sessions()
+        .open(key, Some(id("before-the-move")), |_| true)
+        .await
+        .unwrap();
+    assert_eq!(session.persona.id, persona.id);
+    harness
+        .store()
+        .http_cookies()
+        .replace(
+            proxy.id,
+            Some(persona.id),
+            &[stored_cookie("shop.example", "cart")],
+        )
+        .await
+        .unwrap();
+    harness
+        .manager
+        .domains()
+        .record_request(&persona, "shop.example")
+        .await
+        .unwrap();
+
+    // The image moves to Firefox 156. The persona's next open is an
+    // operator's self-test: the engine refuses the old document, the
+    // sidecar moves it, Kage stores it and opens the context again.
+    harness.firefox.with(|state| state.major = 156);
+    let run = harness
+        .manager
+        .selftest_browser(persona.id, pages(&harness.config.selftest.browser, false))
+        .await
+        .unwrap();
+    assert_eq!(run.verdict, Verdict::Passed);
+    let (opened, upgraded, tested) = harness.firefox.with(|state| {
+        (
+            state.opened.clone(),
+            state.upgraded.clone(),
+            state.selftested.clone(),
+        )
+    });
+    assert_eq!((opened.len(), upgraded.len(), tested.len()), (2, 1, 1));
+    assert_eq!(upgraded[0]["fingerprint"], persona.fingerprint);
+    assert_eq!(opened[0]["fingerprint"], persona.fingerprint);
+
+    let moved = harness.reload(&persona).await;
+    assert_eq!(moved.browser_major, 156);
+    assert_eq!(
+        moved.user_agent,
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:156.0) Gecko/20100101 Firefox/156.0"
+    );
+    assert_eq!(moved.fingerprint["browser_version"], json!("156.0.1"));
+    assert_eq!(opened[1]["fingerprint"], moved.fingerprint);
+    // The device, the place and the profile are the persona's as before.
+    assert_eq!(moved.fingerprint["native"], persona.fingerprint["native"]);
+    assert_eq!(moved.seed, persona.seed);
+    assert_eq!(
+        (moved.screen, moved.hardware_concurrency),
+        (persona.screen, persona.hardware_concurrency)
+    );
+    assert_eq!(moved.profile_dir, persona.profile_dir);
+    assert_eq!(opened[1]["profile_dir"], json!(persona.profile_dir));
+    assert_eq!(moved.wreq_profile, None);
+    assert_eq!(run.persona.browser_major, 156);
+    // It was tested as what it is now.
+    assert_eq!(tested[0]["expected"]["browser_major"], json!(156));
+    let events: Vec<_> = harness
+        .events_of(&persona)
+        .await
+        .into_iter()
+        .filter(|event| event.kind == "persona_browser_upgraded")
+        .collect();
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0].details,
+        json!({
+            "engine": "firefox",
+            "from_major": 152,
+            "to_major": 156,
+            "browser_version": "156.0.1",
+            "wreq_profile": null,
+            // What the persona was: the way back to the previous image.
+            "previous": {
+                "fingerprint": persona.fingerprint,
+                "user_agent": persona.user_agent,
+                "wreq_profile": null,
+            },
+        })
+    );
+    // Its session, its jar and its record on the site stay.
+    let again = harness
+        .manager
+        .sessions()
+        .open(key, Some(id("before-the-move")), |_| true)
+        .await
+        .unwrap();
+    assert_eq!(again.persona.id, persona.id);
+    assert_eq!(again.persona.browser_major, 156);
+    let jar = harness
+        .store()
+        .http_cookies()
+        .list(proxy.id, Some(persona.id))
+        .await
+        .unwrap();
+    assert_eq!(jar.len(), 1);
+    assert_eq!(jar[0].name, "cart");
+    let site = harness
+        .store()
+        .persona_domain_state()
+        .get(persona.id, "shop.example")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(site.requests_today, 1);
+
+    // The next open takes the moved persona as it is: nothing moves twice.
+    harness
+        .manager
+        .selftest_browser(persona.id, pages(&harness.config.selftest.browser, false))
+        .await
+        .unwrap();
+    assert_eq!(harness.firefox.with(|state| state.upgraded.len()), 1);
+    assert_eq!(
+        harness
+            .count_events(&persona, "persona_browser_upgraded")
+            .await,
+        1
+    );
+
+    // A browser never goes back: an image of an older major refuses the
+    // moved persona and moves nothing.
+    harness.firefox.with(|state| state.major = 152);
+    let refused = harness
+        .manager
+        .selftest_browser(persona.id, pages(&harness.config.selftest.browser, false))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&refused, PersonaError::Browser(error) if error.is_browser_major_mismatch()),
+        "{refused}"
+    );
+    assert_eq!(harness.reload(&persona).await.browser_major, 156);
+
+    // The operator's way back (docs/runbooks/upgrading-an-engine.md, "Going
+    // back", step 3) restores the persona as it was before the move, from
+    // the event alone, and the previous image opens it again.
+    let runbook = include_str!("../../../docs/runbooks/upgrading-an-engine.md");
+    let start = runbook.find("UPDATE personas p").unwrap();
+    let end = start + runbook[start..].find("p.browser_major = 156").unwrap();
+    let statement = &runbook[start..end + "p.browser_major = 156".len()];
+    let restored = sqlx::query(statement)
+        .execute(harness.store().pool())
+        .await
+        .unwrap();
+    assert_eq!(restored.rows_affected(), 1);
+    let back = harness.reload(&persona).await;
+    assert_eq!(
+        (
+            &back.fingerprint,
+            &back.user_agent,
+            &back.wreq_profile,
+            back.browser_major
+        ),
+        (
+            &persona.fingerprint,
+            &persona.user_agent,
+            &persona.wreq_profile,
+            152
+        )
+    );
+    harness
+        .manager
+        .selftest_browser(persona.id, pages(&harness.config.selftest.browser, false))
+        .await
+        .unwrap();
+    assert_eq!(
+        harness
+            .firefox
+            .with(|state| state.opened.last().cloned().unwrap())["fingerprint"],
+        persona.fingerprint
+    );
+}
+
+#[tokio::test]
+async fn a_move_to_another_major_than_the_configuration_names_is_refused() {
+    let harness = Harness::with(155, 152, |config| {
+        config.personas.mix = only(Engine::Firefox, ClaimedOs::Macos);
+        config.selftest.browser.pages = probe_page();
+    })
+    .await;
+    let (_, persona) = harness.persona("FR").await;
+    // The image runs 156 while the configuration still names 152.
+    harness.firefox.with(|state| state.major = 156);
+    let refused = harness
+        .manager
+        .selftest_browser(persona.id, pages(&harness.config.selftest.browser, false))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&refused, PersonaError::Upgrade { persona: moved, reason } if *moved == persona.id && reason.contains("configuration names 152")),
+        "{refused}"
+    );
+    assert_eq!(harness.reload(&persona).await, persona);
+    assert_eq!(
+        harness
+            .count_events(&persona, "persona_browser_upgraded")
+            .await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn the_copies_kept_before_an_upgrade_go_after_the_backup_window() {
+    let harness = Harness::start().await;
+    let copies = harness.volume.path().join(".upgrade");
+    let copy = |name: &str, note: Option<chrono::DateTime<Utc>>| {
+        let dir = copies.join(name);
+        std::fs::create_dir_all(dir.join("profile")).unwrap();
+        std::fs::write(dir.join("profile").join("cookies.sqlite"), b"kept").unwrap();
+        if let Some(at) = note {
+            let note =
+                json!({ "persona_id": name, "from_major": 152, "copied_at": at.to_rfc3339() });
+            std::fs::write(dir.join("upgrade.json"), note.to_string()).unwrap();
+        }
+        dir
+    };
+    // No directory of copies: nothing to do.
+    assert_eq!(harness.manager.sweep_upgrade_copies().await.unwrap(), 0);
+
+    let now = harness.clock.now();
+    let old = copy(
+        "0199c1f2-0000-7000-8000-000000000001",
+        Some(now - Span::days(8)),
+    );
+    let young = copy(
+        "0199c1f2-0000-7000-8000-000000000002",
+        Some(now - Span::days(6)),
+    );
+    // A copy without a note, and one that was never finished, are as old
+    // as their last change: today, by the wall clock.
+    let unnoted = copy("0199c1f2-0000-7000-8000-000000000003", None);
+    let partial = copy("0199c1f2-0000-7000-8000-000000000004.partial", None);
+    std::fs::write(copies.join("stray.txt"), b"not a copy").unwrap();
+
+    assert_eq!(harness.manager.sweep_upgrade_copies().await.unwrap(), 1);
+    assert!(!old.exists());
+    assert!(young.exists() && unnoted.exists() && partial.exists());
+
+    // A week and more after their last change, by the manager's clock.
+    harness.clock.set(Utc::now() + Span::days(8));
+    assert_eq!(harness.manager.sweep_upgrade_copies().await.unwrap(), 3);
+    assert!(!young.exists() && !unnoted.exists() && !partial.exists());
+    assert!(copies.join("stray.txt").exists());
+    // The manager's sweep does it as well.
+    copy(
+        "0199c1f2-0000-7000-8000-000000000005",
+        Some(harness.clock.now() - Span::days(30)),
+    );
+    assert_eq!(harness.manager.sweep().await.upgrade_copies_deleted, 1);
+}

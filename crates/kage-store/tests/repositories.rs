@@ -25,7 +25,7 @@ use kage_core::outcome::{Block, BlockType, Outcome, Vendor};
 use kage_core::secret::SealedSecret;
 use kage_core::seed::Seed;
 use kage_store::StoreError;
-use kage_store::repo::{ResponseCacheEntry, RobotsCacheEntry};
+use kage_store::repo::{BrowserUpgrade, ResponseCacheEntry, RobotsCacheEntry, Upgraded};
 
 // One proxy followed through its whole life: each step needs the one before.
 #[allow(clippy::too_many_lines)]
@@ -2656,4 +2656,81 @@ async fn cookie_jars_are_kept_per_proxy_in_order_and_die_with_it() {
             ..
         })
     ));
+}
+
+#[tokio::test]
+async fn an_engine_upgrade_moves_the_browser_columns_once_and_nothing_else() {
+    let db = TestDb::migrated().await;
+    let persona = common::seed_persona(&db.store).await;
+    let upgrade = BrowserUpgrade {
+        fingerprint: serde_json::json!({
+            "schema": 1,
+            "browser_version": "155.0.8059.39",
+            "native": { "hardware_concurrency": 8 },
+        }),
+        browser_major: 155,
+        user_agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) \
+                     Chrome/155.0.0.0 Safari/537.36"
+            .to_owned(),
+        wreq_profile: None,
+    };
+
+    let Upgraded {
+        persona: moved,
+        moved: wrote,
+    } = db
+        .store
+        .personas()
+        .upgrade_browser(persona.id, 149, &upgrade)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(wrote);
+    assert_eq!(moved.browser_major, 155);
+    assert_eq!(moved.fingerprint, upgrade.fingerprint);
+    assert_eq!(moved.user_agent, upgrade.user_agent);
+    assert_eq!(moved.wreq_profile, None);
+    // What is stored is what came back, and nothing of the identity moved.
+    let stored = db.store.personas().get(persona.id).await.unwrap().unwrap();
+    assert_eq!(stored, moved);
+    let expected = Persona {
+        browser_major: 155,
+        fingerprint: upgrade.fingerprint.clone(),
+        user_agent: upgrade.user_agent.clone(),
+        wreq_profile: None,
+        ..persona.clone()
+    };
+    assert_eq!(stored, expected);
+
+    // A second move from the old major finds it moved and writes nothing.
+    let again = BrowserUpgrade {
+        browser_major: 156,
+        ..upgrade.clone()
+    };
+    let Upgraded {
+        persona: found,
+        moved: wrote,
+    } = db
+        .store
+        .personas()
+        .upgrade_browser(persona.id, 149, &again)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!wrote);
+    assert_eq!(found, expected);
+    assert_eq!(
+        db.store.personas().get(persona.id).await.unwrap().unwrap(),
+        expected
+    );
+
+    // A persona that does not exist is none.
+    assert_eq!(
+        db.store
+            .personas()
+            .upgrade_browser(PersonaId::new(), 149, &upgrade)
+            .await
+            .unwrap(),
+        None
+    );
 }

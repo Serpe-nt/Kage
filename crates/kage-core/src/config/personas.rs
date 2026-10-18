@@ -291,6 +291,13 @@ pub struct PersonasConfig {
     /// Days the archived profile of a retired persona is kept.
     #[serde(default = "default_retention_days")]
     pub retention_days: u32,
+    /// Days the copy of a profile that a sidecar takes before the
+    /// profile's first start under a newer browser major
+    /// (`.upgrade/<persona id>` on the volume) is kept: the way back to the
+    /// previous engine image, since a Firefox profile does not go back to
+    /// an older major.
+    #[serde(default = "default_upgrade_backup_days")]
+    pub upgrade_backup_days: u32,
     /// How long after retirement a profile is archived. Longer than the
     /// sidecar's idle close, so that no browser still has it open.
     #[serde(default = "default_archive_after")]
@@ -313,6 +320,10 @@ const fn default_retention_days() -> u32 {
     7
 }
 
+const fn default_upgrade_backup_days() -> u32 {
+    7
+}
+
 const fn default_archive_after() -> HumanDuration {
     HumanDuration::from_mins(10)
 }
@@ -327,6 +338,7 @@ impl Default for PersonasConfig {
             dir: default_personas_dir(),
             mix: mix::default_mix(),
             retention_days: default_retention_days(),
+            upgrade_backup_days: default_upgrade_backup_days(),
             archive_after: default_archive_after(),
             sweep_interval: default_sweep_interval(),
             warmup: WarmupConfig::default(),
@@ -338,6 +350,12 @@ impl PersonasConfig {
     /// How long the archived profile of a retired persona is kept.
     pub fn retention(&self) -> Duration {
         Duration::from_secs(u64::from(self.retention_days) * 24 * 60 * 60)
+    }
+
+    /// How long the copy of a profile taken before a browser upgrade is
+    /// kept.
+    pub fn upgrade_backup(&self) -> Duration {
+        Duration::from_secs(u64::from(self.upgrade_backup_days) * 24 * 60 * 60)
     }
 }
 
@@ -410,6 +428,9 @@ pub(super) fn validate(
     mix::validate(&personas.mix, allow_cross_os_claims).map_err(|error| error.to_string())?;
     if personas.retention_days == 0 {
         return fail("personas.retention_days must be at least 1");
+    }
+    if personas.upgrade_backup_days == 0 {
+        return fail("personas.upgrade_backup_days must be at least 1");
     }
     if personas.sweep_interval.get() < second {
         return fail("personas.sweep_interval must be at least 1s");
@@ -491,6 +512,8 @@ mod tests {
         assert_eq!(validate(&personas, &sessions, false), Ok(()));
         assert_eq!(personas.retention_days, 7);
         assert_eq!(personas.retention(), Duration::from_hours(7 * 24));
+        assert_eq!(personas.upgrade_backup_days, 7);
+        assert_eq!(personas.upgrade_backup(), Duration::from_hours(7 * 24));
         assert_eq!(personas.archive_after, HumanDuration::from_mins(10));
         let shares: Vec<(Engine, ClaimedOs, u32)> = personas
             .mix
@@ -603,6 +626,9 @@ mod tests {
                 });
             }),
             ("personas.retention_days", |p, _| p.retention_days = 0),
+            ("personas.upgrade_backup_days", |p, _| {
+                p.upgrade_backup_days = 0;
+            }),
             ("personas.sweep_interval", |p, _| {
                 p.sweep_interval = HumanDuration::from_secs(0);
             }),

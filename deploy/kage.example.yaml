@@ -290,6 +290,11 @@ personas:
   # Days the archived profile of a retired persona is kept before it is
   # deleted. Nothing of a retired persona is ever given to another.
   retention_days: 7
+  # Days the copy of a profile that a sidecar takes before its first start
+  # under a newer browser major (.upgrade/<persona id> on the volume) is
+  # kept: the way back to the previous image, since a Firefox profile does
+  # not go back to an older major (docs/runbooks/upgrading-an-engine.md).
+  upgrade_backup_days: 7
   # How long after retirement the profile is archived: longer than the
   # sidecar's idle close, so that no browser still has it open.
   archive_after: 10m

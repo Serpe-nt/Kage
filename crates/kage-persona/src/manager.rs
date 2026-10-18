@@ -118,6 +118,8 @@ pub struct SweepReport {
     pub archived: u32,
     /// Archives deleted.
     pub deleted: u32,
+    /// Copies of profiles from before a browser upgrade deleted.
+    pub upgrade_copies_deleted: u32,
     /// Warm-up visits made or skipped.
     pub warmup_visits: u32,
     /// Self-tests run.
@@ -973,6 +975,12 @@ impl PersonaManager {
                 report.deleted = deleted;
             }
             Err(error) => tracing::warn!(%error, "cannot archive retired profiles"),
+        }
+        match self.sweep_upgrade_copies().await {
+            Ok(deleted) => report.upgrade_copies_deleted = deleted,
+            Err(error) => {
+                tracing::warn!(%error, "cannot delete the profile copies from before an upgrade");
+            }
         }
         match self.warm_up_due().await {
             Ok(visits) => report.warmup_visits = visits,

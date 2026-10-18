@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE personas\n                 SET fingerprint = $2, browser_major = $3, user_agent = $4, wreq_profile = $5\n                 WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb",
+        "Int4",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0575540196b371d8888732ab282246ff4e7531f23973999639a934fd24a75819"
+}
