@@ -71,8 +71,10 @@ jobs:
   node:
     name: node
     runs-on: ubuntu-24.04
-    # The engines' integration tests start real browsers.
-    timeout-minutes: 30
+    # The engines' integration tests start real browsers, twice (the tests
+    # and the coverage run). The job took 23.5 minutes for 1.0.0; the
+    # Camoufox 156 build is twice the download and the parity suite grew.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -82,8 +84,20 @@ jobs:
       - uses: ./.github/actions/setup-node
       - name: Install the pinned Chrome, Xvfb and Mesa
         run: just setup-chrome
+      # The Camoufox archive is 1.29 GB: kept between runs under its pinned
+      # checksum, so that it is downloaded once per build. setup-camoufox.sh
+      # verifies a kept copy against that checksum like a download.
+      - name: The pinned Camoufox archive's checksum
+        id: camoufox
+        run: echo "sha256=$(sed -n 's/^ARG CAMOUFOX_SHA256=//p' deploy/docker/sidecar.Dockerfile)" >> "${GITHUB_OUTPUT}"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/camoufox.zip
+          key: camoufox-${{ steps.camoufox.outputs.sha256 }}
       - name: Install the pinned Camoufox build and the libraries it needs
         run: just setup-camoufox
+        env:
+          KAGE_CAMOUFOX_ARCHIVE: ${{ runner.temp }}/camoufox.zip
       - name: Let Chrome's sandbox create user namespaces
         # Ubuntu 24.04 restricts unprivileged user namespaces to programs
         # with an AppArmor profile. Chrome's sandbox needs them, and the
