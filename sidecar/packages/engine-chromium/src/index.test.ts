@@ -225,7 +225,9 @@ describe('generateFingerprint', () => {
     }
     // The processors are the generator's own draw.
     expect(processors.size).toBeGreaterThanOrEqual(3);
-  });
+    // Thirty-six fingerprints take 4.7 s on a GitHub runner, more under
+    // coverage.
+  }, 60_000);
 
   it('honors screen bounds and says when nothing fits them', () => {
     const narrow = generateFingerprint(
