@@ -1004,12 +1004,105 @@ webhook secrets).
   within pacing expectations without errors.
 - Tag `v1.0.0` published.
 
+**Status.** Done. **1.0.0 was released on 2026-10-18**
+(https://github.com/Serpe-nt/Kage/releases/tag/v1.0.0,
+`m12-handover.md`). The first push took `origin/main` to `adb8ba3` (M0
+to M11, no pull request, as D30 said); the milestone's 55 commits came
+in as PR #1 by rebase, two fixes found by the merged `main`'s own run as
+PR #2, and the released digests as PR #3; `main` is `6308a36` with
+`ci-ok` green. The tag is annotated and signed with an SSH release key
+the owner made for it, listed in `.github/allowed_signers`, which
+`release.yaml` checks before it builds; the two published images
+(`ghcr.io/serpe-nt/kage`, `ghcr.io/serpe-nt/kage-browser-chromium`) are
+signed keylessly by the workflow's identity with SLSA provenance and a
+CycloneDX SBOM attested to each digest; the Firefox image is not
+published (ADR 0008). Built in the milestone: the carried follow-ups
+F36, F37, F39 (a stop waits up to `jobs.wind_down`, 150 s, and writes
+what it cuts), F45 (YAML by `serde-saphyr` behind a provider of Kage's,
+the advisory's ignore gone), F48, F49, F50, F51, F52 and F54 (a batch no
+longer stands still for one visitor's long break); traces end to end
+(OTLP/HTTP through wreq, the sidecar's spans under Kage's `traceparent`
+on the compose network only), the `observability` profile with the core
+collector, Jaeger v2, Prometheus and Grafana at pinned digests, eight
+dashboards and the alert rules, a redaction audit over the e2e logs; the
+container checklist as a gate, no setuid file in the images, the
+sidecars on an internal network with kage alone; `docs/security-review.md`
+with its fixes (a sidecar's file taken only as described, IPv4-translated
+addresses, https-only provider roots, a 128 MiB bound on a sidecar's
+answer, the command-line self-test through a forwarder of its own); the
+runbooks; the README quick start proven on a Docker-only machine (the
+stack healthy in 563 s from empty); the load test (design A, 200 pages
+in 68 s, in every PR; design B before a release, 582 s with the
+20-a-minute cap reached on Kage's clock, D49); the three workflows. The
+local gate was green on a clean clone (47 min) and the mutation score
+92.6 %. GitHub's 4-vCPU runners then found what no local gate had: on a
+slow host a fresh document draws no frames for about half a second, so
+the hand lost its wheel and read every page as one that does not scroll
+(a product fix: the hand waits for two frames and turns the wheel once
+more before it gives up, reproduced with a cgroup holding four CPUs to
+0.6 of one), a Chrome screenshot right after a load could fail, a
+scheduler test flaky since M7, a coverage report counting a cached older
+build, and six assumptions of a fast host or a daytime run. The nightly
+workflow's `load` job runs by schedule; its live job waits for the
+owner's secrets and the `KAGE_LIVE_ENABLED` variable. One slip reported:
+an early crates.io API call carried the owner's e-mail address in its
+User-Agent.
+
+**Still the owner's, after 1.0.** The repository settings of
+`docs/runbooks/repo.md` (branch protection with `ci-ok` required,
+Actions restricted and SHA-pinned, read-only token, fork approval,
+secret scanning with push protection, e-mail privacy); the two Actions
+secrets and the first run of `nightly-live.yaml`; deleting the three
+merged branches on GitHub.
+
+**Follow-ups raised by M12** (after 1.0; each a pull request of its own)
+- **F55:** drop the `zip` ignore when `utoipa-swagger-ui` is on `zip` 9.
+- **F56 (M13, observe):** count `domain_rpm` at the moment a page's
+  request leaves, if a site is ever seen to count by the minute.
+- **F57 (security review):** with `resolve_on_host` on, the forwarder
+  resolves the names it relays and refuses denied ranges, and `kage
+  config check` warns about a static proxy list without it (G1); the
+  http path refuses the browsers' unsafe ports (G3); the forwarder relays
+  the authority it checked, not the client's text (G5); a per-key limit
+  of open jobs and queued items (L2); a bound on the distinct `domain`
+  label values (L3); a volume of the sidecars' own for their files (V1).
+- **F58 (CI):** the report-only mutants job reaches 78 of 2375 mutants
+  in its 30 min on a runner; run the mutants of the pull request's diff
+  (`cargo mutants --in-diff`) or a weekly job on a larger runner. The
+  release workflow pushes an image before Trivy scans it; scan before
+  the push.
+- **F59 (M13, measure):** whether `min_dwell` should bound a persona's
+  own dwell too (a draw of 600 ms was seen on a page that fit its
+  window); whether a first look before the hand moves belongs in the
+  motor profile (the hand moves 100 to 400 ms after a load, two frames
+  since the fix); what Firefox's select looked like to the page on the
+  runners (the `parity-notes` artifact).
+- **The Camoufox 156 line** as a fingerprint-critical milestone of its
+  own: removes the ADR 0010 backport, re-checks `camoufox.cfg` against
+  stock Firefox defaults, new baselines, a live self-test on the owner's
+  word (D32).
+
 ---
 
 ## M13 — Field validation campaign (ops, repeated)
 
 **Goal.** Measure and tune against real protected sites chosen by the
 owner, never in CI.
+
+**Starting point (after 1.0).** Nothing of the field campaign can begin
+until the owner names the sites; the plan does not choose them. Before
+the first report the owner's to-dos above should be done, so that the
+nightly live suite (the echo and detection pages, the real pool) runs
+and the released build has been seen on the real proxies at least once.
+A campaign session runs the released images on the owner's host, never
+in CI, with the owner's keys under the owner's typed approval, one site
+at a time, with `report` for robots.txt unless the owner says `enforce`
+for that site, and writes `docs/field-reports/<date>.md`. What it may
+change: `policies/domains.yaml` (pacing profile, cooldowns, breaker,
+`robots`, `cache`, `driver_input`), block signatures with new sanitized
+fixtures, the persona mix; what it may not change without a milestone
+of its own: anything fingerprint-critical (`docs/versions.md`). F31, F41,
+F53, F56 and F59 wait for its data.
 
 **Deliverables**
 - `docs/field-reports/<date>.md`: per site, vendor detected, outcome rates
