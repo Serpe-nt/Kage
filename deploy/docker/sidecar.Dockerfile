@@ -166,7 +166,11 @@ RUN --mount=type=cache,id=kage-camoufox,target=/var/cache/kage,sharing=locked \
                 "https://github.com/daijro/camoufox/releases/download/v${build}/camoufox-${build}-lin.x86_64.zip"; \
         fi \
         && echo "${CAMOUFOX_SHA256}  ${archive}" | sha256sum --check --strict \
-        && unzip -q "${archive}" -d /opt/camoufox \
+        # unzip exits 1 for warnings with every file extracted: Debian's
+        # warns that the 156 archive's Hiragino font names differ between
+        # the local and the central header, and takes the central (UTF-8)
+        # one. Anything above 1 is an error.
+        && { unzip -q "${archive}" -d /opt/camoufox || [ "$?" -eq 1 ]; } \
         && chmod -R a+rX,go-w /opt/camoufox \
         # The engine reads which build this is from this file and refuses
         # any other (packages/engine-firefox/src/host.ts).
