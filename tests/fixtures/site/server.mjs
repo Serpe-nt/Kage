@@ -125,6 +125,52 @@ setTimeout(() => navigator.sendBeacon('/__kage/report', JSON.stringify({ page: '
 </script>`,
 );
 
+// What a frame of this site sees of the storage it set as the first party,
+// inside a page of another site (the Camoufox 156 milestone): a browser
+// that partitions storage, as Firefox and Chrome do by default, shows the
+// frame none of it. The page of the other site waits for the frame's word
+// and reports it.
+const PARTITION_SET_PAGE = page(
+  'First party',
+  `<h1>First party</h1><script>localStorage.setItem('kage_partition', 'first-party'); document.body.setAttribute('data-done', '1');</script>`,
+);
+const partitionTopPage = (frame) =>
+  page(
+    'Another site',
+    `<h1>Another site</h1><script>
+addEventListener('message', (event) => {
+  if (!event.data || event.data.kagePartition !== true) return;
+  navigator.sendBeacon('/__kage/report', JSON.stringify({ page: 'partition', cookie: event.data.cookie, stored: event.data.stored, access: event.data.access }));
+  document.body.setAttribute('data-done', '1');
+});
+const frame = document.createElement('iframe');
+frame.src = ${JSON.stringify(frame)};
+document.body.appendChild(frame);
+</script>`,
+  );
+const PARTITION_FRAME_PAGE = page(
+  'Frame',
+  `<script>(async () => {
+  let access = null;
+  try { access = await document.hasStorageAccess(); } catch (error) { access = 'throws ' + error.name; }
+  let stored = null;
+  try { stored = localStorage.getItem('kage_partition'); } catch (error) { stored = 'throws ' + error.name; }
+  parent.postMessage({ kagePartition: true, cookie: document.cookie, stored, access }, '*');
+})();</script>`,
+);
+
+// A window opened by the page itself, with nobody's click before it: the
+// popup blocker of a browser nobody configured refuses it.
+const POPUP_PAGE = page(
+  'Popup',
+  `<h1>Popup</h1><script>
+let opened = null;
+try { const win = window.open('about:blank', '_blank', 'width=300,height=200'); opened = win !== null; if (win) win.close(); } catch (error) { opened = 'throws ' + error.name; }
+navigator.sendBeacon('/__kage/report', JSON.stringify({ page: 'popup', opened }));
+document.body.setAttribute('data-done', '1');
+</script>`,
+);
+
 // Opens a WebRTC connection against the STUN server named in the query
 // and reports which candidates were gathered. A test listens on that
 // address to see whether anything left around the proxy.
@@ -360,6 +406,11 @@ const routes = {
   '/storage.html': (_req, res) => html(res, STORAGE_PAGE),
   '/console.html': (_req, res) => html(res, CONSOLE_PAGE),
   '/webrtc.html': (_req, res) => html(res, WEBRTC_PAGE),
+  '/partition/set': (_req, res) =>
+    html(res, PARTITION_SET_PAGE, { 'set-cookie': 'kage_partition=first-party; Path=/; Max-Age=3600' }),
+  '/partition/top': (_req, res, url) => html(res, partitionTopPage(url.searchParams.get('frame') ?? '')),
+  '/partition/frame': (_req, res) => html(res, PARTITION_FRAME_PAGE),
+  '/popup.html': (_req, res) => html(res, POPUP_PAGE),
   '/cached.html': (_req, res) => html(res, page('Cached', '<h1>Cached for ten minutes</h1>'), { 'cache-control': 'max-age=600' }),
   '/big.html': (_req, res) => html(res, page('Big', `<p>${'ä'.repeat(40_000)}</p>`)),
   '/set-cookies': (_req, res) =>

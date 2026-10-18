@@ -10,7 +10,7 @@
  */
 import dgram from 'node:dgram';
 import { appendFileSync } from 'node:fs';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { networkInterfaces, tmpdir, userInfo } from 'node:os';
 import path from 'node:path';
 
@@ -73,6 +73,44 @@ export interface ParitySubject {
   readonly autoplayPolicy: { readonly mediaelement: string; readonly audiocontext: string } | null;
   /** How the browser names a refused tunnel and a proxy that is not there; `null` when it gives no name. */
   readonly netErrors: { readonly tunnel: string | null; readonly deadProxy: string | null };
+  /**
+   * What the probe's window must read where the engine's document fixes
+   * it, for an engine whose document holds the browser's values (Firefox:
+   * the configuration it applies). Absent for an engine whose page reads
+   * the browser's own (Chromium).
+   */
+  readonly documentReads?: (document: FingerprintDocument) => DocumentReads;
+  /**
+   * The same persona's document as the engine's previous browser major made
+   * it, for an engine that moves documents to a new major and keeps the
+   * profile before its first start under it (Firefox). Absent: the suite
+   * does not move a persona.
+   */
+  readonly olderDocument?: (document: FingerprintDocument) => FingerprintDocument;
+  /**
+   * Whether a frame of one site, inside a page of another, sees nothing of
+   * the storage its site set as the first party, as in the browser nobody
+   * configured. `false` records a measured tell of the engine that is not
+   * fixed yet, with its cause, so that the test notices when it changes.
+   */
+  readonly thirdPartyStoragePartitioned: boolean;
+}
+
+/** Values of the probe's window that a fingerprint document fixes; a field left out is not compared. */
+export interface DocumentReads {
+  readonly user_agent?: string;
+  readonly platform?: string;
+  readonly oscpu?: string;
+  readonly app_version?: string;
+  readonly hardware_concurrency?: number;
+  readonly screen?: {
+    readonly width: number;
+    readonly height: number;
+    readonly avail_width: number;
+    readonly avail_height: number;
+    readonly color_depth: number;
+  };
+  readonly webgl?: { readonly vendor: string; readonly renderer: string };
 }
 
 const SEEDS = {
@@ -613,6 +651,138 @@ export function defineParitySuite(subject: ParitySubject): void {
       const navigation = (report.requests.navigation ?? []).map(([name]) => name.toLowerCase());
       expect(navigation).not.toContain('pragma');
       expect(navigation).not.toContain('cache-control');
+      // Nothing of the driver is there for a page to find (the Camoufox 156
+      // milestone measured both on Camoufox 152).
+      for (const check of [
+        'automation.driver_worker',
+        'automation.extra_globals',
+        'coherence.intl_language',
+      ]) {
+        expect(findings.find((finding) => finding.check === check)?.status, check).toBe('pass');
+      }
+      // What the window reads is what the document says, where it says it.
+      if (subject.documentReads !== undefined) {
+        const want = subject.documentReads(persona);
+        const seen = report.scopes.window;
+        expect({
+          ...(want.user_agent === undefined ? {} : { user_agent: seen.user_agent }),
+          ...(want.platform === undefined ? {} : { platform: seen.platform }),
+          ...(want.oscpu === undefined ? {} : { oscpu: seen.oscpu }),
+          ...(want.app_version === undefined ? {} : { app_version: seen.app_version }),
+          ...(want.hardware_concurrency === undefined
+            ? {}
+            : { hardware_concurrency: seen.hardware_concurrency }),
+          ...(want.screen === undefined
+            ? {}
+            : {
+                screen: {
+                  width: seen.screen?.width,
+                  height: seen.screen?.height,
+                  avail_width: seen.screen?.avail_width,
+                  avail_height: seen.screen?.avail_height,
+                  color_depth: seen.screen?.color_depth,
+                },
+              }),
+          ...(want.webgl === undefined
+            ? {}
+            : { webgl: { vendor: seen.webgl?.vendor, renderer: seen.webgl?.renderer } }),
+        }).toEqual(want);
+      }
+    });
+
+    it.skipIf(subject.olderDocument === undefined)(
+      'moves a persona of the previous browser to this one, which passes the probe, and keeps its profile first',
+      async () => {
+        const older = subject.olderDocument?.(persona);
+        if (older === undefined) {
+          return;
+        }
+        const moved = await engine.upgradePersona({ fingerprint: older });
+        expect(moved.upgraded).toBe(true);
+        // A persona that moves is one made new on this browser.
+        expect(moved.fingerprint).toEqual(persona);
+        expect(moved.summary.browser_major).toBe(subject.browserMajor);
+        expect(await engine.upgradePersona({ fingerprint: persona })).toMatchObject({
+          upgraded: false,
+          fingerprint: persona,
+        });
+        // Its profile last ran under the previous major.
+        const userData = path.join(root, 'personas', 'personas', 'moved', 'user-data');
+        await mkdir(userData, { recursive: true });
+        await writeFile(
+          path.join(userData, 'compatibility.ini'),
+          `[Compatibility]\nLastVersion=${String(subject.browserMajor - 1)}.0_20260101000000/20260101000000\n`,
+        );
+        await site.reset();
+        const report = await withContext('moved', probe, {
+          document: moved.fingerprint as FingerprintDocument,
+        });
+        const findings = judgeProbe(
+          report,
+          {
+            claimed_os: subject.claimedOs,
+            browser_major: subject.browserMajor,
+            timezone: 'Europe/Berlin',
+            languages: LANGUAGES,
+          },
+          'probe',
+          10,
+        );
+        expect(findings.filter((finding) => finding.status === 'fail')).toEqual([]);
+        // The profile as it was is kept on the personas volume.
+        const note = JSON.parse(
+          await readFile(
+            path.join(
+              root,
+              'personas',
+              '.upgrade',
+              '0199c1f2-6b7a-7c3e-9d41-2f8a5b6c7d8e',
+              'upgrade.json',
+            ),
+            'utf8',
+          ),
+        ) as Record<string, unknown>;
+        expect(note).toMatchObject({
+          profile_dir: 'personas/moved',
+          from_major: subject.browserMajor - 1,
+        });
+      },
+    );
+
+    it('keeps what a site stored as the first party out of its frames in other sites', async () => {
+      await site.reset();
+      await withContext('partition', async (context) => {
+        // The frame's site stores a cookie and a value as the first party…
+        await go(context, secure('/partition/set'), {
+          wait: { until: 'load', selector: 'body[data-done]' },
+        });
+        // …and is then a frame in a page of another site.
+        await go(
+          context,
+          named(`/partition/top?frame=${encodeURIComponent(secure('/partition/frame'))}`),
+          {
+            wait: { until: 'load', selector: 'body[data-done]' },
+          },
+        );
+      });
+      const report = (await site.reports()).find((entry) => entry['page'] === 'partition');
+      measured('storage of a frame in another site', { report });
+      // The first-party cookie is Lax by default and stays out of the frame
+      // in both browsers. Camoufox 152 showed the frame both the cookie and
+      // the stored value (its cookie behaviour was Playwright's 4, not
+      // Firefox's 5).
+      expect(report).toMatchObject({ cookie: '' });
+      expect(report?.['stored']).toBe(subject.thirdPartyStoragePartitioned ? null : 'first-party');
+    });
+
+    it('blocks a window a page opens with nobody’s click before it', async () => {
+      await site.reset();
+      await withContext('popup', (context) =>
+        go(context, named('/popup.html'), { wait: { until: 'load', selector: 'body[data-done]' } }),
+      );
+      const report = (await site.reports()).find((entry) => entry['page'] === 'popup');
+      // Camoufox 152 opened it: its popup blocker was off.
+      expect(report).toMatchObject({ opened: false });
     });
 
     it('exports and imports cookies as rows of http_cookies, and the storage of the page', async () => {

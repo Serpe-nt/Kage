@@ -9,7 +9,7 @@ self.kageReadScope = async (scope, makeCanvas) => {
     user_agent: null, platform: null, oscpu: null, app_version: null, build_id: null,
     language: null, languages: null, intl_locale: null, hardware_concurrency: null,
     device_memory: null, timezone: null, uad_platform: null, high_entropy: null,
-    webgl: null, fonts: null, screen: null, error: null,
+    gpc: null, dnt: null, webgl: null, fonts: null, screen: null, error: null,
   };
   // Families whose presence says which system the fonts come from, and a few
   // every system has under one name or another. Detection is the usual one:
@@ -35,6 +35,10 @@ self.kageReadScope = async (scope, makeCanvas) => {
     out.languages = Array.from(nav.languages || []);
     out.hardware_concurrency = nav.hardwareConcurrency ?? null;
     out.device_memory = nav.deviceMemory ?? null;
+    // The two privacy signals a page reads here and in the headers of every
+    // request (`Sec-GPC`, `DNT`): Firefox has both, Chrome neither.
+    out.gpc = typeof nav.globalPrivacyControl === 'boolean' ? nav.globalPrivacyControl : null;
+    out.dnt = typeof nav.doNotTrack === 'string' ? nav.doNotTrack : null;
     const resolved = new scope.Intl.DateTimeFormat().resolvedOptions();
     out.timezone = resolved.timeZone;
     out.intl_locale = resolved.locale;
