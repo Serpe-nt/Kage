@@ -61,6 +61,9 @@ const scope = (change: Partial<ProbeScope> = {}): ProbeScope => ({
   timezone: 'Europe/Berlin',
   uad_platform: 'Linux',
   high_entropy: HIGH_ENTROPY,
+  // Chrome has neither privacy signal in a script.
+  gpc: null,
+  dnt: null,
   webgl: {
     vendor: 'Google Inc. (Mesa)',
     renderer: 'ANGLE (Mesa, llvmpipe (LLVM 20.1.2 256 bits), OpenGL 4.5)',
@@ -115,6 +118,8 @@ const report = (change: (report: ProbeReport) => void = () => undefined): ProbeR
       getters_native: true,
       illegal_invocation_throws: true,
       navigator_own_properties: [],
+      driver_worker: 'throws',
+      set_globals: [],
     },
     requests: {
       navigation: navigationHeaders,

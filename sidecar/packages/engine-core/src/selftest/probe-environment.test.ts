@@ -42,6 +42,9 @@ const scope = (change: Partial<ProbeScope> = {}): ProbeScope => ({
   timezone: 'Europe/Berlin',
   uad_platform: null,
   high_entropy: null,
+  // What a Firefox nobody configured says.
+  gpc: false,
+  dnt: 'unspecified',
   webgl: {
     vendor: 'Google Inc. (NVIDIA)',
     renderer: 'ANGLE (NVIDIA, NVIDIA GeForce GTX 980 Direct3D11 vs_5_0 ps_5_0), or similar',
@@ -109,6 +112,8 @@ const report = (change: (report: ProbeReport) => void = () => undefined): ProbeR
       getters_native: true,
       illegal_invocation_throws: true,
       navigator_own_properties: [],
+      driver_worker: 'throws',
+      set_globals: [],
     },
     requests: {
       navigation: null,
@@ -319,6 +324,128 @@ describe('a Firefox persona on the probe', () => {
     expect(old?.environment).toBeUndefined();
     expect(old?.scopes.window.fonts).toBeNull();
     expect(old?.scopes.window.screen).toBeNull();
+  });
+});
+
+describe('what the Camoufox 156 milestone taught the probe', () => {
+  const headers = (...extra: [string, string][]): [string, string][] => [
+    ['User-Agent', WINDOWS_UA],
+    ['Accept-Language', 'de,en-US;q=0.9,en;q=0.8'],
+    ...extra,
+  ];
+
+  it("fails an Intl that speaks another language than the persona's", () => {
+    // Camoufox 156 before the launch plan set the interface language.
+    const english = judge(
+      report((value) => {
+        value.scopes.window = scope({ intl_locale: 'en-US', language: 'de' });
+      }),
+    );
+    expect(statusOf(english, 'coherence.intl_language')).toBe('fail');
+    expect(english.find((finding) => finding.check === 'coherence.intl_language')?.observed).toBe(
+      'Intl=en-US navigator.language=de',
+    );
+    // The regional tag of the system next to the bare language: one person.
+    for (const [intl, language] of [
+      ['de-DE', 'de'],
+      ['de-AT', 'de'],
+      ['en-GB', 'en-GB'],
+      ['it-IT', 'it-IT'],
+    ] as const) {
+      const findings = judge(
+        report((value) => {
+          value.scopes.window = scope({ intl_locale: intl, language });
+        }),
+      );
+      expect(statusOf(findings, 'coherence.intl_language'), `${intl} ${language}`).toBe('pass');
+    }
+  });
+
+  it('fails a privacy signal the script says and the request does not, and the reverse', () => {
+    const cases: [boolean | null, string | null, [string, string][], string | undefined][] = [
+      [false, 'unspecified', headers(), undefined],
+      [true, 'unspecified', headers(), 'fail'],
+      [true, 'unspecified', headers(['Sec-GPC', '1']), 'pass'],
+      [false, 'unspecified', headers(['Sec-GPC', '1']), 'fail'],
+    ];
+    for (const [gpc, dnt, navigation, status] of cases) {
+      const findings = judge(
+        report((value) => {
+          value.scopes.window = scope({ gpc, dnt });
+          value.requests.navigation = navigation;
+        }),
+      );
+      expect(statusOf(findings, 'headers.navigation.gpc'), String(gpc)).toBe(status ?? 'pass');
+    }
+    const dnt = (value: string, navigation: [string, string][]) =>
+      statusOf(
+        judge(
+          report((report) => {
+            report.scopes.window = scope({ dnt: value });
+            report.requests.navigation = navigation;
+          }),
+        ),
+        'headers.navigation.dnt',
+      );
+    expect(dnt('unspecified', headers())).toBe('pass');
+    expect(dnt('1', headers())).toBe('fail');
+    expect(dnt('1', headers(['DNT', '1']))).toBe('pass');
+    expect(dnt('unspecified', headers(['DNT', '1']))).toBe('fail');
+    // Nothing to compare: a static host of the probe, or Chrome, which has neither.
+    expect(statusOf(judge(report()), 'headers.navigation.gpc')).toBeUndefined();
+    const chrome = judge(
+      report((value) => {
+        value.scopes.window = scope({ gpc: null, dnt: null });
+        value.requests.navigation = headers();
+      }),
+    );
+    expect(statusOf(chrome, 'headers.navigation.gpc')).toBeUndefined();
+    expect(statusOf(chrome, 'headers.navigation.dnt')).toBeUndefined();
+  });
+
+  it("fails a page that finds the browser's driver, and warns on a probe page older than the check", () => {
+    // Camoufox 152, measured: the driver's package answered, and fifteen
+    // setters of the build were functions of every window.
+    const camoufox152 = judge(
+      report((value) => {
+        value.automation.driver_worker = 'returns';
+        value.automation.set_globals = ['setNavigatorUserAgent', 'setTimezone'];
+      }),
+    );
+    expect(statusOf(camoufox152, 'automation.driver_worker')).toBe('fail');
+    expect(statusOf(camoufox152, 'automation.extra_globals')).toBe('fail');
+    expect(
+      camoufox152.find((finding) => finding.check === 'automation.extra_globals')?.observed,
+    ).toBe('setNavigatorUserAgent, setTimezone');
+    const clean = judge(report());
+    expect(statusOf(clean, 'automation.driver_worker')).toBe('pass');
+    expect(statusOf(clean, 'automation.extra_globals')).toBe('pass');
+    // A copy of the probe page on an operator's host that nobody updated.
+    const older = judge(
+      report((value) => {
+        delete value.automation.driver_worker;
+        delete value.automation.set_globals;
+      }),
+    );
+    expect(statusOf(older, 'automation.driver_worker')).toBe('warn');
+    expect(statusOf(older, 'automation.extra_globals')).toBe('warn');
+    // And the JSON of such a page parses, with the new values absent.
+    const parsed = parseProbeReport(
+      JSON.stringify(
+        report((value) => {
+          delete value.automation.driver_worker;
+          delete value.automation.set_globals;
+          value.scopes.window = {
+            ...scope(),
+            gpc: undefined,
+            dnt: undefined,
+          } as unknown as ProbeScope;
+        }),
+      ),
+    );
+    expect(parsed?.automation.driver_worker ?? null).toBeNull();
+    expect(parsed?.scopes.window.gpc).toBeNull();
+    expect(parsed?.scopes.window.dnt).toBeNull();
   });
 });
 

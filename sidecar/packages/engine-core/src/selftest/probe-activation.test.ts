@@ -41,6 +41,8 @@ const scope: ProbeScope = {
   timezone: 'Europe/Berlin',
   uad_platform: 'Linux',
   high_entropy: null,
+  gpc: null,
+  dnt: null,
   webgl: null,
   error: null,
 };
@@ -83,6 +85,8 @@ const report = (activation: ProbeActivation | null | undefined): ProbeReport => 
     getters_native: true,
     illegal_invocation_throws: true,
     navigator_own_properties: [],
+    driver_worker: 'throws',
+    set_globals: [],
   },
   requests: {
     navigation: null,

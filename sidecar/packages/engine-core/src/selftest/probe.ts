@@ -51,6 +51,10 @@ const ScopeSchema = z.object({
   timezone: text,
   uad_platform: text,
   high_entropy: HighEntropySchema.nullable().catch(null),
+  /** `navigator.globalPrivacyControl` (Firefox); `null` where the browser has none, or the page is older. */
+  gpc: z.boolean().nullable().catch(null),
+  /** `navigator.doNotTrack` (Firefox): `"1"`, `"0"` or `"unspecified"`. */
+  dnt: text,
   webgl: z
     .object({
       vendor: text,
@@ -166,6 +170,20 @@ export const ProbeReportSchema = z.object({
     getters_native: z.boolean(),
     illegal_invocation_throws: z.boolean(),
     navigator_own_properties: z.array(z.string()),
+    /**
+     * What `new Worker("chrome://juggler/…")` did: `returns` where the
+     * browser registers its driver as a package a page can name (hCaptcha
+     * asks this), `throws` everywhere else. Absent from a probe page of
+     * before the Camoufox 156 milestone.
+     */
+    driver_worker: z.enum(['throws', 'returns']).nullable().catch(null).optional(),
+    /**
+     * Functions of the window named `set…` other than the browsers' own
+     * (`setTimeout`, `setInterval`, and Firefox's `setResizable`): a build
+     * that exposes its own setters to pages (Camoufox 152 had fifteen).
+     * Absent from an older probe page.
+     */
+    set_globals: z.array(z.string()).nullable().catch(null).optional(),
   }),
   /**
    * Request headers as the server saw them, in order; `null` where the host
@@ -312,6 +330,101 @@ function judgeActivation(list: FindingList, activation: ProbeActivation | null):
 }
 
 /**
+ * Judges what a page finds of the browser's driver by asking for it
+ * (measured on Camoufox 152, gone in 156): a worker from the driver's own
+ * package, which every browser without one refuses, and functions of the
+ * window that no browser has. Either is one line of script and a hard
+ * failure. A probe page older than the check reports neither: a warning,
+ * as for user activation.
+ */
+function judgeDriverResidue(list: FindingList, automation: ProbeReport['automation']): void {
+  const worker = automation.driver_worker ?? null;
+  if (worker === null) {
+    list.add('automation.driver_worker', 'warn', {
+      observed: 'the probe page did not ask: it is older than this check',
+      expected: 'the probe page of this version',
+    });
+  } else {
+    list.check(
+      'automation.driver_worker',
+      worker === 'throws',
+      true,
+      `new Worker("chrome://juggler/…") ${worker}`,
+      'throws, as in a browser without a driver package',
+    );
+  }
+  const globals = automation.set_globals ?? null;
+  if (globals === null) {
+    list.add('automation.extra_globals', 'warn', {
+      observed: 'the probe page did not list them: it is older than this check',
+      expected: 'the probe page of this version',
+    });
+  } else {
+    list.check(
+      'automation.extra_globals',
+      globals.length === 0,
+      true,
+      globals.length === 0 ? 'none' : globals.join(', '),
+      'no set… function beyond the browser’s own (setTimeout, setInterval, setResizable)',
+    );
+  }
+}
+
+/** The language subtag of a tag, lower case: `de` of `de-AT`. */
+const languageOf = (tag: string) => tag.split('-')[0]?.toLowerCase() ?? '';
+
+/**
+ * Judges what the window says in two places at once.
+ *
+ * - `Intl`'s locale speaks the persona's language: a German persona whose
+ *   dates and numbers come out in English is two people (measured on
+ *   Camoufox 156 before the launch plan set the interface language).
+ * - The privacy signals a script reads are the ones the request carried:
+ *   `globalPrivacyControl` true with `Sec-GPC: 1`, `doNotTrack` `"1"` with
+ *   `DNT: 1`, and neither header otherwise (measured: 156 applied a
+ *   generated `true` to the script alone). Judged where the host of the
+ *   probe wrote down the navigation's headers.
+ */
+function judgeLanguageAndSignals(
+  list: FindingList,
+  window: ProbeScope,
+  navigation: ProbeReport['requests']['navigation'],
+): void {
+  if (window.intl_locale !== null && window.language !== null) {
+    list.check(
+      'coherence.intl_language',
+      languageOf(window.intl_locale) === languageOf(window.language),
+      true,
+      `Intl=${window.intl_locale} navigator.language=${window.language}`,
+      'the language of navigator.language',
+    );
+  }
+  if (navigation === null) {
+    return;
+  }
+  if (window.gpc !== null) {
+    const sent = header(navigation, 'sec-gpc');
+    list.check(
+      'headers.navigation.gpc',
+      window.gpc === (sent === '1'),
+      true,
+      `globalPrivacyControl=${String(window.gpc)} Sec-GPC=${sent ?? 'none'}`,
+      'the same signal in the script and in the request',
+    );
+  }
+  if (window.dnt !== null) {
+    const sent = header(navigation, 'dnt');
+    list.check(
+      'headers.navigation.dnt',
+      (window.dnt === '1') === (sent === '1'),
+      true,
+      `doNotTrack=${window.dnt} DNT=${sent ?? 'none'}`,
+      'the same signal in the script and in the request',
+    );
+  }
+}
+
+/**
  * Judges a probe report against the identity a persona claims.
  *
  * Hard failures are the ones spec §6.2 names: an automation flag, a scope
@@ -356,6 +469,7 @@ export function judgeProbe(
   );
 
   judgeActivation(list, report.activation ?? null);
+  judgeDriverResidue(list, automation);
 
   const reporting: (readonly [ProbeScopeName, ProbeScope])[] = [];
   for (const name of PROBE_SCOPES) {
@@ -448,6 +562,7 @@ export function judgeProbe(
   );
 
   const window = report.scopes.window;
+  judgeLanguageAndSignals(list, window, requests.navigation);
   list.add('webgl.available', window.webgl?.renderer == null ? 'warn' : 'pass', {
     observed: window.webgl?.renderer ?? 'no WebGL',
   });

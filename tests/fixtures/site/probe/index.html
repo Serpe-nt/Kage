@@ -194,6 +194,23 @@
         } catch (error) {
           illegalThrows = error instanceof TypeError;
         }
+        // What a page finds of a browser's driver by asking for it: a worker
+        // from the driver's own package (hCaptcha asks exactly this) is
+        // refused by every browser that has no such package, and functions a
+        // build exposes to pages that no browser has.
+        let driverWorker = null;
+        try {
+          new Worker('chrome://juggler/content/content/WorkerMain.js').terminate();
+          driverWorker = 'returns';
+        } catch (error) {
+          driverWorker = 'throws';
+        }
+        // The browsers' own: Chrome has the first two, Firefox all three.
+        const OWN_SETTERS = ['setTimeout', 'setInterval', 'setResizable'];
+        const setGlobals = Object.getOwnPropertyNames(window).filter(
+          (name) =>
+            /^set[A-Z]/.test(name) && !OWN_SETTERS.includes(name) && typeof window[name] === 'function',
+        );
 
         const same = document.getElementById('frame-same');
         const srcdoc = document.getElementById('frame-srcdoc');
@@ -250,6 +267,8 @@
               /\{\s*\[native code\]\s*\}/.test(Function.prototype.toString.toString()),
             illegal_invocation_throws: illegalThrows,
             navigator_own_properties: Object.getOwnPropertyNames(navigator),
+            driver_worker: driverWorker,
+            set_globals: setGlobals,
           },
           requests: {
             navigation: REQUEST_HEADERS,
