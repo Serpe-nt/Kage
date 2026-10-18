@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use kage_core::config::process_env;
-use kage_core::domain::{Engine, PersonaState, ProxyState, RenderMode, Scope};
+use kage_core::domain::{ClaimedOs, Engine, PersonaState, ProxyState, RenderMode, Scope};
 use kage_core::duration::HumanDuration;
 use kage_core::ids::{ApiKeyId, PersonaId, ProxyId};
 
@@ -397,6 +397,11 @@ enum SelftestCommand {
             conflicts_with = "persona"
         )]
         engine: Engine,
+        /// The system the stand-in persona claims: windows or macos on
+        /// firefox. Default: the engine's own (linux on chromium, windows
+        /// on firefox); a chromium sidecar refuses anything but linux.
+        #[arg(long, value_name = "OS", conflicts_with = "persona")]
+        claimed_os: Option<ClaimedOs>,
         /// The IANA time zone of the stand-in persona, for example
         /// Europe/Berlin. Default: the one of the proxy's geo record.
         #[arg(long, value_name = "ZONE", conflicts_with = "persona")]
@@ -608,6 +613,7 @@ async fn selftest(command: SelftestCommand, config_file: Option<&Path>) -> anyho
         SelftestCommand::Browser {
             proxy,
             engine,
+            claimed_os,
             timezone,
             languages,
             third_party,
@@ -619,6 +625,7 @@ async fn selftest(command: SelftestCommand, config_file: Option<&Path>) -> anyho
                 let options = selftest_browser::BrowserSelftestOptions {
                     proxy,
                     engine,
+                    claimed_os,
                     timezone,
                     languages,
                     third_party,
@@ -844,7 +851,7 @@ mod tests {
     use std::time::Duration;
 
     use clap::{CommandFactory, Parser};
-    use kage_core::domain::{Engine, PersonaState, ProxyState, RenderMode};
+    use kage_core::domain::{ClaimedOs, Engine, PersonaState, ProxyState, RenderMode};
     use kage_core::duration::HumanDuration;
     use kage_scheduler::RobotsWish;
 
@@ -1169,6 +1176,7 @@ mod tests {
                     proxy,
                     persona,
                     engine,
+                    claimed_os,
                     timezone,
                     languages,
                     third_party,
@@ -1180,6 +1188,8 @@ mod tests {
             panic!("expected the browser self-test, got {:?}", cli.command);
         };
         assert!(idle_before.is_none());
+        // The engine's own claim unless another is named.
+        assert_eq!(claimed_os, None);
         assert_eq!(persona, None);
         assert_eq!(proxy.unwrap().to_string(), id);
         assert_eq!(engine, Engine::Chromium);
@@ -1211,6 +1221,25 @@ mod tests {
             panic!("expected every flag to be read, got {:?}", cli.command);
         };
         assert_eq!(idle.get(), Duration::from_mins(10));
+
+        // The stand-in may claim another system than its engine's own.
+        let cli = Cli::try_parse_from(base.into_iter().chain([
+            "--engine",
+            "firefox",
+            "--claimed-os",
+            "macos",
+        ]))
+        .unwrap();
+        let Command::Selftest {
+            command:
+                SelftestCommand::Browser {
+                    claimed_os: Some(ClaimedOs::Macos),
+                    ..
+                },
+        } = cli.command
+        else {
+            panic!("expected the claim to be read, got {:?}", cli.command);
+        };
 
         // The stand-in takes its time zone and languages from the proxy's
         // geo record unless they are named.
@@ -1253,6 +1282,18 @@ mod tests {
                 "de",
             ],
             vec!["kage", "selftest", "browser", "--persona", "seven"],
+            // A system nobody claims, and a claim for a persona, which
+            // has its own.
+            [&base[..], &["--claimed-os", "android"]].concat(),
+            vec![
+                "kage",
+                "selftest",
+                "browser",
+                "--persona",
+                id,
+                "--claimed-os",
+                "macos",
+            ],
         ] {
             assert!(
                 Cli::try_parse_from(arguments.clone()).is_err(),

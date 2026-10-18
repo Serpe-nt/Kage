@@ -7,12 +7,15 @@
 // automation flag or an identity mismatch (a hard failure), every page
 // could be read, and no check is worse than in the recorded baseline
 // (`<baseline directory>/<engine>-<major>-live.json`). An engine and major
-// without a baseline fail the check: record one first.
+// without a baseline fail the check: record one first. A recording run of
+// a major that has none yet is judged against the newest baseline of an
+// older major of the same engine, when there is one: the browser that
+// image ran, which the new one must not be worse than.
 //
 // `--record` writes the findings as the new baseline. What is written holds
 // no address: the report names none, and anything that looks like one in
 // what a page showed is replaced before it is stored.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const [reportFile, baselineDir, flag] = process.argv.slice(2);
@@ -72,8 +75,25 @@ if (report.passed !== true) {
 
 const major = String(persona.browser_major ?? "unknown");
 const baselineFile = join(baselineDir, `${report.engine}-${major}-live.json`);
-if (existsSync(baselineFile)) {
-  const baseline = JSON.parse(readFileSync(baselineFile, "utf8"));
+/** The newest baseline of an older major of this engine, for a new major's first run. */
+const previousBaseline = () => {
+  const own = new RegExp(`^${report.engine}-(\\d+)-live\\.json$`);
+  const older = (existsSync(baselineDir) ? readdirSync(baselineDir) : [])
+    .map((file) => [file, Number(own.exec(file)?.[1])])
+    .filter(([, found]) => Number.isInteger(found) && found < Number(major))
+    .sort((a, b) => b[1] - a[1]);
+  return older.length > 0 ? join(baselineDir, older[0][0]) : null;
+};
+const compareWith = existsSync(baselineFile)
+  ? baselineFile
+  : flag === "--record"
+    ? previousBaseline()
+    : null;
+if (compareWith !== null) {
+  const baseline = JSON.parse(readFileSync(compareWith, "utf8"));
+  if (compareWith !== baselineFile) {
+    console.log(`    no baseline of ${report.engine} ${major} yet: judged against the previous major's, ${compareWith}`);
+  }
   const before = new Map(
     baseline.findings.map((finding) => [`${finding.page}/${finding.check}`, finding.status]),
   );
