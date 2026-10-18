@@ -294,7 +294,8 @@ derives from the id, and every draw below is seeded by it.
    persona claims the system its Chrome runs on, Linux in the shipped image
    (ADR 0009). A firefox persona claims Windows or macOS: M5 measured
    Camoufox under the same worker-inclusive coherence bar and both pass
-   (§6.2). The default mix is: chromium on linux 40%, firefox on windows
+   (§6.2), and the Camoufox 156 milestone measured both again on the 156
+   build. The default mix is: chromium on linux 40%, firefox on windows
    45%, firefox on macos 15%. Firefox on linux stays possible by
    configuration but is not in the default: its fonts are Tor Browser's
    bundle, not a Linux desktop's (`docs/runbooks/engine-firefox.md`).
@@ -310,7 +311,10 @@ derives from the id, and every draw below is seeded by it.
    using fingerprint-generator (chromium) or Camoufox's generator (firefox),
    returns the full fingerprint JSON, and Kage persists it. The same JSON is
    sent back on every session open. The sidecar MUST apply it
-   deterministically.
+   deterministically, and applies it as far as the engine's browser reads
+   it: on firefox the keys the pinned build declares `removed` and the two
+   privacy signals are left out (§10.3), so that a document generated for
+   one build opens unchanged on the next.
 4. **wreq profile.** Kage maps (engine, browser_major, claimed_os) to a
    wreq-util profile (`kage_http::profile::resolve`). An exact match is the
    profile of the same major, among the newest eight majors wreq-util ships
@@ -386,17 +390,44 @@ derives from the id, and every draw below is seeded by it.
   the claimed system's and equal in every scope; `oscpu` and `buildID`
   exist in windows only, as in every Firefox. The probe judges fonts
   (`fonts.own`, `fonts.foreign`, `coherence.fonts`), WebGL (`webgl.os`,
-  `coherence.webgl`) and the screen for both engines since.
+  `coherence.webgl`) and the screen for both engines since. The Camoufox
+  156 milestone measured the bar on `v156.0.1-beta.39` with Windows and
+  macOS personas and added three things that build made visible, judged
+  hard for both engines: `Intl` speaks the language of
+  `navigator.language` (`coherence.intl_language`), what a script reads of
+  `globalPrivacyControl` and `doNotTrack` is what the navigation sent
+  (`headers.navigation.gpc`, `headers.navigation.dnt`), and a page finds
+  no trace of the driver (`automation.driver_worker`: a
+  `new Worker("chrome://juggler/…")` throws as in stock Firefox;
+  `automation.extra_globals`: no `set…` function beyond the browser's
+  own).
 - What surrounds the browser is part of the claim: a work area smaller
   than the screen (chromium: a desktop's top bar announced on the display
-  and the window placed below it; firefox: the fingerprint's), media
+  and the window placed below it; firefox: what Firefox's baseline
+  fingerprinting protection reports of any screen since the 156 build,
+  the screen less a taskbar of the claimed system, 48 px on Windows and
+  76 px on macOS), media
   devices and an `AudioContext` with channels (a sound server in both
   images). The probe reports their absence as warnings
   (`environment.*`), never as failures.
 - Never rotate any identity attribute inside a persona's lifetime. Browser
-  major may advance only when the engine image is upgraded; then every
-  persona of that engine gets its `browser_major` and `wreq_profile` updated
-  together and re-tested.
+  major may advance only when the engine image is upgraded, and then as a
+  real browser's update does: at the persona's next open the engine
+  refuses its document (`browser_major_mismatch`), the sidecar moves it to
+  the engine's major (`POST /v1/personas/upgrade`: the browser version and
+  the `User-Agent`, nothing of the device, the same answer for the same
+  document), and the manager stores it with its `browser_major`,
+  `user_agent` and `wreq_profile` together, records
+  `persona_browser_upgraded` and opens the context as the moved persona,
+  whose next self-test tests it. Its sessions, its cookies, its http jar
+  and its per-domain state continue. A major never goes back: a sidecar of
+  an older major refuses the moved document, and a Firefox profile does
+  not start under an older major, so before its first start under the new
+  one the firefox engine copies it to `.upgrade/<persona id>` on the
+  personas volume, which Kage deletes after `personas.upgrade_backup_days`
+  (7). The way back within that window is
+  `docs/runbooks/upgrading-an-engine.md`; `--allow-downgrade` is never
+  used.
 
 ### 6.3 Lifecycle
 
@@ -405,6 +436,7 @@ derives from the id, and every draw below is seeded by it.
 | Proxy enters `backoff` or `replacing` | Persona `cooling` (`proxy_backoff`); no new sessions; existing sessions finish. Active again when the proxy is usable. |
 | Proxy `retired` (replaced, by Kage or by the provider itself) | Persona `retired`: its sessions end and its http cookies are deleted at once; `personas.archive_after` (10 min) later its profile directory is moved to `.archive/<persona id>` on the personas volume with a `persona.json` (ids, engine, system, the proxy's address without credentials, reason, times), and the archive is deleted after `personas.retention_days` (default 7). The row, the fingerprint, the per-domain state and the self-test runs stay. New persona generated for the replacement proxy; it inherits nothing. |
 | Geo record of the address changes | Same country: time zone and position follow, event `persona_geo_updated` at info. Another country (or a region of another language): locale and languages follow too, the event is a warning and the persona is `cooling` (`geo_changed`) until a self-test passes. Seed, fingerprint, screen and profile never change. |
+| Engine image bundles a newer browser major | At the persona's next open its document is moved to that major and stored, event `persona_browser_upgraded` at info (§6.2). Seed, device, place, profile, sessions and cookies stay. A firefox profile is first copied to `.upgrade/<persona id>`; the copy is deleted after `personas.upgrade_backup_days` (7). |
 | Block on domain D | `PersonaDomainState.cooldown_until = now + cooldown(D, block_type)`; defaults: `rate_limited` 2 h, `forbidden`/`captcha`/`challenge_failed` 24 h, `soft_block` 6 h. A rule may carry a cooldown class instead: `none`, `short` (policy key `short`, default 30 min, never longer than the outcome's own cooldown) or `long` (the outcome's cooldown). M7 scales the duration by the classification confidence. |
 | Daily cap reached on D | Persona ineligible for D until local midnight in the persona's timezone. |
 | Self-test failure | Persona `cooling` (`selftest_failed`) until a self-test passes: the next scheduled one (retried after a twelfth of the interval) or an operator's `kage persona selftest`. A run that could not read its test site is inconclusive and changes nothing. |
@@ -752,7 +784,7 @@ either way (F35).
   kinds below, or a script's request.
 - **A script's request** (`request_kind: fetch | xhr` of the API, F6): a
   `fetch()` or an `XMLHttpRequest` goes out as Chrome 155 and Firefox 152
-  were captured sending one (`tests/fixtures/fingerprints/browser/`): its
+  and 156 were captured sending one (`tests/fixtures/fingerprints/browser/`): its
   own header order, `Dest: empty`, `Mode: cors`, the `Accept` of a script
   (`*/*`), Chrome's `Priority: u=1, i`, Firefox's `u=4` for a fetch and
   none for an XHR, no `Upgrade-Insecure-Requests` and no `Sec-Fetch-User`.
@@ -855,6 +887,7 @@ file and the Rust types drift.
 | `GET /v1/health` | engine, browser version, contexts in use, uptime |
 | `GET /v1/metrics` | Prometheus |
 | `POST /v1/personas/generate` | input: constraints; output: fingerprint JSON and summary |
+| `POST /v1/personas/upgrade` | input: a stored fingerprint; output: the same persona moved to the engine's browser major (deterministic), its summary, and whether it changed (1.4.0) |
 | `POST /v1/contexts` | open a persona context: persona id, fingerprint, proxy, locale, timezone, geolocation, screen, profile dir; returns context id |
 | `DELETE /v1/contexts/{id}` | close, flush profile |
 | `POST /v1/contexts/{id}/navigate` | url, wait, behavior, capture → page result |
@@ -889,7 +922,7 @@ and a PDF (`beforeprint`, `afterprint`).
 
 Reading a page grants it nothing. Both drivers mark an evaluation as a
 user gesture (patchright sends `userGesture: true`; the Juggler of the
-pinned Camoufox build calls `setHandlingUserInput` and
+Camoufox 152 build called `setHandlingUserInput` and
 `notifyUserGestureActivation`), and M5 measured the result: a page nobody
 touched read `navigator.userActivation` as active from its first read on,
 and Chrome let an `AudioContext` run. Since M5.1:
@@ -907,10 +940,10 @@ and Chrome let an `AudioContext` run. Since M5.1:
   cache nor its `waitForURL` is used: both hang there (F21). `back` and
   `wait_for url` look at the address and at `document.readyState`
   themselves.
-- On firefox the pinned build runs with upstream's fix of its Juggler
-  backported into `omni.ja` (ADR 0010); the engine refuses a build without
-  it and clears a profile's startup cache when the profile last started
-  under another archive.
+- On firefox the pinned 156 build has upstream's fix natively (Camoufox
+  pull request 779): an evaluation lifts the popup blocker through
+  `driverPopupsAllowed` and grants no activation. M5.1 had backported it
+  into the 152 build (ADR 0010, superseded by ADR 0011).
 - The coherence probe compares `navigator.userActivation` with the trusted
   input events it received: `automation.user_activation` is a hard failure
   when the page is or has been active without an event that grants
@@ -949,7 +982,7 @@ with NDJSON: one `step` line per finished step as it finishes, then one
 before its first step is an ordinary error answer; a flow that breaks
 after lines were sent ends without its final line.
 
-The contract is at 1.3.0: everything M5 added (1.1.0) is optional in
+The contract is at 1.4.0: everything M5 added (1.1.0) is optional in
 requests and additional in responses, and so is what M9 added (1.2.0: a
 flow's `behavior.pace` and the `paced_ms` of a step, §10.5) and what M10
 added: `behavior.patience_ms` and what the scrolling came to
@@ -959,6 +992,8 @@ result), an entry by a link of a page the persona has been reading
 report), and the links of the document (`capture.links`, `links` and
 `links_truncated` in the result), each with whether a reader can see it
 and whether it stands in what the site repeats on every page (§10.4).
+The Camoufox 156 milestone added an endpoint (1.4.0:
+`POST /v1/personas/upgrade`), which no earlier client calls.
 
 A breaking change of the contract needs a new major of the contract
 version; `just contract-check` compares the committed document with the
@@ -995,24 +1030,34 @@ Rules from patchright's guidance, kept by tests: no custom UA through
 Playwright options, no `addInitScript` and no request interception from
 application code, no `Runtime.enable`-dependent APIs.
 
-**firefox.** Camoufox at a pinned build (`v152.0.4-beta.30`, fetched by
-URL and checksum, never by the launcher's own download; the engine refuses
-any other build, and this one without the Juggler backport of ADR 0010,
-§10.2), driven through its own playwright-core, one browser per
+**firefox.** Camoufox at a pinned build (`v156.0.1-beta.39`, Firefox
+156.0.1, fetched by URL and checksum, never by a launcher's own download;
+the engine refuses any other build and any other `omni.ja`, ADR 0011), driven through its own playwright-core, one browser per
 context on its own Xvfb display, started through a wrapper that sets the
 persona's CPU affinity. The fingerprint is generated from a 64-hex seed
 with the parts of camoufox-js (the real-device generator under the seeded
 swap, the mapping to the browser's configuration, the font list and a
 graphics card of the claimed system drawn from the launcher's table) and
 persisted as the complete browser configuration; opening is a pure launch
-plan from that document. The launcher's `launchOptions` is not called: it
+plan from that document. The plan sends the build only what it reads: the
+keys its `properties.json` declares `removed` are left out, and
+`navigator.doNotTrack` and `navigator.globalPrivacyControl` are never
+applied (the generator draws them, and a stock Firefox sends neither
+signal unless its user turns it on). Its preferences reach the build at
+startup through `CAMOU_PREFS` and through the driver: the persona's
+Firefox UI locale (`intl.locale.requested`, from a table per country
+checked against the build's locales, so that `Intl` and the browser's own
+messages speak the persona's language), WebGPU where Firefox 156 has it
+(Windows, and macOS claims whose graphics card is Apple's), and the memory
+cache and compression dictionaries as in stock. The launcher's `launchOptions` is not called: it
 is not reproducible, points fontconfig at a directory the pinned build
 does not have, and depends on ua-parser-js (ADR 0008). Language, time
 zone and position come from the open request (`geoip` is never used),
 `humanize` stays off (the shared behavior engine drives input), no addon
-is loaded, the build's window theming is off, and autoplay is Firefox's
-own default (the build's allows it, which a page reads with
-`navigator.getAutoplayPolicy()`). The persona's fontconfig
+is loaded, and autoplay is Firefox's own default (the 156 build ships it;
+the engine sets it as well, so that a build that allows autoplay, as the
+152 build did and a page reads with `navigator.getAutoplayPolicy()`, is
+still answered as Firefox answers). The persona's fontconfig
 file is the build's own for the claimed system with an absolute font
 directory and, for Windows and macOS claims, hinting off. The proxy with
 credentials goes through the driver's option; loopback is sent through it
@@ -2146,10 +2191,12 @@ Sections at this point: `server`, `database`, `secrets`, `sidecar`,
 `reputation`, `http` (with `http.subresources`), `selftest` (`selftest.http`,
 `selftest.browser` with its own pages and the third-party pages, each with
 the `interval` of its scheduled run), `personas` (`dir`, `mix`,
-`retention_days`, `archive_after`, `sweep_interval`, `warmup`), `sessions`
+`retention_days`, `upgrade_backup_days`, `archive_after`, `sweep_interval`,
+`warmup`), `sessions`
 (`idle_ttl`, `max_lifetime`, `sweep_interval`),
 `engines` (`engines.<engine>.browser_major`: 155 for the chromium image of
-M4, 152 for the firefox image of M5; a set major must be served by a profile,
+M4, 156 for the firefox image since the Camoufox 156 milestone (152 in
+M5); a set major must be served by a profile,
 verified or recorded as browser-only, or `kage config check` fails;
 `engines.chromium.allow_cross_os_claims`, default false), `scheduler`
 (the caps `max_browser_sessions` 6, `max_http_inflight` 20 and

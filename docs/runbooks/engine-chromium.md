@@ -26,6 +26,7 @@ the same in the window, in every iframe and in every worker.
 | WebRTC addresses | none: `disable_non_proxied_udp`, no UDP leaves outside the proxy |
 | media devices, `AudioContext` | a PulseAudio in the container with one output and one input that go nowhere (`SIDECAR_AUDIO=pulse`, the image's default) |
 | device memory, fonts | the host and the image; the fingerprint lists them as `host_bound` |
+| storage of a cross-site frame | **not partitioned**, unlike a Chrome nobody configured: patchright's default switches (Playwright's `chromiumSwitches`) disable `ThirdPartyStoragePartitioning`, so a frame of site B inside site A reads B's first-party `localStorage` (the cookie, `SameSite=Lax` by default, stays out). Found by the parity suite in the Camoufox 156 milestone; a known tell until the audit of Chrome's launch switches (security review T2) |
 
 One browser process per persona context: a persistent profile is a browser
 process of its own in Chrome. `SIDECAR_MAX_CONTEXTS` (default 3) is

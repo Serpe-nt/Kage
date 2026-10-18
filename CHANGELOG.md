@@ -6,6 +6,72 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- The Firefox engine runs Camoufox **156.0.1-beta.39** (Firefox 156.0.1),
+  pinned by URL and checksum with its `omni.ja` by a second checksum, in
+  place of 152.0.4-beta.30 and its Juggler backport (ADR 0011, which
+  supersedes ADR 0010). It removes four things a page could read of every
+  1.0.0 Firefox persona and of no stock Firefox: a page's
+  `new Worker("chrome://juggler/…")` worked, a cross-site frame read the
+  persona's first-party cookies and storage, `window.open()` without
+  activation opened a window, and pages had 15 extra `set…` functions.
+  Reading a page still grants it no user activation, now by the build
+  itself. `engines.firefox.browser_major` is 156; Firefox 156 is
+  browser-only on the http path (JA4
+  `t13d1517h2_8daaf6152771_3cbfd9057e0d`, as a stock Firefox 156.0.1), and
+  its capture replaces the 152 one. The Firefox image grows by about
+  1.2 GB (the build bundles 2.1 GB of fonts).
+- The launch plan speaks the persona's language at startup: its Firefox
+  UI locale (`intl.locale.requested`, a table per country checked against
+  the build's language packs) and the plan's other preferences reach the
+  build through `CAMOU_PREFS` before the first page, so that `Intl` and the
+  browser's own messages are the persona's (on 152 the messages were
+  English). The engine leaves out of the configuration the keys the build
+  declares `removed` and never applies `navigator.doNotTrack` or
+  `navigator.globalPrivacyControl`, which the generator draws for nearly
+  every device and 156 would have shown without the `Sec-GPC` header.
+  WebGPU is on for Windows claims and for macOS claims with an Apple
+  graphics card, and the memory cache and compression dictionaries are on,
+  as in stock Firefox 156.
+
+### Added
+
+- `POST /v1/personas/upgrade` (sidecar contract 1.4.0, additive): a stored
+  persona moved to the browser major its engine runs, the same bytes for
+  the same document. At a persona's first open under a newer major the
+  manager has it moved, stores it with its new `browser_major`,
+  `user_agent` and `wreq_profile`, and records `persona_browser_upgraded`
+  with what the persona was before; its sessions, cookies, http jar and
+  per-domain state continue. Personas of 1.0.0 move to Firefox 156 this
+  way, at their next open.
+- Before a profile's first start under a newer Firefox major the engine
+  copies it to `.upgrade/<persona id>/` on the personas volume; kage
+  deletes a copy after `personas.upgrade_backup_days` (7). The rollback
+  within that window is `docs/runbooks/upgrading-an-engine.md`, "Going
+  back", and a test runs its database statement.
+- Probe checks, hard for both engines: `coherence.intl_language` (the
+  language of `Intl` against `navigator.language`),
+  `headers.navigation.gpc` and `headers.navigation.dnt` (what a script
+  reads against what the navigation sent), `automation.driver_worker` (a
+  `chrome://juggler` worker) and `automation.extra_globals` (a `set…`
+  function the browser does not have). The parity suite states what a
+  page reads of a persona's document, of a moved persona, of third-party
+  storage and of an unrequested popup, per engine. On Chromium the storage
+  statement records a tell it found: a cross-site frame reads its site's
+  first-party `localStorage`, because patchright's default switches turn
+  third-party storage partitioning off (security review T2). Chrome is
+  unchanged here; the audit of its launch switches is the next milestone.
+- `scripts/audit-camoufox-prefs.mjs`: the preference audit of a Camoufox
+  build against a stock Firefox of the same version, for the next bump;
+  its table for 156 is `docs/evidence/camoufox-156-prefs-audit.tsv`.
+
+### Removed
+
+- `scripts/patch-camoufox-juggler.mjs`, its two checksums and the
+  startup-cache clearing of the engine (ADR 0010). The `omni.sha256` notes
+  in existing profiles are no longer read.
+
 ## [1.0.0] - 2026-10-17
 
 The first release. Kage fetches web pages through a pool of static
