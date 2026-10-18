@@ -21,6 +21,7 @@ import {
   majorOfVersion,
   matchesContentType,
   mediaType,
+  moveToVersion,
   osOfHintPlatform,
   osOfPlatform,
   osOfUserAgent,
@@ -51,6 +52,7 @@ describe('createStubEngine', () => {
     for (const call of [
       () => engine.generatePersona({ seed: SEED, claimed_os: 'linux', languages: ['en'] }),
       () => engine.openContext({} as never),
+      () => engine.upgradePersona({ fingerprint: {} }),
     ]) {
       const error: unknown = await call().catch((thrown: unknown) => thrown);
       expect(error).toBeInstanceOf(EngineError);
@@ -451,5 +453,40 @@ describe('fingerprint document', () => {
   it('refuses something that is no document at all', () => {
     expect(() => parseFingerprint(null)).toThrow(/not a fingerprint document/);
     expect(() => parseFingerprint('x')).toThrow(EngineError);
+  });
+
+  it('moves to a newer browser as an update moves it, and never back', () => {
+    const rewrite = (userAgent: string, from: number, to: number) =>
+      userAgent.replace(`Chrome/${from}.0.0.0`, `Chrome/${to}.0.0.0`);
+    const moved = moveToVersion(document, '156.0.8100.10', rewrite);
+    expect(moved.upgraded).toBe(true);
+    expect(moved.document).toEqual({
+      ...document,
+      browser_version: '156.0.8100.10',
+      user_agent: document.user_agent.replace('Chrome/155.0.0.0', 'Chrome/156.0.0.0'),
+    });
+    // Deterministic, and the document it was made from is untouched.
+    expect(moveToVersion(document, '156.0.8100.10', rewrite)).toEqual(moved);
+    expect(document.browser_version).toBe('155.0.8059.39');
+    // Of that version already: the same document, unchanged.
+    expect(moveToVersion(moved.document, '156.0.8100.10', rewrite)).toEqual({
+      document: moved.document,
+      upgraded: false,
+    });
+    // Another build of the same major: the version moves, the string names the major only.
+    const patch = moveToVersion(document, '155.0.8059.50', () => {
+      throw new Error('not asked');
+    });
+    expect(patch.document).toMatchObject({
+      browser_version: '155.0.8059.50',
+      user_agent: document.user_agent,
+    });
+    // A browser does not go back, and a version without a major is no version.
+    expect(() => moveToVersion(document, '154.0.1.1', rewrite)).toThrow(
+      expect.objectContaining({ code: 'browser_major_mismatch' }) as Error,
+    );
+    expect(() => moveToVersion(document, 'x', rewrite)).toThrow(
+      expect.objectContaining({ code: 'internal' }) as Error,
+    );
   });
 });

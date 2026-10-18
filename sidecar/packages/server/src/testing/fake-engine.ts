@@ -45,6 +45,7 @@ export function createFakeEngine(): FakeEngine {
     onFlow: () => Promise.resolve(),
     status: () => ({ browserVersion: '155.0.8059.39' }),
     generatePersona: () => Promise.resolve(example('GeneratePersonaResponse')),
+    upgradePersona: () => Promise.resolve(example('UpgradePersonaResponse')),
     openContext: async (request) => {
       await engine.beforeOpen(request);
       const context: FakeContext = {

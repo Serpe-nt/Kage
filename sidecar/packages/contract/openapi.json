@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Kage browser sidecar",
-    "version": "1.3.0",
+    "version": "1.4.0",
     "description": "Internal contract between Kage and its browser sidecars (spec §10.2). Generated from the zod schemas in sidecar/packages/contract; do not edit by hand. Regenerate with `just openapi`.",
     "license": {
       "name": "MIT OR Apache-2.0",
@@ -168,6 +168,84 @@
           },
           "422": {
             "description": "Error codes: `cross_os_claim_disabled`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error codes: `internal`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Error codes: `not_implemented`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/personas/upgrade": {
+      "post": {
+        "operationId": "upgrade_persona",
+        "summary": "Move a stored fingerprint to the browser major the engine runs, as a user's browser updates itself (1.4.0).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpgradePersonaRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The moved fingerprint and its summary.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradePersonaResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error codes: `invalid_request`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error codes: `unauthorized`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error codes: `browser_major_mismatch`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4916,6 +4994,163 @@
         ],
         "additionalProperties": false,
         "description": "Type text into an element."
+      },
+      "UpgradePersonaRequest": {
+        "type": "object",
+        "properties": {
+          "fingerprint": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {},
+            "description": "The fingerprint document as Kage stored it: generated, or moved before, by an engine of the same kind."
+          }
+        },
+        "required": [
+          "fingerprint"
+        ],
+        "additionalProperties": false,
+        "description": "A stored fingerprint to move to the browser major the engine's sidecar runs.",
+        "examples": [
+          {
+            "fingerprint": {
+              "schema": 1,
+              "generator": "fingerprint-generator@2.1.88",
+              "seed": "5f1c0e9a7b3d2468ace013579bdf02468ace13579bdf0246813579bdf02468ac",
+              "claimed_os": "linux",
+              "browser_version": "155.0.8059.39",
+              "native": {
+                "screen": {
+                  "width": 1920,
+                  "height": 1080,
+                  "dpr": 1,
+                  "color_depth": 24
+                },
+                "hardware_concurrency": 8
+              },
+              "inject": "none"
+            }
+          }
+        ]
+      },
+      "UpgradePersonaResponse": {
+        "type": "object",
+        "properties": {
+          "fingerprint": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {},
+            "description": "The document for the browser the engine runs: the same device and seeds, with the browser's version moved as the browser's own update moves it. The same request gives the same document, byte for byte; a document of that version comes back unchanged."
+          },
+          "summary": {
+            "description": "The moved fingerprint in a few fields.",
+            "$ref": "#/components/schemas/PersonaSummary"
+          },
+          "upgraded": {
+            "type": "boolean",
+            "description": "Whether the document changed: false when it was of the engine’s browser already."
+          }
+        },
+        "required": [
+          "fingerprint",
+          "summary",
+          "upgraded"
+        ],
+        "additionalProperties": false,
+        "description": "A persona fingerprint for the browser major the engine runs.",
+        "examples": [
+          {
+            "fingerprint": {
+              "schema": 1,
+              "generator": "fingerprint-generator@2.1.88",
+              "seed": "5f1c0e9a7b3d2468ace013579bdf02468ace13579bdf0246813579bdf02468ac",
+              "claimed_os": "linux",
+              "browser_version": "155.0.8059.39",
+              "native": {
+                "screen": {
+                  "width": 1920,
+                  "height": 1080,
+                  "dpr": 1,
+                  "color_depth": 24
+                },
+                "hardware_concurrency": 8
+              },
+              "inject": "none"
+            },
+            "summary": {
+              "engine": "chromium",
+              "claimed_os": "linux",
+              "browser_version": "155.0.8059.39",
+              "browser_major": 155,
+              "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+              "platform": "Linux x86_64",
+              "screen": {
+                "width": 1920,
+                "height": 1080,
+                "dpr": 1,
+                "color_depth": 24
+              },
+              "hardware_concurrency": 8,
+              "languages": [
+                "de-DE",
+                "de",
+                "en-US",
+                "en"
+              ],
+              "generator": "fingerprint-generator@2.1.88",
+              "seed": "5f1c0e9a7b3d2468ace013579bdf02468ace13579bdf0246813579bdf02468ac",
+              "inject": "none"
+            },
+            "upgraded": true
+          },
+          {
+            "fingerprint": {
+              "schema": 1,
+              "generator": "fingerprint-generator@2.1.88",
+              "seed": "5f1c0e9a7b3d2468ace013579bdf02468ace13579bdf0246813579bdf02468ac",
+              "claimed_os": "linux",
+              "browser_version": "155.0.8059.39",
+              "native": {
+                "screen": {
+                  "width": 1920,
+                  "height": 1080,
+                  "dpr": 1,
+                  "color_depth": 24
+                },
+                "hardware_concurrency": 8
+              },
+              "inject": "none"
+            },
+            "summary": {
+              "engine": "chromium",
+              "claimed_os": "linux",
+              "browser_version": "155.0.8059.39",
+              "browser_major": 155,
+              "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+              "platform": "Linux x86_64",
+              "screen": {
+                "width": 1920,
+                "height": 1080,
+                "dpr": 1,
+                "color_depth": 24
+              },
+              "hardware_concurrency": 8,
+              "languages": [
+                "de-DE",
+                "de",
+                "en-US",
+                "en"
+              ],
+              "generator": "fingerprint-generator@2.1.88",
+              "seed": "5f1c0e9a7b3d2468ace013579bdf02468ace13579bdf0246813579bdf02468ac",
+              "inject": "none"
+            },
+            "upgraded": false
+          }
+        ]
       },
       "Wait": {
         "type": "object",

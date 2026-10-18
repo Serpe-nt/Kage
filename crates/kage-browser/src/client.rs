@@ -18,7 +18,7 @@ use crate::contract::{
     DwellMode, ErrorResponse, ExportStateRequest, ExportStateResponse, FlowEvent, FlowRequest,
     GeneratePersonaRequest, GeneratePersonaResponse, HealthResponse, ImportStateRequest,
     ImportStateResponse, NavigateRequest, OpenContextRequest, OpenContextResponse, PageResult,
-    SelftestRequest, SelftestResponse, TOKEN_HEADER,
+    SelftestRequest, SelftestResponse, TOKEN_HEADER, UpgradePersonaRequest, UpgradePersonaResponse,
 };
 use crate::error::BrowserError;
 use crate::ssrf::{self, DeniedHop};
@@ -97,6 +97,7 @@ pub const IMPLEMENTED_OPERATIONS: &[&str] = &[
     "health",
     "metrics",
     "generate_persona",
+    "upgrade_persona",
     "open_context",
     "close_context",
     "navigate",
@@ -451,6 +452,23 @@ impl SidecarClient {
         request: &GeneratePersonaRequest,
     ) -> Result<GeneratePersonaResponse, BrowserError> {
         self.post("generate_persona", "/v1/personas/generate", request)
+            .await
+    }
+
+    /// `POST /v1/personas/upgrade` (contract 1.4.0): moves a stored
+    /// fingerprint to the browser major the sidecar runs, as a browser's own
+    /// update moves it; a document of that major comes back unchanged with
+    /// `upgraded` false.
+    ///
+    /// # Errors
+    ///
+    /// See [`BrowserError`]; `browser_major_mismatch` when the document is of
+    /// a newer major than the sidecar's browser.
+    pub async fn upgrade_persona(
+        &self,
+        request: &UpgradePersonaRequest,
+    ) -> Result<UpgradePersonaResponse, BrowserError> {
+        self.post("upgrade_persona", "/v1/personas/upgrade", request)
             .await
     }
 

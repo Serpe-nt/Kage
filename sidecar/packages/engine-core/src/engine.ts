@@ -8,6 +8,8 @@ import type {
   FlowRequest,
   GeneratePersonaRequest,
   GeneratePersonaResponse,
+  UpgradePersonaRequest,
+  UpgradePersonaResponse,
   ImportStateRequest,
   ImportStateResponse,
   NavigateRequest,
@@ -77,6 +79,12 @@ export interface Engine {
   readonly name: EngineName;
   status(): EngineStatus;
   generatePersona(request: GeneratePersonaRequest): Promise<GeneratePersonaResponse>;
+  /**
+   * Moves a stored fingerprint to the browser major the engine runs, as a
+   * browser's own update moves it (contract 1.4.0): deterministic, and a
+   * document of that major comes back unchanged.
+   */
+  upgradePersona(request: UpgradePersonaRequest): Promise<UpgradePersonaResponse>;
   /** Opens a context. The server enforces the cap, the idle close and the one-context-per-persona rule. */
   openContext(request: OpenContextRequest): Promise<EngineContext>;
   /** Releases every browser resource. Safe to call more than once. */
@@ -132,6 +140,7 @@ export function createStubEngine(name: EngineName): Engine {
     name,
     status: () => ({ browserVersion: null }),
     generatePersona: refuse,
+    upgradePersona: refuse,
     openContext: refuse,
     close: () => Promise.resolve(),
   };

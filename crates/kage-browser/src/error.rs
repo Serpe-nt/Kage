@@ -130,4 +130,11 @@ impl BrowserError {
     pub const fn is_context_busy(&self) -> bool {
         matches!(self.code(), Some(ErrorCode::ContextBusy))
     }
+
+    /// Whether the engine bundles another browser major than the request
+    /// names: a persona of an older major is moved with
+    /// [`crate::SidecarClient::upgrade_persona`] before its context opens.
+    pub const fn is_browser_major_mismatch(&self) -> bool {
+        matches!(self.code(), Some(ErrorCode::BrowserMajorMismatch))
+    }
 }

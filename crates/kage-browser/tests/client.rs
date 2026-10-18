@@ -12,6 +12,7 @@ use common::BodySays;
 use kage_browser::contract::{
     self, ErrorCode, ExportStateRequest, FlowEvent, FlowRequest, GeneratePersonaRequest,
     ImportStateRequest, NavigateRequest, OpenContextRequest, PageResult, SelftestRequest,
+    UpgradePersonaRequest,
 };
 use kage_browser::{
     BrowserError, Closed, Navigation, SidecarClient, SidecarSettings, navigation_bound,
@@ -128,6 +129,12 @@ async fn sidecar_of_the_examples() -> MockServer {
             200,
         ),
         (
+            "/v1/personas/upgrade",
+            "UpgradePersonaRequest",
+            "UpgradePersonaResponse",
+            200,
+        ),
+        (
             "/v1/contexts",
             "OpenContextRequest",
             "OpenContextResponse",
@@ -213,6 +220,15 @@ async fn every_call_carries_the_shared_secret_and_reads_the_contracts_answer() {
         .unwrap();
     assert_eq!(persona.summary.browser_major, 155);
     assert_eq!(persona.fingerprint["schema"], 1);
+    let moved = client
+        .upgrade_persona(&example::<UpgradePersonaRequest>(
+            "UpgradePersonaRequest",
+            0,
+        ))
+        .await
+        .unwrap();
+    assert!(moved.upgraded);
+    assert_eq!(moved.summary.browser_major, 155);
 
     let opened = client
         .open_context(&example::<OpenContextRequest>("OpenContextRequest", 0))
@@ -941,4 +957,25 @@ async fn an_answer_longer_than_the_limit_is_not_read() {
         "{error:?}"
     );
     assert!(error.to_string().contains("longer than"), "{error}");
+}
+
+#[tokio::test]
+async fn a_persona_of_another_major_is_refused_with_a_code_the_caller_acts_on() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/contexts"))
+        .respond_with(ResponseTemplate::new(409).set_body_json(json!({
+            "code": "browser_major_mismatch",
+            "message": "the persona was made for firefox 152 and this engine runs 156.0.1: move it with POST /v1/personas/upgrade first"
+        })))
+        .mount(&server)
+        .await;
+    let client = client(&server);
+
+    let refused = client
+        .open_context(&example::<OpenContextRequest>("OpenContextRequest", 0))
+        .await
+        .unwrap_err();
+    assert!(refused.is_browser_major_mismatch(), "{refused:?}");
+    assert!(!refused.is_context_conflict() && !refused.is_context_gone());
 }

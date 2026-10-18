@@ -5,7 +5,12 @@ import { OpenContextRequestSchema, OpenContextResponseSchema } from './contexts.
 import { FlowEventSchema, FlowRequestSchema } from './flow.js';
 import { HealthResponseSchema } from './health.js';
 import { NavigateRequestSchema, PageResultSchema } from './navigate.js';
-import { GeneratePersonaRequestSchema, GeneratePersonaResponseSchema } from './personas.js';
+import {
+  GeneratePersonaRequestSchema,
+  GeneratePersonaResponseSchema,
+  UpgradePersonaRequestSchema,
+  UpgradePersonaResponseSchema,
+} from './personas.js';
 import { SelftestRequestSchema, SelftestResponseSchema } from './selftest.js';
 import {
   ExportStateRequestSchema,
@@ -99,6 +104,16 @@ export const ENDPOINTS = {
     request: GeneratePersonaRequestSchema,
     response: json(200, GeneratePersonaResponseSchema, 'The fingerprint and its summary.'),
     errors: ['cross_os_claim_disabled', 'browser_major_mismatch', 'not_implemented'],
+  },
+  upgradePersona: {
+    operation: 'upgrade_persona',
+    method: 'POST',
+    path: `${prefix}/personas/upgrade`,
+    summary:
+      "Move a stored fingerprint to the browser major the engine runs, as a user's browser updates itself (1.4.0).",
+    request: UpgradePersonaRequestSchema,
+    response: json(200, UpgradePersonaResponseSchema, 'The moved fingerprint and its summary.'),
+    errors: ['browser_major_mismatch', 'not_implemented'],
   },
   openContext: {
     operation: 'open_context',

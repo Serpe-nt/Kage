@@ -78,6 +78,7 @@ describe('the shared secret', () => {
       ['GET', '/v1/health'],
       ['GET', '/v1/metrics'],
       ['POST', '/v1/personas/generate'],
+      ['POST', '/v1/personas/upgrade'],
       ['POST', '/v1/contexts'],
       ['DELETE', '/v1/contexts/0199c1f3-0a1b-7d2c-8e3f-4a5b6c7d8e9f'],
       ['POST', '/v1/contexts/0199c1f3-0a1b-7d2c-8e3f-4a5b6c7d8e9f/navigate'],
@@ -117,7 +118,7 @@ describe('GET /v1/health', () => {
       contexts_in_use: 1,
       max_contexts: 2,
       uptime_seconds: 2.5,
-      contract_version: '1.3.0',
+      contract_version: '1.4.0',
     });
   });
 
@@ -162,6 +163,11 @@ describe('GET /v1/health', () => {
       501,
       'not_implemented',
     );
+    expectError(
+      await post(app, '/v1/personas/upgrade', exampleOf('UpgradePersonaRequest')),
+      501,
+      'not_implemented',
+    );
   });
 });
 
@@ -171,6 +177,15 @@ describe('personas and contexts', () => {
     const response = await post(app, '/v1/personas/generate', exampleOf('GeneratePersonaRequest'));
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual(exampleOf('GeneratePersonaResponse'));
+  });
+
+  it("moves a stored persona to the engine's browser through the engine (1.4.0)", async () => {
+    const { app } = await start();
+    const response = await post(app, '/v1/personas/upgrade', exampleOf('UpgradePersonaRequest'));
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(exampleOf('UpgradePersonaResponse'));
+    // A body that is no document is the contract's to refuse.
+    expectError(await post(app, '/v1/personas/upgrade', {}), 400, 'invalid_request');
   });
 
   it('opens a context once per persona and returns the open one for the same request', async () => {

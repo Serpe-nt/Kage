@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, stat, symlink, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -29,9 +29,12 @@ import {
   detectHost,
   drawWebgl,
   firefoxUiLocale,
+  firefoxUserAgentOf,
   generateFingerprint,
   generatedOf,
   generatorId,
+  keepBeforeUpgrade,
+  keptProfileDir,
   launchPlan,
   launcherVersion,
   localeConfig,
@@ -41,8 +44,10 @@ import {
   personaFontconfig,
   plausibleRenderer,
   preferenceEnvironment,
+  profileMajor,
   profilePaths,
   readArchiveEntry,
+  upgradeFingerprint,
   validateConfig,
   webgpuPreferences,
   type CamoufoxConfig,
@@ -77,6 +82,13 @@ const request = (document: FingerprintDocument, change: Partial<OpenContextReque
     profile_dir: 'personas/p1',
     ...change,
   }) satisfies OpenContextRequest;
+
+/** Whether a file or directory exists. */
+const exists = (file: string) =>
+  stat(file).then(
+    () => true,
+    () => false,
+  );
 
 /** Whether the process has loaded ua-parser-js, by whatever way. */
 const uaParserLoaded = () =>
@@ -861,10 +873,155 @@ describe('the engine before it launches anything', () => {
     await expect(
       engine.openContext(request({ ...document, engine: 'chromium' })),
     ).rejects.toMatchObject({ code: 'invalid_request' });
-    await expect(
-      engine.openContext(request({ ...document, browser_version: '151.0.1' })),
-    ).rejects.toMatchObject({ code: 'browser_major_mismatch' });
+    const older = await engine
+      .openContext(request({ ...document, browser_version: '152.0.4' }))
+      .catch((error: unknown) => error);
+    expect(older).toMatchObject({ code: 'browser_major_mismatch' });
+    expect((older as EngineError).message).toContain('POST /v1/personas/upgrade');
     await engine.close();
+  });
+});
+
+/** A document of this build as Firefox `major` would have made it: the same device, an older browser. */
+const asOf = (document: FingerprintDocument, version: string): FingerprintDocument => {
+  const major = Number(version.split('.')[0]);
+  const userAgent = firefoxUserAgentOf(document.user_agent, 156, major);
+  const generated = generatedOf(document);
+  return {
+    ...document,
+    browser_version: version,
+    user_agent: userAgent,
+    generated: {
+      ...generated,
+      config: { ...generated.config, 'navigator.userAgent': userAgent },
+    },
+  };
+};
+
+describe('moving a persona to a newer Firefox (contract 1.4.0)', () => {
+  it("rewrites the major in both places of a Firefox User-Agent, and nothing that isn't one", () => {
+    for (const os of SYSTEMS) {
+      const userAgent = generate(os).user_agent;
+      const older = firefoxUserAgentOf(userAgent, 156, 152);
+      expect(older).toContain('rv:152.0)');
+      expect(older.endsWith('Firefox/152.0')).toBe(true);
+      expect(firefoxUserAgentOf(older, 152, 156)).toBe(userAgent);
+    }
+    expect(() =>
+      firefoxUserAgentOf(
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36',
+        152,
+        156,
+      ),
+    ).toThrow(expect.objectContaining({ code: 'invalid_request' }) as Error);
+  });
+
+  it('gives a persona moved from Firefox 152 the document a new one of this build has', () => {
+    for (const os of SYSTEMS) {
+      const made = generate(os);
+      const moved = upgradeFingerprint(asOf(made, '152.0.4'), host.version);
+      expect(moved.upgraded, os).toBe(true);
+      expect(moved.document, os).toEqual(made);
+      // A document of this build stays as it is.
+      expect(upgradeFingerprint(made, host.version)).toEqual({ document: made, upgraded: false });
+    }
+    const made = generate('windows');
+    expect(() => upgradeFingerprint({ ...made, engine: 'chromium' }, host.version)).toThrow(
+      expect.objectContaining({ code: 'invalid_request' }) as Error,
+    );
+    // A browser does not go back to an older major.
+    expect(() => upgradeFingerprint(asOf(made, '157.0'), host.version)).toThrow(
+      expect.objectContaining({ code: 'browser_major_mismatch' }) as Error,
+    );
+  });
+
+  it('moves a document through the engine', async () => {
+    const engine = new FirefoxEngine(
+      {
+        personasDir: await mkdtemp(path.join(tmpdir(), 'kage-firefox-up-')),
+        allowCrossOsClaims: false,
+        gl: 'llvmpipe',
+        selftestPages: [],
+        log: silentLog,
+      },
+      host,
+    );
+    const made = generate('macos');
+    const answer = await engine.upgradePersona({ fingerprint: asOf(made, '152.0.4') });
+    expect(answer).toMatchObject({ upgraded: true, summary: { browser_major: 156 } });
+    expect(answer.fingerprint).toEqual(made);
+    await expect(
+      engine.upgradePersona({ fingerprint: { not: 'a document' } }),
+    ).rejects.toMatchObject({ code: 'invalid_request' });
+    await engine.close();
+  });
+
+  it('keeps the profile as it was before its first start under a newer major, once', async () => {
+    const personas = await mkdtemp(path.join(tmpdir(), 'kage-firefox-keep-'));
+    const profileDir = path.join(personas, 'firefox', 'p1');
+    const { userData } = profilePaths(profileDir);
+    await mkdir(path.join(userData, 'cache2'), { recursive: true });
+    await mkdir(path.join(userData, 'startupCache'), { recursive: true });
+    await writeFile(
+      path.join(userData, 'compatibility.ini'),
+      '[Compatibility]\nLastVersion=152.0.4-beta.30_20260831224106/20260831224106\n',
+    );
+    await writeFile(path.join(userData, 'cookies.sqlite'), 'the cookies');
+    await writeFile(path.join(userData, 'cache2', 'entry'), 'a cached page');
+    await symlink('127.0.0.1:+4242', path.join(userData, 'lock'));
+    expect(await profileMajor(userData)).toBe(152);
+    const keep = (hostVersion = host.version, dir = profileDir) =>
+      keepBeforeUpgrade({
+        personasDir: personas,
+        personaId: '0199c1f2-6b7a-7c3e-9d41-2f8a5b6c7d8e',
+        profileDir: dir,
+        relativeProfileDir: 'firefox/p1',
+        userData: profilePaths(dir).userData,
+        hostVersion,
+        now: new Date('2026-10-18T20:00:00Z'),
+      });
+
+    // Not for a profile of this major or a newer one.
+    expect(await keep('152.0.4')).toBeNull();
+    const kept = await keep();
+    expect(kept).toBe(keptProfileDir(personas, '0199c1f2-6b7a-7c3e-9d41-2f8a5b6c7d8e'));
+    expect(kept).toBe(path.join(personas, '.upgrade', '0199c1f2-6b7a-7c3e-9d41-2f8a5b6c7d8e'));
+    const keptData = path.join(kept ?? '', 'user-data');
+    expect(await readFile(path.join(keptData, 'cookies.sqlite'), 'utf8')).toBe('the cookies');
+    expect(await readFile(path.join(keptData, 'compatibility.ini'), 'utf8')).toContain('152.0.4');
+    // Caches Firefox builds again, and a lock of a browser, are left out.
+    for (const left of ['cache2', 'startupCache', 'lock']) {
+      expect(await exists(path.join(keptData, left)), left).toBe(false);
+    }
+    expect(JSON.parse(await readFile(path.join(kept ?? '', 'upgrade.json'), 'utf8'))).toEqual({
+      persona_id: '0199c1f2-6b7a-7c3e-9d41-2f8a5b6c7d8e',
+      profile_dir: 'firefox/p1',
+      from_major: 152,
+      to_version: '156.0.1',
+      copied_at: '2026-10-18T20:00:00.000Z',
+    });
+    // The first copy is the profile as it was: a later open takes none.
+    await writeFile(path.join(userData, 'cookies.sqlite'), 'cookies of the new browser');
+    expect(await keep()).toBeNull();
+    expect(await readFile(path.join(keptData, 'cookies.sqlite'), 'utf8')).toBe('the cookies');
+    // A new profile has nothing to keep.
+    const fresh = path.join(personas, 'firefox', 'p2');
+    expect(await keep(host.version, fresh)).toBeNull();
+    expect(await profileMajor(profilePaths(fresh).userData)).toBeNull();
+    // A copy that cannot be written leaves nothing half written behind.
+    const blocked = await mkdtemp(path.join(tmpdir(), 'kage-firefox-blocked-'));
+    await writeFile(path.join(blocked, '.upgrade'), 'a file where the directory goes');
+    await expect(
+      keepBeforeUpgrade({
+        personasDir: blocked,
+        personaId: 'p1',
+        profileDir,
+        relativeProfileDir: 'firefox/p1',
+        userData,
+        hostVersion: host.version,
+        now: new Date(),
+      }),
+    ).rejects.toThrow();
   });
 });
 

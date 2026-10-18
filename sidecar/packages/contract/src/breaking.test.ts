@@ -431,7 +431,7 @@ describe('findBreakingChanges', () => {
     delete schemas['PageLink'];
     delete schemas['ScrollEnd'];
     before.info['version'] = '1.2.0';
-    expect(now.info['version']).toBe('1.3.0');
+    expect(now.info['version']).toBe('1.4.0');
     const current = now.components['schemas'] as Record<string, JsonObject>;
     // Asked for with optional fields only, so that a caller of 1.2.0 is still served.
     for (const [name, fields] of [
@@ -479,6 +479,26 @@ describe('findBreakingChanges', () => {
     ]) {
       expect(lost, line).toContain(line);
     }
+  });
+
+  it('takes the move of a fingerprint to a new major (1.4.0) as an addition, and its removal as a break', () => {
+    const now = buildOpenApiDocument();
+    // The document as it was at 1.3.0: no upgrade endpoint, none of its schemas.
+    const before = structuredClone(now);
+    delete (before.paths as Record<string, unknown>)['/v1/personas/upgrade'];
+    const schemas = before.components['schemas'] as Record<string, JsonObject>;
+    delete schemas['UpgradePersonaRequest'];
+    delete schemas['UpgradePersonaResponse'];
+    before.info['version'] = '1.3.0';
+    expect(checkBreaking(before, now)).toEqual({ changes: [], majorBumped: false, ok: true });
+    expect(
+      findBreakingChanges(now, before).map((change) => `${change.where}: ${change.what}`),
+    ).toContain('POST /v1/personas/upgrade: the operation was removed');
+    // A sidecar of 1.4.0 still answers everything a caller of 1.3.0 asks.
+    const current = now.components['schemas'] as Record<string, JsonObject>;
+    expect(named(current, 'UpgradePersonaResponse')['required']).toEqual(
+      expect.arrayContaining(['fingerprint', 'summary', 'upgraded']),
+    );
   });
 
   it('compares a schema used twice only once per direction', () => {

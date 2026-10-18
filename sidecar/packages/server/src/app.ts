@@ -8,6 +8,7 @@ import {
   ExportStateResponseSchema,
   FlowEventSchema,
   GeneratePersonaResponseSchema,
+  UpgradePersonaResponseSchema,
   HealthResponseSchema,
   ImportStateResponseSchema,
   OpenContextResponseSchema,
@@ -306,6 +307,12 @@ export function buildApp(options: AppOptions): App {
     ENDPOINTS.generatePersona,
     GeneratePersonaResponseSchema,
     (body) => engine.generatePersona(body),
+  );
+
+  json<typeof ENDPOINTS.upgradePersona.request, typeof UpgradePersonaResponseSchema>(
+    ENDPOINTS.upgradePersona,
+    UpgradePersonaResponseSchema,
+    (body) => engine.upgradePersona(body),
   );
 
   json<typeof ENDPOINTS.openContext.request, typeof OpenContextResponseSchema>(

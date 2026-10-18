@@ -10,6 +10,7 @@ export * from './fontconfig.js';
 export * from './host.js';
 export * from './launch-plan.js';
 export * from './omni.js';
+export * from './upgrade.js';
 
 /**
  * Creates the Firefox engine: Camoufox on one virtual display per persona.

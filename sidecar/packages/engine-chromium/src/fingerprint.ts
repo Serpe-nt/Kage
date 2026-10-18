@@ -82,6 +82,23 @@ function userAgentFor(os: ClaimedOs, major: number, generatedUserAgent: string):
 }
 
 /**
+ * A Chrome `User-Agent` of one major as the same browser's of another:
+ * Chrome's reduced string names the major alone (`Chrome/155.0.0.0`). What
+ * an injection script says is built from the document at launch, so the
+ * version and this string are all that moves (contract 1.4.0).
+ *
+ * @throws {EngineError} `invalid_request` when it is not a Chrome
+ *   `User-Agent` of that major.
+ */
+export function chromeUserAgentOf(userAgent: string, from: number, to: number): string {
+  const moved = userAgent.replace(`Chrome/${from}.0.0.0`, `Chrome/${to}.0.0.0`);
+  if (!moved.includes(`Chrome/${to}.0.0.0`)) {
+    throw new EngineError('invalid_request', `not a User-Agent of Chrome ${from}: ${userAgent}`);
+  }
+  return moved;
+}
+
+/**
  * Generates the fingerprint document of a persona (spec §6.1 step 3).
  *
  * The generator draws from `Math.random()` and takes no seed, so the draw

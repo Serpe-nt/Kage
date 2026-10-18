@@ -6,10 +6,13 @@ import type {
   GeneratePersonaRequest,
   GeneratePersonaResponse,
   OpenContextRequest,
+  UpgradePersonaRequest,
+  UpgradePersonaResponse,
 } from '@kage/contract';
 import {
   EngineError,
   majorOfVersion,
+  moveToVersion,
   DisplayPool,
   parseFingerprint,
   startXvfb,
@@ -23,7 +26,12 @@ import {
 import { chromium, type BrowserContext } from 'patchright';
 
 import { ChromiumContext } from './context.js';
-import { buildInjection, generateFingerprint, type Injection } from './fingerprint.js';
+import {
+  buildInjection,
+  chromeUserAgentOf,
+  generateFingerprint,
+  type Injection,
+} from './fingerprint.js';
 import type { HostFacts } from './host.js';
 import { cpuListOf, launchPlan } from './launch-plan.js';
 import { PageReader } from './page-reader.js';
@@ -73,6 +81,26 @@ export class ChromiumEngine implements Engine {
     }
   }
 
+  upgradePersona(request: UpgradePersonaRequest): Promise<UpgradePersonaResponse> {
+    try {
+      const stored = parseFingerprint(request.fingerprint);
+      if (stored.engine !== 'chromium') {
+        throw new EngineError(
+          'invalid_request',
+          `a ${stored.engine} fingerprint is not moved by the chromium engine`,
+        );
+      }
+      const { document, upgraded } = moveToVersion(
+        stored,
+        this.host.chromeVersion,
+        chromeUserAgentOf,
+      );
+      return Promise.resolve({ fingerprint: document, summary: summarize(document), upgraded });
+    } catch (error) {
+      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
   async openContext(request: OpenContextRequest): Promise<EngineContext> {
     const document = parseFingerprint(request.fingerprint);
     if (document.engine !== 'chromium') {
@@ -91,7 +119,7 @@ export class ChromiumEngine implements Engine {
     if (majorOfVersion(document.browser_version) !== installed) {
       throw new EngineError(
         'browser_major_mismatch',
-        `the fingerprint was generated for Chrome ${document.browser_version}, the engine runs ${this.host.chromeVersion}: generate it again from its seed`,
+        `the fingerprint was generated for Chrome ${document.browser_version}, the engine runs ${this.host.chromeVersion}: move it with POST /v1/personas/upgrade first`,
       );
     }
     const plan = launchPlan(document, request, { cpus: this.host.cpus, gl: this.options.gl });

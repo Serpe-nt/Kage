@@ -57,10 +57,12 @@ describe('contract basics', () => {
   it('serves everything under the versioned prefix', () => {
     expect(CONTRACT_VERSION).toBe('v1');
     expect(CONTRACT_SEMVER.startsWith('1.')).toBe(true);
-    // 1.2.0 added the pace of a flow (M9). 1.3.0 adds what a crawl needs (M10): the patience
-    // of a page, the click on a link of the open page, and the links of a document. All of
-    // it is optional in the request and additional in the answer.
-    expect(CONTRACT_SEMVER).toBe('1.3.0');
+    // 1.2.0 added the pace of a flow (M9). 1.3.0 added what a crawl needs (M10): the patience
+    // of a page, the click on a link of the open page, and the links of a document. 1.4.0
+    // adds the move of a stored fingerprint to a new browser major (the Camoufox 156
+    // milestone), an endpoint of its own. All of it is optional in a request and
+    // additional in an answer.
+    expect(CONTRACT_SEMVER).toBe('1.4.0');
     expect(HEALTH_PATH).toBe('/v1/health');
     expect(METRICS_PATH).toBe('/v1/metrics');
     for (const endpoint of Object.values<Endpoint>(ENDPOINTS)) {
@@ -72,7 +74,7 @@ describe('contract basics', () => {
     expect(EngineNameSchema.options).toEqual(['chromium', 'firefox']);
   });
 
-  it('has the ten endpoints of spec §10.2', () => {
+  it('has the eleven endpoints of spec §10.2', () => {
     const table = Object.values<Endpoint>(ENDPOINTS).map(
       (endpoint) => `${endpoint.method} ${endpoint.path}`,
     );
@@ -80,6 +82,7 @@ describe('contract basics', () => {
       'GET /v1/health',
       'GET /v1/metrics',
       'POST /v1/personas/generate',
+      'POST /v1/personas/upgrade',
       'POST /v1/contexts',
       'DELETE /v1/contexts/{id}',
       'POST /v1/contexts/{id}/navigate',
@@ -90,7 +93,7 @@ describe('contract basics', () => {
     ]);
     expect(
       new Set(Object.values<Endpoint>(ENDPOINTS).map((endpoint) => endpoint.operation)).size,
-    ).toBe(10);
+    ).toBe(11);
   });
 
   it('gives every error code one status and every endpoint known codes', () => {
