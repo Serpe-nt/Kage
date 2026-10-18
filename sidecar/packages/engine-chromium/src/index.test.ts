@@ -20,6 +20,7 @@ import {
   WEBRTC_POLICY,
   allowedCpus,
   buildInjection,
+  captureWhenDrawn,
   chromeBrands,
   classifyNavigationError,
   cpuListOf,
@@ -545,6 +546,50 @@ describe('profile preferences', () => {
     await writeFile(paths.preferences, '{ not json');
     await prepareProfile(root, preferences);
     expect(JSON.parse(await readFile(paths.preferences, 'utf8'))).toEqual(preferences);
+  });
+});
+
+describe('captureWhenDrawn', () => {
+  const noFrame = () =>
+    new Error('Protocol error (Page.captureScreenshot): Unable to capture screenshot');
+
+  it('asks again while the page has no frame, and gives up at its limit', async () => {
+    const waits: number[] = [];
+    const wait = (ms: number) => {
+      waits.push(ms);
+      return Promise.resolve();
+    };
+    let asked = 0;
+    // The third answer is a picture.
+    const late = () => {
+      asked += 1;
+      return asked < 3 ? Promise.reject(noFrame()) : Promise.resolve('picture');
+    };
+    await expect(captureWhenDrawn(late, 2000, wait)).resolves.toBe('picture');
+    expect(asked).toBe(3);
+    expect(waits).toEqual([100, 100]);
+    // A page that never draws: twenty-one questions, then the error.
+    asked = 0;
+    waits.length = 0;
+    const never = () => {
+      asked += 1;
+      return Promise.reject(noFrame());
+    };
+    await expect(captureWhenDrawn(never, 2000, wait)).rejects.toThrow('Unable to capture');
+    expect(asked).toBe(21);
+    expect(waits.reduce((sum, ms) => sum + ms, 0)).toBe(2000);
+  });
+
+  it('throws any other failure at once', async () => {
+    let asked = 0;
+    const gone = () => {
+      asked += 1;
+      return Promise.reject(new Error('Target closed'));
+    };
+    await expect(captureWhenDrawn(gone, 2000, () => Promise.resolve())).rejects.toThrow(
+      'Target closed',
+    );
+    expect(asked).toBe(1);
   });
 });
 

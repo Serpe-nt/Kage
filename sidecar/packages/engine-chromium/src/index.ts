@@ -4,7 +4,7 @@ import { ChromiumEngine } from './engine.js';
 import { DEFAULT_CHROME_PATH, detectHost } from './host.js';
 
 export { CHROME_WRAPPER, ChromiumEngine } from './engine.js';
-export { ChromiumContext, classifyNavigationError } from './context.js';
+export { ChromiumContext, captureWhenDrawn, classifyNavigationError } from './context.js';
 export {
   DEFAULT_POLL_MS,
   PageReadError,
