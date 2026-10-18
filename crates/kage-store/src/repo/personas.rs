@@ -310,7 +310,9 @@ impl PersonaRepo<'_> {
     /// position), what an engine upgrade moves (browser major, wreq
     /// profile, user agent), the warm-up counters, and the retirement and
     /// archive marks. The identity (engine, system, seed, fingerprint,
-    /// screen, profile directory) is written once and never again.
+    /// screen, profile directory) is written once and never again here; an
+    /// engine upgrade moves the fingerprint's browser version with
+    /// [`Self::upgrade_browser`] alone.
     ///
     /// Returns `None` when the persona does not exist; `change` is not
     /// called then.
@@ -332,6 +334,81 @@ impl PersonaRepo<'_> {
         write(&mut transaction, &persona).await?;
         transaction.commit().await?;
         Ok(Some(result))
+    }
+}
+
+/// What an engine upgrade moves of a persona (spec §6.2): the fingerprint
+/// document as the engine's sidecar moved it to the new browser major, and
+/// the columns that follow the major.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BrowserUpgrade {
+    /// The moved document, exactly as the sidecar answered it.
+    pub fingerprint: serde_json::Value,
+    /// The browser major it belongs to.
+    pub browser_major: u32,
+    /// The `User-Agent` of the moved document.
+    pub user_agent: String,
+    /// The wreq-util profile of the new major; `None` keeps the persona
+    /// browser-only.
+    pub wreq_profile: Option<String>,
+}
+
+/// A persona after [`PersonaRepo::upgrade_browser`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct Upgraded {
+    /// The persona as it is stored now.
+    pub persona: Persona,
+    /// Whether this call moved it: `false` when it was no longer of the
+    /// major it was to be moved from.
+    pub moved: bool,
+}
+
+impl PersonaRepo<'_> {
+    /// Moves a persona to the browser major its engine runs, in one
+    /// transaction under the row lock: the only write of a fingerprint after
+    /// generation, and nothing else of the identity moves.
+    ///
+    /// The move is made only while the persona is still of `from_major`: a
+    /// persona another process moved first is returned as it is stored,
+    /// with [`Upgraded::moved`] false. Returns `None` when the persona does
+    /// not exist.
+    ///
+    /// # Errors
+    ///
+    /// Fails when a query fails or the row does not parse; nothing is
+    /// written in that case.
+    pub async fn upgrade_browser(
+        &self,
+        id: PersonaId,
+        from_major: u32,
+        upgrade: &BrowserUpgrade,
+    ) -> Result<Option<Upgraded>, StoreError> {
+        const TABLE: &str = "personas";
+        let mut transaction = self.pool.begin().await?;
+        let Some(mut persona) = lock_row(&mut transaction, id).await? else {
+            return Ok(None);
+        };
+        let moved = persona.browser_major == from_major;
+        if moved {
+            sqlx::query!(
+                "UPDATE personas
+                 SET fingerprint = $2, browser_major = $3, user_agent = $4, wreq_profile = $5
+                 WHERE id = $1",
+                id.as_uuid(),
+                upgrade.fingerprint,
+                to_i32((TABLE, "browser_major"), upgrade.browser_major)?,
+                upgrade.user_agent,
+                upgrade.wreq_profile,
+            )
+            .execute(&mut *transaction)
+            .await?;
+            persona.fingerprint = upgrade.fingerprint.clone();
+            persona.browser_major = upgrade.browser_major;
+            persona.user_agent.clone_from(&upgrade.user_agent);
+            persona.wreq_profile.clone_from(&upgrade.wreq_profile);
+        }
+        transaction.commit().await?;
+        Ok(Some(Upgraded { persona, moved }))
     }
 }
 

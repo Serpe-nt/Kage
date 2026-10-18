@@ -1032,10 +1032,13 @@ impl PathExecutor {
             Ok(route) => route,
             Err(error) => return Self::unavailable(&error),
         };
-        let lease = match self.manager.contexts().acquire(persona, &endpoint).await {
-            Ok(lease) => lease,
+        let (lease, moved) = match self.manager.open_browser(persona, &endpoint).await {
+            Ok(opened) => opened,
             Err(error) => return Self::unavailable(&error),
         };
+        // A persona whose engine runs a newer browser goes on as it was
+        // moved and stored.
+        let persona = moved.as_ref().unwrap_or(persona);
         let context = lease.context();
         let origin = origin_of(&job.url);
 

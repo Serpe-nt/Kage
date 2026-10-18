@@ -273,7 +273,10 @@ impl PersonaManager {
             },
         };
         let sidecar = self.sidecars.of(persona.engine);
-        let lease = self.contexts().acquire(persona, &endpoint).await?;
+        let (lease, moved) = self.open_browser(persona, &endpoint).await?;
+        // A persona whose engine runs a newer browser visits as it was
+        // moved and stored.
+        let persona = moved.as_ref().unwrap_or(persona);
         let context = lease.context();
         domains.record_request(persona, &domain).await?;
         let timeout_ms =

@@ -205,6 +205,7 @@ pub struct SidecarState {
     pub exported: Vec<Value>,
     pub imported: Vec<Value>,
     pub selftested: Vec<Value>,
+    pub upgraded: Vec<Value>,
 }
 
 /// A self-test answer: complete, with one finding.
@@ -228,6 +229,17 @@ pub fn selftest_answer(passed: bool) -> Value {
 struct SidecarResponder {
     engine: Engine,
     state: Arc<Mutex<SidecarState>>,
+}
+
+/// The browser major a document was made or moved for, as the mock writes
+/// it; `None` for a document that names none.
+fn major_of(document: &Value) -> Option<u64> {
+    document["browser_version"]
+        .as_str()?
+        .split('.')
+        .next()?
+        .parse()
+        .ok()
 }
 
 fn user_agent(engine: Engine, os: &str, major: u64) -> String {
@@ -270,6 +282,7 @@ impl SidecarResponder {
             "schema": 1,
             "seed": seed,
             "claimed_os": os,
+            "browser_version": format!("{}.0.1", state.major),
             "native": { "screen": screen, "hardware_concurrency": cores },
         });
         let summary = &mut answer["summary"];
@@ -288,6 +301,39 @@ impl SidecarResponder {
         };
         ResponseTemplate::new(200).set_body_json(answer)
     }
+
+    /// Moves a document to the major the mock bundles, as an engine does:
+    /// the version and the `User-Agent`, nothing of the device.
+    fn upgrade(&self, request: &Value) -> ResponseTemplate {
+        let mut state = self.state.lock().unwrap();
+        state.upgraded.push(request.clone());
+        let mut document = request["fingerprint"].clone();
+        let from = major_of(&document).unwrap_or(state.major);
+        if from > state.major {
+            return ResponseTemplate::new(409).set_body_json(json!({
+                "code": "browser_major_mismatch",
+                "message": "the document is of a newer browser than this engine runs",
+            }));
+        }
+        document["browser_version"] = json!(format!("{}.0.1", state.major));
+        let os = document["claimed_os"]
+            .as_str()
+            .unwrap_or("linux")
+            .to_owned();
+        let mut answer = example("UpgradePersonaResponse");
+        let summary = &mut answer["summary"];
+        summary["engine"] = json!(self.engine.as_str());
+        summary["claimed_os"] = json!(os);
+        summary["browser_major"] = json!(state.major);
+        summary["browser_version"] = json!(format!("{}.0.1", state.major));
+        summary["user_agent"] = json!(user_agent(self.engine, &os, state.major));
+        summary["screen"] = document["native"]["screen"].clone();
+        summary["hardware_concurrency"] = document["native"]["hardware_concurrency"].clone();
+        summary["seed"] = document["seed"].clone();
+        answer["upgraded"] = json!(from != state.major);
+        answer["fingerprint"] = document;
+        ResponseTemplate::new(200).set_body_json(answer)
+    }
 }
 
 impl Respond for SidecarResponder {
@@ -298,12 +344,22 @@ impl Respond for SidecarResponder {
         if method == "POST" && path == "/v1/personas/generate" {
             return self.generate(&body);
         }
+        if method == "POST" && path == "/v1/personas/upgrade" {
+            return self.upgrade(&body);
+        }
         let mut state = self.state.lock().unwrap();
         if method == "POST" && path == "/v1/contexts" {
             let persona = body["persona_id"].as_str().unwrap_or_default().to_owned();
             let mut answer = example("OpenContextResponse");
             answer["persona_id"] = json!(persona);
             state.opened.push(body.clone());
+            // A document of another major than the engine runs is refused.
+            if major_of(&body["fingerprint"]).is_some_and(|major| major != state.major) {
+                return ResponseTemplate::new(409).set_body_json(json!({
+                    "code": "browser_major_mismatch",
+                    "message": "the persona was made for another browser: move it first",
+                }));
+            }
             // Opening is idempotent: the open context is handed back as it
             // is, unless it was opened with other parameters.
             if let Some((context, opened_with)) = state.contexts.get(&persona) {
@@ -397,6 +453,7 @@ impl MockSidecar {
             exported: Vec::new(),
             imported: Vec::new(),
             selftested: Vec::new(),
+            upgraded: Vec::new(),
         }));
         let server = MockServer::start().await;
         Mock::given(any())

@@ -73,6 +73,15 @@ pub enum PersonaError {
         /// What differs.
         reason: String,
     },
+    /// The persona's engine runs a newer browser major than the persona
+    /// was made for, and the sidecar's move of it is not one Kage stores.
+    #[error("persona {persona} cannot be moved to the browser its engine runs: {reason}")]
+    Upgrade {
+        /// The persona.
+        persona: PersonaId,
+        /// What is wrong with the move.
+        reason: String,
+    },
     /// The persona's stored fingerprint is not a document a sidecar can
     /// take.
     #[error("the stored fingerprint of persona {0} is not a JSON object")]
