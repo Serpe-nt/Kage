@@ -20,6 +20,7 @@ import {
   CAMOUFOX_RELEASE,
   CAMOUFOX_VERSION,
   FirefoxEngine,
+  NEVER_APPLIED,
   OSCPU,
   basePreferences,
   classifyNavigationError,
@@ -27,6 +28,7 @@ import {
   cpuListOf,
   detectHost,
   drawWebgl,
+  firefoxUiLocale,
   generateFingerprint,
   generatedOf,
   generatorId,
@@ -38,9 +40,11 @@ import {
   parseRemovedProperties,
   personaFontconfig,
   plausibleRenderer,
+  preferenceEnvironment,
   profilePaths,
   readArchiveEntry,
   validateConfig,
+  webgpuPreferences,
   type CamoufoxConfig,
   type HostFacts,
 } from './index.js';
@@ -580,8 +584,13 @@ describe('launchPlan', () => {
   it('adds what Kage says about language, time and place, and nothing it looked up', () => {
     const document = generate('windows');
     const plan = launchPlan(document, request(document), host, '/p/page.pdf');
+    const sent = Object.fromEntries(
+      Object.entries(generatedOf(document).config).filter(
+        ([key]) => !host.removedProperties.has(key) && !NEVER_APPLIED.includes(key),
+      ),
+    );
     expect(plan.config).toMatchObject({
-      ...generatedOf(document).config,
+      ...sent,
       'locale:language': 'de',
       'locale:region': 'DE',
       'locale:all': 'de-DE, de, en',
@@ -600,17 +609,26 @@ describe('launchPlan', () => {
     });
     expect(plan.cpus.length).toBe(Math.min(16, host.cpus.length));
     expect(cpuListOf(plan)).toMatch(/^\d+([-,]\d+)*$/);
-    // The configuration reaches the browser whole, in chunks it can read.
-    const joined = Object.entries(plan.configEnv)
-      .sort(([a], [b]) => Number(a.split('_').at(-1)) - Number(b.split('_').at(-1)))
-      .map(([, value]) => value)
-      .join('');
-    expect(JSON.parse(joined)).toEqual(plan.config);
+    // The configuration and the preferences reach the browser whole, in
+    // chunks it can read.
+    const joined = (prefix: string) =>
+      Object.entries(plan.configEnv)
+        .filter(([name]) => name.startsWith(prefix))
+        .sort(([a], [b]) => Number(a.split('_').at(-1)) - Number(b.split('_').at(-1)))
+        .map(([, value]) => value)
+        .join('');
+    expect(JSON.parse(joined('CAMOU_CONFIG_'))).toEqual(plan.config);
+    expect(JSON.parse(joined('CAMOU_PREFS_'))).toEqual(plan.preferences);
     expect(Object.keys(configEnvironment({ fonts: ['x'.repeat(70_000)] }))).toEqual([
       'CAMOU_CONFIG_1',
       'CAMOU_CONFIG_2',
       'CAMOU_CONFIG_3',
     ]);
+    expect(Object.keys(preferenceEnvironment({ a: 'x'.repeat(40_000) }))).toEqual([
+      'CAMOU_PREFS_1',
+      'CAMOU_PREFS_2',
+    ]);
+    expect(preferenceEnvironment({})).toEqual({});
 
     const nowhere = launchPlan(
       document,
@@ -641,11 +659,116 @@ describe('launchPlan', () => {
       'webgl.enable-webgl2': true,
     });
     expect(basePreferences('/x.pdf')['print_printer']).toBe('Mozilla Save to PDF');
-    // Sound waits for the user, as in a Firefox nobody configured: the
-    // build's own default (0) lets every page play at once.
+    // Sound waits for the user, as in a Firefox nobody configured; the
+    // build ships that default now, and a build that changes it is still
+    // answered this way.
     expect(plan.preferences['media.autoplay.default']).toBe(1);
+    // Two of the build's choices are back at Firefox's own (the audit).
+    expect(plan.preferences).toMatchObject({
+      'browser.cache.memory.enable': true,
+      'network.http.dictionaries.enable': true,
+    });
     // Nothing of the launcher's own input simulation is switched on.
     expect(plan.config).not.toHaveProperty(['humanize']);
+  });
+
+  it('sends only what the build reads of a document, and neither DNT nor GPC', () => {
+    for (const os of SYSTEMS) {
+      const document = generate(os);
+      const { config } = generatedOf(document);
+      const plan = launchPlan(document, request(document), host, '/p/page.pdf');
+      const dropped = Object.keys(config).filter((key) => !(key in plan.config));
+      // The ten keys Camoufox 156 no longer reads, and the two Firefox owns.
+      expect(dropped.sort(), os).toEqual(
+        [
+          'canvas:aaCapOffset',
+          'canvas:aaOffset',
+          'canvas:seed',
+          'disableTheming',
+          'fonts:spacing_seed',
+          'navigator.appCodeName',
+          'navigator.appName',
+          'navigator.product',
+          'webGl2:contextAttributes',
+          'webGl:contextAttributes',
+          ...NEVER_APPLIED.filter((key) => key in config),
+        ].sort(),
+      );
+      for (const key of Object.keys(plan.config)) {
+        expect(host.removedProperties.has(key), key).toBe(false);
+      }
+      // What stays is what was generated: the document is not touched.
+      for (const [key, value] of Object.entries(plan.config)) {
+        if (key in config) {
+          expect(value, key).toEqual(config[key]);
+        }
+      }
+    }
+    // The generator's records say DNT "1" for every persona; the sample
+    // must hold one, or this test proves nothing.
+    expect(generatedOf(generate('windows')).config['navigator.doNotTrack']).toBe('1');
+  });
+
+  it('starts the browser in the interface language a person of the persona’s country installs', () => {
+    // Every locale the persona tables give (kage_core::persona::locale).
+    const expected: Record<string, string> = {
+      'de-AT': 'de',
+      'de-DE': 'de',
+      'de-CH': 'de',
+      'fr-FR': 'fr',
+      'fr-BE': 'fr',
+      'fr-CH': 'fr',
+      'fr-LU': 'fr',
+      'fr-CA': 'fr',
+      'it-IT': 'it',
+      'it-CH': 'it',
+      'en-GB': 'en-GB',
+      'en-IE': 'en-GB',
+      'en-CA': 'en-CA',
+      'en-US': 'en-US',
+      'nl-NL': 'nl',
+      'nl-BE': 'nl',
+      'es-ES': 'es-ES',
+      'pl-PL': 'pl',
+      'pt-PT': 'pt-PT',
+      'ro-RO': 'ro',
+      'sv-SE': 'sv-SE',
+    };
+    for (const [locale, ui] of Object.entries(expected)) {
+      expect(firefoxUiLocale(locale, host.locales), locale).toBe(ui);
+      expect(host.locales, locale).toContain(ui);
+    }
+    expect(firefoxUiLocale('pt-BR', host.locales)).toBe('pt-BR');
+    expect(firefoxUiLocale('es-MX', host.locales)).toBe('es-MX');
+    // A language the table does not know, and a build without the language.
+    expect(firefoxUiLocale('xx-YY', host.locales)).toBe('en-US');
+    expect(firefoxUiLocale('de-DE', ['en-US'])).toBe('en-US');
+    const document = generate('windows');
+    expect(
+      launchPlan(document, request(document, { locale: 'en-GB' }), host, '/p/page.pdf').preferences[
+        'intl.locale.requested'
+      ],
+    ).toBe('en-GB');
+    expect(
+      launchPlan(document, request(document), host, '/p/page.pdf').preferences[
+        'intl.locale.requested'
+      ],
+    ).toBe('de');
+  });
+
+  it('gives WebGPU to the systems whose Firefox has it, with a blocked adapter', () => {
+    const blocked = { 'dom.webgpu.enabled': true, 'gfx.blacklist.webgpu': 4 };
+    expect(webgpuPreferences('windows', {})).toEqual(blocked);
+    expect(webgpuPreferences('macos', { 'webGl:vendor': 'Apple Inc.' })).toEqual(blocked);
+    expect(webgpuPreferences('macos', { 'webGl:renderer': 'Apple M2, or similar' })).toEqual(
+      blocked,
+    );
+    expect(webgpuPreferences('macos', { 'webGl:vendor': 'Intel Inc.' })).toEqual({});
+    expect(webgpuPreferences('linux', {})).toEqual({});
+    const document = generate('windows');
+    expect(launchPlan(document, request(document), host, '/p/page.pdf').preferences).toMatchObject(
+      blocked,
+    );
   });
 
   it('gives each claimed system its own fonts by an absolute path, unhinted except for Linux', () => {
