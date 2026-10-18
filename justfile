@@ -104,9 +104,8 @@ setup-chrome:
 # Install the pinned Camoufox build, Xvfb, setxkbmap, Mesa and the libraries
 # a Firefox needs: what the Firefox engine's tests start. The build is the
 # one the firefox image is built with, unpacked into /opt/camoufox (or
-# KAGE_CAMOUFOX_DIR) and given the same Juggler backport (ADR 0010), which
-# needs node. Uses sudo when not root; does nothing when everything is
-# there already.
+# KAGE_CAMOUFOX_DIR); KAGE_CAMOUFOX_ARCHIVE keeps its archive between runs.
+# Uses sudo when not root; does nothing when everything is there already.
 setup-camoufox:
     scripts/setup-camoufox.sh
 

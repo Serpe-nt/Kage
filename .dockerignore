@@ -12,8 +12,6 @@
 !sidecar/
 # The fingerprint fixtures are compiled into the kage binary (kage-http).
 !tests/fixtures/fingerprints/
-# The Firefox image applies the Juggler backport while it is built (ADR 0010).
-!scripts/patch-camoufox-juggler.mjs
 
 **/target
 **/node_modules
