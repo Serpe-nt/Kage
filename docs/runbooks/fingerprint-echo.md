@@ -188,8 +188,8 @@ the majors the engines bundle (`engines`).
 `engines.chromium.browser_major` and `engines.firefox.browser_major` name
 the browser each engine image bundles. The Chromium image of this release
 bundles Chrome 155: set `engines.chromium.browser_major: 155`. The Firefox
-image bundles Camoufox 152.0.4, which is built from Firefox 152: set
-`engines.firefox.browser_major: 152`. A set major must be served by a
+image bundles Camoufox 156.0.1-beta.39, which is built from Firefox
+156.0.1: set `engines.firefox.browser_major: 156`. A set major must be served by a
 profile, verified (`VERIFIED_MAJORS`), or recorded as browser-only
 (`BROWSER_ONLY_MAJORS`); anything else fails `kage config check` and the
 profile test. That is the gate working: a persona of that engine would
@@ -265,31 +265,37 @@ and is ready for that day: the navigation `Accept` now names `image/jxl`.
 The capture also holds what F6 (M8) needs: the header sets of `fetch()` and
 `XMLHttpRequest` as the real browser sends them.
 
-### Firefox 152: browser-only
+### Firefox 156: browser-only
 
-Recorded 2026-10-09 from Camoufox 152.0.4, which is built from Firefox
-152.0.4, claiming Windows
-(`tests/fixtures/fingerprints/browser/firefox-152.json`), compared with
+Recorded 2026-10-18 from Camoufox 156.0.1-beta.39, which is built from
+Firefox 156.0.1, claiming Windows
+(`tests/fixtures/fingerprints/browser/firefox-156.json`), compared with
 `firefox_151`, the newest Firefox profile of wreq-util 0.2.0:
 
-| | Firefox 152 (real, and Camoufox 152.0.4) | `firefox_151` (wreq-util) |
+| | Firefox 156 (real, and Camoufox 156.0.1) | `firefox_151` (wreq-util) |
 |---|---|---|
-| JA4 | `t13d1617h2_86a278354501_3cbfd9057e0d` | `t13d1717h2_5b57614c22b0_3cbfd9057e0d` |
+| JA4 | `t13d1517h2_8daaf6152771_3cbfd9057e0d` | `t13d1717h2_5b57614c22b0_3cbfd9057e0d` |
 | HTTP/2 | `1:65536;2:0;4:131072;5:16384\|12517377\|0\|m,p,a,s` | the same |
 | navigation header names and order | 11 names | the same 11, same order |
 
 The extensions and the signature algorithms are the same, which is why the
-last part of the JA4 is equal; the ciphers are not. Firefox 152 offers 16
-cipher suites where the profile offers 17: `c009`
-(`TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA`) is gone from the list. No header
-table can make an older TLS stack leave a cipher out, so 152 is in
-`BROWSER_ONLY_MAJORS` and a Firefox 152 persona has no http path until
+last part of the JA4 is equal; the ciphers are not. Firefox 156 offers 15
+cipher suites where the profile offers 17: `c009` and `c00a`
+(`TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA` and `…_256_CBC_SHA`) are gone
+from the list, the first since 152, the second since 156 (the 15 that
+remain are the set Chrome 155 offers, so the middle part of the two JA4
+is equal). No header table can
+make an older TLS stack leave a cipher out, so 156 is in
+`BROWSER_ONLY_MAJORS` and a Firefox 156 persona has no http path until
 wreq-util ships a profile for it.
 
-This is Firefox 152's own TLS and nothing Camoufox changes. A stock Mozilla
-Firefox 152.0.4, measured against the same echo, showed the same JA4, the
-same HTTP/2 fingerprint and the same header order as the Camoufox build
-(`m5-evidence/experiments/stock-firefox-152.log` in the M5 hand-over).
+This is Firefox 156's own TLS and nothing Camoufox changes. A stock Mozilla
+Firefox 156.0.1, measured against the same echo, showed the same JA4, the
+same HTTP/2 fingerprint and the same header order as the Camoufox build,
+and the headers of a navigation and of a `fetch()` are those of the 152
+capture with the version moved. M5's capture of Firefox 152
+(`t13d1617h2_86a278354501_3cbfd9057e0d`, one cipher fewer than the
+profile) was removed with the 152 build: no engine runs it any more.
 
 One header value differs as well and is ready for that day: for the
 languages `en-US, en` both the stock Firefox and the Camoufox build sent

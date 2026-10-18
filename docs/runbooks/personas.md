@@ -17,7 +17,7 @@ do, and what each event and alert means.
 | locale and languages | A table per country (`kage_core::persona::locale`): the locale carries the country (`de-AT`), the language list is the one a stock installation of that browser ships with there. Chrome in Austria sends `de-DE, de, en-US, en`; Firefox sends `de, en-US, en`. A country without an entry gets `en-US, en` and the event `persona_locale_unknown`. |
 | screen | A class from a seeded table per engine and system, asked of the generator by exact bounds. |
 | fingerprint | Generated once by the engine's sidecar from the seed and the constraints above, stored whole, sent back unchanged on every open. |
-| http profile | The wreq-util profile of the same browser major, if one exists (`kage config check` lists them). Chrome 155 and Firefox 152 have none: their personas are browser-only (`http_profile_missing`, once per engine and major). |
+| http profile | The wreq-util profile of the same browser major, if one exists (`kage config check` lists them). Chrome 155 and Firefox 156 have none: their personas are browser-only (`http_profile_missing`, once per engine and major). |
 | profile directory | `<engine>/<persona id>` on the personas volume. |
 
 Nothing of this is ever drawn again. `tables_version` records which tables
@@ -90,6 +90,17 @@ kage selftest browser --persona <id> [--third-party]
   database. Under `just dev` kage does not see the volume: a warning says
   so once, nothing is archived, and the profiles stay in the volume of
   the dev stack.
+- **A newer browser.** When an engine image bundles a newer browser
+  major, each persona of that engine moves to it at its next open, as a
+  real browser's update does: the sidecar moves its document (the browser
+  version and the `User-Agent`; the device, the place and the seed stay),
+  kage stores it with the new `browser_major` and records
+  `persona_browser_upgraded`. Sessions, cookies, the http jar and what
+  the persona did on each site continue. A Firefox profile is copied to
+  `.upgrade/<persona id>` on the personas volume before its first start
+  under the new major, and kage deletes the copy after
+  `personas.upgrade_backup_days` (7): that copy is the only way back to
+  the previous image (`docs/runbooks/upgrading-an-engine.md`).
 - **Probes.** A health probe through a proxy presents as the persona
   behind it when that persona has an http path, on a fresh connection and
   without its cookies.
@@ -118,13 +129,14 @@ Health events about a persona have `subject_kind = persona`.
 | `persona_selftest_passed`, `persona_selftest_failed`, `persona_selftest_inconclusive` | info, warning, warning | One run. Inconclusive: the test site could not be read; nothing changes. |
 | `persona_retired` | info | Why, and how many sessions and cookies went with it. |
 | `persona_profile_archived`, `persona_profile_deleted` | info | Where the archive is; `archive: null` means there was no directory within reach. |
+| `persona_browser_upgraded` | info | The persona moved to the browser major its engine runs: engine, `from_major`, `to_major`, the browser version and the wreq profile of the new major (null: browser-only). One per persona and major; expected for every persona of an engine after an image with a newer browser is deployed. |
 
 | Alert | Severity | Action |
 |---|---|---|
 | `persona_generation_failed` | critical | A usable proxy has no persona, so nothing is fetched through it. The message carries the sidecar's reason. A full or unreachable sidecar raises it on the third failure in a row; the manager tries again every sweep. |
 | `browser_selftest_failed` | critical | Read the run (`kage persona show <id>`, `selftest_runs.findings`). A hard finding is an automation flag or a value that contradicts the persona. If it reproduces with `kage persona selftest <id>`, compare with a second persona of the same engine: one persona failing is its fingerprint (`regenerate`), all of them failing is the engine (stop, see the engine's runbook). |
 | `http_selftest_failed` | critical | The http path's JA4, HTTP/2 fingerprint or header order differs from the recorded one: a pin moved or a proxy rewrites traffic (`docs/runbooks/fingerprint-echo.md`). |
-| `http_profile_missing` | warning | Expected for Chrome 155 and Firefox 152; see `docs/versions.md`. |
+| `http_profile_missing` | warning | Expected for Chrome 155 and Firefox 156; see `docs/versions.md`. |
 
 ## Sessions and per-domain state
 

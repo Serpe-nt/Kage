@@ -1,9 +1,12 @@
 # ADR 0010: The pinned Camoufox build runs with one upstream fix backported into its driver
 
-Status: accepted, 2026-10-09, by the planning session on the owner's
-standing delegation (consult 1 of M5.1, `m5-1-consults.md`). It does not
-change the pin of D29: the build is still `v152.0.4-beta.30`, fetched by
-URL and checksum. It changes what the engine runs of it, by 260 bytes.
+Status: superseded on 2026-10-18 by [ADR 0011](0011-camoufox-156-line.md):
+the pin moved to `v156.0.1-beta.39`, which has the fix natively, and the
+backport, its tool and its two checksums are gone. Accepted on
+2026-10-09, by the planning session on the owner's standing delegation
+(consult 1 of M5.1, `m5-1-consults.md`). It did not change the pin of
+D29: the build was still `v152.0.4-beta.30`, fetched by URL and checksum.
+It changed what the engine ran of it, by 260 bytes.
 
 ## Context
 

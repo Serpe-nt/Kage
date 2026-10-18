@@ -17,14 +17,20 @@ profile and an authenticated proxy. No script of Kage's runs in any page.
 | What a page can read | Where it comes from |
 |---|---|
 | operating system, `User-Agent`, `platform`, `oscpu`, `appVersion` | the persisted fingerprint: Windows or macOS (spec §6.1); Linux only when configured |
-| screen, work area, window size and position | the fingerprint, a real device's values with its quirks (a taskbar, a menu bar, a maximized window a few pixels larger than its screen, a second monitor) |
+| screen, window size and position | the fingerprint, a real device's values with its quirks (a maximized window a few pixels larger than its screen, a second monitor) |
+| work area (`availWidth`, `availHeight`) | what Firefox's baseline fingerprinting protection reports of any screen, as a stock Firefox 156 does: the screen less a taskbar of the claimed system (48 px on Windows, 76 px on macOS). The 152 build showed the fingerprint's own |
 | time zone, languages, `Accept-Language`, `Intl` locale, position | the open request, always from Kage; nothing is looked up from the proxy's address |
+| the browser's own language (`Intl`'s default, form validation messages, the PDF viewer) | the persona's Firefox UI locale, requested at startup: the build carries all of Firefox's language packs |
 | `hardwareConcurrency` | the fingerprint; the browser also runs under a CPU mask of that size, at most the host's |
 | WebGL vendor, renderer, parameters, extensions | a graphics card of the claimed system, drawn from the launcher's table by the persona's seed |
 | fonts | the claimed system's own font files, which the build ships, through a fontconfig file Kage writes per persona |
-| canvas, audio and text-metric variation | the build's own, from three seeds drawn from the persona's seed: one stable device per persona, twenty devices for twenty personas |
+| audio variation | the build's own, from a seed drawn from the persona's seed: one stable device per persona |
+| canvas pixels, text metrics | the host's (Mesa and FreeType), the same for every persona of a host: the 156 build no longer reads the per-persona canvas and font-spacing seeds (a known tell below) |
 | media devices, `AudioContext` | one microphone, a camera on two personas in three, 48 or 44.1 kHz stereo: what a Firefox lists before any permission |
-| whether sound may start by itself (`navigator.getAutoplayPolicy()`, an `AudioContext` before any input) | Firefox's own default, set by the launch plan: `allowed-muted` for media, `disallowed` for an `AudioContext`. The build's own default says `allowed` |
+| whether sound may start by itself (`navigator.getAutoplayPolicy()`, an `AudioContext` before any input) | Firefox's own default: `allowed-muted` for media, `disallowed` for an `AudioContext`. The 156 build ships it, and the launch plan sets it as well, as a guard (the 152 build said `allowed`) |
+| `navigator.doNotTrack`, `navigator.globalPrivacyControl`, `Sec-GPC` | Firefox's defaults (`"unspecified"`, `false`, no header): the engine never applies what the generator draws for them |
+| WebGPU (`navigator.gpu`) | present on Windows claims and on macOS claims whose graphics card is Apple's, as in Firefox 156; `requestAdapter()` answers null, as on a machine whose GPU Firefox blocks |
+| storage of a cross-site frame | partitioned, as in a stock Firefox (`network.cookie.cookieBehavior` 5; the 152 build had 4, which showed a frame its site's first-party cookies and storage) |
 | cookies, storage, history | the persona's profile directory |
 | WebRTC | host candidates as names (`<uuid>.local`), nothing from a STUN server: no packet leaves outside the proxy |
 
@@ -53,9 +59,20 @@ table. Kage does not call its `launchOptions`:
 
 Instead, `POST /v1/personas/generate` builds the complete configuration
 once (`generateFingerprint`, engine-firefox) and stores it in the
-fingerprint document, and every open is a pure function of that document
-and the request (`launchPlan`): the `CAMOU_CONFIG_<n>` environment
-variables, a few preferences, the proxy, and the persona's fontconfig file.
+fingerprint document, and every open is a pure function of that document,
+the request and the build (`launchPlan`): the `CAMOU_CONFIG_<n>`
+environment variables with the configuration as far as the build reads it,
+the `CAMOU_PREFS_<n>` variables with a few preferences, which the build's
+`camoufox.cfg` applies at startup (the driver sets them again once the
+browser runs), the proxy, and the persona's fontconfig file. What the
+build does not read is left out: the keys its `properties.json` declares
+`removed` (ten of the generator's: the canvas and font-spacing seeds and
+offsets, `disableTheming`, the WebGL context attributes, and
+`navigator.product`, `appCodeName` and `appName`), and the two privacy
+signals (`NEVER_APPLIED`, `launch-plan.ts`), which the generator draws
+for nearly every device and a stock Firefox sends only when its user turns
+them on. A stored document keeps its bytes: what is left out is decided at
+every open, so the next build's removals are handled the same way.
 
 The fontconfig file is the build's own for the claimed system with two
 changes: the font directory is absolute, and for Windows and macOS claims
@@ -64,13 +81,17 @@ fractional advances and whole-pixel advances are FreeType's signature. Not
 verified against a real Windows Firefox: that comparison belongs to the
 Windows engine-host milestone (follow-up F14 of the plan).
 
-Four more settings differ from the launcher's or the build's defaults,
-each for a measured reason: no addon is loaded; the build's own window
-theming is off (`disableTheming`: with it the toolbar is 51 px high, a
-stock Firefox has 85, and a page reads the difference as
-`outerHeight - innerHeight`); `history.length` and the size of the page
-area are never set, they are the tab's and the window's own; and sound
-waits for the user (`media.autoplay.default` is 1, Firefox's default).
+More settings differ from the launcher's or the build's defaults, each
+for a measured reason: no addon is loaded; `history.length` and the size
+of the page area are never set, they are the tab's and the window's own;
+sound waits for the user (`media.autoplay.default` is 1, Firefox's
+default); the browser speaks the persona's language (below); WebGPU is on
+where Firefox 156 has it; and the memory cache and compression
+dictionaries (`browser.cache.memory.enable`,
+`network.http.dictionaries.enable`) are on as in stock, where the build
+turns them off. The 152 build also needed its window theming off (its
+toolbar was 51 px high, a stock Firefox's 85, and a page reads
+`outerHeight - innerHeight`); the 156 build's is 85 by itself.
 
 The last one was found in M5.1. The build's `camoufox.cfg` sets
 `media.autoplay.default` to 0, "allow autoplay". Measured with nothing
@@ -86,9 +107,25 @@ it. With Firefox's default in the profile's preferences a persona
 answers as the stock browser does in every value measured, and a click
 through the display lets an `AudioContext` run. The parity suite asserts
 the answer (it needs no sound device) and the probe warns for it
-(`automation.audio_autoplay`).
+(`automation.audio_autoplay`). The 156 build ships Firefox's 1 by
+itself; the launch plan keeps setting it, as a guard, so that a later
+build that changes it again is still answered as Firefox answers.
 
-### What was measured (M5, 2026-10-09)
+**The browser's language.** The 156 build carries all of Firefox's
+language packs and reads `intl.locale.requested` at startup only. The
+launch plan requests the persona's Firefox UI locale through
+`CAMOU_PREFS` (`firefoxUiLocale`: the full tag where Firefox ships one,
+`en-GB`, `pt-BR`, `es-MX`, `sv-SE`, …, else the language, `de` for
+Germany and Austria; checked against the build's `res/multilocale.txt`,
+`en-US` when the build has neither). Measured: set through the driver
+alone, `Intl` moved but the browser's own messages stayed English; at
+startup both are the persona's. A stock Firefox of a country's language on
+a system of that country reports the regional tag (`de-DE`, `fr-FR`,
+`it-IT`, `en-GB`), which is the persona's locale; the probe judges
+`Intl`'s language against `navigator.language`'s
+(`coherence.intl_language`, hard).
+
+### What was measured (M5, 2026-10-09, on the 152 build)
 
 Camoufox v152.0.4-beta.30 on Linux, claiming Windows and claiming macOS,
 against the coherence probe (`tests/fixtures/site/probe/`):
@@ -115,6 +152,44 @@ against the coherence probe (`tests/fixtures/site/probe/`):
 
 The parity suite keeps all of it (`engine parity: firefox`, "passes the
 coherence probe …", "shows the same browser on every open …").
+
+### What was measured again (Camoufox 156, 2026-10-18)
+
+Camoufox v156.0.1-beta.39, four personas (two claiming Windows, two
+macOS), against the same probe and against a reference page that reads
+about 80 values a page can read without input or permission, next to
+Mozilla's own Firefox 156.0.1 and 152.0.4 that nothing drives:
+
+- The coherence bar holds as on 152: 0 failures and 0 warnings in the
+  window, the three kinds of iframe and both workers, for every persona.
+- Four things a page could read of the 152 personas are gone, each now as
+  in stock Firefox: a `new Worker("chrome://juggler/content/content/WorkerMain.js")`
+  throws (hCaptcha's probe; `automation.driver_worker`), a cross-site
+  frame sees no first-party storage (`cookieBehavior` 5), `window.open()`
+  without activation is blocked, and no page has the 15 extra `set…`
+  functions (`setNavigatorUserAgent`, `setTimezone`, …;
+  `automation.extra_globals`). The parity suite states the storage and the
+  popup cases.
+- Firefox 156 itself: `RTCRtpReceiver.getCapabilities('video')` lists
+  H264, and a few new interfaces exist (`IDBRecord`,
+  `PictureInPictureEvent`, `RTCIceCandidatePair`), as in stock.
+- TLS, HTTP/2 and the header order equal a stock Firefox 156.0.1 against
+  the echo (JA4 `t13d1517h2_8daaf6152771_3cbfd9057e0d`: Firefox 156 dropped
+  the cipher suite `c00a`); `Accept-Encoding` is `gzip, deflate, br, zstd`
+  as in stock.
+- Fonts: each of the 107 Windows families of the launcher's list has a file
+  in the build; of its 573 macOS families 6 have none (152: 69).
+- The built-in add-ons (`webcompat` 156.1.0 among them) are active as in
+  stock, so Mozilla's site interventions apply as for a user.
+- A 152 persona's profile opened by 156 keeps its cookies and moves its
+  `compatibility.ini` forward (Firefox then discards its startup cache by
+  itself); opened by 152 again afterwards it gives no context within a
+  minute (downgrade protection).
+
+The preference table is `docs/evidence/camoufox-156-prefs-audit.tsv`,
+made by `scripts/audit-camoufox-prefs.mjs`; the parity suite keeps what a
+test can keep of the rest, and the reference page with its results is in
+the milestone's hand-over evidence.
 
 A Linux-claiming Firefox persona is possible but not in the default mix:
 the build's Linux fonts are Tor Browser's bundle (Arimo, Tinos, Cousine,
@@ -143,70 +218,89 @@ Measured in M5 over 200 seeds per system:
 M6 decides whether a pool of twenty personas needs more variety than this
 (a screen constraint per persona is the lever that exists).
 
-### The Juggler backport (ADR 0010)
+### User activation and the driver (ADR 0011)
 
-The driver inside the pinned build (Juggler, in
-`chrome/juggler/content/content/Runtime.js` of the build's `omni.ja`) runs
-every evaluation of a page as user input: `setHandlingUserInput(true)` and
-`notifyUserGestureActivation()`. Every navigation reads the page at least
-once, so a page nobody touched read `navigator.userActivation.isActive`
-and `hasBeenActive` as true about 300 ms after `load`, with no input event
-before it (measured in M5). Upstream took both calls out in Camoufox pull
-request 779; the builds from `v156.0.1-beta.32` on have the fix, the
-pinned Firefox 152 build does not.
+The driver inside the build (Juggler) used to run every evaluation of a
+page as user input (`setHandlingUserInput(true)`,
+`notifyUserGestureActivation()`), so that a page nobody touched read
+`navigator.userActivation` as active about 300 ms after `load` (measured
+in M5). Upstream took both calls out in Camoufox pull request 779; the 156
+build lifts the popup blocker for an evaluation through
+`docShell.driverPopupsAllowed` instead, which grants no activation, and
+since pull request 852 Juggler is no `chrome://` package a page can name.
+M5.1 had backported the fix into the 152 build's `omni.ja` (ADR 0010,
+superseded); that tool and its two checksums are gone.
 
-Kage applies the same change to the pinned build:
+- **The engine runs the pinned archive only.** At start it hashes
+  `omni.ja` against `CAMOUFOX_OMNI_SHA256`; anything else answers
+  `browser_launch_failed`, "is not the pinned build's". Run
+  `just setup-camoufox`, or rebuild the image.
+- **A profile's startup cache needs nothing from Kage.** Firefox discards
+  it when the version a profile last started under changes
+  (`compatibility.ini`), which every build change does. Profiles from 1.0.0
+  hold an `omni.sha256` note of M5.1's; nothing reads it any more, and it
+  may stay.
 
-```bash
-node scripts/patch-camoufox-juggler.mjs /opt/camoufox \
-    --from <CAMOUFOX_OMNI_SHA256> --to <CAMOUFOX_OMNI_PATCHED_SHA256>
-```
-
-The image build and `just setup-camoufox` run it with the two checksums of
-`deploy/docker/sidecar.Dockerfile`. The file is stored uncompressed in the
-archive, so the four statements are overwritten by statements of the same
-length that do nothing and the entry's checksum is rewritten: nothing is
-repacked, 260 bytes differ, and the tool refuses any archive but the
-pinned one. Measured on the result: either call alone still grants
-activation, both gone grant none; an untouched page is not active at
-`load`, 300 ms, 1.5 s and 4 s later; a click through the display
-activates it from `mousedown` on, as for a person; the parity suite is
-green.
-
-Two rules follow from it, and their messages are what an operator sees:
-
-- **The engine runs the patched archive only.** At start it hashes
-  `omni.ja`; anything else answers `browser_launch_failed`, "does not hold
-  the Juggler backport". Run `just setup-camoufox`, or rebuild the image.
-- **A profile is told when the archive changed.** Firefox keeps the
-  compiled scripts of its own code in the profile (`startupCache/`) and
-  trusts them while version and install directory are the same. Measured:
-  a profile first opened under the unpatched build went on granting
-  activation after the build was patched in place, on every open. Each
-  profile directory holds a note of the archive it last started under
-  (`omni.sha256`, next to `user-data`); when it differs, the engine
-  removes that profile's `startupCache` before the launch and logs it.
-  The first start after that compiles the scripts again.
-
-What the backport leaves out: upstream's switch that lets an evaluation
-open a window without activation (it needs the browser's C++). Kage opens
-no window through an evaluation.
-
-The probe's check for all of this, and the cases it must not be tightened
-to, are in `engine-chromium.md` ("The probe's check").
+The parity test "reads a page nobody touched without granting it user
+activation" says whether a build keeps the promise. The probe's check, and
+the cases it must not be tightened to, are in `engine-chromium.md` ("The
+probe's check").
 
 ### Known tells (not solved here)
 
 - No speech synthesis voices (`speechSynthesis.getVoices()` is empty); a
-  Windows or macOS Firefox has the system's.
-- Pixels come from Mesa and glyph shapes from FreeType under a Windows or
-  macOS claim. Canvas and WebGL image hashes are therefore not those of
-  any real Windows machine; the build's seeded variation makes them one
-  unknown device per persona instead of one known Linux value.
+  Windows or macOS Firefox has the system's. The 156 build reads a
+  `voices` key; it needs voice data per system (a follow-up).
+- **The canvas is the host's.** Pixels come from Mesa and glyph shapes from
+  FreeType under a Windows or macOS claim, and the 156 build no longer
+  varies them per persona: every Firefox persona of a host draws the same
+  canvas and measures text the same, as every Chromium persona already
+  does. That is a pool-level risk: personas of one host share one canvas
+  hash while naming different graphics cards, which a vendor that knows
+  which hash goes with which card, or that clusters hashes across
+  addresses, can link. Accepted for 156 (ADR 0011); the field campaign
+  measures how rare the hash is, and the answer, if one is needed, is a
+  real GPU or per-persona rendering, never noise. WebGL pixels were and
+  are the host's (`host_bound`).
+- No Widevine: `requestMediaKeySystemAccess("com.widevine.alpha")` fails
+  with "EME has been preffed off", where a desktop Firefox fetches the
+  module at first use (a follow-up: the preference and a download through
+  the proxy).
+- A macOS persona with a colour depth of 30 does not match
+  `(color-gamut: p3)`, which a Mac with such a display does (a follow-up).
+- The generator gives 13 % of its Windows devices a `maxTouchPoints` of 1
+  or 2; a Windows machine reports 0, or 10 with a touch screen (a
+  follow-up, in the generator's data).
+- `pageshow.persisted` is never true after back and forward: the driver
+  turns the back-forward cache off (upstream's own list of what remains
+  visible, row 106), and `camoufox.cfg` does too.
 - A printed PDF is always A4, portrait, with backgrounds (below).
 - Every PNG a canvas exports carries a 16-byte `deBG` chunk that differs
   per browser session. A stock Firefox 152 writes it too: it is Firefox's
   own, not a mark of this build.
+
+**Preferences a page or a server can see.** The build's `camoufox.cfg`
+and Kage's launch plan differ from a stock Firefox 156.0.1 in 24 values a
+page or a server can see (of 402 that differ in all; the rest are
+the browser's own interface, its background services and what the driver
+needs). Each is kept for the reason given, and the whole table, with the
+source of every row, is `docs/evidence/camoufox-156-prefs-audit.tsv`:
+
+| Preference | stock | persona | who can see it | why it stays |
+|---|---|---|---|---|
+| `browser.sessionhistory.max_total_viewers`, `fission.bfcacheInParent` | -1, true | 0, false | a page (`pageshow.persisted`) | the driver turns the cache off anyway |
+| `fission.webContentIsolationStrategy` | 1 | 0 | a page, by timing (no out-of-process iframes) | Playwright needs it, per upstream |
+| `focusmanager.testmode` | false | true | a page (focus is emulated: a blur into a frame does not happen) | the driver needs it |
+| `dom.input_events.security.minNumTicks`, `.minTimeElapsedInMS` | 3, 100 | 0, 0 | a page, only with input within 100 ms of an element appearing | the driver needs it; the hand rests longer than that |
+| `webgl.forbid-software`, `webgl.force-enabled` | true, false | false, true | a page | the claimed graphics card must have WebGL on the image's software renderer |
+| `media.peerconnection.ice.default_address_only`, `.proxy_only_if_behind_proxy`, `.proxy_only_if_pbmode` | false | true | a page (CreepJS says WebRTC "blocked") | no packet leaves outside the proxy (spec §10.3) |
+| `gfx.bundled-fonts.activate` | -1 | 1 | a page (fonts) | the claimed system's fonts |
+| `dom.push.connection.enabled`, `dom.push.serverURL` | true, Mozilla's | false, empty | a page, only after a notification permission | no connection to Mozilla's push service from the persona's address |
+| `browser.safebrowsing.{malware,phishing,downloads,blockedURIs}.enabled` | true | false | Google only | no list updates or lookups from the persona's address |
+| `network.http.http3.enable` | true | false | a server | no UDP outside the proxy; behind an HTTP proxy a stock Firefox does not use HTTP/3 either |
+| `print.always_print_silent` | false | true | a page that calls `print()`: no dialog | the PDF capture |
+| `intl.accept_languages`, `intl.locale.requested` | `und`, empty | the persona's | a page and a server | the persona's languages |
+| `dom.webgpu.enabled`, `gfx.blacklist.webgpu` | Linux's | Windows' (on Windows and Apple-GPU macOS claims) | a page (`navigator.gpu`) | what Firefox 156 has on the claimed system |
 
 ## Input: the display's mouse and keyboard
 
@@ -239,7 +333,7 @@ in Firefox, 120 in Chrome) with its smooth scrolling, modifiers are keys.
   person's.
 - Flow steps with `human: false` are done by the driver and are visible to
   a page as such; they are for pages known not to look. One more way to
-  see it since the Juggler backport: at the `mousedown` of a driver's
+  see it since M5.1: at the `mousedown` of a driver's
   click the page still reads `isActive` as false, and as true at `click`;
   for a click through the display it is true at `mousedown`. And an
   `AudioContext` made after a driver's click stays suspended, where one
@@ -284,7 +378,7 @@ the two third-party pages show of a Firefox persona was recorded live on
 
 | Capture | How | A page can notice |
 |---|---|---|
-| DOM, title, text, storage | read in the driver's isolated world | nothing: with the Juggler backport a read grants no user activation |
+| DOM, title, text, storage | read in the driver's isolated world | nothing: a read grants no user activation |
 | raw body, headers, redirects, XHR and fetch bodies | network events | nothing |
 | console | the page's `console.*` calls and uncaught errors, reported by the browser to its driver | nothing (the probe's console check stays at zero) |
 | screenshot, viewport or full page | drawn from the browser side | nothing, also for a full page |
@@ -307,10 +401,12 @@ the request's `format` and `landscape` are not honored on this engine.
 | | `SIDECAR_CAMOUFOX_DIR` | `/opt/camoufox` | Where the pinned build is unpacked. |
 | `KAGE_SIDECAR_SELFTEST_PROBE_URL`, `…_ECHO_URL` | the same with `SIDECAR_` | unset | The self-test's own pages. |
 
-On the kage side: `sidecar.firefox_url`, and `engines.firefox.browser_major:
-152`. Firefox 152 is browser-only on the http path (its TLS offers one
-cipher suite fewer than the newest profile, `firefox_151`): a Firefox
-persona has no `wreq_profile` until wreq-util ships a matching one.
+On the kage side: `sidecar.firefox_url`, `engines.firefox.browser_major:
+156`, and `personas.upgrade_backup_days` (7, how long a profile's copy
+from before a browser upgrade is kept). Firefox 156 is browser-only on the
+http path (its TLS offers two cipher suites fewer than the newest profile,
+`firefox_151`): a Firefox persona has no `wreq_profile` until wreq-util
+ships a matching one.
 
 The container: user 65532, read-only root filesystem, every capability
 dropped, `no-new-privileges`, Docker's default seccomp profile, writable
@@ -319,7 +415,7 @@ stack smoke test checks it on a running container with a context open
 (`tests/e2e/firefox-hardening.mjs`).
 
 **The Firefox image is not published.** The Camoufox build bundles
-Microsoft's and Apple's font files; they are what makes the font check
+Microsoft's and Apple's font files (2.1 GB of the 156 build's 2.4); they are what makes the font check
 pass, and a public image of ours would redistribute them. Build it where
 it runs: `just build-images`. (This is the project's default, not legal
 advice; it is one matrix entry in `.github/workflows/release.yaml`.)
@@ -342,55 +438,79 @@ in this tree gets macOS wrong.** Re-run that test and read the launcher's
 ## Moving to a new Camoufox build
 
 A bump is a dedicated change (`docs/versions.md`, fingerprint-critical).
-The launcher accepts a range of builds and its own `fetch` installs the
-newest in it, which at the time of M5 was a build attached to a release
-that says "nothing here is meant to be installed". Kage therefore never
-uses that fetch.
+Kage never uses a launcher's download: the image build and
+`scripts/setup-camoufox.sh` fetch the pinned build by URL and checksum,
+and the engine refuses any other build.
+
+**Learning of a new build.** Builds are published on the GitHub releases
+of `daijro/camoufox` (watch its releases). Since its pull request 810
+upstream pre-releases every tested merge and promotes by tag, so the
+pre-release flag says nothing about a build: read the pull requests a
+build contains instead, for what a page can read (the line's `LEAKS`
+list, its changelog). Firefox itself moves every two weeks; a Camoufox
+build follows it by weeks, and a persona claims the build's version. No
+launcher of camoufox-js accepts the 156 builds, and the engine does not
+need one to.
 
 1. Take the version, the release and the SHA-256 of the Linux x86_64 zip
-   from the build's GitHub release: `CAMOUFOX_VERSION`, `CAMOUFOX_RELEASE`,
-   `CAMOUFOX_SHA256` in `deploy/docker/sidecar.Dockerfile`, and the two
-   constants in `engine-firefox/src/host.ts`. The image build and
-   `scripts/setup-camoufox.sh` read the Dockerfile lines; the engine
-   refuses any build but the one its constants name.
-2. The Juggler backport belongs to one build. `just setup-camoufox` stops
-   at the new archive ("neither the pinned build's archive nor the patched
-   one"), which is the reminder. A build from `v156.0.1-beta.32` on has
-   the fix itself: delete `scripts/patch-camoufox-juggler.mjs`, its two
-   `CAMOUFOX_OMNI_*` lines in the Dockerfile, its steps in the Dockerfile
-   and in `scripts/setup-camoufox.sh`, and set `CAMOUFOX_OMNI_SHA256` in
-   `engine-firefox/src/host.ts` to the new build's own `omni.ja` (the
-   engine keeps refusing any other archive). The parity test "reads a
-   page nobody touched without granting it user activation" then says
-   whether the build keeps the promise by itself.
-3. `just setup-camoufox`, then `just test-node`. The pinned-seed test
-   shows what changed in generated fingerprints; the parity suite re-checks
-   the coherence bar, the captures and the input path on the new build.
-   Look at `fontconfig/*/fonts.conf` and `properties.json` of the new
-   build: `personaFontconfig` and `validateConfig` fail loudly when they
-   no longer fit.
-4. Read the build's own preference defaults (`camoufox.cfg` in the build
-   directory, a few hundred `defaultPref` lines) for values that differ
-   from a stock Firefox and that a page can read. They are the build's
-   choices, not the persona's, so every Firefox persona shares them: a
-   tell for the whole pool. The example is `media.autoplay.default`
-   (above): the build says 0, Firefox ships 1, a page reads it with
-   `navigator.getAutoplayPolicy()`. Check that this line is still what the
-   launch plan corrects, and measure anything new against a stock Firefox
-   of the same version that nothing drives; a preference set in
-   `basePreferences` (engine-firefox, `launch-plan.ts`) with its reason is
-   the remedy.
-5. `just capture-browser-fingerprint firefox`, then "A new browser major"
-   in `docs/runbooks/fingerprint-echo.md`.
-6. Set `engines.firefox.browser_major` in the deployment.
-7. Run the self-test against your own pages, and the live suite once with
-   `KAGE_LIVE_RECORD=1` after reviewing its findings.
-8. Update `docs/versions.md` and the changelog.
+   from the build's GitHub release (GitHub shows the asset's digest):
+   `CAMOUFOX_VERSION`, `CAMOUFOX_RELEASE`, `CAMOUFOX_SHA256` in
+   `deploy/docker/sidecar.Dockerfile`, and the same three constants in
+   `engine-firefox/src/host.ts`. `just setup-camoufox` (with
+   `KAGE_CAMOUFOX_ARCHIVE=<path>` it keeps the archive for the next run),
+   then set `CAMOUFOX_OMNI_SHA256` in `host.ts` to the new build's own
+   `omni.ja` (`sha256sum /opt/camoufox/omni.ja`). A test keeps the
+   Dockerfile and `host.ts` at the same values.
+2. `just test-node`. The pinned-seed test shows what changed in generated
+   fingerprints; the parity suite re-checks the coherence bar, the
+   captures, the input path, user activation, a moved persona (a document
+   of the previous major, moved and opened on a profile the previous
+   major left), third-party storage and popups on the new build. Read
+   `properties.json` of the new build: keys it declares `removed` are
+   left out by themselves, new live keys are the generator's to fill or
+   not; `personaFontconfig` and `validateConfig` fail loudly when the
+   fontconfig files or the property types no longer fit.
+3. **Audit the preferences.** Download Mozilla's Linux build of the same
+   Firefox version (`archive.mozilla.org/pub/firefox/releases/<version>/`,
+   checked against its `SHA256SUMS`), unpack it, and run, as a user that
+   is not root:
 
-A persona's fingerprint document holds the browser's whole configuration
-for the build it was generated with. After a bump to another Firefox major
-the sidecar refuses the old document (`browser_major_mismatch`); generate
-it again from its seed.
+   ```bash
+   node scripts/audit-camoufox-prefs.mjs --stock <dir>/firefox --out prefs-audit.tsv
+   ```
+
+   It starts the stock browser with nothing driving it and a persona of
+   Kage's engine, each from a copy of its build with a preference dump,
+   and writes every preference that differs twelve seconds after start,
+   with where the persona's value comes from and what the last audit
+   (`docs/evidence/camoufox-<major>-prefs-audit.tsv`) said about it. Every
+   row marked `new: review` gets a decision: invisible to pages and
+   servers (the browser's interface, its background services, what the
+   driver needs), or visible, and then either set as in stock in
+   `basePreferences` (`launch-plan.ts`) with its reason, or kept and
+   listed above under "Preferences a page or a server can see". Commit the
+   new table as the evidence of the bump. What a page reads that no
+   preference explains is found by comparing a stock browser and a
+   persona on the same page, as above (the coherence probe and
+   `kage selftest browser` are the start).
+4. `just capture-browser-fingerprint firefox`, then "A new browser major"
+   in `docs/runbooks/fingerprint-echo.md` (the capture replaces the
+   previous major's in `tests/fixtures/fingerprints/browser/`, and
+   `BROWSER_ONLY_MAJORS` or `VERIFIED_MAJORS` names the new one).
+5. Set `engines.firefox.browser_major` in the deployment, with the image.
+6. Run the self-test against your own pages, and the live suite once with
+   `KAGE_LIVE_RECORD=1` after reviewing its findings: it judges the run
+   against the previous major's baseline and records the new one
+   (`tests/fixtures/selftest/firefox-<major>-live.json`), which replaces
+   the old.
+7. Update `docs/versions.md` and the changelog.
+
+**The personas move by themselves.** A persona's document names the
+build's version; at its first open under a newer major the sidecar moves
+it (`POST /v1/personas/upgrade`) and kage stores it, and the engine copies
+the profile to `.upgrade/<persona id>` before Firefox moves it forward.
+What an operator does around a deploy, and the way back, is in
+[upgrading-an-engine.md](upgrading-an-engine.md).
 
 ## Fallback: a Python engine behind the same contract (risk R1)
 
@@ -398,7 +518,7 @@ camoufox-js is labeled experimental. If it becomes unusable, the Firefox
 engine is replaced by a Python service that uses the upstream `camoufox`
 launcher and Playwright for Python. Kage and the Chromium sidecar do not
 change: the replacement is a container that speaks the same HTTP contract,
-`sidecar/packages/contract/openapi.json` (contract 1.1.0), on the same
+`sidecar/packages/contract/openapi.json` (contract 1.4.0), on the same
 port, with the same shared secret.
 
 It must implement exactly these endpoints, with the schemas of that
@@ -410,6 +530,7 @@ with the document's codes:
 | `GET /v1/health` | `engine: "firefox"`, the browser version, contexts in use, `contract_version`. |
 | `GET /v1/metrics` | The metrics of spec §20 that start with `sidecar_`. |
 | `POST /v1/personas/generate` | A fingerprint document from a 64-hex seed: the same seed and constraints give the same bytes. The document is opaque to Kage; it must hold everything needed to start the same browser again. |
+| `POST /v1/personas/upgrade` | The same persona for the browser the engine runs: a document of an older major moved (its browser version and `User-Agent`, nothing of the device), the same bytes for the same request; one of a newer major refused with `browser_major_mismatch`. |
 | `POST /v1/contexts` | One browser per persona on its own X display, the persisted fingerprint applied, language, time zone and position from the request (`geoip` off), the proxy with credentials, loopback through the proxy, WebRTC confined, a persistent profile. Idempotent per persona; `context_conflict`, `context_limit`. |
 | `DELETE /v1/contexts/{id}` | Close and flush the profile. |
 | `POST /v1/contexts/{id}/navigate` | The page result of spec §10.2 with every capture, the `behavior` options and the entry strategies. |
@@ -425,12 +546,13 @@ What a replacement must keep, because Kage relies on it and tests it:
   persona's keyboard layout; the upstream launcher's `humanize` stays off.
 - The fontconfig rule above (the Python launcher sets its own path: check
   that generic families resolve to three different fonts).
-- No addon, no theming of the build, no download at run time, and
-  Firefox's own default for autoplay (the Python launcher starts the same
-  build with the same `camoufox.cfg`).
+- No addon, no download at run time, Firefox's own default for autoplay,
+  the persona's UI language at startup, no privacy signal the user did
+  not ask for, and the preferences of `basePreferences` (the Python
+  launcher starts the same build with the same `camoufox.cfg`).
 - Reads that grant no user activation. Playwright for Python drives the
-  same Juggler, so the same rule about the build holds: the backport above,
-  or a build that has the fix. The probe fails hard otherwise
+  same Juggler, so the same rule about the build holds: a build that has
+  the fix (156 and later). The probe fails hard otherwise
   (`automation.user_activation`).
 - The parity suite's expectations. Its tests are TypeScript, but they only
   need an `Engine`; the simplest proof for a Python engine is to run them

@@ -211,3 +211,19 @@ and in no release.
   a refused hop has left through the proxy; nothing read from it is
   returned or stored.
 - **The `domain` metric label** is unbounded until its follow-up (L3).
+
+## Known tells
+
+Added by the Camoufox 156 milestone (2026-10-18). A tell is not a breach
+of §19, but it is what the product exists to avoid, and one that every
+persona of a host or of an engine shares is a risk for the whole pool:
+it can link personas that live behind different addresses. The tells of
+one persona and one engine are listed in the engine's runbook
+(`engine-firefox.md` and `engine-chromium.md`, "Known tells"); these are
+the pool-level ones.
+
+| ID | Engine | Tell | Outcome |
+|---|---|---|---|
+| T1 | both | Canvas pixels and text metrics are the host's (Mesa and FreeType): every persona of a host draws the same canvas while each names its own graphics card. A vendor that knows which canvas hash goes with which card, or that clusters hashes across addresses, can link them. Since Camoufox 156 this holds for Firefox as it did for Chromium (the 152 build varied the canvas per persona, which upstream removed as a tell of its own) | accepted (ADR 0011); the field campaign measures how rare the hash is; if an answer is needed it is a real GPU or per-persona rendering, never noise |
+| T2 | chromium | A cross-site frame reads its site's first-party `localStorage`: patchright's default switches turn `ThirdPartyStoragePartitioning` off (and `HttpsUpgrades`, among others), where a Chrome nobody configured partitions it | follow-up, the next milestone: audit Chrome 155's launch switches against a stock Chrome that nothing drives; the parity suite states the current answer per engine and fails the day it changes |
+| T3 | firefox | The 1.0.0 Firefox personas (Camoufox 152) showed four things stock Firefox does not: a page could construct `new Worker("chrome://juggler/…")`, a cross-site frame read first-party cookies and storage, `window.open()` without activation opened a window, and pages had 15 extra `set…` functions | fixed by the move to Camoufox 156 (ADR 0011): each persona at its next open after the deploy |
