@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { deflateRawSync } from 'node:zlib';
 
 import type { ClaimedOs, OpenContextRequest } from '@kage/contract';
 import {
@@ -32,11 +33,13 @@ import {
   launchPlan,
   launcherVersion,
   localeConfig,
-  matchProfileToBuild,
+  parseLocales,
   parseProperties,
+  parseRemovedProperties,
   personaFontconfig,
   plausibleRenderer,
   profilePaths,
+  readArchiveEntry,
   validateConfig,
   type CamoufoxConfig,
   type HostFacts,
@@ -101,56 +104,123 @@ describe('engine-firefox pins (fingerprint-critical, see docs/versions.md)', () 
 
   it('runs the pinned Camoufox build and no other', async () => {
     expect([host.version, host.release]).toEqual([CAMOUFOX_VERSION, CAMOUFOX_RELEASE]);
-    expect([CAMOUFOX_VERSION, CAMOUFOX_RELEASE]).toEqual(['152.0.4', 'beta.30']);
+    expect([CAMOUFOX_VERSION, CAMOUFOX_RELEASE]).toEqual(['156.0.1', 'beta.39']);
     expect(host.properties.get('navigator.userAgent')).toBe('str');
     expect(host.properties.size).toBeGreaterThan(100);
-
-    const empty = await mkdtemp(path.join(tmpdir(), 'kage-nocamoufox-'));
-    await expect(detectHost(empty)).rejects.toMatchObject({ code: 'browser_launch_failed' });
-    // Another build, even a newer one of the same Firefox, is refused: the
-    // launcher's own download installs exactly such a build.
-    await writeFile(
-      path.join(empty, 'version.json'),
-      JSON.stringify({ version: '152.0.4', release: 'beta.31' }),
-    );
-    const refused: unknown = await detectHost(empty).catch((error: unknown) => error);
-    expect(refused).toBeInstanceOf(EngineError);
-    expect((refused as EngineError).message).toContain('152.0.4-beta.31');
-    await writeFile(path.join(empty, 'version.json'), 'not json');
-    await expect(detectHost(empty)).rejects.toMatchObject({ code: 'browser_launch_failed' });
-  });
-  it('runs that build with the Juggler backport and with no other archive (ADR 0010)', async () => {
-    expect(host.omniSha256).toBe(CAMOUFOX_OMNI_SHA256);
-    // The image and the setup script patch to the checksum the engine asks for.
+    // The image and the setup script fetch the build the engine names.
     const dockerfile = await readFile(
       new URL('../../../../deploy/docker/sidecar.Dockerfile', import.meta.url),
       'utf8',
     );
-    expect(/^ARG CAMOUFOX_OMNI_PATCHED_SHA256=(.+)$/m.exec(dockerfile)?.[1]).toBe(
-      CAMOUFOX_OMNI_SHA256,
-    );
-    expect(/^ARG CAMOUFOX_OMNI_SHA256=(.+)$/m.exec(dockerfile)?.[1]).toMatch(/^[0-9a-f]{64}$/);
-    expect(/^ARG CAMOUFOX_OMNI_SHA256=(.+)$/m.exec(dockerfile)?.[1]).not.toBe(CAMOUFOX_OMNI_SHA256);
+    expect(/^ARG CAMOUFOX_VERSION=(.+)$/m.exec(dockerfile)?.[1]).toBe(CAMOUFOX_VERSION);
+    expect(/^ARG CAMOUFOX_RELEASE=(.+)$/m.exec(dockerfile)?.[1]).toBe(CAMOUFOX_RELEASE);
+    expect(/^ARG CAMOUFOX_SHA256=(.+)$/m.exec(dockerfile)?.[1]).toMatch(/^[0-9a-f]{64}$/);
+    // Nothing is patched into the build any more (ADR 0010 is superseded).
+    expect(dockerfile).not.toMatch(/CAMOUFOX_OMNI|patch-camoufox/);
 
-    // The pinned build as its release ships it, or with anything else in
-    // its archive: the driver inside would grant user activation again.
-    const unpatched = await mkdtemp(path.join(tmpdir(), 'kage-unpatched-'));
+    const empty = await mkdtemp(path.join(tmpdir(), 'kage-nocamoufox-'));
+    await expect(detectHost(empty)).rejects.toMatchObject({ code: 'browser_launch_failed' });
+    // Another build, even another one of the same Firefox, is refused: the
+    // launcher's own download installs exactly such a build.
     await writeFile(
-      path.join(unpatched, 'version.json'),
+      path.join(empty, 'version.json'),
+      JSON.stringify({ version: '156.0.1', release: 'beta.38' }),
+    );
+    const refused: unknown = await detectHost(empty).catch((error: unknown) => error);
+    expect(refused).toBeInstanceOf(EngineError);
+    expect((refused as EngineError).message).toContain('156.0.1-beta.38');
+    await writeFile(path.join(empty, 'version.json'), 'not json');
+    await expect(detectHost(empty)).rejects.toMatchObject({ code: 'browser_launch_failed' });
+  });
+
+  it("runs that build's own archive of its scripts and no other", async () => {
+    expect(host.omniSha256).toBe(CAMOUFOX_OMNI_SHA256);
+    // The pinned build with anything else in its archive: the driver inside
+    // could grant user activation again, or show itself to a page.
+    const changed = await mkdtemp(path.join(tmpdir(), 'kage-changed-'));
+    await writeFile(
+      path.join(changed, 'version.json'),
       JSON.stringify({ version: CAMOUFOX_VERSION, release: CAMOUFOX_RELEASE }),
     );
-    const missing: unknown = await detectHost(unpatched).catch((error: unknown) => error);
+    const missing: unknown = await detectHost(changed).catch((error: unknown) => error);
     expect(missing).toMatchObject({ code: 'browser_launch_failed' });
     expect((missing as EngineError).message).toContain('omni.ja cannot be read');
-    await writeFile(path.join(unpatched, 'omni.ja'), 'the archive of a release');
-    const refused: unknown = await detectHost(unpatched).catch((error: unknown) => error);
+    await writeFile(path.join(changed, 'omni.ja'), 'the archive of a release');
+    const refused: unknown = await detectHost(changed).catch((error: unknown) => error);
     expect(refused).toMatchObject({ code: 'browser_launch_failed' });
-    expect((refused as EngineError).message).toContain('does not hold the Juggler backport');
+    expect((refused as EngineError).message).toContain("is not the pinned build's");
     // What the archive is, so that a log line says which one somebody installed.
     expect((refused as EngineError).message).toContain(
       '96d5c9f90ccaf996e7b1ccc75831cfdeca1e6cb11586709bbc3407387e467116',
     );
     expect((refused as EngineError).message).toContain('just setup-camoufox');
+  });
+
+  it('knows which keys the build no longer reads and which languages it ships', () => {
+    // Declared with "removed" so that older documents still validate.
+    for (const key of [
+      'canvas:seed',
+      'canvas:aaOffset',
+      'canvas:aaCapOffset',
+      'fonts:spacing_seed',
+      'disableTheming',
+      'webGl:contextAttributes',
+      'webGl2:contextAttributes',
+      'navigator.product',
+      'navigator.appCodeName',
+      'navigator.appName',
+    ]) {
+      expect(host.removedProperties.has(key), key).toBe(true);
+      expect(host.properties.has(key), key).toBe(true);
+    }
+    expect(host.removedProperties.has('navigator.userAgent')).toBe(false);
+    expect(host.removedProperties.has('audio:seed')).toBe(false);
+    // The build carries Firefox's language packs (152 had en-US only).
+    for (const locale of ['en-US', 'de', 'fr', 'it', 'en-GB', 'es-ES', 'pt-BR', 'zh-CN']) {
+      expect(host.locales, locale).toContain(locale);
+    }
+    expect(
+      parseRemovedProperties(
+        '[{"property":"a","type":"str"},{"property":"b","type":"bool","removed":"156.0.1-beta.32"},{"x":1}]',
+      ),
+    ).toEqual(new Set(['b']));
+    expect(parseLocales('en-US,de, fr\n')).toEqual(['en-US', 'de', 'fr']);
+  });
+
+  it('reads a file out of a zip archive, stored or deflated', () => {
+    // A zip of two entries made by hand: "a.txt" stored, "b.txt" deflated.
+    const entry = (name: string, data: Buffer, method: number, offset: number) => {
+      const body = method === 8 ? deflateRawSync(data) : data;
+      const local = Buffer.alloc(30 + name.length);
+      local.writeUInt32LE(0x04034b50, 0);
+      local.writeUInt16LE(method, 8);
+      local.writeUInt32LE(body.length, 18);
+      local.writeUInt32LE(data.length, 22);
+      local.writeUInt16LE(name.length, 26);
+      local.write(name, 30);
+      const central = Buffer.alloc(46 + name.length);
+      central.writeUInt32LE(0x02014b50, 0);
+      central.writeUInt16LE(method, 10);
+      central.writeUInt32LE(body.length, 20);
+      central.writeUInt32LE(data.length, 24);
+      central.writeUInt16LE(name.length, 28);
+      central.writeUInt32LE(offset, 42);
+      central.write(name, 46);
+      return { local: Buffer.concat([local, body]), central };
+    };
+    const a = entry('a.txt', Buffer.from('stored text'), 0, 0);
+    const b = entry('b.txt', Buffer.from('deflated text '.repeat(20)), 8, a.local.length);
+    const directory = Buffer.concat([a.central, b.central]);
+    const end = Buffer.alloc(22);
+    end.writeUInt32LE(0x06054b50, 0);
+    end.writeUInt16LE(2, 10);
+    end.writeUInt32LE(directory.length, 12);
+    end.writeUInt32LE(a.local.length + b.local.length, 16);
+    const zip = Buffer.concat([a.local, b.local, directory, end]);
+    expect(readArchiveEntry(zip, 'a.txt')?.toString()).toBe('stored text');
+    expect(readArchiveEntry(zip, 'b.txt')?.toString()).toBe('deflated text '.repeat(20));
+    expect(readArchiveEntry(zip, 'c.txt')).toBeNull();
+    expect(() => readArchiveEntry(Buffer.from('no zip at all'), 'a.txt')).toThrow(/no end/);
   });
 });
 
@@ -203,12 +273,12 @@ describe('generateFingerprint', () => {
     expect(document).toMatchObject({
       schema: 1,
       engine: 'firefox',
-      generator: 'camoufox-js@0.12.1+camoufox-152.0.4-beta.30',
+      generator: 'camoufox-js@0.12.1+camoufox-156.0.1-beta.39',
       seed: SEED,
       claimed_os: 'windows',
-      browser_version: '152.0.4',
+      browser_version: '156.0.1',
       user_agent:
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:156.0) Gecko/20100101 Firefox/156.0',
       platform: 'Win32',
       languages: LANGUAGES,
       native: {
@@ -280,14 +350,14 @@ describe('generateFingerprint', () => {
 
   it('describes each system it may claim in every value that names one', () => {
     const marks: Record<ClaimedOs, [RegExp, string, RegExp, string]> = {
-      windows: [/\(Windows NT 10\.0; Win64; x64; rv:152\.0\)/, 'Win32', /Direct3D/, 'Segoe UI'],
+      windows: [/\(Windows NT 10\.0; Win64; x64; rv:156\.0\)/, 'Win32', /Direct3D/, 'Segoe UI'],
       macos: [
-        /\(Macintosh; Intel Mac OS X [\d.]+; rv:152\.0\)/,
+        /\(Macintosh; Intel Mac OS X [\d.]+; rv:156\.0\)/,
         'MacIntel',
         /Apple|Intel|AMD/,
         'Helvetica Neue',
       ],
-      linux: [/\(X11; Linux x86_64; rv:152\.0\)/, 'Linux x86_64', /.+/, 'Arimo'],
+      linux: [/\(X11; Linux x86_64; rv:156\.0\)/, 'Linux x86_64', /.+/, 'Arimo'],
     };
     for (const os of SYSTEMS) {
       const document = generate(os);
@@ -584,8 +654,10 @@ describe('launchPlan', () => {
       const { fontconfig } = launchPlan(document, request(document), host, '/p/page.pdf');
       expect(fontconfig).toContain(`<dir>${path.join(host.installDir, 'fonts')}</dir>`);
       expect(fontconfig).not.toContain('prefix="cwd"');
+      // A Linux claim keeps the build's own setting, the light autohinter
+      // since 156 (whole-pixel advances were a tell there too).
       expect(fontconfig).toContain(
-        os === 'linux' ? '<const>hintfull</const>' : '<const>hintnone</const>',
+        os === 'linux' ? '<const>hintslight</const>' : '<const>hintnone</const>',
       );
       expect(
         fontconfig.includes('<edit name="hinting" mode="assign"><bool>false</bool></edit>'),
@@ -625,44 +697,7 @@ describe('the engine before it launches anything', () => {
       home: '/var/lib/kage/personas/p1/home',
       fontconfig: '/var/lib/kage/personas/p1/home/fontconfig',
       pdf: '/var/lib/kage/personas/p1/home/print/page.pdf',
-      build: '/var/lib/kage/personas/p1/omni.sha256',
     });
-  });
-  it('removes the startup cache of a profile that last started under another build', async () => {
-    const profile = await mkdtemp(path.join(tmpdir(), 'kage-firefox-profile-'));
-    const paths = profilePaths(profile);
-    const cache = path.join(paths.userData, 'startupCache');
-    const exists = (file: string) =>
-      stat(file).then(
-        () => true,
-        () => false,
-      );
-
-    // A new profile: nothing to remove, and it notes the build.
-    await mkdir(paths.userData, { recursive: true });
-    expect(await matchProfileToBuild(paths, 'a'.repeat(64))).toBe(false);
-    expect(await readFile(paths.build, 'utf8')).toBe(`${'a'.repeat(64)}\n`);
-
-    // The browser ran: it left compiled scripts and everything else.
-    await mkdir(cache);
-    await writeFile(path.join(cache, 'scriptCache-child.bin'), 'the script that was patched');
-    await writeFile(path.join(paths.userData, 'cookies.sqlite'), 'cookies');
-    // The same build again: the cache is the browser's to keep.
-    expect(await matchProfileToBuild(paths, 'a'.repeat(64))).toBe(false);
-    expect(await exists(path.join(cache, 'scriptCache-child.bin'))).toBe(true);
-
-    // Another archive at the same place: the cache goes, the rest stays.
-    expect(await matchProfileToBuild(paths, 'b'.repeat(64))).toBe(true);
-    expect(await exists(cache)).toBe(false);
-    expect(await readFile(path.join(paths.userData, 'cookies.sqlite'), 'utf8')).toBe('cookies');
-    expect(await readFile(paths.build, 'utf8')).toBe(`${'b'.repeat(64)}\n`);
-    expect(await matchProfileToBuild(paths, 'b'.repeat(64))).toBe(false);
-
-    // A profile from before the note existed has a cache and no note.
-    const old = profilePaths(await mkdtemp(path.join(tmpdir(), 'kage-firefox-old-')));
-    await mkdir(path.join(old.userData, 'startupCache'), { recursive: true });
-    expect(await matchProfileToBuild(old, 'b'.repeat(64))).toBe(true);
-    expect(await exists(path.join(old.userData, 'startupCache'))).toBe(false);
   });
 
   it('generates through the engine, and refuses to open what is not its own', async () => {
@@ -678,7 +713,7 @@ describe('the engine before it launches anything', () => {
       },
       host,
     );
-    expect(engine.status()).toEqual({ browserVersion: '152.0.4' });
+    expect(engine.status()).toEqual({ browserVersion: '156.0.1' });
     const generated = await engine.generatePersona({
       seed: SEED,
       claimed_os: 'macos',
@@ -687,7 +722,7 @@ describe('the engine before it launches anything', () => {
     expect(generated.summary).toMatchObject({
       engine: 'firefox',
       claimed_os: 'macos',
-      browser_major: 152,
+      browser_major: 156,
       platform: 'MacIntel',
       inject: 'none',
     });

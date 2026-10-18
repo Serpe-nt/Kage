@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -46,11 +46,15 @@ export interface ProfilePaths {
   readonly fontconfig: string;
   /** Where the browser writes a printed page. */
   readonly pdf: string;
-  /** A note of the build the profile last started under: the checksum of its `omni.ja`. */
-  readonly build: string;
 }
 
-/** Where the parts of a persona's profile live. */
+/**
+ * Where the parts of a persona's profile live.
+ *
+ * A profile directory may also hold an `omni.sha256` file: profiles that
+ * ran the Camoufox 152 build with the Juggler backport (ADR 0010) noted
+ * there which archive they last started under. Nothing reads it any more.
+ */
 export function profilePaths(profileDir: string): ProfilePaths {
   const home = path.join(profileDir, 'home');
   return {
@@ -58,46 +62,7 @@ export function profilePaths(profileDir: string): ProfilePaths {
     home,
     fontconfig: path.join(home, 'fontconfig'),
     pdf: path.join(home, 'print', 'page.pdf'),
-    build: path.join(profileDir, 'omni.sha256'),
   };
-}
-/** Where Firefox keeps the compiled scripts of its own code, below its profile. */
-const STARTUP_CACHE = 'startupCache';
-
-/**
- * Makes a profile fit for the build it is about to start under (ADR 0010).
- *
- * Firefox keeps the compiled scripts of its own code in the profile and
- * trusts that cache for as long as the build's version and place are the
- * same. The Juggler backport changes one of those scripts and neither of
- * the two, so a profile that last started under another archive would go
- * on running the script that is no longer there: measured, a page nobody
- * touched reads user activation again, on every open. The profile
- * therefore remembers the archive it last started under, and its cache is
- * removed when that is not the one the engine runs. Firefox builds the
- * cache anew; nothing else in the profile depends on it.
- *
- * @returns whether a cache was removed.
- */
-export async function matchProfileToBuild(
-  paths: ProfilePaths,
-  omniSha256: string,
-): Promise<boolean> {
-  const last = await readFile(paths.build, 'utf8').then(
-    (text) => text.trim(),
-    () => null,
-  );
-  if (last === omniSha256) {
-    return false;
-  }
-  const cache = path.join(paths.userData, STARTUP_CACHE);
-  const cached = await stat(cache).then(
-    () => true,
-    () => false,
-  );
-  await rm(cache, { recursive: true, force: true });
-  await writeFile(paths.build, `${omniSha256}\n`, { mode: 0o600 });
-  return cached;
 }
 
 /**
@@ -155,12 +120,6 @@ export class FirefoxEngine implements Engine {
       await mkdir(directory, { recursive: true, mode: 0o700 });
     }
     await writeFile(path.join(paths.fontconfig, 'fonts.conf'), plan.fontconfig, { mode: 0o600 });
-    if (await matchProfileToBuild(paths, this.host.omniSha256)) {
-      this.options.log.info(
-        { persona_id: request.persona_id },
-        'the profile last started under another build: its startup cache was removed',
-      );
-    }
 
     const displayNumber = this.displays.acquire();
     let display: VirtualDisplay | null = null;

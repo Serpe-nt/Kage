@@ -8,12 +8,9 @@
 # from deploy/docker/sidecar.Dockerfile, so tests and image run the same
 # build. The archive is fetched by its exact address, never through the
 # launcher's own download (`camoufox-js fetch`), which installs another
-# build. A machine that already has the pinned build is left alone.
-#
-# The build then gets the Juggler backport (ADR 0010,
-# scripts/patch-camoufox-juggler.mjs): the same bytes the image runs. A
-# build unpacked before the backport existed is patched in place; the engine
-# refuses one that is not. That step needs `node`.
+# build. A machine that already has the pinned build is left alone; another
+# build in the same place is replaced, so that a machine that ran the
+# earlier pin moves to this one.
 #
 #   KAGE_CAMOUFOX_DIR   where the build is unpacked, /opt/camoufox when not
 #                       set. The engine looks there too; tell it about
@@ -28,14 +25,8 @@ dockerfile="deploy/docker/sidecar.Dockerfile"
 version="$(sed -n 's/^ARG CAMOUFOX_VERSION=//p' "${dockerfile}")"
 release="$(sed -n 's/^ARG CAMOUFOX_RELEASE=//p' "${dockerfile}")"
 checksum="$(sed -n 's/^ARG CAMOUFOX_SHA256=//p' "${dockerfile}")"
-omni="$(sed -n 's/^ARG CAMOUFOX_OMNI_SHA256=//p' "${dockerfile}")"
-patched="$(sed -n 's/^ARG CAMOUFOX_OMNI_PATCHED_SHA256=//p' "${dockerfile}")"
 if [ -z "${version}" ] || [ -z "${release}" ] || [ -z "${checksum}" ]; then
     echo "error: ${dockerfile} does not name CAMOUFOX_VERSION, CAMOUFOX_RELEASE and CAMOUFOX_SHA256" >&2
-    exit 1
-fi
-if [ -z "${omni}" ] || [ -z "${patched}" ]; then
-    echo "error: ${dockerfile} does not name CAMOUFOX_OMNI_SHA256 and CAMOUFOX_OMNI_PATCHED_SHA256" >&2
     exit 1
 fi
 
@@ -51,32 +42,9 @@ reported() {
     "${camoufox}" --version 2> /dev/null | sed -E 's/^.* //' || true
 }
 
-# Whether the build's archive holds the Juggler backport; says nothing.
-backported() {
-    node scripts/patch-camoufox-juggler.mjs "${dir}" --to "${patched}" --check > /dev/null 2>&1
-}
-
 sudo=""
 if [ "$(id -u)" -ne 0 ]; then
     sudo="sudo"
-fi
-
-# Applies the Juggler backport. The tool refuses an archive that is neither
-# the pinned build's nor the patched one. A build that belongs to root is
-# patched under sudo, which has a PATH of its own: node goes by its path.
-backport() {
-    echo "==> applying the Juggler backport to ${dir}/omni.ja"
-    if [ -w "${dir}" ] && [ -w "${dir}/omni.ja" ]; then
-        node scripts/patch-camoufox-juggler.mjs "${dir}" --from "${omni}" --to "${patched}"
-    else
-        ${sudo} "$(command -v node)" scripts/patch-camoufox-juggler.mjs "${dir}" \
-            --from "${omni}" --to "${patched}"
-    fi
-}
-
-if ! command -v node > /dev/null; then
-    echo "error: the Juggler backport needs node (\`just setup-node\` installs the pinned one)" >&2
-    exit 1
 fi
 
 unpacked=""
@@ -86,12 +54,7 @@ if [ -x "${camoufox}" ] && [ -r "${dir}/version.json" ] \
 fi
 if [ -n "${unpacked}" ] && [ "$(reported)" = "${build}" ] \
     && command -v Xvfb > /dev/null && command -v setxkbmap > /dev/null; then
-    if backported; then
-        echo "Camoufox ${build} with the Juggler backport, Xvfb and setxkbmap are already installed"
-    else
-        # Everything is there but the backport: a build unpacked before it existed.
-        backport
-    fi
+    echo "Camoufox ${build}, Xvfb and setxkbmap are already installed"
     exit 0
 fi
 
@@ -124,11 +87,22 @@ ${sudo} env DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-re
     unzip xvfb x11-xkb-utils libgl1-mesa-dri libegl1 "${libraries[@]}"
 
 if [ -z "${unpacked}" ]; then
-    archive="$(mktemp --suffix=.zip)"
-    trap 'rm -f "${archive}"' EXIT
-    echo "==> downloading Camoufox ${build}"
-    curl --fail --silent --show-error --location --retry 3 --output "${archive}" \
-        "https://github.com/daijro/camoufox/releases/download/v${build}/camoufox-${build}-lin.x86_64.zip"
+    # KAGE_CAMOUFOX_ARCHIVE names a place to keep the archive between runs
+    # (CI's cache): a copy there is taken when it is the pinned archive, and
+    # anything else there is replaced by a fresh download.
+    archive="${KAGE_CAMOUFOX_ARCHIVE:-}"
+    if [ -z "${archive}" ]; then
+        archive="$(mktemp --suffix=.zip)"
+        trap 'rm -f "${archive}"' EXIT
+    fi
+    if echo "${checksum}  ${archive}" | sha256sum --check --strict --status 2> /dev/null; then
+        echo "==> Camoufox ${build} from ${archive}"
+    else
+        echo "==> downloading Camoufox ${build}"
+        mkdir -p "$(dirname "${archive}")"
+        curl --fail --silent --show-error --location --retry 3 --output "${archive}" \
+            "https://github.com/daijro/camoufox/releases/download/v${build}/camoufox-${build}-lin.x86_64.zip"
+    fi
     echo "${checksum}  ${archive}" | sha256sum --check --strict
 
     echo "==> unpacking Camoufox ${build} into ${dir}"
@@ -139,10 +113,6 @@ if [ -z "${unpacked}" ]; then
     ${sudo} unzip -q "${archive}" -d "${dir}"
     ${sudo} chmod -R a+rX,go-w "${dir}"
     printf '%s\n' "${stamp}" | ${sudo} tee "${dir}/version.json" > /dev/null
-fi
-
-if ! backported; then
-    backport
 fi
 
 if [ "$(reported)" != "${build}" ]; then
