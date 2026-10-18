@@ -1,0 +1,403 @@
+pref	stock	Kage persona	where it comes from	who can see it	what it does	action
+app.normandy.api_url	"https://normandy.cdn.mozilla.net/api/v1"	""	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+app.normandy.enabled	true	false	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+app.shield.optoutstudies.enabled	true	false	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+app.update.auto	true	false	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+app.update.badgeWaitTime	345600	(absent)	absent in Camoufox	none (only Mozilla sees the missing background requests)	background service off	keep
+app.update.channel	"release"	"default"	build default (not in camoufox.cfg)	none (only Mozilla sees the missing background requests)	background service off	keep
+app.update.checkInstallTime	true	false	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+app.update.checkInstallTime.days	63	(absent)	absent in Camoufox	none (only Mozilla sees the missing background requests)	background service off	keep
+app.update.disabledForTesting	(absent)	true	only in Camoufox	none (only Mozilla sees the missing background requests)	background service off	keep
+app.update.interval	21600	(absent)	absent in Camoufox	none (only Mozilla sees the missing background requests)	background service off	keep
+app.update.lastUpdateTime.recipe-client-addon-run	1792356864	(absent)	absent in Camoufox	none (only Mozilla sees the missing background requests)	background service off	keep
+app.update.lastUpdateTime.rs-experiment-loader-timer	1792356864	(absent)	absent in Camoufox	none (only Mozilla sees the missing background requests)	background service off	keep
+app.update.promptWaitTime	691200	(absent)	absent in Camoufox	none (only Mozilla sees the missing background requests)	background service off	keep
+app.update.service.enabled	(absent)	false	only in Camoufox	none (only Mozilla sees the missing background requests)	background service off	keep
+app.update.url.details	"https://www.mozilla.org/%LOCALE%/firefox/notes"	(absent)	absent in Camoufox	none (only Mozilla sees the missing background requests)	background service off	keep
+app.update.url.manual	"https://www.mozilla.org/%LOCALE%/firefox/new?reason=manual-update"	(absent)	absent in Camoufox	none (only Mozilla sees the missing background requests)	background service off	keep
+breakpad.reportURL	"https://crash-stats.mozilla.org/report/index/"	""	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+browser.aboutConfig.showWarning	true	false	camoufox.cfg	none	browser UI only	keep
+browser.bookmarks.max_backups	15	0	camoufox.cfg	none	browser UI only	keep
+browser.contentblocking.report.hide_vpn_banner	false	true	camoufox.cfg	none	browser UI only	keep
+browser.contentblocking.report.lockwise.enabled	true	false	camoufox.cfg	none	browser UI only	keep
+browser.contentblocking.report.show_mobile_app	true	false	camoufox.cfg	none	browser UI only	keep
+browser.contextual-password-manager.enabled	true	false	build default (not in camoufox.cfg)	none	browser UI only	keep
+browser.discovery.enabled	true	false	camoufox.cfg	none	browser UI only	keep
+browser.dom.window.dump.enabled	false	true	camoufox.cfg	none	what the driver or the build needs	keep
+browser.download.panel.shown	false	true	camoufox.cfg	none	browser UI only	keep
+browser.formfill.enable	true	false	camoufox.cfg	none (Kage fills no forms from memory, D13)	password manager, form history and autofill off	keep
+browser.ml.chat.nimbus	"copilot-chatbot-sunset:control"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.ml.chat.providers	"claude,chatgpt,gemini,lechat"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.activationWindow.variant	""	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.asrouter.devtoolsEnabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.asrouter.userprefs.cfr.addons	true	false	camoufox.cfg	none	browser UI only	keep
+browser.newtabpage.activity-stream.asrouter.userprefs.cfr.features	true	false	camoufox.cfg	none	browser UI only	keep
+browser.newtabpage.activity-stream.caretBlinkCount	5	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.caretBlinkTime	1200	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.default.sites	"https://www.wikipedia.org/,https://www.youtube.com/,https://www.reddit.com/,https://addons.mozilla.org"	""	camoufox.cfg	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.attribution.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.carousel.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.carousel.paused	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.carousel.slideCount	5	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.config	"{\"collapsible\":true,\"enabled\":true}"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.enabled	true	false	camoufox.cfg	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.endpointSpocsClear	"https://spocs.getpocket.com/user"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.endpoints	"https://getpocket.cdn.mozilla.net/,https://firefox-api-proxy.cdn.mozilla.net/,https://spocs.getpocket.com/,https://merino.services.mozilla.com/,https://ads.mozilla.org/"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.flight.blocks	"{}"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.optIn-region-weather-config	"DE,GB,FR,ES,IT,CH,AT,BE,IE,NL,PL,CZ,SE,SG,HU,SK,FI,DK,NO,PT"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.promoCard.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.rec.impressions	"{}"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.region-basic-layout	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.sections.adAllowedRanks	""	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.sections.blocked	""	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.sections.clientLayout.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.sections.contextualAds.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.sections.customizeMenuPanel.enabled	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.sections.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.sections.following	""	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.sections.ordering	"default"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.sections.personalization.enabled	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.sections.personalization.inferred.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.shortcuts.force_log.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.shortcuts.personalization.enabled	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.spoc.impressions	"{}"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.spocs.onDemand	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.spocs.startupCache.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.topicLabels.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.topicSelection.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.topicSelection.hasBeenUpdatedPreviously	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.topicSelection.onboarding.displayCount	0	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.topicSelection.onboarding.displayTimeout	0	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.topicSelection.onboarding.lastDisplayed	""	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.topicSelection.onboarding.maybeDisplay	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.topicSelection.selectedTopics	""	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.topicSelection.suggestedTopics	"business, arts, government"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.discoverystream.topicSelection.topics	"business, arts, food, health, finance, government, sports, tech, travel, education-science, society"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.aboutpreferences	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.adsfeed	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.discoverystreamfeed	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.externalcomponentsfeed	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.favicon	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.inferredpersonalizationfeed	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.listsfeed	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.newtabattributionfeed	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.newtabinit	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.newtabmessaging	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.pictureofthedayfeed	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.places	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.prefs	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.privacyfeed	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.recentsearchesfeed	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.section.topstories	true	false	camoufox.cfg	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.sections	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.sectionslayoutfeed	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.smartshortcutsfeed	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.sportsfeed	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.startupcacheinit	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.stocksfeed	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.system.topsites	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.system.topstories	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.systemtick	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.telemetry	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.timerfeed	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.topsites	true	false	camoufox.cfg	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.wallpaperfeed	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.weatherfeed	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.feeds.webnotificationsfeed	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.hideLogo	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.hideTopSitesTitle	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.improvesearch.noDefaultSearchTile	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.improvesearch.topSiteSearchShortcuts.havePinned	""	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.improvesearch.topSiteSearchShortcuts.searchEngines	""	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.migrationExpired	(absent)	true	only in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.newtabAdSize.billboard	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.newtabAdSize.billboard.position	"3"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.newtabAdSize.leaderboard	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.newtabAdSize.leaderboard.position	"3"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.newtabAdSize.mediumRectangle	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.newtabWallpapers.customWallpaper.uploadedPreviously	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.newtabWallpapers.enabled	true	false	camoufox.cfg	none	browser UI only	keep
+browser.newtabpage.activity-stream.newtabWallpapers.initialWallpaper	""	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.newtabWallpapers.user.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.newtabWallpapers.user.enabled.migrated	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.newtabWallpapers.visibilityGroups	""	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.pageLayouts.variant	"nova-full-width"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.pocketCta	"{\"cta_button\":\"\",\"cta_text\":\"\",\"cta_url\":\"\",\"use_cta\":false}"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.privacyInfo.url	"https://support.mozilla.org/1/firefox/156.0.1/Linux/en-US/sponsor-privacy"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.remote-renderer.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.section.highlights.includeBookmarks	true	false	camoufox.cfg	none	browser UI only	keep
+browser.newtabpage.activity-stream.section.highlights.includeDownloads	true	false	camoufox.cfg	none	browser UI only	keep
+browser.newtabpage.activity-stream.section.highlights.includeVisited	true	false	camoufox.cfg	none	browser UI only	keep
+browser.newtabpage.activity-stream.section.highlights.rows	1	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.section.topstories.rows	1	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.sectionOrder	"topsites,topstories,highlights"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.sectionsLearnMore.url	"https://support.mozilla.org/1/firefox/156.0.1/Linux/en-US/firefox-new-tab-personalization"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.showSponsored	true	false	camoufox.cfg	none	browser UI only	keep
+browser.newtabpage.activity-stream.showSponsoredCheckboxes	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.showSponsoredTopSites	true	false	camoufox.cfg	none	browser UI only	keep
+browser.newtabpage.activity-stream.showWeather	true	false	camoufox.cfg	none	browser UI only	keep
+browser.newtabpage.activity-stream.showWebNotifications	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.sov.amp.allocation	"100, 100, 100"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.sov.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.sov.frecency.allocation	"0, 0, 0"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.sov.frecency.exposure	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.sov.name	"SOV-20251122215625"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.spaces.activityOptOut	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.spaces.storiesOptOut	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.spaces.widgetsOptOut	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.sports.worldCup.liveEndpoint	"https://merino.services.mozilla.com/api/v1/wcs/live"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.sports.worldCup.matchesEndpoint	"https://merino.services.mozilla.com/api/v1/wcs/matches"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.sports.worldCup.teamsEndpoint	"https://merino.services.mozilla.com/api/v1/wcs/teams"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.sports.worldCup.watchLiveEndpoint	"https://merino.services.mozilla.com/api/v1/wcs/watch-links"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.support.url	"https://support.mozilla.org/1/firefox/156.0.1/Linux/en-US/new-tab"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.system.showSponsored	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.system.showWeatherOptIn	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.system.showWebNotifications	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.telemetry	true	false	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+browser.newtabpage.activity-stream.telemetry.structuredIngestion.endpoint	"https://incoming.telemetry.mozilla.org/submit"	(absent)	absent in Camoufox	none (only Mozilla sees the missing background requests)	background service off	keep
+browser.newtabpage.activity-stream.topSitesGroupedPins	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.topSitesMaxSitesPerRow	8	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.topSitesRows	1	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.unifiedAds.adsClient.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.unifiedAds.blockedAds	""	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.weather.optInAccepted	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.weather.optInDisplayed	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.weather.staticData.enabled	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.weather.temperatureUnits	"c"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.clocks.enabled	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.clocks.hourFormat	""	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.clocks.interaction	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.clocks.size	""	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.clocks.zones	""	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.crossword.enabled	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.crossword.endpoint	"https://prod-games-particle.merino.prod.webservices.mozgcp.net/index.html"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.crossword.interaction	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.crossword.size	""	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.defaultSize	"medium"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.enabled	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.feedback.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.focusTimer.enabled	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.focusTimer.interaction	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.focusTimer.showSystemNotifications	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.focusTimer.size	""	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.hideAllToast.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.lists.badge.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.lists.badge.label	""	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.lists.enabled	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.lists.interaction	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.lists.maxListItems	100	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.lists.maxLists	10	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.lists.size	""	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.maximized	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.order	""	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.pictureOfTheDay.dismissedDate	""	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.pictureOfTheDay.enabled	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.pictureOfTheDay.endpoint	"https://merino.services.mozilla.com/api/v1/rss/picture-of-the-day"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.pictureOfTheDay.interaction	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.pictureOfTheDay.setAsWallpaper.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.pictureOfTheDay.size	""	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.pictureOfTheDay.wallpaperActive	""	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.privacy.blankChance	"0.4"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.privacy.celebrationState	"{}"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.privacy.celebrationThreshold	10	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.privacy.enabled	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.privacy.forceCelebration	""	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.privacy.forceMessageId	""	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.privacy.maxCount	100	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.privacy.maxDisplayCount	999	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.privacy.messageState	"{}"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.privacy.showVpnMessages	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.privacy.size	""	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.recentSearches.enabled	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.recentSearches.interaction	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.recentSearches.size	""	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.row.expanded	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.sports.forceLiveDataTrustable	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.sportsWidget.celebrations.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.sportsWidget.celebrations.windowMs	86400000	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.sportsWidget.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.sportsWidget.interaction	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.sportsWidget.live.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.sportsWidget.pollIdleMs	21600000	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.sportsWidget.pollLiveMs	60000	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.sportsWidget.pollMatchDayMs	1800000	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.sportsWidget.pollPregameLeadMs	600000	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.sportsWidget.size	""	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.stocks.enabled	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.stocks.interaction	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.stocks.size	""	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.stocks.watchlist	""	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.system.clocks.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.system.crossword.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.system.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.system.focusTimer.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.system.lists.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.system.maximized	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.system.pictureOfTheDay.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.system.privacy.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.system.recentSearches.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.system.sportsWidget.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.system.stocks.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.system.weather.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.system.weatherForecast.enabled	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.weather.enabled	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.weather.size	"small"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.weatherForecast.enabled	true	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.activity-stream.widgets.weatherForecast.interaction	false	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.newtabpage.enabled	true	false	camoufox.cfg	none	browser UI only	keep
+browser.newtabpage.trainhopAddonDeployment.version	"158.1.20260920.214645"	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.pagethumbnails.capturing_disabled	(absent)	true	only in Camoufox	none	browser UI, macOS screen picker, printing target	keep
+browser.places.interactions.enabled	true	false	camoufox.cfg	none	browser UI only	keep
+browser.preferences.defaultPerformanceSettings.enabled	true	false	camoufox.cfg	none	browser UI only	keep
+browser.preferences.moreFromMozilla	true	false	camoufox.cfg	none	browser UI only	keep
+browser.region.network.url	"https://location.services.mozilla.com/v1/country?key=%MOZILLA_API_KEY%"	""	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+browser.safebrowsing.blockedURIs.enabled	true	false	camoufox.cfg	server (Google only)	as above	document
+browser.safebrowsing.downloads.enabled	true	false	camoufox.cfg	server (Google only)	as above	document
+browser.safebrowsing.malware.enabled	true	false	camoufox.cfg	server (Google only)	no Safe Browsing lists or lookups from the persona's address; a listed site opens without a warning	document
+browser.safebrowsing.phishing.enabled	true	false	camoufox.cfg	server (Google only)	as above	document
+browser.safebrowsing.provider.mozilla.updateURL	"moz-sbrs:://antitracking"	""	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+browser.search.serpEventTelemetryCategorization.regionEnabled	false	(absent)	absent in Camoufox	none	browser UI, macOS screen picker, printing target	keep
+browser.search.update	true	false	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+browser.sessionhistory.max_total_viewers	-1	0	camoufox.cfg	page	bfcache off: pageshow.persisted is never true after back/forward (upstream LEAKS row 106); Juggler also sets docShell.disallowBFCache	document (not a pref fix: Juggler enforces it)
+browser.sessionstore.max_resumed_crashes	1	0	camoufox.cfg	none	session restore and startup (history.length measured equal to stock)	keep
+browser.sessionstore.max_tabs_undo	25	0	camoufox.cfg	none	session restore and startup (history.length measured equal to stock)	keep
+browser.sessionstore.max_windows_undo	5	0	camoufox.cfg	none	session restore and startup (history.length measured equal to stock)	keep
+browser.sessionstore.privacy_level	0	2	camoufox.cfg	none	session restore and startup (history.length measured equal to stock)	keep
+browser.sessionstore.restore_on_demand	true	false	camoufox.cfg	none	session restore and startup (history.length measured equal to stock)	keep
+browser.sessionstore.restore_tabs_lazily	true	false	camoufox.cfg	none	session restore and startup (history.length measured equal to stock)	keep
+browser.sessionstore.resume_from_crash	true	false	camoufox.cfg	none	session restore and startup (history.length measured equal to stock)	keep
+browser.sessionstore.upgradeBackup.maxUpgradeBackups	3	0	camoufox.cfg	none	session restore and startup (history.length measured equal to stock)	keep
+browser.startup.homepage	"about:home"	"about:blank"	camoufox.cfg	none	session restore and startup (history.length measured equal to stock)	keep
+browser.startup.page	1	0	camoufox.cfg	none	session restore and startup (history.length measured equal to stock)	keep
+browser.tabs.crashReporting.sendReport	true	false	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+browser.tabs.warnOnCloseOtherTabs	true	false	camoufox.cfg	none	browser UI only	keep
+browser.tabs.warnOnOpen	true	false	camoufox.cfg	none	browser UI only	keep
+browser.topsites.contile.enabled	true	false	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+browser.topsites.useRemoteSetting	true	false	camoufox.cfg	none	browser UI only	keep
+browser.translations.enable	true	false	camoufox.cfg	none	browser UI only	keep
+browser.uitour.enabled	true	false	camoufox.cfg	none	browser UI only	keep
+browser.uitour.url	"https://www.mozilla.org/%LOCALE%/firefox/%VERSION%/tour/"	""	camoufox.cfg	none	browser UI only	keep
+browser.urlbar.autoFill	true	false	camoufox.cfg	none	browser UI only	keep
+browser.urlbar.quickactions.enabled	(absent)	false	only in Camoufox	none	browser UI only	keep
+browser.urlbar.quicksuggest.migrationVersion	7	(absent)	absent in Camoufox	none	browser UI only	keep
+browser.urlbar.shortcuts.quickactions	(absent)	false	only in Camoufox	none	browser UI only	keep
+browser.urlbar.suggest.bookmark	true	false	camoufox.cfg	none	browser UI only	keep
+browser.urlbar.suggest.calculator	true	false	camoufox.cfg	none	browser UI only	keep
+browser.urlbar.suggest.clipboard	true	false	camoufox.cfg	none	browser UI only	keep
+browser.urlbar.suggest.engines	true	false	camoufox.cfg	none	browser UI only	keep
+browser.urlbar.suggest.history	true	false	camoufox.cfg	none	browser UI only	keep
+browser.urlbar.suggest.openpage	true	false	camoufox.cfg	none	browser UI only	keep
+browser.urlbar.suggest.searches	true	false	camoufox.cfg	none	browser UI only	keep
+browser.urlbar.suggest.topsites	true	false	camoufox.cfg	none	browser UI only	keep
+browser.urlbar.suggest.trending	true	false	camoufox.cfg	none	browser UI only	keep
+browser.urlbar.suggest.weather	true	false	camoufox.cfg	none	browser UI only	keep
+browser.urlbar.trending.featureGate	true	false	camoufox.cfg	none	browser UI only	keep
+browser.urlbar.unitConversion.enabled	true	false	camoufox.cfg	none	browser UI only	keep
+browser.vpn_promo.enabled	true	false	camoufox.cfg	none	browser UI only	keep
+browser.warnOnQuit	true	false	camoufox.cfg	none	browser UI only	keep
+captivedetect.canonicalURL	"http://firefox-portal-detection.com/generate_204"	""	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+datareporting.healthreport.infoURL	"https://www.mozilla.org/legal/privacy/firefox.html#health-report"	(absent)	absent in Camoufox	none (only Mozilla sees the missing background requests)	background service off	keep
+datareporting.healthreport.uploadEnabled	true	false	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+datareporting.policy.currentPolicyVersion	2	(absent)	absent in Camoufox	none (only Mozilla sees the missing background requests)	background service off	keep
+datareporting.policy.dataSubmissionEnabled	true	false	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+datareporting.policy.dataSubmissionPolicyAccepted	(absent)	false	only in Camoufox	none (only Mozilla sees the missing background requests)	background service off	keep
+datareporting.policy.dataSubmissionPolicyAcceptedVersion	0	(absent)	absent in Camoufox	none (only Mozilla sees the missing background requests)	background service off	keep
+datareporting.policy.dataSubmissionPolicyNotifiedTime	"0"	(absent)	absent in Camoufox	none (only Mozilla sees the missing background requests)	background service off	keep
+datareporting.policy.minimumPolicyVersion	1	(absent)	absent in Camoufox	none (only Mozilla sees the missing background requests)	background service off	keep
+datareporting.policy.minimumPolicyVersion.channel-beta	2	(absent)	absent in Camoufox	none (only Mozilla sees the missing background requests)	background service off	keep
+datareporting.usage.uploadEnabled	true	false	build default (not in camoufox.cfg)	none (only Mozilla sees the missing background requests)	background service off	keep
+devtools.debugger.prompt-connection	true	false	camoufox.cfg	none	browser UI only	keep
+devtools.debugger.remote-enabled	false	true	camoufox.cfg	none	browser UI only	keep
+devtools.jsonview.enabled	true	false	camoufox.cfg	none	browser UI only	keep
+devtools.selfxss.count	0	100	camoufox.cfg	none	browser UI only	keep
+devtools.toolbox.host	"bottom"	"window"	camoufox.cfg	none	browser UI only	keep
+dom.file.createInChild	false	true	camoufox.cfg	none	what the driver or the build needs	keep
+dom.filesystem.pathcheck.disabled	(absent)	true	only in Camoufox	none	what the driver or the build needs	keep
+dom.forms.autocomplete.formautofill	true	false	build default (not in camoufox.cfg)	none (Kage fills no forms from memory, D13)	password manager, form history and autofill off	keep
+dom.input_events.security.minNumTicks	3	0	camoufox.cfg	page (only with input under 3 ticks after an element appears)	stock drops input on an element shown less than 3 refresh ticks / 100 ms ago	document (Juggler requirement; the hand rests longer)
+dom.input_events.security.minTimeElapsedInMS	100	0	camoufox.cfg	page (as above)	see minNumTicks	document
+dom.ipc.processPrelaunch.enabled	true	false	camoufox.cfg	none	what the driver or the build needs	keep
+dom.ipc.reportProcessHangs	true	false	camoufox.cfg	none	what the driver or the build needs	keep
+dom.max_script_run_time	10	0	camoufox.cfg	none	what the driver or the build needs	keep
+dom.push.connection.enabled	true	false	camoufox.cfg	page (with a granted permission)	pushManager.subscribe() cannot succeed	document
+dom.push.serverURL	"wss://push.services.mozilla.com/"	""	camoufox.cfg	page (with a granted permission)	as above	document
+dom.webgpu.enabled	false	true	Kage launch plan	page (navigator.gpu)	WebGPU as Firefox 156 has it on Windows and on Macs with an Apple GPU; requestAdapter() is null	keep (identity of the claimed system)
+extensions.autoDisableScopes	15	0	camoufox.cfg	none	what the driver or the build needs	keep
+extensions.blocklist.enabled	true	false	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+extensions.enabledScopes	(absent)	5	only in Camoufox	none	what the driver or the build needs	keep
+extensions.formautofill.addresses.enabled	true	false	camoufox.cfg	none (Kage fills no forms from memory, D13)	password manager, form history and autofill off	keep
+extensions.formautofill.addresses.supported	"detect"	"off"	camoufox.cfg	none (Kage fills no forms from memory, D13)	password manager, form history and autofill off	keep
+extensions.formautofill.creditCards.enabled	true	false	camoufox.cfg	none (Kage fills no forms from memory, D13)	password manager, form history and autofill off	keep
+extensions.formautofill.creditCards.supported	"on"	"off"	camoufox.cfg	none (Kage fills no forms from memory, D13)	password manager, form history and autofill off	keep
+extensions.getAddons.cache.enabled	true	false	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+extensions.getAddons.databaseSchema	6	(absent)	absent in Camoufox	none	browser UI, macOS screen picker, printing target	keep
+extensions.getAddons.showPane	(absent)	false	only in Camoufox	none	browser UI, macOS screen picker, printing target	keep
+extensions.htmlaboutaddons.recommendations.enabled	true	false	camoufox.cfg	none	browser UI only	keep
+extensions.installDistroAddons	(absent)	false	only in Camoufox	none	what the driver or the build needs	keep
+extensions.postDownloadThirdPartyPrompt	true	false	camoufox.cfg	none	browser UI only	keep
+extensions.systemAddon.update.enabled	true	false	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+extensions.systemAddon.update.url	"https://aus5.mozilla.org/update/3/SystemAddons/%VERSION%/%BUILD_ID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/update.xml"	""	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+extensions.update.enabled	true	false	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+extensions.webcompat-reporter.enabled	false	true	build default (not in camoufox.cfg)	none	browser UI only	keep
+extensions.webcompat-reporter.newIssueEndpoint	"https://webcompat.com/issues/new"	""	camoufox.cfg	none	browser UI only	keep
+fission.bfcacheInParent	true	false	camoufox.cfg	page	same as max_total_viewers	document
+fission.webContentIsolationStrategy	1	0	camoufox.cfg	page (timing)	cross-site iframes share the page process (no OOPIF): timing and memory side channels differ from stock 1	document (Playwright requirement per upstream)
+focusmanager.testmode	false	true	camoufox.cfg	page (focus events)	focus emulation: hasFocus() stays true, blur into an iframe is suppressed (upstream PR 852 notes)	document (Juggler requirement)
+general.config.filename	"kage-dump.cfg"	"camoufox.cfg"	build default (not in camoufox.cfg)	none	what the driver or the build needs	keep
+geo.provider.testing	(absent)	true	only in Camoufox	none (the position is the persona's, from the configuration)	geolocation through the test provider	keep
+gfx.blacklist.webgpu	(absent)	4	only in Camoufox	page (navigator.gpu)	as dom.webgpu.enabled	keep (identity of the claimed system)
+gfx.bundled-fonts.activate	-1	1	camoufox.cfg	page (fonts)	the bundled font set of the claimed system	keep (identity)
+identity.fxaccounts.enabled	true	false	camoufox.cfg	none	browser UI only	keep
+intl.accept_languages	"und"	"de, en-US, en"	user value	page and server	the persona's languages	keep (identity)
+intl.locale.requested	(absent)	"de"	only in Camoufox	page (Intl default, the browser’s own messages)	the persona’s Firefox UI locale, requested at startup through CAMOU_PREFS (the build is multi-locale)	keep (identity)
+media.getdisplaymedia.screencapturekit.enabled	(absent)	false	only in Camoufox	none	browser UI, macOS screen picker, printing target	keep
+media.getdisplaymedia.screencapturekit.picker.enabled	(absent)	false	only in Camoufox	none	browser UI, macOS screen picker, printing target	keep
+media.gmp-manager.updateEnabled	(absent)	true	only in Camoufox	none for a site	media plugins (OpenH264, Widevine) may be downloaded, as in stock	keep
+media.peerconnection.ice.default_address_only	false	true	Kage launch plan	page (WebRTC)	candidate gathering confined to the proxy (spec 10.3)	keep (Kage sets it too)
+media.peerconnection.ice.proxy_only_if_behind_proxy	false	true	Kage launch plan	page (WebRTC)	as above; CreepJS shows WebRTC "blocked"	keep (Kage sets it too)
+media.peerconnection.ice.proxy_only_if_pbmode	false	true	camoufox.cfg	page (WebRTC, private windows only)	as above	keep
+network.captive-portal-service.enabled	true	false	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+network.connectivity-service.enabled	true	false	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+network.http.http3.enable	true	false	Kage launch plan	server	no HTTP/3; behind an HTTP proxy stock Firefox does not use it either	keep (Kage: no UDP outside the proxy)
+network.protocol-handler.external.ms-windows-store	(absent)	false	only in Camoufox	none	browser UI, macOS screen picker, printing target	keep
+network.proxy.allow_hijacking_localhost	false	true	Kage launch plan	none for a site	loopback goes through the proxy (spec 19)	keep
+network.proxy.socks_remote_dns	false	true	camoufox.cfg	none	what the driver or the build needs	keep
+nimbus.migrations.after-remote-settings-update	0	(absent)	absent in Camoufox	none (only Mozilla sees the missing background requests)	background service off	keep
+nimbus.migrations.after-store-initialized	5	(absent)	absent in Camoufox	none (only Mozilla sees the missing background requests)	background service off	keep
+nimbus.migrations.init-started	1	(absent)	absent in Camoufox	none (only Mozilla sees the missing background requests)	background service off	keep
+permissions.isolateBy.userContext	false	true	camoufox.cfg	none	what the driver or the build needs	keep
+pref.privacy.disable_button.view_passwords	(absent)	true	only in Camoufox	none	browser UI, macOS screen picker, printing target	keep
+print.always_print_silent	false	true	Kage launch plan	page (window.print())	a page that calls print() gets beforeprint/afterprint at once, no dialog	keep (PDF capture)
+print_printer	(absent)	"Mozilla Save to PDF"	only in Camoufox	none	browser UI, macOS screen picker, printing target	keep
+privacy.clearOnShutdown.openWindows	false	true	camoufox.cfg	none	session restore and startup (history.length measured equal to stock)	keep
+privacy.history.custom	false	true	camoufox.cfg	none	session restore and startup (history.length measured equal to stock)	keep
+reader.parse-on-load.enabled	true	false	camoufox.cfg	none	browser UI only	keep
+screenshots.browser.component.enabled	true	false	camoufox.cfg	none	browser UI only	keep
+security.certerrors.mitm.priming.enabled	true	false	camoufox.cfg	none	what the driver or the build needs	keep
+security.notification_enable_delay	500	0	camoufox.cfg	none	browser UI only	keep
+security.sandbox.warn_unprivileged_namespaces	true	false	user value	none	browser UI, macOS screen picker, printing target	keep
+services.passwordSavingEnabled	(absent)	false	only in Camoufox	none	browser UI, macOS screen picker, printing target	keep
+services.settings.base_attachments_url	"https://firefox.settings.services.mozilla.com/v2|https://firefox-settings-attachments.cdn.mozilla.net/"	(absent)	absent in Camoufox	none (only Mozilla sees the missing background requests)	background service off	keep
+services.settings.server	(absent)	""	only in Camoufox	none (only Mozilla sees the missing background requests)	background service off	keep
+services.sync.engine.addresses.available	true	false	build default (not in camoufox.cfg)	none (Kage fills no forms from memory, D13)	password manager, form history and autofill off	keep
+sidebar.main.tools	"aichat,syncedtabs,history,bookmarks,opentabs"	""	build default (not in camoufox.cfg)	none	browser UI only	keep
+sidebar.nimbus	"upgraded-sidebar-rollout-without-messaging-145-156:rollout-treatment"	(absent)	absent in Camoufox	none	browser UI only	keep
+sidebar.revamp	true	false	build default (not in camoufox.cfg)	none	browser UI only	keep
+signon.autofillForms	true	false	camoufox.cfg	none (Kage fills no forms from memory, D13)	password manager, form history and autofill off	keep
+signon.formlessCapture.enabled	true	false	camoufox.cfg	none (Kage fills no forms from memory, D13)	password manager, form history and autofill off	keep
+signon.rememberSignons	true	false	camoufox.cfg	none (Kage fills no forms from memory, D13)	password manager, form history and autofill off	keep
+toolkit.coverage.endpoint.base	"https://coverage.mozilla.org"	""	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+toolkit.coverage.opt-out	(absent)	true	only in Camoufox	none (only Mozilla sees the missing background requests)	background service off	keep
+toolkit.shutdown.fastShutdownStage	1	3	camoufox.cfg	none	session restore and startup (history.length measured equal to stock)	keep
+toolkit.startup.max_resumed_crashes	3	-1	camoufox.cfg	none	session restore and startup (history.length measured equal to stock)	keep
+toolkit.telemetry.archive.enabled	true	false	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+toolkit.telemetry.bhrPing.enabled	true	false	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+toolkit.telemetry.firstShutdownPing.enabled	true	false	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+toolkit.telemetry.newProfilePing.enabled	true	false	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+toolkit.telemetry.server	"https://incoming.telemetry.mozilla.org"	""	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+toolkit.telemetry.server_owner	"Mozilla"	""	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+toolkit.telemetry.shutdownPingSender.enabled	true	false	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+toolkit.telemetry.unified	true	false	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+toolkit.telemetry.updatePing.enabled	true	false	camoufox.cfg	none (only Mozilla sees the missing background requests)	background service off	keep
+webgl.forbid-software	true	false	camoufox.cfg	page	stock refuses WebGL on a software renderer; the container has only llvmpipe	keep (a claimed real GPU must have WebGL)
+webgl.force-enabled	false	true	Kage launch plan	page	WebGL on the software renderer	keep
