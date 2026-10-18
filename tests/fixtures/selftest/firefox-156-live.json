@@ -1,8 +1,8 @@
 {
   "engine": "firefox",
-  "browser_version": "152.0.4",
+  "browser_version": "156.0.1",
   "claimed_os": "windows",
-  "recorded": "2026-10-09",
+  "recorded": "2026-10-18",
   "score": 100,
   "min_score": 90,
   "pages": [
@@ -24,7 +24,7 @@
       "status": "pass",
       "hard": false,
       "weight": 1,
-      "observed": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0",
+      "observed": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:156.0) Gecko/20100101 Firefox/156.0",
       "expected": null
     },
     {
@@ -87,7 +87,7 @@
       "status": "pass",
       "hard": false,
       "weight": 1,
-      "observed": "de-DE,de,en",
+      "observed": "fr,fr-FR,en-US,en",
       "expected": null
     },
     {
@@ -96,7 +96,7 @@
       "status": "pass",
       "hard": false,
       "weight": 1,
-      "observed": "Google Inc. (NVIDIA)",
+      "observed": "Google Inc. (Intel)",
       "expected": null
     },
     {
@@ -105,7 +105,7 @@
       "status": "pass",
       "hard": false,
       "weight": 1,
-      "observed": "ANGLE (NVIDIA, NVIDIA GeForce GTX 980 Direct3D11 vs_5_0 ps_5_0), or similar",
+      "observed": "ANGLE (Intel, Intel(R) HD Graphics Direct3D11 vs_5_0 ps_5_0), or similar",
       "expected": null
     },
     {

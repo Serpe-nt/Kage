@@ -358,18 +358,23 @@ validation (M13).
 `kage selftest browser --engine firefox` and the live check work as on
 chromium (`engine-chromium.md`, "Checking a persona: the self-test"). What
 the two third-party pages show of a Firefox persona was recorded live on
-2026-10-09 through two proxies
-(`tests/fixtures/selftest/firefox-152-live.json`, 34 checks, all passed):
+2026-10-18 on Camoufox 156 through two proxies, one stand-in claiming
+Windows and one macOS (`tests/fixtures/selftest/firefox-156-live.json`,
+34 checks, all passed for both, score 100; judged first against the 152
+baseline M5 recorded on 2026-10-09, which it replaces):
 
 - bot.sannysoft.com paints its row "Chrome (New)" red. The page was
   written for Chrome, and a Firefox has no `window.chrome`: every real
   Firefox user gets that red row. The judge reads the row by the browser
   the page saw: on a Firefox, missing passes and present fails hard.
   Every other row is green, the canvas row (`TRANSPARENT_PIXEL`) included.
-- CreepJS: `headless` 0 %, `stealth` 0 %, `like headless` 6 %. It names no
-  anti-fingerprinting mode (its "resistance" entries stay unknown), calls
-  the fonts "Like Windows 11", and reads the same language, time zone,
-  system and graphics card in a service worker as in the window.
+- CreepJS: `headless` 0 %, `stealth` 0 %, `like headless` 6 %, for both
+  claims. It names no anti-fingerprinting mode (its "resistance" entries
+  stay unknown), calls the Windows persona's fonts "Like Windows 11" and
+  the macOS persona's "Like undefined" (its classifier has no Mac entry
+  that matches; the families are macOS ones), and reads the same
+  language, time zone, system and graphics card in a service worker as in
+  the window.
 - CreepJS prints "blocked" for two things. WebRTC: no host and no STUN
   candidate, which is the confinement of spec §10.3 at work. Speech
   synthesis: no voices, the known tell above.
