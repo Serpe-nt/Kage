@@ -747,7 +747,7 @@ impl Lab {
             seed: Seed::from_u64(7),
         }));
         let chromium = MockSidecar::start(Engine::Chromium, u64::from(major)).await;
-        let firefox = MockSidecar::start(Engine::Firefox, 152).await;
+        let firefox = MockSidecar::start(Engine::Firefox, 156).await;
         let volume = tempfile::tempdir().unwrap();
         let policy_dir = tempfile::tempdir().unwrap();
         let policies = policies(policy_dir.path(), domains, Arc::clone(&alerts));
@@ -763,7 +763,7 @@ impl Lab {
         config.sidecar.chromium_url = chromium.url();
         config.sidecar.firefox_url = firefox.url();
         config.engines.chromium.browser_major = Some(major);
-        config.engines.firefox.browser_major = Some(152);
+        config.engines.firefox.browser_major = Some(156);
         config.personas.dir = volume.path().to_path_buf();
         config.scheduler.retry_pause = kage_core::config::PauseConfig {
             min: millis(50),

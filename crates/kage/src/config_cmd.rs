@@ -298,7 +298,7 @@ mod tests {
             "chrome_149"
         );
 
-        // The engines of this release, Chrome 155 and Camoufox 152: a
+        // The engines of this release, Chrome 155 and Camoufox 156: a
         // capture of each proved that no profile fits, so the check accepts
         // them and says that their personas are browser-only.
         let released: serde_json::Value = serde_json::from_str(
@@ -308,7 +308,7 @@ mod tests {
                     &shipped_policies(),
                     &[
                         ("KAGE__ENGINES__CHROMIUM__BROWSER_MAJOR", "155"),
-                        ("KAGE__ENGINES__FIREFOX__BROWSER_MAJOR", "152"),
+                        ("KAGE__ENGINES__FIREFOX__BROWSER_MAJOR", "156"),
                     ],
                 ),
             )
@@ -316,12 +316,12 @@ mod tests {
         )
         .unwrap();
         let http = &released["http"];
-        assert_eq!(http["engines"]["firefox"]["browser_major"], 152);
+        assert_eq!(http["engines"]["firefox"]["browser_major"], 156);
         assert!(http["engines"]["firefox"]["profile"].is_null());
         assert!(http["engines"]["chromium"]["profile"].is_null());
         assert_eq!(
             http["browser_only_majors"],
-            serde_json::json!(["chromium-155", "firefox-152"])
+            serde_json::json!(["chromium-155", "firefox-156"])
         );
         assert_eq!(http["browser_captures"], 2);
 

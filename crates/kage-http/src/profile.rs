@@ -404,9 +404,10 @@ pub fn mapping_table() -> Vec<MappingRow> {
 /// when a major is listed without an equal capture. If the real browser's
 /// headers differ, the header tables get an entry for that major first.
 ///
-/// **Still empty after M4 and M5.** The captures of Chrome 155 and of
-/// Firefox 152 each differ from the newest profile of their family in the
-/// TLS fingerprint; see [`BROWSER_ONLY_MAJORS`].
+/// **Still empty after M4, M5 and the Camoufox 156 milestone.** The
+/// captures of Chrome 155 and of Firefox 156 (and of Firefox 152 before
+/// it) each differ from the newest profile of their family in the TLS
+/// fingerprint; see [`BROWSER_ONLY_MAJORS`].
 pub const VERIFIED_MAJORS: &[(Engine, u32)] = &[];
 
 /// Browser majors whose capture proved the opposite: the newest profile
@@ -429,22 +430,25 @@ pub const VERIFIED_MAJORS: &[(Engine, u32)] = &[];
 ///   and the names and order of the navigation headers are equal. The
 ///   value of `accept` differs too (`image/jxl` is new), which the header
 ///   tables would have to learn before the major could be verified.
-/// - **Firefox 152** (M5, 2026-10-09). Camoufox 152.0.4, which is built
-///   from Firefox 152.0.4, sends JA4 `t13d1617h2_86a278354501_3cbfd9057e0d`,
-///   the profile `firefox_151` sends `t13d1717h2_5b57614c22b0_3cbfd9057e0d`:
-///   Firefox 152 offers 16 cipher suites where the profile offers 17,
-///   because `c009` (`TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA`) is gone. The
+/// - **Firefox 156** (the Camoufox 156 milestone, 2026-10-18). Camoufox
+///   156.0.1-beta.39, which is built from Firefox 156.0.1, sends JA4
+///   `t13d1517h2_8daaf6152771_3cbfd9057e0d`, the profile `firefox_151`
+///   sends `t13d1717h2_5b57614c22b0_3cbfd9057e0d`: Firefox 156 offers 15
+///   cipher suites where the profile offers 17, because `c009` and `c00a`
+///   (`TLS_ECDHE_ECDSA_WITH_AES_{128,256}_CBC_SHA`) are gone. The
 ///   extensions and the signature algorithms are equal, and so are the
 ///   HTTP/2 fingerprint and the names and order of the navigation headers.
-///   A stock Mozilla Firefox 152.0.4 shows the echo the same three values
-///   as the Camoufox build, so the difference is Firefox's own and nothing
-///   Camoufox changes. One header value differs too: for the languages
-///   `en-US, en` both browsers sent `accept-language: en-US,en;q=0.9`,
-///   where [`crate::headers::accept_language`] writes `en-US,en;q=0.5` for
+///   A stock Mozilla Firefox 156.0.1 shows the echo the same three values
+///   as the Camoufox build, so the difference is Firefox's own. One header
+///   value differs too, as it did for 152: for the languages `en-US, en`
+///   both browsers send `accept-language: en-US,en;q=0.9`, where
+///   [`crate::headers::accept_language`] writes `en-US,en;q=0.5` for
 ///   Firefox. The header code would have to learn that before the major
-///   could be verified.
+///   could be verified. (Firefox 152, which M5 recorded here with JA4
+///   `t13d1617h2_86a278354501_3cbfd9057e0d`, is no engine's major any
+///   more.)
 pub const BROWSER_ONLY_MAJORS: &[(Engine, u32)] =
-    &[(Engine::Chromium, 155), (Engine::Firefox, 152)];
+    &[(Engine::Chromium, 155), (Engine::Firefox, 156)];
 
 /// Chrome's `sec-ch-ua` brand list for a major version.
 ///
@@ -832,14 +836,15 @@ mod tests {
 
     #[test]
     fn a_major_without_a_profile_resolves_to_nothing() {
-        // The engines' real majors today: Camoufox 152 (D29) and Chrome
-        // stable 155/156. wreq-util 0.2.0 has neither, and the captures of
-        // 152 and 155 differ from the newest profiles, so no capture has
-        // verified them and those personas are browser-only (spec §6.1
-        // step 4, risk R7).
+        // The engines' real majors today: Camoufox 156 (Camoufox 152 before
+        // it, D29) and Chrome stable 155/156. wreq-util 0.2.0 has neither,
+        // and the captures of 152, 156 and 155 differ from the newest
+        // profiles, so no capture has verified them and those personas are
+        // browser-only (spec §6.1 step 4, risk R7).
         assert_eq!(VERIFIED_MAJORS, []);
         for (engine, major) in [
             (Engine::Firefox, 152),
+            (Engine::Firefox, 156),
             (Engine::Chromium, 150),
             (Engine::Chromium, 155),
             (Engine::Chromium, 156),
@@ -941,25 +946,33 @@ mod tests {
         assert_eq!(check_engine_majors(Some(149), Some(151)), Ok(()));
         assert_eq!(check_engine_majors(Some(142), None), Ok(()));
 
-        // Chrome 155 was captured in M4 and Firefox 152 in M5, and neither
-        // equals the newest profile of its family: each is accepted as its
-        // engine's major, and resolves to nothing, so its personas are
-        // browser-only.
+        // Chrome 155 was captured in M4 and Firefox 156 in the Camoufox 156
+        // milestone, and neither equals the newest profile of its family:
+        // each is accepted as its engine's major, and resolves to nothing,
+        // so its personas are browser-only.
         assert_eq!(
             BROWSER_ONLY_MAJORS,
-            [(Engine::Chromium, 155), (Engine::Firefox, 152)]
+            [(Engine::Chromium, 155), (Engine::Firefox, 156)]
         );
         assert_eq!(check_engine_majors(Some(155), None), Ok(()));
-        assert_eq!(check_engine_majors(None, Some(152)), Ok(()));
+        assert_eq!(check_engine_majors(None, Some(156)), Ok(()));
         // What a deployment of this release sets.
-        assert_eq!(check_engine_majors(Some(155), Some(152)), Ok(()));
+        assert_eq!(check_engine_majors(Some(155), Some(156)), Ok(()));
         for os in CLAIMED_OSES {
             assert_eq!(resolve(Engine::Chromium, 155, os), None);
-            assert_eq!(resolve(Engine::Firefox, 152, os), None);
+            assert_eq!(resolve(Engine::Firefox, 156, os), None);
         }
         // A major is browser-only for its own engine and no other.
-        assert!(check_engine_majors(Some(152), None).is_err());
+        assert!(check_engine_majors(Some(156), None).is_err());
         assert!(check_engine_majors(None, Some(155)).is_err());
+        // The major of the previous image is no engine's any more: a
+        // configuration that still names it fails, so that the key moves
+        // with the image.
+        let previous = check_engine_majors(None, Some(152)).unwrap_err();
+        assert!(
+            previous.starts_with("engines.firefox.browser_major:"),
+            "{previous}"
+        );
         // A major is never both verified and browser-only.
         for entry in BROWSER_ONLY_MAJORS {
             assert!(!VERIFIED_MAJORS.contains(entry));
@@ -979,12 +992,12 @@ mod tests {
         );
         assert!(chrome.contains("fingerprint-echo.md"), "{chrome}");
 
-        let firefox = check_engine_majors(Some(149), Some(153)).unwrap_err();
+        let firefox = check_engine_majors(Some(149), Some(157)).unwrap_err();
         assert!(
             firefox.starts_with("engines.firefox.browser_major:"),
             "{firefox}"
         );
-        assert!(firefox.contains("firefox 153"), "{firefox}");
+        assert!(firefox.contains("firefox 157"), "{firefox}");
     }
 
     #[test]

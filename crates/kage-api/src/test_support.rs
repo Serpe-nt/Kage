@@ -8,7 +8,7 @@ use kage_persona::identity::profile_for;
 
 /// A ready Berlin persona of `engine` at `major`: chromium on Linux,
 /// firefox on Windows, with the http profile its major resolves to (none
-/// for the majors of this release: Chrome 155, Firefox 152).
+/// for the majors of this release: Chrome 155, Firefox 156).
 pub(crate) fn persona(engine: Engine, major: u32) -> Persona {
     let id = PersonaId::new();
     let (claimed_os, user_agent, languages) = match engine {

@@ -166,7 +166,7 @@ mod tests {
             Engine::Firefox
         );
 
-        let stored = persona(Engine::Firefox, 152).screen;
+        let stored = persona(Engine::Firefox, 156).screen;
         let sent = contract_screen(stored);
         assert_eq!(
             (sent.width, sent.height, sent.color_depth),
@@ -199,7 +199,7 @@ mod tests {
 
     #[test]
     fn a_context_is_opened_with_the_persona_as_it_is_stored() {
-        let persona = persona(Engine::Firefox, 152);
+        let persona = persona(Engine::Firefox, 156);
         let endpoint = endpoint(persona.proxy_id);
 
         let request = open_request(&persona, &endpoint).unwrap();

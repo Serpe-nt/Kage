@@ -753,7 +753,9 @@ mod tests {
         let chrome = echo_expectation(Engine::Chromium, 155).unwrap();
         assert!(chrome.ja4.starts_with("t13d"), "{}", chrome.ja4);
         assert_ne!(chrome.headers.len(), 0);
-        assert!(echo_expectation(Engine::Firefox, 152).is_some());
+        assert!(echo_expectation(Engine::Firefox, 156).is_some());
+        // The capture of the previous image is gone with it.
+        assert!(echo_expectation(Engine::Firefox, 152).is_none());
         assert!(echo_expectation(Engine::Chromium, 1).is_none());
     }
 
@@ -798,7 +800,7 @@ mod tests {
 
     #[test]
     fn self_tests_are_a_day_apart_and_sooner_for_a_persona_that_waits() {
-        let mut persona = persona(Engine::Firefox, 152);
+        let mut persona = persona(Engine::Firefox, 156);
         persona.created_at = Utc::now();
         let minutes = |at: chrono::DateTime<Utc>, from: chrono::DateTime<Utc>| {
             at.signed_duration_since(from).num_minutes()

@@ -100,7 +100,7 @@ async fn a_usable_proxy_gets_a_persona_derived_from_its_observed_geo() {
                 persona.claimed_os,
                 ClaimedOs::Windows | ClaimedOs::Macos
             ));
-            assert_eq!(persona.browser_major, 152);
+            assert_eq!(persona.browser_major, 156);
         }
     }
 

@@ -249,7 +249,7 @@ mod tests {
 
     #[test]
     fn only_a_passing_selftest_ends_a_selftest_cooling() {
-        let mut persona = persona(Engine::Firefox, 152);
+        let mut persona = persona(Engine::Firefox, 156);
 
         assert_eq!(
             cool_until_selftest(&mut persona, CoolingReason::SelftestFailed),

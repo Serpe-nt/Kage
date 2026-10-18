@@ -328,7 +328,7 @@ mod tests {
     #[test]
     fn hints_and_a_domains_policy_are_conditions_on_a_sessions_persona() {
         let german_chrome = persona(Engine::Chromium, 155);
-        let german_firefox = persona(Engine::Firefox, 152);
+        let german_firefox = persona(Engine::Firefox, 156);
         let wanted = |countries: &[&str], engines: &[Engine], policy: Option<&str>| Wanted {
             countries: countries
                 .iter()
