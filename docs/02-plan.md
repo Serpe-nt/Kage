@@ -1080,7 +1080,38 @@ merged branches on GitHub.
 - **The Camoufox 156 line** as a fingerprint-critical milestone of its
   own: removes the ADR 0010 backport, re-checks `camoufox.cfg` against
   stock Firefox defaults, new baselines, a live self-test on the owner's
-  word (D32).
+  word (D32). **Done, 2026-10-19:** merged as
+  [Serpe-nt/Kage#5](https://github.com/Serpe-nt/Kage/pull/5), thirteen
+  commits (`camoufox156-handover.md`), released in 1.0.1. Measured
+  before the change: the 1.0.0 Firefox personas had four tells no stock
+  Firefox has, each one line of script for a page (the `chrome://juggler`
+  worker hCaptcha probes for, unpartitioned cross-site storage, a popup
+  without activation, fifteen `set…` globals); 156 removes all four with
+  no launcher or driver pin moved, since the driver already runs it and
+  the parity suite passed 31 of 31 without the backport. 156 brought
+  three regressions, two fixed in the pull request (`Intl` and the
+  browser's messages in English for a German persona; Global Privacy
+  Control claimed without its header) and one accepted (the host's
+  canvas for every Firefox persona, security review T1). The audit of
+  `camoufox.cfg` (411 rows, `docs/evidence/camoufox-156-prefs-audit.tsv`)
+  set two preferences to stock and documented the rest as known tells.
+  Existing personas move at their next open and keep their cookies; a
+  profile is one-way, so a copy is kept seven days. The live self-test
+  scored 100 of 100 for a Windows and a macOS persona and recorded
+  `firefox-156-live.json`. The same parity check found Chrome's one tell:
+  unpartitioned third-party storage from patchright's default switches
+  (T2), left for the next milestone. Follow-ups raised: **F60** the
+  Chrome launch-switch audit (started 2026-10-19 as its own milestone,
+  with the Chromium "paces a flow" test that fails under the slow cgroup
+  on main); **F61 (M13, measure)** how rare the host's canvas hash is
+  among real Windows and macOS Firefox users; **F62 (data needed)**
+  speech voices, EME/Widevine, the macOS colour gamut, `maxTouchPoints`
+  for 13 % of Windows devices, WebGPU's null adapter; **F63 (a milestone
+  of its own if wanted)** the official `camoufox` launcher as a second
+  generator (fpgen, per-identity fonts, voices, media labels; brings
+  ua-parser-js 2.x and python-random, ADR 0008 again). Firefox is at
+  158; a Camoufox build for it is a routine fingerprint-critical pull
+  request when upstream publishes one.
 
 ---
 
