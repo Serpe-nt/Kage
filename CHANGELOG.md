@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-19
+
 ### Changed
 
 - The Firefox engine runs Camoufox **156.0.1-beta.39** (Firefox 156.0.1),

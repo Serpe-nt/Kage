@@ -2140,7 +2140,7 @@ dependencies = [
 
 [[package]]
 name = "kage"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2179,7 +2179,7 @@ dependencies = [
 
 [[package]]
 name = "kage-api"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -2229,7 +2229,7 @@ dependencies = [
 
 [[package]]
 name = "kage-browser"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "chrono",
  "http-body-util",
@@ -2247,7 +2247,7 @@ dependencies = [
 
 [[package]]
 name = "kage-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -2271,7 +2271,7 @@ dependencies = [
 
 [[package]]
 name = "kage-crawl"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "chrono",
  "flate2",
@@ -2287,7 +2287,7 @@ dependencies = [
 
 [[package]]
 name = "kage-extract"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "chrono",
  "ego-tree",
@@ -2302,7 +2302,7 @@ dependencies = [
 
 [[package]]
 name = "kage-http"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2336,7 +2336,7 @@ dependencies = [
 
 [[package]]
 name = "kage-persona"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -2364,7 +2364,7 @@ dependencies = [
 
 [[package]]
 name = "kage-proxy"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -2392,7 +2392,7 @@ dependencies = [
 
 [[package]]
 name = "kage-scheduler"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -2427,7 +2427,7 @@ dependencies = [
 
 [[package]]
 name = "kage-store"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "chrono",
  "flate2",
