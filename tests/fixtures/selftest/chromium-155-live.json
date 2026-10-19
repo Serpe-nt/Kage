@@ -2,7 +2,7 @@
   "engine": "chromium",
   "browser_version": "155.0.8059.39",
   "claimed_os": "linux",
-  "recorded": "2026-10-09",
+  "recorded": "2026-10-19",
   "score": 100,
   "min_score": 90,
   "pages": [
@@ -87,7 +87,7 @@
       "status": "pass",
       "hard": false,
       "weight": 1,
-      "observed": "de-DE,de,en",
+      "observed": "de-DE,de,en-US,en",
       "expected": null
     },
     {
@@ -321,7 +321,7 @@
       "status": "pass",
       "hard": false,
       "weight": 1,
-      "observed": "44%",
+      "observed": "38%",
       "expected": "at most 50%"
     }
   ]
