@@ -32,6 +32,11 @@ export interface InputReport {
   };
   readonly field: string;
   readonly choice: string;
+  /**
+   * Milliseconds since the recorder started at which the page drew its
+   * first two frames; absent from a recorder older than the field.
+   */
+  readonly drawn?: readonly number[];
   readonly events: readonly RecordedEvent[];
 }
 
