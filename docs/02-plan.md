@@ -1147,6 +1147,114 @@ F53, F56 and F59 wait for its data.
 
 ---
 
+## Phase 2.0 — levels, egress, providers, the public face
+
+Decided by the owner on 2026-10-19 (D50 to D52, ADR 0012 and ADR 0013)
+after 1.0.1. Three milestones, in this order, one pull request each on
+the PR workflow; the phase releases as **2.0.0** (the required `level`
+breaks every 1.x request on purpose). Before M14 lands: the Chrome
+launch-switch audit (F60, its own fingerprint-critical pull request,
+released as 1.0.2). The field campaign (M13) runs whenever the owner
+names sites, on whichever release is current.
+
+### M14 — Camouflage levels and egress (2.0 core)
+
+**Scope.** Spec §25, ADR 0012, D50; §1, §3.1, §8.1, §16.4, §17 and §19
+updated to it.
+
+**Deliverables**
+- `level` required on every request and in a job's `defaults`
+  (`level_required`, `level_below_policy`, `level_unavailable`,
+  `session_needs_persona`); the policy's `min_level`; the OpenAPI, the
+  TypeScript client, `kage fetch --level`, the results' `level`, the
+  metrics' `level` label.
+- Level 0: the plain client in `kage-http` (wreq's own TLS, the default
+  `User-Agent`, the caller's headers and body, no jar), no persona,
+  egress per `egress.plain`, through the SSRF guard, the key's limits and
+  the daily budget; the pool used as plain proxies in turn when
+  `egress.plain: proxies`.
+- Level 2: the sidecar's plain load (contract 1.5.0, additive: a
+  behaviour mode with no scrolling, no wander, no patience, the dwell at
+  `min_dwell`), the scheduler keeping the persona's pacing, visits and
+  nights.
+- Level 1: the path exists and is refused with `level_unavailable` while
+  `VERIFIED_MAJORS` is empty (F30), tested with a fixture major.
+- Egress `direct`: the host persona generated from the host's observed
+  geo or the declared country and locale, the forwarder with no upstream,
+  the pool untouched; `kage config check` refuses a mixed configuration.
+- The security review's new threats (direct mode, level 0), the runbook's
+  table of what each level costs and what a site can tell at each.
+
+**Consult first.** Level 0's TLS and header defaults (what wreq sends
+untouched, and whether a `kage/<version>` User-Agent is right for a
+"plain" client or a caller must always name one); what pacing level 0
+gets per domain (none beyond the key's limits, or a `plain_rpm` in the
+policy); level 2's dwell and whether the pointer should move at all; the
+host persona's generation when the host is behind a carrier NAT or a VPN;
+how a crawl behaves at level 0 (links from raw HTML only, no clicks).
+
+**Acceptance.** Compose e2e: the same fixture page fetched at every level
+with the site's own log proving what differed (no persona and the plain
+User-Agent at 0; the persona's browser without scrolling at 2; the full
+behaviour at 3); a request without a level refused; a policy floor
+enforced; `egress: direct` end to end with the host persona on the
+compose network (the world's "host" address) and nothing through the
+pool; `just ci` green; the mutation gate on `kage-core`.
+
+### M15 — Provider-agnostic pool and declared lists
+
+**Scope.** ADR 0013, D51; spec §6.1, §7.1, §7.4, §17 updated.
+
+**Deliverables**
+- `ProxyProvider::capabilities()`; the pool, the CLI and the health page
+  showing unsupported operations as such; the conformance suite in
+  `crates/kage-proxy/tests/provider_conformance.rs` run against the
+  Webshare mock and the static list; `CONTRIBUTING.md`'s provider guide
+  (a template module, the mock, the suite, the versions row).
+- Static entries with `country`, `locale`, `city`; personas generated
+  from them; an entry without a country usable at level 0 only, with the
+  warning; verification by geo lookup with `geo_mismatch`.
+- `proxies.health.echo_url` with the public default for providers
+  without an echo, the runbook's note on what the echo's operator sees,
+  and the operator's own echo as the alternative.
+- `docs/runbooks/proxies.md` rewritten for three ways to run: Webshare,
+  a declared list, no proxies (direct).
+
+**Consult first.** Whether a second built-in provider should ship as the
+worked example of the guide (a "list URL" provider that fetches
+`host:port:user:pass:country` lines from an authenticated URL, which
+several vendors offer), and the exact YAML shape of an entry.
+
+**Acceptance.** A declared list of the e2e world's proxies with countries
+and locales produces personas whose languages and time zones match the
+declarations; a geo mismatch is alerted and the proxy degraded; the
+conformance suite passes for both providers and fails for a deliberately
+broken mock; `kage proxy health` on a list without a provider shows live
+and dead proxies from the echo; `just ci` green.
+
+### M16 — The public face, and 2.0.0
+
+**Scope.** D52; the README, the community files, the badges, the
+release.
+
+**Deliverables**
+- The README rewritten (D52): the badges with Kage's own data (a CI job
+  writing the coverage JSON to `gh-pages`, shields.io endpoint badges),
+  the light ninja voice, the audiences, the levels in plain words, the
+  quick start re-verified on a Docker-only machine, the responsible-use
+  section kept.
+- `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, the issue and
+  pull-request templates, `CODEOWNERS`.
+- The 2.0.0 release per the runbook: the version bump, the changelog
+  with the breaking change first, the owner's signed tag, the digests
+  pull request.
+
+**Acceptance.** Every badge renders from the repository's own data on a
+fresh fork with no secret; the quick start transcript; `just ci` green;
+the release published with the attestations verified.
+
+---
+
 ## Session brief template
 
 ```
