@@ -6,6 +6,53 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Every Chromium persona of 1.0.0 and 1.0.1 showed a page three things a
+  stock Chrome 155 does not**, all from the driver's default switches
+  (patchright's, Playwright's `chromiumSwitches`), measured against a
+  Chrome nobody configured: a bar over the page on every start ("You are
+  using an unsupported command-line flag:
+  `--disable-blink-features=AutomationControlled`"), which made the
+  viewport 56 px shorter than the window's; third-party storage not
+  partitioned (a cross-site frame read its site's first-party
+  `localStorage` and IndexedDB); and no HTTPS upgrade (an `http` address of
+  a public host went to http directly, where Chrome asks it on 443 first
+  and falls back by itself). The engine now names every switch Chrome is
+  started with and leaves the rest to Chrome (ADR 0014): it keeps 12 of the
+  driver's 25 for the driver, the hand or the container, leaves 13 out
+  (`ThirdPartyStoragePartitioning`, `HttpsUpgrades`, `PaintHolding`,
+  `Translate` and the other disabled features, the background throttling
+  switches, `--force-color-profile=srgb` among them), and adds
+  `--test-type`, which suppresses the bar and changed nothing a page reads.
+  Each persona moves at its next context open. The wire is unchanged (the
+  capture against the echo equals the committed one).
+- The Chromium parity test of a paced flow failed on a slow host (0.6 of a
+  CPU, as on GitHub's runners): the unpaced click came after the paced
+  floor because the page drew its first frames 0.9 to 1.3 s after `load`,
+  and the hand waits for them. The input recorder notes those frames, and
+  the click is held to the floor from there.
+
+### Changed
+
+- Known tells kept on purpose and written down
+  (`docs/runbooks/engine-chromium.md`, security review T5 to T7): the
+  built-in AI APIs answer `unavailable` (`OptimizationHints` stays off, so
+  a page cannot make a persona download a model through its proxy), Google's
+  properties see no variations seed and no `X-Client-Data`
+  (`--disable-background-networking` stays), Cast discovery stays off, and
+  WebGL from llvmpipe is reached past Chrome's own blocklist. A result of a
+  navigation that Chrome upgraded and that fell back to http shows Chrome's
+  internal `307` from the https address as the one hop of its chain.
+- The live browser check measures Chromium's idle traffic in two windows
+  of its own, with Kage's switches and without
+  `--disable-background-networking`, each with the bytes per persona-hour
+  and the hosts asked for (about 89 kB and 139 kB, measured on
+  2026-10-19), and the Chromium baseline
+  (`tests/fixtures/selftest/chromium-155-live.json`) is recorded anew with
+  the new switches: 100 of 100, every check as on 2026-10-09, CreepJS's
+  "like headless" 38 % (44 % before).
+
 ## [1.0.1] - 2026-10-19
 
 ### Changed

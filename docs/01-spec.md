@@ -1072,6 +1072,27 @@ Rules from patchright's guidance, kept by tests: no custom UA through
 Playwright options, no `addInitScript` and no request interception from
 application code, no `Runtime.enable`-dependent APIs.
 
+Chrome is started with the switches Kage names and no other default of
+the driver's (ADR 0014): of patchright's defaults only those the driver,
+the hand or the container needs, or that no page can see and Kage gains
+by, are kept (`--no-first-run`, `--no-default-browser-check`, the three
+that keep dialogs off the page, `--disable-breakpad`,
+`--disable-dev-shm-usage`, `--password-store=basic`, the two of the
+captures, `--disable-background-networking` and
+`--disable-blink-features=AutomationControlled`); Kage adds `--test-type`
+(no startup bar over the page, measured to change nothing a page reads)
+and keeps `MediaRouter`, `DialMediaRouteProvider` and `OptimizationHints`
+off. Everything else is Chrome's default: third-party storage is
+partitioned, an `http` address of a public host is tried over https first
+and falls back by itself (Chrome's internal `307` from the https address is
+then the one hop of the chain), PaintHolding, Translate and the timer
+throttling of a hidden tab are on. A unit test checks the driver's own
+default list against the two lists, and an integration test the browser
+process's command line. The known tells that remain (the built-in AI APIs
+`unavailable`, no variations seed and no `X-Client-Data` for Google, WebGL
+from llvmpipe past Chrome's blocklist) are in
+`docs/runbooks/engine-chromium.md`.
+
 **firefox.** Camoufox at a pinned build (`v156.0.1-beta.39`, Firefox
 156.0.1, fetched by URL and checksum, never by a launcher's own download;
 the engine refuses any other build and any other `omni.ja`, ADR 0011), driven through its own playwright-core, one browser per
