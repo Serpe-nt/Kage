@@ -1112,6 +1112,29 @@ merged branches on GitHub.
   ua-parser-js 2.x and python-random, ADR 0008 again). Firefox is at
   158; a Camoufox build for it is a routine fingerprint-critical pull
   request when upstream publishes one.
+- **The Chrome launch-switch audit (F60). Done, 2026-10-19:** merged
+  as [Serpe-nt/Kage#8](https://github.com/Serpe-nt/Kage/pull/8), five
+  commits, ADR 0014 (`chrome-switches-handover.md`), released in 1.0.2.
+  Measured against a stock Chrome 155 that nothing drives: every
+  Chromium persona of 1.0.0 and 1.0.1 showed a page three things no
+  stock Chrome does, all from the driver's default switches: a yellow
+  "unsupported command-line flag" bar over the page on every start
+  (the viewport 56 px short of a real Chrome's), unpartitioned
+  third-party storage, and no https-first attempt on a bare host. Kage
+  now owns the switch list (D53): thirteen of the driver's defaults are
+  left out, twelve kept with a reason each, `--test-type` removes the
+  bar, and three features stay off as known tells (the built-in AI
+  models, which would download gigabytes through the pool; media
+  routing, which would multicast; background networking to Google,
+  measured live at 89 kB per persona-hour with it off against 139 kB
+  with it on). The wire did not move and no fixture changed. The live
+  self-test scored 100 of 100 for two Chromium personas. Follow-ups:
+  **F64 (M14 or later, level 3)** a typed navigation made by the hand
+  through the address bar, since the driver's navigation leaves the
+  address bar focused; **F65 (M14, first commit)** the server-sync test
+  of the proxy CLI suite is racy on a slow runner (the proxy is healthy
+  before its `proxy_added` event is written): wait for the events, and
+  check the order the pool writes them in.
 
 ---
 

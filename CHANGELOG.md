@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-10-19
+
 ### Fixed
 
 - **Every Chromium persona of 1.0.0 and 1.0.1 showed a page three things a
