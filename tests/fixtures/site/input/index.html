@@ -49,9 +49,17 @@
 
         const events = [];
         const started = performance.now();
+        const since = () => Math.round((performance.now() - started) * 100) / 100;
+        // When the page drew its first two frames: a slow machine draws a new
+        // document late, and a hand that acts once the page is there waits for it.
+        const drawn = [];
+        requestAnimationFrame(() => {
+          drawn.push(since());
+          requestAnimationFrame(() => drawn.push(since()));
+        });
         const base = (event) => ({
           type: event.type,
-          t: Math.round((performance.now() - started) * 100) / 100,
+          t: since(),
           stamp: Math.round(event.timeStamp * 100) / 100,
           trusted: event.isTrusted,
           target: event.target && event.target.id ? event.target.id : (event.target && event.target.nodeName) || null,
@@ -93,6 +101,7 @@
             },
             field: document.getElementById('field').value,
             choice: document.getElementById('choice').value,
+            drawn,
             events,
           };
           document.getElementById('kage-input-report').textContent = JSON.stringify(report);

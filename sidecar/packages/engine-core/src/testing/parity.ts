@@ -2175,7 +2175,8 @@ export function defineParitySuite(subject: ParitySubject): void {
       const report = inputReportOf(run.steps.at(-1)?.capture?.dom_html ?? null);
       expect(inputStatistics(report).untrusted).toBe(0);
       // The recorder counts from the moment its script ran. An unpaced flow
-      // clicks about a second after that (measured: 0.95 to 1.19 s).
+      // clicks one to two seconds after that (measured: 0.95 to 1.19 s in
+      // M9, 1.65 s since the hand waits for the page to draw).
       const clicks = report.events
         .filter((event) => event.type === 'click')
         .map((event) => event.t);
@@ -2245,16 +2246,28 @@ export function defineParitySuite(subject: ParitySubject): void {
       );
       expect(bare.steps.map((step) => step.paced_ms)).toEqual([null, null, null, null]);
       expect(bare.final.behavior).toMatchObject({ dwell_ms: 0, clicks: 1 });
-      const hasty = inputReportOf(bare.steps.at(-1)?.capture?.dom_html ?? null).events;
+      const unpaced = inputReportOf(bare.steps.at(-1)?.capture?.dom_html ?? null);
+      const hasty = unpaced.events;
+      // The hand acts on a page once it has drawn (spec §10.4), and the page
+      // says when it drew its first two frames. At full speed that was about
+      // 0.4 s after the recorder started; at 0.6 of a CPU 0.9 to 1.0 s, and
+      // the unpaced click came at 2.4 to 2.7 s, after the floor, with the
+      // persona's path (0.84 s) and rest unchanged (measured in the Chrome
+      // switch audit).
+      const drawnAt = unpaced.drawn?.[1] ?? Number.NaN;
       measured('a click without a pace', {
         floor_ms: floor,
+        drawn: unpaced.drawn ?? null,
         events: kinds(hasty),
         moves: hasty
           .filter((event) => event.type === 'mousemove')
           .map((event) => [event.t, event.x, event.y]),
       });
-      // On its way at once, and there long before the paced one has set out.
-      expect(hasty.find((event) => event.type === 'click')?.t).toBeLessThan(floor);
+      // On its way at once, and there long before the paced one has set out
+      // once the page was there to see.
+      expect(drawnAt).toBeGreaterThanOrEqual(0);
+      const clickedAt = hasty.find((event) => event.type === 'click')?.t ?? Number.NaN;
+      expect(clickedAt - drawnAt).toBeLessThan(floor);
       expect(
         hasty.filter((event) => event.type === 'mousemove' && event.t < floor).length,
       ).toBeGreaterThan(5);
