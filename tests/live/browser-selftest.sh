@@ -38,11 +38,22 @@
 #   KAGE_LIVE_EVIDENCE_DIR   keeps the pages' text and screenshots there, in
 #                            one directory per engine; they are evidence for
 #                            a person, never committed
-#   KAGE_LIVE_IDLE_SECONDS   leaves the first context of each engine open and
-#                            untouched for this long before its pages load,
-#                            and reports what the browser sent and received
-#                            by itself in that time
-#                            (tests/live/background-traffic.mjs)
+#   KAGE_LIVE_IDLE_SECONDS   measures what an idle browser sends and receives
+#                            by itself (tests/live/background-traffic.mjs).
+#                            Firefox: its first context stays open and
+#                            untouched for this long before its pages load.
+#                            Chromium (ADR 0014): after the judged runs, two
+#                            windows of this length (600 s at most), each a
+#                            fresh stand-in of one proxy of the pair in a
+#                            measurement image (measure-chromium.Dockerfile)
+#                            with Chrome's NetLog on: the first with Kage's
+#                            switches, the second with
+#                            --disable-background-networking left to Chrome;
+#                            the bytes per persona-hour and the hosts asked
+#                            for (tests/live/netlog-hosts.mjs). Each window
+#                            ends when its self-test loads the detection
+#                            pages, which are not judged. Google is contacted
+#                            from the two proxies, as Chrome does.
 #
 # The images are the ones deploy/compose.yaml names
 # (KAGE_BROWSER_CHROMIUM_IMAGE, KAGE_BROWSER_FIREFOX_IMAGE); one that is
@@ -96,6 +107,10 @@ for engine in "${engines[@]}"; do
         *) fail "KAGE_LIVE_ENGINES names '${engine}'; the engines are chromium and firefox" ;;
     esac
 done
+[[ "${idle}" =~ ^[0-9]+$ ]] || fail "KAGE_LIVE_IDLE_SECONDS is a number of seconds"
+if [ "${idle}" -gt 600 ] && [[ " ${engines[*]} " == *" chromium "* ]]; then
+    fail "KAGE_LIVE_IDLE_SECONDS: Chromium's two idle windows are 600 s each at most"
+fi
 
 # The image of an engine's sidecar, as deploy/compose.yaml names it.
 image_of() {
@@ -162,9 +177,10 @@ node tests/live/pick-browser-proxy.mjs "${workdir}/proxies.json" "${day}" > "${w
     || fail "no pair of proxies could be picked"
 
 # Starts the sidecar of an engine with the hardening of its service in
-# deploy/compose.yaml and waits until it answers.
+# deploy/compose.yaml and waits until it answers. A second argument names
+# another image of the engine (the measurement image).
 start_sidecar() {
-    local engine="$1" port
+    local engine="$1" image="${2:-$(image_of "$1")}" port
     local hardening=(--init --read-only --cap-drop ALL --security-opt no-new-privileges)
     if [ "${engine}" = chromium ]; then
         # Chrome's sandbox needs the derived profile. The firefox service
@@ -177,7 +193,7 @@ start_sidecar() {
         --volume /var/lib/kage/personas --volume /var/lib/kage/artifacts \
         --env "ENGINE=${engine}" --env "SIDECAR_TOKEN=${token}" --env SIDECAR_MAX_CONTEXTS=1 \
         --env "SIDECAR_CONTEXT_IDLE_MS=$(((idle + 300) * 1000))" \
-        --publish 127.0.0.1::8090 "$(image_of "${engine}")" > /dev/null
+        --publish 127.0.0.1::8090 "${image}" > /dev/null
     wait_for docker exec "${sidecar}" node dist/healthcheck.js \
         || fail "the ${engine} sidecar did not become ready"
     port="$(docker port "${sidecar}" 8090/tcp | head -n 1 | sed 's/.*://')"
@@ -187,25 +203,68 @@ start_sidecar() {
     esac
 }
 
+# The counters of the sidecar's network interface, every five seconds, into
+# <file>, in the background. Reading them goes through the container
+# runtime, not the network.
+start_sampler() {
+    local file="$1"
+    (
+        while true; do
+            counters="$(docker exec "${sidecar}" cat \
+                /sys/class/net/eth0/statistics/rx_bytes /sys/class/net/eth0/statistics/tx_bytes \
+                2> /dev/null | tr '\n' ' ')" || break
+            echo "$(date +%s%3N) ${counters}" >> "${file}"
+            sleep 5
+        done
+    ) &
+    sampler=$!
+}
+
+# Chromium's idle traffic with and without --disable-background-networking
+# (ADR 0014): one window per proxy of the pair, each in a measurement image
+# and on a fresh profile (a new container), the first with Kage's switches,
+# the second without that one. What is kept is what the two reporters
+# print: the bytes and the host names.
+measure_chromium_idle() {
+    local mode image window=0
+    while read -r proxy country; do
+        window=$((window + 1))
+        if [ "${window}" -eq 1 ]; then mode=with; else mode=without; fi
+        image="kage-live-measure-${mode}-$$"
+        echo "    idle window ${window}: Chromium ${mode} --disable-background-networking, through proxy ${window} of the pair (${country}), ${idle} s"
+        docker build --quiet --file tests/live/measure-chromium.Dockerfile \
+            --build-arg "BASE=$(image_of chromium)" --build-arg "MODE=${mode}" \
+            --tag "${image}" tests/live > /dev/null || fail "the measurement image could not be built"
+        start_sidecar chromium "${image}"
+        start_sampler "${workdir}/idle-${mode}-net.txt"
+        kage selftest browser --proxy "${proxy}" --engine chromium --idle-before "${idle}s" \
+            --third-party --json < /dev/null > "${workdir}/idle-${mode}.json" || true
+        kill "${sampler}" 2> /dev/null || true
+        sampler=""
+        docker logs "${sidecar}" > "${workdir}/idle-${mode}-sidecar.log" 2>&1 || true
+        # The browser has exited with its context: its NetLog is complete.
+        docker exec "${sidecar}" cat /tmp/kage-netlog.json \
+            > "${workdir}/idle-${mode}-netlog.json" 2> /dev/null || true
+        node tests/live/background-traffic.mjs "${workdir}/idle-${mode}-net.txt" "${workdir}/idle-${mode}-sidecar.log"
+        node tests/live/netlog-hosts.mjs "${workdir}/idle-${mode}-netlog.json" "${workdir}/idle-${mode}-sidecar.log"
+        docker rm --force --volumes "${sidecar}" > /dev/null 2>&1 || true
+        sidecar=""
+        docker rmi "${image}" > /dev/null 2>&1 || true
+    done < "${workdir}/pair.txt"
+}
+
 baseline_dir="tests/fixtures/selftest"
 failed=()
 for engine in "${engines[@]}"; do
     echo "    starting the ${engine} sidecar"
     start_sidecar "${engine}"
 
-    if [ "${idle}" -gt 0 ]; then
-        # The counters of the sidecar's network interface, every five seconds.
-        # Reading them goes through the container runtime, not the network.
-        (
-            while true; do
-                counters="$(docker exec "${sidecar}" cat \
-                    /sys/class/net/eth0/statistics/rx_bytes /sys/class/net/eth0/statistics/tx_bytes \
-                    2> /dev/null | tr '\n' ' ')" || break
-                echo "$(date +%s%3N) ${counters}" >> "${workdir}/${engine}-net.txt"
-                sleep 5
-            done
-        ) &
-        sampler=$!
+    # Chromium measures its idle traffic in windows of its own, after the
+    # judged runs (measure_chromium_idle).
+    engine_idle="${idle}"
+    [ "${engine}" = chromium ] && engine_idle=0
+    if [ "${engine_idle}" -gt 0 ]; then
+        start_sampler "${workdir}/${engine}-net.txt"
     fi
 
     status=0
@@ -214,7 +273,7 @@ for engine in "${engines[@]}"; do
         run=$((run + 1))
         idle_flags=()
         # Only the first context idles: one measurement per engine is enough.
-        if [ "${idle}" -gt 0 ] && [ "${run}" -eq 1 ]; then
+        if [ "${engine_idle}" -gt 0 ] && [ "${run}" -eq 1 ]; then
             idle_flags+=(--idle-before "${idle}s")
             echo "    the first context stays idle for ${idle} s before its pages load"
         fi
@@ -235,7 +294,7 @@ for engine in "${engines[@]}"; do
             < /dev/null > "${workdir}/${engine}-report-${run}.json" || status=1
     done < "${workdir}/pair.txt"
 
-    if [ "${idle}" -gt 0 ]; then
+    if [ "${engine_idle}" -gt 0 ]; then
         kill "${sampler}" 2> /dev/null || true
         sampler=""
         docker logs "${sidecar}" > "${workdir}/${engine}-sidecar.log" 2>&1 || true
@@ -265,6 +324,10 @@ for engine in "${engines[@]}"; do
     elif [ "${status}" -ne 0 ]; then
         echo "error: a ${engine} self-test command failed; its log is above" >&2
         failed+=("${engine}")
+    fi
+
+    if [ "${engine}" = chromium ] && [ "${idle}" -gt 0 ]; then
+        measure_chromium_idle
     fi
 done
 
