@@ -17,6 +17,14 @@ Defaults in tables are configuration defaults, not hard-coded constants.
 owner's projects while presenting, to the target site, the same signals a
 real human on a real household connection would present.
 
+Since 2.0 (§25, ADR 0012) the caller says on every request how much of
+that it wants, by a **camouflage level** from 0 (a plain HTTP client, no
+persona) to 3 (everything below), and the operator says whether the
+traffic leaves through the proxy pool or the host's own connection
+(`egress.mode`). The goals below describe level 3 under `egress: proxies`;
+the lower levels are Kage being a well-behaved client, not a person, and
+a site's policy may refuse them (`min_level`).
+
 **Goals**
 
 1. Indistinguishability at every software-controllable layer: egress IP class
@@ -488,6 +496,23 @@ set, else the static list, else none. Without a provider `kage serve` still
 starts, warns, and keeps health-checking stored proxies (a leak must not go
 unseen because a key went missing) but never syncs or replaces.
 
+Since 2.0 (ADR 0013, M15): the trait has `capabilities()`, and
+`replace`, `replaced`, `account` and `stats` are optional (a provider
+that lacks one answers `Unsupported`, which the pool, the CLI and the
+health page show as such); a provider is one module under
+`crates/kage-proxy/src/provider/`, its configuration section, its pins,
+and a pass of the conformance suite
+(`crates/kage-proxy/tests/provider_conformance.rs`) against a mock of
+its API, as `CONTRIBUTING.md` describes. A static entry carries
+`country` and may carry `locale` (BCP 47) and `city`; a persona is
+generated from the declared values as from an observed geo record
+(§6.1), `locale` overriding the country's primary language; an entry
+without a country gets no persona and serves level 0 only (§25), with a
+warning at start and in `kage config check`. Where a geo lookup is
+possible (§7.4) it verifies the declaration: a mismatch on two
+consecutive lookups is `geo_mismatch`, the proxy `degraded` with an
+alert, the declared identity kept until the operator resolves it.
+
 ### 7.2 Webshare specifics
 
 Verified against <https://apidocs.webshare.io> on 2026-10-08 (M2). The API
@@ -612,6 +637,15 @@ row without it; never when the list is empty or shorter than half the pool.
 
 All health traffic obeys pacing and never targets real target sites.
 
+Since 2.0 (ADR 0013): `proxies.health.echo_url` names the page the
+reachability probe fetches and the leak check compares with. For a
+provider with an echo of its own (Webshare) it defaults to that echo;
+for a declared list it defaults to the public echo above
+(`https://checkip.amazonaws.com/`), whose operator then sees every proxy
+address on the probe's schedule, as the runbook says; the operator's own
+echo (`selftest.http.echo_url`, O5) is the private alternative. The
+confirmation echo stays as it is.
+
 ### 7.5 The forwarder and the bandwidth budget
 
 **Forwarder (follow-up F10).** `kage serve` runs one HTTP proxy of its own
@@ -683,6 +717,14 @@ request.render == auto             → policy.render if set, else:
 escalation: an http attempt with outcome in {challenge_*, captcha, forbidden, soft_block}
             and render == auto → next attempt uses browser
 ```
+
+Since 2.0 the request's `level` (§25) comes first: level 0 is the plain
+client and no persona, level 1 is `render: http` with the persona's
+verified profile, levels 2 and 3 are `render: browser` (2 a plain load,
+3 the behaviour engine); `render` is derived from the level and is no
+longer a request field, and escalation from level 1 to 2 under `auto`
+happens only when the request's level allows it (a level is a maximum
+the caller chose as much as a minimum the policy set).
 
 ### 8.2 Persona selection score
 
@@ -1875,7 +1917,9 @@ entries, denylist enforced (`header_denied`, naming the header); `include`
 by default `dom` and `headers`, or `raw` and `headers` with `render:
 http`; `render: http` with an `include` only a browser produces is
 rejected with code `render_include_conflict`. There is no `locale`: a
-persona's languages are its own.
+persona's languages are its own. Since 2.0 every request also names
+`level` (§25), which replaces `render` (derived from the level) and is
+required (`level_required`).
 
 What only the http path can send is refused elsewhere instead of being
 dropped: a `method` other than `GET` (`GET`, `HEAD`, `POST` exist), a
@@ -2594,3 +2638,57 @@ Web Bot Auth signing module; pay-per-crawl (HTTP 402) handling; a Windows
 engine host for native Chrome personas; more providers; a small web UI over
 the admin API; per-site learned policies from outcome history; Redis-backed
 scheduler if a second Kage instance is ever needed.
+
+---
+
+## 25. Camouflage levels and egress (2.0)
+
+Decided by the owner on 2026-10-19 (D50, ADR 0012); built by M14. This
+section is normative; the sections it touches (§1, §3.1, §6.1, §8.1,
+§16.4, §17, §19) are updated by M14 to point here.
+
+**The level.** Every request names `level`, an integer 0 to 3. A request
+without one is refused with `level_required`; a job's `defaults.level`
+applies to its items and a crawl's to its pages; a flow names 2 or 3.
+The result says the level applied, and the metrics of fetches, jobs and
+attempts carry a `level` label.
+
+| Level | Name | What runs | Persona | Pacing | A site sees |
+|---|---|---|---|---|---|
+| 0 | plain | wreq with its own TLS and HTTP/2 settings; `User-Agent: kage/<version>` unless the caller sets one; the caller's headers and body as given; no cookie jar (a `Cookie` header is the caller's); redirects as a plain client follows them, through the SSRF chain check | none; `persona: null` | none of a persona's; the key's limits, the daily budget and the policy's robots and cache rules apply | a well-behaved HTTP client that says who it is |
+| 1 | http-emulated | the persona's http client (§9): its verified browser profile, header tables, cookie jar, request kinds | yes | the persona's | a browser's wire fingerprint with no page behaviour; refused with `level_unavailable` while no verified major exists (F30) |
+| 2 | browser-fast | the persona's real browser context, a plain navigation: no scrolling, no wandering pointer, no patience, the dwell at the site policy's `min_dwell`; captures, screenshots and extraction as at 3 | yes | the persona's pacing, visits and nights (the address's rhythm, D37) | a real browser that loads a page and leaves |
+| 3 | human | everything of 1.0: the behaviour engine, the patience and the rest, the reader's order, the floors of D40 and D44 | yes | the persona's | a person |
+
+**The floor.** A site's policy may set `min_level` (0 to 3, default 0;
+the shipped policy file sets 3 for the detection pages). A request below
+the floor is refused with `level_below_policy` and never raised. The
+level is also the request's ceiling: escalation (§8.1) never goes above
+it, and a block at level 0 or 1 is reported, not retried in a browser.
+
+**Egress.** `egress.mode` is `proxies` (the pool, as in 1.0; the default)
+or `direct` (the host's own connection). Under `direct`, one persona
+stands for the host (`egress.direct.personas`, default 1, at most a
+small number): its country, time zone, locale and languages come from
+the host's observed geo through the pool's lookup (§7.4), or from
+`egress.direct.country` and `egress.direct.locale` when declared; it is
+generated, warmed, paced and self-tested like any persona; the forwarder
+fronts every client and browser with no upstream, so the SSRF guard and
+the byte count hold. Level 0's egress is `egress.plain`: `host` (the
+default under `direct`) or `pool` (the pool's usable proxies in turn, as
+plain proxies, no persona binding; the default under `proxies`). There
+is no mixed mode and `kage config check` refuses one: a site that sees a
+visitor move from a residential address to the host's has seen a bot.
+
+**What a level never changes.** Persona handles, sessions (a session
+needs a persona: `session_needs_persona` at level 0), jobs, crawls,
+flows, webhooks, extraction, robots.txt, the cache (its key includes the
+level) and the shape of a result. The SSRF guard, the key's scopes and
+rate limits and the daily page budget apply at every level.
+
+**Costs, said plainly** (the runbook's table, the OpenAPI description
+and the README repeat it): below 3 Kage is not pretending to be a
+person. Level 0 is for pages that can be read with `curl`; level 2 for
+sites that need a browser but not a reader; level 1 waits for a
+verified major. A request's level is the caller's responsibility and a
+site's floor is the operator's.

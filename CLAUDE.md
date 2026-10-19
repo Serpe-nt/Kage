@@ -27,7 +27,10 @@ owner if you need it.
 - No `openssl-sys` anywhere in the Rust dependency graph. `just deny` checks
   it. Every TLS-capable crate uses rustls; all outbound HTTP in Rust goes
   through wreq.
-- Never add a direct (non-proxy) connection path to targets.
+- No request leaves the host's own address unless the operator configured
+  it (`egress.mode: direct` or `egress.plain: direct`, ADR 0012, D50);
+  under `egress.mode: proxies` nothing ever does. Never add a mixed path
+  that uses the pool and the host's address for one site by turns.
 - Never add external CAPTCHA solving or credentialed scraping.
 - Never run live tests (`KAGE_LIVE=1`) against real target sites. Live tests
   only hit the echo and detection test pages listed in configuration.
