@@ -6,6 +6,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- The proxy pool wrote a proxy and the health event that records it in
+  two transactions (a new proxy and `proxy_added`, a probe's state change
+  and its `proxy_state_changed` and `proxy_geo_observed`, a retirement, a
+  replacement requested or finished), so a reader in between saw the
+  proxy or its new state without the event; a slow runner's CLI test read
+  a `healthy` proxy and no `proxy_added` (F65). The row and its events are
+  now one write.
+
 ## [1.0.2] - 2026-10-19
 
 ### Fixed

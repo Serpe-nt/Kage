@@ -1,12 +1,13 @@
 //! The `proxies` table.
 
 use chrono::{DateTime, Utc};
-use kage_core::domain::{Proxy, ProxyProviderKind, ProxyReplacement, ProxyState};
+use kage_core::domain::{HealthEvent, Proxy, ProxyProviderKind, ProxyReplacement, ProxyState};
 use kage_core::ids::ProxyId;
 use kage_core::secret::SealedSecret;
 use sqlx::PgConnection;
 use uuid::Uuid;
 
+use super::events::insert_event;
 use super::repository;
 use crate::StoreError;
 use crate::convert::{from_json_opt, parse, parse_opt, to_i32, to_json_opt, to_u16, to_u32};
@@ -94,43 +95,28 @@ impl ProxyRepo<'_> {
     /// [`StoreError::Conflict`] when the provider already has a live proxy
     /// with this `provider_ref`.
     pub async fn insert(&self, proxy: &Proxy) -> Result<(), StoreError> {
-        let replacement = proxy.replacement.as_ref();
-        sqlx::query!(
-            "INSERT INTO proxies (id, provider, provider_ref, host, port, username, password,
-                                  scheme, country, city, asn, state, consecutive_failures,
-                                  backoff_count, backoff_until, failing_since,
-                                  replacement_requested_at, replacement_reason,
-                                  replacement_ticket, last_health, created_at, retired_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-                     $18, $19, $20, $21, $22)",
-            proxy.id.as_uuid(),
-            proxy.provider.as_str(),
-            proxy.provider_ref,
-            proxy.host,
-            i32::from(proxy.port),
-            proxy.username.as_bytes(),
-            proxy.password.as_bytes(),
-            proxy.scheme.as_str(),
-            proxy.country.map(|country| country.as_str().to_owned()),
-            proxy.city,
-            proxy.asn,
-            proxy.state.as_str(),
-            to_i32(
-                ("proxies", "consecutive_failures"),
-                proxy.consecutive_failures
-            )?,
-            to_i32(("proxies", "backoff_count"), proxy.backoff_count)?,
-            proxy.backoff_until,
-            proxy.failing_since,
-            replacement.map(|replacement| replacement.requested_at),
-            replacement.map(|replacement| replacement.reason.as_str()),
-            replacement.and_then(|replacement| replacement.ticket.as_deref()),
-            to_json_opt(("proxies", "last_health"), proxy.last_health.as_ref())?,
-            proxy.created_at,
-            proxy.retired_at,
-        )
-        .execute(self.pool)
-        .await?;
+        self.insert_noting(proxy, &[]).await
+    }
+
+    /// Stores a new proxy and, in the same transaction, the health events
+    /// that record its arrival, so that nobody reads the proxy without them
+    /// (follow-up F65).
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Conflict`] when the provider already has a live proxy
+    /// with this `provider_ref`; nothing is written then.
+    pub async fn insert_noting(
+        &self,
+        proxy: &Proxy,
+        events: &[HealthEvent],
+    ) -> Result<(), StoreError> {
+        let mut transaction = self.pool.begin().await?;
+        insert_row(&mut transaction, proxy).await?;
+        for event in events {
+            insert_event(&mut transaction, event).await?;
+        }
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -240,21 +226,46 @@ impl ProxyRepo<'_> {
         id: ProxyId,
         change: impl FnOnce(&mut Proxy) -> T,
     ) -> Result<Option<T>, StoreError> {
+        self.modify_noting(id, |proxy| (change(proxy), Vec::new()))
+            .await
+    }
+
+    /// Like [`ProxyRepo::modify`], and `change` also names the health
+    /// events that record what it did: they are written in the same
+    /// transaction as the proxy, so that nobody reads a proxy in a state
+    /// whose event is not there yet (follow-up F65).
+    ///
+    /// Returns `None` when the proxy does not exist; `change` is not called
+    /// then.
+    ///
+    /// # Errors
+    ///
+    /// Fails when a query fails or the row does not parse; nothing is
+    /// written in that case.
+    pub async fn modify_noting<T>(
+        &self,
+        id: ProxyId,
+        change: impl FnOnce(&mut Proxy) -> (T, Vec<HealthEvent>),
+    ) -> Result<Option<T>, StoreError> {
         let mut transaction = self.pool.begin().await?;
         let Some(mut proxy) = lock_row(&mut transaction, id).await? else {
             return Ok(None);
         };
-        let result = change(&mut proxy);
+        let (result, events) = change(&mut proxy);
         write(&mut transaction, &proxy).await?;
+        for event in &events {
+            insert_event(&mut transaction, event).await?;
+        }
         transaction.commit().await?;
         Ok(Some(result))
     }
 
-    /// Like [`ProxyRepo::modify`], for the one decision that spends the
-    /// replacement budget: `change` also receives the number of
+    /// Like [`ProxyRepo::modify_noting`], for the one decision that spends
+    /// the replacement budget: `change` also receives the number of
     /// replacements requested since `since`, and every caller of this
     /// method is serialized by one advisory lock. Two callers can therefore
-    /// never both see the last free slot.
+    /// never both see the last free slot. The events `change` names are
+    /// written with the decision.
     ///
     /// # Errors
     ///
@@ -264,7 +275,7 @@ impl ProxyRepo<'_> {
         &self,
         id: ProxyId,
         since: DateTime<Utc>,
-        change: impl FnOnce(&mut Proxy, u32) -> T,
+        change: impl FnOnce(&mut Proxy, u32) -> (T, Vec<HealthEvent>),
     ) -> Result<Option<T>, StoreError> {
         let mut transaction = self.pool.begin().await?;
         // The function returns `void`, which the checked macros cannot decode.
@@ -276,8 +287,11 @@ impl ProxyRepo<'_> {
         let Some(mut proxy) = lock_row(&mut transaction, id).await? else {
             return Ok(None);
         };
-        let result = change(&mut proxy, used);
+        let (result, events) = change(&mut proxy, used);
         write(&mut transaction, &proxy).await?;
+        for event in &events {
+            insert_event(&mut transaction, event).await?;
+        }
         transaction.commit().await?;
         Ok(Some(result))
     }
@@ -365,6 +379,48 @@ async fn write(connection: &mut PgConnection, proxy: &Proxy) -> Result<bool, Sto
     .execute(connection)
     .await?;
     Ok(done.rows_affected() == 1)
+}
+
+/// Writes a new proxy row.
+async fn insert_row(connection: &mut PgConnection, proxy: &Proxy) -> Result<(), StoreError> {
+    let replacement = proxy.replacement.as_ref();
+    sqlx::query!(
+        "INSERT INTO proxies (id, provider, provider_ref, host, port, username, password,
+                                  scheme, country, city, asn, state, consecutive_failures,
+                                  backoff_count, backoff_until, failing_since,
+                                  replacement_requested_at, replacement_reason,
+                                  replacement_ticket, last_health, created_at, retired_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+                     $18, $19, $20, $21, $22)",
+        proxy.id.as_uuid(),
+        proxy.provider.as_str(),
+        proxy.provider_ref,
+        proxy.host,
+        i32::from(proxy.port),
+        proxy.username.as_bytes(),
+        proxy.password.as_bytes(),
+        proxy.scheme.as_str(),
+        proxy.country.map(|country| country.as_str().to_owned()),
+        proxy.city,
+        proxy.asn,
+        proxy.state.as_str(),
+        to_i32(
+            ("proxies", "consecutive_failures"),
+            proxy.consecutive_failures
+        )?,
+        to_i32(("proxies", "backoff_count"), proxy.backoff_count)?,
+        proxy.backoff_until,
+        proxy.failing_since,
+        replacement.map(|replacement| replacement.requested_at),
+        replacement.map(|replacement| replacement.reason.as_str()),
+        replacement.and_then(|replacement| replacement.ticket.as_deref()),
+        to_json_opt(("proxies", "last_health"), proxy.last_health.as_ref())?,
+        proxy.created_at,
+        proxy.retired_at,
+    )
+    .execute(connection)
+    .await?;
+    Ok(())
 }
 
 async fn count_replacements(

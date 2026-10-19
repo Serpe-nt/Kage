@@ -43,6 +43,27 @@ impl TryFrom<HealthEventRow> for HealthEvent {
     }
 }
 
+/// Appends an event on a connection, inside whatever transaction it holds.
+pub(crate) async fn insert_event(
+    connection: &mut PgConnection,
+    event: &HealthEvent,
+) -> Result<(), StoreError> {
+    sqlx::query!(
+        "INSERT INTO health_events (id, at, subject_kind, subject_id, kind, severity, details)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        event.id.as_uuid(),
+        event.at,
+        event.subject_kind.as_str(),
+        event.subject_id,
+        event.kind,
+        event.severity.as_str(),
+        event.details,
+    )
+    .execute(connection)
+    .await?;
+    Ok(())
+}
+
 fn parse_severity(text: &str) -> Result<kage_core::alert::AlertSeverity, StoreError> {
     use kage_core::alert::AlertSeverity;
 
@@ -67,20 +88,8 @@ impl HealthEventRepo<'_> {
     ///
     /// Fails when the query fails.
     pub async fn insert(&self, event: &HealthEvent) -> Result<(), StoreError> {
-        sqlx::query!(
-            "INSERT INTO health_events (id, at, subject_kind, subject_id, kind, severity, details)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)",
-            event.id.as_uuid(),
-            event.at,
-            event.subject_kind.as_str(),
-            event.subject_id,
-            event.kind,
-            event.severity.as_str(),
-            event.details,
-        )
-        .execute(self.pool)
-        .await?;
-        Ok(())
+        let mut connection = self.pool.acquire().await?;
+        insert_event(&mut connection, event).await
     }
 
     /// Stores an operator alert as a health event about `subject_kind`, and
