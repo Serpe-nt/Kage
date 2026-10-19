@@ -644,16 +644,16 @@ impl Pool {
         Alert::new(kind, severity, message, details).at(self.clock.now())
     }
 
-    /// Stores a health event. A failure to store it is logged and does not
-    /// fail the operation it describes.
-    async fn event(
+    /// A health event about a proxy, or about the pool when `subject` is
+    /// `None`, dated now.
+    fn health_event(
         &self,
         subject: Option<ProxyId>,
         kind: &str,
         severity: AlertSeverity,
         details: serde_json::Value,
-    ) {
-        let event = HealthEvent {
+    ) -> HealthEvent {
+        HealthEvent {
             id: HealthEventId::new(),
             at: self.clock.now(),
             subject_kind: if subject.is_some() {
@@ -665,7 +665,20 @@ impl Pool {
             kind: kind.to_owned(),
             severity,
             details,
-        };
+        }
+    }
+
+    /// Stores a health event that records nothing the pool wrote at the
+    /// same moment. A failure to store it is logged and does not fail the
+    /// operation it describes.
+    async fn event(
+        &self,
+        subject: Option<ProxyId>,
+        kind: &str,
+        severity: AlertSeverity,
+        details: serde_json::Value,
+    ) {
+        let event = self.health_event(subject, kind, severity, details);
         if let Err(error) = self.store.health_events().insert(&event).await {
             tracing::error!(%error, kind, "cannot store the health event");
         }
@@ -676,7 +689,62 @@ impl Pool {
         let _ = self.events.send(event);
     }
 
-    /// Turns what the state machine reported into stored events, alerts and
+    /// The health events that record what the state machine did to a proxy,
+    /// `proxy` being the proxy as it is afterwards. They are written in the
+    /// transaction that changes the proxy (`modify_noting`), so that nobody
+    /// reads a proxy in a state whose event is not there yet (follow-up
+    /// F65); what [`Pool::handle`] does afterwards is only announced.
+    fn records(&self, proxy: &Proxy, effects: &[Effect], cause: &str) -> Vec<HealthEvent> {
+        let subject = Some(proxy.id);
+        effects
+            .iter()
+            .filter_map(|effect| match effect {
+                Effect::StateChanged { from, to } => Some(self.health_event(
+                    subject,
+                    "proxy_state_changed",
+                    AlertSeverity::Info,
+                    json!({
+                        "from": from, "to": to, "cause": cause,
+                        "consecutive_failures": proxy.consecutive_failures,
+                        "backoff_count": proxy.backoff_count,
+                        "backoff_until": proxy.backoff_until,
+                    }),
+                )),
+                Effect::GeoObserved { current } => Some(self.health_event(
+                    subject,
+                    "proxy_geo_observed",
+                    AlertSeverity::Info,
+                    json!({ "current": current, "provider_country": proxy.country }),
+                )),
+                Effect::GeoChanged { previous, current } => Some(self.health_event(
+                    subject,
+                    "proxy_geo_changed",
+                    AlertSeverity::Warning,
+                    json!({ "previous": previous, "current": current }),
+                )),
+                Effect::GeoMismatchCleared => Some(self.health_event(
+                    subject,
+                    "proxy_geo_mismatch_cleared",
+                    AlertSeverity::Info,
+                    json!({}),
+                )),
+                Effect::ReputationRecovered => Some(self.health_event(
+                    subject,
+                    "proxy_reputation_recovered",
+                    AlertSeverity::Info,
+                    json!({}),
+                )),
+                Effect::Leak { .. }
+                | Effect::LeakCleared
+                | Effect::GeoMismatch { .. }
+                | Effect::ReputationBad { .. }
+                | Effect::UsageTypeSuspicious { .. } => None,
+            })
+            .collect()
+    }
+
+    /// Announces what the state machine reported, once the proxy and the
+    /// events of [`Pool::records`] are stored: the log, the alerts and the
     /// published events.
     // One arm per effect; splitting it would only scatter the list.
     #[allow(clippy::too_many_lines)]
@@ -691,18 +759,6 @@ impl Pool {
                         cause,
                         "proxy changed state"
                     );
-                    self.event(
-                        Some(proxy.id),
-                        "proxy_state_changed",
-                        AlertSeverity::Info,
-                        json!({
-                            "from": from, "to": to, "cause": cause,
-                            "consecutive_failures": proxy.consecutive_failures,
-                            "backoff_count": proxy.backoff_count,
-                            "backoff_until": proxy.backoff_until,
-                        }),
-                    )
-                    .await;
                     self.publish(PoolEvent::StateChanged {
                         proxy: proxy.id,
                         from,
@@ -730,25 +786,11 @@ impl Pool {
                     self.publish(PoolEvent::EgressUnsafe(true));
                 }
                 Effect::LeakCleared => self.leak_cleared(proxy.id, "probe").await,
-                Effect::GeoObserved { current } => {
-                    self.event(
-                        Some(proxy.id),
-                        "proxy_geo_observed",
-                        AlertSeverity::Info,
-                        json!({ "current": current, "provider_country": proxy.country }),
-                    )
-                    .await;
+                Effect::GeoObserved { .. } => {
                     self.publish(PoolEvent::GeoChanged { proxy: proxy.id });
                 }
-                Effect::GeoChanged { previous, current } => {
+                Effect::GeoChanged { .. } => {
                     tracing::warn!(proxy = %proxy.id, "the geo record of a proxy changed");
-                    self.event(
-                        Some(proxy.id),
-                        "proxy_geo_changed",
-                        AlertSeverity::Warning,
-                        json!({ "previous": previous, "current": current }),
-                    )
-                    .await;
                     self.publish(PoolEvent::GeoChanged { proxy: proxy.id });
                 }
                 Effect::GeoMismatch { provider, observed } => self.raise_once(
@@ -762,13 +804,6 @@ impl Pool {
                 ),
                 Effect::GeoMismatchCleared => {
                     self.settle(AlertKind::ProxyGeoMismatch, Some(proxy.id));
-                    self.event(
-                        Some(proxy.id),
-                        "proxy_geo_mismatch_cleared",
-                        AlertSeverity::Info,
-                        json!({}),
-                    )
-                    .await;
                 }
                 Effect::ReputationBad { score } => self.raise_once(
                     self.alert(
@@ -781,13 +816,6 @@ impl Pool {
                 ),
                 Effect::ReputationRecovered => {
                     self.settle(AlertKind::ProxyReputationBad, Some(proxy.id));
-                    self.event(
-                        Some(proxy.id),
-                        "proxy_reputation_recovered",
-                        AlertSeverity::Info,
-                        json!({}),
-                    )
-                    .await;
                 }
                 Effect::UsageTypeSuspicious { usage_type } => {
                     // Raised on every change into a suspicious type.
@@ -905,12 +933,18 @@ impl Pool {
         let outage = failed && Self::outage_suspected(&live, Some(id));
         let jitter = self.backoff_jitter(id, report.at);
         let rules = self.rules;
+        let cause = match (&report.exit, report.leak) {
+            (Ok(_), Some(true)) => "leak",
+            (Ok(_), _) => "probe_ok",
+            (Err(failure), _) => failure.as_str(),
+        };
         let Some((proxy, effects)) = self
             .store
             .proxies()
-            .modify(id, |proxy| {
+            .modify_noting(id, |proxy| {
                 let effects = machine::apply_probe(proxy, report, outage, jitter, &rules);
-                (proxy.clone(), effects)
+                let records = self.records(proxy, &effects, cause);
+                ((proxy.clone(), effects), records)
             })
             .await?
         else {
@@ -937,11 +971,6 @@ impl Pool {
                     .await;
             }
         }
-        let cause = match (&report.exit, report.leak) {
-            (Ok(_), Some(true)) => "leak",
-            (Ok(_), _) => "probe_ok",
-            (Err(failure), _) => failure.as_str(),
-        };
         self.handle(&proxy, effects, cause).await;
         Ok(Some(proxy))
     }
@@ -960,9 +989,10 @@ impl Pool {
         let Some((proxy, effects)) = self
             .store
             .proxies()
-            .modify(id, |proxy| {
+            .modify_noting(id, |proxy| {
                 let effects = machine::apply_reputation(proxy, report, &rules);
-                (proxy.clone(), effects)
+                let records = self.records(proxy, &effects, "reputation");
+                ((proxy.clone(), effects), records)
             })
             .await?
         else {
@@ -984,18 +1014,19 @@ impl Pool {
 
     async fn expire(&self, id: ProxyId, force: bool) -> Result<Option<Proxy>, PoolError> {
         let now = self.clock.now();
+        let cause = if force { "operator" } else { "backoff_expired" };
         let Some((proxy, effects)) = self
             .store
             .proxies()
-            .modify(id, |proxy| {
+            .modify_noting(id, |proxy| {
                 let effects = machine::expire_backoff(proxy, now, force);
-                (proxy.clone(), effects)
+                let records = self.records(proxy, &effects, cause);
+                ((proxy.clone(), effects), records)
             })
             .await?
         else {
             return Ok(None);
         };
-        let cause = if force { "operator" } else { "backoff_expired" };
         self.handle(&proxy, effects, cause).await;
         Ok(Some(proxy))
     }
@@ -1194,7 +1225,18 @@ impl Pool {
             created_at: now,
             retired_at: None,
         };
-        match self.store.proxies().insert(&proxy).await {
+        // The proxy and the event of its arrival are one write: a probe that
+        // finds the proxy finds the event too.
+        let added = self.health_event(
+            Some(id),
+            "proxy_added",
+            AlertSeverity::Info,
+            json!({
+                "provider": kind, "provider_ref": proxy.provider_ref, "host": proxy.host,
+                "port": proxy.port, "country": proxy.country, "city": proxy.city,
+            }),
+        );
+        match self.store.proxies().insert_noting(&proxy, &[added]).await {
             Ok(()) => {}
             // Another process adopted it a moment ago.
             Err(error) if error.is_conflict() => return Ok(()),
@@ -1205,16 +1247,6 @@ impl Pool {
             country = proxy.country.map(|country| country.to_string()),
             "proxy added to the pool"
         );
-        self.event(
-            Some(id),
-            "proxy_added",
-            AlertSeverity::Info,
-            json!({
-                "provider": kind, "provider_ref": proxy.provider_ref, "host": proxy.host,
-                "port": proxy.port, "country": proxy.country, "city": proxy.city,
-            }),
-        )
-        .await;
         self.publish(PoolEvent::Added { proxy: id });
         report.added.push(id);
         Ok(())
@@ -1290,19 +1322,23 @@ impl Pool {
         let retired = self
             .store
             .proxies()
-            .modify(proxy.id, |proxy| machine::retire(proxy, now))
+            .modify_noting(proxy.id, |stored| {
+                if !machine::retire(stored, now) {
+                    return (false, Vec::new());
+                }
+                let event = self.health_event(
+                    Some(proxy.id),
+                    "proxy_retired",
+                    AlertSeverity::Warning,
+                    json!({ "reason": reason, "from": from, "host": proxy.host, "port": proxy.port }),
+                );
+                (true, vec![event])
+            })
             .await?;
         if retired != Some(true) {
             return Ok(());
         }
         tracing::warn!(proxy = %proxy.id, host = %proxy.host, reason, "proxy retired");
-        self.event(
-            Some(proxy.id),
-            "proxy_retired",
-            AlertSeverity::Warning,
-            json!({ "reason": reason, "from": from, "host": proxy.host, "port": proxy.port }),
-        )
-        .await;
         self.publish(PoolEvent::StateChanged {
             proxy: proxy.id,
             from,
@@ -1468,16 +1504,33 @@ impl Pool {
         let decision = self
             .store
             .proxies()
-            .modify_counting_replacements(id, window, |proxy, used| {
+            .modify_counting_replacements(id, window, |stored, used| {
                 // The pool decided on what it read a moment ago; a probe may
                 // have passed since. Only an operator's request is taken
                 // whatever the proxy's health.
                 if reason != ReplaceReason::Operator
-                    && machine::replacement_due(proxy, now, &rules) != Some(reason)
+                    && machine::replacement_due(stored, now, &rules) != Some(reason)
                 {
-                    return ReplacementDecision::NotEligible { state: proxy.state };
+                    let state = stored.state;
+                    return (ReplacementDecision::NotEligible { state }, Vec::new());
                 }
-                machine::start_replacement(proxy, reason, used, available, now, &rules)
+                let decision =
+                    machine::start_replacement(stored, reason, used, available, now, &rules);
+                // The request is on record with the state it put the proxy in.
+                let events = if decision == ReplacementDecision::Started {
+                    vec![self.health_event(
+                        Some(id),
+                        "proxy_replacement_requested",
+                        AlertSeverity::Warning,
+                        json!({
+                            "reason": reason, "from": proxy.state, "host": proxy.host,
+                            "country": country,
+                        }),
+                    )]
+                } else {
+                    Vec::new()
+                };
+                (decision, events)
             })
             .await?
             .ok_or(PoolError::NotFound(id))?;
@@ -1502,13 +1555,6 @@ impl Pool {
             proxy = %id, host = %proxy.host, reason = reason.as_str(),
             "requesting a proxy replacement"
         );
-        self.event(
-            Some(id),
-            "proxy_replacement_requested",
-            AlertSeverity::Warning,
-            json!({ "reason": reason, "from": proxy.state, "host": proxy.host, "country": country }),
-        )
-        .await;
         self.publish(PoolEvent::StateChanged {
             proxy: id,
             from: proxy.state,
@@ -1699,20 +1745,24 @@ impl Pool {
                 let done = self
                     .store
                     .proxies()
-                    .modify(proxy.id, |proxy| machine::finish_replacement(proxy, now))
+                    .modify_noting(proxy.id, |stored| {
+                        if !machine::finish_replacement(stored, now) {
+                            return (false, Vec::new());
+                        }
+                        let event = self.health_event(
+                            Some(proxy.id),
+                            "proxy_replaced",
+                            AlertSeverity::Warning,
+                            json!({
+                                "reason": replacement.reason, "host": proxy.host,
+                                "removed": removed, "added": added, "ticket": replacement.ticket,
+                            }),
+                        );
+                        (true, vec![event])
+                    })
                     .await?;
                 if done == Some(true) {
                     tracing::warn!(proxy = %proxy.id, host = %proxy.host, "proxy replaced by the provider");
-                    self.event(
-                        Some(proxy.id),
-                        "proxy_replaced",
-                        AlertSeverity::Warning,
-                        json!({
-                            "reason": replacement.reason, "host": proxy.host,
-                            "removed": removed, "added": added, "ticket": replacement.ticket,
-                        }),
-                    )
-                    .await;
                     self.publish(PoolEvent::StateChanged {
                         proxy: proxy.id,
                         from: ProxyState::Replacing,

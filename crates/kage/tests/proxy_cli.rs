@@ -556,8 +556,16 @@ async fn the_server_syncs_the_pool_and_checks_its_health_by_itself() {
     assert_eq!(health["exit_ip"], "127.0.0.2");
     assert_eq!(health["leak_detected"], false);
     assert_eq!(health["geo"]["timezone"], "Europe/Vienna");
+    // Each event is written with what it records (F65); the test still
+    // waits for them rather than for the state, so that it says which one
+    // is missing if one ever is.
     for kind in ["proxy_added", "proxy_state_changed", "proxy_geo_observed"] {
         let filter = format!("kind = '{kind}'");
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while count(&db, "health_events", &filter).await == 0 {
+            assert!(Instant::now() < deadline, "no {kind} event");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
         assert_eq!(count(&db, "health_events", &filter).await, 1, "{kind}");
     }
     // The probes keep coming, every two seconds give or take a quarter.

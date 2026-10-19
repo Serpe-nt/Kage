@@ -328,6 +328,95 @@ async fn a_sync_adopts_the_list_and_keeps_every_credential_encrypted() {
     assert_eq!(unchanged, stored);
 }
 
+/// How many proxies the table holds, and in which states, as a reader
+/// outside the pool sees them.
+async fn visible_states(harness: &Harness) -> Vec<String> {
+    sqlx::query_scalar("SELECT state FROM proxies ORDER BY created_at")
+        .fetch_all(harness.db.store.pool())
+        .await
+        .unwrap()
+}
+
+/// Follow-up F65: a reader never sees a proxy, or a state of one, before
+/// the event that records it. While another transaction holds the events
+/// table against writes (reads go on), the pool adopts a proxy and then
+/// probes it: the proxy and its new state must wait with their events, as
+/// one write, and never show without them. Before the fix the proxy was
+/// written first and its event after, so a reader in between (the server
+/// test of the CLI, on a slow runner) saw `healthy` and no `proxy_added`.
+#[tokio::test]
+async fn nobody_reads_a_proxy_or_its_state_before_the_event_that_records_it() {
+    let harness = harness(1).await;
+    let hold = || async {
+        let mut holder = harness.db.store.pool().begin().await.unwrap();
+        sqlx::query("LOCK TABLE health_events IN EXCLUSIVE MODE")
+            .execute(&mut *holder)
+            .await
+            .unwrap();
+        holder
+    };
+
+    let holder = hold().await;
+    let adopting = tokio::spawn({
+        let pool = harness.pool.clone();
+        async move { pool.reconcile().await }
+    });
+    for _ in 0..10 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            visible_states(&harness).await,
+            Vec::<String>::new(),
+            "the proxy is there before the event of its arrival"
+        );
+    }
+    holder.rollback().await.unwrap();
+    assert_eq!(adopting.await.unwrap().unwrap().added.len(), 1);
+    assert_eq!(visible_states(&harness).await, ["new"]);
+    assert_eq!(harness.events("proxy_added").await.len(), 1);
+
+    let proxy = harness.pool.live().await.unwrap().remove(0);
+    let holder = hold().await;
+    let probing = tokio::spawn({
+        let pool = harness.pool.clone();
+        let report = ProbeReport {
+            at: harness.now(),
+            exit: Ok(ExitObservation {
+                ip: Harness::exit(&proxy),
+                latency_ms: 120,
+                connect_ms: None,
+                tls_ms: None,
+            }),
+            leak: Some(false),
+            geo: Some(GeoRecord {
+                country: "DE".parse().unwrap(),
+                city: None,
+                region: None,
+                asn: None,
+                org: None,
+                timezone: Some("Europe/Berlin".to_owned()),
+                loc: None,
+                ip: Harness::exit(&proxy),
+                checked_at: harness.now(),
+            }),
+        };
+        async move { pool.record_probe(proxy.id, &report).await }
+    });
+    for _ in 0..10 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            visible_states(&harness).await,
+            ["new"],
+            "the proxy is healthy before the event of the change"
+        );
+    }
+    holder.rollback().await.unwrap();
+    let probed = probing.await.unwrap().unwrap().unwrap();
+    assert_eq!(probed.state, ProxyState::Healthy);
+    assert_eq!(visible_states(&harness).await, ["healthy"]);
+    assert_eq!(harness.events("proxy_state_changed").await.len(), 1);
+    assert_eq!(harness.events("proxy_geo_observed").await.len(), 1);
+}
+
 #[tokio::test]
 async fn changed_credentials_and_locations_are_taken_over() {
     let harness = harness(2).await;

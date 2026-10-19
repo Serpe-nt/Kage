@@ -159,6 +159,99 @@ async fn proxies_round_trip_filter_and_update() {
     assert!(!proxies.update(&common::proxy("ghost")).await.unwrap());
 }
 
+/// An event about a proxy, dated now.
+fn proxy_event(proxy: ProxyId, kind: &str) -> HealthEvent {
+    HealthEvent {
+        id: HealthEventId::new(),
+        at: now(),
+        subject_kind: SubjectKind::Proxy,
+        subject_id: Some(proxy.as_uuid()),
+        kind: kind.to_owned(),
+        severity: AlertSeverity::Info,
+        details: serde_json::json!({}),
+    }
+}
+
+/// Follow-up F65: a proxy and the events that record it are one write.
+/// When an event cannot be stored, neither is the proxy or its change.
+#[tokio::test]
+async fn a_proxy_and_the_events_that_record_it_are_written_together() {
+    let db = TestDb::migrated().await;
+    let proxies = db.store.proxies();
+    let events = db.store.health_events();
+    let kinds = || async {
+        let mut kinds: Vec<String> = events
+            .recent(None, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|event| event.kind)
+            .collect();
+        kinds.sort();
+        kinds
+    };
+
+    // An event that cannot be stored (its id is taken twice) takes the
+    // proxy with it.
+    let proxy = common::proxy("ref-1");
+    let twice = proxy_event(proxy.id, "proxy_added");
+    let failed = proxies
+        .insert_noting(&proxy, &[twice.clone(), twice.clone()])
+        .await;
+    assert!(failed.is_err());
+    assert_eq!(proxies.get(proxy.id).await.unwrap(), None);
+    assert_eq!(kinds().await, Vec::<String>::new());
+
+    // Stored together.
+    proxies
+        .insert_noting(&proxy, &[proxy_event(proxy.id, "proxy_added")])
+        .await
+        .unwrap();
+    assert_eq!(proxies.get(proxy.id).await.unwrap(), Some(proxy.clone()));
+    assert_eq!(kinds().await, ["proxy_added"]);
+
+    // A change whose event cannot be stored is not made either.
+    let failed = proxies
+        .modify_noting(proxy.id, |stored| {
+            stored.state = ProxyState::Healthy;
+            let event = proxy_event(proxy.id, "proxy_state_changed");
+            ((), vec![event.clone(), event])
+        })
+        .await;
+    assert!(failed.is_err());
+    assert_eq!(
+        proxies.get(proxy.id).await.unwrap().unwrap().state,
+        ProxyState::New
+    );
+    assert_eq!(kinds().await, ["proxy_added"]);
+
+    // And the change with its event, as one.
+    let from = proxies
+        .modify_noting(proxy.id, |stored| {
+            let from = stored.state;
+            stored.state = ProxyState::Healthy;
+            (from, vec![proxy_event(proxy.id, "proxy_state_changed")])
+        })
+        .await
+        .unwrap();
+    assert_eq!(from, Some(ProxyState::New));
+    assert_eq!(
+        proxies.get(proxy.id).await.unwrap().unwrap().state,
+        ProxyState::Healthy
+    );
+    assert_eq!(kinds().await, ["proxy_added", "proxy_state_changed"]);
+
+    // A proxy that does not exist: nothing is called, nothing written.
+    let missing = proxies
+        .modify_noting(ProxyId::new(), |_| -> ((), Vec<HealthEvent>) {
+            panic!("called for a missing proxy")
+        })
+        .await
+        .unwrap();
+    assert_eq!(missing, None);
+    assert_eq!(kinds().await.len(), 2);
+}
+
 #[tokio::test]
 async fn a_proxy_is_modified_under_its_row_lock() {
     let db = TestDb::migrated().await;
@@ -273,7 +366,7 @@ async fn the_replacement_budget_is_counted_and_spent_atomically() {
                 .proxies()
                 .modify_counting_replacements(id, month_start, |stored, used| {
                     if used >= budget {
-                        return false;
+                        return (false, Vec::new());
                     }
                     stored.state = ProxyState::Replacing;
                     stored.replacement = Some(ProxyReplacement {
@@ -281,7 +374,7 @@ async fn the_replacement_budget_is_counted_and_spent_atomically() {
                         reason: ReplaceReason::Unreachable,
                         ticket: None,
                     });
-                    true
+                    (true, Vec::new())
                 })
                 .await
                 .unwrap()
