@@ -18,10 +18,9 @@ defineParitySuite({
   // Chrome has no navigator.getAutoplayPolicy().
   autoplayPolicy: null,
   netErrors: { tunnel: 'ERR_TUNNEL_CONNECTION_FAILED', deadProxy: 'ERR_PROXY_CONNECTION_FAILED' },
-  // A known tell, measured in the Camoufox 156 milestone and not fixed here:
-  // the driver's default switches (patchright 1.63.0, Playwright's
-  // chromiumSwitches) start Chrome with ThirdPartyStoragePartitioning off,
-  // so a frame of another site reads its site's first-party storage, where
-  // a Chrome nobody configured partitions it.
-  thirdPartyStoragePartitioned: false,
+  // The driver's default switches turned ThirdPartyStoragePartitioning off
+  // (found in the Camoufox 156 milestone); the engine starts Chrome with
+  // its own (ADR 0014), and a frame of another site sees none of its
+  // site's first-party storage, as in a Chrome nobody configured.
+  thirdPartyStoragePartitioned: true,
 });
