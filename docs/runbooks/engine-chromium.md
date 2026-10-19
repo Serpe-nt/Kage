@@ -26,11 +26,77 @@ the same in the window, in every iframe and in every worker.
 | WebRTC addresses | none: `disable_non_proxied_udp`, no UDP leaves outside the proxy |
 | media devices, `AudioContext` | a PulseAudio in the container with one output and one input that go nowhere (`SIDECAR_AUDIO=pulse`, the image's default) |
 | device memory, fonts | the host and the image; the fingerprint lists them as `host_bound` |
-| storage of a cross-site frame | **not partitioned**, unlike a Chrome nobody configured: patchright's default switches (Playwright's `chromiumSwitches`) disable `ThirdPartyStoragePartitioning`, so a frame of site B inside site A reads B's first-party `localStorage` (the cookie, `SameSite=Lax` by default, stays out). Found by the parity suite in the Camoufox 156 milestone; a known tell until the audit of Chrome's launch switches (security review T2) |
+| storage of a cross-site frame | partitioned, as in a Chrome nobody configured: a frame of site B inside site A sees none of B's first-party storage. Up to 1.0.1 the driver's default switches turned partitioning off (security review T2); see "How Chrome is started" |
+| `http` addresses of public hosts | tried over https first, as Chrome does, falling back to http by itself |
 
 One browser process per persona context: a persistent profile is a browser
 process of its own in Chrome. `SIDECAR_MAX_CONTEXTS` (default 3) is
 therefore also the number of browsers a container runs at once.
+
+## How Chrome is started
+
+Chrome gets the switches Kage names and no other default of the
+driver's (ADR 0014; `engine-chromium/src/launch-plan.ts`). Everything
+else is Chrome's own default, as in a Chrome nobody configured. The Chrome
+switch audit measured every switch patchright 1.63.0 passes by default
+against a stock Chrome 155 that nothing drives: the reference page, a local
+CreepJS, `chrome://version`, screenshots of the display, the parity suite
+and the echo.
+
+| Switch | Why it stays |
+|---|---|
+| `--no-first-run` | the driver: a new profile's first-run window holds the start page, and the launch times out |
+| `--no-default-browser-check` | a bar over the page on every start of a Chrome that is not the system's default browser; a person who made it the default never sees it |
+| `--disable-search-engine-choice-screen`, `--disable-hang-monitor`, `--disable-prompt-on-repost` | modal dialogs over the page (the EEA's search engine choice, a page that does not answer, a reload of a POST) would take the hand's clicks; no page sees them |
+| `--disable-breakpad` | no crash dump with a page's memory and the persona's proxy credential on the personas volume; a Chrome without its user's consent uploads none either |
+| `--disable-dev-shm-usage` | a container's `/dev/shm` may be 64 MB |
+| `--password-store=basic` | a profile's secrets stay in the profile, never in the keyring of a developer's desktop; the image has none and gets the same store |
+| `--export-tagged-pdf`, `--enable-features=CDPScreenshotNewSurface` | the PDF and screenshot captures as they are measured |
+| `--disable-background-networking` | Google's background services stay quiet through the persona's proxy (a known tell for Google's properties, below) |
+| `--disable-blink-features=AutomationControlled` | the driver's `--remote-debugging-pipe` turns Chrome's automation flag on; without this `navigator.webdriver` is `true` |
+| `--test-type` (Kage's) | suppresses Chrome's startup bars, among them the one about the switch above ("an unsupported command-line flag", 56 px of the viewport on every start); it changed nothing a page reads |
+| `--disable-features=MediaRouter,DialMediaRouteProvider,OptimizationHints` (Kage's) | known tells kept on purpose (below) |
+| the window, `--lang`, the GL switches | the persona (above) |
+| `--proxy-server`, `--proxy-bypass-list=<-loopback>`, `--user-data-dir`, `--remote-debugging-pipe`, `about:blank` | the driver's connection and the proxy |
+
+Left to Chrome since 1.0.2, among others: `ThirdPartyStoragePartitioning`,
+`HttpsUpgrades`, `PaintHolding`, `Translate`, the background timer
+throttling of a tab behind another, `--force-color-profile=srgb` (no
+display profile on Xvfb anyway) and `--disable-sync`.
+
+What the HTTPS upgrade looks like in a result: an `http` address of a
+public host is asked on 443 first. A site with https gives the page over
+https, and the result's `final_url` says so. A site without it is asked
+again over http at once (a refused connection), after about 90 ms (a
+certificate the browser does not trust) or after 3 s (a port that never
+answers), with no interstitial; the result then shows Chrome's own way
+back as the one hop of its chain, an internal `307` from the https
+address, which no server sent. Names that are not unique (`*.test`,
+`*.localhost`, a single label, an address) are never upgraded, so the
+test world needs no TLS for it.
+
+Two tests keep the list: a unit test reads patchright-core's own default
+list from the installed bundle and checks that each switch is either kept
+or left out, and an integration test reads the browser process's command
+line and fails on any switch Kage does not name. A patchright bump that
+adds or respells a default fails the first; review the new switch against
+a stock Chrome as the audit did (its scripts are in the audit's evidence),
+then put it in one of the two lists.
+
+## Known tells
+
+What a page or a server can still tell of a Chromium persona and of no
+stock Chrome, measured; the pool-level ones are also in the security
+review.
+
+| Tell | Who sees it | Why it stays |
+|---|---|---|
+| WebGL from Mesa's llvmpipe, reached by `--ignore-gpu-blocklist`: a stock Chrome on such a machine refuses llvmpipe and has no WebGL at all | a page | identity (ADR 0009); the host's GPU through `SIDECAR_GL=host` is the answer |
+| `LanguageDetector`, `Summarizer` and `LanguageModel` answer `unavailable` (`OptimizationHints` off); a stock Chrome says `downloadable` | a page that asks | a page's `create()` after a click would otherwise download a model through the persona's proxy, for `LanguageModel` gigabytes; measured only offline |
+| no variations seed, no Safe Browsing list update, no `X-Client-Data` header to Google's properties (search, YouTube, reCAPTCHA's frames) | Google | `--disable-background-networking`; measured live, the switch saves about 50 kB per persona-hour and keeps two Google hosts quiet ("What an idle browser costs") |
+| Cast discovery off (`MediaRouter`, `DialMediaRouteProvider`) | nobody measured: `PresentationRequest.getAvailability()` and Remote Playback answer the same | no page can start multicast discovery on the sidecar's network |
+| after the driver's first typed navigation the address bar keeps the keyboard focus (a person who typed the address and pressed Enter has the page focused); `document.hasFocus()` says true either way | a page that waits for keys without a click first | follow-up F64: a typed navigation by the hand |
+| `history.length` counts the driver's `about:blank` start page | nobody: the same as for a person who opened a new tab and typed | — |
 
 ## Settings
 
@@ -178,17 +244,29 @@ passing run as the new baseline.
 
 ### What an idle browser costs
 
-Chrome talks to Google by itself: component updates, safe browsing lists,
-field trial data. That traffic leaves through the persona's proxy like
-everything else and counts against the proxy plan. It is left on, because
-it is what a real Chrome at that address does (and no target sees it).
-`KAGE_LIVE_IDLE_SECONDS=600 just test-live` measures it: the first
-context of the browser check stays open and untouched for that long, the
-counters of the sidecar container's network interface are read every five
-seconds, and `tests/live/background-traffic.mjs` reports the bytes of the
-first two minutes (a browser that has just started fetches the most), the
-rate after that, and what one persona-hour costs. The interface counts
-packet headers too, so a provider bills slightly less than the figure.
+Chrome talks to Google by itself. With `--disable-background-networking`
+(kept, "How Chrome is started") most of it is off; what remains leaves
+through the persona's proxy like everything else and counts against the
+proxy plan, and no target sees it. Measured live in the Chrome switch
+audit (2026-10-19, two DE proxies, ten idle minutes each on a fresh
+profile):
+
+| | bytes in 593 s | one persona-hour from a browser start | hosts asked for |
+|---|---|---|---|
+| Kage's switches | 26.8 kB | about 89 kB | `accounts.google.com`, `android.clients.google.com`, `www.gstatic.com`, `update.googleapis.com`, `www.google.com` |
+| without `--disable-background-networking` | 33.7 kB | about 139 kB | the same, and `clientservices.googleapis.com` (the variations seed) and `safebrowsing.googleapis.com` |
+
+`KAGE_LIVE_IDLE_SECONDS=600 just test-live` measures it again: Firefox's
+first context stays open and untouched for that long; Chromium gets the
+two windows of the table after its judged runs, each in a measurement
+image (`tests/live/measure-chromium.Dockerfile`, Chrome's NetLog on) on a
+fresh profile. The counters of the sidecar container's network interface
+are read every five seconds, `tests/live/background-traffic.mjs` reports
+the bytes of the first two minutes (a browser that has just started
+fetches the most), the rate after that and what one persona-hour costs,
+and `tests/live/netlog-hosts.mjs` the host names asked for. The interface
+counts packet headers too, so a provider bills slightly less than the
+figure.
 
 ## Input and flows
 
@@ -315,7 +393,10 @@ fingerprint-critical).
    `scripts/setup-chrome.sh` both read these two lines.
 2. `just setup-chrome`, then `just test-node`. The engine's integration
    tests fail if the installed Chrome is not the pinned one, and re-check
-   the coherence bar, the header order and the captures on the new build.
+   the coherence bar, the header order, the captures and the launch
+   switches on the new build (a switch can change its meaning between
+   majors: run the reference page of the switch audit against a stock
+   Chrome of the new build, "How Chrome is started").
 3. `just capture-browser-fingerprint` records
    `tests/fixtures/fingerprints/browser/chromium-<major>.json`. Then follow
    "A new browser major" in `docs/runbooks/fingerprint-echo.md`: the new
