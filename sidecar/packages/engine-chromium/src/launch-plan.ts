@@ -35,7 +35,11 @@ export interface LaunchPlan {
   };
   /** Environment of the browser process, besides the display. */
   readonly env: Readonly<Record<string, string>>;
-  /** Chrome arguments on top of the driver's own. */
+  /**
+   * Kage's switches on top of the driver's it keeps ({@link KAGE_SWITCHES},
+   * {@link DRIVER_SWITCHES_KEPT}) and the persona's own; the driver adds its
+   * pipe, the profile, the start page and the proxy.
+   */
   readonly args: readonly string[];
   /** CPUs the browser may run on; their count is `navigator.hardwareConcurrency`. */
   readonly cpus: readonly number[];
@@ -88,11 +92,112 @@ export const LOOPBACK_THROUGH_PROXY = '<-loopback>';
  */
 export const WEBRTC_POLICY = 'disable_non_proxied_udp';
 
+/**
+ * The driver's default switches that Kage leaves out, spelled as
+ * patchright 1.63.0 spells them (`chromiumSwitches` in patchright-core's
+ * `lib/coreBundle.js`), for its `ignoreDefaultArgs` (ADR 0014). Each is
+ * left to Chrome's own default, as in a Chrome nobody configured; the
+ * Chrome switch audit measured what each changes. The driver drops an
+ * argument only where it is spelled exactly so, and from Kage's own
+ * arguments too: none of these may be one of them.
+ */
+export const DRIVER_SWITCHES_LEFT_OUT: readonly string[] = [
+  // No effect on Google Chrome, which applies its built-in variations seed either way.
+  '--disable-field-trial-config',
+  // A tab behind another has its timers throttled again, as Chrome's are;
+  // a persona's page is in front, and Linux tracks no occlusion.
+  '--disable-background-timer-throttling',
+  '--disable-backgrounding-occluded-windows',
+  '--disable-renderer-backgrounding',
+  // Every feature back on, among them ThirdPartyStoragePartitioning (a
+  // cross-site frame read its site's first-party storage), HttpsUpgrades
+  // (an `http` address of a public host is tried over https first and
+  // falls back by itself) and PaintHolding; the three Kage keeps off are
+  // in {@link KAGE_SWITCHES}.
+  '--disable-features=AvoidUnnecessaryBeforeUnloadCheckSync,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,PaintHolding,ThirdPartyStoragePartitioning,BlockOriginHeaderModificationOnRedirect,Translate,AutoDeElevate,OptimizationHints,msForceBrowserSignIn,msEdgeUpdateLaunchServicesPreferredVersion',
+  // Nothing to change on Xvfb, which has no display profile.
+  '--force-color-profile=srgb',
+  // No account is signed in.
+  '--disable-sync',
+  // For Edge, macOS, Windows or Chrome for Testing: nothing in this Chrome.
+  '--disable-edgeupdater',
+  '--disable-updater-scheduler',
+  '--use-mock-keychain',
+  '--no-service-autorun',
+  '--edge-skip-compat-layer-relaunch',
+  '--disable-infobars',
+];
+
+/**
+ * The driver's default switches that Kage keeps, each for a reason no page
+ * can see or one Kage cannot do without (ADR 0014; the known tells in
+ * `docs/runbooks/engine-chromium.md`).
+ */
+export const DRIVER_SWITCHES_KEPT: readonly string[] = [
+  // The driver: a new profile's first-run window holds the start page,
+  // and the launch times out without it.
+  '--no-first-run',
+  // A bar over the page on every start of a Chrome that is not the
+  // system's default browser; a person who made it the default never sees one.
+  '--no-default-browser-check',
+  // Modal dialogs over the page (the search engine choice in the EEA, a
+  // page that does not answer, a reload of a POST) would take the hand's
+  // clicks; no page sees them.
+  '--disable-search-engine-choice-screen',
+  '--disable-hang-monitor',
+  '--disable-prompt-on-repost',
+  // No crash dump with a page's memory and the persona's proxy credential
+  // on the personas volume; a Chrome without its user's consent sends none.
+  '--disable-breakpad',
+  // A container's /dev/shm may be 64 MB; Chrome then uses /tmp.
+  '--disable-dev-shm-usage',
+  // The profile's secrets in the profile, never in the keyring of a
+  // developer's desktop; the image has no keyring and gets the same store.
+  '--password-store=basic',
+  // The PDF and screenshot captures as they are measured (the screenshot
+  // path is the one hardened for slow hosts).
+  '--export-tagged-pdf',
+  '--enable-features=CDPScreenshotNewSurface',
+  // Google's background services stay quiet: no variations seed, no
+  // component downloads, no network-time query through the persona's
+  // proxy. A known tell for Google's own properties, which see no
+  // `X-Client-Data` from a persona.
+  '--disable-background-networking',
+  // The driver's pipe turns Chrome's automation flag on, and with it
+  // `navigator.webdriver`; this switch turns it off again.
+  '--disable-blink-features=AutomationControlled',
+];
+
+/** The switches Kage adds to the ones it keeps of the driver's (ADR 0014). */
+export const KAGE_SWITCHES: readonly string[] = [
+  // Without it Chrome shows a bar about the AutomationControlled switch
+  // ("an unsupported command-line flag") over every page, 56 px of the
+  // viewport; it suppresses Chrome's startup bars and changed nothing a
+  // page reads (measured with the reference page, CreepJS and the active
+  // field trials).
+  '--test-type',
+  // Off on purpose, each a known tell: the built-in AI APIs answer
+  // `unavailable` instead of downloading models through the proxy, and a
+  // page cannot start Cast discovery (multicast) on the sidecar's network.
+  '--disable-features=MediaRouter,DialMediaRouteProvider,OptimizationHints',
+];
+
+/**
+ * Every switch of Chrome but the driver's connection (its pipe, the
+ * profile, the start page, the proxy) and the persona's own window, language
+ * and GL switches: the list ADR 0014 names. Anything else is Chrome's own
+ * default.
+ */
+export const CHROME_SWITCHES: readonly string[] = [...DRIVER_SWITCHES_KEPT, ...KAGE_SWITCHES];
+
 const GL_ARGS: Readonly<Record<GlMode, readonly string[]>> = {
   none: [],
   swiftshader: ['--enable-unsafe-swiftshader'],
   // Mesa's software renderer through ANGLE: a renderer string real Linux
   // machines without GPU acceleration report, the same in window and worker.
+  // A known tell: a Chrome nobody configured refuses llvmpipe by its
+  // blocklist and has no WebGL at all on such a machine (measured); the
+  // host's GPU (`host`) is the answer.
   llvmpipe: ['--use-gl=angle', '--use-angle=gl', '--ignore-gpu-blocklist'],
   // A GPU of the host mapped into the container (/dev/dri): Chrome's defaults.
   host: [],
@@ -146,6 +251,7 @@ export function launchPlan(
     height: screen.height - PANEL_HEIGHT,
   };
   const args = [
+    ...KAGE_SWITCHES,
     `--window-position=${window.x},${window.y}`,
     `--window-size=${window.width},${window.height}`,
     `--lang=${locale}`,

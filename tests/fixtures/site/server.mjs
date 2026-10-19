@@ -171,6 +171,31 @@ document.body.setAttribute('data-done', '1');
 </script>`,
 );
 
+// What a page reads of how its browser was started (the Chrome switch
+// audit, ADR 0014): the automation flag, how much of the window the
+// browser's own bars take (a bar over the page makes it more), and what the
+// built-in AI APIs say they can do. The APIs are asked two seconds after
+// `load`, on a page in the tests' persona's own language: at 0.6 of a CPU a
+// call during Chrome's own work after a load (it detects the page's
+// language to offer a translation) stalled the page's timers for half a
+// minute in about one load of two, with the driver's switches and with
+// Kage's alike; two seconds later it never did (measured in the switch
+// audit).
+const LAUNCH_PAGE = page(
+  'Start',
+  `<h1>Start</h1><p>Diese Seite liest, wie der Browser gestartet wurde, und meldet es. Niemand berührt sie.</p><script>
+addEventListener('load', () => setTimeout(async () => {
+  const timed = (promise) => Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve('timeout'), 3000))]);
+  const ai = {};
+  for (const name of ['LanguageDetector', 'Summarizer', 'LanguageModel']) {
+    try { ai[name] = globalThis[name] === undefined ? 'absent' : await timed(globalThis[name].availability()); } catch (error) { ai[name] = 'throws ' + error.name; }
+  }
+  navigator.sendBeacon('/__kage/report', JSON.stringify({ page: 'launch', webdriver: navigator.webdriver, chrome: outerHeight - innerHeight, secure: isSecureContext, ai }));
+  document.body.setAttribute('data-done', '1');
+}, 2000));
+</script>`,
+);
+
 // Opens a WebRTC connection against the STUN server named in the query
 // and reports which candidates were gathered. A test listens on that
 // address to see whether anything left around the proxy.
@@ -411,6 +436,7 @@ const routes = {
   '/partition/top': (_req, res, url) => html(res, partitionTopPage(url.searchParams.get('frame') ?? '')),
   '/partition/frame': (_req, res) => html(res, PARTITION_FRAME_PAGE),
   '/popup.html': (_req, res) => html(res, POPUP_PAGE),
+  '/launch.html': (_req, res) => html(res, LAUNCH_PAGE.replace('<html lang="en">', '<html lang="de">')),
   '/cached.html': (_req, res) => html(res, page('Cached', '<h1>Cached for ten minutes</h1>'), { 'cache-control': 'max-age=600' }),
   '/big.html': (_req, res) => html(res, page('Big', `<p>${'ä'.repeat(40_000)}</p>`)),
   '/set-cookies': (_req, res) =>

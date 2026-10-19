@@ -90,8 +90,9 @@ export interface ParitySubject {
   /**
    * Whether a frame of one site, inside a page of another, sees nothing of
    * the storage its site set as the first party, as in the browser nobody
-   * configured. `false` records a measured tell of the engine that is not
-   * fixed yet, with its cause, so that the test notices when it changes.
+   * configured (true for both engines since the Chrome switch audit).
+   * `false` would record a measured tell of an engine, with its cause, so
+   * that the test notices when it changes.
    */
   readonly thirdPartyStoragePartitioned: boolean;
 }

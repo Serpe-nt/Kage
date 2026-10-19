@@ -34,9 +34,12 @@ import {
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import {
+  CHROME_SWITCHES,
   ChromiumEngine,
+  LOOPBACK_THROUGH_PROXY,
   chromeUserAgentOf,
   detectHost,
+  launchPlan,
   profilePaths,
   type HostFacts,
 } from './index.js';
@@ -821,6 +824,121 @@ describe('coherence (spec §6.2)', () => {
       'ERR_TUNNEL_CONNECTION_FAILED',
     );
     expect(result.pages[1]?.text?.path).toBe('selftests/s1/text.txt');
+  });
+});
+
+/** The command line of a persona's browser process, as Chrome took it, without the binary. */
+async function browserSwitches(userData: string): Promise<string[]> {
+  for (const pid of (await readdir('/proc')).filter((entry) => /^\d+$/.test(entry))) {
+    let line: string;
+    try {
+      line = await readFile(`/proc/${pid}/cmdline`, 'utf8');
+    } catch {
+      continue;
+    }
+    // The browser process was started by exec: its arguments are separated
+    // by NULs (the processes its zygote forks rewrite theirs with spaces).
+    const [binary, ...rest] = line.split('\0').filter((argument) => argument !== '');
+    if (
+      binary === host.chromePath &&
+      rest.includes(`--user-data-dir=${userData}`) &&
+      !rest.some((argument) => argument.startsWith('--type='))
+    ) {
+      return rest;
+    }
+  }
+  throw new Error(`no browser process for ${userData}`);
+}
+
+describe('how Chrome is started (ADR 0014)', () => {
+  it("gets the switches Kage names and the driver's connection, and nothing else", async () => {
+    await withContext('switches', async (context) => {
+      await go(context, named('/landing'));
+      const userData = profilePaths(path.join(root, 'personas', 'personas', 'switches')).userData;
+      const switches = await browserSwitches(userData);
+      const plan = launchPlan(linux, openRequest(linux, 'switches'), {
+        cpus: host.cpus,
+        gl: 'llvmpipe',
+      });
+      // A driver bump that adds or respells a default of its own fails here:
+      // every switch Chrome got is one Kage names or the driver's connection.
+      expect(new Set(switches)).toEqual(
+        new Set([
+          ...CHROME_SWITCHES,
+          ...plan.args,
+          `--proxy-server=${proxy.server}`,
+          `--proxy-bypass-list=${LOOPBACK_THROUGH_PROXY}`,
+          `--user-data-dir=${userData}`,
+          '--remote-debugging-pipe',
+          'about:blank',
+        ]),
+      );
+      // One list of features each way: Chrome takes the last of a switch given twice.
+      expect(switches.filter((argument) => argument.startsWith('--disable-features='))).toEqual([
+        '--disable-features=MediaRouter,DialMediaRouteProvider,OptimizationHints',
+      ]);
+      expect(switches.filter((argument) => argument.startsWith('--enable-features='))).toEqual([
+        '--enable-features=CDPScreenshotNewSurface',
+      ]);
+    });
+  });
+
+  it('asks a public host over https first, and comes back to http by itself when it has none', async () => {
+    const before = proxy.log.length;
+    const result = await withContext('upgrade', (context) =>
+      go(context, 'http://upgrade.example.com/landing'),
+    );
+    const asked = proxy.log.slice(before).filter((entry) => entry.target.startsWith('upgrade.'));
+    // As a Chrome nobody configured does: the tunnel to 443 first, refused
+    // here, then the page over http, with no interstitial in between.
+    expect(asked[0]).toMatchObject({ kind: 'connect', target: 'upgrade.example.com:443' });
+    expect(asked.some((entry) => entry.kind === 'connect' && !entry.relayed)).toBe(true);
+    const page = asked.findIndex((entry) => entry.kind === 'http' && entry.path === '/landing');
+    expect(page).toBeGreaterThan(0);
+    expect(asked[page]).toMatchObject({ relayed: true });
+    expect(result).toMatchObject({
+      url: 'http://upgrade.example.com/landing',
+      final_url: 'http://upgrade.example.com/landing',
+      status: 200,
+      title: 'Landing',
+    });
+    // Chrome's own way back from the refused https is the one hop of the
+    // chain: an internal 307 from the https address, which no server sent.
+    expect(result.redirects).toEqual([
+      {
+        url: 'https://upgrade.example.com/landing',
+        status: 307,
+        location: 'http://upgrade.example.com/landing',
+      },
+    ]);
+    // The names of the test world are never upgraded: Chrome leaves
+    // non-unique names alone.
+    expect(proxy.log.some((entry) => entry.target === 'fixture.kage.test:443')).toBe(false);
+  });
+
+  it('shows the page no bar over it, says nobody drives it, and has no AI models', async () => {
+    await site.reset();
+    const result = await withContext('launch', (context) =>
+      go(context, secure('/launch.html'), {
+        wait: { until: 'load', selector: 'body[data-done]' },
+        capture: { ...NO_CAPTURE, dom: true },
+      }),
+    );
+    const report = (await site.reports()).find((entry) => entry['page'] === 'launch');
+    expect(
+      report,
+      `the page reported nothing: ${result.error?.message ?? 'no error'}; ${result.dom_html?.slice(0, 400) ?? ''}`,
+    ).toMatchObject({ webdriver: false, secure: true });
+    // The tab strip and the toolbar, 87 px at a scale of 1 (measured); the
+    // bar Chrome shows for an unsupported switch adds 56 without --test-type.
+    expect(report?.['chrome']).toBeLessThan(100);
+    // A known tell kept on purpose (ADR 0014): no model is ever downloaded
+    // through the persona's proxy, so the APIs say they have none.
+    expect(report?.['ai']).toEqual({
+      LanguageDetector: 'unavailable',
+      Summarizer: 'unavailable',
+      LanguageModel: 'unavailable',
+    });
   });
 });
 

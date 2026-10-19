@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -13,6 +14,10 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import {
+  CHROME_SWITCHES,
+  DRIVER_SWITCHES_KEPT,
+  DRIVER_SWITCHES_LEFT_OUT,
+  KAGE_SWITCHES,
   GENERATOR_ID,
   HOST_BOUND,
   LOOPBACK_THROUGH_PROXY,
@@ -395,6 +400,7 @@ describe('launchPlan', () => {
       inject: 'none',
     });
     expect(plan.args).toEqual([
+      ...KAGE_SWITCHES,
       '--window-position=0,32',
       '--window-size=1920,1048',
       '--lang=de-DE',
@@ -404,6 +410,66 @@ describe('launchPlan', () => {
     ]);
     expect(LOOPBACK_THROUGH_PROXY).toBe('<-loopback>');
     expect(WEBRTC_POLICY).toBe('disable_non_proxied_udp');
+  });
+
+  it("starts Chrome with the switches Kage names, and no other default of the driver's", () => {
+    // The list of ADR 0014, as the Chrome switch audit measured it: every
+    // switch here has its reason in launch-plan.ts; anything else is Chrome's
+    // own default. A change of it is a change of what a persona is.
+    expect(CHROME_SWITCHES).toEqual([
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-search-engine-choice-screen',
+      '--disable-hang-monitor',
+      '--disable-prompt-on-repost',
+      '--disable-breakpad',
+      '--disable-dev-shm-usage',
+      '--password-store=basic',
+      '--export-tagged-pdf',
+      '--enable-features=CDPScreenshotNewSurface',
+      '--disable-background-networking',
+      '--disable-blink-features=AutomationControlled',
+      '--test-type',
+      '--disable-features=MediaRouter,DialMediaRouteProvider,OptimizationHints',
+    ]);
+    // What patchright-core 1.63.0 itself defines as its default switches,
+    // read from the installed bundle: a driver bump that adds, drops or
+    // respells one fails here before any browser starts.
+    const bundle = readFileSync(
+      path.join(
+        path.dirname(
+          createRequire(require.resolve('patchright/package.json')).resolve(
+            'patchright-core/package.json',
+          ),
+        ),
+        'lib',
+        'coreBundle.js',
+      ),
+      'utf8',
+    );
+    const block = (start: RegExp) => {
+      const from = bundle.search(start);
+      expect(from, String(start)).toBeGreaterThan(0);
+      return bundle.slice(from, bundle.indexOf('].filter(Boolean)', from));
+    };
+    const literals = (text: string) => [...text.matchAll(/"(--?[^"]*)"|"([A-Za-z]+)"/g)];
+    const features = literals(block(/disabledFeatures = \[/))
+      .map((match) => match[2] ?? '')
+      .filter((value) => value !== '');
+    const defaults = literals(block(/chromiumSwitches = \(options\) => \[/))
+      .map((match) => match[1] ?? '')
+      .filter((value) => value !== '')
+      .map((value) =>
+        value === '--disable-features=' ? `--disable-features=${features.join(',')}` : value,
+      );
+    expect(new Set(defaults)).toEqual(
+      new Set([...DRIVER_SWITCHES_KEPT, ...DRIVER_SWITCHES_LEFT_OUT]),
+    );
+    expect(new Set(defaults).size).toBe(25);
+    // Each default is either kept or left out, and the driver, which drops a
+    // left-out spelling from every argument, finds none of them in Kage's own.
+    expect(DRIVER_SWITCHES_KEPT.filter((s) => DRIVER_SWITCHES_LEFT_OUT.includes(s))).toEqual([]);
+    expect(KAGE_SWITCHES.filter((s) => defaults.includes(s))).toEqual([]);
   });
 
   it('never passes what patchright warns against or what would weaken the browser', () => {
@@ -422,11 +488,17 @@ describe('launchPlan', () => {
         expect(args.some((argument) => argument.startsWith(forbidden))).toBe(false);
       }
     }
-    expect(launchPlan(document, request, { ...host, gl: 'none' }).args).toHaveLength(3);
+    // The one Blink feature turned off, a default of the driver's Kage keeps,
+    // is the automation flag the driver's pipe turns on.
+    expect(CHROME_SWITCHES.filter((s) => s.startsWith('--disable-blink-features'))).toEqual([
+      '--disable-blink-features=AutomationControlled',
+    ]);
+    const own = KAGE_SWITCHES.length;
+    expect(launchPlan(document, request, { ...host, gl: 'none' }).args).toHaveLength(own + 3);
     expect(launchPlan(document, request, { ...host, gl: 'swiftshader' }).args).toContain(
       '--enable-unsafe-swiftshader',
     );
-    expect(launchPlan(document, request, { ...host, gl: 'host' }).args).toHaveLength(3);
+    expect(launchPlan(document, request, { ...host, gl: 'host' }).args).toHaveLength(own + 3);
   });
 
   it("gives the persona as many CPUs as its fingerprint says, at most the host's", () => {

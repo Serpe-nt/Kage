@@ -33,7 +33,7 @@ import {
   type Injection,
 } from './fingerprint.js';
 import type { HostFacts } from './host.js';
-import { cpuListOf, launchPlan } from './launch-plan.js';
+import { DRIVER_SWITCHES_LEFT_OUT, cpuListOf, launchPlan } from './launch-plan.js';
 import { PageReader } from './page-reader.js';
 import { prepareProfile } from './profile.js';
 
@@ -52,8 +52,9 @@ const LAUNCH_TIMEOUT_MS = 60_000;
  * (it would switch the HTTP cache off), no route, nothing that needs the
  * `Runtime` or `Console` debugger domains, no read of a page through the
  * driver (it marks every evaluation as a user gesture; see
- * `page-reader.ts`), headful on the persona's own X display, and Chrome's
- * sandbox on.
+ * `page-reader.ts`), headful on the persona's own X display, Chrome's
+ * sandbox on, and Chrome started with the switches Kage names and no other
+ * default of the driver's (`launch-plan.ts`, ADR 0014).
  */
 export class ChromiumEngine implements Engine {
   readonly name = 'chromium' as const;
@@ -148,6 +149,8 @@ export class ChromiumEngine implements Engine {
         viewport: null,
         chromiumSandbox: true,
         timeout: LAUNCH_TIMEOUT_MS,
+        // The driver's defaults Kage leaves to Chrome (ADR 0014); Kage's own come with the plan.
+        ignoreDefaultArgs: [...DRIVER_SWITCHES_LEFT_OUT],
         args: [...plan.args],
         proxy: plan.proxy,
         ...(plan.geolocation === null ? {} : { geolocation: plan.geolocation }),
