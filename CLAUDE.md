@@ -31,8 +31,9 @@ owner if you need it.
   `egress.mode: direct` (ADR 0012, D50); under `egress.mode: proxies`
   nothing ever does, and `egress.plain` is `host` only under `direct`.
   Never add a mixed path that uses the pool and the host's address for
-  one site by turns; level 0 traffic for a site leaves through that
-  site's scout address under the pool, never in turn.
+  one site by turns; under the pool, level 0 traffic for a site leaves
+  through one address (the site's plain exit of the pool's own, else its
+  scout's), never in turn.
 - Never add external CAPTCHA solving. Kage holds no credentials for any
   site and never logs in; a caller's own `Cookie` or `Authorization`
   header is the caller's request, sent at level 0 only, never stored,

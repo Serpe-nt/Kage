@@ -1294,7 +1294,63 @@ conformance suite passes for both providers and fails for a deliberately
 broken mock; `kage proxy health` on a list without a provider shows live
 and dead proxies from the echo; `just ci` green.
 
+**Status.** Merged on 2026-10-20 as
+[Serpe-nt/Kage#14](https://github.com/Serpe-nt/Kage/pull/14), three
+commits (`m15-handover.md`). Built: provider capabilities with the
+optional operations shown as unsupported by the pool, the CLI and the
+admin view; the conformance suite with a deliberately broken provider
+that makes every rule report; `CONTRIBUTING.md` with the provider guide;
+declared entries (YAML with a `url` form, or the line form with country
+and locale) that build personas, verified by the geo lookup, a mismatch
+degraded and alerted with the declared identity kept, a corrected
+declaration regenerating the persona; a declared `timezone`; unknown
+countries refused at load; shared exits detected; entries without a
+country as the pool's plain exits, one per site and kept, which closes
+M14's known limit; the echo defaults put right (a provider's echo only
+for that provider, the public echo for a list, the probe reading the
+operator's own `kage echo serve`, the host's address from a second
+public echo); F68 (no probe of the idle pool under `direct`); migration
+0018; the runbook `proxies.md` rewritten for three ways to run. Gate
+green on a clean clone with ten e2e scripts (a new `declared.sh`),
+mutation score 93.4 % with no new survivor. Found and fixed on the way:
+1.x probed Webshare's echo through every proxy of any vendor's list and
+read the host's address from it. The list-URL provider stays a
+follow-up written from the guide. The planner amended D50, D51, ADR 0012
+and `CLAUDE.md` for the plain-exit rule.
+
+**Follow-ups raised by M15** (after 2.0.0 unless said)
+- **F70:** the `list_url` provider, the first written from the guide (a
+  URL per source with its declared country, locale and city; plain wreq,
+  https only, no redirects, a size cap, the URL never logged; list-only
+  capabilities); whoever writes it notes where the guide fell short.
+- **F71 (M16, first commit):** a proxy that never answered gets a
+  persona once its backoff ends, because `backoff_expired` makes it
+  `degraded` and usable; generate only for a proxy with one successful
+  probe.
+- **F72:** shrinking a declared list by more than half trips the
+  `provider_list_suspect` guard; a declared list is the operator's own
+  word, so trust the file (guarding an empty one) or add `kage proxy
+  retire`.
+- **F73:** IP-authorised entries without a username and password.
+- **F74:** a plain exit later given a country releases its sites and
+  carries a persona; quarantine those sites for that persona as the
+  scout rule does.
+- **F75 (M16, first commit):** the `--language` error of the browser
+  self-test command prints a literal line break.
+
 ### M16 — The public face, and 2.0.0
+
+**Starting point (after M15).** Every feature of 2.0 is built and the
+contract is what main holds: the levels (§25), the egress modes, the
+providers and declared lists, the Chrome and Camoufox engines of 1.0.2.
+M16 makes the public face and cuts the release: the README, the badges
+from Kage's own data, the community files, the quick start re-proven on
+a Docker-only machine, F66, F71 and F75 as its first commits, the host
+persona's live self-test on the owner's word (the only live run of the
+phase), and 2.0.0 per the release runbook with the breaking changes
+first in the changelog. The repository settings of `docs/runbooks/repo.md`
+are still unset and the nightly live suite still has no secrets; both
+are the owner's and the README must not claim either.
 
 **Scope.** D52; the README, the community files, the badges, the
 release.
