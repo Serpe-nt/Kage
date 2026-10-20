@@ -28,10 +28,15 @@ owner if you need it.
   it. Every TLS-capable crate uses rustls; all outbound HTTP in Rust goes
   through wreq.
 - No request leaves the host's own address unless the operator configured
-  it (`egress.mode: direct` or `egress.plain: direct`, ADR 0012, D50);
-  under `egress.mode: proxies` nothing ever does. Never add a mixed path
-  that uses the pool and the host's address for one site by turns.
-- Never add external CAPTCHA solving or credentialed scraping.
+  `egress.mode: direct` (ADR 0012, D50); under `egress.mode: proxies`
+  nothing ever does, and `egress.plain` is `host` only under `direct`.
+  Never add a mixed path that uses the pool and the host's address for
+  one site by turns; level 0 traffic for a site leaves through that
+  site's scout address under the pool, never in turn.
+- Never add external CAPTCHA solving. Kage holds no credentials for any
+  site and never logs in; a caller's own `Cookie` or `Authorization`
+  header is the caller's request, sent at level 0 only, never stored,
+  never logged, never sent across origins (D50, security review E-series).
 - Never run live tests (`KAGE_LIVE=1`) against real target sites. Live tests
   only hit the echo and detection test pages listed in configuration.
 - Never commit secrets, real proxy credentials, API keys, or unsanitized
