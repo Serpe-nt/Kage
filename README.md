@@ -126,7 +126,7 @@ until curl --silent --fail http://127.0.0.1:8080/readyz > /dev/null; do sleep 5;
 ```
 
 The first build compiles Kage and fetches the pinned Chrome and Camoufox:
-about ten minutes on 32 cores, up to 40 on a small machine. The stack
+six to ten minutes on 32 cores, up to 40 on a small machine. The stack
 applies the database migrations before `kage` starts and publishes one
 port, on loopback only: the API speaks plain HTTP, and a deployment that
 serves other machines puts a reverse proxy that terminates TLS in front of
@@ -301,7 +301,10 @@ for Chrome and 6 % for Firefox. The score and its threshold are Kage's own
 (`min_score` 90); the 38 % is shown because hiding it would be the
 opposite of measuring. The recorded runs are the baselines in
 [tests/fixtures/selftest/](tests/fixtures/selftest/), and a run that is
-worse on any check fails.
+worse on any check fails. On 2026-10-20 the same check ran from a home
+connection under `egress.mode: direct`, with a host persona of each
+engine placed by a lookup of that connection's address: 100 of 100 for
+both, every check as in the baselines.
 
 A detection page is not a site that watches: a pass there is necessary,
 not sufficient, and nothing here says Kage cannot be told apart. The live
