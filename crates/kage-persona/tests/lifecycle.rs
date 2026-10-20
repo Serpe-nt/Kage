@@ -166,6 +166,42 @@ async fn under_the_pool_the_hosts_own_rows_get_no_persona() {
 }
 
 #[tokio::test]
+async fn a_proxy_that_never_answered_gets_no_persona_when_its_backoff_ends() {
+    let harness = Harness::start().await;
+    let proxy = harness.add_proxy("AT").await;
+    let failed = harness.fail_into_backoff(proxy.id).await;
+
+    // Its backoff runs out: `degraded`, which is usable, though no probe
+    // ever answered through it.
+    let until = failed.backoff_until.unwrap();
+    harness
+        .clock
+        .advance(until - harness.clock.now() + Span::seconds(1));
+    let tick = harness.pool.tick().await.unwrap();
+    assert_eq!(tick.expired, [proxy.id]);
+    let expired = harness.pool.get(proxy.id).await.unwrap().unwrap();
+    assert_eq!(expired.state, ProxyState::Degraded);
+    assert!(expired.state.is_usable() && !expired.has_answered());
+
+    assert_eq!(harness.manager.ensure(proxy.id).await.unwrap(), None);
+    assert_eq!(harness.manager.reconcile().await.unwrap().generated, []);
+    for engine in [Engine::Chromium, Engine::Firefox] {
+        let asked = harness.sidecar(engine).with(|state| state.generated.len());
+        assert_eq!(asked, 0, "{engine:?} was asked for a fingerprint");
+    }
+
+    // Its first answer makes it one, and a later failure keeps what it
+    // answered.
+    let now = harness.clock.now();
+    let answered = harness.probe_ok(proxy.id, Some(capital("AT", now))).await;
+    assert!(answered.has_answered());
+    let persona = harness.manager.ensure(proxy.id).await.unwrap().unwrap();
+    assert_eq!(persona.proxy_id, proxy.id);
+    let failed_again = harness.fail_into_backoff(proxy.id).await;
+    assert!(failed_again.has_answered());
+}
+
+#[tokio::test]
 async fn a_usable_proxy_gets_a_persona_derived_from_its_observed_geo() {
     let harness = Harness::start().await;
     let mut events = harness.manager.subscribe();
