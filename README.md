@@ -4,7 +4,9 @@ Kage is a self-hosted API service that fetches web pages for its operator's
 own projects while presenting, to the target site, the same signals a real
 person on a household connection would present: a static residential IP, one
 long-lived persona per IP, a real browser (patched Chromium or Camoufox) in an
-anti-detect sidecar, and a wreq-based HTTP path for lenient sites.
+anti-detect sidecar, and a wreq-based HTTP path for lenient sites. Every
+request says how much of that it wants, by a camouflage level from 0 (a
+plain HTTP client that says it is Kage) to 3 (a person).
 
 **Status: 1.0.0.** Kage fetches pages through its pool of personas, in
 both browsers and on the http path, alone or as batches, scripted flows and
@@ -34,10 +36,12 @@ personal projects. Whoever runs it is responsible for how it is used.
   for. Decide per site, and decide `enforce` where a site's rules are
   what you mean to follow.
 - **No access you were not given.** Kage does not solve CAPTCHAs through
-  external services, does not log in with accounts, does not perform write
-  actions on targets, and never connects to a target from the host's own IP.
-  These are design decisions, not missing features; please do not send
-  patches that add them.
+  external services, does not log in with accounts, and does not perform
+  write actions on targets. It connects to a target from the host's own
+  IP only when the operator configured that (`egress.mode: direct`), and
+  then uses no proxy at all: never both for one site. These are design
+  decisions, not missing features; please do not send patches that change
+  them.
 - **Handle personal data with care.** Fetched pages can contain personal
   data. Retention defaults are short. Store only what your project needs and
   delete it when you are done.
@@ -46,8 +50,9 @@ personal projects. Whoever runs it is responsible for how it is used.
   for harassment or surveillance.
 
 The settled decisions behind these limits are in
-[docs/00-decisions.md](docs/00-decisions.md) (D10, D13, D15, D17) and
-[docs/adr/0006-no-solvers-no-direct-mode.md](docs/adr/0006-no-solvers-no-direct-mode.md).
+[docs/00-decisions.md](docs/00-decisions.md) (D10, D13, D15, D17, D50),
+[docs/adr/0006-no-solvers-no-direct-mode.md](docs/adr/0006-no-solvers-no-direct-mode.md)
+and [docs/adr/0012-camouflage-levels-and-egress.md](docs/adr/0012-camouflage-levels-and-egress.md).
 
 ## Quick start
 
@@ -70,11 +75,11 @@ and publishes one port, on loopback only: the API speaks plain HTTP, and a
 deployment that serves other machines puts a reverse proxy that terminates
 TLS in front of it.
 
-Kage fetches only through proxies. Put `KAGE_WEBSHARE_API_KEY=<key>` into
-`deploy/.env` (or give `kage` a static list,
-[docs/runbooks/proxies.md](docs/runbooks/proxies.md)) and run the `up`
-again: every proxy gets a persona within minutes. Then make a key and fetch
-a page of a site you may fetch:
+By default Kage fetches only through proxies. Put
+`KAGE_WEBSHARE_API_KEY=<key>` into `deploy/.env` (or give `kage` a static
+list, [docs/runbooks/proxies.md](docs/runbooks/proxies.md)) and run the
+`up` again: every proxy gets a persona within minutes. Then make a key and
+fetch a page of a site you may fetch:
 
 ```bash
 docker compose --file deploy/compose.yaml exec kage \
@@ -82,8 +87,22 @@ docker compose --file deploy/compose.yaml exec kage \
 curl http://127.0.0.1:8080/v1/fetch \
     --header "Authorization: Bearer <token>" \
     --header 'Content-Type: application/json' \
-    --data '{"url": "https://example.org/"}'
+    --data '{"url": "https://example.org/", "level": 3}'
 ```
+
+**Levels and egress.** Every request names its `level`, and one without
+it is refused: 0 is a plain HTTP client that says it is Kage, with no
+persona; 1 a persona's emulated http client (not available in this
+release); 2 a persona's real browser that loads the page and leaves; 3 a
+persona's browser as a person. Below 3 Kage is not pretending to be a
+person: it is a well-behaved client. A site's policy may set the lowest
+level it is read at (`min_level`), and nothing is ever raised or retried
+at another level. The operator chooses where traffic leaves from: the
+proxy pool (`egress.mode: proxies`, the default) or the host's own
+connection (`direct`), never both.
+[docs/runbooks/levels-and-egress.md](docs/runbooks/levels-and-egress.md)
+says what each level costs and what a site can tell, and how to upgrade
+from 1.x.
 
 [docs/runbooks/first-start.md](docs/runbooks/first-start.md) is the whole
 first start, [docs/runbooks/api.md](docs/runbooks/api.md) the guide to
@@ -111,18 +130,22 @@ kage migrate        # apply the database schema; safe to run again
 kage proxy list     # the proxy pool; also `health`, `replace` and `egress`
 kage persona list   # the personas; also `show`, `selftest`, `regenerate` and `retire`
 kage selftest http  # compare the http path's fingerprint with the recorded one
-kage fetch <url>    # one request through the whole pipeline; see docs/runbooks/fetching.md
+kage fetch <url>    # one request through the whole pipeline, at the --level it must name; see docs/runbooks/fetching.md
 kage key create     # an API key; also `list`, `revoke` and `rotate`
 kage openapi        # print the OpenAPI document of the public API
 kage serve          # the API, the pool, the personas and the scheduler
 ```
 
-Kage fetches only through proxies. Give it a Webshare API key
+Under the default `egress.mode: proxies` Kage fetches only through
+proxies. Give it a Webshare API key
 (`KAGE__WEBSHARE__API_KEY`, or `KAGE_WEBSHARE_API_KEY` in `deploy/.env`) or a
 static list, and it keeps the pool by itself: health checks, backoff, and
 replacement within a budget. Without a provider the pool is empty and
-nothing is fetched. [docs/runbooks/proxies.md](docs/runbooks/proxies.md) is
-the operator's guide. Every usable proxy gets one persona, a long-lived
+nothing is fetched. Under `egress.mode: direct` the host's own connection
+carries everything, with one to four personas standing for the host
+([docs/runbooks/levels-and-egress.md](docs/runbooks/levels-and-egress.md)).
+[docs/runbooks/proxies.md](docs/runbooks/proxies.md) is the operator's
+guide to the pool. Every usable proxy gets one persona, a long-lived
 synthetic household user with its own browser, screen, language and place:
 [docs/runbooks/personas.md](docs/runbooks/personas.md). What a request
 passes through (pace, retries on another persona, the circuit breaker, the
@@ -131,7 +154,8 @@ bandwidth budget) is in
 [docs/runbooks/fetching.md](docs/runbooks/fetching.md).
 
 Per-domain behaviour is data in [policies/](policies/): `domains.yaml`
-(render mode, pacing, robots, retries, cooldowns), `pacing-profiles.yaml`
+(the lowest level a site may be read at, pacing, robots, retries,
+cooldowns), `pacing-profiles.yaml`
 and `block-signatures.yaml`. `kage` reloads them when they change; an
 invalid file keeps the last good policy in force and raises an alert.
 
@@ -178,9 +202,9 @@ House rules for contributors and coding agents are in
 [CLAUDE.md](CLAUDE.md). Repository settings, CI jobs and the release
 procedure are in [docs/runbooks/repo.md](docs/runbooks/repo.md). The
 runbooks of [docs/runbooks/](docs/runbooks/) cover the first start, the
-proxy pool, the personas, fetching, the API, rotating keys, upgrading an
-engine, reading a block report, the fingerprint echo, observability and the
-owner's field campaign; the security review is
+proxy pool, the personas, fetching, levels and egress, the API, rotating
+keys, upgrading an engine, reading a block report, the fingerprint echo,
+observability and the owner's field campaign; the security review is
 [docs/security-review.md](docs/security-review.md).
 
 ## Layout

@@ -196,6 +196,22 @@ and in no release.
 | D1 | info | the database connection has no TLS by default | accepted: compose's Postgres is on the stack's own network; a remote database takes `sslmode=verify-full` in `database.url` (sqlx over rustls with the webpki roots; a private CA is named with `sslrootcert`) |
 | V1 | low | the artifacts volume is shared: a sidecar that was taken over can read and delete stored artifacts | follow-up after 1.0: a volume of their own for the sidecars' files, mounted below `sidecar/` in kage |
 
+## 2.0: camouflage levels and egress
+
+Milestone M14 (spec §25, ADR 0012) added two roads and one new kind of
+request. Each threat below names what holds it and the test that shows
+it.
+
+| ID | Severity | Threat | What holds it |
+|---|---|---|---|
+| E1 | medium | Under `egress.mode: direct` there is no proxy to resolve a name: a target that resolves into the operator's networks would be reached from the host itself | the forwarder's route with no upstream resolves every target, refuses it when any address lies in a denied range (private, loopback, CGNAT and ULA only for a name in `egress.direct.private_names`; link-local, metadata and multicast for every name), connects only to an address it checked, and answers a `CONNECT` itself (`a_route_with_no_upstream_connects_only_to_addresses_it_checked`); `kage config check` warns while private names are listed |
+| E2 | medium | One installation using the pool and the host's own address for one site by turns: the site sees a visitor move from a residential address to the host's | the mode is one for the whole installation: `proxies` with `egress.plain: host` and `direct` with `plain: pool` are refused at load and by `kage config check`; under `direct` the backend schedules only the host's personas and the routes refuse a pool persona, under `proxies` the host's rows are retired at start and a host persona is refused (`where_requests_leave_from_is_reported_and_a_crossing_is_refused`, `the_hosts_own_rows_are_never_probed_and_take_the_place_the_host_looks_up`) |
+| E3 | low | The host's own rows taken for proxies: probed, counted as a leak, replaced at the provider | they are never probed, never in the leak check, the outage share or the capacity, and refused for replacement; the pool's stops (a leak, the provider's budget) do not hold the host's connection, which uses neither (same test) |
+| E4 | medium | Level 0 sends what its caller gives, `Cookie` and `Authorization` included: a key with the `fetch` scope can make Kage replay the caller's own bearer token to any site the guard allows | accepted as the caller's request with the caller's own credential (consult 1e): the value goes to the request's origin only and is dropped on a redirect to another, is never logged, and the stored request keeps the header's name with `[redacted]`; a job, which keeps its items, refuses it, and a fetch carried on as a job after a restart is not made again without it (`interrupted`) (`a_plain_client_sends_the_callers_own_headers_and_never_keeps_a_credential`, the plain client's tests in kage-http) |
+| E5 | low | A plain client says it is Kage: the address that sends `kage/<version>` to a site is marked for it, and a persona that reads the same site from that address is a bot that also said so | under the pool a site's plain traffic leaves through its scout's address only, the one persona that never reads the site; never from another (`plain_exit_unavailable`). Under `direct` the host has one address for everything: the runbook says so and names `min_level` as the operator's guard |
+| E6 | info | A caller's own `User-Agent`, `Accept` or other headers at level 0 make the plain client look like anything | accepted: level 0 is the caller's request as given and makes no claim to be a person; the transport's headers, `Proxy-*`, the forwarding family and `Accept-Encoding` are still refused |
+| E7 | info | The plain client's credential at the forwarder names an exit, not a persona (`plain-host`, `plain-<proxy id>`) | an HMAC token per exit under the forwarder's key; another exit's or a persona's token is refused, and the host's exit only when the mode allows it (`a_plain_clients_credential_names_its_exit_and_nothing_else`) |
+
 ## Accepted exceptions
 
 - **RUSTSEC-2026-0367, -0368, -0369 (`zip` 8.6.0)** are ignored in

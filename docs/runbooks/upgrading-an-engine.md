@@ -25,7 +25,11 @@ its runbook; this page is what they share and the order to keep.
    may do, as "A new browser major" in
    [fingerprint-echo.md](fingerprint-echo.md#a-new-browser-major) says:
    whether the http path may stand in for it, or the major is
-   browser-only.
+   browser-only. Level 1 is available only while a configured major has
+   a verified profile (`level_unavailable` otherwise,
+   [levels-and-egress.md](levels-and-egress.md)): a major that moves a
+   deployment from one to the other changes which levels its callers may
+   ask for.
 4. **Tell the deployment** the new major: `engines.chromium.browser_major`
    or `engines.firefox.browser_major` (`KAGE_CHROMIUM_BROWSER_MAJOR`,
    `KAGE_FIREFOX_BROWSER_MAJOR` in compose). The stack's smoke test fails

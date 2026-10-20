@@ -16,10 +16,16 @@ practice.
   and look up reputations once a day when a key is set.
 
 Without a provider the pool of a new installation stays empty, neither loop
-runs, and every fetch fails: Kage never connects to a target directly. When
+runs, and every fetch fails: under `egress.mode: proxies` (the default)
+Kage never connects to a target from the host's own address. When
 the provider goes missing from the configuration later, the proxies already
 stored are still health-checked, so a leak is still seen, but the pool is no
 longer synced and nothing is replaced; the log says so at start.
+
+Under `egress.mode: direct` the host's own connection carries everything
+and the pool is idle: neither loop runs, nothing is synced, probed or
+used, and the pool's personas wait (below, "The host's own rows", and
+[levels-and-egress.md](levels-and-egress.md)).
 
 The `kage proxy` commands work on the same database and may run next to the
 server. Each prints a table, or one JSON document with `--json`; logs go to
@@ -191,6 +197,36 @@ address arrives as `new` and gets a new persona that knows nothing of the
 old one. A site therefore sees one household leave and another arrive,
 never one browser change its address.
 
+A proxy whose persona is a site's scout is also that site's plain exit:
+the one address level 0 leaves from for it
+([levels-and-egress.md](levels-and-egress.md#under-the-pool-egressmode-proxies)).
+While the proxy is in backoff or being replaced, level 0 for those sites
+is answered `plain_exit_unavailable` and never sent from another address;
+after a replacement the site gets a new scout, and with it a new plain
+exit.
+
+## The host's own rows (`egress.mode: direct`)
+
+Under `direct` each host persona (`egress.direct.personas`, 1 to 4) has a
+row of its own in the pool so that it keeps its one "proxy" like any
+persona: provider `host`, reference `host-1` to `host-4`, address
+`host.invalid`, `healthy` from the start. `kage proxy list` shows them
+beside the idle pool. Nothing is relayed to that address: the forwarder
+sends the persona's traffic out of the host's own connection.
+
+- A host row is never synced, probed, leak-checked, counted in the outage
+  share or the capacity, or replaced: `kage proxy replace` answers that
+  the provider cannot replace it, and `kage proxy health` skips it.
+- Its place is the host's own: Kage reads the host's address
+  (`proxies.health.host_ip_url`) and looks it up (`proxies.health.geo_url`)
+  directly, at start and once per `proxies.health.geo_interval`, unless
+  `egress.direct.country` declares it; a lookup that disagrees with the
+  declared country twice in a row is `geo_mismatch`.
+- The pool's leak flag (`egress_unsafe`) and the bandwidth budget do not
+  hold the host's connection.
+- When the mode goes back to `proxies`, the host's rows are retired at
+  the next start, with their personas (`egress_mode`).
+
 ## Alerts
 
 Alerts are logged and stored in `health_events`. Each is raised once per
@@ -267,15 +303,18 @@ characters. `just setup` generates one; `openssl rand -hex 32` does too.
 | `https://ipv4.webshare.io/` | `proxies.health.echo_url` | each proxy | every probe |
 | `https://checkip.amazonaws.com/` | `proxies.health.confirm_url` | a proxy whose first echo failed | once before a failure counts |
 | `https://ipinfo.io/json` | `proxies.health.geo_url` | each proxy | first check, exit address change, once a day |
-| `https://ipv4.webshare.io/` | `proxies.health.host_ip_url` | the host, directly | start, then hourly |
+| `https://ipv4.webshare.io/` | `proxies.health.host_ip_url` | the host, directly | start, then hourly; under `egress.mode: direct` start, then once per `geo_interval` |
+| `https://ipinfo.io/json` | `proxies.health.geo_url` | the host, directly, only under `egress.mode: direct` | start, then once per `geo_interval`: the place of the host's personas |
 | `https://api.abuseipdb.com/` | `reputation.base_url` | the host, directly | once a day per proxy, only with a key |
 
 The echo every probe reads belongs to the proxy provider, who sees every
 connection anyway, so the probes add no observer. Probes present the TLS,
 HTTP/2 and header fingerprint of `proxies.health.profile` (the newest Chrome
 profile of the pinned wreq-util) until personas bring their own client (M6).
-The two requests marked "the host, directly" are the only ones Kage makes
-without a proxy, and neither goes to a target.
+Under `egress.mode: proxies` the requests marked "the host, directly" are
+the only ones Kage makes without a proxy, besides webhooks, and none goes
+to a target. Under `direct` the pool is not probed at all, and every
+request leaves from the host.
 No health traffic ever goes to a target site.
 
 ## The live check

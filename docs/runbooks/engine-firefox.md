@@ -327,10 +327,12 @@ in Firefox, 120 in Chrome) with its smooth scrolling, modifiers are keys.
   A request has its own stream from the persona's seed and the request's;
   the result returns that seed and the profile's id (`behavior.seed`,
   `behavior.profile_id`), with which a run can be replayed.
-- A navigation without `behavior` sends no input at all. Kage's policy
-  must ask for human behavior on a browser render (`dwell: "human"`, a
-  scroll depth, wander): a page load with no scroll and no dwell is not a
-  person's.
+- A navigation without `behavior` sends no input at all. Kage asks for
+  human behavior on every level-3 visit (`dwell: "human"`, a scroll
+  depth, wander): a page load with no scroll and no dwell is not a
+  person's. A level-2 visit is such a load on purpose (`behavior.mode:
+  "still"`, the policy's dwell, no input); the caller asked for it by
+  name ([levels-and-egress.md](levels-and-egress.md)).
 - Flow steps with `human: false` are done by the driver and are visible to
   a page as such; they are for pages known not to look. One more way to
   see it since M5.1: at the `mousedown` of a driver's
