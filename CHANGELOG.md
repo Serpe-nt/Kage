@@ -148,6 +148,9 @@ of 1.x still queued names no level and fails at take-up with
 - The probe reads Kage's own echo (`kage echo serve`, its `peer`) and an
   address written with its port, so the operator's echo can be
   `proxies.health.echo_url`.
+- `deploy/compose.yaml` takes where requests leave from and a declared list
+  from `deploy/.env`: `KAGE_EGRESS_MODE` (`proxies` or `direct`) and
+  `KAGE_STATIC_LIST_FILE`, a file the `kage` service mounts read-only.
 
 ### Fixed
 
@@ -189,6 +192,9 @@ of 1.x still queued names no level and fails at take-up with
   browser's self-test could reach no page. A command's forwarder now takes
   the server's routes, and the direct end-to-end test runs the host
   persona's self-test through it.
+- An empty `KAGE__…_FILE` variable was read as a file named by nothing and
+  stopped the start; it now counts as not set, like an empty secret
+  variable, which is how compose passes an optional one.
 
 ## [1.0.2] - 2026-10-19
 

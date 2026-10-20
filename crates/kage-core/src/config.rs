@@ -518,13 +518,14 @@ impl Config {
                 name == spec.env || name.strip_suffix(FILE_SUFFIX) == Some(spec.env)
             });
             if let Some((spec, direct, from_file)) = slot {
+                // An empty variable is how compose passes an optional secret
+                // that is not set, in either form, so it is no value and
+                // must not clash with the other form.
+                let value = Some(value).filter(|value| !value.is_empty());
                 if name == spec.env {
-                    // An empty variable is how compose passes an optional
-                    // secret that is not set, so it must not clash with the
-                    // `_FILE` form.
-                    *direct = Some(value).filter(|value| !value.is_empty());
+                    *direct = value;
                 } else {
-                    *from_file = Some(PathBuf::from(value));
+                    *from_file = value.map(PathBuf::from);
                 }
                 continue;
             }
@@ -1114,6 +1115,22 @@ urls:
         );
         let from_env = Config::load(None, with(&[("KAGE__PROXIES__STATIC_LIST", list)])).unwrap();
         assert_eq!(from_env.proxies.static_list_file, None);
+
+        // Compose passes an empty variable when the operator named no
+        // file: that is no list, in either form, and no clash with the
+        // other.
+        let unset = Config::load(None, with(&[("KAGE__PROXIES__STATIC_LIST_FILE", "")])).unwrap();
+        assert!(unset.proxies.static_list.is_none());
+        assert_eq!(unset.proxies.static_list_file, None);
+        let both = Config::load(
+            None,
+            with(&[
+                ("KAGE__PROXIES__STATIC_LIST", list),
+                ("KAGE__PROXIES__STATIC_LIST_FILE", ""),
+            ]),
+        )
+        .unwrap();
+        assert!(both.proxies.static_list.is_some());
 
         // A malformed list fails the load without being quoted.
         let message = invalid(Config::load(

@@ -175,7 +175,11 @@ one proxy per line, `#` for a comment:
 The list holds passwords: it is a secret, set in
 `KAGE__PROXIES__STATIC_LIST` or in a file named by
 `KAGE__PROXIES__STATIC_LIST_FILE`, never in the configuration file. With
-compose, mount it as a Docker secret and name the file.
+the shipped compose file, name the file in `deploy/.env`
+(`KAGE_STATIC_LIST_FILE=<path>`, absolute or relative to `deploy/`): the
+`kage` service mounts it read-only and is told where. Let only the
+container's user read it: `sudo chown 65532 <file> && sudo chmod 0400
+<file>`.
 
 - **A file is read again at every sync** (`proxies.sync_interval`, 10 min)
   and at once by `kage proxy list --sync`. A new entry is adopted (`new`,
