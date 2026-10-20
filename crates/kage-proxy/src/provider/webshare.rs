@@ -41,10 +41,24 @@ use wreq::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderValue, RETRY_AFTER
 use wreq::{Method, StatusCode};
 
 use super::{
-    AccountInfo, AutoReplace, ProviderError, ProviderProxy, ProxyActivity, ProxyProvider,
-    ReplaceSpec, ReplaceState, ReplaceTicket, ReplacedProxy, Result,
+    AccountInfo, AutoReplace, Capabilities, ProviderError, ProviderProxy, ProxyActivity,
+    ProxyProvider, ReplaceSpec, ReplaceState, ReplaceTicket, ReplacedProxy, Result,
 };
 use crate::rate::TokenBucket;
+
+/// Webshare's own address echo: what the health probes read through its
+/// proxies unless `proxies.health.echo_url` names another. Webshare sees
+/// every connection through its proxies anyway, so it adds no observer.
+pub const ECHO_URL: &str = "https://ipv4.webshare.io/";
+
+/// Everything the trait offers, and Webshare's echo.
+pub const CAPABILITIES: Capabilities = Capabilities {
+    replacement: true,
+    replaced_log: true,
+    account: true,
+    stats: true,
+    echo: Some(ECHO_URL),
+};
 
 /// What the client calls itself.
 const USER_AGENT: &str = concat!("kage/", env!("CARGO_PKG_VERSION"));
@@ -336,6 +350,10 @@ impl WebshareProvider {
 impl ProxyProvider for WebshareProvider {
     fn kind(&self) -> ProxyProviderKind {
         ProxyProviderKind::Webshare
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        CAPABILITIES
     }
 
     async fn list(&self) -> Result<Vec<ProviderProxy>> {
@@ -688,6 +706,9 @@ impl TryFrom<ListedProxy> for ProviderProxy {
             username: Secret::new(listed.username),
             password: Secret::new(listed.password),
             country: country(listed.country_code.as_deref()),
+            // Webshare states a country and declares nothing (decision D5).
+            locale: None,
+            timezone: None,
             city: listed.city_name.filter(|city| !city.trim().is_empty()),
             asn: listed
                 .asn_number

@@ -18,15 +18,17 @@ use std::time::Duration;
 use chrono::{DateTime, TimeZone, Utc};
 use common::{Echo, GeoFixture, MASTER_KEY_BYTES, TestDb, TestProxy, loopback};
 use kage_core::alert::{AlertKind, MemoryAlertSink};
-use kage_core::config::{ProxyHealthConfig, StaticProxy};
-use kage_core::domain::{HealthFailure, Proxy, ProxyProviderKind, ProxyState, ReplaceReason};
+use kage_core::config::{EgressMode, ProxyHealthConfig, ResolvedProvider, StaticProxy};
+use kage_core::domain::{
+    Declaration, HealthFailure, Proxy, ProxyProviderKind, ProxyState, ReplaceReason,
+};
 use kage_core::duration::HumanDuration;
 use kage_core::ids::ProxyId;
 use kage_core::seed::Seed;
-use kage_proxy::health::{HostIp, HttpProber};
+use kage_proxy::health::{EmulatedClientFactory, Endpoints, HostIp, HttpProber};
 use kage_proxy::{
-    Clock, CredentialCipher, HealthChecker, HealthSettings, ManualClock, Pool, PoolParts,
-    PoolRules, ReplacementOutcome, StaticListProvider,
+    Clock, CredentialCipher, HealthChecker, HealthSettings, ManualClock, Pool, PoolEvent,
+    PoolParts, PoolRules, ReplacementOutcome, StaticListProvider,
 };
 
 fn start() -> DateTime<Utc> {
@@ -88,16 +90,19 @@ async fn net_with(exits: &[(u8, &str)], settings: HealthSettings) -> Net {
 
     let health = ProxyHealthConfig {
         timeout: HumanDuration::from_secs(3),
-        echo_url: echo.url("/ip"),
+        echo_url: Some(echo.url("/ip")),
         confirm_url: Some(echo.url("/confirm")),
         geo_url: Some(echo.url("/json")),
-        host_ip_url: echo.url("/host"),
+        host_ip_url: Some(echo.url("/host")),
         ..ProxyHealthConfig::default()
     };
     let checker = Arc::new(HealthChecker::new(
         Arc::clone(&pool),
-        Arc::new(HttpProber::from_config(&health).unwrap()),
-        Arc::new(HostIp::new(health.host_ip_url.clone(), health.timeout.get()).unwrap()),
+        Arc::new(HttpProber::new(
+            EmulatedClientFactory::from_config(&health).unwrap(),
+            &Endpoints::resolve(&health, ResolvedProvider::Static, EgressMode::Proxies),
+        )),
+        Arc::new(HostIp::new(echo.url("/host"), health.timeout.get()).unwrap()),
         None,
         settings,
     ));
@@ -258,12 +263,14 @@ async fn the_hosts_own_rows_are_never_probed_and_take_the_place_the_host_looks_u
     net.echo.set_geo(loopback(2), GeoFixture::berlin());
     let ids = |rows: &[Proxy]| rows.iter().map(|row| row.id).collect::<Vec<_>>();
 
-    // Two rows for the host's own connection, declared Austrian.
-    let rows = net
-        .pool
-        .keep_host_rows(2, Some("AT".parse().unwrap()))
-        .await
-        .unwrap();
+    // Two rows for the host's own connection, declared Austrian and
+    // German-speaking, written on the rows like a declared list's entry.
+    let austria = Declaration {
+        country: "AT".parse().unwrap(),
+        locale: Some("de-AT".to_owned()),
+        timezone: None,
+    };
+    let rows = net.pool.keep_host_rows(2, Some(&austria)).await.unwrap();
     assert_eq!(
         rows.iter()
             .map(|row| row.provider_ref.as_str())
@@ -277,10 +284,13 @@ async fn the_hosts_own_rows_are_never_probed_and_take_the_place_the_host_looks_u
             row.country.map(|country| country.to_string()).as_deref(),
             Some("AT")
         );
+        assert_eq!(row.declaration(), Some(austria.clone()));
     }
-    // Kept again: nothing new.
-    let again = net.pool.keep_host_rows(2, None).await.unwrap();
+    // Kept again with the same declaration: nothing new, nothing said.
+    let mut events = net.pool.subscribe();
+    let again = net.pool.keep_host_rows(2, Some(&austria)).await.unwrap();
     assert_eq!(ids(&again), ids(&rows));
+    assert!(events.try_recv().is_err());
 
     // The checker probes the pool's proxy and never a host row, whose exit
     // is the host's own address and no leak.
@@ -325,6 +335,33 @@ async fn the_hosts_own_rows_are_never_probed_and_take_the_place_the_host_looks_u
             .unwrap(),
         ReplacementOutcome::Unsupported
     );
+
+    // The operator declares another place between two starts: the rows
+    // take it, and the change is announced, for the persona to follow.
+    let switzerland = Declaration {
+        country: "CH".parse().unwrap(),
+        locale: Some("fr-CH".to_owned()),
+        timezone: Some("Europe/Zurich".to_owned()),
+    };
+    let mut events = net.pool.subscribe();
+    let moved = net
+        .pool
+        .keep_host_rows(2, Some(&switzerland))
+        .await
+        .unwrap();
+    assert_eq!(ids(&moved), ids(&rows));
+    for row in &moved {
+        assert_eq!(row.declaration(), Some(switzerland.clone()));
+        assert_eq!(
+            events.recv().await.unwrap(),
+            PoolEvent::DeclarationChanged { proxy: row.id }
+        );
+    }
+    // Without a declaration the lookup places them again.
+    for row in net.pool.keep_host_rows(2, None).await.unwrap() {
+        assert_eq!(row.declaration(), None);
+        assert_eq!((row.country, row.locale, row.timezone), (None, None, None));
+    }
 
     // Fewer rows retire the rest, and none at all retires every one.
     assert_eq!(
@@ -407,10 +444,25 @@ async fn a_country_mismatch_degrades_after_two_lookups_and_lookups_are_rare() {
     assert_eq!(second.state, ProxyState::Degraded);
     assert_eq!(second.last_health.as_ref().unwrap().geo_mismatches, 2);
     assert_eq!(net.alerts_of(AlertKind::ProxyGeoMismatch), 1);
-    // Still usable, and what it is observed as is what counts.
+    // Still usable, and on a declared list what the operator declared is
+    // what counts (ADR 0013); the alert says what a site would see.
     assert!(second.state.is_usable());
     assert_eq!(second.country.unwrap().as_str(), "DE");
-    assert_eq!(second.effective_country().unwrap().as_str(), "AT");
+    assert_eq!(second.effective_country().unwrap().as_str(), "DE");
+    let alert = net
+        .alerts
+        .alerts()
+        .into_iter()
+        .find(|alert| alert.kind == AlertKind::ProxyGeoMismatch)
+        .unwrap();
+    assert!(
+        alert.message.contains("declared in DE in AT"),
+        "{}",
+        alert.message
+    );
+    assert!(alert.message.contains("keeps the declared identity"));
+    assert_eq!(alert.details["declared"], "DE");
+    assert_eq!(alert.details["observed"], "AT");
 
     // The exit address changes: looked up at once, whatever the schedule.
     net.proxies[0].set_exit(loopback(7));

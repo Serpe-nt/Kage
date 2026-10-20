@@ -72,12 +72,7 @@ pub(crate) fn check(
             "signature_rules": policies.signatures.rules().len(),
             "signature_hints": policies.signatures.hint_count(),
         },
-        "proxies": {
-            // What `auto` resolved to.
-            "provider": config.proxy_provider(),
-            "static_proxies": static_proxies,
-            "reputation": config.reputation.abuseipdb_key.is_some(),
-        },
+        "proxies": proxies(&config, static_proxies),
         // What the http path can present as in this build.
         "http": kage_http::describe(&config),
         // What the persona manager will do by itself.
@@ -90,6 +85,53 @@ pub(crate) fn check(
     serde_json::to_writer_pretty(&mut *out, &report).context("cannot write the report")?;
     writeln!(out).context("cannot write the report")?;
     Ok(())
+}
+
+/// The pool's provider and what it can do, the endpoints the health
+/// checks read, and what deserves a second look (spec §7, ADR 0013).
+fn proxies(config: &Config, static_proxies: usize) -> serde_json::Value {
+    let provider = config.proxy_provider();
+    let capabilities = kage_proxy::capabilities_of(provider);
+    let plain_exits = kage_proxy::plain_exit_entries(config);
+    let mut warnings: Vec<String> = Vec::new();
+    if !plain_exits.is_empty() {
+        warnings.push(format!(
+            "{} entr{} of the declared proxy list name no country: they get no persona and serve \
+             as plain exits (level 0) only: {}",
+            plain_exits.len(),
+            if plain_exits.len() == 1 { "y" } else { "ies" },
+            plain_exits.join(", ")
+        ));
+    }
+    let endpoints = kage_proxy::health::Endpoints::from_config(config);
+    if config.egress.mode == EgressMode::Direct {
+        warnings.push(
+            "egress.mode is direct: proxies.health.echo_url, confirm_url, interval, jitter, \
+             max_concurrent, startup_spread and profile are unused (the pool is not probed); \
+             host_ip_url, geo_url and geo_interval place the host"
+                .to_owned(),
+        );
+    } else if capabilities.is_some_and(|capabilities| capabilities.echo.is_none())
+        && config.proxies.health.echo_url.is_none()
+    {
+        warnings.push(format!(
+            "the provider runs no echo of its own: every probe reads {}, whose operator sees \
+             every proxy address on the probe's schedule; name your own echo in \
+             proxies.health.echo_url for privacy",
+            endpoints.echo
+        ));
+    }
+    serde_json::json!({
+        // What `auto` resolved to.
+        "provider": provider,
+        "capabilities": capabilities,
+        "unsupported": capabilities.map(|capabilities| capabilities.unsupported()),
+        "static_proxies": static_proxies,
+        "plain_exits": plain_exits,
+        "health_endpoints": endpoints,
+        "reputation": config.reputation.abuseipdb_key.is_some(),
+        "warnings": warnings,
+    })
 }
 
 /// Where requests leave from, and what deserves a second look.
@@ -256,6 +298,22 @@ mod tests {
         ]);
         assert_eq!(webshare["proxies"]["provider"], "webshare");
         assert_eq!(webshare["proxies"]["reputation"], true);
+        // Webshare offers everything and runs its own echo, which the
+        // probes and the host's address read (ADR 0013).
+        assert_eq!(webshare["proxies"]["unsupported"], serde_json::json!([]));
+        assert_eq!(
+            webshare["proxies"]["capabilities"]["echo"],
+            "https://ipv4.webshare.io/"
+        );
+        assert_eq!(
+            webshare["proxies"]["health_endpoints"]["echo"],
+            "https://ipv4.webshare.io/"
+        );
+        assert_eq!(
+            webshare["proxies"]["health_endpoints"]["host_ip"],
+            "https://ipv4.webshare.io/"
+        );
+        assert_eq!(webshare["proxies"]["warnings"], serde_json::json!([]));
 
         // A static list is counted, and never printed.
         let output = run(
@@ -264,7 +322,7 @@ mod tests {
                 &shipped_policies(),
                 &[(
                     "KAGE__PROXIES__STATIC_LIST",
-                    "198.51.100.10:8080:user-c41d:pass-77aa\n198.51.100.11:8080:user-c41d:pass-77aa",
+                    "198.51.100.10:8080:user-c41d:pass-77aa:AT\n198.51.100.11:8080:user-c41d:pass-77aa",
                 )],
             ),
         )
@@ -274,6 +332,41 @@ mod tests {
         assert_eq!(fixed["proxies"]["provider"], "static");
         assert_eq!(fixed["proxies"]["static_proxies"], 2);
         assert_eq!(fixed["config"]["proxies"]["static_list"], "[redacted]");
+        // A declared list lists only; its probes read the public echo and
+        // the host's address another one; an entry without a country is a
+        // plain exit, and both are said.
+        assert_eq!(
+            fixed["proxies"]["unsupported"],
+            serde_json::json!(["replacement", "replaced_log", "account", "stats"])
+        );
+        assert_eq!(
+            fixed["proxies"]["health_endpoints"]["echo"],
+            "https://checkip.amazonaws.com/"
+        );
+        assert_eq!(
+            fixed["proxies"]["health_endpoints"]["host_ip"],
+            "https://api.ipify.org/"
+        );
+        assert_eq!(
+            fixed["proxies"]["plain_exits"],
+            serde_json::json!(["198.51.100.11:8080"])
+        );
+        let warnings = fixed["proxies"]["warnings"].as_array().unwrap();
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(
+            warnings[0]
+                .as_str()
+                .unwrap()
+                .contains("1 entry of the declared proxy list name no country"),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings[1]
+                .as_str()
+                .unwrap()
+                .contains("whose operator sees every proxy address"),
+            "{warnings:?}"
+        );
     }
 
     #[test]
@@ -319,6 +412,19 @@ mod tests {
         assert_eq!(warnings.len(), 2, "{warnings:?}");
         assert!(warnings[0].as_str().unwrap().contains("the pool is idle"));
         assert!(warnings[1].as_str().unwrap().contains("fixture.kage.test"));
+        // The probe's keys are unused under direct, and the host's address
+        // never comes from the provider's echo (ADR 0013, consult 4d).
+        let unused = direct["proxies"]["warnings"].as_array().unwrap();
+        assert!(
+            unused
+                .iter()
+                .any(|warning| warning.as_str().unwrap().contains("are unused")),
+            "{unused:?}"
+        );
+        assert_eq!(
+            direct["proxies"]["health_endpoints"]["host_ip"],
+            "https://api.ipify.org/"
+        );
 
         // Neither a declared country nor a lookup: only level 0.
         let blind_file = dir.path().join("blind.yaml");

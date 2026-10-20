@@ -355,10 +355,13 @@ impl Pipeline {
             return Ok(Asked::Known(known));
         }
         let plain = call.need.level == Level::Plain;
-        // A plain client from the host's connection needs nobody; any other
-        // asks through the site's scout: its browser, or its proxy as the
-        // site's plain exit.
-        let scout = if plain && self.settings.plain_exit == Exit::Host {
+        // A plain client from the host's connection, or from a plain exit
+        // of the pool's own, needs nobody; any other asks through the
+        // site's scout: its browser, or its proxy as the site's plain exit.
+        let scout = if plain
+            && (self.settings.plain_exit == Exit::Host
+                || self.own_plain_exit(&call.site).await?.is_some())
+        {
             None
         } else {
             let Some(scout) = self

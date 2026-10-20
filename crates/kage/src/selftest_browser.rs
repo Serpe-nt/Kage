@@ -182,7 +182,9 @@ struct StandIn {
 /// without one, so that is refused here, before a sidecar is asked.
 fn stand_in(proxy: &Proxy, options: &BrowserSelftestOptions) -> anyhow::Result<StandIn> {
     let seed = Seed::derive("selftest-stand-in", &[proxy.id.as_uuid().as_bytes()]);
-    let place = kage_persona::lifecycle::place_of(proxy, options.engine, &seed);
+    // Where a persona behind the proxy would be: the declared place, else
+    // the observed one (ADR 0013).
+    let place = kage_persona::lifecycle::place_for(proxy, options.engine, &seed);
     let (locale, languages) = match options.languages.first() {
         Some(first) => {
             if options.engine == Engine::Firefox && locale::region_of(first).is_none() {
@@ -526,7 +528,8 @@ mod tests {
     fn proxy(country: &str, observed: Option<(&str, &str)>) -> Proxy {
         Proxy {
             id: ProxyId::new(),
-            provider: ProxyProviderKind::Static,
+            // A provider whose country the observed record overrides.
+            provider: ProxyProviderKind::Webshare,
             provider_ref: "fixture".to_owned(),
             host: "127.0.0.1".to_owned(),
             port: 8080,
@@ -534,6 +537,8 @@ mod tests {
             password: SealedSecret::new(Vec::new()),
             scheme: ProxyScheme::Http,
             country: country.parse().ok(),
+            locale: None,
+            timezone: None,
             city: None,
             asn: None,
             state: ProxyState::Healthy,
@@ -594,6 +599,16 @@ mod tests {
         let unplaced = stand_in(&proxy("IT", None), &derived(Engine::Chromium));
         assert_eq!(unplaced.languages, ["it-IT", "it", "en-US", "en"]);
         assert_eq!(unplaced.timezone, "Europe/Rome");
+
+        // A declared list's entry speaks its declaration, as its persona
+        // would (ADR 0013): the lookup that disagrees changes nothing.
+        let mut declared = proxy("CH", Some(("FR", "Europe/Paris")));
+        declared.provider = ProxyProviderKind::Static;
+        declared.locale = Some("fr-CH".to_owned());
+        let swiss = stand_in(&declared, &derived(Engine::Firefox));
+        assert_eq!(swiss.locale, "fr-CH");
+        assert_eq!(swiss.languages, ["fr", "fr-FR", "en-US", "en"]);
+        assert_eq!(swiss.timezone, "Europe/Zurich");
 
         // What the caller names is used as it is.
         let named = stand_in(&german, &options(false));

@@ -10,6 +10,8 @@
 
 mod common;
 
+use std::sync::Arc;
+
 use axum::http::{Method, StatusCode};
 use common::sched::lab::FAST;
 use common::{Api, ECHO_PATH};
@@ -380,6 +382,11 @@ async fn proxies_the_pool_and_the_policies_are_an_admins_to_see_and_to_act_on() 
     assert_eq!(shown["host"], "127.0.0.1");
     assert_eq!(shown["country"], "DE");
     assert_eq!(shown["state"], "healthy");
+    // The lab's list declares its proxies' countries (ADR 0013).
+    assert_eq!(shown["declared"], true);
+    assert_eq!(shown["carries_persona"], true);
+    assert_eq!(shown["plain_exit"], false);
+    assert_eq!(shown["locale"], Value::Null);
     let text = String::from_utf8_lossy(&listed.body).into_owned();
     for secret in [
         common::sched::proxy::PROXY_USER,
@@ -423,8 +430,16 @@ async fn proxies_the_pool_and_the_policies_are_an_admins_to_see_and_to_act_on() 
     assert_eq!(pool["personas"]["browsers_open"], 0);
     assert!(pool["proxies"].is_object());
     assert!(pool["bandwidth"].is_object(), "{pool}");
+    // The provider, and what it does not offer (spec §7.1).
+    assert_eq!(pool["provider"]["kind"], "static");
+    assert_eq!(
+        pool["provider"]["unsupported"],
+        json!(["replacement", "replaced_log", "account", "stats"])
+    );
+    assert_eq!(pool["provider"]["capabilities"]["echo"], Value::Null);
 
-    // A replacement the provider cannot make is said, not thrown.
+    // A replacement the provider cannot make is said, not thrown: a list
+    // offers none, whatever state the proxy is in.
     let replaced = api
         .post(
             &admin,
@@ -433,12 +448,19 @@ async fn proxies_the_pool_and_the_policies_are_an_admins_to_see_and_to_act_on() 
         )
         .await;
     assert_eq!(replaced.status, StatusCode::OK, "{:?}", replaced.json());
-    let outcome = replaced.json()["outcome"].as_str().unwrap().to_owned();
-    assert!(
-        ["unsupported", "failed", "not_eligible"].contains(&outcome.as_str()),
-        "{outcome}"
+    assert_eq!(
+        replaced.json()["outcome"],
+        "unsupported",
+        "{:?}",
+        replaced.json()
     );
-    assert!(replaced.json()["detail"].is_string());
+    assert!(
+        replaced.json()["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("does not offer replacement")),
+        "{:?}",
+        replaced.json()
+    );
     for at in ["health", "replace"] {
         api.post(
             &admin,
@@ -505,7 +527,7 @@ async fn proxies_the_pool_and_the_policies_are_an_admins_to_see_and_to_act_on() 
         .iter()
         .find(|event| event["action"] == "admin.proxy.replace" && event["outcome"] == "success")
         .unwrap();
-    assert_eq!(replace["details"]["result"]["outcome"], outcome);
+    assert_eq!(replace["details"]["result"]["outcome"], "unsupported");
     assert_eq!(last(&events, "admin.proxy.list")["outcome"], "success");
     assert_eq!(last(&events, "admin.pool.show")["outcome"], "success");
     let reloads: Vec<&str> = events
@@ -716,5 +738,21 @@ async fn without_a_pool_the_admin_endpoints_that_need_one_say_so() {
         let reply = common::ask(&bare, sent).await;
         assert_eq!(reply.status, StatusCode::OK, "{at}: {:?}", reply.json());
     }
+    // F68: under direct the pool is idle and nothing of it is probed.
+    let direct = api.with_parts(|parts| {
+        let mut config = (*parts.config).clone();
+        config.egress.mode = kage_core::config::EgressMode::Direct;
+        parts.config = Arc::new(config);
+    });
+    let sent = common::request(
+        Method::POST,
+        "/v1/admin/proxies/0190a0b0-0000-7000-8000-000000000001/health",
+        Some(&admin),
+        None,
+    );
+    let refused = common::ask(&direct, sent)
+        .await
+        .problem(StatusCode::CONFLICT, "conflict");
+    assert_eq!(refused["reason"], "pool_idle", "{refused}");
     api.shut_down().await;
 }

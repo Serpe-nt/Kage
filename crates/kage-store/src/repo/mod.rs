@@ -17,7 +17,8 @@ pub use access::{ApiKeyRepo, AuditRepo, SessionRepo};
 pub use artifacts::ArtifactRepo;
 pub use bandwidth::{BandwidthRepo, Traffic};
 pub use caches::{
-    ResponseCacheEntry, ResponseCacheRepo, RobotsCacheEntry, RobotsCacheRepo, SiteScoutRepo,
+    ResponseCacheEntry, ResponseCacheRepo, RobotsCacheEntry, RobotsCacheRepo, SiteExitRepo,
+    SiteScoutRepo,
 };
 pub use cookies::HttpCookieRepo;
 pub use events::{BreakerRepo, HealthEventRepo, SelftestRepo};

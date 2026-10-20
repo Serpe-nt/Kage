@@ -14,11 +14,11 @@ use std::time::Duration;
 use anyhow::{Context, bail};
 use chrono::{DateTime, Utc};
 use kage_core::alert::{AlertSink, MemoryAlertSink, TracingAlertSink};
-use kage_core::config::Config;
+use kage_core::config::{Config, EgressMode};
 use kage_core::domain::{AuditActor, AuditEvent, AuditOutcome, Proxy, ProxyState, ReplaceReason};
 use kage_core::ids::{AuditEventId, ProxyId};
 use kage_proxy::{
-    AccountInfo, AutoReplace, BudgetWindow, CheckResult, HealthChecker, Pool, PoolError,
+    AccountInfo, AutoReplace, BudgetWindow, CheckResult, HealthChecker, Operation, Pool, PoolError,
     PoolSummary, ReplacementOutcome,
 };
 use kage_store::Store;
@@ -133,15 +133,61 @@ fn time(at: Option<DateTime<Utc>>) -> String {
     )
 }
 
-/// The provider's country, with the observed one when it differs.
+/// The country of a proxy: a declared one marked so (ADR 0013), a plain
+/// exit named as one, and the observed country beside it when it differs.
 fn country(proxy: &Proxy) -> String {
+    if proxy.is_plain_exit() {
+        return "- (plain exit)".to_owned();
+    }
+    if proxy.exit_shared() {
+        return "- (exit shared)".to_owned();
+    }
     let observed = proxy.observed_geo().map(|geo| geo.country);
-    match (proxy.country, observed) {
-        (Some(stated), Some(observed)) if stated != observed => {
+    let stated = match (proxy.declaration(), proxy.country) {
+        (Some(declared), _) => Some(format!("{} declared", declared.country)),
+        (None, country) => country.map(|country| country.to_string()),
+    };
+    match (stated, proxy.country, observed) {
+        (Some(stated), Some(country), Some(observed)) if country != observed => {
             format!("{stated} (observed {observed})")
         }
-        (Some(country), _) | (None, Some(country)) => country.to_string(),
-        (None, None) => "-".to_owned(),
+        (Some(stated), _, _) => stated,
+        (None, _, Some(observed)) => observed.to_string(),
+        (None, _, None) => "-".to_owned(),
+    }
+}
+
+/// The provider and what it can do, as JSON: its kind, its capabilities
+/// and the operations it does not offer (spec §7.1).
+fn provider_json(pool: &Pool) -> Value {
+    match (pool.provider_kind(), pool.capabilities()) {
+        (Some(kind), Some(capabilities)) => json!({
+            "kind": kind,
+            "capabilities": capabilities,
+            "unsupported": capabilities.unsupported(),
+        }),
+        _ => Value::Null,
+    }
+}
+
+/// The provider and what it does not offer, in a line: `provider: static
+/// (lists only; replacement, replaced_log, account and stats unsupported)`.
+fn provider_line(pool: &Pool) -> String {
+    let (Some(kind), Some(capabilities)) = (pool.provider_kind(), pool.capabilities()) else {
+        return "provider: none".to_owned();
+    };
+    let unsupported: Vec<&str> = capabilities
+        .unsupported()
+        .into_iter()
+        .map(Operation::as_str)
+        .collect();
+    match unsupported.as_slice() {
+        [] => format!("provider: {kind}"),
+        [only] => format!("provider: {kind} ({only} unsupported)"),
+        [first @ .., last] => format!(
+            "provider: {kind} (lists only; {} and {last} unsupported)",
+            first.join(", ")
+        ),
     }
 }
 
@@ -155,6 +201,11 @@ fn proxy_json(proxy: &Proxy, username: Option<&str>) -> Value {
         "host": proxy.host,
         "port": proxy.port,
         "country": proxy.country,
+        "locale": proxy.locale,
+        "timezone": proxy.timezone,
+        "declared": proxy.declaration().is_some(),
+        "carries_persona": proxy.carries_persona(),
+        "plain_exit": proxy.is_plain_exit(),
         "observed_country": proxy.observed_geo().map(|geo| geo.country),
         "city": proxy.city,
         "asn": proxy.asn,
@@ -266,6 +317,7 @@ async fn list_in(
             .context("cannot sync with the proxy provider")?;
         match pool.sync_account().await {
             Ok(_) | Err(PoolError::NoProvider) => {}
+            Err(error) if error.is_unsupported() => {}
             Err(error) => tracing::warn!(%error, "cannot read the provider account"),
         }
         session
@@ -321,6 +373,7 @@ async fn list_in(
                 .map(|(proxy, username)| proxy_json(proxy, username.as_deref()))
                 .collect::<Vec<_>>(),
             "summary": summary,
+            "provider": provider_json(pool),
             "account": pool.account(),
         });
         serde_json::to_writer_pretty(&mut *out, &document).context("cannot write the list")?;
@@ -336,7 +389,8 @@ async fn list_in(
         pool.account().as_ref(),
         pool.rules().accepted_auto_replace,
     )
-    .context("cannot write the list")
+    .context("cannot write the list")?;
+    writeln!(out, "{}", provider_line(pool)).context("cannot write the list")
 }
 
 /// The list as a table, followed by the pool's summary and what the
@@ -444,6 +498,13 @@ async fn health_in(
     out: &mut impl Write,
 ) -> anyhow::Result<()> {
     let pool = &session.pool;
+    // Under direct the pool is idle: nothing of it is probed (F68).
+    if config.egress.mode == EgressMode::Direct {
+        bail!(
+            "the pool is idle under egress.mode direct: nothing of it is probed, and the host's \
+             own rows never are"
+        );
+    }
     if !options.no_sync && pool.provider_kind().is_some() {
         pool.reconcile().await.context(
             "cannot sync with the proxy provider (use --no-sync to check what is stored)",
@@ -462,6 +523,11 @@ async fn health_in(
     let results = checker.check_now(only).await?;
     let summary = pool.summary().await?;
     let host_known = checker.host_ip().is_some();
+    // Live: the echo answered through it; dead: neither echo did.
+    let live = results
+        .iter()
+        .filter(|result| result.report.exit.is_ok())
+        .count();
     session
         .audit(
             "proxy.health",
@@ -484,13 +550,38 @@ async fn health_in(
                 })
                 .collect::<Vec<_>>(),
             "host_address_known": host_known,
+            "live": live,
+            "dead": results.len() - live,
             "summary": summary,
+            "provider": provider_json(pool),
         });
         serde_json::to_writer_pretty(&mut *out, &document).context("cannot write the result")?;
         writeln!(out).context("cannot write the result")?;
         return Ok(());
     }
 
+    health_table(out, &results)?;
+    writeln!(
+        out,
+        "{} checked: {live} live, {} dead",
+        results.len(),
+        results.len() - live,
+    )
+    .context("cannot write the result")?;
+    writeln!(out, "pool: {}", summary_line(&summary)).context("cannot write the result")?;
+    writeln!(out, "{}", provider_line(pool)).context("cannot write the result")?;
+    if !host_known {
+        writeln!(
+            out,
+            "the host's own address could not be read, so the leak check did not run"
+        )
+        .context("cannot write the result")?;
+    }
+    Ok(())
+}
+
+/// What `kage proxy health` found, as a table: one row per proxy probed.
+fn health_table(out: &mut impl Write, results: &[CheckResult]) -> anyhow::Result<()> {
     let rows: Vec<Vec<String>> = results
         .iter()
         .map(|result| {
@@ -527,15 +618,6 @@ async fn health_in(
         &rows,
     )
     .context("cannot write the result")?;
-    writeln!(out, "{} checked; {}", results.len(), summary_line(&summary))
-        .context("cannot write the result")?;
-    if !host_known {
-        writeln!(
-            out,
-            "the host's own address could not be read, so the leak check did not run"
-        )
-        .context("cannot write the result")?;
-    }
     Ok(())
 }
 
@@ -569,7 +651,9 @@ fn describe(outcome: &ReplacementOutcome) -> (AuditOutcome, String) {
         ),
         ReplacementOutcome::Unsupported => (
             AuditOutcome::Denied,
-            "refused: this provider cannot replace proxies".to_owned(),
+            "refused: the provider does not offer replacement (a declared list: edit the list; \
+             the host's own row: nobody replaces the host)"
+                .to_owned(),
         ),
         ReplacementOutcome::NotEligible { state } => (
             AuditOutcome::Denied,
@@ -606,6 +690,8 @@ async fn replace_in(
     match pool.sync_account().await {
         Ok(_) => {}
         Err(PoolError::NoProvider) => bail!(PoolError::NoProvider),
+        // A provider without an account: its answer to the request decides.
+        Err(error) if error.is_unsupported() => {}
         Err(error) => tracing::warn!(%error, "cannot read the provider account"),
     }
     let outcome = match pool.request_replacement(id, ReplaceReason::Operator).await {
@@ -788,6 +874,8 @@ mod tests {
             password: SealedSecret::new(b"sealed-pass".to_vec()),
             scheme: ProxyScheme::Http,
             country: "DE".parse().ok(),
+            locale: None,
+            timezone: None,
             city: Some("Berlin".to_owned()),
             asn: Some("AS3320".to_owned()),
             state: ProxyState::Healthy,
@@ -867,6 +955,20 @@ mod tests {
         assert_eq!(country(&proxy), "AT");
         proxy.last_health = None;
         assert_eq!(country(&proxy), "-");
+
+        // A declared list's entry: the declaration, marked, and what the
+        // lookup says beside it when it disagrees; one without a country
+        // is a plain exit (ADR 0013).
+        proxy.provider = ProxyProviderKind::Static;
+        proxy.country = Some("AT".parse().unwrap());
+        proxy.last_health = Some(ProxyHealth::new(Utc::now(), true));
+        assert_eq!(country(&proxy), "AT declared");
+        observed(&mut proxy, "FR");
+        assert_eq!(country(&proxy), "AT declared (observed FR)");
+        proxy.country = None;
+        assert_eq!(country(&proxy), "- (plain exit)");
+        proxy.last_health.as_mut().unwrap().exit_shared_with = Some(ProxyId::new());
+        assert_eq!(country(&proxy), "- (exit shared)");
     }
 
     #[test]

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO site_exits (site, proxy_id, chosen_at) VALUES ($1, $2, $3)\n             ON CONFLICT (site) DO UPDATE\n             SET proxy_id = EXCLUDED.proxy_id, chosen_at = EXCLUDED.chosen_at\n             WHERE site_exits.proxy_id <> EXCLUDED.proxy_id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8d66aa8b50db50b97f5a6b4b505c83fde1396e6a78517ae703b8fd1f07fcecb4"
+}

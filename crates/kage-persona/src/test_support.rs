@@ -90,7 +90,9 @@ pub(crate) fn endpoint(proxy: ProxyId) -> ProxyEndpoint {
 pub(crate) fn proxy(country: &str) -> Proxy {
     Proxy {
         id: ProxyId::new(),
-        provider: ProxyProviderKind::Static,
+        // A provider whose country the observed record overrides; a
+        // test of a declaration says so (ADR 0013).
+        provider: ProxyProviderKind::Webshare,
         provider_ref: "fixture".to_owned(),
         host: "127.0.0.1".to_owned(),
         port: 8080,
@@ -98,6 +100,8 @@ pub(crate) fn proxy(country: &str) -> Proxy {
         password: SealedSecret::new(Vec::new()),
         scheme: ProxyScheme::Http,
         country: country.parse().ok(),
+        locale: None,
+        timezone: None,
         city: None,
         asn: None,
         state: ProxyState::Healthy,

@@ -41,10 +41,7 @@ use kage_core::seed::Seed;
 use kage_http::{ClientFactory, HttpSettings, StoreCookies};
 use kage_persona::{PersonaManager, PersonaParts, Sidecars};
 use kage_proxy::machine::{ExitObservation, ProbeReport};
-use kage_proxy::provider::{
-    AccountInfo, ProviderError, ProviderProxy, ProxyActivity, ProxyProvider, ReplaceSpec,
-    ReplaceState, ReplaceTicket, ReplacedProxy,
-};
+use kage_proxy::provider::{Capabilities, ProviderError, ProviderProxy, ProxyProvider};
 use kage_proxy::{CredentialCipher, ManualClock, Pool, PoolEvent, PoolParts, PoolRules};
 use kage_store::Store;
 use serde_json::{Value, json};
@@ -96,13 +93,61 @@ impl TestDb {
 
 // --- Provider ----------------------------------------------------------------
 
-/// A provider whose list a test edits.
-#[derive(Debug, Default)]
+/// A provider whose list a test edits. By default it stands for a
+/// provider whose country the observed geo record overrides (as
+/// Webshare's); [`ListProvider::declaring`] stands for the operator's
+/// declared list, whose country, locale and zone the persona follows
+/// (ADR 0013).
+#[derive(Debug)]
 pub struct ListProvider {
+    kind: ProxyProviderKind,
     proxies: Mutex<Vec<ProviderProxy>>,
 }
 
+impl Default for ListProvider {
+    fn default() -> Self {
+        Self {
+            kind: ProxyProviderKind::Webshare,
+            proxies: Mutex::new(Vec::new()),
+        }
+    }
+}
+
 impl ListProvider {
+    /// A declared list.
+    pub fn declaring() -> Self {
+        Self {
+            kind: ProxyProviderKind::Static,
+            proxies: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Adds an entry that declares `country` (none: a plain exit), and
+    /// optionally a locale and a zone, and returns its id.
+    pub fn add_declared(
+        &self,
+        country: Option<&str>,
+        locale: Option<&str>,
+        timezone: Option<&str>,
+    ) -> String {
+        let provider_ref = self.add(country.unwrap_or(""));
+        self.change(&provider_ref, |entry| {
+            entry.locale = locale.map(str::to_owned);
+            entry.timezone = timezone.map(str::to_owned);
+        });
+        provider_ref
+    }
+
+    /// Changes an entry of the list, as an operator edits it.
+    pub fn change(&self, provider_ref: &str, change: impl FnOnce(&mut ProviderProxy)) {
+        let mut proxies = self.proxies.lock().unwrap();
+        let entry = proxies
+            .iter_mut()
+            .find(|proxy| proxy.provider_ref == provider_ref)
+            .expect("the entry is listed");
+        change(entry);
+    }
+
     /// Adds a proxy in `country` and returns the provider's id for it.
     pub fn add(&self, country: &str) -> String {
         let mut proxies = self.proxies.lock().unwrap();
@@ -116,6 +161,8 @@ impl ListProvider {
             username: Secret::new(format!("user-{number}")),
             password: Secret::new("secret-pass-91aa"),
             country: country.parse().ok(),
+            locale: None,
+            timezone: None,
             city: None,
             asn: None,
             valid: Some(true),
@@ -135,37 +182,16 @@ impl ListProvider {
 #[async_trait]
 impl ProxyProvider for ListProvider {
     fn kind(&self) -> ProxyProviderKind {
-        ProxyProviderKind::Static
+        self.kind
+    }
+
+    // A declared list: it lists, and the rest is the trait's "unsupported".
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::LIST_ONLY
     }
 
     async fn list(&self) -> Result<Vec<ProviderProxy>, ProviderError> {
         Ok(self.proxies.lock().unwrap().clone())
-    }
-
-    async fn replace(&self, _: &Proxy, _: ReplaceSpec) -> Result<ReplaceTicket, ProviderError> {
-        Err(ProviderError::Unsupported {
-            provider: ProxyProviderKind::Static,
-            operation: "replacement",
-        })
-    }
-
-    async fn replace_status(&self, _: &ReplaceTicket) -> Result<ReplaceState, ProviderError> {
-        Err(ProviderError::Unsupported {
-            provider: ProxyProviderKind::Static,
-            operation: "replacement",
-        })
-    }
-
-    async fn replaced(&self, _: DateTime<Utc>) -> Result<Vec<ReplacedProxy>, ProviderError> {
-        Ok(Vec::new())
-    }
-
-    async fn account(&self) -> Result<AccountInfo, ProviderError> {
-        Ok(AccountInfo::default())
-    }
-
-    async fn stats(&self, _: DateTime<Utc>) -> Result<Vec<ProxyActivity>, ProviderError> {
-        Ok(Vec::new())
     }
 }
 
@@ -560,10 +586,24 @@ impl Harness {
     /// A harness whose engines bundle the given majors, with `change`
     /// applied to the configuration.
     pub async fn with(chrome: u32, firefox: u32, change: impl FnOnce(&mut Config)) -> Self {
+        Self::build(chrome, firefox, ListProvider::default(), change).await
+    }
+
+    /// A harness whose pool is the operator's declared list (ADR 0013).
+    pub async fn declared(change: impl FnOnce(&mut Config)) -> Self {
+        Self::build(155, 156, ListProvider::declaring(), change).await
+    }
+
+    async fn build(
+        chrome: u32,
+        firefox: u32,
+        provider: ListProvider,
+        change: impl FnOnce(&mut Config),
+    ) -> Self {
         let db = TestDb::migrated().await;
         let clock = Arc::new(ManualClock::new(start()));
         let alerts = Arc::new(MemoryAlertSink::new());
-        let provider = Arc::new(ListProvider::default());
+        let provider = Arc::new(provider);
         let pool = Arc::new(Pool::new(PoolParts {
             store: db.store.clone(),
             provider: Some(provider.clone()),
@@ -641,16 +681,19 @@ impl Harness {
             .expect("the pool adopted the proxy")
     }
 
-    /// A probe of a proxy that answered, with this geo record.
+    /// A probe of a proxy that answered, with this geo record, from an exit
+    /// address of the proxy's own: two proxies that leave by one address
+    /// carry no persona (decision D6).
     pub async fn probe_ok(&self, proxy: ProxyId, geo: Option<GeoRecord>) -> Proxy {
         let at = kage_proxy::Clock::now(&*self.clock);
+        let own = IpAddr::V6(std::net::Ipv6Addr::from(proxy.as_uuid().as_u128()));
         self.pool
             .record_probe(
                 proxy,
                 &ProbeReport {
                     at,
                     exit: Ok(ExitObservation {
-                        ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
+                        ip: own,
                         latency_ms: 120,
                         connect_ms: Some(40),
                         tls_ms: Some(60),

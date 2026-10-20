@@ -2450,6 +2450,7 @@ export interface components {
              *     ready, and how many browsers are open.
              */
             personas: components["schemas"]["FreeForm"];
+            provider?: components["schemas"]["FreeForm"] | null;
             /**
              * @description The proxies: by state, how many are usable, whether a leak is on
              *     record, and the replacement budget of the current term.
@@ -2499,20 +2500,32 @@ export interface components {
              * @description Until when it is left alone.
              */
             backoff_until?: string | null;
-            /** @description The city the provider states. */
+            /**
+             * @description Whether it carries a persona: not a declared entry without a
+             *     country, and not one that leaves by another proxy's address.
+             */
+            carries_persona: boolean;
+            /** @description The city the provider states; informational. */
             city?: string | null;
             /**
              * Format: int32
              * @description Failed probes in a row.
              */
             consecutive_failures: number;
-            /** @description The country the provider states. */
+            /**
+             * @description The country the provider states: for a declared list and the host's
+             *     own rows the declared one, which the persona follows and a lookup
+             *     only verifies (ADR 0013); for Webshare a fallback the observed
+             *     country overrides.
+             */
             country?: string | null;
             /**
              * Format: date-time
              * @description When it joined the pool.
              */
             created_at: string;
+            /** @description Whether `country`, `locale` and `timezone` are a declaration. */
+            declared: boolean;
             /**
              * Format: date-time
              * @description Since when it fails without a break.
@@ -2526,12 +2539,19 @@ export interface components {
              */
             id: string;
             last_health?: components["schemas"]["FreeForm"] | null;
+            /** @description The declared locale (BCP 47), when one is declared. */
+            locale?: string | null;
+            /** @description Whether it is one of the pool's plain exits only (level 0). */
+            plain_exit: boolean;
             /**
              * Format: int32
              * @description Its port.
              */
             port: number;
-            /** @description `webshare` or `static`. */
+            /**
+             * @description `webshare`, `static` (the operator's declared list) or `host` (the
+             *     host's own connection under `egress.mode: direct`).
+             */
             provider: string;
             /** @description Why a replacement was requested, when one was. */
             replacement_reason?: string | null;
@@ -2542,6 +2562,8 @@ export interface components {
             retired_at?: string | null;
             /** @description `new`, `healthy`, `degraded`, `backoff`, `replacing` or `retired`. */
             state: string;
+            /** @description The declared IANA time zone, when one is declared. */
+            timezone?: string | null;
         };
         /** @description The proxies. */
         ProxyList: {
@@ -3650,7 +3672,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description `conflict`: the proxy is being replaced or is retired, and is not probed. */
+            /** @description `conflict`: the proxy is being replaced or is retired, and is not probed (`not_probed`); or the pool is idle under `egress.mode: direct` (`pool_idle`). */
             409: {
                 headers: {
                     [name: string]: unknown;

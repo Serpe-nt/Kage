@@ -37,7 +37,6 @@ use kage_core::domain::{
     ProxyProviderKind, ProxyState, Render, SubjectKind,
 };
 use kage_core::ids::{HealthEventId, PersonaId, ProxyId};
-use kage_core::persona::locale;
 use kage_core::persona::mix::{self, MixCounts, MixEntry};
 use kage_core::persona::place::ZoneSource;
 use kage_core::persona::screen::{self, ScreenClass};
@@ -70,6 +69,16 @@ pub const REASON_PROXY_RETIRED: &str = "proxy_retired";
 pub const REASON_REGENERATED: &str = "regenerated";
 /// Why a persona was retired by `kage persona retire`.
 pub const REASON_OPERATOR: &str = "operator";
+/// Why a persona was retired when the identity its proxy declares changed
+/// (another country, or another language): a new persona is made from the
+/// corrected declaration (ADR 0013).
+pub const REASON_DECLARATION_CHANGED: &str = "declaration_changed";
+/// Why a persona was retired when its declared list's entry lost its
+/// country: the proxy is a plain exit from then on (ADR 0013).
+pub const REASON_UNDECLARED: &str = "undeclared";
+/// Why a persona was retired when its proxy turned out to leave by an
+/// older proxy's address: two personas would share one (decision D6).
+pub const REASON_EXIT_SHARED: &str = "exit_shared";
 
 /// What the manager is built from.
 pub struct PersonaParts {
@@ -437,36 +446,31 @@ impl PersonaManager {
         Ok(self.pool.egress_unsafe().await?)
     }
 
-    /// The place of a persona of `engine` with `seed` behind `proxy`:
-    /// what the proxy's geo record says (spec §6.1). For a row of the
-    /// host's own connection what the operator declared wins (spec §25):
-    /// its country, which a lookup that disagrees only counts against
-    /// (`geo_mismatch`), and its locale.
-    fn place_for(&self, proxy: &Proxy, engine: Engine, seed: &Seed) -> Place {
-        let direct = &self.config.egress.direct;
-        if proxy.provider != ProxyProviderKind::Host || direct.country.is_none() {
-            return lifecycle::place_of(proxy, engine, seed);
+    /// The place of a persona of `engine` with `seed` behind `proxy` (spec
+    /// §6.1): what the operator declared, when the proxy carries a
+    /// declaration (a declared list's entry, or a host row under
+    /// `egress.direct.country`), which a lookup that disagrees only counts
+    /// against (`geo_mismatch`); else what the proxy's geo record says.
+    /// One rule for every declaration (ADR 0013).
+    fn place_for(proxy: &Proxy, engine: Engine, seed: &Seed) -> Place {
+        lifecycle::place_for(proxy, engine, seed)
+    }
+
+    /// Why a persona must go although its proxy lives: the proxy carries
+    /// no persona any more (a declared entry without a country, which is a
+    /// plain exit; or one that leaves by another proxy's address), or its
+    /// declared identity changed (consult 3c of M15: another country, or
+    /// another language, is another persona). `None` when it stays.
+    fn must_go(persona: &Persona, proxy: &Proxy) -> Option<&'static str> {
+        if proxy.exit_shared() {
+            return Some(REASON_EXIT_SHARED);
         }
-        let mut declared = proxy.clone();
-        declared.country = direct.country;
-        // A lookup that names another country says nothing of the declared
-        // place: neither its time zone nor its position is taken.
-        if declared
-            .observed_geo()
-            .is_some_and(|geo| Some(geo.country) != direct.country)
-            && let Some(health) = declared.last_health.as_mut()
-        {
-            health.geo = None;
+        if !proxy.carries_persona() {
+            return Some(REASON_UNDECLARED);
         }
-        let mut place = lifecycle::place_of(&declared, engine, seed);
-        if let Some(locale) = direct
-            .locale
-            .as_deref()
-            .and_then(|tag| locale::declared(tag, engine))
-        {
-            place.locale = locale;
-        }
-        place
+        let declaration = proxy.declaration()?;
+        let place = lifecycle::declared_place(proxy, &declaration, persona.engine, &persona.seed);
+        lifecycle::declaration_moved(persona, &place).then_some(REASON_DECLARATION_CHANGED)
     }
 
     /// A live persona's proxy, and the endpoint its browser or its http
@@ -537,11 +541,21 @@ impl PersonaManager {
             return Ok(None);
         }
         if let Some(existing) = self.store.personas().get_by_proxy(proxy.id).await? {
-            return Ok(Some(self.follow(existing, &proxy).await?));
+            match Self::must_go(&existing, &proxy) {
+                None => return Ok(Some(self.follow(existing, &proxy).await?)),
+                Some(reason) => {
+                    tracing::info!(
+                        proxy = %proxy.id, persona = %existing.id, reason,
+                        "a persona goes: what its proxy declares or shares changed"
+                    );
+                    self.retire(existing.id, reason).await?;
+                }
+            }
         }
-        if !proxy.state.is_usable() {
+        if !proxy.state.is_usable() || !proxy.carries_persona() {
             return Ok(None);
         }
+        self.release_plain_exit(&proxy).await?;
         match self.generate(&proxy).await {
             Ok(persona) => {
                 self.memory().failures.remove(&proxy.id);
@@ -553,6 +567,34 @@ impl PersonaManager {
                 Err(error)
             }
         }
+    }
+
+    /// A proxy that is about to carry a persona stops being any site's
+    /// plain exit: each of those sites chooses another (spec §25). A site
+    /// it served at level 0 may then see one address do both; the event
+    /// says how many, and the runbook says to give the list a new entry
+    /// instead of a country to a plain exit.
+    async fn release_plain_exit(&self, proxy: &Proxy) -> Result<(), PersonaError> {
+        let released = self.store.site_exits().release(proxy.id).await?;
+        if released > 0 {
+            tracing::warn!(
+                proxy = %proxy.id, sites = released,
+                "a plain exit now carries a persona; its sites choose another plain exit"
+            );
+            let event = HealthEvent {
+                id: HealthEventId::new(),
+                at: self.now(),
+                subject_kind: SubjectKind::Proxy,
+                subject_id: Some(proxy.id.as_uuid()),
+                kind: "plain_exit_released".to_owned(),
+                severity: AlertSeverity::Warning,
+                details: json!({ "sites": released }),
+            };
+            if let Err(error) = self.store.health_events().insert(&event).await {
+                tracing::warn!(%error, "cannot store a proxy health event");
+            }
+        }
+        Ok(())
     }
 
     fn generation_failed(&self, proxy: &Proxy, error: &PersonaError) {
@@ -634,7 +676,7 @@ impl PersonaManager {
 
         // Engine and system: the entry the pool is shortest of, the
         // country of the new persona first.
-        let country = self.place_for(proxy, Engine::Chromium, &seed).country;
+        let country = Self::place_for(proxy, Engine::Chromium, &seed).country;
         // The host's personas run the engines the operator names, if any.
         let named: Vec<MixEntry>;
         let entries: &[MixEntry] = match &self.config.egress.direct.engines {
@@ -673,7 +715,7 @@ impl PersonaManager {
             return Err(PersonaError::CrossOsClaim { engine, os });
         }
 
-        let place = self.place_for(proxy, engine, &seed);
+        let place = Self::place_for(proxy, engine, &seed);
         let class = screen::draw(engine, os, &seed);
         let configured_major = match engine {
             Engine::Chromium => self.config.engines.chromium.browser_major,
@@ -745,6 +787,7 @@ impl PersonaManager {
                     ZoneSource::Observed => "observed",
                     ZoneSource::Country => "country",
                     ZoneSource::Unknown => "unknown",
+                    ZoneSource::Declared => "declared",
                 },
                 "locale": place.locale.locale,
                 "languages": place.locale.languages,
@@ -800,7 +843,7 @@ impl PersonaManager {
     /// Brings a persona in step with its proxy: its state, and the place
     /// the proxy's geo record gives.
     async fn follow(&self, persona: Persona, proxy: &Proxy) -> Result<Persona, PersonaError> {
-        let place = self.place_for(proxy, persona.engine, &persona.seed);
+        let place = Self::place_for(proxy, persona.engine, &persona.seed);
         let proxy_state = proxy.state;
         let Some((change, moved, cooled, updated)) = self
             .store
@@ -890,6 +933,8 @@ impl PersonaManager {
             } => self.proxy_retired(proxy).await?,
             PoolEvent::Added { proxy }
             | PoolEvent::GeoChanged { proxy }
+            | PoolEvent::DeclarationChanged { proxy }
+            | PoolEvent::ExitShared { proxy }
             | PoolEvent::StateChanged { proxy, .. } => {
                 self.ensure(proxy).await?;
             }
@@ -1016,9 +1061,20 @@ impl PersonaManager {
             if let Some(proxy) = proxies.get(&persona.proxy_id) {
                 covered.insert(proxy.id);
                 // A persona of a row this installation does not leave
-                // through waits as it is.
+                // through waits as it is. One whose proxy's declaration or
+                // exit changed is replaced as an event would have it.
                 if self.serves(proxy) {
-                    self.follow(persona, proxy).await?;
+                    match Self::must_go(&persona, proxy) {
+                        None => {
+                            self.follow(persona, proxy).await?;
+                        }
+                        Some(_) => match self.ensure(proxy.id).await {
+                            Ok(Some(made)) => report.generated.push(made.id),
+                            Ok(None) => report.retired.push(persona.id),
+                            Err(PersonaError::Store(error)) => return Err(error.into()),
+                            Err(_) => report.failed.push(proxy.id),
+                        },
+                    }
                 }
             } else {
                 report.retired.push(persona.id);

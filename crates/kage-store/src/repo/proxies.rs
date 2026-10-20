@@ -31,6 +31,8 @@ struct ProxyRow {
     password: Vec<u8>,
     scheme: String,
     country: Option<String>,
+    locale: Option<String>,
+    timezone: Option<String>,
     city: Option<String>,
     asn: Option<String>,
     state: String,
@@ -69,6 +71,8 @@ impl TryFrom<ProxyRow> for Proxy {
             password: SealedSecret::new(row.password),
             scheme: parse(("proxies", "scheme"), &row.scheme)?,
             country: parse_opt(("proxies", "country"), row.country.as_deref())?,
+            locale: row.locale,
+            timezone: row.timezone,
             city: row.city,
             asn: row.asn,
             state: parse(("proxies", "state"), &row.state)?,
@@ -129,7 +133,7 @@ impl ProxyRepo<'_> {
         sqlx::query_as!(
             ProxyRow,
             "SELECT id, provider, provider_ref, host, port, username, password, scheme, country,
-                    city, asn, state, consecutive_failures, backoff_count, backoff_until,
+                    locale, timezone, city, asn, state, consecutive_failures, backoff_count, backoff_until,
                     failing_since, replacement_requested_at, replacement_reason,
                     replacement_ticket, last_health, created_at, retired_at
              FROM proxies WHERE id = $1",
@@ -150,7 +154,7 @@ impl ProxyRepo<'_> {
         sqlx::query_as!(
             ProxyRow,
             "SELECT id, provider, provider_ref, host, port, username, password, scheme, country,
-                    city, asn, state, consecutive_failures, backoff_count, backoff_until,
+                    locale, timezone, city, asn, state, consecutive_failures, backoff_count, backoff_until,
                     failing_since, replacement_requested_at, replacement_reason,
                     replacement_ticket, last_health, created_at, retired_at
              FROM proxies
@@ -178,7 +182,7 @@ impl ProxyRepo<'_> {
         sqlx::query_as!(
             ProxyRow,
             "SELECT id, provider, provider_ref, host, port, username, password, scheme, country,
-                    city, asn, state, consecutive_failures, backoff_count, backoff_until,
+                    locale, timezone, city, asn, state, consecutive_failures, backoff_count, backoff_until,
                     failing_since, replacement_requested_at, replacement_reason,
                     replacement_ticket, last_health, created_at, retired_at
              FROM proxies
@@ -331,7 +335,7 @@ async fn lock_row(connection: &mut PgConnection, id: ProxyId) -> Result<Option<P
     sqlx::query_as!(
         ProxyRow,
         "SELECT id, provider, provider_ref, host, port, username, password, scheme, country,
-                city, asn, state, consecutive_failures, backoff_count, backoff_until,
+                locale, timezone, city, asn, state, consecutive_failures, backoff_count, backoff_until,
                 failing_since, replacement_requested_at, replacement_reason,
                 replacement_ticket, last_health, created_at, retired_at
          FROM proxies WHERE id = $1 FOR UPDATE",
@@ -352,7 +356,7 @@ async fn write(connection: &mut PgConnection, proxy: &Proxy) -> Result<bool, Sto
              asn = $8, state = $9, consecutive_failures = $10, backoff_count = $11,
              backoff_until = $12, failing_since = $13, replacement_requested_at = $14,
              replacement_reason = $15, replacement_ticket = $16, last_health = $17,
-             retired_at = $18
+             retired_at = $18, locale = $19, timezone = $20
          WHERE id = $1",
         proxy.id.as_uuid(),
         proxy.host,
@@ -375,6 +379,8 @@ async fn write(connection: &mut PgConnection, proxy: &Proxy) -> Result<bool, Sto
         replacement.and_then(|replacement| replacement.ticket.as_deref()),
         to_json_opt(("proxies", "last_health"), proxy.last_health.as_ref())?,
         proxy.retired_at,
+        proxy.locale,
+        proxy.timezone,
     )
     .execute(connection)
     .await?;
@@ -389,9 +395,10 @@ async fn insert_row(connection: &mut PgConnection, proxy: &Proxy) -> Result<(), 
                                   scheme, country, city, asn, state, consecutive_failures,
                                   backoff_count, backoff_until, failing_since,
                                   replacement_requested_at, replacement_reason,
-                                  replacement_ticket, last_health, created_at, retired_at)
+                                  replacement_ticket, last_health, created_at, retired_at,
+                                  locale, timezone)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-                     $18, $19, $20, $21, $22)",
+                     $18, $19, $20, $21, $22, $23, $24)",
         proxy.id.as_uuid(),
         proxy.provider.as_str(),
         proxy.provider_ref,
@@ -417,6 +424,8 @@ async fn insert_row(connection: &mut PgConnection, proxy: &Proxy) -> Result<(), 
         to_json_opt(("proxies", "last_health"), proxy.last_health.as_ref())?,
         proxy.created_at,
         proxy.retired_at,
+        proxy.locale,
+        proxy.timezone,
     )
     .execute(connection)
     .await?;

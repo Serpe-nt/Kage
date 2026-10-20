@@ -228,12 +228,17 @@ pub struct ProxyHealthConfig {
     #[serde(default = "default_startup_spread")]
     pub startup_spread: HumanDuration,
     /// Echo read through every proxy for reachability, latency, the exit
-    /// address and the leak check. The default belongs to the proxy
-    /// provider, who sees every connection anyway.
-    #[serde(default = "default_echo_url")]
-    pub echo_url: String,
-    /// Second echo, run by someone else, tried once when the first fails
-    /// before the failure counts. `null` disables the confirmation.
+    /// address and the leak check. Unset, the provider's own echo when it
+    /// runs one (Webshare's, which sees every connection anyway), else the
+    /// public echo `https://checkip.amazonaws.com/`, whose operator then sees
+    /// every proxy address on the probe's schedule (ADR 0013). The
+    /// operator's own echo (`kage echo serve`) is the private choice. It
+    /// answers the address as text, or JSON with it under `ip`.
+    #[serde(default)]
+    pub echo_url: Option<String>,
+    /// Second echo, tried once when the first fails before the failure
+    /// counts. When it is the echo in force, the confirmation is a second
+    /// read on a fresh tunnel. `null` disables the confirmation.
     #[serde(default = "default_confirm_url")]
     pub confirm_url: Option<String>,
     /// Geo lookup of the exit address: on the first check of a new proxy,
@@ -249,9 +254,13 @@ pub struct ProxyHealthConfig {
     #[serde(default = "default_geo_mismatches")]
     pub geo_mismatches: u32,
     /// Echo read without a proxy to learn the host's own public address,
-    /// which the leak check compares against.
-    #[serde(default = "default_echo_url")]
-    pub host_ip_url: String,
+    /// which the leak check compares against. Unset, the provider's own echo
+    /// when it runs one, else a public echo of another operator than the
+    /// probe's (`https://api.ipify.org/`), so that nobody outside sees both
+    /// the host and the pool; under `egress.mode: direct` always the
+    /// latter (ADR 0013).
+    #[serde(default)]
+    pub host_ip_url: Option<String>,
     /// How often the host address is read again.
     #[serde(default = "default_host_ip_refresh")]
     pub host_ip_refresh: HumanDuration,
@@ -282,10 +291,6 @@ const fn default_health_concurrency() -> u32 {
 
 const fn default_startup_spread() -> HumanDuration {
     HumanDuration::from_mins(2)
-}
-
-fn default_echo_url() -> String {
-    "https://ipv4.webshare.io/".to_owned()
 }
 
 #[allow(clippy::unnecessary_wraps)]
@@ -326,12 +331,12 @@ impl Default for ProxyHealthConfig {
             timeout: default_health_timeout(),
             max_concurrent: default_health_concurrency(),
             startup_spread: default_startup_spread(),
-            echo_url: default_echo_url(),
+            echo_url: None,
             confirm_url: default_confirm_url(),
             geo_url: default_geo_url(),
             geo_interval: default_geo_interval(),
             geo_mismatches: default_geo_mismatches(),
-            host_ip_url: default_echo_url(),
+            host_ip_url: None,
             host_ip_refresh: default_host_ip_refresh(),
             profile: default_probe_profile(),
             platform: default_probe_platform(),
@@ -346,11 +351,18 @@ pub struct ProxiesConfig {
     /// Where the proxy list comes from.
     #[serde(default = "default_provider")]
     pub provider: ProviderChoice,
-    /// A fixed proxy list, for tests and for vendors without an API. Secret:
-    /// `KAGE__PROXIES__STATIC_LIST`. See [`StaticProxy::parse_list`] for the
-    /// two formats.
+    /// The operator's declared proxy list, for proxies of any vendor
+    /// (ADR 0013). Secret: `KAGE__PROXIES__STATIC_LIST`, or a file named by
+    /// `KAGE__PROXIES__STATIC_LIST_FILE`. See [`StaticProxy::parse_list`]
+    /// for the two formats.
     #[serde(default)]
     pub static_list: Option<Secret>,
+    /// The file the declared list was read from, when it came from one: it
+    /// is read again at every sync, and a version that does not parse
+    /// leaves the last good one in force. Set by the loader, never by the
+    /// configuration file.
+    #[serde(skip)]
+    pub static_list_file: Option<std::path::PathBuf>,
     /// How often the pool is reconciled with the provider's list and the
     /// account is read.
     #[serde(default = "default_sync_interval")]
@@ -426,6 +438,7 @@ impl Default for ProxiesConfig {
         Self {
             provider: default_provider(),
             static_list: None,
+            static_list_file: None,
             sync_interval: default_sync_interval(),
             missing_syncs: default_missing_syncs(),
             replacements_per_month: default_replacements_per_month(),
@@ -439,7 +452,11 @@ impl Default for ProxiesConfig {
     }
 }
 
-/// One proxy of a static list.
+/// One proxy of the declared list (ADR 0013).
+///
+/// The declared `country`, `locale` and `timezone` are the identity of
+/// the proxy's persona; a geo lookup only verifies them. An entry without
+/// a country gets no persona and serves as a plain exit (level 0) only.
 #[derive(Debug, Clone)]
 pub struct StaticProxy {
     /// A stable name for the proxy; `host:port` when the list gives none.
@@ -452,11 +469,17 @@ pub struct StaticProxy {
     pub username: Secret,
     /// Proxy password.
     pub password: Secret,
-    /// Country of the exit address, when known.
+    /// The country the operator declares the exit address in.
     pub country: Option<CountryCode>,
-    /// City of the exit address, when known.
+    /// The locale its persona speaks (BCP 47, the country as region); the
+    /// country's primary language when unset.
+    pub locale: Option<String>,
+    /// The IANA time zone of its persona; the lookup's when it agrees on
+    /// the country, else the country's main zone, when unset.
+    pub timezone: Option<String>,
+    /// City of the exit address, informational: shown, never compared.
     pub city: Option<String>,
-    /// Autonomous system of the exit address, when known.
+    /// Autonomous system of the exit address, informational.
     pub asn: Option<String>,
 }
 
@@ -467,18 +490,28 @@ struct StaticListDocument {
     proxies: Vec<StaticProxyEntry>,
 }
 
-/// The YAML form of one static proxy.
+/// The YAML form of one static proxy: `url`, or the four fields.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StaticProxyEntry {
     #[serde(default)]
     id: Option<String>,
-    host: String,
-    port: u16,
-    username: String,
-    password: String,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    host: Option<String>,
+    #[serde(default)]
+    port: Option<u16>,
+    #[serde(default)]
+    username: Option<String>,
+    #[serde(default)]
+    password: Option<String>,
     #[serde(default)]
     country: Option<CountryCode>,
+    #[serde(default)]
+    locale: Option<String>,
+    #[serde(default)]
+    timezone: Option<String>,
     #[serde(default)]
     city: Option<String>,
     #[serde(default)]
@@ -491,34 +524,56 @@ struct StaticProxyEntry {
 #[error("static proxy list: {0}")]
 pub struct StaticListError(String);
 
+/// What an entry declares besides where the proxy is and how to log in.
+#[derive(Default)]
+struct Declared {
+    id: Option<String>,
+    country: Option<CountryCode>,
+    locale: Option<String>,
+    timezone: Option<String>,
+    city: Option<String>,
+    asn: Option<String>,
+}
+
 impl StaticProxy {
     /// Parses a static proxy list in one of two formats.
     ///
-    /// One proxy per line, the format of Webshare's own list download.
-    /// Blank lines and lines starting with `#` are skipped:
+    /// One proxy per line, the format of Webshare's own list download with
+    /// Kage's two optional fields, a country and a locale. Blank lines and
+    /// lines starting with `#` are skipped:
     ///
     /// ```text
     /// 198.51.100.10:8080:username:password
     /// 198.51.100.11:8080:username:password:DE
+    /// 198.51.100.12:8080:username:password:CH:fr-CH
     /// ```
     ///
-    /// Or a YAML document with a `proxies` list, which also covers passwords
-    /// and hosts that contain a colon:
+    /// Or a YAML document with a `proxies` list, which also covers a
+    /// password or a host that contains a colon, a time zone and a city,
+    /// and a proxy written as a URL:
     ///
     /// ```yaml
     /// proxies:
-    ///   - host: 198.51.100.10
+    ///   - id: vienna-1
+    ///     host: 198.51.100.10
     ///     port: 8080
     ///     username: user
     ///     password: "pa:ss"
-    ///     country: DE
-    ///     city: Berlin
+    ///     country: AT
+    ///     locale: de-AT
+    ///     timezone: Europe/Vienna
+    ///     city: Vienna
+    ///   - url: http://user:pa%3Ass@198.51.100.11:8080
+    ///     country: FR
     /// ```
     ///
     /// # Errors
     ///
     /// Fails on a malformed entry, a port of 0, an empty host or user name,
-    /// or two entries with the same id.
+    /// a declaration no persona can be made from
+    /// ([`crate::config::declared::check`]), two entries with the same id,
+    /// or two entries with the same proxy and login (one address would
+    /// carry two personas).
     pub fn parse_list(text: &str) -> Result<Vec<Self>, StaticListError> {
         let proxies = if text.trim_start().starts_with("proxies:") {
             Self::parse_yaml(text)?
@@ -526,14 +581,33 @@ impl StaticProxy {
             Self::parse_lines(text)?
         };
         for (index, proxy) in proxies.iter().enumerate() {
-            if proxies[..index].iter().any(|other| other.id == proxy.id) {
+            let earlier = &proxies[..index];
+            if earlier.iter().any(|other| other.id == proxy.id) {
                 return Err(StaticListError(format!(
-                    "entry {} repeats the id of an earlier entry",
+                    "entry {} repeats the id of an earlier entry (the id is host:port unless one \
+                     is given: entries that share a host and port, as a gateway's sessions do, \
+                     need an id each, in the YAML form)",
                     index + 1
+                )));
+            }
+            if let Some(position) = earlier.iter().position(|other| other.same_exit(proxy)) {
+                return Err(StaticListError(format!(
+                    "entry {} repeats the proxy and login of entry {}: one address would carry \
+                     two personas",
+                    index + 1,
+                    position + 1
                 )));
             }
         }
         Ok(proxies)
+    }
+
+    /// Whether two entries name the same proxy with the same login.
+    fn same_exit(&self, other: &Self) -> bool {
+        self.host.eq_ignore_ascii_case(&other.host)
+            && self.port == other.port
+            && self.username.expose() == other.username.expose()
+            && self.password.expose() == other.password.expose()
     }
 
     fn parse_yaml(text: &str) -> Result<Vec<Self>, StaticListError> {
@@ -541,10 +615,10 @@ impl StaticProxy {
         // passwords, so it is not passed on.
         let document: StaticListDocument = crate::yaml::from_str(text).map_err(|_| {
             StaticListError(
-                "the YAML form must be `proxies:` with a list of entries that have host, \
-                 port, username and password, optionally id, country, city and asn; a \
-                 password or a name that YAML reads as a number (`0123`, `12345`) is \
-                 written in quotes"
+                "the YAML form must be `proxies:` with a list of entries that have url, or host, \
+                 port, username and password, and optionally id, country, locale, timezone, \
+                 city and asn; a password or a name that YAML reads as a number (`0123`, \
+                 `12345`) is written in quotes"
                     .to_owned(),
             )
         })?;
@@ -552,20 +626,36 @@ impl StaticProxy {
             .proxies
             .into_iter()
             .enumerate()
-            .map(|(index, entry)| {
-                Self::checked(
-                    index + 1,
-                    entry.id,
-                    &entry.host,
-                    entry.port,
-                    entry.username,
-                    entry.password,
-                    entry.country,
-                    entry.city,
-                    entry.asn,
-                )
-            })
+            .map(|(index, entry)| Self::from_entry(index + 1, entry))
             .collect()
+    }
+
+    fn from_entry(position: usize, entry: StaticProxyEntry) -> Result<Self, StaticListError> {
+        let problem = |what: &str| StaticListError(format!("entry {position}: {what}"));
+        let declared = Declared {
+            id: entry.id,
+            country: entry.country,
+            locale: entry.locale,
+            timezone: entry.timezone,
+            city: entry.city,
+            asn: entry.asn,
+        };
+        let fields = (entry.host, entry.port, entry.username, entry.password);
+        match (entry.url, fields) {
+            (Some(url), (None, None, None, None)) => {
+                let (host, port, username, password) = parse_url(&url).map_err(problem)?;
+                Self::checked(position, &host, port, username, password, declared)
+            }
+            (Some(_), _) => Err(problem(
+                "give either url, or host, port, username and password, not both",
+            )),
+            (None, (Some(host), Some(port), Some(username), Some(password))) => {
+                Self::checked(position, &host, port, username, password, declared)
+            }
+            (None, _) => Err(problem(
+                "host, port, username and password are all needed, or a url",
+            )),
+        }
     }
 
     fn parse_lines(text: &str) -> Result<Vec<Self>, StaticListError> {
@@ -577,14 +667,24 @@ impl StaticProxy {
                 continue;
             }
             let fields: Vec<&str> = line.split(':').collect();
-            let (host, port, username, password, country) = match fields.as_slice() {
-                [host, port, username, password] => (*host, *port, *username, *password, None),
-                [host, port, username, password, country] => {
-                    (*host, *port, *username, *password, Some(*country))
+            let (host, port, username, password, country, locale) = match fields.as_slice() {
+                [host, port, username, password] => {
+                    (*host, *port, *username, *password, None, None)
                 }
+                [host, port, username, password, country] => {
+                    (*host, *port, *username, *password, Some(*country), None)
+                }
+                [host, port, username, password, country, locale] => (
+                    *host,
+                    *port,
+                    *username,
+                    *password,
+                    Some(*country),
+                    Some(*locale),
+                ),
                 _ => {
                     return Err(StaticListError(format!(
-                        "line {number}: expected host:port:username:password[:country]"
+                        "line {number}: expected host:port:username:password[:country[:locale]]"
                     )));
                 }
             };
@@ -602,30 +702,27 @@ impl StaticProxy {
                 .transpose()?;
             proxies.push(Self::checked(
                 number,
-                None,
                 host,
                 port,
                 username.to_owned(),
                 password.to_owned(),
-                country,
-                None,
-                None,
+                Declared {
+                    country,
+                    locale: locale.map(str::to_owned),
+                    ..Declared::default()
+                },
             )?);
         }
         Ok(proxies)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn checked(
         position: usize,
-        id: Option<String>,
         host: &str,
         port: u16,
         username: String,
         password: String,
-        country: Option<CountryCode>,
-        city: Option<String>,
-        asn: Option<String>,
+        declared: Declared,
     ) -> Result<Self, StaticListError> {
         let problem = |what: &str| StaticListError(format!("entry {position}: {what}"));
         let host = host.trim().to_owned();
@@ -638,22 +735,101 @@ impl StaticProxy {
         if username.is_empty() {
             return Err(problem("the user name is empty"));
         }
-        let id = match id {
+        let id = match declared.id {
             Some(id) if id.trim().is_empty() => return Err(problem("the id is empty")),
             Some(id) => id.trim().to_owned(),
             None => format!("{host}:{port}"),
         };
+        let filled = |value: Option<String>| value.filter(|value| !value.trim().is_empty());
+        let locale = filled(declared.locale);
+        let timezone = filled(declared.timezone);
+        // The rule of every declaration; its message names the field only.
+        crate::config::declared::check(
+            declared.country,
+            locale.as_deref(),
+            timezone.as_deref(),
+            &|field| format!("entry {position}: {field}"),
+        )
+        .map_err(StaticListError)?;
         Ok(Self {
             id,
             host,
             port,
             username: Secret::new(username),
             password: Secret::new(password),
-            country,
-            city: city.filter(|city| !city.trim().is_empty()),
-            asn: asn.filter(|asn| !asn.trim().is_empty()),
+            country: declared.country,
+            // The tag as the tables write it: language lower, region upper.
+            locale: locale.map(|tag| normalize_locale(&tag)),
+            timezone,
+            city: filled(declared.city),
+            asn: filled(declared.asn),
         })
     }
+}
+
+/// A `language-REGION` tag as the tables write it: `de-AT`.
+fn normalize_locale(tag: &str) -> String {
+    match tag.split_once('-') {
+        Some((language, region)) => format!(
+            "{}-{}",
+            language.to_ascii_lowercase(),
+            region.to_ascii_uppercase()
+        ),
+        None => tag.to_owned(),
+    }
+}
+
+/// The host, port, user name and password of a proxy written as a URL:
+/// `http://user:password@host:port`, the login percent-decoded. The
+/// message never quotes the URL: it holds the password.
+fn parse_url(text: &str) -> Result<(String, u16, String, String), &'static str> {
+    let url = url::Url::parse(text.trim()).map_err(|_| "the url is not a URL")?;
+    match url.scheme() {
+        "http" => {}
+        "socks5" | "socks5h" | "socks4" | "socks" => {
+            return Err("a SOCKS proxy is not supported; the url's scheme must be http");
+        }
+        _ => return Err("the url's scheme must be http"),
+    }
+    if !matches!(url.path(), "" | "/") || url.query().is_some() || url.fragment().is_some() {
+        return Err("the url has a path, a query or a fragment; it names a proxy only");
+    }
+    let host = url
+        .host_str()
+        .ok_or("the url has no host")?
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_owned();
+    let port = url.port().ok_or("the url names no port")?;
+    let username = percent_decode(url.username()).ok_or("the url's user name is not text")?;
+    let password = percent_decode(url.password().unwrap_or_default())
+        .ok_or("the url's password is not text")?;
+    if username.is_empty() || url.password().is_none() {
+        return Err("the url has no user name and password");
+    }
+    Ok((host, port, username, password))
+}
+
+/// `%XX` sequences of a URL's user name or password as the bytes they
+/// stand for, read as UTF-8; `None` for a broken escape or bytes that are
+/// no text.
+fn percent_decode(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while let Some(&byte) = bytes.get(index) {
+        if byte == b'%' {
+            let hex = std::str::from_utf8(bytes.get(index + 1..index + 3)?)
+                .ok()
+                .filter(|hex| hex.bytes().all(|byte| byte.is_ascii_hexdigit()))?;
+            decoded.push(u8::from_str_radix(hex, 16).ok()?);
+            index += 3;
+        } else {
+            decoded.push(byte);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded).ok()
 }
 
 /// Checks `webshare.accepted_auto_replace`: each name is one of the
@@ -754,7 +930,9 @@ pub(super) fn validate(
     if health.max_concurrent == 0 {
         return fail("proxies.health.max_concurrent must be at least 1");
     }
-    http_url("proxies.health.echo_url", &health.echo_url, false)?;
+    if let Some(url) = &health.echo_url {
+        http_url("proxies.health.echo_url", url, false)?;
+    }
     if let Some(url) = &health.confirm_url {
         http_url("proxies.health.confirm_url", url, false)?;
     }
@@ -767,7 +945,9 @@ pub(super) fn validate(
     if health.geo_mismatches == 0 {
         return fail("proxies.health.geo_mismatches must be at least 1");
     }
-    http_url("proxies.health.host_ip_url", &health.host_ip_url, false)?;
+    if let Some(url) = &health.host_ip_url {
+        http_url("proxies.health.host_ip_url", url, false)?;
+    }
     if health.host_ip_refresh.get() < second {
         return fail("proxies.health.host_ip_refresh must be at least 1s");
     }
@@ -989,7 +1169,7 @@ mod tests {
                 p.health.max_concurrent = 0;
             }),
             ("proxies.health.echo_url", |_, _, p| {
-                p.health.echo_url = "ipv4.webshare.io".to_owned();
+                p.health.echo_url = Some("ipv4.webshare.io".to_owned());
             }),
             ("proxies.health.confirm_url", |_, _, p| {
                 p.health.confirm_url = Some("file:///etc/passwd".to_owned());
@@ -1004,7 +1184,7 @@ mod tests {
                 p.health.geo_mismatches = 0;
             }),
             ("proxies.health.host_ip_url", |_, _, p| {
-                p.health.host_ip_url = "http://".to_owned();
+                p.health.host_ip_url = Some("http://".to_owned());
             }),
             ("proxies.health.host_ip_refresh", |_, _, p| {
                 p.health.host_ip_refresh = HumanDuration::from_secs(0);
@@ -1101,13 +1281,83 @@ mod tests {
         assert_eq!(StaticProxy::parse_list("proxies: []").unwrap().len(), 0);
     }
 
+    // One table of every malformed entry: long, and better read in one piece.
+    #[allow(clippy::too_many_lines)]
     #[test]
     fn malformed_lists_are_rejected_without_quoting_them() {
         let cases = [
             ("198.51.100.10:8080:user", "line 1: expected"),
             (
-                "198.51.100.10:8080:user:hunter2:DE:extra",
+                "198.51.100.10:8080:user:hunter2:DE:de-DE:extra",
                 "line 1: expected",
+            ),
+            (
+                "198.51.100.10:8080:user:hunter2:DE:extra",
+                "entry 1: locale is a BCP 47 tag",
+            ),
+            (
+                "198.51.100.10:8080:user:hunter2:AT:de-DE",
+                "entry 1: locale must carry entry 1: country",
+            ),
+            (
+                "198.51.100.10:8080:user:hunter2:JP",
+                "entry 1: country: no browser language list is known for JP",
+            ),
+            (
+                "proxies:\n  - host: a.example\n    port: 1\n    username: u\n    password: hunter2\n    locale: de-AT\n",
+                "entry 1: locale needs entry 1: country",
+            ),
+            (
+                "proxies:\n  - host: a.example\n    port: 1\n    username: u\n    password: hunter2\n    country: AT\n    timezone: Europe/Atlantis\n",
+                "entry 1: timezone: \"Europe/Atlantis\" is not an IANA time zone",
+            ),
+            (
+                "proxies:\n  - host: a.example\n    port: 1\n    username: u\n    password: hunter2\n  - id: other\n    url: http://u:hunter2@A.example:1\n",
+                "entry 2 repeats the proxy and login of entry 1",
+            ),
+            (
+                "proxies:\n  - url: socks5://u:hunter2@a.example:1080\n",
+                "entry 1: a SOCKS proxy is not supported",
+            ),
+            (
+                "proxies:\n  - url: https://u:hunter2@a.example:443\n",
+                "entry 1: the url's scheme must be http",
+            ),
+            (
+                "proxies:\n  - url: http://u:hunter2@a.example\n",
+                "entry 1: the url names no port",
+            ),
+            (
+                "proxies:\n  - url: http://u:hunter2@a.example:1/path\n",
+                "entry 1: the url has a path",
+            ),
+            (
+                "proxies:\n  - url: http://u:hunter2@a.example:1/?q=1\n",
+                "entry 1: the url has a path",
+            ),
+            (
+                "proxies:\n  - url: http://a.example:1\n",
+                "entry 1: the url has no user name and password",
+            ),
+            (
+                "proxies:\n  - url: http://u@a.example:1\n",
+                "entry 1: the url has no user name and password",
+            ),
+            (
+                "proxies:\n  - url: http://u:hunter2%zz@a.example:1\n",
+                "entry 1: the url's password is not text",
+            ),
+            (
+                "proxies:\n  - url: http://u:hunter2%ff@a.example:1\n",
+                "entry 1: the url's password is not text",
+            ),
+            (
+                "proxies:\n  - url: not a url hunter2\n",
+                "entry 1: the url is not a URL",
+            ),
+            (
+                "proxies:\n  - url: http://u:hunter2@a.example:1\n    host: a.example\n",
+                "entry 1: give either url, or host",
             ),
             (
                 "ok.example:1:u:hunter2\n198.51.100.10:http:user:hunter2",
@@ -1126,7 +1376,7 @@ mod tests {
             ),
             (
                 "proxies:\n  - host: a.example\n    port: 1\n    username: u\n",
-                "YAML form",
+                "entry 1: host, port, username and password are all needed",
             ),
             (
                 "proxies:\n  - host: a.example\n    port: 1\n    username: u\n    password: hunter2\n    extra: 1\n",
@@ -1148,6 +1398,68 @@ mod tests {
             assert!(message.contains(needle), "{needle}: {message}");
             assert!(!message.contains("hunter2"), "{message}");
         }
+    }
+
+    /// ADR 0013: an entry declares its country, and may declare a locale
+    /// and a time zone, in both forms; a proxy may be written as a URL.
+    #[test]
+    fn an_entry_declares_where_it_is_and_what_its_persona_speaks() {
+        let lines = StaticProxy::parse_list(
+            "198.51.100.10:8080:user:pass:ch:fr-ch\n198.51.100.11:8080:user:pass:AT\n",
+        )
+        .unwrap();
+        assert_eq!(lines[0].country.unwrap().as_str(), "CH");
+        assert_eq!(lines[0].locale.as_deref(), Some("fr-CH"));
+        assert_eq!(lines[0].timezone, None);
+        assert_eq!(lines[1].locale, None);
+
+        let yaml = StaticProxy::parse_list(
+            "proxies:
+  - id: chicago-1
+    host: 198.51.100.20
+    port: 8080
+    username: user
+    password: pass
+    country: US
+    locale: en-US
+    timezone: America/Chicago
+    city: Chicago
+  - id: paris-1
+    url: http://us%40er:pa%3Ass%2F%C3%A9@198.51.100.21:3128
+    country: FR
+  - url: http://user:pass@[2001:db8::21]:3128/
+  - url: http://user:pass@proxy.example.net:3128
+    country: AT
+    locale: \"\"
+",
+        )
+        .unwrap();
+        assert_eq!(yaml.len(), 4);
+        assert_eq!(yaml[0].timezone.as_deref(), Some("America/Chicago"));
+        assert_eq!(yaml[0].locale.as_deref(), Some("en-US"));
+        assert_eq!(yaml[0].city.as_deref(), Some("Chicago"));
+        assert_eq!(yaml[1].id, "paris-1");
+        assert_eq!(yaml[1].host, "198.51.100.21");
+        assert_eq!(yaml[1].port, 3128);
+        assert_eq!(yaml[1].username.expose(), "us@er");
+        assert_eq!(yaml[1].password.expose(), "pa:ss/é");
+        assert_eq!(yaml[2].host, "2001:db8::21");
+        assert_eq!(yaml[2].id, "2001:db8::21:3128");
+        assert_eq!(yaml[2].country, None);
+        assert_eq!(yaml[3].host, "proxy.example.net");
+        // An empty value declares nothing.
+        assert_eq!(yaml[3].locale, None);
+
+        // A gateway reaches many exits through one host and port: entries
+        // that differ in their login are different proxies.
+        let gateway = StaticProxy::parse_list(
+            "proxies:
+  - {id: a, host: gw.example.net, port: 7000, username: session-1, password: p}
+  - {id: b, host: gw.example.net, port: 7000, username: session-2, password: p}
+",
+        )
+        .unwrap();
+        assert_eq!(gateway.len(), 2);
     }
 
     #[test]

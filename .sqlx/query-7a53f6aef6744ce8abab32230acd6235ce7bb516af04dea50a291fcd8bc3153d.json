@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT site_exit.proxy_id FROM site_exits site_exit\n             JOIN proxies proxy ON proxy.id = site_exit.proxy_id\n             WHERE site_exit.site = $1 AND proxy.state <> 'retired'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "proxy_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "site_exits",
+            "name": "proxy_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "7a53f6aef6744ce8abab32230acd6235ce7bb516af04dea50a291fcd8bc3153d"
+}

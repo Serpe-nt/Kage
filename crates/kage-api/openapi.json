@@ -781,7 +781,7 @@
             }
           },
           "409": {
-            "description": "`conflict`: the proxy is being replaced or is retired, and is not probed.",
+            "description": "`conflict`: the proxy is being replaced or is retired, and is not probed (`not_probed`); or the pool is idle under `egress.mode: direct` (`pool_idle`).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -5554,6 +5554,17 @@
             "$ref": "#/components/schemas/FreeForm",
             "description": "The personas: how many per state and per engine, how many are\nready, and how many browsers are open."
           },
+          "provider": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FreeForm",
+                "description": "The provider: its `kind`, its `capabilities` (replacement, the\nreplaced log, the account, the stats, its own echo) and the\noperations it does not offer, `unsupported`. Null without a\nprovider (spec §7.1)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "proxies": {
             "$ref": "#/components/schemas/FreeForm",
             "description": "The proxies: by state, how many are usable, whether a leak is on\nrecord, and the replacement budget of the current term."
@@ -5652,6 +5663,9 @@
           "provider",
           "host",
           "port",
+          "declared",
+          "carries_persona",
+          "plain_exit",
           "state",
           "consecutive_failures",
           "created_at"
@@ -5665,12 +5679,16 @@
             "format": "date-time",
             "description": "Until when it is left alone."
           },
+          "carries_persona": {
+            "type": "boolean",
+            "description": "Whether it carries a persona: not a declared entry without a\ncountry, and not one that leaves by another proxy's address."
+          },
           "city": {
             "type": [
               "string",
               "null"
             ],
-            "description": "The city the provider states."
+            "description": "The city the provider states; informational."
           },
           "consecutive_failures": {
             "type": "integer",
@@ -5683,12 +5701,16 @@
               "string",
               "null"
             ],
-            "description": "The country the provider states."
+            "description": "The country the provider states: for a declared list and the host's\nown rows the declared one, which the persona follows and a lookup\nonly verifies (ADR 0013); for Webshare a fallback the observed\ncountry overrides."
           },
           "created_at": {
             "type": "string",
             "format": "date-time",
             "description": "When it joined the pool."
+          },
+          "declared": {
+            "type": "boolean",
+            "description": "Whether `country`, `locale` and `timezone` are a declaration."
           },
           "failing_since": {
             "type": [
@@ -5718,6 +5740,17 @@
               }
             ]
           },
+          "locale": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The declared locale (BCP 47), when one is declared."
+          },
+          "plain_exit": {
+            "type": "boolean",
+            "description": "Whether it is one of the pool's plain exits only (level 0)."
+          },
           "port": {
             "type": "integer",
             "format": "int32",
@@ -5726,7 +5759,7 @@
           },
           "provider": {
             "type": "string",
-            "description": "`webshare` or `static`."
+            "description": "`webshare`, `static` (the operator's declared list) or `host` (the\nhost's own connection under `egress.mode: direct`)."
           },
           "replacement_reason": {
             "type": [
@@ -5746,6 +5779,13 @@
           "state": {
             "type": "string",
             "description": "`new`, `healthy`, `degraded`, `backoff`, `replacing` or `retired`."
+          },
+          "timezone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The declared IANA time zone, when one is declared."
           }
         }
       },

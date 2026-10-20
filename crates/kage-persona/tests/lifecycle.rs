@@ -19,8 +19,8 @@ use common::{Harness, capital, geo, tally};
 use kage_core::alert::AlertKind;
 use kage_core::config::EgressMode;
 use kage_core::domain::{
-    ClaimedOs, CoolingReason, Engine, Persona, PersonaState, ProxyProviderKind, ProxyState,
-    SessionId,
+    ClaimedOs, CoolingReason, Declaration, Engine, Persona, PersonaState, ProxyProviderKind,
+    ProxyState, SessionId,
 };
 use kage_core::ids::PersonaId;
 use kage_core::persona::mix::MixEntry;
@@ -59,10 +59,16 @@ async fn under_direct_the_host_has_personas_of_its_own_and_the_pools_wait() {
     let pooled = harness.healthy_proxy("DE").await;
     assert_eq!(harness.manager.ensure(pooled.id).await.unwrap(), None);
 
-    // The host's rows do, as declared: Austria, German, Firefox only.
+    // The host's rows do, as declared on them: Austria, German, Firefox
+    // only.
+    let austria = Declaration {
+        country: "AT".parse().unwrap(),
+        locale: Some("de-AT".to_owned()),
+        timezone: None,
+    };
     let rows = harness
         .pool
-        .keep_host_rows(2, Some("AT".parse().unwrap()))
+        .keep_host_rows(2, Some(&austria))
         .await
         .unwrap();
     let report = harness.manager.reconcile().await.unwrap();
@@ -1156,4 +1162,145 @@ async fn the_manager_follows_the_pool_until_it_is_told_to_stop() {
         .await
         .expect("the manager stops when told to")
         .unwrap();
+}
+
+/// The stored proxy of the declared list's entry `provider_ref`.
+async fn entry(harness: &Harness, provider_ref: &str) -> kage_core::domain::Proxy {
+    harness
+        .pool
+        .live()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|proxy| proxy.provider_ref == provider_ref)
+        .expect("the entry was adopted")
+}
+
+/// ADR 0013 and the acceptance of M15: a declared list makes personas of
+/// what it declares: the country, the locale (or the country's language)
+/// with the browser's own list for it, and the zone; an entry without a
+/// country is a plain exit and gets none; a lookup that disagrees is a
+/// mismatch, alerted, the proxy degraded, the identity kept; a corrected
+/// identity is a new persona, a corrected zone the same one moved.
+#[tokio::test]
+async fn a_declared_list_makes_personas_of_what_it_declares() {
+    let harness = Harness::declared(|_| {}).await;
+    let provider = &harness.provider;
+    let vienna = provider.add_declared(Some("AT"), Some("de-AT"), None);
+    let geneva = provider.add_declared(Some("CH"), Some("fr-CH"), Some("Europe/Zurich"));
+    let chicago = provider.add_declared(Some("US"), None, Some("America/Chicago"));
+    let plain = provider.add_declared(None, None, None);
+    harness.pool.reconcile().await.unwrap();
+    let mut personas = Vec::new();
+    for (provider_ref, country, locale, zone) in [
+        (&vienna, "AT", "de-AT", "Europe/Vienna"),
+        (&geneva, "CH", "fr-CH", "Europe/Zurich"),
+        (&chicago, "US", "en-US", "America/Chicago"),
+    ] {
+        let proxy = entry(&harness, provider_ref).await;
+        harness.probe_ok(proxy.id, None).await;
+        let persona = harness.manager.ensure(proxy.id).await.unwrap().unwrap();
+        assert_eq!(
+            persona
+                .country
+                .map(|country| country.to_string())
+                .as_deref(),
+            Some(country)
+        );
+        assert_eq!(persona.locale, locale);
+        assert_eq!(
+            persona.languages,
+            persona::locale::declared(locale, persona.engine)
+                .unwrap()
+                .languages,
+            "{provider_ref}"
+        );
+        assert_eq!(persona.timezone, zone);
+        personas.push(persona);
+    }
+    // No country: a plain exit, no persona.
+    let exit = entry(&harness, &plain).await;
+    let exit = harness.probe_ok(exit.id, None).await;
+    assert!(exit.is_plain_exit());
+    assert_eq!(harness.manager.ensure(exit.id).await.unwrap(), None);
+    assert_eq!(
+        harness
+            .store()
+            .personas()
+            .get_by_proxy(exit.id)
+            .await
+            .unwrap(),
+        None
+    );
+
+    // The lookup places Vienna in France, twice: a mismatch, alerted, the
+    // proxy degraded and usable, the persona Austrian as declared.
+    let proxy = entry(&harness, &vienna).await;
+    for _ in 0..2 {
+        let at = harness.clock.now();
+        harness.probe_ok(proxy.id, Some(capital("FR", at))).await;
+        harness.clock.advance(Span::days(2));
+    }
+    let degraded = harness.pool.get(proxy.id).await.unwrap().unwrap();
+    assert_eq!(degraded.state, ProxyState::Degraded);
+    assert_eq!(
+        harness
+            .alerts
+            .alerts()
+            .iter()
+            .filter(|alert| alert.kind == AlertKind::ProxyGeoMismatch)
+            .count(),
+        1
+    );
+    let kept = harness.manager.ensure(proxy.id).await.unwrap().unwrap();
+    assert_eq!(kept.id, personas[0].id);
+    assert_eq!(
+        (kept.locale.as_str(), kept.timezone.as_str()),
+        ("de-AT", "Europe/Vienna")
+    );
+    assert_eq!(kept.geolocation, None);
+
+    // The operator corrects Vienna to France: another persona.
+    provider.change(&vienna, |entry| {
+        entry.country = "FR".parse().ok();
+        entry.locale = None;
+    });
+    harness.pool.reconcile().await.unwrap();
+    let french = harness.manager.ensure(proxy.id).await.unwrap().unwrap();
+    assert_ne!(french.id, personas[0].id);
+    assert_eq!(french.locale, "fr-FR");
+    assert_eq!(french.timezone, "Europe/Paris");
+    let old = harness.reload(&personas[0]).await;
+    assert_eq!(old.state, PersonaState::Retired);
+    assert_eq!(old.retire_reason.as_deref(), Some("declaration_changed"));
+
+    // Chicago moves to Denver: the same persona, moved.
+    provider.change(&chicago, |entry| {
+        entry.timezone = Some("America/Denver".to_owned());
+    });
+    harness.pool.reconcile().await.unwrap();
+    let chicago_proxy = entry(&harness, &chicago).await;
+    let moved = harness
+        .manager
+        .ensure(chicago_proxy.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(moved.id, personas[2].id);
+    assert_eq!(moved.timezone, "America/Denver");
+    assert_eq!(moved.state, PersonaState::Active);
+
+    // Geneva loses its country: its persona goes, the proxy is a plain
+    // exit from then on; the sweep does it as an event would.
+    provider.change(&geneva, |entry| {
+        entry.country = None;
+        entry.locale = None;
+        entry.timezone = None;
+    });
+    harness.pool.reconcile().await.unwrap();
+    let report = harness.manager.reconcile().await.unwrap();
+    assert!(report.retired.contains(&personas[1].id), "{report:?}");
+    let gone = harness.reload(&personas[1]).await;
+    assert_eq!(gone.retire_reason.as_deref(), Some("undeclared"));
+    assert!(entry(&harness, &geneva).await.is_plain_exit());
 }

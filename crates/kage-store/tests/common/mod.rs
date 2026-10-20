@@ -84,6 +84,8 @@ pub fn proxy(provider_ref: &str) -> Proxy {
         password: SealedSecret::new(vec![0xde, 0xad, 0xbe, 0xef]),
         scheme: ProxyScheme::Http,
         country: Some("DE".parse().unwrap()),
+        locale: None,
+        timezone: None,
         city: Some("Berlin".to_owned()),
         asn: Some("AS64500".to_owned()),
         state: ProxyState::New,

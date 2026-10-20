@@ -24,6 +24,8 @@ pub enum ZoneSource {
     Country,
     /// The country is not known either: UTC, which the caller reports.
     Unknown,
+    /// The operator declared it (ADR 0013).
+    Declared,
 }
 
 /// The main time zone of a country, for an address whose lookup named no

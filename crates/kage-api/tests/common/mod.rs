@@ -297,6 +297,17 @@ impl Api {
         domains: &str,
         change: impl FnOnce(&mut Config),
     ) -> Self {
+        // Boxed: the start holds the whole configuration across its awaits,
+        // and a test's own future stays small.
+        Box::pin(Self::build(personas, major, domains, change)).await
+    }
+
+    async fn build(
+        personas: usize,
+        major: u32,
+        domains: &str,
+        change: impl FnOnce(&mut Config),
+    ) -> Self {
         let artifact_dir = tempfile::tempdir().unwrap();
         let dir = artifact_dir.path().to_path_buf();
         let host_echo = MockServer::start().await;
@@ -309,10 +320,10 @@ impl Api {
         let lab = Lab::start_with(personas, major, domains, |config| {
             config.artifacts.dir = dir;
             let health = &mut config.proxies.health;
-            health.echo_url = format!("http://{SITE}{ECHO_PATH}");
+            health.echo_url = Some(format!("http://{SITE}{ECHO_PATH}"));
             health.confirm_url = None;
             health.geo_url = None;
-            health.host_ip_url = host_ip_url;
+            health.host_ip_url = Some(host_ip_url);
             health.timeout = kage_core::duration::HumanDuration::from_secs(3);
             change(config);
         })

@@ -25,7 +25,7 @@ metrics = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["fs", "macros", "rt", "sync", "time"] }
 tracing = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
@@ -39,7 +39,9 @@ zeroize = { workspace = true }
 axum = { workspace = true }
 proptest = { workspace = true }
 sqlx = { workspace = true }
+tempfile = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["postgres"] }
 tokio = { workspace = true, features = ["io-util", "net", "rt-multi-thread", "test-util"] }
+tracing-subscriber = { workspace = true, features = ["fmt"] }
 wiremock = { workspace = true }

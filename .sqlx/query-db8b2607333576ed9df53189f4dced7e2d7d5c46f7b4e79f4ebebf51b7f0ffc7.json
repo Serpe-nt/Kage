@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, provider, provider_ref, host, port, username, password, scheme, country,\n                    city, asn, state, consecutive_failures, backoff_count, backoff_until,\n                    failing_since, replacement_requested_at, replacement_reason,\n                    replacement_ticket, last_health, created_at, retired_at\n             FROM proxies\n             WHERE state <> 'retired' AND ($1::text IS NULL OR provider = $1)\n             ORDER BY id",
+  "query": "SELECT id, provider, provider_ref, host, port, username, password, scheme, country,\n                    locale, timezone, city, asn, state, consecutive_failures, backoff_count, backoff_until,\n                    failing_since, replacement_requested_at, replacement_reason,\n                    replacement_ticket, last_health, created_at, retired_at\n             FROM proxies\n             WHERE $1::text IS NULL OR state = $1\n             ORDER BY id",
   "describe": {
     "columns": [
       {
@@ -104,6 +104,28 @@
       },
       {
         "ordinal": 9,
+        "name": "locale",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "proxies",
+            "name": "locale"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "timezone",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "proxies",
+            "name": "timezone"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
         "name": "city",
         "type_info": "Text",
         "origin": {
@@ -114,7 +136,7 @@
         }
       },
       {
-        "ordinal": 10,
+        "ordinal": 12,
         "name": "asn",
         "type_info": "Text",
         "origin": {
@@ -125,7 +147,7 @@
         }
       },
       {
-        "ordinal": 11,
+        "ordinal": 13,
         "name": "state",
         "type_info": "Text",
         "origin": {
@@ -136,7 +158,7 @@
         }
       },
       {
-        "ordinal": 12,
+        "ordinal": 14,
         "name": "consecutive_failures",
         "type_info": "Int4",
         "origin": {
@@ -147,7 +169,7 @@
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 15,
         "name": "backoff_count",
         "type_info": "Int4",
         "origin": {
@@ -158,7 +180,7 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 16,
         "name": "backoff_until",
         "type_info": "Timestamptz",
         "origin": {
@@ -169,7 +191,7 @@
         }
       },
       {
-        "ordinal": 15,
+        "ordinal": 17,
         "name": "failing_since",
         "type_info": "Timestamptz",
         "origin": {
@@ -180,7 +202,7 @@
         }
       },
       {
-        "ordinal": 16,
+        "ordinal": 18,
         "name": "replacement_requested_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -191,7 +213,7 @@
         }
       },
       {
-        "ordinal": 17,
+        "ordinal": 19,
         "name": "replacement_reason",
         "type_info": "Text",
         "origin": {
@@ -202,7 +224,7 @@
         }
       },
       {
-        "ordinal": 18,
+        "ordinal": 20,
         "name": "replacement_ticket",
         "type_info": "Text",
         "origin": {
@@ -213,7 +235,7 @@
         }
       },
       {
-        "ordinal": 19,
+        "ordinal": 21,
         "name": "last_health",
         "type_info": "Jsonb",
         "origin": {
@@ -224,7 +246,7 @@
         }
       },
       {
-        "ordinal": 20,
+        "ordinal": 22,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -235,7 +257,7 @@
         }
       },
       {
-        "ordinal": 21,
+        "ordinal": 23,
         "name": "retired_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -263,6 +285,8 @@
       true,
       true,
       true,
+      true,
+      true,
       false,
       false,
       false,
@@ -276,5 +300,5 @@
       true
     ]
   },
-  "hash": "eadbb44fce0328ff7dd28235464979c16689c93003aaf0593695f7fcc592410f"
+  "hash": "db8b2607333576ed9df53189f4dced7e2d7d5c46f7b4e79f4ebebf51b7f0ffc7"
 }

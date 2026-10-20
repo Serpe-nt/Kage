@@ -15,13 +15,39 @@ string_enum! {
     pub enum ProxyProviderKind {
         /// The Webshare list and replacement API.
         Webshare => "webshare",
-        /// A fixed list from configuration.
+        /// The operator's declared list (ADR 0013).
         Static => "static",
         /// The host's own connection under `egress.mode: direct`: one row
         /// per host persona, so that each keeps its one proxy. Never
         /// synced, probed through, replaced or counted as a leak.
         Host => "host",
     }
+}
+
+impl ProxyProviderKind {
+    /// Whether the country this provider gives a proxy is a declaration
+    /// that the persona follows and a geo lookup only verifies (ADR 0013),
+    /// rather than a statement the observed geo record overrides
+    /// (Webshare's, decision D5). The operator's list and the host's own
+    /// rows declare.
+    pub const fn declares_identity(self) -> bool {
+        matches!(self, Self::Static | Self::Host)
+    }
+}
+
+/// What an operator declared about where a proxy's exit is and what its
+/// persona speaks (ADR 0013): the identity its persona is made from, which
+/// a geo lookup only verifies.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Declaration {
+    /// The country.
+    pub country: CountryCode,
+    /// The locale, BCP 47 with the country as region; the country's
+    /// primary language when `None`.
+    pub locale: Option<String>,
+    /// The IANA time zone; the lookup's when it agrees on the country,
+    /// else the country's main zone, when `None`.
+    pub timezone: Option<String>,
 }
 
 string_enum! {
@@ -222,6 +248,12 @@ pub struct ProxyHealth {
     /// Geo lookups in a row whose country differed from the provider's.
     #[serde(default)]
     pub geo_mismatches: u32,
+    /// Another live proxy whose exit address this one's probe also saw:
+    /// two proxies that leave by one address would be two personas on one
+    /// address (decision D6), so the later of the two carries nothing while
+    /// it lasts (`proxy_exit_shared`).
+    #[serde(default)]
+    pub exit_shared_with: Option<ProxyId>,
     /// Abuse score from the reputation provider, 0 (clean) to 100.
     #[serde(default)]
     pub reputation_score: Option<u8>,
@@ -253,6 +285,7 @@ impl ProxyHealth {
             leak_detected: None,
             geo: None,
             geo_mismatches: 0,
+            exit_shared_with: None,
             reputation_score: None,
             usage_type: None,
             reputation_checked_at: None,
@@ -292,9 +325,17 @@ pub struct Proxy {
     pub password: SealedSecret,
     /// Proxy protocol.
     pub scheme: ProxyScheme,
-    /// Country of the exit address as the provider states it.
+    /// Country of the exit address as the provider states it: a fallback
+    /// for Webshare's, a declaration for a provider that declares
+    /// ([`ProxyProviderKind::declares_identity`]).
     pub country: Option<CountryCode>,
-    /// City of the exit address as the provider states it.
+    /// The locale its persona speaks, as declared (BCP 47); `None` for the
+    /// country's primary language, and for a provider that does not
+    /// declare.
+    pub locale: Option<String>,
+    /// The IANA time zone of its persona, as declared.
+    pub timezone: Option<String>,
+    /// City of the exit address as the provider states it; informational.
     pub city: Option<String>,
     /// Autonomous system of the exit address, from the geo lookup when one
     /// succeeded, else from the provider.
@@ -326,10 +367,59 @@ impl Proxy {
     }
 
     /// The country to use for persona generation and policy `countries`
-    /// filters: the observed one, falling back to the provider's only when
-    /// no geo lookup has succeeded yet.
+    /// filters: the declared one (ADR 0013); else the observed one, falling
+    /// back to the provider's only when no geo lookup has succeeded yet.
     pub fn effective_country(&self) -> Option<CountryCode> {
+        if let Some(declaration) = self.declaration() {
+            return Some(declaration.country);
+        }
         self.observed_geo().map(|geo| geo.country).or(self.country)
+    }
+
+    /// What the operator declared about the proxy's exit: `Some` when its
+    /// provider declares ([`ProxyProviderKind::declares_identity`]) and a
+    /// country is declared. Its persona is made from this, and a geo lookup
+    /// only verifies it.
+    pub fn declaration(&self) -> Option<Declaration> {
+        if !self.provider.declares_identity() {
+            return None;
+        }
+        Some(Declaration {
+            country: self.country?,
+            locale: self.locale.clone(),
+            timezone: self.timezone.clone(),
+        })
+    }
+
+    /// A declared entry without a country: it never carries a persona.
+    /// The host's own rows are not: without a declared country they take
+    /// the host's observed place (spec §25).
+    fn undeclared(&self) -> bool {
+        self.provider.declares_identity()
+            && self.provider != ProxyProviderKind::Host
+            && self.country.is_none()
+    }
+
+    /// Whether the last probe saw this proxy leave by another live proxy's
+    /// exit address ([`ProxyHealth::exit_shared_with`]).
+    pub fn exit_shared(&self) -> bool {
+        self.last_health
+            .as_ref()
+            .is_some_and(|health| health.exit_shared_with.is_some())
+    }
+
+    /// Whether the proxy carries a persona: not a declared entry without a
+    /// country, and not one whose exit address is another proxy's.
+    pub fn carries_persona(&self) -> bool {
+        !self.undeclared() && !self.exit_shared()
+    }
+
+    /// Whether the proxy is one of the pool's plain exits only: a declared
+    /// entry without a country, which carries no persona and so never
+    /// reads any site as a person; level 0 prefers it (ADR 0013, spec §25).
+    /// One whose exit address is another proxy's carries nothing at all.
+    pub fn is_plain_exit(&self) -> bool {
+        self.undeclared() && !self.exit_shared()
     }
 
     /// Whether the last probe saw the host's own address leave through this
@@ -347,8 +437,8 @@ mod tests {
     use chrono::Utc;
 
     use super::{
-        GeoRecord, HealthFailure, Proxy, ProxyHealth, ProxyProviderKind, ProxyScheme, ProxyState,
-        ReplaceReason,
+        Declaration, GeoRecord, HealthFailure, Proxy, ProxyHealth, ProxyProviderKind, ProxyScheme,
+        ProxyState, ReplaceReason,
     };
     use crate::ids::ProxyId;
     use crate::macros::test_support::assert_string_enum;
@@ -379,6 +469,8 @@ mod tests {
             password: SealedSecret::new(vec![2]),
             scheme: ProxyScheme::Http,
             country: Some("DE".parse().unwrap()),
+            locale: None,
+            timezone: None,
             city: None,
             asn: None,
             state: ProxyState::New,
@@ -497,6 +589,76 @@ mod tests {
         proxy.country = None;
         proxy.last_health = None;
         assert_eq!(proxy.effective_country(), None);
+    }
+
+    /// ADR 0013: the operator's list and the host's rows declare, and the
+    /// declaration wins over the lookup; Webshare's country stays a
+    /// fallback.
+    #[test]
+    fn a_declared_country_wins_and_an_entry_without_one_is_a_plain_exit() {
+        assert!(ProxyProviderKind::Static.declares_identity());
+        assert!(ProxyProviderKind::Host.declares_identity());
+        assert!(!ProxyProviderKind::Webshare.declares_identity());
+
+        let mut webshare = proxy();
+        webshare.last_health = Some(ProxyHealth {
+            geo: Some(geo("AT")),
+            ..ProxyHealth::new(Utc::now(), true)
+        });
+        assert_eq!(webshare.declaration(), None);
+        assert_eq!(webshare.effective_country().unwrap().as_str(), "AT");
+        assert!(webshare.carries_persona());
+        assert!(!webshare.is_plain_exit());
+
+        let mut listed = webshare.clone();
+        listed.provider = ProxyProviderKind::Static;
+        listed.locale = Some("de-DE".to_owned());
+        listed.timezone = Some("Europe/Berlin".to_owned());
+        assert_eq!(
+            listed.declaration(),
+            Some(Declaration {
+                country: "DE".parse().unwrap(),
+                locale: Some("de-DE".to_owned()),
+                timezone: Some("Europe/Berlin".to_owned()),
+            })
+        );
+        // The lookup says Austria; the declaration says Germany, and wins.
+        assert_eq!(listed.effective_country().unwrap().as_str(), "DE");
+        assert!(listed.carries_persona());
+        assert!(!listed.is_plain_exit());
+
+        // Without a country: no persona, a plain exit.
+        listed.country = None;
+        assert_eq!(listed.declaration(), None);
+        assert!(!listed.carries_persona());
+        assert!(listed.is_plain_exit());
+        assert_eq!(listed.effective_country().unwrap().as_str(), "AT");
+
+        // The host's row without a declared country takes its observed
+        // place, as in M14: it carries a persona and is no plain exit.
+        let mut host = listed.clone();
+        host.provider = ProxyProviderKind::Host;
+        assert!(host.carries_persona());
+        assert!(!host.is_plain_exit());
+        host.country = Some("AT".parse().unwrap());
+        assert_eq!(host.declaration().unwrap().country.as_str(), "AT");
+    }
+
+    #[test]
+    fn a_proxy_that_shares_another_ones_exit_carries_nothing() {
+        let mut shared = proxy();
+        assert!(!shared.exit_shared());
+        shared.last_health = Some(ProxyHealth {
+            exit_shared_with: Some(ProxyId::new()),
+            ..ProxyHealth::new(Utc::now(), true)
+        });
+        assert!(shared.exit_shared());
+        assert!(!shared.carries_persona());
+        assert!(!shared.is_plain_exit());
+        shared.provider = ProxyProviderKind::Static;
+        shared.country = None;
+        assert!(!shared.carries_persona());
+        assert!(!shared.is_plain_exit());
     }
 
     #[test]

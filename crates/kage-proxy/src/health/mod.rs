@@ -36,8 +36,8 @@ use tokio::task::JoinSet;
 
 pub use host_ip::{HostIp, HostIpError};
 pub use probe::{
-    EmulatedClientFactory, GeoLookup, GeoPolicy, HttpProber, ProbeClientError, ProbeClientFactory,
-    ProbeOutcome, Prober, parse_geo, parse_ip, profile_names,
+    EmulatedClientFactory, Endpoints, GeoLookup, GeoPolicy, HOST_IP_ECHO_URL, HttpProber,
+    ProbeClientError, ProbeClientFactory, ProbeOutcome, Prober, parse_geo, parse_ip, profile_names,
 };
 pub use reputation::{AbuseIpDb, Reputation, ReputationError, ReputationProvider};
 
@@ -214,25 +214,24 @@ impl HealthChecker {
         clients: F,
     ) -> Result<Self, HealthSetupError> {
         let health = &config.proxies.health;
+        let endpoints = Endpoints::from_config(config);
         let reputation: Option<Arc<dyn ReputationProvider>> =
             match AbuseIpDb::from_config(&config.reputation)? {
                 Some(provider) => Some(Arc::new(provider)),
                 None => None,
             };
         tracing::info!(
-            echo = %health.echo_url,
-            geo = health.geo_url.as_deref().unwrap_or("off"),
+            echo = %endpoints.echo,
+            host_ip = %endpoints.host_ip,
+            geo = endpoints.geo.as_deref().unwrap_or("off"),
             profile = %health.profile,
             reputation = reputation.as_ref().map_or("off", |provider| provider.name()),
             "proxy health checks configured"
         );
         Ok(Self::new(
             pool,
-            Arc::new(HttpProber::new(clients, health)),
-            Arc::new(HostIp::new(
-                health.host_ip_url.clone(),
-                health.timeout.get(),
-            )?),
+            Arc::new(HttpProber::new(clients, &endpoints)),
+            Arc::new(HostIp::new(endpoints.host_ip, health.timeout.get())?),
             reputation,
             HealthSettings::from_config(config),
         ))

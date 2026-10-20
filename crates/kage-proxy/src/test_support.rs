@@ -25,6 +25,8 @@ pub(crate) fn proxy(provider_ref: &str) -> Proxy {
         password: SealedSecret::new(vec![2]),
         scheme: ProxyScheme::Http,
         country: "DE".parse().ok(),
+        locale: None,
+        timezone: None,
         city: Some("Berlin".to_owned()),
         asn: None,
         state: ProxyState::New,

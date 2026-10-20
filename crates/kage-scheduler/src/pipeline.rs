@@ -80,7 +80,7 @@ use kage_core::domain::{
     PersonaSummary, Render, RenderMode, RequestRecord, RobotsVerdict, SessionId, Visit,
     redact_set_cookie,
 };
-use kage_core::ids::{ApiKeyId, AttemptId, JobId, PersonaId, RequestId, ResultId};
+use kage_core::ids::{ApiKeyId, AttemptId, JobId, PersonaId, ProxyId, RequestId, ResultId};
 use kage_core::outcome::{Block, Outcome};
 use kage_core::pacing::Lognormal;
 use kage_core::policy::{EffectivePolicy, PacingDecision, PacingRequest};
@@ -1226,14 +1226,19 @@ impl Pipeline {
             .and_then(|wait| self.now().checked_add_signed(wait))
     }
 
-    /// Where a plain client's attempt leaves from: the host's connection,
-    /// or the proxy of the site's scout (chosen now when the site has none,
-    /// and its scout from then on). `None` when the pool has no plain exit
-    /// for the site that can carry traffic: nobody may scout it, or its
-    /// scout's proxy is down. Never another address.
+    /// Where a plain client's attempt leaves from: the host's connection;
+    /// under the pool the site's own plain exit (one of the pool's proxies
+    /// that carry no persona, chosen once by a draw seeded by the site and
+    /// recorded, ADR 0013), else, when the pool has none, the proxy of the
+    /// site's scout (chosen now when the site has none, and its scout from
+    /// then on). `None` when that address cannot carry traffic now: the
+    /// request waits or is refused, never sent from another address.
     async fn plain_route(&self, course: &Course) -> Result<Option<PlainRoute>, SchedulerError> {
         if self.settings.plain_exit == Exit::Host {
             return Ok(Some(PlainRoute::Host));
+        }
+        if let Some(exit) = self.own_plain_exit(&course.site).await? {
+            return Ok(exit.map(PlainRoute::Pool));
         }
         let scout = match self.site_scout(&course.site).await? {
             Some(scout) => Some(scout),
@@ -1247,6 +1252,29 @@ impl Pipeline {
             .plain_exit(scout)
             .await?
             .map(PlainRoute::Pool))
+    }
+
+    /// The site's plain exit among the pool's own (ADR 0013): `Some(Some)`
+    /// with the recorded one when it can carry traffic, `Some(None)` when
+    /// it cannot now (wait, never another address), and `None` when the
+    /// pool has no plain exit of its own for the site, so that the scout's
+    /// proxy serves. A site without one gets one of the usable ones now,
+    /// by a draw seeded by the site, and keeps it until its proxy retires.
+    pub(crate) async fn own_plain_exit(
+        &self,
+        site: &str,
+    ) -> Result<Option<Option<ProxyId>>, SchedulerError> {
+        let backend = self.backend();
+        if let Some((proxy, usable)) = backend.site_exit(site).await? {
+            return Ok(Some(usable.then_some(proxy)));
+        }
+        let exits = backend.plain_exits().await?;
+        let Some(proxy) = pick_plain_exit(site, &exits) else {
+            return Ok(None);
+        };
+        backend.set_site_exit(site, proxy, self.now()).await?;
+        tracing::info!(site, %proxy, "a site has a plain exit of its own");
+        Ok(Some(Some(proxy)))
     }
 
     /// How a run ends whose last attempt was cut: a fetch for a job
@@ -1767,4 +1795,17 @@ impl Pipeline {
             visit: kept,
         })
     }
+}
+
+/// One of the pool's plain exits for a site: a draw seeded by the site's
+/// name, so that the sites spread over the exits and a site gets the same
+/// exit for the same set, whichever process asks first.
+fn pick_plain_exit(site: &str, exits: &[ProxyId]) -> Option<ProxyId> {
+    let mut sorted = exits.to_vec();
+    sorted.sort_unstable();
+    let last = u64::try_from(sorted.len().checked_sub(1)?).ok()?;
+    let index = Seed::derive("plain-exit", &[site.as_bytes()])
+        .rng()
+        .int_inclusive(0, last);
+    sorted.get(usize::try_from(index).ok()?).copied()
 }
