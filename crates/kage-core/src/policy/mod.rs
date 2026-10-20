@@ -869,7 +869,7 @@ mod tests {
 
     use super::{
         ActiveHoursMode, Cooldowns, DomainPolicies, DomainRule, PacingRequest, PacingSource,
-        PolicyError, PolicyMatch, RefererStrategy, RobotsMode, normalize_host,
+        PolicyError, PolicyMatch, RefererStrategy, Retired, RobotsMode, normalize_host,
     };
     use crate::domain::{Engine, Level};
     use crate::duration::HumanDuration;
@@ -1490,6 +1490,19 @@ defaults:
         );
         // Whatever was written there, even what was never a render mode.
         assert!(DomainPolicies::from_yaml("defaults:\n  render: { a: 1 }\n").is_err());
+    }
+
+    #[test]
+    fn a_retired_field_reads_its_value_through_and_keeps_nothing_of_it() {
+        // Read through, so that what follows is read as what it is: a
+        // reader that checks for trailing input finds none.
+        for value in [r#""auto""#, r#"{"a":[1,{"b":null}]}"#, "[1,2]", "null"] {
+            assert_eq!(
+                serde_json::from_str::<Retired>(value).ok(),
+                Some(Retired),
+                "{value}"
+            );
+        }
     }
 
     #[test]

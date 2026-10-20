@@ -222,8 +222,12 @@ pub(super) fn validate(egress: &EgressConfig) -> Result<(), String> {
         ));
     }
     for name in &direct.private_names {
-        let plain = !name.contains("://") && !name.contains('/') && !name.contains(':');
-        if !plain || normalize_host(name).is_none() || name.parse::<std::net::IpAddr>().is_ok() {
+        // A scheme and a port bring a colon, and so does an IPv6 address,
+        // which the host parser would take; a path is no host to it.
+        if name.contains(':')
+            || normalize_host(name).is_none()
+            || name.parse::<std::net::IpAddr>().is_ok()
+        {
             return Err(format!(
                 "egress.direct.private_names: {name:?} is not a host name; write the name only, \
                  without a scheme, a port or a path"
@@ -384,6 +388,13 @@ mod tests {
         // A locale needs the country, and must carry it.
         let alone = with(|egress| egress.direct.locale = Some("de-AT".to_owned())).unwrap_err();
         assert!(alone.contains("needs egress.direct.country"), "{alone}");
+        // A region is two letters: three are no region, not another one.
+        let three = with(|egress| {
+            egress.direct.country = Some("AT".parse().unwrap());
+            egress.direct.locale = Some("de-AUT".to_owned());
+        })
+        .unwrap_err();
+        assert!(three.contains("BCP 47"), "{three}");
         for locale in ["de-DE", "de", "DE-AT", "deutsch-AT", "de_AT", "de-AUT", ""] {
             assert!(
                 with(|egress| {
@@ -425,6 +436,7 @@ mod tests {
             "fixture.kage.test:8088",
             "fixture.kage.test/path",
             "10.0.0.5",
+            "[::1]",
             "",
         ] {
             assert!(

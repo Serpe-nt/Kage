@@ -353,6 +353,27 @@ mod tests {
             declared("en-IE", Engine::Chromium).unwrap().languages,
             ["en-GB", "en-US", "en"]
         );
+        // Every language a locale may be declared in, with its own lists.
+        for (tag, chromium, firefox) in [
+            ("de-CH", "de-DE,de,en-US,en", "de,en-US,en"),
+            ("fr-BE", "fr-FR,fr,en-US,en", "fr,fr-FR,en-US,en"),
+            ("it-CH", "it-IT,it,en-US,en", "it-IT,it,en-US,en"),
+            ("en-US", "en-US,en", "en-US,en"),
+            ("en-CA", "en-GB,en-US,en", "en-CA,en-US,en"),
+            ("en-AU", "en-GB,en-US,en", "en-GB,en"),
+            ("nl-BE", "nl-NL,nl,en-US,en", "nl,en-US,en"),
+            ("es-MX", "es-ES,es", "es-ES,es,en-US,en"),
+            ("pl-PL", "pl-PL,pl,en-US,en", "pl,en-US,en"),
+            ("pt-BR", "pt-PT,pt,en-US,en", "pt-PT,pt,en"),
+            ("ro-MD", "ro-RO,ro,en-US,en", "ro-RO,ro,en-US,en-GB,en"),
+            ("sv-FI", "sv-SE,sv,en-US,en", "sv-SE,sv,en-US,en"),
+        ] {
+            for (engine, list) in [(Engine::Chromium, chromium), (Engine::Firefox, firefox)] {
+                let declared = declared(tag, engine).unwrap();
+                assert_eq!(declared.locale, tag);
+                assert_eq!(declared.languages.join(","), list, "{tag} {engine:?}");
+            }
+        }
         // What no browser list is known for, and a tag without a region.
         assert_eq!(declared("tlh-AT", Engine::Chromium), None);
         assert_eq!(declared("de", Engine::Chromium), None);
