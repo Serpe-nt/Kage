@@ -212,6 +212,7 @@ test-e2e: setup-env
     tests/e2e/smoke.sh
     tests/e2e/fetch.sh
     tests/e2e/direct.sh
+    tests/e2e/declared.sh
     tests/e2e/api.sh
     tests/e2e/jobs.sh
     tests/e2e/crawl.sh

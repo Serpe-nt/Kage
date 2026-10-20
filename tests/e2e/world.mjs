@@ -10,9 +10,11 @@
 //     target asked for on it: what a provider would bill.
 //     GET /__stats (asked directly, not as a proxy) returns the counts.
 //
-//   node world.mjs echo --port 8089
+//   node world.mjs echo --port 8089 [--places 'name|CC|City|Zone|lat,lon;...']
 //     What the proxy health probe asks: /ip answers with the address the
-//     request came from, /geo places that address in Berlin.
+//     request came from, /geo places that address: where --places puts
+//     the address a name resolves to (a proxy of this world), else in
+//     Berlin.
 //
 //   node world.mjs hooks --port 8090 --secret S --fail-first N
 //     A receiver of a job's webhooks (spec §16.6), as an operator would
@@ -22,6 +24,7 @@
 //     deliveries are answered 503, to be tried again. GET /__deliveries
 //     returns what arrived, in order.
 import crypto from 'node:crypto';
+import dns from 'node:dns';
 import http from 'node:http';
 import net from 'node:net';
 
@@ -34,21 +37,43 @@ const port = Number(option('port', '0'));
 const remote = (socket) => (socket.remoteAddress ?? '').replace(/^::ffff:/, '');
 
 if (role === 'echo') {
+  const berlin = { country: 'DE', city: 'Berlin', timezone: 'Europe/Berlin', loc: '52.5200,13.4050' };
+  const places = option('places', '')
+    .split(';')
+    .filter(Boolean)
+    .map((spec) => {
+      const [name, country, city, timezone, loc] = spec.split('|');
+      return { name, country, city, timezone, loc };
+    });
+  // Where an address is: the place of the name it is, looked up at the
+  // time of asking (the proxies may start after the echo), else Berlin.
+  const placeOf = async (ip) => {
+    for (const place of places) {
+      try {
+        const { address } = await dns.promises.lookup(place.name, { family: 4 });
+        if (address === ip) return place;
+      } catch {
+        // Not up yet: not this one.
+      }
+    }
+    return berlin;
+  };
   http
-    .createServer((req, res) => {
+    .createServer(async (req, res) => {
       const ip = remote(req.socket);
       const path = new URL(req.url ?? '/', 'http://echo.invalid').pathname;
       if (path === '/geo') {
+        const place = await placeOf(ip);
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(
           JSON.stringify({
             ip,
-            city: 'Berlin',
-            region: 'Berlin',
-            country: 'DE',
-            loc: '52.5200,13.4050',
+            city: place.city,
+            region: place.city,
+            country: place.country,
+            loc: place.loc,
             org: 'AS64500 Example Broadband',
-            timezone: 'Europe/Berlin',
+            timezone: place.timezone,
           }),
         );
         return;

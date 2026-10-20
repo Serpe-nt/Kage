@@ -1,0 +1,32 @@
+# Overlay on deploy/compose.e2e.yaml for the end-to-end test of a declared
+# proxy list (tests/e2e/declared.sh, ADR 0013). Never for a deployment.
+#
+# Kage runs on the operator's own list of the world's three proxies, each
+# with a declared country and locale, and one entry at an address where no
+# proxy listens. The world's echo places each proxy where the test says,
+# by the address it comes from: Vienna and Geneva where they are declared,
+# and proxy-c in Milan although the list declares it in Germany.
+
+services:
+  kage:
+    environment:
+      # Not secrets: they open three containers of this test and nothing
+      # else.
+      KAGE__PROXIES__STATIC_LIST: |
+        proxies:
+          - {id: vienna, host: proxy-a, port: 3128, username: provider-a, password: e2e-only-a, country: AT, locale: de-AT}
+          - {id: geneva, host: proxy-b, port: 3128, username: provider-b, password: e2e-only-b, country: CH, locale: fr-CH, timezone: Europe/Zurich}
+          - {id: berlin, host: proxy-c, port: 3128, username: provider-c, password: e2e-only-c, country: DE, locale: de-DE}
+          - {id: gone, host: proxy-gone.kage.test, port: 3128, username: provider-d, password: e2e-only-d, country: DE}
+      # Two lookups within the time of a test: one at the first probe, one
+      # a minute (give or take a quarter) later.
+      KAGE__PROXIES__HEALTH__GEO_INTERVAL: 1m
+
+  world:
+    command:
+      - /e2e/world.mjs
+      - echo
+      - --port
+      - "8089"
+      - --places
+      - "proxy-a|AT|Vienna|Europe/Vienna|48.2082,16.3738;proxy-b|CH|Geneva|Europe/Zurich|46.2044,6.1432;proxy-c|IT|Milan|Europe/Rome|45.4642,9.1900"
