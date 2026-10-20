@@ -163,6 +163,20 @@ async fn stopped(mut shutdown: watch::Receiver<bool>) {
     let _ = shutdown.wait_for(|stop| *stop).await;
 }
 
+/// The forwarder's routes of this installation: through the pool, or from
+/// the host's own connection under `egress.mode: direct`, with level 0
+/// leaving by the exit `egress.plain` names (spec §25). The server's
+/// forwarder and a command's own both take theirs from here, so that a
+/// command routes a host persona as the server does.
+pub(crate) fn routes(config: &Config, store: &Store, pool: &Arc<Pool>) -> PoolRoutes {
+    let routes = PoolRoutes::new(store.clone(), Arc::clone(pool))
+        .with_plain_exit(config.egress.plain_exit());
+    match config.egress.mode {
+        EgressMode::Direct => routes.direct(),
+        EgressMode::Proxies => routes,
+    }
+}
+
 impl Engine {
     /// Composes the engine and starts the forwarder and the scheduler.
     /// The forwarder listens on `bind`; a port of 0 takes a free one,
@@ -182,12 +196,7 @@ impl Engine {
             .master_key_bytes()
             .context("secrets.master_key is not 32 bytes of hexadecimal")?;
         let pooled = config.egress.mode == EgressMode::Proxies;
-        let mut routes = PoolRoutes::new(store.clone(), Arc::clone(&pool))
-            .with_plain_exit(config.egress.plain_exit());
-        if !pooled {
-            routes = routes.direct();
-        }
-        let routes: Arc<dyn Routes> = Arc::new(routes);
+        let routes: Arc<dyn Routes> = Arc::new(routes(config, store, &pool));
         let (forwarder, listener) = Forwarder::bind(
             bind,
             ForwarderSettings::from_config(config),

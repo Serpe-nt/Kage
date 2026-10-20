@@ -11,6 +11,9 @@
 #   - a page of the fixture site at level 0, by the plain client from the
 #     host's connection, and at level 3, by the host persona's browser:
 #     the site sees one address for both, and no proxy carries a byte;
+#   - the host persona's self-test by the command line, whose forwarder of
+#     its own routes the persona from the host's connection as the
+#     server's does;
 #   - a name the operator did not list as private, which resolves to a
 #     private address of this network, never reached;
 #   - every byte counted as the host's, none against the pool's budget;
@@ -34,6 +37,8 @@ export KAGE_PERSONAS_WARMUP=false
 # out on purpose.
 export KAGE_E2E_EGRESS_MODE=direct
 export KAGE_E2E_PRIVATE_NAMES='["fixture.kage.test","world.kage.test"]'
+# A persona's self-test reads the fixture's probe page, the operator's own.
+export KAGE_E2E_SELFTEST_PAGES='[{id="probe",kind="probe",url="http://fixture.kage.test:8088/probe/"}]'
 
 # The shipped policies, unchanged.
 policies="$(mktemp -d)"
@@ -141,6 +146,19 @@ seen="$(got "http://fixture:8088/__kage/requests")"
 check "the site saw the browser, from the same address" "${seen}" \
     "['/', '/api/items?source=fetch'].every((path) => d.some((r) => r.path === path && r.from === '${address}' && r.headers.some(([n, v]) => n.toLowerCase() === 'user-agent' && v.includes('Mozilla/'))))"
 echo "    both from ${address}"
+
+echo "==> the host persona's self-test, through the command's own forwarder"
+# `kage persona selftest` runs a forwarder of its own; under direct it must
+# route the host persona as the server does, from the host's connection.
+got "http://fixture:8088/__kage/reset" > /dev/null
+tested="$(kage persona selftest "${host}" --json 2> /dev/null || true)"
+[ -n "${tested}" ] || fail "kage persona selftest printed no report"
+check "the browser self-test passed from the host's own connection" "${tested}" \
+    "d.passed === true && d.browser.verdict === 'passed' && d.persona.id === '${host}'"
+seen="$(got "http://fixture:8088/__kage/requests")"
+check "the probe page saw the persona's browser, from the host's address" "${seen}" \
+    "d.some((r) => r.path.startsWith('/probe/') && r.from === '${address}')"
+echo "    $(value "${tested}" "'verdict ' + d.browser.verdict")"
 
 echo "==> a name the operator did not list as private is never reached"
 got "http://fixture:8088/__kage/reset" > /dev/null
