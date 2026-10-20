@@ -31,7 +31,7 @@ use kage_persona::manager::REASON_OPERATOR;
 use kage_persona::selftest::{BrowserRun, HttpRun, Verdict, pages};
 use kage_persona::{Egress, PersonaError, PersonaManager, PersonaParts, Sidecars};
 use kage_proxy::Pool;
-use kage_scheduler::{Forwarder, ForwarderSettings, PoolRoutes, Routes, Tokens};
+use kage_scheduler::{Forwarder, ForwarderSettings, Routes, Tokens};
 use kage_store::Store;
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
@@ -161,10 +161,10 @@ impl OwnForwarder {
             .secrets
             .master_key_bytes()
             .context("secrets.master_key is not 32 bytes of hexadecimal")?;
-        let routes: Arc<dyn Routes> = Arc::new(PoolRoutes::new(
-            session.store.clone(),
-            Arc::clone(&session.pool),
-        ));
+        // The server's routes: under `egress.mode: direct` a host persona
+        // leaves from the host's own connection, and nothing else does.
+        let routes: Arc<dyn Routes> =
+            Arc::new(crate::engine::routes(config, &session.store, &session.pool));
         let bind = SocketAddr::new(config.forwarder.bind.ip(), 0);
         let (forwarder, listener) = Forwarder::bind(
             bind,

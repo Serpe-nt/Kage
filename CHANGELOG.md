@@ -183,6 +183,12 @@ of 1.x still queued names no level and fails at take-up with
   attempt no exit). They are required and nullable now, so a client
   generated from the document may rely on them (F69); only `seed`, which
   an admin key alone sees, may be absent.
+- Under `egress.mode: direct`, `kage persona selftest` and `kage selftest
+  browser --persona` refused every host persona: the command's own
+  forwarder took the pool's routes, which carry no host row, so the
+  browser's self-test could reach no page. A command's forwarder now takes
+  the server's routes, and the direct end-to-end test runs the host
+  persona's self-test through it.
 
 ## [1.0.2] - 2026-10-19
 
