@@ -1309,12 +1309,14 @@ export class PageSession {
     const shown = await this.read<{ born: number }>(READ_SHOWN).catch(() => null);
     this.freshOnNavigation = 'once';
     let onLink = false;
+    let missed = 'not_on_link';
     try {
-      // The pointer goes to the link, and the page is asked what it rests
-      // on. A page that was still gliding when the hand set out has moved
-      // the link a little: the hand goes again, as a hand does. What it
-      // rests on after that lies over the link, and a click there would be
-      // a click on that, so the hand does not click.
+      // The pointer goes to the link once the page rests from the wheel,
+      // and the page is asked what it rests on. A page that moved by itself
+      // meanwhile (an image that came, a banner) has moved the link a
+      // little: the hand goes again, as a hand does. What it rests on after
+      // that lies over the link, and a click there would be a click on
+      // that, so the hand does not click.
       for (let attempt = 0; attempt < HOVER_ATTEMPTS && !onLink; attempt += 1) {
         await human.hover(selector);
         onLink = await this.pointerOnLink(target, mode);
@@ -1324,8 +1326,16 @@ export class PageSession {
         throw thrown;
       }
       // The link went away, or cannot be brought into view.
+      missed = thrown.reason;
     }
     if (!onLink) {
+      // Rare, and the result says only `link_not_found`: the log says why
+      // (follow-up F66), so that a crawl that typed what it meant to click
+      // can be told from one whose page had no such link.
+      this.parts.log.warn(
+        { attempts: HOVER_ATTEMPTS, missed },
+        'the hand did not come to rest on the link, so it did not click',
+      );
       this.freshOnNavigation = 'never';
       return null;
     }
@@ -1442,7 +1452,13 @@ export class PageSession {
       referer: string | null = null,
       backs: number | null = null,
     ): EntryReport => ({ strategy: entry.strategy, outcome, from_url: from, referer, backs });
-    const notFound = () => {
+    let backs = 0;
+    // Why the link was not clicked, for the log: the result says only
+    // `link_not_found` (F66). The hand's own misses log themselves.
+    const notFound = (missed: 'not_in_tab' | 'no_such_link' | null) => {
+      if (missed !== null) {
+        this.parts.log.info({ missed, backs }, 'the link of the open page was not clicked');
+      }
       this.freshOnNavigation = 'never';
       return report('link_not_found');
     };
@@ -1456,7 +1472,6 @@ export class PageSession {
     // document the click asks for begins the result, and nothing the page
     // that is left still loads is counted with it.
     this.document = newDocument(/^https?:\/\//i.test(open) ? withoutFragment(open) : null);
-    let backs = 0;
     if (wanted === null || plainAddress(open) !== wanted) {
       const reach = wanted === null ? 0 : await this.entriesBack(wanted, entry.max_backs ?? 0);
       let found = false;
@@ -1476,7 +1491,7 @@ export class PageSession {
         found = plainAddress(await address()) === wanted;
       }
       if (!found) {
-        return notFound();
+        return notFound('not_in_tab');
       }
     }
     const observation = await this.observe().catch(() => emptyObservation);
@@ -1488,13 +1503,13 @@ export class PageSession {
     if (
       (await this.surface.boxOf(LINK_PREFIX + JSON.stringify({ target, mode: 'exact' }))) === null
     ) {
-      return notFound();
+      return notFound('no_such_link');
     }
     if (Date.now() >= deadline) {
       throw this.notCome('the time of the navigation ran out before the link was clicked');
     }
     const arrived = await this.clickThrough(target, 'exact', until, human, deadline);
-    return arrived === null ? notFound() : report('arrived', arrived.referer, backs);
+    return arrived === null ? notFound(null) : report('arrived', arrived.referer, backs);
   }
 
   /**

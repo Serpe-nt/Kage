@@ -161,6 +161,14 @@ of 1.x still queued names no level and fails at take-up with
 - Under `egress.mode: direct` an operator's `kage proxy health` and the
   admin probe still probed the idle pool; both refuse now ("the pool is
   idle", F68).
+- The hand found a link it had to scroll to while the page still glided
+  from the wheel, and aimed where the link was, not where it came to rest:
+  a page that glides for longer than the hand's pause after a flick (a
+  slow or loaded host) moves the link from under the pointer, and after
+  two tries the hand gives up and a crawl types the address it meant to
+  click (seen once in four gate runs of M14, F66). After the wheel the
+  hand now goes to an element only once the page rests, and a link it
+  does not come to rest on is logged with the reason.
 - A proxy that never answered a probe got a persona when its backoff
   ended, because `degraded` is usable: a generation spent and a profile
   made for an address nothing was ever seen through (F71). A persona is

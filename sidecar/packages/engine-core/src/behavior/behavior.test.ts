@@ -500,7 +500,9 @@ describe('the pace of a flow', () => {
 /**
  * A mouse, a keyboard and a clock that only write down what was asked of
  * them. `dark` is a spell of the rig's time, from its start, in which the
- * page draws nothing: the wheel turned then moves no page.
+ * page draws nothing: the wheel turned then moves no page. `glideMs` is
+ * how long the page takes to get where a notch sent it, as a browser's
+ * smooth scrolling glides there (0: at once).
  */
 function rig(
   options: {
@@ -508,6 +510,7 @@ function rig(
     boxes?: Record<string, Box>;
     notchPx?: number;
     dark?: readonly [number, number];
+    glideMs?: number;
   } = {},
 ) {
   const log: string[] = [];
@@ -516,7 +519,16 @@ function rig(
   const dark = options.dark;
   const drawing = () => dark === undefined || now - 1000 < dark[0] || now - 1000 >= dark[1];
   let pointer: Point = { x: 960, y: 540 };
-  let scrollY = 0;
+  // Where the wheel sent the page, and where it was when the last notch
+  // came: the page shows a point between the two until the glide is over.
+  let target = 0;
+  let glideFrom = 0;
+  let glideStart = 0;
+  const glideMs = options.glideMs ?? 0;
+  const shown = () => {
+    const done = glideMs === 0 ? 1 : Math.min(1, (now - glideStart) / glideMs);
+    return Math.round(glideFrom + (target - glideFrom) * done);
+  };
   const viewport = { width: 1200, height: 800 };
   const scrollHeight = options.scrollHeight ?? 4000;
   const notch = options.notchPx ?? 114;
@@ -546,11 +558,13 @@ function rig(
     },
     wheelNotch: (direction) => {
       if (drawing()) {
-        scrollY = Math.max(
+        glideFrom = shown();
+        glideStart = now;
+        target = Math.max(
           0,
           Math.min(
             scrollHeight - viewport.height,
-            scrollY + (direction === 'down' ? notch : -notch),
+            target + (direction === 'down' ? notch : -notch),
           ),
         );
       }
@@ -572,7 +586,7 @@ function rig(
   const metrics = (): SurfaceMetrics => ({
     origin: { x: 0, y: 90 },
     viewport,
-    scrollY,
+    scrollY: shown(),
     scrollHeight,
   });
   const surface: PageSurface = {
@@ -580,7 +594,7 @@ function rig(
     visibleWords: () => Promise.resolve(180),
     boxOf: (selector) => {
       const box = boxes[selector];
-      return Promise.resolve(box === undefined ? null : { ...box, y: box.y - scrollY });
+      return Promise.resolve(box === undefined ? null : { ...box, y: box.y - shown() });
     },
     painted: (limitMs) => {
       // Two frames of 16 ms, after the dark spell when they fall into it.
@@ -606,7 +620,7 @@ function rig(
     log,
     paints,
     pointer: () => pointer,
-    scrollY: () => scrollY,
+    scrollY: shown,
     elapsed: () => now - 1000,
     place: (point: Point) => {
       pointer = point;
@@ -644,6 +658,28 @@ describe('a persona at its mouse and keyboard', () => {
     expect(2600 - scrollY()).toBeGreaterThan(0);
     expect(2600 - scrollY()).toBeLessThan(800);
     expect(human.counts.notches).toBe(log.filter((entry) => entry.startsWith('wheel')).length);
+  });
+
+  it('goes to an element where the page comes to rest, not where it glides past (F66)', async () => {
+    // A slow machine: the page takes a second and a half to get where a
+    // flick sent it, far longer than the hand's own pause after the wheel.
+    const on = (pointer: Point, box: Box, scrollY: number) =>
+      pointer.x > box.x &&
+      pointer.x < box.x + box.width &&
+      pointer.y - 90 > box.y - scrollY &&
+      pointer.y - 90 < box.y - scrollY + box.height;
+    const deep = { x: 100, y: 2600, width: 200, height: 40 };
+    const down = rig({ boxes: { '#deep': deep }, glideMs: 1500 });
+    await down.human.hover('#deep');
+    expect(on(down.pointer(), deep, down.scrollY())).toBe(true);
+
+    // A reader who scrolled down and goes back up to a link near the top,
+    // the page still gliding from the reading when the hand sets out.
+    const near = { x: 300, y: 420, width: 160, height: 22 };
+    const back = rig({ boxes: { '#next': near }, glideMs: 1500, scrollHeight: 6000 });
+    expect(await back.human.scrollTo(0.5)).toBe('depth');
+    await back.human.hover('#next');
+    expect(on(back.pointer(), near, back.scrollY())).toBe(true);
   });
 
   it('says so when there is no such element, or it cannot be reached', async () => {

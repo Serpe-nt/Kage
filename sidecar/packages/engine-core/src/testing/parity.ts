@@ -1340,6 +1340,56 @@ export function defineParitySuite(subject: ParitySubject): void {
       });
     });
 
+    it('clicks a link the reader has scrolled past once the page rests from the wheel (F66)', async () => {
+      await withContext('read-click', async (context) => {
+        // The crawl's case: the persona read the page down to its end, and
+        // its next page is a link at the top, above the window now. The
+        // wheel brings it back, and the page glides there; the hand goes
+        // to the link once it rests, never where it glided past.
+        await site.reset();
+        const leave = secure('/leave/?run=next');
+        const read = await go(context, leave, {
+          wait: { until: 'load', selector: 'body[data-ready]' },
+          dwell_ms: 600,
+          behavior: { seed: SEEDS.first, scroll_depth: 1, patience_ms: 20_000, wander: true },
+        });
+        expect(read.error).toBeNull();
+        expect(read.behavior?.notches).toBeGreaterThan(0);
+        const target = secure('/landing?from=leave');
+        const next = await go(context, target, {
+          capture: DOM,
+          behavior: {
+            seed: SEEDS.other,
+            entry: { strategy: 'link', from_url: leave, from_open_page: true },
+          },
+        });
+        expect(next.error).toBeNull();
+        expect(next).toMatchObject({ status: 200, final_url: target, title: 'Landing' });
+        expect(next.behavior).toMatchObject({
+          clicks: 1,
+          keys: 0,
+          entry: { strategy: 'link', outcome: 'arrived', referer: leave, backs: 0 },
+        });
+        // The wheel went back up, and the press and the click were on the
+        // link itself.
+        expect(next.behavior?.notches).toBeGreaterThan(0);
+        const left = await leaveReport('next');
+        expect(pressesOf(left)).toEqual([
+          ['mousedown', true, 'next'],
+          ['mouseup', true, 'next'],
+          ['click', true, 'next'],
+        ]);
+        expect(left.activation).toBe(true);
+        measured('a click on a link the reader scrolled past', {
+          read_notches: read.behavior?.notches,
+          back_notches: next.behavior?.notches,
+          scroll_y_when_left: left.scrollY,
+          wheels: left.wheels,
+          moves: left.moves,
+        });
+      });
+    });
+
     it('goes back in the tab to the page that holds the link and clicks there, at no cost to the site', async () => {
       const articles = secure('/site/articles');
       const from = (page: string, backs?: number) => ({
