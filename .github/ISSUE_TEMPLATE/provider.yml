@@ -1,0 +1,90 @@
+name: Proxy provider request
+description: A proxy vendor whose API Kage should speak.
+labels: ["provider"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **A vendor without an API needs no provider.** Its proxies run as a
+        declared list today, with a country (and a locale) for each entry:
+        [docs/runbooks/proxies.md](https://github.com/Serpe-nt/Kage/blob/main/docs/runbooks/proxies.md),
+        "A declared list". A provider is worth writing when the vendor's API
+        brings what a list cannot: replacing a burned address, a log of
+        replaced addresses, the account, traffic counts.
+
+        How a provider is written is in
+        [CONTRIBUTING.md](https://github.com/Serpe-nt/Kage/blob/main/CONTRIBUTING.md),
+        "Adding a proxy provider". Never put a key, an account name or a proxy
+        address in this issue.
+  - type: input
+    id: vendor
+    attributes:
+      label: Vendor
+      placeholder: Example Proxies Ltd
+    validations:
+      required: true
+  - type: input
+    id: docs
+    attributes:
+      label: Link to the vendor's API documentation
+      placeholder: https://docs.example.org/proxy-api
+    validations:
+      required: true
+  - type: checkboxes
+    id: offers
+    attributes:
+      label: What the vendor's API offers
+      description: Tick what its documentation describes.
+      options:
+        - label: A list of the account's proxies, with credentials
+        - label: Replacing a proxy's address on request
+        - label: A log of replaced addresses
+        - label: The account (plan, quota, subscription term)
+        - label: Traffic counts
+        - label: An echo of its own (an endpoint that says the exit address)
+  - type: dropdown
+    id: identity
+    attributes:
+      label: Where an address is
+      description: Kage either trusts a geo lookup (the vendor states its places) or the operator's declaration (as for a list).
+      options:
+        - The vendor states each address's country (and city)
+        - The operator chooses or declares the country
+        - I do not know
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind of proxies
+      options:
+        - Static residential (ISP)
+        - Rotating residential
+        - Datacenter
+        - Mobile
+        - Several of these
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why a declared list is not enough
+    validations:
+      required: true
+  - type: dropdown
+    id: writing
+    attributes:
+      label: Would you write it?
+      options:
+        - Yes, following CONTRIBUTING.md
+        - I could help test it against a mock
+        - No
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you send it
+      options:
+        - label: This issue holds no key, account name, credential or proxy address.
+          required: true

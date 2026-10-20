@@ -148,6 +148,16 @@ of 1.x still queued names no level and fails at take-up with
 - The probe reads Kage's own echo (`kage echo serve`, its `peer`) and an
   address written with its port, so the operator's echo can be
   `proxies.health.echo_url`.
+- **The public face** (decision D52): the README rewritten for 2.0 (what
+  Kage is, who it is for, responsible use for the levels, the quick start,
+  the levels and the egress modes in plain words, the three ways to run
+  the pool, what a result holds, what is measured and the honest limits);
+  `SECURITY.md` (the private advisory form, the latest release line only,
+  what is and is not in scope); `CODE_OF_CONDUCT.md` (the Contributor
+  Covenant 2.1); issue forms for a bug, a feature and a proxy provider;
+  a pull-request template that is the definition of done; `CODEOWNERS`
+  naming the release's files and the public ones; `CONTRIBUTING.md` with
+  every `just` target and the definition of done.
 - `deploy/compose.yaml` takes where requests leave from and a declared list
   from `deploy/.env`: `KAGE_EGRESS_MODE` (`proxies` or `direct`) and
   `KAGE_STATIC_LIST_FILE`, a file the `kage` service mounts read-only.

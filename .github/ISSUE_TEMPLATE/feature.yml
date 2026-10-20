@@ -1,0 +1,62 @@
+name: Feature request
+description: Something Kage could do that it does not.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Kage's settled decisions are in
+        [docs/00-decisions.md](https://github.com/Serpe-nt/Kage/blob/main/docs/00-decisions.md)
+        and its contract in
+        [docs/01-spec.md](https://github.com/Serpe-nt/Kage/blob/main/docs/01-spec.md).
+        A request that changes a decision is welcome when it says which one and
+        why; it becomes an ADR before it becomes code.
+
+        Some things Kage does not do by design, and a request for them will be
+        closed: solving CAPTCHAs through a service or by hand, logging in with
+        accounts or holding credentials for a site, write actions on a site, and
+        one installation sending a site's traffic from the pool and from the
+        host's own address by turns.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do, and where Kage stops you.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you propose
+      description: How it would look to a caller or an operator (a request field, a configuration key, a command, a behaviour).
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried or considered instead
+  - type: input
+    id: decisions
+    attributes:
+      label: Decisions or spec sections it touches
+      description: For example "D45, spec §13", or "none that I found".
+  - type: dropdown
+    id: levels
+    attributes:
+      label: Levels it concerns
+      multiple: true
+      options:
+        - "0 (plain)"
+        - "1 (http-emulated)"
+        - "2 (browser-fast)"
+        - "3 (human)"
+        - All, or none in particular
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you send it
+      options:
+        - label: I looked for an existing issue or decision about this.
+          required: true
+        - label: This issue holds no key, credential, proxy address or personal data.
+          required: true

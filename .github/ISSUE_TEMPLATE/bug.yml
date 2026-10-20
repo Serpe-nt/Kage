@@ -1,0 +1,116 @@
+name: Bug report
+description: Kage did something it should not, or did not do what its documents say.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time. Before you write:
+
+        - **A vulnerability is not a bug report.** Report it privately, as
+          [SECURITY.md](https://github.com/Serpe-nt/Kage/blob/main/SECURITY.md) says.
+        - **Nothing secret goes into an issue**: no API key, no proxy address or
+          credential, no `deploy/.env`, no master key, no page with someone's
+          personal data. Kage's own logs and `kage config check` redact what they
+          know to be secret; check the rest yourself.
+        - Use `example.org` or a `*.test` name for the site in your example. An
+          issue does not need the name of a site you fetch.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of problem
+      options:
+        - An error, a crash or a refusal that should not happen
+        - A result that is wrong or incomplete
+        - A site tells a persona apart (a tell)
+        - The documents say something else than Kage does
+        - The build, the gates or the images
+        - Something else
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Kage version
+      description: "`kage --version`, or the tag or commit you built."
+      placeholder: kage 2.0.0
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How Kage runs
+      options:
+        - The compose stack (deploy/compose.yaml), images built here
+        - The compose stack with the released images
+        - kage serve natively (just dev or my own)
+        - Something else (say below)
+    validations:
+      required: true
+  - type: dropdown
+    id: egress
+    attributes:
+      label: Where requests leave from
+      options:
+        - "egress.mode: proxies, Webshare"
+        - "egress.mode: proxies, a declared list"
+        - "egress.mode: direct (the host's own connection)"
+        - Not relevant
+    validations:
+      required: true
+  - type: dropdown
+    id: level
+    attributes:
+      label: Level of the request
+      multiple: true
+      options:
+        - "0"
+        - "1"
+        - "2"
+        - "3"
+        - Not a request (the CLI, the pool, a job's bookkeeping)
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Engine
+      options:
+        - chromium
+        - firefox
+        - both
+        - none (level 0 or 1, or no browser involved)
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what Kage answered, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to make it happen again
+      description: The smallest request or configuration that shows it. The fixture site of the end-to-end tests (tests/fixtures/site) is a good place to show a browser problem.
+      placeholder: |
+        curl http://127.0.0.1:8080/v1/fetch \
+            --header "Authorization: Bearer <token>" \
+            --header 'Content-Type: application/json' \
+            --data '{"url": "https://example.org/", "level": 3}'
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and output
+      description: The result's `outcome`, `reason` and `attempts`, the lines of the log around it, `kage config check` if the configuration matters. Pasted as text.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you send it
+      options:
+        - label: I looked for an existing issue about this.
+          required: true
+        - label: This issue holds no key, credential, proxy address or personal data.
+          required: true
+        - label: It is not a vulnerability (those go privately, as SECURITY.md says).
+          required: true

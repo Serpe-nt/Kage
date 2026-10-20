@@ -15,3 +15,18 @@
 /docs/00-decisions.md @Serpe-nt
 /docs/01-spec.md @Serpe-nt
 /docs/adr/ @Serpe-nt
+
+# The release and its supply chain: who may sign a tag, what CI and the
+# release workflow do with the repository's token (docs/runbooks/repo.md).
+/.github/allowed_signers @Serpe-nt
+/.github/workflows/ @Serpe-nt
+/.github/actions/ @Serpe-nt
+/deploy/ @Serpe-nt
+
+# What the project promises in public.
+/README.md @Serpe-nt
+/SECURITY.md @Serpe-nt
+/CODE_OF_CONDUCT.md @Serpe-nt
+/CONTRIBUTING.md @Serpe-nt
+/LICENSE-APACHE @Serpe-nt
+/LICENSE-MIT @Serpe-nt
