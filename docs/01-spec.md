@@ -57,8 +57,9 @@ a site's policy may refuse them (`min_level`).
 | Persona | A long-lived synthetic household user bound 1:1 to a proxy: engine, fingerprint, locale, timezone, geolocation, persistent browser profile, wreq profile. |
 | Engine | A browser implementation in the sidecar: `chromium` (patchright + real Chrome) or `firefox` (Camoufox). |
 | Session | A caller-visible handle that pins subsequent requests to one persona for a TTL. |
-| Render mode | `http` (wreq, no JavaScript) or `browser` (sidecar). `auto` lets policy decide. |
-| Domain policy | Per-domain configuration: render mode, pacing, robots, countries, engines, retries, locks. |
+| Level | How much of a person a request is (§25): 0 a plain client, 1 a persona's http client, 2 a persona's browser that loads the page and leaves, 3 a person. Named by every request. |
+| Render | The path an attempt takes: `http` (wreq, no JavaScript; levels 0 and 1) or `browser` (sidecar; levels 2 and 3). Decided by the level, never by a policy. |
+| Domain policy | Per-domain configuration: the floor `min_level`, pacing, robots, countries, engines, retries, locks. |
 | Outcome | Classified result of an attempt: `ok`, `challenge_passed`, `challenge_failed`, `captcha`, `rate_limited`, `forbidden`, `soft_block`, `provider_error`, `timeout`, `ssrf_denied`, `robots_denied`. |
 | Job | Asynchronous unit: `batch`, `flow`, or `crawl`. |
 | Sidecar | The Node service that owns browsers. One container per engine, same codebase. |
@@ -76,7 +77,7 @@ consumers ──HTTPS/JSON──▶ kage (Rust, axum)
                            ├─ scheduler  : queue, pacing, persona selection, retries, circuit breakers
                            ├─ forwarder  : the one proxy every persona is given; adds the provider's credentials, counts bytes
                            ├─ policy     : domain policies, robots, block signatures (hot reload)
-                           ├─ http path  : wreq clients per persona (TLS/H2/header emulation)
+                           ├─ http path  : wreq clients per persona (TLS/H2/header emulation), and the plain client of level 0
                            ├─ browser    : client for the sidecar contract
                            ├─ personas   : generation, lifecycle, state export/import
                            ├─ proxies    : Webshare provider, pool state machine, health, replacement
@@ -91,6 +92,7 @@ consumers ──HTTPS/JSON──▶ kage (Rust, axum)
                                  │  per-context proxy: kage's forwarder, under the persona's own credential
                                  ▼
                  kage forwarder ──▶ Webshare static residential IPs ──▶ target sites
+                        └──(egress.mode: direct, §25)──▶ the host's own connection ──▶ target sites
 
 postgres (jobs, personas, proxies, results, keys, audit)
 otel-collector, jaeger, prometheus, grafana (optional compose profiles)
@@ -100,14 +102,18 @@ otel-collector, jaeger, prometheus, grafana (optional compose profiles)
 
 1. API validates the request, authenticates the key, checks scopes and the
    key's rate limit, runs the SSRF guard on the URL.
-2. Policy resolves the effective domain policy and the render decision.
+2. Policy resolves the effective domain policy; the request's level
+   decides its path once (§8.1) and must be at the site's floor
+   (`min_level`, §25).
    A request that named a cache lifetime is answered from the response
    cache when the cache holds its page (§15): none of the steps below
    happen. Where the site's policy has its `robots.txt` asked for, what
    the file says of the address is looked up, and under `enforce` waited
    for and kept to (§14); the file is asked for by the site's scout, never
    by the persona of step 3.
-3. Scheduler picks a persona: session-pinned if a session is given, otherwise
+3. Scheduler picks a persona (none at level 0, which waits only for the
+   site's own limits and leaves from its exit, §25): session-pinned if a
+   session is given, otherwise
    a persona already visiting the domain whose slot is free, otherwise the
    best-scored eligible persona (§8.2), preferring one that is awake in its
    own day; it waits for the persona's pacing slot and spaces starts of
@@ -116,13 +122,12 @@ otel-collector, jaeger, prometheus, grafana (optional compose profiles)
    byte through the in-process forwarder (§7.5).
 5. Classifier labels the outcome from status, headers, cookies, body and
    browser signals.
-6. On a block a browser cures (`challenge_failed`, `soft_block`, a rule
-   marked `escalate` that is not a refusal) under `auto`, the same persona
-   makes the browser attempt once, and the verdict on the persona comes
-   from that attempt. On a refusal (`forbidden`, `captcha`, `rate_limited`)
-   or a browser block, the persona cools for the domain, its visit ends and
-   its context is closed, and another persona on another network retries
-   after a seeded pause, up to the retry budget.
+6. On a block the persona cools for the domain, its visit ends and its
+   context is closed, and another persona on another network retries on
+   the same path after a seeded pause, up to the retry budget. Nothing
+   moves a request to another level (§8.1). At level 0 a block is the
+   answer at once; a failure that is not the site's is tried again from
+   the same exit.
 7. What the request asked to have extracted is read from the document
    the visit captured (§14). Result and artifacts are stored, and the
    cache is filled when the request named a lifetime; the response is
@@ -280,6 +285,18 @@ A persona is generated when a proxy is usable (`healthy` or `degraded`) and
 has none: on the pool's events, and at every sweep of the persona manager
 (`kage-persona`) for whatever no event announced. Its id is new, its seed
 derives from the id, and every draw below is seeded by it.
+
+Under `egress.mode: direct` (§25) the proxies are the host's own rows
+(provider `host`, one per `egress.direct.personas`): never probed,
+leak-checked or replaced, placed by the host's own geo lookup
+(`proxies.health.geo_url`, read directly, at start and once per
+`geo_interval`) or by `egress.direct.country` and `egress.direct.locale`,
+which win, a lookup that disagrees only counting against them
+(`geo_mismatch`). Their personas run the engines `egress.direct.engines`
+names, else the mix, and are warmed up and self-tested like any. Under
+`direct` the pool's personas wait unused, and under `proxies` the host's
+rows are retired: never both. A host with one persona has it ask for a
+site's files itself (it is its own scout).
 
 1. **Geo.** Everything derives from the observed geo record of the proxy
    (§7.4); the provider's country is the fallback only while no lookup has
@@ -707,24 +724,26 @@ visits and scheduled self-tests wait. An operator's own
 
 ## 8. Fetch pipeline
 
-### 8.1 Render decision
+### 8.1 Level and path
+
+The request's `level` (§25) decides the path once:
 
 ```
-request.render == http | browser   → as requested (http requires wreq_profile)
-request.render == auto             → policy.render if set, else:
-                                     domain known lenient (policy)   → http
-                                     otherwise                        → browser
-escalation: an http attempt with outcome in {challenge_*, captcha, forbidden, soft_block}
-            and render == auto → next attempt uses browser
+level 0 → the plain client, no persona, from the exit egress.plain names
+level 1 → the persona's http client (requires wreq_profile; level_unavailable
+          while no configured engine major has an http profile)
+level 2 → the persona's browser, a still visit (no input, the policy's dwell)
+level 3 → the persona's browser, the behaviour engine
 ```
 
-Since 2.0 the request's `level` (§25) comes first: level 0 is the plain
-client and no persona, level 1 is `render: http` with the persona's
-verified profile, levels 2 and 3 are `render: browser` (2 a plain load,
-3 the behaviour engine); `render` is derived from the level and is no
-longer a request field, and escalation from level 1 to 2 under `auto`
-happens only when the request's level allows it (a level is a maximum
-the caller chose as much as a minimum the policy set).
+Escalation never happens: a block at level 0 or 1 is reported, never
+retried in a browser. The level is the caller's ceiling as much as the
+policy's `min_level` is its floor. `requests.render` keeps the path the
+level implies (`auto` only in rows of 1.x); `render` is no request field
+and no policy field any more. Kage's own traffic (scouts, warm-up,
+self-tests) has no request level: robots.txt and sitemaps are asked for at
+level 3 in the scout's browser, or by the plain client for a request at
+level 0.
 
 ### 8.2 Persona selection score
 
@@ -746,8 +765,10 @@ and minus 2 for its ASN. Ties seeded.
 `challenge_failed`, `captcha`, `forbidden`, `soft_block`, `provider_error`,
 `timeout`. Each retry after a refusal or a browser block uses a different
 persona, after a seeded pause (shifted log-normal, at least 2 s, median
-6 s, p95 20 s, scaled by the persona's factor); the one exception is the
-same persona's single browser escalation of a curable http block (§3.2).
+6 s, p95 20 s, scaled by the persona's factor). At level 0 a block (403,
+429, a captcha, a challenge, a soft block) is reported at once and never
+retried from another address; a network failure, a timeout or a 5xx is
+tried again from the same exit after the same pause at the middle pace.
 Cooldown = `Cooldowns::resolve(outcome, class)` × confidence, at least
 5 min, ±10 % seeded per persona. Non-retryable: `ssrf_denied`,
 `robots_denied`, 4xx other than 403/429 (returned as `ok` with the
@@ -760,8 +781,8 @@ with `reason: domain_paused` immediately. The breaker is half-open: when
 the pause ends one trial request goes through on one persona; success
 closes it, a block reopens it with the pause doubled (at most 6 h) and a
 success resets the length. Blocks of real work and warm-up count; server
-errors, an http block cured by its own escalation, a passed challenge and
-self-tests never do.
+errors, a passed challenge, an attempt at level 0 and self-tests never do;
+the server-error pause counts every level.
 
 ### 8.4 Timeouts
 
@@ -1024,7 +1045,7 @@ with NDJSON: one `step` line per finished step as it finishes, then one
 before its first step is an ordinary error answer; a flow that breaks
 after lines were sent ends without its final line.
 
-The contract is at 1.4.0: everything M5 added (1.1.0) is optional in
+The contract is at 1.5.0: everything M5 added (1.1.0) is optional in
 requests and additional in responses, and so is what M9 added (1.2.0: a
 flow's `behavior.pace` and the `paced_ms` of a step, §10.5) and what M10
 added: `behavior.patience_ms` and what the scrolling came to
@@ -1035,7 +1056,14 @@ report), and the links of the document (`capture.links`, `links` and
 `links_truncated` in the result), each with whether a reader can see it
 and whether it stands in what the site repeats on every page (§10.4).
 The Camoufox 156 milestone added an endpoint (1.4.0:
-`POST /v1/personas/upgrade`), which no earlier client calls.
+`POST /v1/personas/upgrade`), which no earlier client calls. M14 added
+the still visit of level 2 (1.5.0, §25): `behavior.mode`, `human` (the
+default) or `still`, a visit that sends no input at all, arrives typed,
+dwells the fixed `dwell_ms` and is refused beside `scroll_depth`,
+`patience_ms`, `wander: true`, `dwell: human`, an entry by `link` or
+`search_engine` and `from_open_page: true`; and a flow's
+`behavior.pace.wander` (default true), which rests the hand while a flow
+dwells.
 
 A breaking change of the contract needs a new major of the contract
 version; `just contract-check` compares the committed document with the
@@ -1427,15 +1455,16 @@ Classifier output:
 ```json
 { "outcome": "challenge_failed", "vendor": "cloudflare", "type": "managed_challenge",
   "confidence": 0.95, "rule": "cloudflare-just-a-moment",
-  "retryable": true, "escalate": true, "cooldown": "long",
+  "retryable": true, "cooldown": "long",
   "vendors": ["cloudflare"],
   "evidence": ["status:503", "body:/Just a moment/", "cookie:__cf_bm"] }
 ```
 
 Every verdict, including `ok`, carries `evidence` (the markers that fired)
-and `vendors` (vendor hints seen on the page). `retryable`, `escalate` and
-`cooldown` are scheduler hints: defaults follow the outcome, a rule may
-override them. Confidence bands are meaningful: a vendor marker yields 0.9 or
+and `vendors` (vendor hints seen on the page). `retryable` and `cooldown`
+are scheduler hints: defaults follow the outcome, a rule may override
+them. A rule's `escalate` of 1.x is refused since 2.0: nothing escalates
+(§8.1). Confidence bands are meaningful: a vendor marker yields 0.9 or
 higher, a bare 403 or 429 without a marker about 0.6 with cooldown `short`.
 Vendor cookies and scripts on an otherwise good page never make a block by
 themselves.
@@ -1452,7 +1481,10 @@ Job type `crawl`: `seeds[]`, `allow[]`/`deny[]` (regex on the normalized
 URL), `max_depth`, `max_pages`, `same_site_only`, `use_sitemaps`,
 `defaults` (what every page is fetched with: any field of a fetch request
 but `url`, `session_id`, `method`, `body` and `request_kind`, so `include`,
-`pacing`, `render` and `behavior` are a crawl's as they are a fetch's),
+`pacing`, `level` (required) and `behavior` are a crawl's as they are a
+fetch's; at level 0 every page is typed, its links are read from the
+markup, `visitors` is refused, and robots.txt and sitemaps are asked for
+by the plain client from the site's plain exit),
 `visitors`, `session_id`, `webhook`. It needs the `crawl` scope besides
 `jobs`. (`personas` of the first draft is `visitors`: a count, as in a
 batch. No request names a persona.)
@@ -1738,9 +1770,9 @@ minute like any call.
 - **The key** is everything that changes what a result holds, and
   nothing that only changes when or how politely it is fetched: the
   normalized URL (as a crawl normalizes it, §13), the method, the body,
-  the request kind, the caller's headers, `render` as asked (`auto`,
-  `http` and `browser` are three keys: which path `auto` takes is the
-  policy's, and may change), the include set (a result with more parts is
+  the request kind, the caller's headers, the level (the key's version
+  is 2 since 2.0, so no entry of 1.x serves a request of 2.0), the
+  include set (a result with more parts is
   not cut down for a request for fewer), `wait`, `behavior`, the
   `screenshot`, `pdf`, `xhr` and `extract` options, `max_body_bytes`, the
   persona hints as asked (never the country of whoever happened to
@@ -1873,7 +1905,7 @@ scope included), and every change at the command line is written to
 | `GET /v1/artifacts/{id}` | fetch | What was kept of a page (document, raw body, screenshot, PDF, the body of a captured XHR response), streamed; served with `nosniff` and a sandboxing CSP, gzip passed through to a client that takes it |
 | `POST /v1/sessions` | sessions | Open a session pinned to a persona matching the hints and a `domain`'s policy: `201` new, `200` when the id is open already, `409 no_matching_persona` |
 | `GET /v1/sessions/{id}` / `DELETE` | sessions | Inspect (not a use: the idle time does not start again) or end |
-| `GET /v1/policies/domains/{domain}` | fetch | Effective policy preview: the policy as it resolves, the pacing profile, the first render, a pause in force |
+| `GET /v1/policies/domains/{domain}` | fetch | Effective policy preview: the policy as it resolves, the pacing profile, the floor `min_level`, a pause in force |
 | `GET /v1/admin/personas[?state=&all=]`, `GET …/{id}[?fingerprint=true]`, `POST …/{id}/retire`, `POST …/{id}/regenerate`, `POST …/{id}/selftest` | admin | The self-test runs in the server: the http path when the persona has one and an echo is configured, the browser path in the persona's own context through the scheduler's gate and the forwarder, so it never meets `context_conflict` with real work (F29) |
 | `GET /v1/admin/proxies[?all=]`, `POST …/{id}/replace`, `POST …/{id}/health` | admin | Never a proxy's user name or password |
 | `GET /v1/admin/pool` | admin | Pool and bandwidth summary |
@@ -1899,7 +1931,7 @@ naming the constraint, and nothing is fetched.
   "method": "GET",
   "headers": {},
   "body": null,
-  "render": "auto",
+  "level": 3,
   "request_kind": "navigation",
   "include": ["dom", "raw", "headers", "extract", "xhr", "screenshot"],
   "session_id": "proj-a-42",
@@ -1919,11 +1951,39 @@ naming the constraint, and nothing is fetched.
 }
 ```
 
-A `Referer`, caller headers, a method other than `GET`, a body or a
-`request_kind` other than `navigation` need `render: http` and are refused
-under `browser` or `auto` (`render_needs_http`, `render_kind_conflict`);
-arriving from a page in a browser is `behavior` (a click on a link, F28),
-never a header. `behavior.dwell_ms` is a median Kage draws around per
+`level` is required (§25; `level_required`), 0 to 3, and decides what
+else the request may name:
+
+| field | 0 | 1 | 2 | 3 |
+|---|---|---|---|---|
+| `method`, `body`, `headers` | yes (level 0's list) | yes | `level_needs_http` | `level_needs_http` |
+| `request_kind` `fetch`, `xhr` | `level_kind_conflict` | yes | `level_kind_conflict` | `level_kind_conflict` |
+| `session_id` | `session_needs_persona` | yes | yes | yes |
+| `persona` | refused | yes | yes | yes |
+| `behavior` | refused | refused | refused | yes |
+| `wait` | refused | refused | yes | yes |
+| `pacing` | refused | yes | yes | yes |
+| `include` `dom`, `xhr`, `screenshot`, `pdf`, `console` | `level_include_conflict` | `level_include_conflict` | yes | yes |
+| `robots`, `cache_ttl_s`, `extract` | yes | yes | yes | yes |
+| `timeout_ms` at least | 1 000 | 1 000 | 15 000 | 15 000 |
+
+"refused" is `validation_failed` naming the field. A level below the
+site's `min_level` is `level_below_policy`, never raised; level 1 is
+`level_unavailable` while no browser major of the installation has a
+verified http profile. A request that still names `render` is refused as
+an unknown field. At level 0 the headers are the caller's request as
+given, `User-Agent` (`kage/<version>` unless named), `Cookie` and
+`Authorization` included; only the transport's, `Proxy-*`, the
+forwarding family and `Accept-Encoding` are refused. A caller's `Cookie`
+and `Authorization` go to the request's origin only, never across a
+redirect to another, are never logged, and the stored request keeps
+their names with `[redacted]` values; a job, which keeps its items until
+they run, refuses them (`header_denied`).
+
+At level 1 a `Referer`, caller headers, a method other than `GET`, a body
+or a `request_kind` other than `navigation` are sent as a persona's
+browser would; arriving from a page in a browser is `behavior` (a click
+on a link, F28), never a header. `behavior.dwell_ms` is a median Kage draws around per
 attempt, never below the policy's `min_dwell`; `timeout_ms` is at least
 15 000 on a browser render (`timeout_too_short`). The forwarding headers
 are on the denylist (F34): `X-Forwarded-For`, `Forwarded`, `X-Real-IP`,
@@ -1935,22 +1995,18 @@ says that a proxy is in the way.
 Validation: `url` http(s) only, ≤ 8 KB, SSRF guard (§19); `headers` ≤ 32
 entries, denylist enforced (`header_denied`, naming the header); `include`
 ⊆ {`dom`,`raw`,`headers`,`extract`,`xhr`,`screenshot`,`pdf`,`console`},
-by default `dom` and `headers`, or `raw` and `headers` with `render:
-http`; `render: http` with an `include` only a browser produces is
-rejected with code `render_include_conflict`. There is no `locale`: a
-persona's languages are its own. Since 2.0 every request also names
-`level` (§25), which replaces `render` (derived from the level) and is
-required (`level_required`).
+by default `dom` and `headers` at level 2 and 3, `raw` and `headers` at
+0 and 1. There is no `locale`: a persona's languages are its own.
 
-What only the http path can send is refused elsewhere instead of being
-dropped: a `method` other than `GET` (`GET`, `HEAD`, `POST` exist), a
-`body` and caller `headers` need `render: http`
-(`render_needs_http`); a browser render is a plain navigation. Arriving
-from a page in a browser is `behavior.referer_strategy`, not a header.
+What only the http path can send is refused in a browser instead of
+being dropped: a `method` other than `GET` (`GET`, `HEAD`, `POST` exist),
+a `body` and caller `headers` need level 0 or 1 (`level_needs_http`); a
+browser visit is a plain navigation. Arriving from a page in a browser
+is `behavior.referer_strategy`, not a header.
 
 `request_kind` (`navigation`, `fetch`, `xhr`; default `navigation`, never
 guessed from the URL) says what kind of request the http path sends
-(§9). A `fetch` or `xhr` needs `render: http` (`render_kind_conflict`)
+(§9). A `fetch` or `xhr` needs level 1 (`level_kind_conflict`)
 and a `Referer` header that names the page making it
 (`request_kind_needs_referer`); `Origin` and the `Sec-Fetch-*` headers are
 derived and cannot be set. Of a caller's headers a script's request takes
@@ -1960,18 +2016,17 @@ place in one (`header_not_placeable`). A request a browser would preflight
 `preflight_required` until preflights are emulated (with F30's milestone).
 
 `behavior` is what a request may change of what the persona does on a
-page, in a browser: `scroll_depth` from 0 (no scrolling) to 1, honoured as
+page, at level 3: `scroll_depth` from 0 (no scrolling) to 1, honoured as
 given; `dwell_ms`, the median of a log-normal the attempt's seed draws
 from (p95 at twice the median), never below the domain policy's
 `min_dwell` (2 s unless set) and at most 60 000; `referer_strategy`. A
 policy with `behavior_locked` ignores all three, and the result says so.
-The pointer always wanders; no field turns it off. How long the persona
+At level 3 the pointer always wanders; a page nobody touches is level 2. How long the persona
 goes on scrolling a page is no field either: it is the patience Kage
 draws for every page (§10.4), and the result says what it was. `timeout_ms`
 is the time to reach the page, and in a browser bounds nothing after it;
 it is at
-least 15 000 when a browser may make the attempt and 1 000 with `render:
-http`, at most 300 000; a shorter one is `timeout_too_short`, not clamped:
+least 15 000 at level 2 and 3 and 1 000 at 0 and 1, at most 300 000; a shorter one is `timeout_too_short`, not clamped:
 a budget that only fits a bare load would make every visit one. `pacing`
 is D9's: a profile's name or a custom profile, ignored and reported when
 the policy locks it.
@@ -1992,7 +2047,7 @@ code `not_available_yet` is gone: nothing answers it any more.
 
 ```json
 {
-  "id": "0192…", "outcome": "ok", "status": 200,
+  "id": "0192…", "outcome": "ok", "level": 3, "status": 200,
   "final_url": "https://example.org/listing?page=2",
   "redirects": [], "headers": { "...": "..." },
   "dom_html": "<!doctype html>…", "raw_body": null, "raw_body_artifact": "art_…",
@@ -2001,7 +2056,8 @@ code `not_available_yet` is gone: nothing answers it any more.
   "artifacts": { "screenshot": "art_…" },
   "timing": { "ttfb_ms": 410, "load_ms": 2210, "total_ms": 9800 },
   "persona": { "id": "…", "engine": "chromium", "claimed_os": "windows", "country": "DE" },
-  "attempts": [ { "n": 1, "render": "browser", "outcome": "ok", "status": 200, "total_ms": 9800 } ],
+  "attempts": [ { "n": 1, "render": "browser", "outcome": "ok", "status": 200, "total_ms": 9800,
+                  "persona": "p_…", "engine": "chromium", "exit": null } ],
   "block": null,
   "robots": { "fetched": true, "allowed": true, "matched_rule": null, "crawl_delay": null },
   "pacing": { "applied": "human", "waited_ms": 3900 },
@@ -2022,7 +2078,8 @@ As built (the OpenAPI document is the contract):
   cookie's name and attributes kept, unless `security.expose_set_cookie`
   is on: a session a persona holds with a site is not a caller's to take.
 - `dom_html` and `raw_body` are inline when `include` asks; the http path
-  has no document, so `include: ["dom"]` returns its body as `raw_body`.
+  (levels 0 and 1) has no document, so `dom` is refused there
+  (`level_include_conflict`) and its body is `raw_body`.
   What `include` asked for is also kept as artifacts, named in `artifacts`
   by kind (`dom_html`, `raw_body`, `screenshot`, `pdf`) as `art_…` ids.
 - `xhr` is `{ responses, dropped }`; a response's body is inline up to 256
@@ -2033,8 +2090,11 @@ As built (the OpenAPI document is the contract):
   `engine`, `claimed_os` and `country` are shown. No response to such a key
   names a proxy, an address or an attempt's seed. A key with the admin
   scope sees the persona's id and the seeds.
-- `attempts[].persona`, `reason`, `retry_at`, `escalated`, `session_id`,
-  `side_effects`, `created_at`.
+- `level` is the level the request was made at (null for a result of
+  1.x). `attempts[].persona` and `attempts[].engine` are null at level 0,
+  whose attempts say `exit` (`host` or `pool`, never an address); then
+  `reason`, `retry_at`, `session_id`, `side_effects`, `created_at`.
+  `escalated` is gone with escalation.
 - `pacing` (`applied`, `request_ignored`, `waited_ms`) and `behavior`
   (`applied`: `policy` or `request`, `request_ignored`, `scroll_depth`,
   `scroll_reached`, `scroll_ended_by`: `depth`, `patience` or `page`,
@@ -2308,7 +2368,7 @@ Domain policy (`policies/domains.yaml`):
 
 ```yaml
 defaults:
-  render: auto
+  min_level: 0
   pacing: human
   robots: ignore
   retries: 2
@@ -2316,7 +2376,7 @@ defaults:
   breaker_pause: 30m
 domains:
   "example.org":
-    render: browser
+    min_level: 3
     countries: ["DE", "AT"]
     engines: ["chromium", "firefox"]
     pacing: human
@@ -2328,9 +2388,28 @@ domains:
     behavior_locked: false
     cooldowns: { rate_limited: 2h, forbidden: 24h }
   "api.lenient.example":
-    render: http
     pacing: fast
 ```
+
+`min_level` (0 to 3, default 0) is the lowest level a request for the
+domain may name (§25); the shipped file sets 3 for the detection pages.
+`render` is gone since 2.0: a file that still has it is refused with a
+message that names `min_level`.
+
+`egress` (§25, ADR 0012) says where requests leave from: `mode`
+(`proxies`, the default, or `direct`), `plain` (`pool` or `host`, the
+exit of level 0, fixed by the mode: `proxies` with `host` and `direct`
+with `pool` are refused at load and by `kage config check`),
+`plain_user_agent` (`kage/<version>` unless set, at most 256 printable
+characters; an operator's own, as `acme-bot/1 (+https://acme.example/bot)`)
+and `direct`: `personas` (1, at most 4: the host's personas),
+`country` and `locale` (declared; a lookup only verifies them),
+`engines` (the host personas' engines, a subset of `personas.mix`) and
+`private_names` (exact names that may resolve to a private or loopback
+address on the host's own connection; empty, and `kage config check`
+warns while it is not). `kage config check` reports `egress` with its
+warnings: a provider configured under `direct` (the pool is idle), no
+way to place the host's personas, private names.
 
 Resolution cascades per field: exact host, then each parent domain from
 nearest to furthest (suffix on label boundaries), then `defaults`, then the
@@ -2437,6 +2516,27 @@ are gzip-compressed on disk.
   `webhooks.private_origins` may resolve to a private or loopback address;
   `kage config check` refuses a private origin that is not listed as
   allowed.
+- **Egress (§25).** Under `egress.mode: proxies` nothing leaves from the
+  host's own address but the webhooks and the host's address lookup; under
+  `direct` everything does and nothing leaves through the pool. Never
+  both for one installation: a site that sees a visitor move from a
+  residential address to the host's has seen a bot. With no proxy to
+  resolve, the forwarder resolves a target itself, refuses it when any of
+  its addresses lies in a denied range (unless the operator named it in
+  `egress.direct.private_names`; link-local, metadata and multicast never),
+  and connects only to an address it checked, as the webhook sender does.
+  The pool's stops (a leak, the provider's budget) do not hold the host's
+  connection.
+- **Level 0 and a caller's credential.** A plain client sends what its
+  caller gives, `Cookie` and `Authorization` included: a key with the
+  `fetch` scope can make Kage replay the caller's own bearer token to the
+  guard-allowed site it names. Kage holds no credential for any site and
+  never logs in: the value is sent to the request's origin only, never
+  across a redirect to another, never logged, and the stored request
+  keeps `[redacted]`; a job refuses one. A plain client says it is Kage
+  (`kage/<version>`), so the address that sends it is one that must never
+  read the same site as a person: under the pool it is the site's scout's
+  (§25), under `direct` the operator guards it with `min_level`.
 - **Secrets.** Proxy usernames and passwords both encrypted at rest with
   XChaCha20-Poly1305 under `KAGE__SECRETS__MASTER_KEY` (random 24-byte nonce
   per value; version byte, nonce, ciphertext and tag; associated data binds
@@ -2518,17 +2618,18 @@ are gzip-compressed on disk.
 ## 20. Observability
 
 - Logs: JSON via tracing, one event per attempt with request id, persona
-  id, domain, render, outcome, vendor, timing. Sidecar logs via pino in the
+  id (or the exit of a level-0 attempt), domain, level, render, outcome,
+  vendor, timing. Sidecar logs via pino in the
   same shape; both carry the trace id.
-- Metrics (Prometheus): `kage_requests_total{domain,render,outcome,vendor}`,
-  `kage_attempts_total{domain,render,outcome,vendor}`,
-  `kage_attempt_duration_seconds{render,outcome}`, `kage_persona_state{state}`,
+- Metrics (Prometheus): `kage_requests_total{domain,level,outcome,vendor}`,
+  `kage_attempts_total{domain,level,outcome,vendor}`,
+  `kage_attempt_duration_seconds{level,outcome}`, `kage_persona_state{state}`,
   `kage_proxy_state{state}`, `kage_scheduler_wait_seconds{kind}`,
   `kage_queue_depth{kind}`, `kage_scheduler_in_flight{render}`,
   `kage_scheduler_refusals_total{reason}`, `kage_breaker_open{domain}`,
   `kage_policy_breaker_threshold{domain}` (the blocks per hour that pause a
   domain under its policy, set at each attempt there),
-  `kage_bandwidth_bytes_total{direction}`, `kage_bandwidth_budget_ratio`
+  `kage_bandwidth_bytes_total{direction,egress}`, `kage_bandwidth_budget_ratio`
   (the scheduler's are recorded through the `metrics` facade since M7 and
   exported with the API's since M8),
   `kage_selftest_score{persona,engine}`, `kage_replacements_total`,
@@ -2539,9 +2640,9 @@ are gzip-compressed on disk.
   `kage_api_requests_in_flight` and `kage_api_refusals_total{code}`.
   Jobs add `kage_jobs{job_type,state}`, `kage_job_items{state}` (what
   waits and what is being worked) and `kage_webhook_deliveries_pending`,
-  read from the store at the scrape, and `kage_jobs_accepted_total{job_type}`,
+  read from the store at the scrape, and `kage_jobs_accepted_total{job_type,level}`,
   `kage_jobs_finished_total{job_type,state}`,
-  `kage_job_items_total{job_type,state}` and
+  `kage_job_items_total{job_type,state,level}` and
   `kage_webhook_deliveries_total{event,result}` (`delivered`, `retry`,
   `failed`) from the process. A crawl is a job (`job_type="crawl"`) and
   adds `kage_crawl_pages_total{reached}` (`typed`, `click`, `back_click`,
@@ -2569,8 +2670,9 @@ are gzip-compressed on disk.
   through a proxy) and `SIDECAR_OTLP_ENDPOINT` (a sidecar); without one
   nothing is sent. One trace per request: `api.request` (the route as its
   pattern, the method, the status, the key's id) → `pipeline.fetch` (the
-  request's id, its domain, the render asked for, how it ended) →
-  `scheduler.wait` → `attempt` (its number, its render, the persona's id,
+  request's id, its domain, its level and path, how it ended) →
+  `scheduler.wait` → `attempt` (its number, its level and render, the
+  persona's id or at level 0 its exit,
   outcome and vendor) → `sidecar.navigate` or `sidecar.flow`, on Kage's side
   as the client and on the sidecar's as the server, joined by the W3C
   `traceparent` of Kage's own request to the sidecar. A job's page is a
@@ -2684,8 +2786,8 @@ attempts carry a `level` label.
 **The floor.** A site's policy may set `min_level` (0 to 3, default 0;
 the shipped policy file sets 3 for the detection pages). A request below
 the floor is refused with `level_below_policy` and never raised. The
-level is also the request's ceiling: escalation (§8.1) never goes above
-it, and a block at level 0 or 1 is reported, not retried in a browser.
+level is also the request's ceiling: nothing escalates (§8.1), and a
+block at level 0 or 1 is reported, not retried in a browser.
 
 **Egress.** `egress.mode` is `proxies` (the pool, as in 1.0; the default)
 or `direct` (the host's own connection). Under `direct`, one persona
@@ -2696,8 +2798,14 @@ the host's observed geo through the pool's lookup (§7.4), or from
 generated, warmed, paced and self-tested like any persona; the forwarder
 fronts every client and browser with no upstream, so the SSRF guard and
 the byte count hold. Level 0's egress is `egress.plain`: `host` (the
-default under `direct`) or `pool` (the pool's usable proxies in turn, as
-plain proxies, no persona binding; the default under `proxies`). There
+default under `direct`) or `pool` (the default under `proxies`): the
+site's plain traffic leaves through one address, its scout's (chosen by
+the scout rule when the site has none, and its scout from then on), as a
+plain proxy under a credential of its own (`plain-<proxy id>`); when that
+proxy cannot carry traffic the request waits or is refused
+(`plain_exit_unavailable`), never sent from another address. robots.txt
+and sitemaps at level 0 go the same way. An address that sends
+`kage/<version>` to a site is never one that reads it as a person. There
 is no mixed mode and `kage config check` refuses one: a site that sees a
 visitor move from a residential address to the host's has seen a bot.
 

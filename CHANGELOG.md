@@ -6,6 +6,86 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+The next release is 2.0.0: camouflage levels and egress (spec §25, ADR
+0012, decision D50). **Drain the job queues before upgrading**: an item
+of 1.x still queued names no level and fails at take-up with
+`level_required`; nothing is decided for the caller.
+
+### Breaking
+
+- **Every request names `level`**, 0 to 3, and a request without one is
+  refused with `422 level_required`: `POST /v1/fetch`, every item of a
+  batch (its own or `defaults.level`), a crawl's `defaults.level`, a
+  flow's `level` (2 or 3), and `kage fetch --level`. There is no default.
+  0 is a plain HTTP client that says it is Kage (`User-Agent:
+  kage/<version>` unless the request names one), with no persona; 1 a
+  persona's http client (what `render: http` was; refused with
+  `level_unavailable` while no browser version of the installation has a
+  verified profile, which is the case for the shipped Chrome 155 and
+  Camoufox 156); 2 a persona's browser that loads the page, sends no input
+  and leaves; 3 a persona's browser as a person (what 1.x did in a
+  browser). Below 3 Kage is not pretending to be a person.
+- **`render` is gone**: from requests (an unknown field now), from `kage
+  fetch` (`--render` is refused; `--level` is required), from the domain
+  policy file (a file that still has `render`, including the 1.x default
+  `render: auto`, is refused with a message that names `min_level`: remove
+  the key), from the cache key, and from the labels of
+  `kage_requests_total`, `kage_attempts_total` and
+  `kage_attempt_duration_seconds`, which carry `level` (`"0"` to `"3"`).
+  The shipped dashboards and alert tests follow, and the block-rate alert
+  counts levels 1 to 3 only: a block at level 0 is no breaker's.
+- **Nothing escalates.** A block on the http path is never retried in a
+  browser: the level is the request's ceiling. Results no longer have
+  `escalated`; a block signature with `escalate` is refused.
+- **Error codes renamed**: `render_needs_http` → `level_needs_http`,
+  `render_kind_conflict` → `level_kind_conflict`, `render_include_conflict`
+  → `level_include_conflict`. New: `level_required`, `level_below_policy`
+  (a site's `min_level`), `level_unavailable`, `session_needs_persona` (a
+  session at level 0).
+- The response cache's key is at version 2 (the level replaces the
+  render): no entry of 1.x is served after the upgrade.
+- An attempt's `persona` and `engine` are null at level 0, which says its
+  `exit` (`host` or `pool`) instead; `attempts.persona_id` and
+  `attempts.engine` became nullable in the store (migration 0017).
+- The policy preview says `min_level` in place of `first_render`.
+
+### Added
+
+- `level` on every result, and the still visit of level 2: the dwell is
+  the site policy's `min_dwell` drawn upward (median one and a half times,
+  95 % under three times), with no scrolling, no wandering pointer and no
+  patience. Sidecar contract 1.5.0 (additive): `behavior.mode` (`human`,
+  `still`) and a flow's `pace.wander`.
+- Level 0, the plain client: wreq with its own TLS and HTTP/2, a minimal
+  header set in a fixed order (recorded as
+  `tests/fixtures/fingerprints/plain.json` and compared in the gate), the
+  caller's headers and body as given (`Cookie` and `Authorization` too:
+  sent to the request's origin only, never stored or logged), cookies a
+  redirect chain sets kept for that chain only. It waits for the site's
+  own limits (concurrency, requests per minute, the breaker's pause, the
+  pause after server errors) and nothing of a persona's; a block is the
+  answer at once and cools nobody. Under the pool it leaves through the
+  site's scout's address and no other (`plain_exit_unavailable` while that
+  proxy cannot carry traffic).
+- `min_level` in the domain policy (0 by default); the shipped file sets 3
+  for the detection pages (`bot.sannysoft.com`,
+  `abrahamjuliot.github.io`, `browserscan.net`, `pixelscan.net`,
+  `browserleaks.com`, `fingerprint.com`, `demo.fingerprint.com`).
+- `egress.mode: direct`: Kage fetches from the host's own connection, with
+  host personas (`egress.direct.personas`, 1 to 4) placed by the host's own
+  geo lookup or by `egress.direct.country` and `egress.direct.locale`, on
+  the engines `egress.direct.engines` names; the forwarder resolves and
+  checks every target itself (`egress.direct.private_names` for names the
+  operator allows to be private). Nothing leaves through the pool then,
+  and under `egress.mode: proxies` nothing leaves from the host's address:
+  `kage config check` and the start refuse both crossings, and the check
+  reports `egress` with its warnings. `egress.plain_user_agent` sets the
+  plain client's name.
+- The bandwidth is counted by exit (`kage_bandwidth_bytes_total{egress}`,
+  `bandwidth_usage.egress`); only the pool's counts against the
+  provider's budget. `kage_jobs_accepted_total` and `kage_job_items_total`
+  carry `level`.
+
 ### Fixed
 
 - The proxy pool wrote a proxy and the health event that records it in

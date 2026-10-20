@@ -32,7 +32,7 @@ stored proxy credentials sealed until the next sync with the provider
 
 ## 2. The proxies
 
-Kage fetches only through proxies, one persona per proxy
+By default Kage fetches only through proxies, one persona per proxy
 ([proxies.md](proxies.md)). Give it one of the two:
 
 - **Webshare**: add `KAGE_WEBSHARE_API_KEY=<key>` to `deploy/.env`. The
@@ -46,6 +46,12 @@ Kage takes Webshare when its key is set, else the static list
 
 Without either the stack starts, the pool stays empty, and every fetch is
 answered without an attempt.
+
+An operator who means Kage to fetch from the machine's own connection
+instead sets `egress.mode: direct` (`KAGE__EGRESS__MODE=direct` for the
+`kage` service): no proxies, one to four personas standing for the host,
+and every site seeing the host's address. Read
+[levels-and-egress.md](levels-and-egress.md) before choosing it.
 
 ## 3. The stack
 
@@ -84,11 +90,16 @@ The token (`kage_<id>_<secret>`) is shown once and stored only as a hash.
 curl http://127.0.0.1:8080/v1/fetch \
     --header "Authorization: Bearer <token>" \
     --header 'Content-Type: application/json' \
-    --data '{"url": "https://example.org/"}'
+    --data '{"url": "https://example.org/", "level": 3}'
 ```
 
-Pick a site you may fetch. The answer is the result: its `outcome`, the
-page's status and headers, what was captured, and how the visit went.
+Pick a site you may fetch. Every request names its `level`: 3 is a
+persona's browser as a person, 2 a browser that loads the page and
+leaves, 0 a plain HTTP client that says it is Kage (1 is not available in
+this release); below 3 Kage is not pretending to be a person
+([levels-and-egress.md](levels-and-egress.md)). The answer is the result:
+its `outcome`, the page's status and headers, what was captured, and how
+the visit went.
 [api.md](api.md) is the guide to what a request may ask for, jobs,
 crawls, sessions and the admin endpoints; [fetching.md](fetching.md) says
 what happens on the way.
@@ -111,6 +122,7 @@ traces of every request ([observability.md](observability.md)).
 | More proxies, a proxy that is down, an address to replace | [proxies.md](proxies.md) |
 | A persona that fails its self-test, retiring one | [personas.md](personas.md) |
 | A site that blocks | [block-report.md](block-report.md) |
+| A site's floor (`min_level`), the host's own connection, upgrading from 1.x | [levels-and-egress.md](levels-and-egress.md) |
 | A key that leaked, rotating the secrets | [rotating-keys.md](rotating-keys.md) |
 | A new Chrome or Camoufox | [upgrading-an-engine.md](upgrading-an-engine.md) |
 | Stopping and upgrading Kage | [fetching.md](fetching.md#stopping-the-server), the release notes in `CHANGELOG.md` |

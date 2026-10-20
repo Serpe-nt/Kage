@@ -4,8 +4,12 @@ A persona is one long-lived synthetic household user: one browser, one
 screen, one language, one place, behind one proxy (spec §5, §6). The
 persona manager (`kage-persona`, started by `kage serve`) makes one for
 every usable proxy and keeps it in step with that proxy for the rest of
-its life. This runbook says what it does by itself, what an operator can
-do, and what each event and alert means.
+its life. Under `egress.mode: direct` its "proxy" is one of the host's
+own rows (below, "Host personas"). This runbook says what it does by
+itself, what an operator can do, and what each event and alert means.
+
+A persona serves levels 1 to 3; a request at level 0 has none
+([levels-and-egress.md](levels-and-egress.md)).
 
 ## What a persona is made of
 
@@ -17,7 +21,7 @@ do, and what each event and alert means.
 | locale and languages | A table per country (`kage_core::persona::locale`): the locale carries the country (`de-AT`), the language list is the one a stock installation of that browser ships with there. Chrome in Austria sends `de-DE, de, en-US, en`; Firefox sends `de, en-US, en`. A country without an entry gets `en-US, en` and the event `persona_locale_unknown`. |
 | screen | A class from a seeded table per engine and system, asked of the generator by exact bounds. |
 | fingerprint | Generated once by the engine's sidecar from the seed and the constraints above, stored whole, sent back unchanged on every open. |
-| http profile | The wreq-util profile of the same browser major, if one exists (`kage config check` lists them). Chrome 155 and Firefox 156 have none: their personas are browser-only (`http_profile_missing`, once per engine and major). |
+| http profile | The wreq-util profile of the same browser major, if one exists (`kage config check` lists them). Chrome 155 and Firefox 156 have none: their personas are browser-only (`http_profile_missing`, once per engine and major), and level 1 is refused (`level_unavailable`). |
 | profile directory | `<engine>/<persona id>` on the personas volume. |
 
 Nothing of this is ever drawn again. `tables_version` records which tables
@@ -103,7 +107,31 @@ kage selftest browser --persona <id> [--third-party]
   the previous image (`docs/runbooks/upgrading-an-engine.md`).
 - **Probes.** A health probe through a proxy presents as the persona
   behind it when that persona has an http path, on a fresh connection and
-  without its cookies.
+  without its cookies. A host persona's row is never probed.
+
+## Host personas (`egress.mode: direct`)
+
+Under `direct` the host's own connection carries the traffic, and
+`egress.direct.personas` personas (1 by default, at most 4) stand for it,
+each on a row of its own (provider `host`, [proxies.md](proxies.md#the-hosts-own-rows-egressmode-direct)).
+They are generated, warmed up, paced and self-tested like any persona,
+with three differences:
+
+- **Their place** is the host's: its own geo lookup, read directly at
+  start and once per `proxies.health.geo_interval`, or what
+  `egress.direct.country` and `egress.direct.locale` declare, which win
+  (a lookup then only verifies them). Without either there is no host
+  persona and only level 0 works.
+- **Their engines** are drawn from `egress.direct.engines` when it is
+  set, else from `personas.mix`.
+- **They share one address**, the host's. A site sees every host persona
+  and every level-0 request from it; a lone host persona also asks a site
+  for its `robots.txt` itself. What that costs and how `min_level` guards
+  against it is in [levels-and-egress.md](levels-and-egress.md#the-hosts-own-connection-egressmode-direct).
+
+The pool's personas are not scheduled under `direct` and wait; the host
+personas are retired, with their rows, at the first start under
+`proxies` (`egress_mode`). Never both at once.
 
 ## States
 
@@ -140,7 +168,8 @@ Health events about a persona have `subject_kind = persona`.
 
 ## Sessions and per-domain state
 
-A session pins a caller's requests to one persona. Ids are the caller's or
+A session pins a caller's requests to one persona, so a request at level 0
+cannot name one (`session_needs_persona`). Ids are the caller's or
 minted by the server and unique per API key. A session ends after
 `sessions.idle_ttl` (10 minutes) without use, `sessions.max_lifetime`
 (6 hours) after it was opened, or at once when its persona is retired; it

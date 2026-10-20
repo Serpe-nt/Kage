@@ -137,7 +137,9 @@ What a deployment needs for the result to mean something:
 - **Reachable from the proxies' exits**, which means from the internet: the
   echo is the one service besides `kage` that publishes a port. It may run
   on the same host as Kage, because only the proxies' exits ever connect to
-  it; the host's own address never does. It has no authentication and needs
+  it; the host's own address never does under `egress.mode: proxies`
+  (under `direct` the host's personas reach it from there). It has no
+  authentication and needs
   none: it tells a caller only what that caller sent. It accepts at most
   256 connections at once and reads at most 1 MB of request body.
 

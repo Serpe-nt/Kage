@@ -79,7 +79,10 @@ part of the key: to change them, make another key.
 
 These limits protect the API. What protects the sites is the scheduler's
 pacing (`docs/runbooks/fetching.md`), which no key can raise beyond the
-bounds of D9 and no key can touch where a policy locks it.
+bounds of D9 and no key can touch where a policy locks it. A request at
+level 0 has no persona to pace: the site's own limits (its concurrency
+and requests per minute, the breaker's pause) and these hold it, and a
+site's `min_level` keeps it from the sites that should not see it.
 
 ## Fetching a page
 
@@ -87,8 +90,20 @@ bounds of D9 and no key can touch where a policy locks it.
 curl --silent http://127.0.0.1:8080/v1/fetch \
     --header "Authorization: Bearer ${KAGE_KEY}" \
     --header 'Content-Type: application/json' \
-    --data '{"url": "https://example.org/listing?page=2"}'
+    --data '{"url": "https://example.org/listing?page=2", "level": 3}'
 ```
+
+**Every request names `level`**, 0 to 3, and one without it is refused
+(`422 level_required`): 0 a plain HTTP client that says it is Kage, with
+no persona; 1 a persona's http client (not available in this release,
+`level_unavailable`); 2 a persona's browser that loads the page and
+leaves; 3 a persona's browser as a person. Below 3 Kage is not pretending
+to be a person. A level below the site's `min_level` is refused
+(`level_below_policy`), never raised, and nothing escalates: a block is
+never retried at another level. What each level costs, what it refuses
+and where its traffic leaves from is in
+[levels-and-egress.md](levels-and-egress.md). The rest of this section is
+level 3 unless it says otherwise.
 
 The answer is `200` with the result whenever a fetch was made. A block is
 not an HTTP error: `outcome` says `challenge_failed`, `forbidden`,
@@ -96,7 +111,11 @@ not an HTTP error: `outcome` says `challenge_failed`, `forbidden`,
 "provider_error"` with a `reason` means nothing was attempted
 (`docs/runbooks/fetching.md` lists the reasons). A `4xx` problem document
 means the request cannot be made as asked, and its `code` says why; nothing
-was fetched then and nothing counted against the day's pages.
+was fetched then and nothing counted against the day's pages. The result
+says the `level` it was made at; at level 0 its `persona` is null, and an
+attempt's `persona` and `engine` are null and its `exit` says where it
+left from (`pool` or `host`, never an address). There is no `escalated`
+any more.
 
 A fetch waits for the persona's pace and for the persona to behave on the
 page, so it takes seconds to minutes. One that outlasts
@@ -108,7 +127,9 @@ result afterwards. The id of every fetch is also in `X-Request-Id`.
 the browser had it), `raw` (the main response's body), `headers`,
 `extract` (what the page says, below), `xhr` (the responses the page's
 scripts fetched), `screenshot`, `pdf`, `console`.
-Without it a fetch returns `dom` and `headers`. What was asked for is also
+Without it a fetch returns `dom` and `headers` at level 2 and 3, `raw`
+and `headers` at 0 and 1, where `dom`, `xhr`, `screenshot`, `pdf` and
+`console` are refused (`level_include_conflict`): there is no browser. What was asked for is also
 stored as artifacts for `artifacts.retention_days` (14) and named in
 `artifacts`; `GET /v1/artifacts/{id}` streams one. A screenshot is WebP
 unless `screenshot.format` says otherwise, except from a firefox persona,
@@ -117,10 +138,13 @@ whose browser encodes PNG and JPEG only: read the artifact's
 
 ### What a fetch costs, and what a request may shorten
 
-A persona in a browser does what a person does: it arrives, reads, moves
-the pointer, scrolls, and leaves. With the shipped policy a page of three
-screens takes about 33 s (median), which is about 100 pages an hour per
-persona.
+At level 3 a persona in a browser does what a person does: it arrives,
+reads, moves the pointer, scrolls, and leaves. With the shipped policy a
+page of three screens takes about 33 s (median), which is about 100 pages
+an hour per persona. At level 2 it loads the page, sends no input and
+leaves after the policy's `min_dwell` drawn upward (one and a half times
+it at the median); `behavior` is refused there. The rest of this section
+is level 3's.
 
 How long it stays is its own. It scrolls to the depth the policy or the
 request names, or until its **patience** with the page is used up,
@@ -145,7 +169,7 @@ flow with a `scroll` step (see Flows), which goes where it says.
 A request may ask for less, within the policy's bounds:
 
 ```json
-{ "url": "https://example.org/listing?page=2",
+{ "url": "https://example.org/listing?page=2", "level": 3,
   "behavior": { "scroll_depth": 0.3, "dwell_ms": 3000 } }
 ```
 
@@ -167,12 +191,13 @@ sites.)
 - `dwell_ms` is the middle of what the persona draws from, not a fixed
   time, and never below the policy's `min_dwell` (2 s unless a domain says
   otherwise). The result's `behavior.dwell_ms` is what it dwelt.
-- The pointer always moves. There is no bare load: a page that is loaded
-  and left within a second and a half is what a script does, and a site
-  that sees one learns the persona.
-- `timeout_ms` below 15 000 is refused (`timeout_too_short`) when a browser
-  may make the attempt: a page that is slow to arrive needs that much.
-  With `render: "http"` it may be as low as 1 000.
+- At level 3 the pointer always moves. A page that is loaded and left with
+  no input is level 2, which the caller asks for by name: a site that
+  watches learns from it that the visitor is a script, so give such a site
+  `min_level: 3`.
+- `timeout_ms` below 15 000 is refused (`timeout_too_short`) at level 2
+  and 3: a page that is slow to arrive needs that much. At level 0 and 1
+  it may be as low as 1 000.
 - A fetch may therefore take longer than its `timeout_ms`: reaching the
   page, then up to the patience, then the dwell. One that outlasts the
   server's wall time is carried on as a job (below), as before.
@@ -193,7 +218,7 @@ its markup:
 curl --silent http://127.0.0.1:8080/v1/fetch \
     --header "Authorization: Bearer ${KAGE_KEY}" \
     --header 'Content-Type: application/json' \
-    --data '{"url": "https://example.org/article", "include": ["extract"]}'
+    --data '{"url": "https://example.org/article", "level": 3, "include": ["extract"]}'
 ```
 
 `extract` holds the `title`, `description`, `canonical`, `lang`, when the
@@ -209,9 +234,9 @@ leaves either out.
   that is a list of the same thing (a thread, search results) every one
   of them is content.
 - `thin_content: true` says the main content has fewer than
-  `extract.thin_words` (80) words. On the http path that usually means
+  `extract.thin_words` (80) words. At level 0 or 1 that usually means
   the page is built by scripts or a wall stands in front of it: fetch it
-  with `render: "browser"`. The result does not guess which.
+  at level 2 or 3. The result does not guess which.
 - `extract` is null when the fetch did not get its page (a block, a
   failure) and for a response that is no HTML document (a PDF, JSON).
 - `title` is the document's `<title>`, as written; the headline is in
@@ -227,7 +252,7 @@ A request with `cache_ttl_s` may be answered from the response cache:
 curl --silent http://127.0.0.1:8080/v1/fetch \
     --header "Authorization: Bearer ${KAGE_KEY}" \
     --header 'Content-Type: application/json' \
-    --data '{"url": "https://example.org/prices", "include": ["extract"], "cache_ttl_s": 600}'
+    --data '{"url": "https://example.org/prices", "level": 3, "include": ["extract"], "cache_ttl_s": 600}'
 ```
 
 The first one is fetched and kept for ten minutes. A later request that
@@ -241,9 +266,10 @@ counts against the key's requests per minute. `behavior`, `console` and
 page (how far it was scrolled matters for what the document holds);
 `pacing` is the request's own, with `waited_ms: 0`.
 
-- **"The same" is strict.** Another `include` set, another `render`,
+- **"The same" is strict.** Another `include` set, another `level`,
   other `wait`, `behavior`, `extract`, `screenshot`, `pdf`, `xhr` or
   persona hints, another method, body or header: each is another entry.
+  No entry of 1.x is served (the key is at version 2 since 2.0).
   A request for fewer parts is not served from a result with more.
   `timeout_ms`, `max_retries`, `pacing` and `robots` do not matter.
 - **A key's entries are its own.** Another key's identical request is a
@@ -312,7 +338,11 @@ domains:
   (`robots.scout_quarantine`), nobody asks (`reason: "robots_no_scout"`
   under `enforce`). After the 30 days a persona that read the site may
   become its scout. A site's only Firefox is not taken as its scout while
-  another persona can ask.
+  another persona can ask. For a request at level 0 the file is asked for
+  by the plain client from the site's plain exit, which under the pool is
+  the scout's proxy; under `egress.mode: direct` from the host, where a
+  lone host persona is its own scout
+  ([levels-and-egress.md](levels-and-egress.md)).
 - The file is kept for about a day (`robots.ttl`) and asked for again
   only when a request needs it. A `404` is "no file": everything is
   allowed. A server error, a timeout or a block is "unreachable" for an
@@ -321,7 +351,9 @@ domains:
   job's pages of that site wait (`paused`, `robots_unavailable`).
 - Kage answers to the group of `*`, and to a group that names `kage`
   (`robots.agents`) in its place: a site owner who wants to address Kage
-  can. Its requests carry a browser's `User-Agent`, as always.
+  can. A scout's request carries its browser's `User-Agent`; a plain
+  client's (level 0) carries `kage/<version>` or the operator's
+  `egress.plain_user_agent`.
 - A request may say `robots` itself: `enforce` where the policy reports
   is honoured. Less than the policy enforces is refused
   (`robots_enforced`), and so is `enforce` where the policy never asks
@@ -362,29 +394,42 @@ When the data is what a page's own scripts fetch, fetch the page and ask
 for `include: ["xhr"]`: the browser makes the requests as the page does,
 with everything a page's request carries, and the responses come back in
 `xhr` (`xhr.content_types` and `xhr.max_bytes` filter them). This works
-with every persona.
+with every persona, at level 2 and 3.
 
-`render: "http"` with `request_kind: "fetch"` or `"xhr"` sends one request
+`level: 1` with `request_kind: "fetch"` or `"xhr"` sends one request
 as a script's, without a browser: with the header order, `Sec-Fetch-*`,
 `Accept` and `Priority` of a real `fetch()` or `XMLHttpRequest`, and the
-page that makes it as its `Referer`, which the request must name. It needs
-a persona with an http path (none in this release, follow-up F30), takes
-no other caller header than `Referer`, `Accept` and `Content-Type`, and
-refuses what a browser would preflight. Without `request_kind` a request is
-a navigation, whatever its URL looks like: Kage never guesses.
+page that makes it as its `Referer`, which the request must name. Any
+other level refuses it (`level_kind_conflict`). It needs a persona with an
+http path (none in this release, follow-up F30: level 1 is
+`level_unavailable`), takes no other caller header than `Referer`,
+`Accept` and `Content-Type`, and refuses what a browser would preflight.
+Without `request_kind` a request is a navigation, whatever its URL looks
+like: Kage never guesses. A JSON endpoint that anybody may read can be
+asked for at level 0, as a plain client.
 
 ### What only the http path sends
 
-A `method` other than `GET`, a `body` and `headers` need `render: "http"`.
-Under `browser` and `auto` they are refused (`render_needs_http`) rather
-than dropped: a browser render is a plain navigation. Arriving from a page
-is `behavior.referer_strategy` in a browser, not a `Referer` header.
+A `method` other than `GET`, a `body` and `headers` need level 0 or 1.
+At level 2 and 3 they are refused (`level_needs_http`) rather than
+dropped: a browser visit is a plain navigation. Arriving from a page is
+`behavior.referer_strategy` in a browser, not a `Referer` header.
 
-Headers that are the persona's identity or the transport's cannot be set
-(`header_denied` names the header): `User-Agent`, `Accept-Language`,
-`Accept-Encoding`, `Cookie`, `Origin`, `Host`, every `Sec-*` and `Proxy-*`,
-and the rest of spec §9's list. To speak another language, ask for a
-persona of another country (`persona.countries`).
+At level 1, headers that are the persona's identity or the transport's
+cannot be set (`header_denied` names the header): `User-Agent`,
+`Accept-Language`, `Accept-Encoding`, `Cookie`, `Origin`, `Host`, every
+`Sec-*` and `Proxy-*`, and the rest of spec §9's list. To speak another
+language, ask for a persona of another country (`persona.countries`).
+
+At level 0 there is no persona to protect: the headers are the caller's
+request as given, `User-Agent`, `Cookie` and `Authorization` included.
+Only the transport's own, `Proxy-*`, the forwarding family
+(`X-Forwarded-*`, `Forwarded`, `X-Real-IP`, …) and `Accept-Encoding` are
+refused. A caller's `Cookie` and `Authorization` go to the request's
+origin only, never across a redirect to another, are never logged, and
+the stored request keeps `[redacted]` in their place; a job refuses them
+(`header_denied`). See
+[levels-and-egress.md](levels-and-egress.md#a-callers-cookie-and-authorization-at-level-0).
 
 ## Jobs
 
@@ -397,8 +442,13 @@ read along its links).
 ```json
 { "type": "batch",
   "urls": ["https://example.org/listing?page=1", "https://example.org/listing?page=2"],
-  "defaults": { "include": ["dom"], "behavior": { "scroll_depth": 0.3, "dwell_ms": 3000 } } }
+  "defaults": { "level": 3, "include": ["dom"], "behavior": { "scroll_depth": 0.3, "dwell_ms": 3000 } } }
 ```
+
+Every item ends with a level: its own or the batch's `defaults.level`;
+one that has neither refuses the job (`level_required`). Items of one
+batch may differ in level. A job keeps its items until they run, so it
+refuses a caller's `Cookie` or `Authorization` header (`header_denied`).
 
 A job is accepted whole or not at all: one item the API would refuse as a
 fetch refuses the job (`item` in the problem says which), and nothing is
@@ -434,7 +484,8 @@ Kage, within 57.3 s at the site.
 
 `visitors` is the way to trade stealth for time: up to the
 `domain_concurrency` of the pacing in force for the site (3 under
-`human`), refused beyond it and never reduced. Sites of one batch are
+`human`), refused beyond it and never reduced, and refused at level 0,
+which has no persona. Sites of one batch are
 independent and are read side by side, each by its own visitor. A faster
 `pacing` does the rest where the policy does not lock it. Every page
 counts against the key's daily page budget when it is begun.
@@ -446,9 +497,10 @@ as use of the session while it has items left.
 ### A job that waits
 
 An item that cannot be attempted now is not failed. When the site is
-paused by its breaker, the visitor sleeps, the bandwidth term is used up
-or the key's daily page budget is spent, the item goes back into the
-queue, and a job whose every remaining item waits is `paused`:
+paused by its breaker, the visitor sleeps, the bandwidth term is used up,
+the key's daily page budget is spent, or at level 0 the site's plain exit
+cannot carry traffic (`plain_exit_unavailable`), the item goes back into
+the queue, and a job whose every remaining item waits is `paused`:
 
 ```json
 { "state": "paused", "paused": { "reason": "domain_paused", "until": "2026-10-12T06:40:00Z" },
@@ -468,6 +520,7 @@ A flow is a script of steps in one browser, by one persona:
 
 ```json
 { "type": "flow",
+  "level": 3,
   "actions": [
     { "action": "goto", "url": "https://example.org/" },
     { "action": "type", "selector": "input[name=q]", "text": "lamp" },
@@ -476,6 +529,8 @@ A flow is a script of steps in one browser, by one persona:
     { "action": "extract", "include": ["dom", "extract"] } ] }
 ```
 
+- It names `level` 2 or 3: a flow is a browser. At level 2 it takes no
+  `behavior` and rests the hand while it dwells.
 - It starts with a `goto`. Every `goto` is checked by the SSRF guard when
   the job is accepted, and every page the flow visited is checked again
   afterwards; one refused address and nothing of the flow is kept.
@@ -509,7 +564,7 @@ scope besides `jobs`.
   "deny": ["/login", "\\?sort="],
   "max_depth": 3,
   "max_pages": 50,
-  "defaults": { "include": ["dom", "headers"] } }
+  "defaults": { "level": 3, "include": ["dom", "headers"] } }
 ```
 
 | Field | Default | |
@@ -520,8 +575,8 @@ scope besides `jobs`.
 | `max_pages` | 100 | Pages asked of the sites, a failed one included; at most `jobs.max_items`. |
 | `same_site_only` | true | A site is a registrable domain: `shop.example.org` and `www.example.org` are one. |
 | `use_sitemaps` | false | See below: a sitemap request is a tell. |
-| `defaults` | | What every page is fetched with: `include`, `render`, `pacing`, `behavior`, `persona`, … Not `url`, `session_id`, `method`, `body`, `request_kind`. |
-| `visitors` | 1 | Personas that read one site at a time; at most the `domain_concurrency` of the pacing in force, refused beyond. |
+| `defaults` | | What every page is fetched with: `level` (required), `include`, `pacing`, `behavior`, `persona`, … Not `url`, `session_id`, `method`, `body`, `request_kind`. At level 0 every page is typed, its links are read from the markup, and `robots.txt` and sitemaps are asked for by the plain client from the site's plain exit. |
+| `visitors` | 1 | Personas that read one site at a time; at most the `domain_concurrency` of the pacing in force, refused beyond, and refused at level 0. |
 | `session_id` | | An open session: its persona reads every page. |
 
 **It reads like a reader, and takes a reader's time.** The first page is
@@ -582,11 +637,11 @@ http path), its content hash, and what it repeats:
 **Links nobody can see are not followed.** In a browser the crawl takes
 only links a reader can see: rendered, with a box, on the page, not
 transparent. The others are counted as `hidden` and never asked for; a
-link that only a script would find is the oldest trap there is. On the
-http path nothing is rendered, so only what the markup itself hides is
+link that only a script would find is the oldest trap there is. At level
+0 and 1 nothing is rendered, so only what the markup itself hides is
 known (`hidden`, an inline `display: none` or `visibility: hidden`); a
 link hidden by a stylesheet or moved off the page is followed there. Crawl
-a site that sets traps with a browser.
+a site that sets traps at level 2 or 3.
 
 **A sitemap request is a tell.** No reader opens `/sitemap.xml`. With
 `use_sitemaps` Kage asks for it anyway, so it is not the site's reader
@@ -635,8 +690,9 @@ A job may name a receiver for its events:
 "webhook": { "url": "https://hooks.example.org/kage", "secret": "<16 to 256 bytes>", "progress_every": 10 }
 ```
 
-**No job may have a webhook until you list its receiver.** A webhook is
-the one request Kage makes from this host's own address, so it goes only
+**No job may have a webhook until you list its receiver.** Under
+`egress.mode: proxies` a webhook is the one request Kage makes from this
+host's own address (under `direct` every request is), and it goes only
 where the operator said:
 
 ```yaml
@@ -711,7 +767,9 @@ curl --silent http://127.0.0.1:8080/v1/sessions \
 
 `201` is a new session, `200` one that was open under that id; without an
 `id` the server makes one. Then name it in a fetch: `"session_id":
-"proj-a-42"` (the key needs `sessions` and `fetch`).
+"proj-a-42"` (the key needs `sessions` and `fetch`). A session is a
+persona's, so a fetch at level 0 cannot name one
+(`422 session_needs_persona`).
 
 - Only `POST /v1/sessions` opens a session. A fetch that names one that is
   not open is `404 session_not_found`: it ended (ten idle minutes, six
@@ -813,7 +871,8 @@ handler ran: a rise of `invalid_key` is someone guessing, a rise of
 For jobs: `kage_jobs{job_type,state}` (a growing `paused` is sites that
 are closed or personas that sleep; a growing `queued` is more work than
 `jobs.max_running` takes), `kage_job_items{state}` for what waits and what
-is being worked, `kage_job_items_total{job_type,state}` and
+is being worked, `kage_jobs_accepted_total{job_type,level}` for what was
+accepted, `kage_job_items_total{job_type,state,level}` and
 `kage_jobs_finished_total{job_type,state}` for what ended and how, and
 `kage_webhook_deliveries_pending` with
 `kage_webhook_deliveries_total{event,result}`: deliveries that stay
@@ -865,7 +924,11 @@ off behind a residential provider.
 | `validation_failed` | `422`; `field` names what is wrong. A field the API does not know is one. |
 | `invalid_url`, `ssrf_denied` | The target (above). |
 | `header_denied`, `header_invalid`, `header_not_placeable` | A caller's header; `header` names it. |
-| `render_needs_http`, `render_kind_conflict`, `render_include_conflict` | What was asked does not fit the render mode. |
+| `level_required` | The request, an item of a batch with no `defaults.level`, a crawl's `defaults` or a flow names no `level`. Nothing is decided for the caller. |
+| `level_below_policy` | The level is below the site's `min_level`; a request is never raised. |
+| `level_unavailable` | Level 1 while no browser major of the installation has a verified http profile (every default deployment). |
+| `level_needs_http`, `level_kind_conflict`, `level_include_conflict` | What was asked does not fit the level: a method, a body or headers at level 2 or 3; a `fetch` or `xhr` at another level than 1; an `include` part that needs a browser at level 0 or 1. They were `render_needs_http`, `render_kind_conflict` and `render_include_conflict` in 1.x. |
+| `session_needs_persona` | A session named at level 0, which has no persona. |
 | `request_kind_needs_referer`, `preflight_required` | A script's request without its page, or one a browser would preflight. |
 | `timeout_too_short`, `invalid_pacing` | `minimum_ms` says the least; a pacing profile that does not exist or leaves D9's bounds. |
 | `robots_enforced`, `robots_ignored` | The request asks for less care about `robots.txt` than the site's policy enforces, or to have a file enforced that the policy never asks for. |

@@ -27,18 +27,21 @@ agent. Everything here is ordinary use of Kage: there is no campaign mode.
 ## During a session
 
 1. Give every site an explicit entry in `policies/domains.yaml` before its
-   first request, with the shipped defaults written out: `render: auto`,
+   first request, with the settings written out: `min_level: 3`,
    `pacing: human`, `active_hours: enforce`, `retries: 2`,
    `breaker_threshold: 5`. A site without an entry gets the defaults, and
-   the report cannot say what applied.
+   the report cannot say what applied. The floor of 3 keeps a request at
+   a lower level from reaching a protected site by mistake.
 2. Ask little and slowly: a batch of 10 to 30 pages of one site at a time
-   (`POST /v1/jobs`), never more than one batch per site at once. A crawl
-   only of a site whose batches went well.
+   (`POST /v1/jobs`, with `"defaults": { "level": 3 }`), never more than
+   one batch per site at once. A crawl only of a site whose batches went
+   well.
 3. Watch **Kage · blocks and breakers**. A breaker that opens ends that
    site for the session: do not close it by hand to go on.
 4. Change one thing at a time, and run the same batch again after each
-   change: the render (`browser` instead of `auto`), the pacing (a slower
-   profile), the engine mix of the site (`engines`), the active hours.
+   change: the level (2 against 3, with the site's `min_level` lowered for
+   the run and raised again after it), the pacing (a slower profile), the
+   engine mix of the site (`engines`), the active hours.
 5. A block page that Kage did not recognise gets a signature and a
    sanitized fixture ([block-report.md](block-report.md), last section).
    Strip every cookie, token, address and personal detail from a fixture
@@ -49,10 +52,12 @@ agent. Everything here is ordinary use of Kage: there is no campaign mode.
 Per site and per change, from the store (the last session's requests):
 
 ```sql
--- Outcome rates per engine and render for one domain since a moment.
-SELECT attempt.engine, attempt.render, attempt.outcome,
+-- Outcome rates per level and engine for one domain since a moment.
+-- (attempt.render is the path the level implied: http at 0 and 1,
+-- browser at 2 and 3.)
+SELECT request.level, attempt.engine, attempt.outcome,
        count(*) AS attempts,
-       round(100.0 * count(*) / sum(count(*)) OVER (PARTITION BY attempt.engine, attempt.render), 1) AS percent
+       round(100.0 * count(*) / sum(count(*)) OVER (PARTITION BY request.level, attempt.engine), 1) AS percent
 FROM attempts attempt
 JOIN requests request ON request.id = attempt.request_id
 WHERE request.domain = 'shop.example' AND attempt.started_at > '2026-11-02T09:00:00Z'
@@ -85,7 +90,7 @@ Commit <sha>; pool of <n> proxies (<countries>), <n> personas (<engines>).
 ## <domain>
 
 - Vendor detected: <vendor, kind> (or none)
-- Before: <outcome rates per engine and render, from the query above>
+- Before: <outcome rates per level and engine, from the query above>
 - Change: <the exact diff of policies/domains.yaml for the site>
 - After: <the same rates after the change>
 - Pacing: <profile>, bandwidth: <MB>
