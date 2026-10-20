@@ -1224,6 +1224,45 @@ enforced; `egress: direct` end to end with the host persona on the
 compose network (the world's "host" address) and nothing through the
 pool; `just ci` green; the mutation gate on `kage-core`.
 
+**Status.** Merged on 2026-10-20 as
+[Serpe-nt/Kage#11](https://github.com/Serpe-nt/Kage/pull/11), four
+commits (F65 first, the feature, the docs, the tests that catch the
+mutants on its lines); the hand-over is the pull request's body
+(`m14-consult-answers.md` holds the decisions). Built: `level` on every
+request with the codes `level_required`, `level_below_policy`,
+`level_unavailable`, `level_needs_http`, `level_kind_conflict`,
+`level_include_conflict`, `session_needs_persona`; `render` gone from
+requests and from the policy file, escalation removed; the plain client
+(`kage-http`'s `plain.rs`, wreq's own TLS recorded as
+`tests/fixtures/fingerprints/plain.json`, a minimal well-formed header
+set with `kage/<version>` unless `egress.plain_user_agent` or the caller
+names one, in-chain cookies only, caller `Cookie` and `Authorization`
+at level 0 only); level 2 as the sidecar's still visit (contract 1.5.0,
+`behavior.mode: still`, no input, a seeded dwell above `min_dwell`);
+the host persona on a synthetic proxy row (provider `host`, declared
+values winning, a lone host persona its own scout, `egress.direct.private_names`);
+`egress.plain` `host | pool` with both crossings refused; the site's
+scout's address as the one plain exit under the pool; migration 0017;
+the runbook `levels-and-egress.md`; the security review's E-series.
+Measured: untouched wreq has a fingerprint no common client has, sends
+no `Accept` and puts `Host` last, hence the header set; a stock browser
+shows a page zero input for a short visit, hence level 2's stillness;
+the gate green on a clean clone in 50 min with all nine e2e scripts
+(a new `direct.sh`), the mutation score 92.6 % with the twelve survivors
+on M14's lines caught. Known limit, documented: level 0 under the pool
+needs a site scout that has read none of the site, so a small pool that
+has read a site answers `plain_exit_unavailable` for it until one
+qualifies. Follow-ups: **F66 (M16, first commit)** the crawl e2e's "a
+page that is left" fails about once in four runs under load (a hover
+that does not settle on the link while the page still scrolls makes the
+hand fall back to typing; 1.x code); **F67 (M16)** refusals made in the
+pipeline are not counted in `kage_scheduler_refusals_total`; **F68
+(M15)** under `direct` with a provider configured the idle pool is
+still probed; **F69 (M16)** the `AttemptView` nullables of level 0.
+The planner amended D50, ADR 0012 and `CLAUDE.md` to what was built
+(the scout's address as the plain exit, `egress.plain` `host | pool`,
+up to four host personas, the credential sentence).
+
 ### M15 — Provider-agnostic pool and declared lists
 
 **Scope.** ADR 0013, D51; spec §6.1, §7.1, §7.4, §17 updated.

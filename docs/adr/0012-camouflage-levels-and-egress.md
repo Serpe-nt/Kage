@@ -33,7 +33,12 @@ policy is the operator saying how little they will accept for that site.
      TLS, a `User-Agent` of `kage/<version>` unless the caller sets one,
      the caller's headers and body as given, no cookie jar (a `Cookie`
      header is the caller's). Egress is whatever `egress.plain` says:
-     the host's own address, or the pool used as plain proxies in turn.
+     the host's own address, or, under the pool, the one address of the
+     site's scout (the persona that asks the site for what no reader asks
+     for and never reads it; M14 found that rotating level 0 through the
+     pool would show a site the personas' own addresses sending
+     `kage/<version>`); `plain_exit_unavailable` when that proxy is not
+     usable, never another address.
      The SSRF guard, the key's limits, the daily budget, robots.txt as
      the site's policy says and the cache apply as at every level.
    - **1, http-emulated**: a persona's http client (wreq with the
@@ -53,7 +58,7 @@ policy is the operator saying how little they will accept for that site.
 3. **Egress is the operator's choice, global**: `egress.mode` is
    `proxies` (1.0's behaviour, the default) or `direct`. Under `direct`
    the host's own connection carries the traffic and **one persona**
-   stands for it (`egress.direct.personas`, default 1): its country,
+   stands for it (`egress.direct.personas`, default 1, at most 4): its country,
    time zone, locale and languages come from the host's observed geo
    through the same lookup the pool uses, or from
    `egress.direct.country` and `locale` when declared; it is generated,
@@ -78,7 +83,8 @@ policy is the operator saying how little they will accept for that site.
 
 - `CLAUDE.md`'s rule becomes: no request leaves the host's own address
   unless the operator configured `egress.mode: direct` or
-  `egress.plain: direct`; under `proxies` nothing does, as before.
+  (`egress.plain` is `host | pool` and is `host` only under `direct`);
+  under `proxies` nothing does, as before.
 - D40's floors apply at level 3 and, for the dwell, at level 2; level 0
   has no persona to protect, and level 1 has no page behaviour.
 - The runbook and the OpenAPI say what each level costs and what a site
