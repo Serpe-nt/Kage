@@ -71,6 +71,13 @@ const SCROLL_SETTLE_MS = 260;
 const MAX_FLICKS = 400;
 /** The longest the hand waits for a page to draw before it acts on it all the same. */
 const PAINT_WAIT_MS = 2000;
+/**
+ * How often a page that may still glide from the wheel is asked where it
+ * is before the hand goes to an element, and the rest before each look
+ * (after the page has drawn): about three seconds at most.
+ */
+const REST_LOOKS = 30;
+const REST_LOOK_MS = 60;
 
 /**
  * One persona at the mouse and keyboard of its own display for the length
@@ -95,6 +102,8 @@ export class Human {
   /** Whether this persona has moved the mouse yet. */
   private touched = false;
   private notchPx = ASSUMED_NOTCH_PX;
+  /** Whether the wheel turned since the page was last seen at rest. */
+  private mayGlide = false;
   private readonly clock: Clock;
 
   constructor(private readonly parts: HumanParts) {
@@ -196,12 +205,39 @@ export class Human {
       await this.parts.device.wheelNotch(direction);
     }
     this.counts.notches += flick.gaps.length;
+    this.mayGlide ||= flick.gaps.length > 0;
     await this.clock.sleep(SCROLL_SETTLE_MS);
     return flick.gaps.length;
   }
 
   /**
-   * Finds an element and scrolls with the wheel until it is in view.
+   * Waits until the page rests where the wheel sent it. A browser glides
+   * there over the frames it draws, and on a slow machine for longer than
+   * the hand's own pause after a flick: an element found while the page
+   * still glides is no longer where the pointer is sent when it gets
+   * there (follow-up F66, where the hand gave up on a link and the page
+   * was typed). After each time the page has drawn it is asked where it
+   * is, until two looks in a row find it in the same place, at most
+   * {@link REST_LOOKS} times.
+   */
+  private async resting(): Promise<void> {
+    const { surface } = this.parts;
+    let last = await surface.metrics().catch(() => null);
+    for (let look = 0; last !== null && look < REST_LOOKS; look += 1) {
+      await this.clock.sleep(REST_LOOK_MS);
+      await this.seeing();
+      const next = await surface.metrics().catch(() => null);
+      if (next === null || next.scrollY === last.scrollY) {
+        break;
+      }
+      last = next;
+    }
+    this.mayGlide = false;
+  }
+
+  /**
+   * Finds an element and scrolls with the wheel until it is in view, and
+   * says where it is once the page rests.
    *
    * @throws {BehaviorError} when no element matches, or it cannot be brought into view.
    */
@@ -209,6 +245,9 @@ export class Human {
     const { surface, random } = this.parts;
     await this.seeing();
     for (let attempt = 0; attempt < 60; attempt += 1) {
+      if (this.mayGlide) {
+        await this.resting();
+      }
       const [box, metrics] = await Promise.all([surface.boxOf(selector), surface.metrics()]);
       if (box === null) {
         throw new BehaviorError('element_not_found', `no element matches ${selector}`);

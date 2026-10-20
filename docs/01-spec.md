@@ -1244,7 +1244,12 @@ persona's seed and the request's seed, which the result records.
   the wheel turned while it draws none, which a new document on a slow
   machine does for half a second and more. A flick that moves nothing is
   turned once more after the page has drawn before the page counts as
-  one that does not go further. Kage draws the patience anew for every
+  one that does not go further. After the wheel the hand goes to an
+  element only once the page rests (asked after each time it draws, until
+  two looks find it in the same place, at most about 3 s): a page glides
+  to where a flick sent it, on a slow machine for longer than the hand's
+  pause, and a link found while it glides is no longer under the pointer
+  when the pointer gets there (F66). Kage draws the patience anew for every
   page from the attempt's seed (`browser.patience`: a shifted log-normal,
   floor 6 s, median 38 s, p95 110 s, redrawn above 4 min, scaled by the
   persona's pace) and sends it with every navigation it makes: a fetch,
