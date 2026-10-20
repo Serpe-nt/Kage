@@ -166,6 +166,9 @@ of 1.x still queued names no level and fails at take-up with
   made for an address nothing was ever seen through (F71). A persona is
   made only for a proxy that has answered at least once; the host's own
   rows, which are never probed, always count as answered.
+- `kage selftest browser --language` refused a Firefox locale without a
+  region with a line break and a run of spaces in the middle of its
+  message (F75).
 
 ## [1.0.2] - 2026-10-19
 
