@@ -112,6 +112,15 @@ services:
       # first hours (personas.warmup). On in production; the smoke test
       # and every other test setup switch it off.
       KAGE__PERSONAS__WARMUP__ENABLED: ${KAGE_PERSONAS_WARMUP:-true}
+      # Where requests leave from (spec §25): `proxies`, the pool (the
+      # default), or `direct`, this machine's own connection, whose address
+      # every site then sees (docs/runbooks/levels-and-egress.md).
+      KAGE__EGRESS__MODE: ${KAGE_EGRESS_MODE:-proxies}
+      # A declared list of any vendor's proxies (docs/runbooks/proxies.md):
+      # the file KAGE_STATIC_LIST_FILE names on this machine, mounted
+      # read-only below and read again at every sync. Unset, no list (an
+      # empty value counts as not set).
+      KAGE__PROXIES__STATIC_LIST_FILE: ${KAGE_STATIC_LIST_FILE:+/run/kage/static-list}
       # The forwarder (follow-up F10): the one proxy every persona's browser
       # and http client is given. The sidecars reach it by the service name
       # on the compose network; it is never published on the host. The
@@ -132,6 +141,11 @@ services:
       # deletes the archive after personas.retention_days.
       - personas:/var/lib/kage/personas
       - artifacts:/var/lib/kage/artifacts
+      # The declared list when KAGE_STATIC_LIST_FILE names one (an absolute
+      # path, or one relative to this directory), else nothing. It holds
+      # passwords: let the container's user, uid 65532, read it and nobody
+      # else (`sudo chown 65532 <file> && sudo chmod 0400 <file>`).
+      - ${KAGE_STATIC_LIST_FILE:-/dev/null}:/run/kage/static-list:ro
     mem_limit: 1g
     cpus: 2
     pids_limit: 512

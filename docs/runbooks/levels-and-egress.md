@@ -256,10 +256,11 @@ their profiles are archived and deleted after `personas.retention_days`.
 Going back to `direct` makes new host personas that know nothing of the
 old ones. The pool's personas outlive a stretch under `direct` unused.
 
-To switch, set the keys in `kage.yaml`, or in a compose deployment as
-environment of the `kage` service (`KAGE__EGRESS__MODE: direct`,
-`KAGE__EGRESS__DIRECT__COUNTRY: AT`) in an override file of your own,
-and recreate `kage`:
+To switch, set the keys in `kage.yaml`, or in a compose deployment the
+mode in `deploy/.env` (`KAGE_EGRESS_MODE=direct`, which the shipped
+`compose.yaml` passes to `kage`) and the rest as environment of the `kage`
+service (`KAGE__EGRESS__DIRECT__COUNTRY: AT`) in an override file of your
+own, and recreate `kage`:
 
 ```yaml
 egress:
