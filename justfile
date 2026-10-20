@@ -137,8 +137,8 @@ fmt-check-node:
 
 # --- Lint --------------------------------------------------------------------
 
-# clippy -D warnings, eslint, tsc.
-lint: lint-rust lint-node lint-observability
+# clippy -D warnings, eslint, tsc, the README's badges.
+lint: lint-rust lint-node lint-observability lint-docs
 
 lint-rust:
     cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
@@ -155,6 +155,12 @@ lint-observability:
     node scripts/grafana-dashboards.mjs --check
     docker run --rm --volume "$PWD/deploy/prometheus:/rules:ro" --workdir /rules --entrypoint promtool {{ prometheus_image }} check rules alerts.yml
     docker run --rm --volume "$PWD/deploy/prometheus:/rules:ro" --workdir /rules --entrypoint promtool {{ prometheus_image }} test rules alerts.test.yml
+
+# The README's badges say what the repository says: the toolchain badge is
+# rust-toolchain.toml's, the licence badge the workspace's (docs/runbooks/
+# repo.md, "Badges").
+lint-docs:
+    node scripts/check-readme-badges.mjs
 
 # The sidecar contract: the committed OpenAPI document is what the zod
 # schemas emit, and it breaks no client of the document on the base branch
@@ -182,12 +188,16 @@ contract-check:
 
 # --- Test --------------------------------------------------------------------
 
-# Rust unit + integration tests, sidecar vitest.
-test: test-rust test-node
+# Rust unit + integration tests, sidecar vitest, the gate scripts' own tests.
+test: test-rust test-node test-scripts
 
 # The store and CLI tests start Postgres in Docker (testcontainers).
 test-rust:
     cargo test --workspace --all-features --locked
+
+# The tests of the gate scripts in scripts/ (node's own runner).
+test-scripts:
+    node --test "scripts/*.test.mjs"
 
 # Migrations apply from empty, are idempotent, `sqlx migrate info` is clean,
 # and .sqlx/ matches the queries. Uses a throwaway Postgres in Docker.
@@ -274,7 +284,7 @@ cov-rust:
     cargo llvm-cov --workspace --all-features --locked --no-report
     cargo llvm-cov report --lcov --output-path target/coverage/rust.lcov
     cargo llvm-cov report --json --summary-only --output-path target/coverage/rust.json
-    node scripts/check-rust-coverage.mjs --min-lines {{ cov_min_lines }} --gate {{ cov_gated_crates }} target/coverage/rust.json
+    node scripts/check-rust-coverage.mjs --min-lines {{ cov_min_lines }} --gate {{ cov_gated_crates }} --badge target/coverage/badge.json target/coverage/rust.json
 
 cov-node:
     cd sidecar && pnpm run build && pnpm run test:coverage

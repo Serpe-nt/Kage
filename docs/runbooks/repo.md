@@ -69,6 +69,9 @@ Set once, with branch protection, by an admin of the repository:
 | Fork pull requests | approval required for every outside contributor before a run |
 | Secret scanning, push protection | on |
 | Dependabot alerts | on; version updates off (pins move in a pull request of their own, the fingerprint-critical ones never by a bot, `docs/versions.md`) |
+| Private vulnerability reporting | on: it is the route `SECURITY.md` and `CODE_OF_CONDUCT.md` name (the "Report a vulnerability" button of the Security tab) |
+| Description, topics | "Self-hosted web fetching API with camouflage levels: a plain client, a real browser, or a long-lived persona on a residential address, chosen per request."; `rust`, `axum`, `browser-automation`, `camoufox`, `playwright`, `residential-proxies`, `web-fetching`, `security-testing` |
+| Wiki, projects, Discussions | off (decision D52: the documents live in the repository, and there is no roadmap page) |
 
 ```bash
 gh api --method PUT repos/Serpe-nt/Kage/actions/permissions \
@@ -94,7 +97,19 @@ gh api --method PATCH repos/Serpe-nt/Kage --input - <<'JSON'
     "secret_scanning_push_protection": { "status": "enabled" } } }
 JSON
 gh api --method PUT repos/Serpe-nt/Kage/vulnerability-alerts
+gh api --method PUT repos/Serpe-nt/Kage/private-vulnerability-reporting
+gh api --method PATCH repos/Serpe-nt/Kage --input - <<'JSON'
+{ "description": "Self-hosted web fetching API with camouflage levels: a plain client, a real browser, or a long-lived persona on a residential address, chosen per request.",
+  "has_wiki": false, "has_projects": false, "has_discussions": false }
+JSON
+gh api --method PUT repos/Serpe-nt/Kage/topics --input - <<'JSON'
+{ "names": ["rust", "axum", "browser-automation", "camoufox", "playwright",
+            "residential-proxies", "web-fetching", "security-testing"] }
+JSON
 ```
+
+Check what is in force with `gh api repos/Serpe-nt/Kage/private-vulnerability-reporting`
+(`{"enabled": true}`) and `gh api repos/Serpe-nt/Kage --jq '{description, has_wiki, has_projects, has_discussions}'`.
 
 A new action in a workflow needs its owner in the list above, here and in
 the setting, or its run fails before the first step.
@@ -140,10 +155,11 @@ queue. Each job calls the same `just` targets a developer runs locally, and
 |---|---|---|
 | `commits` | `scripts/check-conventional-commits.sh` | PR title and commit subjects |
 | `rust` | `fmt-check-rust`, `lint-rust`, `setup-sqlx`, `sqlx-check`, `test-rust`, `cov-rust` | rustfmt, clippy `-D warnings`, migrations and committed query data, tests, 80 % line coverage on the gated crates |
-| `node` | `fmt-check-node`, `lint-node`, `lint-observability`, `contract-check`, `test-node`, `cov-node` | prettier, tsc, eslint, the dashboards and alert rules (promtool), the sidecar contract, vitest, 80 % line coverage on `engine-core` |
+| `node` | `fmt-check-node`, `lint-node`, `lint-observability`, `lint-docs`, `test-scripts`, `contract-check`, `test-node`, `cov-node` | prettier, tsc, eslint, the dashboards and alert rules (promtool), the README's badges, the gate scripts' own tests, the sidecar contract, vitest, 80 % line coverage on `engine-core` |
 | `security` | `deny`, `hardening`, `secrets`, `sbom` | cargo-deny, cargo-audit, pnpm audit, sidecar license policy, `openssl-sys` check, the container checklist on the Dockerfiles and compose files, gitleaks, CycloneDX SBOMs |
 | `images` | `build-images`, `hardening-images`, `scan-images`, `sbom-images`, `test-e2e` | image builds, the container checklist on the images, Trivy (fixable HIGH and CRITICAL), SBOM per image, the stack end to end and the load test's design A |
 | `mutants` | `mutants` | reported on every pull request; the gate (70 % on `kage-core`) is run before a milestone is merged |
+| `coverage-badge` | none | on a push to `main` only: writes the figure `cov-rust` measured to the `gh-pages` branch ("Badges" below); not a check, and `ci-ok` does not wait for it |
 | `ci-ok` | none | fails unless all required jobs passed |
 
 Coverage gates:
@@ -164,6 +180,45 @@ build set `SQLX_OFFLINE=true`.
 
 The `rust` job needs Docker: the store and CLI tests start Postgres
 containers through testcontainers.
+
+## Badges
+
+The README shows five badges, and every number on them is the
+repository's own. No third party holds a report or a token: GitHub
+serves the files, shields.io draws four of the pictures from public
+endpoints, anonymously.
+
+| Badge | What it says | Where it comes from |
+|---|---|---|
+| CI | whether `ci.yaml` passed on `main` | GitHub's own badge of the workflow |
+| Release | the latest release's tag | shields.io reading GitHub's releases of the repository |
+| Licence | `MIT OR Apache-2.0` | static, the `license` of `[workspace.package]` in `Cargo.toml`; static because GitHub's own detection finds two licence files and reports Apache-2.0 alone, which would misstate the dual licence |
+| Rust | the pinned toolchain | static, the `channel` of `rust-toolchain.toml` |
+| Coverage | the Rust workspace's line coverage | the `coverage-badge` job: the figure `just cov-rust` measured, as `coverage.json` on the `gh-pages` branch, drawn by shields.io's endpoint badge |
+
+`just lint-docs` (in CI's `node` job) fails when a static badge says
+something else than its file, so a toolchain bump that forgets the
+README fails there.
+
+The coverage figure is every crate's lines under `crates/*/src`
+together, counted as the gate counts them
+(`scripts/check-rust-coverage.mjs --badge`), one decimal, rounded down;
+green from 90 %, yellow-green from 80 %, yellow from 70 %, red below.
+On every push to `main` the `coverage-badge` job, which holds
+`contents: write` and nothing else, downloads that run's `rust-coverage`
+artifact, and when the figure differs from the branch's, force-pushes one
+commit with no parent holding `coverage.json` and nothing else, under the
+job's own `GITHUB_TOKEN` sent as a header. It checks nothing out and runs
+no code of the repository. GitHub Pages need not be on: shields.io reads
+`https://raw.githubusercontent.com/Serpe-nt/Kage/gh-pages/coverage.json`.
+Until the first push to `main` after the job exists, that badge says the
+resource was not found.
+
+**On a fork** the README's badges keep pointing at `Serpe-nt/Kage` and
+render without a secret. A fork that enables Actions gets its own
+`gh-pages/coverage.json` from its own token on a push to its `main`; its
+README shows its own figures once the owner in the five image URLs is
+changed (`REPOSITORY` in `scripts/check-readme-badges.mjs` with them).
 
 ## Where versions are pinned
 
@@ -197,10 +252,16 @@ in the fixture world of the end-to-end tests. It reaches no proxy and no
 site of anyone's. Run it by hand, once, on the commit a release is tagged
 on.
 
-- The nightly schedule is skipped until the repository variable
-  `KAGE_LIVE_ENABLED` is set to `true`.
-- A manual run (`workflow_dispatch`) always executes and fails with a clear
-  error when a secret is missing.
+- The nightly schedule runs the `load` job every night and skips the
+  live job until the repository variable `KAGE_LIVE_ENABLED` is set to
+  `true`.
+- A manual run (`workflow_dispatch`) names its `suite`: `load` (the
+  default; no secret), `live` or `both`. The live job of a manual run
+  fails with a clear error when a secret is missing.
+
+  ```bash
+  gh workflow run nightly-live.yaml --ref main -f suite=load
+  ```
 - Repository secrets it reads: `KAGE_WEBSHARE_API_KEY` and
   `KAGE_SECRETS_MASTER_KEY`.
 - The repository variable `KAGE_LIVE_EXPECT_PROXIES` says how many proxies
@@ -215,6 +276,7 @@ The suite is `tests/live/run.sh`, one script per check:
 | `tests/live/browser-selftest.sh` | M4, M5 | For each engine of `KAGE_LIVE_ENGINES` (default `chromium firefox`), one after the other: starts that engine's sidecar image, hardened as in production, and a throwaway Postgres; picks two proxies by the date, never the two of the http check and the same two for every engine; runs `kage selftest browser --engine <engine> --third-party` through each. Passes when no check carries an automation flag or an identity mismatch, both pages could be read, the score is above the threshold, and no check is worse than in the baseline of that engine and major (`tests/fixtures/selftest/<engine>-<major>-live.json`); an engine without a baseline fails until one is recorded. Contacts the Webshare API and the pages of `selftest.browser.third_party_pages` (bot.sannysoft.com and CreepJS), which see the two exit addresses ([engine-chromium.md](engine-chromium.md), [engine-firefox.md](engine-firefox.md)). Requests no replacement. `KAGE_LIVE_RECORD=1` records a passing run as the baseline; the first recording of a new major is judged against the newest baseline of an older major of the same engine, and the old file is removed with the old image. `KAGE_LIVE_FIREFOX_CLAIMS` names the systems the two Firefox stand-ins claim (default `windows windows`; `windows macos` checks both). `KAGE_LIVE_IDLE_SECONDS` adds a measurement of the browser's own background traffic. The repository variable `KAGE_LIVE_ENGINES` narrows the nightly run to one engine. |
 | `tests/live/personas.sh` | M6 | Only with `KAGE_LIVE_PERSONAS=1`, never in the nightly run. Starts both sidecar images, a throwaway Postgres and `kage serve` with warm-up off; waits until every usable proxy of the real pool has its persona and checks them (`tests/live/check-personas.mjs`: one persona per proxy, each where its proxy was observed to be, the mix within two personas of its shares, no shared seed, at least three screens); then runs `kage persona selftest --third-party` for one Chrome and one Firefox persona through their own proxies and judges the reports with the same baselines as the browser check. Contacts the Webshare API, the provider's echo and the geo lookup through every proxy (as the server does), and the pages of `selftest.browser.third_party_pages` through two proxies, which see those two exit addresses ([personas.md](personas.md)). Requests no replacement; no persona visits a site by itself. |
 | `tests/live/jobs.sh` | M9 | Only with `KAGE_LIVE_JOBS=1`, never in the nightly run. Starts both sidecar images, a throwaway Postgres, a receiver of webhooks on the loopback and `kage serve` with warm-up off and the replacement budget at 0, at the shipped `human` pace, and asks the API for the two third-party detection pages only: a synchronous fetch in each engine, a batch of four items, a flow in each engine, their webhooks, and a fetch carried across a restart of the server (about a dozen page loads through the proxies of a few personas). `KAGE_LIVE_JOBS_ONLY=flows` runs the two flows alone (four page loads). A job never wakes a persona: at night in the pool's countries set `KAGE_LIVE_JOBS_ACTIVE_HOURS=ignore`. `tests/live/check-jobs.mjs` judges it and writes evidence without addresses. |
+| `tests/live/host-persona.sh` | M16 | Only with `KAGE_LIVE_HOST=1`, never in the nightly run, and needs no provider secret: `KAGE_LIVE=1 KAGE_LIVE_HOST=1 tests/live/host-persona.sh`. Under `egress.mode: direct`, for each engine of `KAGE_LIVE_ENGINES` (default `chromium firefox`) on a throwaway Postgres: both sidecar images hardened as in production, `kage serve` with warm-up off and one host persona of that engine, placed where the lookup of this machine's own address finds it (no declared country); then `kage persona selftest --third-party` for it, judged with the same baselines as the browser check. Contacts, all from this machine's own address: the host's address echo and the geo lookup (`proxies.health.host_ip_url`, `geo_url`) once per run, the pages of `selftest.browser.third_party_pages` and what they load once per engine, and the browser's own background traffic ([levels-and-egress.md](levels-and-egress.md)). Evidence without the address, the city or the position. |
 
 M12 wires the workflow completely.
 
@@ -230,7 +292,11 @@ KAGE_LIVE=1 KAGE__WEBSHARE__API_KEY=... KAGE__SECRETS__MASTER_KEY=... just test-
    the Unreleased entries of `CHANGELOG.md` under the new version, and merge
    that pull request.
 2. Wait for `ci` on the merge commit, and run the `load` job of
-   `nightly-live.yaml` on it once by hand.
+   `nightly-live.yaml` on it once by hand (the live job stays quiet):
+
+   ```bash
+   gh workflow run nightly-live.yaml --ref main -f suite=load
+   ```
 3. Tag the merge commit with an annotated tag signed by the owner's SSH key,
    and push the tag:
 

@@ -20,7 +20,16 @@ name: nightly-live
 on:
   schedule:
     - cron: "17 3 * * *"
+  # By hand, one suite or both: `gh workflow run nightly-live.yaml --ref main
+  # -f suite=load` is the release's load test (docs/runbooks/repo.md,
+  # Releases), which needs no secret.
   workflow_dispatch:
+    inputs:
+      suite:
+        description: "Which jobs run: load (design B, no secret), live (the owner's proxies), or both"
+        type: choice
+        options: [load, live, both]
+        default: load
 
 permissions:
   contents: read
@@ -32,6 +41,7 @@ concurrency:
 jobs:
   load:
     name: load test (design B)
+    if: github.event_name == 'schedule' || inputs.suite != 'live'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -48,9 +58,11 @@ jobs:
   live:
     name: live suite
     # The schedule stays quiet until the owner opts in with the repository
-    # variable KAGE_LIVE_ENABLED=true. A manual run always executes, and fails
-    # clearly when the secrets are missing.
-    if: github.event_name == 'workflow_dispatch' || vars.KAGE_LIVE_ENABLED == 'true'
+    # variable KAGE_LIVE_ENABLED=true. A manual run executes it when it asks
+    # for `live` or `both`, and fails clearly when the secrets are missing.
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.suite != 'load')
+      || (github.event_name == 'schedule' && vars.KAGE_LIVE_ENABLED == 'true')
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
