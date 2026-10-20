@@ -151,6 +151,10 @@ of 1.x still queued names no level and fails at take-up with
 - `deploy/compose.yaml` takes where requests leave from and a declared list
   from `deploy/.env`: `KAGE_EGRESS_MODE` (`proxies` or `direct`) and
   `KAGE_STATIC_LIST_FILE`, a file the `kage` service mounts read-only.
+- `tests/live/host-persona.sh` (`KAGE_LIVE=1 KAGE_LIVE_HOST=1`, never in
+  the nightly run): the host persona of each engine under
+  `egress.mode: direct`, placed by the lookup of the machine's own address
+  and judged on the two detection pages with the engines' baselines.
 
 ### Fixed
 
