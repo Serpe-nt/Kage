@@ -189,7 +189,9 @@ fn stand_in(proxy: &Proxy, options: &BrowserSelftestOptions) -> anyhow::Result<S
         Some(first) => {
             if options.engine == Engine::Firefox && locale::region_of(first).is_none() {
                 bail!(
-                    "--language {first}: the first language of a firefox persona is its locale \n                     and needs a region, for example {first}-{}; the languages after it may be \n                     bare",
+                    "--language {first}: the first language of a firefox persona is its locale \
+                     and needs a region, for example {first}-{}; the languages after it may be \
+                     bare",
                     locale::region_of(&place.locale.locale).unwrap_or("DE")
                 );
             }
@@ -644,8 +646,11 @@ mod tests {
         let error = named(Engine::Firefox, &["de", "en-US"])
             .unwrap_err()
             .to_string();
-        assert!(error.starts_with("--language de:"), "{error}");
-        assert!(error.contains("de-AT"), "{error}");
+        assert_eq!(
+            error,
+            "--language de: the first language of a firefox persona is its locale and needs \
+             a region, for example de-AT; the languages after it may be bare"
+        );
         assert!(named(Engine::Firefox, &["zh-Hant"]).is_err());
 
         // Only the first language is the locale; the others may be bare.
