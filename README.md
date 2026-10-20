@@ -1,29 +1,64 @@
 # Kage
 
-Kage is a self-hosted API service that fetches web pages for its operator's
-own projects while presenting, to the target site, the same signals a real
-person on a household connection would present: a static residential IP, one
-long-lived persona per IP, a real browser (patched Chromium or Camoufox) in an
-anti-detect sidecar, and a wreq-based HTTP path for lenient sites. Every
-request says how much of that it wants, by a camouflage level from 0 (a
-plain HTTP client that says it is Kage) to 3 (a person).
+*A shinobi is not invisible. A shinobi is unremarkable.*
 
-**Status: 1.0.0.** Kage fetches pages through its pool of personas, in
-both browsers and on the http path, alone or as batches, scripted flows and
-crawls, with extraction, `robots.txt` per site, a response cache, webhooks,
-sessions, an admin API, metrics, traces and an optional observability
-stack. The contract is [docs/01-spec.md](docs/01-spec.md), the settled
-decisions [docs/00-decisions.md](docs/00-decisions.md), and what changed
-[CHANGELOG.md](CHANGELOG.md).
+[![CI](https://github.com/Serpe-nt/Kage/actions/workflows/ci.yaml/badge.svg?branch=main)](https://github.com/Serpe-nt/Kage/actions/workflows/ci.yaml?query=branch%3Amain)
+[![Release](https://img.shields.io/github/v/release/Serpe-nt/Kage?sort=semver&display_name=tag)](https://github.com/Serpe-nt/Kage/releases/latest)
+[![Licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)](#license)
+[![Rust](https://img.shields.io/badge/rust-1.99.0-orange)](rust-toolchain.toml)
+[![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FSerpe-nt%2FKage%2Fgh-pages%2Fcoverage.json)](docs/runbooks/repo.md#badges)
+
+**Kage** (影, Japanese for *shadow*: it goes where its person goes, at its
+person's pace) is a self-hosted API that fetches web pages. On every
+request the caller says how much of a person it should be, by a
+camouflage **level**: 0 is a plain HTTP client that says it is Kage, 1 an
+emulated browser client (waiting for a verified profile), 2 a real browser
+that loads the page and leaves, 3 a long-lived persona at a real browser on
+a household connection that scrolls, reads, pauses and clicks as the
+person it stands for would. Below 3 Kage is a well-behaved client, not a
+person; a site's policy may refuse a level below the one its operator set.
+Nothing is ever raised or retried at another level.
+
+Behind level 3 is everything a site can measure: static residential
+proxies from any provider (or the host's own connection, never both), one
+persona per address with a fingerprint drawn from real devices and kept for
+its life, Chrome 155 and Camoufox 156 in a hardened sidecar with the
+persona's own hand on a virtual display, pacing with breaks and nights, and
+a detection score that Kage measures against public test pages instead of
+promising. It runs as one `docker compose` stack with a REST API (single
+fetches, batches, scripted flows, crawls, extraction, sessions, webhooks),
+metrics and traces; it holds no credentials for any site, never logs in,
+never solves a CAPTCHA, and never pretends to be a person below level 3.
+
+## Who it is for
+
+- **Security operations**: seeing your own pages and defences as an
+  ordinary visitor from an ordinary address sees them.
+- **Platform and dev-ops teams**: reading what your own sites serve, at a
+  pace and in a shape they would accept from a person.
+- **Penetration-testing and research teams with written authorization for
+  their targets**: assessments of bot defences, scraping exposure and what
+  a site gives away to a browser.
+- **An operator's own projects**: fetching public pages at a human pace.
+
+Authorization is the caller's. Kage records none, checks none and holds
+none for any site.
 
 ## Responsible use
 
-Kage is built for fetching publicly available pages at a human pace for
-personal projects. Whoever runs it is responsible for how it is used.
+Kage is built for fetching publicly available pages at a human pace.
+Whoever runs it is responsible for how it is used.
 
+- **Authorization is yours.** Read only what you may: your own sites,
+  public pages, and targets you hold written authorization for. Kage
+  cannot tell them apart and does not try.
 - **Follow the law and the site's terms.** Scraping rules differ by country
   and by site. Check both before pointing Kage at a target, and stop when a
   site asks you to.
+- **A level is how you appear, not whether you may.** Below level 3 Kage
+  says what it is: level 0 sends `User-Agent: kage/<version>` unless you
+  name another client, and levels 1 and 2 behave like no person. A site's
+  floor (`min_level` in its policy) is the operator's to set.
 - **Stay polite.** Pacing defaults imitate one human visitor per persona.
   Do not raise them to extract more than a person could read.
 - **`robots.txt` is the operator's choice, per site.** A reader never asks
@@ -37,11 +72,10 @@ personal projects. Whoever runs it is responsible for how it is used.
   what you mean to follow.
 - **No access you were not given.** Kage does not solve CAPTCHAs through
   external services, does not log in with accounts, and does not perform
-  write actions on targets. It connects to a target from the host's own
-  IP only when the operator configured that (`egress.mode: direct`), and
-  then uses no proxy at all: never both for one site. These are design
-  decisions, not missing features; please do not send patches that change
-  them.
+  write actions on targets. Under `egress.mode: direct` every site sees
+  your own address, and then no proxy is used at all: never both for one
+  site. These are design decisions, not missing features; please do not
+  send patches that change them.
 - **Handle personal data with care.** Fetched pages can contain personal
   data. Retention defaults are short. Store only what your project needs and
   delete it when you are done.
@@ -50,9 +84,11 @@ personal projects. Whoever runs it is responsible for how it is used.
   for harassment or surveillance.
 
 The settled decisions behind these limits are in
-[docs/00-decisions.md](docs/00-decisions.md) (D10, D13, D15, D17, D50),
+[docs/00-decisions.md](docs/00-decisions.md) (D10, D13, D46, D50),
 [docs/adr/0006-no-solvers-no-direct-mode.md](docs/adr/0006-no-solvers-no-direct-mode.md)
-and [docs/adr/0012-camouflage-levels-and-egress.md](docs/adr/0012-camouflage-levels-and-egress.md).
+(whose never-direct rule [ADR 0012](docs/adr/0012-camouflage-levels-and-egress.md)
+replaced with the operator's choice of one egress) and
+[docs/adr/0012-camouflage-levels-and-egress.md](docs/adr/0012-camouflage-levels-and-egress.md).
 
 ## Quick start
 
@@ -61,169 +97,308 @@ git, curl and bash, and nothing else:
 
 ```bash
 git clone https://github.com/Serpe-nt/Kage.git kage && cd kage
+git checkout v2.0.0
 scripts/dev-secrets.sh
-docker compose --file deploy/compose.yaml up --build --detach --wait
-curl http://127.0.0.1:8080/healthz
 ```
 
 `scripts/dev-secrets.sh` writes random local secrets into `deploy/.env`
-(ignored by git). The first build compiles Kage and fetches the pinned
-Chrome and Camoufox: about ten minutes on 32 cores, up to 40 on a small
-machine. The stack applies the
-database migrations in a one-shot `migrate` service before `kage` starts,
-and publishes one port, on loopback only: the API speaks plain HTTP, and a
-deployment that serves other machines puts a reverse proxy that terminates
-TLS in front of it.
+(ignored by git; keep it). Then say where requests leave from, with one
+line in that file:
 
-By default Kage fetches only through proxies. Put
-`KAGE_WEBSHARE_API_KEY=<key>` into `deploy/.env` (or give `kage` a static
-list, [docs/runbooks/proxies.md](docs/runbooks/proxies.md)) and run the
-`up` again: every proxy gets a persona within minutes. Then make a key and
-fetch a page of a site you may fetch:
+```bash
+echo 'KAGE_EGRESS_MODE=direct' >> deploy/.env
+```
+
+That is **this machine's own connection**, the way that needs nothing but
+Docker: one persona stands for the machine, placed where a lookup of its
+address finds it, and **every site you fetch sees your address**. The other
+two ways are the proxy pool, one persona per proxy:
+`KAGE_WEBSHARE_API_KEY=<key>` for a Webshare account, or
+`KAGE_STATIC_LIST_FILE=<path>` for a declared list of any vendor's proxies
+([Three ways to run](#three-ways-to-run-the-pool)). A new persona warms up
+for a few hours, reading popular neutral sites as a new household browser
+would, before it reads yours; for a try-out, skip that with
+`echo 'KAGE_PERSONAS_WARMUP=false' >> deploy/.env`.
+
+```bash
+docker compose --file deploy/compose.yaml up --build --detach --wait
+until curl --silent --fail http://127.0.0.1:8080/readyz > /dev/null; do sleep 5; done
+```
+
+The first build compiles Kage and fetches the pinned Chrome and Camoufox:
+about ten minutes on 32 cores, up to 40 on a small machine. The stack
+applies the database migrations before `kage` starts and publishes one
+port, on loopback only: the API speaks plain HTTP, and a deployment that
+serves other machines puts a reverse proxy that terminates TLS in front of
+it. `/readyz` answers `200` once a persona is ready.
+
+Make a key (its token is shown once) and fetch a page of a site you may
+fetch, at level 0 and at level 3:
 
 ```bash
 docker compose --file deploy/compose.yaml exec kage \
     kage key create --name operator --scope admin --scope fetch
+```
+
+```bash
+curl http://127.0.0.1:8080/v1/fetch \
+    --header "Authorization: Bearer <token>" \
+    --header 'Content-Type: application/json' \
+    --data '{"url": "https://example.org/", "level": 0}'
+```
+
+```bash
 curl http://127.0.0.1:8080/v1/fetch \
     --header "Authorization: Bearer <token>" \
     --header 'Content-Type: application/json' \
     --data '{"url": "https://example.org/", "level": 3}'
 ```
 
-**Levels and egress.** Every request names its `level`, and one without
-it is refused: 0 is a plain HTTP client that says it is Kage, with no
-persona; 1 a persona's emulated http client (not available in this
-release); 2 a persona's real browser that loads the page and leaves; 3 a
-persona's browser as a person. Below 3 Kage is not pretending to be a
-person: it is a well-behaved client. A site's policy may set the lowest
-level it is read at (`min_level`), and nothing is ever raised or retried
-at another level. The operator chooses where traffic leaves from: the
-proxy pool (`egress.mode: proxies`, the default) or the host's own
-connection (`direct`), never both.
-[docs/runbooks/levels-and-egress.md](docs/runbooks/levels-and-egress.md)
-says what each level costs and what a site can tell, and how to upgrade
-from 1.x.
+The first answers at once; the second takes as long as a person reading
+the page, tens of seconds. Under `direct` both came from your own address:
+on a real site choose one level, because an address that says it is Kage
+and then reads like a person is a bot that said so, and set the site's
+floor so that nobody does both
+([levels-and-egress.md](docs/runbooks/levels-and-egress.md)).
 
 [docs/runbooks/first-start.md](docs/runbooks/first-start.md) is the whole
 first start, [docs/runbooks/api.md](docs/runbooks/api.md) the guide to
-keys, limits, jobs, crawls, sessions and the admin endpoints, and
-[docs/runbooks/observability.md](docs/runbooks/observability.md) the
-dashboards and alerts. The API's contract is `/openapi.json`
-([crates/kage-api/openapi.json](crates/kage-api/openapi.json)).
+keys, limits, jobs, crawls, sessions and the admin endpoints. The released
+images, signed and attested, run by digest without building kage or the
+Chromium sidecar ([deploy/compose.yaml](deploy/compose.yaml) says how).
 
-Building and testing Kage itself needs more: rustup, Node.js 24 with
-corepack, and [just](https://just.systems) 1.58 or newer (`just setup`
-installs the rest; see Development below).
+## The levels
 
-## Configuration
+| Level | Name | What runs | Persona | What a site sees |
+|---|---|---|---|---|
+| 0 | plain | an HTTP client with its own TLS, `User-Agent: kage/<version>` unless the request names one, the caller's headers and body as given, no cookie jar | none | a well-behaved HTTP client that says who it is |
+| 1 | http-emulated | the persona's HTTP client with its browser's TLS and HTTP/2 fingerprint, headers and cookies | yes | a browser's wire fingerprint with no page behaviour; **not available yet**: refused with `level_unavailable` until a browser version Kage runs has a verified profile |
+| 2 | browser-fast | the persona's real browser loads the page, sends no input, stays for the site's `min_dwell` and leaves | yes | a real browser that loads a page and leaves |
+| 3 | human | the persona's browser as a person: it scrolls as far as its patience lasts, reads, rests, moves the mouse and clicks links as a reader does, at the persona's pace, with breaks and nights | yes | a person |
+
+In plain words:
+
+- **Below 3 Kage is a well-behaved client, not a person.** Level 0 is for a
+  page you could read with `curl`; level 2 for a site that needs a browser
+  but does not watch how it is read; level 3 for a site that watches.
+- **Every request names its level**, and one without it is refused
+  (`level_required`). Nothing is decided for the caller.
+- **Nothing escalates.** The level is the request's ceiling: a block at
+  level 0 is the answer, never a reason to try a browser.
+- **A site's floor is the operator's guard.** A request below the
+  `min_level` of the site's policy is refused (`level_below_policy`),
+  never raised:
+
+  ```yaml
+  # policies/domains.yaml
+  domains:
+    "shop.example.org":
+      min_level: 3
+  ```
+
+- **What it costs:** a level-0 page is one request; a level-2 page a load
+  and a few seconds; a level-3 page about 35 seconds at the median, about
+  a hundred pages an hour per persona, plus the pacing between pages.
+
+[docs/runbooks/levels-and-egress.md](docs/runbooks/levels-and-egress.md)
+has the whole table: what each level takes of a request, what it costs,
+what a site can tell, and how to upgrade from 1.x.
+
+## Where requests leave from
+
+| | `egress.mode: proxies` (the default) | `egress.mode: direct` |
+|---|---|---|
+| Personas | one per proxy of the pool | one to four standing for the host |
+| Level 0 | from one address per site: a plain exit of the pool, else the site's scout's | from the host |
+| The host's own address is seen by | no site: only the provider's API, the webhooks and the host's own lookups | every site |
+
+**There is no mixed mode**, and `kage config check` refuses one: a site
+that sees a visitor move from a residential address to the host's has
+seen a bot. The forwarder inside `kage` fronts every browser and client
+in both modes, so the SSRF guard and the byte count always hold.
+
+## Three ways to run the pool
+
+| | Webshare | A declared list | No proxies |
+|---|---|---|---|
+| Set in `deploy/.env` | `KAGE_WEBSHARE_API_KEY=<key>` | `KAGE_STATIC_LIST_FILE=<path>` | `KAGE_EGRESS_MODE=direct` |
+| A persona's place | where a geo lookup finds the address | what each entry declares (`country`, optional `locale`, `timezone`), verified by the lookup | where a lookup finds the host, or `egress.direct.country` |
+| Replacing a burned address | yes, automatically within a monthly budget | no: the list is yours to edit | no |
+| What else | the replaced log, the account, the traffic stats | any vendor; an entry without a country carries no persona and serves level 0 only | every site sees your address |
+
+A declared list is one `host:port:username:password:country[:locale]` per
+line, or YAML with more fields, read again at every sync; it holds
+passwords, so let only the container's user read it (`uid 65532`). Its
+probes read a public echo (`checkip.amazonaws.com`), whose operator sees
+every proxy address, unless you name your own. Kage takes Webshare when its
+key is set, else the list (`proxies.provider: auto`), and `kage config
+check` says which and what it cannot do. A vendor whose API brings more
+than a list can is a provider module of its own:
+[CONTRIBUTING.md](CONTRIBUTING.md#adding-a-proxy-provider).
+[docs/runbooks/proxies.md](docs/runbooks/proxies.md) is the operator's guide
+to the pool, [docs/runbooks/personas.md](docs/runbooks/personas.md) to the
+personas.
+
+## What a result holds
+
+A fetch answers `200` with its result whenever something was fetched; a
+block is an outcome, not an HTTP error. Trimmed:
+
+```json
+{
+  "id": "0192…",
+  "state": "finished",
+  "outcome": "ok",
+  "level": 3,
+  "status": 200,
+  "final_url": "https://example.org/article",
+  "headers": [{ "name": "content-type", "value": "text/html; charset=UTF-8" }],
+  "dom_html": "<!doctype html>…",
+  "persona": { "id": "p_3f9a6c0d12e4b87a", "engine": "chromium", "claimed_os": "linux", "country": "DE" },
+  "attempts": [
+    { "n": 1, "render": "browser", "outcome": "ok", "status": 200, "total_ms": 41250,
+      "persona": "p_3f9a6c0d12e4b87a", "engine": "chromium", "exit": null, "reason": null }
+  ],
+  "behavior": { "scroll_reached": 0.84, "scroll_ended_by": "patience", "patience_ms": 38900,
+                "dwell_ms": 6100, "moves": 23, "notches": 41, "referer_strategy": "direct" },
+  "block": null,
+  "robots": { "fetched": false, "allowed": true, "matched_rule": null, "crawl_delay": null },
+  "cached": false
+}
+```
+
+- **`outcome`** says how it ended: `ok`, `challenge_passed`, or a block
+  (`challenge_failed`, `captcha`, `forbidden`, `rate_limited`, …) with
+  **`block`** saying who blocked and how; `provider_error` with a `reason`
+  when nothing could be attempted.
+- **`level`** is the level the request was made at.
+- **`persona`** is a handle that is stable for your key and means nothing
+  to another; a key without the `admin` scope never sees a proxy, an
+  address, a seed or a fingerprint. At level 0 it is `null`, and each
+  attempt says its `exit` (`host` or `pool`) instead.
+- **`attempts`** lists every try, by whom, how it ended and how long it
+  took; **`behavior`** what the persona did on the page.
+- **`include`** chooses what comes back and is kept: `dom`, `raw`,
+  `headers`, `extract` (the main content as text and markdown, metadata
+  and links), `xhr`, `screenshot`, `pdf`, `console`.
+- **`robots`** is the site's `robots.txt` verdict; **`cached`** whether the
+  page came from the response cache.
+
+Batches, scripted flows and crawls give the same result for each page
+([api.md](docs/runbooks/api.md)). The contract is the OpenAPI document,
+served at `/openapi.json` and committed as
+[crates/kage-api/openapi.json](crates/kage-api/openapi.json).
+
+## Measured, not promised
+
+The engines of 1.0.2 were checked live through residential proxies: a
+Chrome 155 persona claiming Linux (2026-10-19) and a Camoufox 156 persona
+claiming Windows (2026-10-18) each scored **100 of 100** on the 34 checks
+Kage reads of [bot.sannysoft.com](https://bot.sannysoft.com/) and
+[CreepJS](https://abrahamjuliot.github.io/creepjs/). CreepJS's own figures
+were **0 % headless and 0 % stealth** for both, and **"like headless" 38 %**
+for Chrome and 6 % for Firefox. The score and its threshold are Kage's own
+(`min_score` 90); the 38 % is shown because hiding it would be the
+opposite of measuring. The recorded runs are the baselines in
+[tests/fixtures/selftest/](tests/fixtures/selftest/), and a run that is
+worse on any check fails.
+
+A detection page is not a site that watches: a pass there is necessary,
+not sufficient, and nothing here says Kage cannot be told apart. The live
+suite needs real proxies and runs only on the maintainer's word; no
+nightly live measurement is published.
+
+What the gates measure: on every pull request, the line coverage of the
+badge above, both engines through one parity suite of the same contract,
+capture and behaviour tests, and the wire of the HTTP clients against
+recorded fingerprints; before a milestone is merged, the mutation score of
+`kage-core` (93.4 % at the last full run, against a gate of 70 %).
+
+The honest limits, each written down where it is decided:
+
+- **Hardware-rooted attestation** (Private Access Tokens and the like)
+  cannot be passed by any browser, and some vendors probe the automation
+  transport itself ([docs/00-decisions.md](docs/00-decisions.md), "Honest
+  limits").
+- **The canvas is the host's** (T1): every persona of one host draws the
+  same canvas pixels and text metrics while each names its own graphics
+  card ([Known tells](docs/security-review.md#known-tells)).
+- **WebGL comes from Mesa's software renderer** (T7), in a configuration no
+  stock Chrome reaches by itself, the same for every persona of a host; the
+  answer is the host's own GPU ([Known tells](docs/security-review.md#known-tells)).
+- **Google's properties see a Chrome that never fetched a variations seed**
+  and sends no `X-Client-Data` header (T5), because background networking
+  is off ([Known tells](docs/security-review.md#known-tells)).
+- **Chrome's built-in AI APIs answer `unavailable`** (T6), so that a page's
+  click cannot make a persona download a model through the pool
+  ([Known tells](docs/security-review.md#known-tells)).
+- **Chrome personas claim Linux**, the system they run on
+  ([ADR 0009](docs/adr/0009-chromium-personas-claim-linux.md)).
+- **Level 1 waits** for a verified HTTP profile of a browser version Kage
+  runs; a default deployment offers levels 0, 2 and 3.
+- **Under `direct` one address does everything**, and below level 3 Kage
+  is not a person, by design.
+
+## Configuration and the command line
 
 `kage` reads `kage.yaml` (or the file named by `--config` / `KAGE_CONFIG`)
 and lets environment variables of the form `KAGE__SECTION__KEY` override it.
 [deploy/kage.example.yaml](deploy/kage.example.yaml) lists every key with its
 default. Secrets are never read from the file: they come from the environment
 or from a file named by the same variable with `_FILE` appended, and `kage`
-refuses to start when a required one is missing.
+refuses to start when a required one is missing. Every YAML file Kage reads
+refuses a repeated key and a merge key, and refuses unquoted text that looks
+like a number where text is expected (`password: "0123"`).
 
 ```bash
 kage config check   # validate, then print the effective configuration, secrets redacted
-kage migrate        # apply the database schema; safe to run again
-kage proxy list     # the proxy pool; also `health`, `replace` and `egress`
+kage proxy list     # the pool; also `health`, `replace` and `egress`
 kage persona list   # the personas; also `show`, `selftest`, `regenerate` and `retire`
-kage selftest http  # compare the http path's fingerprint with the recorded one
-kage fetch <url>    # one request through the whole pipeline, at the --level it must name; see docs/runbooks/fetching.md
+kage fetch <url> --level <0-3>   # one request through the whole pipeline
 kage key create     # an API key; also `list`, `revoke` and `rotate`
-kage openapi        # print the OpenAPI document of the public API
 kage serve          # the API, the pool, the personas and the scheduler
 ```
 
-Under the default `egress.mode: proxies` Kage fetches only through
-proxies. Give it a Webshare API key
-(`KAGE__WEBSHARE__API_KEY`, or `KAGE_WEBSHARE_API_KEY` in `deploy/.env`) or a
-static list, and it keeps the pool by itself: health checks, backoff, and
-replacement within a budget. Without a provider the pool is empty and
-nothing is fetched. Under `egress.mode: direct` the host's own connection
-carries everything, with one to four personas standing for the host
-([docs/runbooks/levels-and-egress.md](docs/runbooks/levels-and-egress.md)).
-[docs/runbooks/proxies.md](docs/runbooks/proxies.md) is the operator's
-guide to the pool. Every usable proxy gets one persona, a long-lived
-synthetic household user with its own browser, screen, language and place:
-[docs/runbooks/personas.md](docs/runbooks/personas.md). What a request
-passes through (pace, retries on another persona, the circuit breaker, the
-forwarder that keeps the provider's credentials out of the browsers, the
-bandwidth budget) is in
-[docs/runbooks/fetching.md](docs/runbooks/fetching.md).
+Per-domain behaviour is data in [policies/](policies/): `domains.yaml` (a
+site's floor, pacing, robots, retries, cooldowns), `pacing-profiles.yaml`
+and `block-signatures.yaml`, reloaded when they change; an invalid file
+keeps the last good policy in force and raises an alert.
 
-Per-domain behaviour is data in [policies/](policies/): `domains.yaml`
-(the lowest level a site may be read at, pacing, robots, retries,
-cooldowns), `pacing-profiles.yaml`
-and `block-signatures.yaml`. `kage` reloads them when they change; an
-invalid file keeps the last good policy in force and raises an alert.
+## Tools of the trade
 
-Every YAML file Kage reads (`kage.yaml`, the policies, the YAML form of the
-static proxy list) is read as YAML 1.2 with three rules of Kage's own: a
-key said twice in one mapping is an error that gives its line and column,
-a merge key (`<<`) is an error, and a document nests at most 128 levels,
-has at most a million nodes and 16 MiB of text. Only `true` and `false`
-are booleans, so `NO` is Norway. **Write in quotes what is text but reads
-as a number**: a password of digits, an id with a leading zero, `1_000`
-(`password: "0123"`); unquoted, it is refused where text is expected, and
-`kage config check` names the key and says so.
-
-## Development
-
-Every dev and CI command is a `just` target. `just` without arguments lists
-them all.
-
-| Command | What it does |
+| Document | What it holds |
 |---|---|
-| `just setup` | Install toolchains, pnpm dependencies, the pinned Chrome, git hooks, local secrets |
-| `just fmt` | rustfmt and prettier |
-| `just lint` | clippy with warnings denied, eslint, tsc, the dashboards and the alert rules of the observability profile |
-| `just test` | Rust tests (the store tests start Postgres in Docker) and sidecar vitest (the Chromium engine's tests start the real browser; not as root) |
-| `just contract-check` | The committed sidecar OpenAPI document is current and breaks no client |
-| `just openapi` | Regenerate the sidecar OpenAPI document from its zod schemas |
-| `just capture-browser-fingerprint [engine]` | Record what an engine's real browser shows the fingerprint echo (`chromium`, `firefox`) |
-| `just sqlx-check` | Migrations apply from empty and are idempotent; `.sqlx/` matches the queries |
-| `just sqlx-prepare` | Regenerate `.sqlx/` after a query or a migration changed |
-| `just cov` | Coverage reports with thresholds |
-| `just deny` | cargo-deny, cargo-audit, pnpm audit, license policy, openssl-sys check |
-| `just hardening` | The container checklist on the Dockerfiles and every compose file (`hardening-images` on the built images) |
-| `just sbom` | CycloneDX SBOMs |
-| `just build-images` | Images for kage and both sidecar variants |
-| `just test-e2e` | Compose-based end-to-end suite, with the load test's design A (200 queued fetches under `fast`) |
-| `just test-load` | The load test's design B: 200 queued fetches under the test-only `load` profile at the shipped caps, about 12 minutes |
-| `just test-live` | Gated live suite through the real proxies; needs `KAGE_LIVE=1` and secrets |
-| `just dev` | Postgres and sidecars in compose, `kage serve` natively |
-| `just migrate` | Apply the migrations to the development database |
-| `just config-check` | Validate the development configuration and print it, secrets redacted |
-| `just ci` | Everything a pull request runs |
+| [docs/01-spec.md](docs/01-spec.md) | the contract: every behaviour, by section |
+| [docs/00-decisions.md](docs/00-decisions.md) | the settled decisions, D1 to D53 |
+| [docs/adr/](docs/adr/) | why things are the way they are |
+| [docs/02-plan.md](docs/02-plan.md) | the milestones and what each one built |
+| [docs/versions.md](docs/versions.md) | every pinned version, the fingerprint-critical ones apart |
+| [docs/runbooks/](docs/runbooks/) | the operator's guides: first start, proxies, personas, fetching, levels and egress, the API, rotating keys, upgrading an engine, reading a block report, the fingerprint echo, observability, the repository and its releases |
+| [docs/security-review.md](docs/security-review.md) | threats, findings, accepted exceptions and the known tells |
+| [crates/kage-api/openapi.json](crates/kage-api/openapi.json) | the public API's OpenAPI 3.1 document |
+| [CHANGELOG.md](CHANGELOG.md) | what changed, release by release |
 
-House rules for contributors and coding agents are in
-[CLAUDE.md](CLAUDE.md). Repository settings, CI jobs and the release
-procedure are in [docs/runbooks/repo.md](docs/runbooks/repo.md). The
-runbooks of [docs/runbooks/](docs/runbooks/) cover the first start, the
-proxy pool, the personas, fetching, levels and egress, the API, rotating
-keys, upgrading an engine, reading a block report, the fingerprint echo,
-observability and the owner's field campaign; the security review is
-[docs/security-review.md](docs/security-review.md).
+## Joining the clan
 
-## Layout
-
-| Path | Contents |
-|---|---|
-| `crates/` | Rust workspace: the `kage` binary and its library crates |
-| `sidecar/` | pnpm workspace: contract, engine-core, both engines, server |
-| `deploy/` | Dockerfiles, compose files and the example configuration |
-| `policies/` | Domain policies, pacing profiles and block signatures (data, hot-reloaded) |
-| `docs/` | Decisions, specification, plan, ADRs, pinned versions, runbooks |
-| `scripts/` | Gate scripts used by `just` and CI |
-| `tests/` | End-to-end and live suites, fixtures |
+Contributions are welcome: a fix, a provider for another proxy vendor, a
+sharper test, a document that says something better. Start with
+[CONTRIBUTING.md](CONTRIBUTING.md): the gates (`just setup`, then
+`just ci` runs what a pull request runs), the pull-request rules, the
+definition of done, and a step-by-step guide to adding a proxy provider.
+Building Kage itself needs rustup, Node.js 24 with corepack and
+[just](https://just.systems) 1.58 or newer; `just setup` installs the
+rest. Everyone taking part follows the
+[code of conduct](CODE_OF_CONDUCT.md). The repository's settings, the CI
+jobs and the release procedure are written down, with the commands that
+apply them, in [docs/runbooks/repo.md](docs/runbooks/repo.md).
 
 ## Security
 
-Please report vulnerabilities privately through GitHub's "Report a
-vulnerability" button on the repository's Security tab, not in a public
-issue.
+Please report a vulnerability privately through GitHub's private advisory
+form ("Report a vulnerability" on the repository's Security tab), never in
+a public issue. [SECURITY.md](SECURITY.md) says what is in scope, which
+versions get fixes, and which known tells are documented limits rather
+than vulnerabilities.
 
 ## License
 

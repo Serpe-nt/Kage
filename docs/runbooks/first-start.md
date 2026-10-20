@@ -18,7 +18,7 @@ curl is needed on the host.
 
 ```bash
 git clone https://github.com/Serpe-nt/Kage.git kage && cd kage
-git checkout v1.0.0
+git checkout v2.0.0
 scripts/dev-secrets.sh
 ```
 
@@ -30,37 +30,46 @@ keeps what is there. Keep the file: a new `KAGE_MASTER_KEY` leaves the
 stored proxy credentials sealed until the next sync with the provider
 ([rotating-keys.md](rotating-keys.md)). Never commit it.
 
-## 2. The proxies
+## 2. Where requests leave from
 
-By default Kage fetches only through proxies, one persona per proxy
-([proxies.md](proxies.md), "Three ways to run"). Give it one of the two:
+One line in `deploy/.env` says it ([proxies.md](proxies.md), "Three ways
+to run"):
 
-- **Webshare**: add `KAGE_WEBSHARE_API_KEY=<key>` to `deploy/.env`. The
-  pool is the account's static residential proxies, placed where the geo
+- **Webshare**: `KAGE_WEBSHARE_API_KEY=<key>`. The pool is the account's
+  static residential proxies, one persona per proxy, placed where the geo
   lookup finds them.
-- **A declared list** of any vendor's proxies: the list in
-  `KAGE__PROXIES__STATIC_LIST`, or better in a file named by
-  `KAGE__PROXIES__STATIC_LIST_FILE` (read again at every sync), given to
-  the `kage` service. One `host:port:username:password:country[:locale]`
-  per line, or the YAML form with `timezone` and `city`. **Each entry's
-  country is a declaration**: its persona speaks that country's language
-  (or the declared locale's) in its zone, and a lookup only verifies it.
-  An entry without a country carries no persona and serves level 0 only.
-  Its probes read the public echo `checkip.amazonaws.com`, whose operator
-  sees every proxy address; name your own echo to keep the pool private.
+- **A declared list** of any vendor's proxies:
+  `KAGE_STATIC_LIST_FILE=<path>`, an absolute path or one relative to
+  `deploy/`. The `kage` service mounts the file read-only and reads it again
+  at every sync; it holds passwords, so let the container's user read it
+  and nobody else (`sudo chown 65532 <file> && sudo chmod 0400 <file>`).
+  One `host:port:username:password:country[:locale]` per line, or the YAML
+  form with `timezone` and `city`. **Each entry's country is a
+  declaration**: its persona speaks that country's language (or the
+  declared locale's) in its zone, and a lookup only verifies it. An entry
+  without a country carries no persona and serves level 0 only. Its probes
+  read the public echo `checkip.amazonaws.com`, whose operator sees every
+  proxy address; name your own echo to keep the pool private.
+- **This machine's own connection**: `KAGE_EGRESS_MODE=direct`. No
+  proxies: one persona stands for the host (up to four with
+  `egress.direct.personas`), placed where a lookup of the host's address
+  finds it, and **every site sees the host's address**. Read
+  [levels-and-egress.md](levels-and-egress.md) before choosing it for real
+  work.
+
+```bash
+echo 'KAGE_EGRESS_MODE=direct' >> deploy/.env
+```
 
 Kage takes Webshare when its key is set, else the declared list
 (`proxies.provider: auto`). `kage config check` says which, and what it
-cannot do (a list replaces nothing).
-
-Without either the stack starts, the pool stays empty, and every fetch is
+cannot do (a list replaces nothing). With neither, and the mode left at
+`proxies`, the stack starts, the pool stays empty, and every fetch is
 answered without an attempt.
 
-An operator who means Kage to fetch from the machine's own connection
-instead sets `egress.mode: direct` (`KAGE__EGRESS__MODE=direct` for the
-`kage` service): no proxies, one to four personas standing for the host,
-and every site seeing the host's address. Read
-[levels-and-egress.md](levels-and-egress.md) before choosing it.
+A new persona warms up for a few hours before it does real work (step 3).
+For a try-out, add `KAGE_PERSONAS_WARMUP=false` to `deploy/.env`: the
+persona is ready as soon as it is made.
 
 ## 3. The stack
 
@@ -77,9 +86,15 @@ reverse proxy that terminates TLS in front of it
 database answers, a sidecar is up and a persona is ready.
 
 The pool and the personas build themselves: within a few minutes every
-proxy is health-checked and gets a persona, which then warms up for a few
-hours by visiting popular neutral sites, as a new household browser
-would ([personas.md](personas.md)).
+proxy is health-checked and gets a persona (under `direct`, the host's
+persona is made once a lookup has placed the host), which then warms up
+for a few hours by visiting popular neutral sites, as a new household
+browser would ([personas.md](personas.md)), unless warm-up is off.
+`/readyz` answers `200` once a persona is ready:
+
+```bash
+until curl --silent --fail http://127.0.0.1:8080/readyz > /dev/null; do sleep 5; done
+```
 
 ```bash
 docker compose --file deploy/compose.yaml exec kage kage proxy list
@@ -99,14 +114,25 @@ The token (`kage_<id>_<secret>`) is shown once and stored only as a hash.
 curl http://127.0.0.1:8080/v1/fetch \
     --header "Authorization: Bearer <token>" \
     --header 'Content-Type: application/json' \
+    --data '{"url": "https://example.org/", "level": 0}'
+```
+
+```bash
+curl http://127.0.0.1:8080/v1/fetch \
+    --header "Authorization: Bearer <token>" \
+    --header 'Content-Type: application/json' \
     --data '{"url": "https://example.org/", "level": 3}'
 ```
 
 Pick a site you may fetch. Every request names its `level`: 3 is a
 persona's browser as a person, 2 a browser that loads the page and
 leaves, 0 a plain HTTP client that says it is Kage (1 is not available in
-this release); below 3 Kage is not pretending to be a person
-([levels-and-egress.md](levels-and-egress.md)). The answer is the result:
+this release); below 3 Kage is not pretending to be a person. Under
+`direct` both requests leave from the host's address: on a real site
+choose one level, and give the site a floor (`min_level`) so that nobody
+reads it both ways ([levels-and-egress.md](levels-and-egress.md)). The
+first answers at once, the second takes as long as a person reading the
+page. The answer is the result:
 its `outcome`, the page's status and headers, what was captured, and how
 the visit went.
 [api.md](api.md) is the guide to what a request may ask for, jobs,

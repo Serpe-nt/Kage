@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: A vulnerability
+    url: https://github.com/Serpe-nt/Kage/security/advisories/new
+    about: Report it privately through GitHub's advisory form, never in an issue (SECURITY.md).
+  - name: How to run and use Kage
+    url: https://github.com/Serpe-nt/Kage/tree/main/docs/runbooks
+    about: The runbooks answer most questions about the first start, proxies, personas, levels, the API and the releases.

@@ -6,7 +6,19 @@ step-by-step guide for the change most often asked for: another proxy
 provider. `CLAUDE.md` has the house rules in full; `docs/00-decisions.md`
 the decisions that are settled; `docs/01-spec.md` the contract.
 
+Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md). A
+vulnerability is reported privately, as [SECURITY.md](SECURITY.md) says,
+never in an issue or a pull request. An issue starts from one of the forms
+(a bug, a feature, a proxy provider); a change that re-opens a settled
+decision says which one and why, and becomes an ADR draft before it
+becomes code.
+
 ## The gates
+
+On Linux (or WSL2) with Docker, rustup, Node.js 24 with corepack and
+[just](https://just.systems) 1.58 or newer; `just setup` installs the
+pinned toolchain, the cargo tools, the pnpm dependencies, the pinned Chrome
+and Camoufox, the git hooks and local secrets:
 
 ```bash
 just setup
@@ -25,6 +37,32 @@ pnpm audit, the `openssl-sys` check, gitleaks over the history, the SBOMs,
 the images and their scan, and the compose end-to-end tests. Nothing
 reaches a real site: live tests (`KAGE_LIVE=1`) run only on the owner's
 word, against the echo and detection pages of the configuration.
+
+Every target on its own (`just` without arguments lists them all):
+
+| Command | What it does |
+|---|---|
+| `just fmt` | rustfmt and prettier |
+| `just lint` | clippy with warnings denied, eslint, tsc, the dashboards and the alert rules of the observability profile, the README's badges |
+| `just test` | Rust tests (the store tests start Postgres in Docker), sidecar vitest (the Chromium engine's tests start the real browser; not as root), the gate scripts' own tests |
+| `just contract-check` | The committed sidecar OpenAPI document is current and breaks no client; the public API's document is valid and its TypeScript client current |
+| `just openapi` | Regenerate both OpenAPI documents and the API's TypeScript test client |
+| `just capture-browser-fingerprint [engine]` | Record what an engine's real browser shows the fingerprint echo (`chromium`, `firefox`) |
+| `just sqlx-check` | Migrations apply from empty and are idempotent; `.sqlx/` matches the queries |
+| `just sqlx-prepare` | Regenerate `.sqlx/` after a query or a migration changed |
+| `just cov` | Coverage reports with thresholds |
+| `just deny` | cargo-deny, cargo-audit, pnpm audit, license policy, openssl-sys check |
+| `just hardening` | The container checklist on the Dockerfiles and every compose file (`hardening-images` on the built images) |
+| `just sbom` | CycloneDX SBOMs |
+| `just build-images` | Images for kage and both sidecar variants |
+| `just test-e2e` | Compose-based end-to-end suite, with the load test's design A (200 queued fetches under `fast`) |
+| `just test-load` | The load test's design B: 200 queued fetches under the test-only `load` profile at the shipped caps, about 12 minutes |
+| `just test-live` | Gated live suite through the real proxies; needs `KAGE_LIVE=1` and secrets, and runs only on the maintainer's word |
+| `just mutants` | Mutation testing of `kage-core`, 70 % required; before a milestone is merged |
+| `just dev` | Postgres and sidecars in compose, `kage serve` natively |
+| `just migrate` | Apply the migrations to the development database |
+| `just config-check` | Validate the development configuration and print it, secrets redacted |
+| `just ci` | Everything a pull request runs |
 
 What a change must keep:
 
@@ -48,12 +86,35 @@ What a change must keep:
 - Conventional commits (`feat(proxy): …`, `fix(core): …`); the commit check
   refuses a comma in the type or the scope.
 - One change, one pull request, from a branch on `main`; `ci-ok` green; a
-  rebase merge that keeps the commits.
+  rebase merge that keeps the commits. A pull request from a fork may wait
+  for the maintainer to approve its CI run.
+- A bump of anything in the fingerprint-critical table of
+  `docs/versions.md` is a pull request of its own, never part of another
+  change and never merged by a bot.
 - The description says how each acceptance criterion was verified, with the
   evidence (a test name, a log, a measurement), and lists anything that
   differs from the spec as a discrepancy, with an ADR draft when it changes
-  a decision.
+  a decision. The template (`.github/PULL_REQUEST_TEMPLATE.md`) asks for
+  both.
 - A line in `CHANGELOG.md` under Unreleased; breaking changes first.
+
+## The definition of done
+
+A change is done when every line holds (`docs/02-plan.md`, "How agents work
+this plan", is the source):
+
+- new code has tests at the layer spec §21 names, and a new module of a
+  core crate keeps 80 % line coverage;
+- `just ci` passes locally, and `ci-ok` is green on the pull request;
+- no new `unwrap`, `expect` or `panic!` in a library crate outside tests;
+- public types and functions are documented; the OpenAPI documents and the
+  API test client are regenerated and committed when a type of theirs
+  changed;
+- `docs/versions.md` has a row for every new or bumped dependency, with its
+  licence;
+- `CHANGELOG.md` has its line under Unreleased;
+- the description lists how each acceptance criterion was verified, and
+  every discrepancy with the spec.
 
 ## Adding a proxy provider
 
