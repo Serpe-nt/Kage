@@ -169,6 +169,12 @@ of 1.x still queued names no level and fails at take-up with
 - `kage selftest browser --language` refused a Firefox locale without a
   region with a line break and a run of spaces in the middle of its
   message (F75).
+- The OpenAPI document had an attempt's `status`, `persona`, `engine`,
+  `exit` and `reason` as optional, though every attempt carries them,
+  null where they do not apply (level 0 has no persona, a persona's
+  attempt no exit). They are required and nullable now, so a client
+  generated from the document may rely on them (F69); only `seed`, which
+  an admin key alone sees, may be absent.
 
 ## [1.0.2] - 2026-10-19
 
