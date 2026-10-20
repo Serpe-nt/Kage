@@ -414,6 +414,18 @@ impl Proxy {
         !self.undeclared() && !self.exit_shared()
     }
 
+    /// Whether a probe through the proxy has ever answered: the exit address
+    /// an echo saw stays in the health record when a later probe fails. The
+    /// host's own rows are never probed through and count as answered: they
+    /// are the host's connection (spec §25).
+    pub fn has_answered(&self) -> bool {
+        self.provider == ProxyProviderKind::Host
+            || self
+                .last_health
+                .as_ref()
+                .is_some_and(|health| health.exit_ip.is_some())
+    }
+
     /// Whether the proxy is one of the pool's plain exits only: a declared
     /// entry without a country, which carries no persona and so never
     /// reads any site as a person; level 0 prefers it (ADR 0013, spec §25).
@@ -564,6 +576,27 @@ mod tests {
         };
         let json = serde_json::to_string(&full).unwrap();
         assert_eq!(serde_json::from_str::<ProxyHealth>(&json).unwrap(), full);
+    }
+
+    #[test]
+    fn a_proxy_has_answered_once_an_echo_saw_its_exit_and_the_host_always_has() {
+        let mut proxy = proxy();
+        assert!(!proxy.has_answered());
+        // Failed probes and a reputation lookup leave no exit address.
+        proxy.last_health = Some(ProxyHealth::new(Utc::now(), false));
+        assert!(!proxy.has_answered());
+
+        proxy.last_health = Some(ProxyHealth {
+            exit_ip: Some("203.0.113.9".parse().unwrap()),
+            ..ProxyHealth::new(Utc::now(), false)
+        });
+        assert!(proxy.has_answered());
+
+        let mut host = self::proxy();
+        host.provider = ProxyProviderKind::Host;
+        assert!(host.has_answered());
+        host.provider = ProxyProviderKind::Static;
+        assert!(!host.has_answered());
     }
 
     #[test]

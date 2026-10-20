@@ -521,9 +521,9 @@ impl PersonaManager {
     }
 
     /// The persona of a proxy: the one it has, brought in step with the
-    /// proxy's state, or a new one when the proxy is usable and has none.
-    /// `None` when the proxy does not exist, is retired, or is not usable
-    /// yet and has no persona.
+    /// proxy's state, or a new one when the proxy is usable, has answered a
+    /// probe and has none. `None` when the proxy does not exist, is retired,
+    /// or is not usable yet or never answered and has no persona.
     ///
     /// # Errors
     ///
@@ -552,7 +552,10 @@ impl PersonaManager {
                 }
             }
         }
-        if !proxy.state.is_usable() || !proxy.carries_persona() {
+        // A proxy that never answered a probe gets none: the end of its
+        // backoff makes it `degraded`, which is usable, though nothing was
+        // ever seen through it.
+        if !proxy.state.is_usable() || !proxy.carries_persona() || !proxy.has_answered() {
             return Ok(None);
         }
         self.release_plain_exit(&proxy).await?;

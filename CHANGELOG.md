@@ -161,6 +161,11 @@ of 1.x still queued names no level and fails at take-up with
 - Under `egress.mode: direct` an operator's `kage proxy health` and the
   admin probe still probed the idle pool; both refuse now ("the pool is
   idle", F68).
+- A proxy that never answered a probe got a persona when its backoff
+  ended, because `degraded` is usable: a generation spent and a profile
+  made for an address nothing was ever seen through (F71). A persona is
+  made only for a proxy that has answered at least once; the host's own
+  rows, which are never probed, always count as answered.
 
 ## [1.0.2] - 2026-10-19
 
