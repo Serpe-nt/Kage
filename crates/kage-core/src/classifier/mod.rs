@@ -19,7 +19,6 @@
 //!     confidence: 0.97
 //!     priority: 80                 # optional, default 50; highest wins
 //!     retryable: true              # optional: try another persona
-//!     escalate: true               # optional: http, then browser under auto
 //!     cooldown: long               # optional: none | short | long
 //!     when:
 //!       all:
@@ -37,12 +36,13 @@
 //! `interstitial`. Patterns are regular expressions matched anywhere in the
 //! value; they are case-sensitive unless they start with `(?i)`.
 //!
-//! `retryable`, `escalate` and `cooldown` tell the scheduler what a match
-//! means. Each defaults to what the outcome implies
-//! ([`Outcome::is_retryable`], [`Outcome::escalates_to_browser`],
+//! `retryable` and `cooldown` tell the scheduler what a match means. Each
+//! defaults to what the outcome implies ([`Outcome::is_retryable`],
 //! [`Outcome::default_cooldown`]); a rule overrides them when the evidence
 //! says otherwise, for example a script-only shell that another persona
-//! would get just the same.
+//! would get just the same. The `escalate` of 1.x is gone: nothing moves a
+//! request from the http path to a browser since 2.0 (spec §25), and a
+//! signature file that still names it is refused.
 //!
 //! A *hint* never blocks. It records which vendor fronts a site, because
 //! protected sites set their vendor's cookies on good responses too. What
@@ -60,6 +60,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::{Header, Render};
 use crate::outcome::{Block, BlockType, CooldownClass, Outcome, Vendor};
+use crate::policy::Retired;
 use text::visible_text;
 
 /// The only signature file version this build reads.
@@ -147,9 +148,6 @@ pub struct Classification {
     /// Whether the scheduler may try again with another persona. From the
     /// rule that decided; `false` when the page was fetched.
     pub retryable: bool,
-    /// Whether an attempt on the http path with this verdict makes the next
-    /// attempt use the browser when the render mode is `auto`.
-    pub escalate: bool,
     /// How long the persona stays away from the domain, as a class the
     /// domain policy turns into a duration.
     pub cooldown: CooldownClass,
@@ -244,8 +242,10 @@ struct RuleSpec {
     /// Overrides of what the outcome implies by default.
     #[serde(default)]
     retryable: Option<bool>,
+    /// The hint of 1.x, read only to be refused (see the module's
+    /// documentation).
     #[serde(default)]
-    escalate: Option<bool>,
+    escalate: Option<Retired>,
     #[serde(default)]
     cooldown: Option<CooldownClass>,
     /// Free text for maintainers; not used by the engine.
@@ -675,7 +675,6 @@ struct Rule {
     confidence: f32,
     priority: i32,
     retryable: bool,
-    escalate: bool,
     cooldown: CooldownClass,
     when: Condition,
 }
@@ -704,8 +703,6 @@ pub struct RuleInfo {
     pub priority: i32,
     /// Whether a match may be retried with another persona.
     pub retryable: bool,
-    /// Whether a match on the http path escalates to the browser.
-    pub escalate: bool,
     /// The cooldown class a match carries.
     pub cooldown: CooldownClass,
 }
@@ -774,13 +771,19 @@ impl SignatureSet {
                     format!("a rule cannot give the outcome {}", spec.outcome),
                 ));
             }
-            let overrides =
-                spec.retryable.is_some() || spec.escalate.is_some() || spec.cooldown.is_some();
+            if spec.escalate.is_some() {
+                return Err(invalid(
+                    &spec.id,
+                    "escalate is gone in 2.0: the level a request names decides its path and \
+                     nothing moves it to a browser (spec §25); remove the key"
+                        .to_owned(),
+                ));
+            }
+            let overrides = spec.retryable.is_some() || spec.cooldown.is_some();
             if spec.outcome == Outcome::Ok && overrides {
                 return Err(invalid(
                     &spec.id,
-                    "a rule with the outcome ok cannot set retryable, escalate or cooldown"
-                        .to_owned(),
+                    "a rule with the outcome ok cannot set retryable or cooldown".to_owned(),
                 ));
             }
             let cooldown = spec.cooldown.unwrap_or(spec.outcome.default_cooldown());
@@ -802,7 +805,6 @@ impl SignatureSet {
                 confidence: spec.confidence,
                 priority: spec.priority,
                 retryable: spec.retryable.unwrap_or(spec.outcome.is_retryable()),
-                escalate: spec.escalate.unwrap_or(spec.outcome.escalates_to_browser()),
                 cooldown,
                 when,
             });
@@ -837,7 +839,6 @@ impl SignatureSet {
                 confidence: rule.confidence,
                 priority: rule.priority,
                 retryable: rule.retryable,
-                escalate: rule.escalate,
                 cooldown: rule.cooldown,
             })
             .collect()
@@ -924,11 +925,10 @@ impl SignatureSet {
                     vendors,
                     rule: Some(rule.id.clone()),
                     retryable: rule.retryable,
-                    escalate: rule.escalate,
                     cooldown: rule.cooldown,
                 }
             }
-            // The page was fetched: nothing to retry, escalate or cool down.
+            // The page was fetched: nothing to retry or cool down.
             decided => Classification {
                 outcome: if passed_challenge {
                     Outcome::ChallengePassed
@@ -940,7 +940,6 @@ impl SignatureSet {
                 evidence: all_evidence(decided.as_ref().map_or(&[], |(_, evidence)| evidence)),
                 rule: decided.map(|(rule, _)| rule.id.clone()),
                 retryable: false,
-                escalate: false,
                 cooldown: CooldownClass::None,
             },
         }
@@ -1476,25 +1475,25 @@ rules:
         use crate::outcome::CooldownClass;
 
         let teapot = observation(418, PAGE);
-        for (outcome, retryable, escalate, cooldown) in [
-            ("challenge_failed", true, true, CooldownClass::Long),
-            ("captcha", true, true, CooldownClass::Long),
-            ("forbidden", true, true, CooldownClass::Long),
-            ("soft_block", true, true, CooldownClass::Long),
-            ("rate_limited", true, false, CooldownClass::Long),
-            ("provider_error", true, false, CooldownClass::None),
+        for (outcome, retryable, cooldown) in [
+            ("challenge_failed", true, CooldownClass::Long),
+            ("captcha", true, CooldownClass::Long),
+            ("forbidden", true, CooldownClass::Long),
+            ("soft_block", true, CooldownClass::Long),
+            ("rate_limited", true, CooldownClass::Long),
+            ("provider_error", true, CooldownClass::None),
         ] {
             let verdict = hinted(outcome, "").unwrap().classify(&teapot);
             assert_eq!(
-                (verdict.retryable, verdict.escalate, verdict.cooldown),
-                (retryable, escalate, cooldown),
+                (verdict.retryable, verdict.cooldown),
+                (retryable, cooldown),
                 "{outcome}"
             );
         }
 
-        // No rule matched: nothing to retry, escalate or cool down.
+        // No rule matched: nothing to retry or cool down.
         let fetched = classify(&observation(200, PAGE));
-        assert!(!fetched.retryable && !fetched.escalate);
+        assert!(!fetched.retryable);
         assert_eq!(fetched.cooldown, CooldownClass::None);
         assert_eq!(fetched.evidence, Vec::<String>::new());
     }
@@ -1504,33 +1503,23 @@ rules:
         use crate::outcome::CooldownClass;
 
         let teapot = observation(418, PAGE);
-        let set = hinted(
-            "soft_block",
-            "    retryable: false\n    escalate: true\n    cooldown: none\n",
-        )
-        .unwrap();
+        let set = hinted("soft_block", "    retryable: false\n    cooldown: none\n").unwrap();
         let verdict = set.classify(&teapot);
         assert_eq!(
-            (verdict.retryable, verdict.escalate, verdict.cooldown),
-            (false, true, CooldownClass::None)
+            (verdict.retryable, verdict.cooldown),
+            (false, CooldownClass::None)
         );
         let listed = &set.rules()[0];
         assert_eq!(
-            (listed.retryable, listed.escalate, listed.cooldown),
-            (false, true, CooldownClass::None)
+            (listed.retryable, listed.cooldown),
+            (false, CooldownClass::None)
         );
 
         let short = hinted("forbidden", "    cooldown: short\n")
             .unwrap()
             .classify(&teapot);
         assert_eq!(short.cooldown, CooldownClass::Short);
-        assert!(short.retryable && short.escalate);
-
-        let stay = hinted("captcha", "    escalate: false\n")
-            .unwrap()
-            .classify(&teapot);
-        assert!(!stay.escalate && stay.retryable);
-        assert_eq!(stay.cooldown, CooldownClass::Long);
+        assert!(short.retryable);
 
         // A short cooldown is allowed on an outcome with no cooldown of its own.
         let pause = hinted("provider_error", "    cooldown: short\n")
@@ -1543,7 +1532,8 @@ rules:
     fn hints_that_contradict_the_outcome_are_rejected() {
         for (outcome, overrides, needle) in [
             ("ok", "    retryable: true\n", "outcome ok cannot set"),
-            ("ok", "    escalate: true\n", "outcome ok cannot set"),
+            ("forbidden", "    escalate: true\n", "escalate is gone"),
+            ("ok", "    escalate: false\n", "escalate is gone"),
             ("ok", "    cooldown: none\n", "outcome ok cannot set"),
             (
                 "provider_error",

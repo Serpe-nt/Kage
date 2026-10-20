@@ -118,7 +118,7 @@ describe('GET /v1/health', () => {
       contexts_in_use: 1,
       max_contexts: 2,
       uptime_seconds: 2.5,
-      contract_version: '1.4.0',
+      contract_version: '1.5.0',
     });
   });
 
@@ -274,6 +274,25 @@ describe('operations on a context', () => {
       'text/plain',
     );
     expect(written?.bytes).toBe(1);
+  });
+
+  it('hands a still visit to the engine, and refuses one that also asks for a hand (1.5.0)', async () => {
+    const { app, engine } = await start();
+    const id = await open(app);
+    const still = exampleOf<{ behavior: Record<string, unknown> }>('NavigateRequest', 2);
+    expect(still.behavior).toMatchObject({ mode: 'still' });
+    const response = await post(app, `/v1/contexts/${id}/navigate`, still);
+    expect(response.statusCode, response.body).toBe(200);
+    expect(engine.contexts[0]?.navigated).toHaveLength(1);
+    const refused = await post(app, `/v1/contexts/${id}/navigate`, {
+      ...still,
+      behavior: { ...still.behavior, scroll_depth: 0.5, wander: true },
+    });
+    expectError(refused, 400, 'invalid_request');
+    expect(ErrorResponseSchema.parse(refused.json()).message).toBe(
+      'behavior.scroll_depth: a still visit does not scroll; behavior.wander: a still visit does not move the mouse',
+    );
+    expect(engine.contexts[0]?.navigated).toHaveLength(1);
   });
 
   it('returns a navigation that did not arrive as a 200 with its error', async () => {

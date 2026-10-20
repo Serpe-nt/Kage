@@ -207,7 +207,6 @@ impl Pipeline {
             persona: record.persona.clone(),
             block: None,
             pacing,
-            escalated: false,
             extract: record.extract.clone(),
             robots: record.robots.clone(),
             page: None,

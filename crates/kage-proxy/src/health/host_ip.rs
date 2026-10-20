@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 
-use super::probe::parse_ip;
+use super::probe::{GeoLookup, parse_geo, parse_ip};
 
 /// What the lookup client calls itself.
 const USER_AGENT: &str = concat!("kage/", env!("CARGO_PKG_VERSION"));
@@ -37,6 +37,9 @@ pub enum HostIpError {
     /// The echo's answer holds no address.
     #[error("the echo's answer holds no address")]
     NoAddress,
+    /// The geo service's answer names no country.
+    #[error("the geo service's answer names no country")]
+    NoPlace,
 }
 
 /// The host's public address as last read.
@@ -113,9 +116,34 @@ impl HostIp {
     /// Fails when the echo cannot be read; [`HostIp::current`] is unchanged
     /// then.
     pub async fn refresh(&self, now: DateTime<Utc>) -> Result<IpAddr, HostIpError> {
+        let body = self
+            .read_text(&self.url)
+            .await?
+            .ok_or(HostIpError::NoAddress)?;
+        let ip = parse_ip(&body).ok_or(HostIpError::NoAddress)?;
+        *self.current.write().unwrap_or_else(PoisonError::into_inner) = Some((ip, now));
+        Ok(ip)
+    }
+
+    /// Looks the host's own address up at `url`, a geo service such as
+    /// `proxies.health.geo_url`, directly: the place of the host's
+    /// personas under `egress.mode: direct` (spec §25).
+    ///
+    /// # Errors
+    ///
+    /// Fails when the service cannot be read or its answer names no
+    /// country.
+    pub async fn lookup(&self, url: &str) -> Result<GeoLookup, HostIpError> {
+        let body = self.read_text(url).await?.ok_or(HostIpError::NoPlace)?;
+        parse_geo(&body).ok_or(HostIpError::NoPlace)
+    }
+
+    /// The body of a `GET` of `url` as text; `None` when it is longer than
+    /// an answer of these services ever is.
+    async fn read_text(&self, url: &str) -> Result<Option<String>, HostIpError> {
         let response = self
             .client
-            .get(self.url.as_str())
+            .get(url)
             .send()
             .await
             .map_err(|error| HostIpError::Transport(error.to_string()))?;
@@ -128,11 +156,9 @@ impl HostIp {
             .await
             .map_err(|error| HostIpError::Transport(error.to_string()))?;
         if body.len() > MAX_BODY_BYTES {
-            return Err(HostIpError::NoAddress);
+            return Ok(None);
         }
-        let ip = parse_ip(&String::from_utf8_lossy(&body)).ok_or(HostIpError::NoAddress)?;
-        *self.current.write().unwrap_or_else(PoisonError::into_inner) = Some((ip, now));
-        Ok(ip)
+        Ok(Some(String::from_utf8_lossy(&body).into_owned()))
     }
 }
 

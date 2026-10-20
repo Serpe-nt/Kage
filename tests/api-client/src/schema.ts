@@ -634,8 +634,13 @@ export interface components {
              */
             timeout_ms?: number | null;
         };
-        /** @description One try at a request by one persona. */
+        /**
+         * @description One try at a request: by one persona, or at level 0 by the plain
+         *     client from its exit.
+         */
         AttemptView: {
+            engine?: components["schemas"]["EngineField"] | null;
+            exit?: components["schemas"]["ExitField"] | null;
             /**
              * Format: int32
              * @description 1 for the first attempt.
@@ -643,8 +648,8 @@ export interface components {
             n: number;
             /** @description How it ended. */
             outcome: components["schemas"]["OutcomeField"];
-            /** @description The persona that made it, as in `persona.id`. */
-            persona: string;
+            /** @description The persona that made it, as in `persona.id`; null at level 0. */
+            persona?: string | null;
             /**
              * @description Why it ended as it did when the site did not say, for example
              *     `proxy_failed`.
@@ -714,6 +719,146 @@ export interface components {
             timeout_ms?: number | null;
         };
         /**
+         * @description A fetch request as an item of a batch: whatever it leaves out comes from the batch's defaults, the level among it; every item ends with one (level_required).
+         * @example {
+         *       "behavior": {
+         *         "dwell_ms": 3000,
+         *         "scroll_depth": 0.3
+         *       },
+         *       "include": [
+         *         "dom",
+         *         "headers",
+         *         "xhr"
+         *       ],
+         *       "level": 3,
+         *       "persona": {
+         *         "countries": [
+         *           "DE",
+         *           "AT"
+         *         ],
+         *         "engines": [
+         *           "chromium"
+         *         ]
+         *       },
+         *       "timeout_ms": 60000,
+         *       "url": "https://example.org/listing?page=2",
+         *       "wait": {
+         *         "until": "network_idle"
+         *       }
+         *     }
+         */
+        BatchItem: {
+            behavior?: components["schemas"]["BehaviorField"] | null;
+            /**
+             * @description The body of a `POST`, as text; needs level 0 or 1 and a
+             *     `Content-Type` header.
+             */
+            body?: string | null;
+            /**
+             * Format: int64
+             * @description For how many seconds the result may be served from the response
+             *     cache: a later request that asks for the same is answered with it,
+             *     without a visit, while it is no older than that request's own
+             *     `cache_ttl_s`. 0 is never. Left out, the site's policy decides
+             *     (never, unless the operator set `cache.ttl`). At most the site's
+             *     `cache.max_ttl` (a day unless configured): more is refused with
+             *     `cache_ttl_too_long`. Not in a session.
+             * @example 600
+             */
+            cache_ttl_s?: number | null;
+            extract?: components["schemas"]["ExtractField"] | null;
+            /**
+             * @description Headers of the request's own; at most 32, and only at level 0 or 1.
+             *     A browser sends its own headers and cannot be given others without a
+             *     page noticing. At level 1 headers that are the persona's identity or
+             *     the transport's are refused by name (`User-Agent`,
+             *     `Accept-Language`, `Accept-Encoding`, `Cookie`, `Origin`, `Sec-*`,
+             *     `Proxy-*`, `Host` and others), and a `Referer` names the page the
+             *     request comes from. At level 0 they are the caller's request as
+             *     given, `User-Agent`, `Cookie` and `Authorization` included: only the
+             *     transport's, `Proxy-*`, the forwarding family and `Accept-Encoding`
+             *     are refused. A caller's `Cookie` and `Authorization` go to the
+             *     request's origin only, never across a redirect to another, and are
+             *     neither stored nor logged.
+             */
+            headers?: {
+                [key: string]: string;
+            };
+            /**
+             * @description The parts of the result to return and to keep. Default: `dom` and
+             *     `headers` at level 2 and 3, `raw` and `headers` at 0 and 1.
+             */
+            include?: components["schemas"]["Include"][] | null;
+            /**
+             * Format: int32
+             * @description The camouflage level (spec §25), required: 0, a plain HTTP client
+             *     that says it is Kage (`User-Agent: kage/<version>` unless the
+             *     request names its own), with no persona and no cookie jar; 1, a
+             *     persona's http client, a browser's wire fingerprint with no page
+             *     behaviour (refused with `level_unavailable` while no browser
+             *     version of this installation has a verified profile); 2, a
+             *     persona's browser that loads the page, sends no input and leaves; 3,
+             *     a persona's browser as a person. Below 3 Kage is not pretending to
+             *     be a person. A site's policy may set a floor (`level_below_policy`);
+             *     a request is never raised and never escalated.
+             * @example 3
+             */
+            level?: number;
+            /**
+             * Format: int64
+             * @description The largest body and document kept, in bytes; a longer one is cut.
+             */
+            max_body_bytes?: number | null;
+            /**
+             * Format: int32
+             * @description Retries after the first attempt, each by another persona. Default:
+             *     the policy's (2). At level 0 only a failure that is not the site's
+             *     answer (the network, a timeout, a server error) is tried again, from
+             *     the same exit; a block is the answer.
+             */
+            max_retries?: number | null;
+            /**
+             * @description `GET`, `HEAD` or `POST`. Anything but `GET` needs level 0 or 1.
+             * @example GET
+             */
+            method?: string;
+            pacing?: components["schemas"]["PacingField"] | null;
+            pdf?: components["schemas"]["PdfField"] | null;
+            persona?: components["schemas"]["PersonaHints"] | null;
+            /**
+             * @description What the request is on the http path; anything but `navigation`
+             *     needs level 1 and a `Referer` header naming the page that makes the
+             *     request.
+             */
+            request_kind?: components["schemas"]["RequestKindField"];
+            /** @description What to do about the site's `robots.txt`. */
+            robots?: components["schemas"]["RobotsField"];
+            screenshot?: components["schemas"]["ScreenshotField"] | null;
+            /**
+             * @description An open session of this key: the request is made by the session's
+             *     persona and by no other. Needs the `sessions` scope, and a level
+             *     with a persona (`session_needs_persona` at 0). A fetch never opens a
+             *     session; `POST /v1/sessions` does.
+             * @example proj-a-42
+             */
+            session_id?: string | null;
+            /**
+             * Format: int64
+             * @description The longest one attempt may take, in milliseconds: at least 15000
+             *     in a browser (level 2 and 3), at least 1000 at 0 and 1, at most
+             *     300000. Default: 60000 in a browser, 30000 on the http path.
+             */
+            timeout_ms?: number | null;
+            /**
+             * @description The page: an `http` or `https` URL of at most 8192 bytes. Hosts
+             *     that name no public site are refused (`ssrf_denied`).
+             * @example https://example.org/listing?page=2
+             */
+            url: string;
+            wait?: components["schemas"]["WaitField"] | null;
+            xhr?: components["schemas"]["XhrField"] | null;
+        };
+        /**
          * @description A batch: pages fetched one after another the way a visitor reads them.
          *
          *     Per site a batch has one visitor: one persona reads its pages of that
@@ -737,7 +882,8 @@ export interface components {
          *         "include": [
          *           "dom",
          *           "headers"
-         *         ]
+         *         ],
+         *         "level": 3
          *       },
          *       "type": "batch",
          *       "urls": [
@@ -758,7 +904,7 @@ export interface components {
              *     with whatever it sets taking the place of the default. They come
              *     after `urls`.
              */
-            items?: components["schemas"]["FetchRequest"][];
+            items?: components["schemas"]["BatchItem"][];
             /**
              * @description An open session of this key: every item is fetched by the
              *     session's persona and by no other, with a fetch's rules (the
@@ -1004,7 +1150,8 @@ export interface components {
          *         "include": [
          *           "dom",
          *           "headers"
-         *         ]
+         *         ],
+         *         "level": 3
          *       },
          *       "deny": [
          *         "/login",
@@ -1233,7 +1380,12 @@ export interface components {
          *     what a problem document carries as `code`.
          * @enum {string}
          */
-        ErrorCode: "missing_key" | "invalid_key" | "key_disabled" | "scope_missing" | "rate_limited" | "concurrency_limited" | "budget_exhausted" | "invalid_request" | "validation_failed" | "invalid_url" | "ssrf_denied" | "header_denied" | "header_invalid" | "header_not_placeable" | "render_include_conflict" | "render_kind_conflict" | "render_needs_http" | "request_kind_needs_referer" | "preflight_required" | "timeout_too_short" | "robots_enforced" | "robots_ignored" | "cache_ttl_too_long" | "invalid_pacing" | "invalid_session_id" | "session_not_found" | "session_persona_conflict" | "no_matching_persona" | "not_found" | "method_not_allowed" | "result_not_found" | "artifact_not_found" | "persona_not_found" | "proxy_not_found" | "key_not_found" | "job_not_found" | "idempotency_key_reused" | "webhook_origin_not_allowed" | "driver_input_denied" | "conflict" | "payload_too_large" | "uri_too_long" | "unsupported_media_type" | "request_timeout" | "unavailable" | "internal";
+        ErrorCode: "missing_key" | "invalid_key" | "key_disabled" | "scope_missing" | "rate_limited" | "concurrency_limited" | "budget_exhausted" | "invalid_request" | "validation_failed" | "invalid_url" | "ssrf_denied" | "header_denied" | "header_invalid" | "header_not_placeable" | "level_required" | "level_below_policy" | "level_unavailable" | "level_include_conflict" | "level_kind_conflict" | "level_needs_http" | "session_needs_persona" | "request_kind_needs_referer" | "preflight_required" | "timeout_too_short" | "robots_enforced" | "robots_ignored" | "cache_ttl_too_long" | "invalid_pacing" | "invalid_session_id" | "session_not_found" | "session_persona_conflict" | "no_matching_persona" | "not_found" | "method_not_allowed" | "result_not_found" | "artifact_not_found" | "persona_not_found" | "proxy_not_found" | "key_not_found" | "job_not_found" | "idempotency_key_reused" | "webhook_origin_not_allowed" | "driver_input_denied" | "conflict" | "payload_too_large" | "uri_too_long" | "unsupported_media_type" | "request_timeout" | "unavailable" | "internal";
+        /**
+         * @description Where a plain client's attempt (level 0) left from: never an address.
+         * @enum {string}
+         */
+        ExitField: "host" | "pool";
         /** @description What of a page is extracted; with `include: ["extract"]`. */
         ExtractField: {
             /** @description Whether the links of the page are listed. */
@@ -1372,6 +1524,7 @@ export interface components {
          *         "headers",
          *         "xhr"
          *       ],
+         *       "level": 3,
          *       "persona": {
          *         "countries": [
          *           "DE",
@@ -1381,7 +1534,6 @@ export interface components {
          *           "chromium"
          *         ]
          *       },
-         *       "render": "auto",
          *       "timeout_ms": 60000,
          *       "url": "https://example.org/listing?page=2",
          *       "wait": {
@@ -1392,7 +1544,7 @@ export interface components {
         FetchRequest: {
             behavior?: components["schemas"]["BehaviorField"] | null;
             /**
-             * @description The body of a `POST`, as text; needs `render: http` and a
+             * @description The body of a `POST`, as text; needs level 0 or 1 and a
              *     `Content-Type` header.
              */
             body?: string | null;
@@ -1410,22 +1562,42 @@ export interface components {
             cache_ttl_s?: number | null;
             extract?: components["schemas"]["ExtractField"] | null;
             /**
-             * @description Headers of the request's own; at most 32, and only with
-             *     `render: http`. A browser sends its own headers and cannot be given
-             *     others without a page noticing. Headers that are the persona's
-             *     identity or the transport's are refused by name (`User-Agent`,
+             * @description Headers of the request's own; at most 32, and only at level 0 or 1.
+             *     A browser sends its own headers and cannot be given others without a
+             *     page noticing. At level 1 headers that are the persona's identity or
+             *     the transport's are refused by name (`User-Agent`,
              *     `Accept-Language`, `Accept-Encoding`, `Cookie`, `Origin`, `Sec-*`,
-             *     `Proxy-*`, `Host` and others). A `Referer` names the page the
-             *     request comes from.
+             *     `Proxy-*`, `Host` and others), and a `Referer` names the page the
+             *     request comes from. At level 0 they are the caller's request as
+             *     given, `User-Agent`, `Cookie` and `Authorization` included: only the
+             *     transport's, `Proxy-*`, the forwarding family and `Accept-Encoding`
+             *     are refused. A caller's `Cookie` and `Authorization` go to the
+             *     request's origin only, never across a redirect to another, and are
+             *     neither stored nor logged.
              */
             headers?: {
                 [key: string]: string;
             };
             /**
              * @description The parts of the result to return and to keep. Default: `dom` and
-             *     `headers`, or `raw` and `headers` with `render: http`.
+             *     `headers` at level 2 and 3, `raw` and `headers` at 0 and 1.
              */
             include?: components["schemas"]["Include"][] | null;
+            /**
+             * Format: int32
+             * @description The camouflage level (spec §25), required: 0, a plain HTTP client
+             *     that says it is Kage (`User-Agent: kage/<version>` unless the
+             *     request names its own), with no persona and no cookie jar; 1, a
+             *     persona's http client, a browser's wire fingerprint with no page
+             *     behaviour (refused with `level_unavailable` while no browser
+             *     version of this installation has a verified profile); 2, a
+             *     persona's browser that loads the page, sends no input and leaves; 3,
+             *     a persona's browser as a person. Below 3 Kage is not pretending to
+             *     be a person. A site's policy may set a floor (`level_below_policy`);
+             *     a request is never raised and never escalated.
+             * @example 3
+             */
+            level: number;
             /**
              * Format: int64
              * @description The largest body and document kept, in bytes; a longer one is cut.
@@ -1434,23 +1606,23 @@ export interface components {
             /**
              * Format: int32
              * @description Retries after the first attempt, each by another persona. Default:
-             *     the policy's (2).
+             *     the policy's (2). At level 0 only a failure that is not the site's
+             *     answer (the network, a timeout, a server error) is tried again, from
+             *     the same exit; a block is the answer.
              */
             max_retries?: number | null;
             /**
-             * @description `GET`, `HEAD` or `POST`. Anything but `GET` needs `render: http`.
+             * @description `GET`, `HEAD` or `POST`. Anything but `GET` needs level 0 or 1.
              * @example GET
              */
             method?: string;
             pacing?: components["schemas"]["PacingField"] | null;
             pdf?: components["schemas"]["PdfField"] | null;
             persona?: components["schemas"]["PersonaHints"] | null;
-            /** @description The path. */
-            render?: components["schemas"]["RenderField"];
             /**
              * @description What the request is on the http path; anything but `navigation`
-             *     needs `render: http` and a `Referer` header naming the page that
-             *     makes the request.
+             *     needs level 1 and a `Referer` header naming the page that makes the
+             *     request.
              */
             request_kind?: components["schemas"]["RequestKindField"];
             /** @description What to do about the site's `robots.txt`. */
@@ -1458,17 +1630,17 @@ export interface components {
             screenshot?: components["schemas"]["ScreenshotField"] | null;
             /**
              * @description An open session of this key: the request is made by the session's
-             *     persona and by no other. Needs the `sessions` scope. A fetch never
-             *     opens a session; `POST /v1/sessions` does.
+             *     persona and by no other. Needs the `sessions` scope, and a level
+             *     with a persona (`session_needs_persona` at 0). A fetch never opens a
+             *     session; `POST /v1/sessions` does.
              * @example proj-a-42
              */
             session_id?: string | null;
             /**
              * Format: int64
              * @description The longest one attempt may take, in milliseconds: at least 15000
-             *     when a browser may make it (`browser` and `auto`), at least 1000
-             *     with `http`, at most 300000. Default: 60000 in a browser, 30000 on
-             *     the http path.
+             *     in a browser (level 2 and 3), at least 1000 at 0 and 1, at most
+             *     300000. Default: 60000 in a browser, 30000 on the http path.
              */
             timeout_ms?: number | null;
             /**
@@ -1520,8 +1692,6 @@ export interface components {
              *     document is `raw_body` there.
              */
             dom_html?: string | null;
-            /** @description Whether the request moved from the http path to a browser. */
-            escalated: boolean;
             extract?: components["schemas"]["ExtractView"] | null;
             /** @description The URL after redirects. */
             final_url?: string | null;
@@ -1533,6 +1703,13 @@ export interface components {
              *     returns this document again.
              */
             id: string;
+            /**
+             * Format: int64
+             * @description The level the request was made at (spec §25); null for a result
+             *     stored before 2.0.
+             * @example 3
+             */
+            level?: number | null;
             /**
              * @description How the request ended. A block is an outcome, not an HTTP error:
              *     the status of this answer is 200 whenever a fetch was made.
@@ -1600,7 +1777,7 @@ export interface components {
         };
         /**
          * @description A flow: a script of steps one persona performs in its browser, as one
-         *     visit.
+         *     visit, at level 2 or 3.
          *
          *     The persona arrives by a typed navigation, stays on every page it comes
          *     to for a while with its pointer moving, and pauses between its actions
@@ -1636,6 +1813,7 @@ export interface components {
          *         "dom",
          *         "headers"
          *       ],
+         *       "level": 3,
          *       "type": "flow"
          *     }
          */
@@ -1649,6 +1827,15 @@ export interface components {
              *     `headers` unless said.
              */
             include?: components["schemas"]["Include"][] | null;
+            /**
+             * Format: int32
+             * @description The camouflage level (spec §25), required: 2 or 3, since a flow is a
+             *     browser's. At 2 the persona's idle hand rests while it dwells and
+             *     its dwell is the policy's `min_dwell` drawn upward; `behavior` is
+             *     level 3's.
+             * @example 3
+             */
+            level: number;
             /**
              * Format: int64
              * @description The largest body and document kept, in bytes.
@@ -2228,11 +2415,12 @@ export interface components {
         /** @description The policy in force for a host. */
         PolicyPreview: {
             /**
-             * @description The path a request with `render: auto` takes first: `http` when the
-             *     policy says so, else `browser`.
-             * @example browser
+             * Format: int64
+             * @description The lowest level a request for the host may name (spec §25): one
+             *     below it is refused with `level_below_policy`, never raised.
+             * @example 0
              */
-            first_render: string;
+            min_level: number;
             /**
              * @description The pacing profile the policy names, in the format of
              *     `policies/pacing-profiles.yaml`.
@@ -2247,7 +2435,7 @@ export interface components {
             paused_until?: string | null;
             /**
              * @description Every field of the policy as it resolves for the host: `host`,
-             *     `matched` (the entry that applies), `inherits`, `render`,
+             *     `matched` (the entry that applies), `inherits`, `min_level`,
              *     `countries`, `engines`, `pacing`, `pacing_locked`, `robots`,
              *     `referer_strategy`, `active_hours`, `min_dwell`, `behavior_locked`,
              *     `retries`, `breaker_threshold`, `breaker_pause`, `cooldowns`.
@@ -2438,11 +2626,6 @@ export interface components {
          * @enum {string}
          */
         RefererStrategyField: "direct" | "none" | "search_engine";
-        /**
-         * @description The path a request asks for.
-         * @enum {string}
-         */
-        RenderField: "auto" | "http" | "browser";
         /**
          * @description The path an attempt took.
          * @enum {string}

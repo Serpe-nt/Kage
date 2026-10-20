@@ -355,6 +355,22 @@ impl ClientFactory {
             .retain(|key, _| key.persona != Some(persona));
     }
 
+    /// The public authorities and the operator's own, when the factory was
+    /// given one; `None` for the public ones alone (wreq's default).
+    pub(crate) fn trust_store(&self) -> Result<Option<wreq::tls::trust::CertStore>, HttpError> {
+        if self.trust_anchors.is_empty() {
+            return Ok(None);
+        }
+        let mut store = wreq::tls::trust::CertStore::builder()
+            .add_der_certs(webpki_root_certs::TLS_SERVER_ROOT_CERTS);
+        for anchor in &self.trust_anchors {
+            store = store.add_stack_pem_certs(anchor);
+        }
+        store.build().map(Some).map_err(|_| {
+            HttpError::Build("a trusted certificate authority is not valid PEM".to_owned())
+        })
+    }
+
     fn build(
         &self,
         spec: &ClientSpec,
@@ -377,15 +393,8 @@ impl ClientFactory {
             .pool_idle_timeout(self.settings.idle_connection_timeout)
             .tls_session_cache(TimedSessionCache::default())
             .connector_layer(ConnectTimingLayer);
-        if !self.trust_anchors.is_empty() {
-            let mut store = wreq::tls::trust::CertStore::builder()
-                .add_der_certs(webpki_root_certs::TLS_SERVER_ROOT_CERTS);
-            for anchor in &self.trust_anchors {
-                store = store.add_stack_pem_certs(anchor);
-            }
-            builder = builder.tls_cert_store(store.build().map_err(|_| {
-                HttpError::Build("a trusted certificate authority is not valid PEM".to_owned())
-            })?);
+        if let Some(store) = self.trust_store()? {
+            builder = builder.tls_cert_store(store);
         }
         let wreq = builder
             .build()

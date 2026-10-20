@@ -121,8 +121,10 @@ reputation:
 # The proxy pool (spec §7.3).
 proxies:
   # auto | webshare | static | none. auto: Webshare when its API key is set,
-  # else the static list when one is set, else no provider. Without a
-  # provider every fetch fails: kage never connects to a target directly.
+  # else the static list when one is set, else no provider. Under
+  # egress.mode proxies (the default) every request leaves through the
+  # pool, so without a provider nothing is fetched; under direct the pool is
+  # idle and no provider is needed (see egress).
   provider: auto
   # How often the pool is reconciled with the provider's list.
   sync_interval: 10m
@@ -170,6 +172,38 @@ proxies:
     # Emulation profile of the probe client until personas bring their own.
     profile: chrome_149
     platform: windows
+
+# Egress (spec §25, ADR 0012): which connection carries the traffic. There
+# is no mixed mode: under proxies nothing leaves the host's own address,
+# under direct nothing goes through the pool.
+egress:
+  # proxies: every persona on its own proxy of the pool (the default).
+  # direct: the host's own connection, with egress.direct.personas
+  # personas standing for it; the forwarder still fronts every browser and
+  # client, checks every address and counts every byte.
+  mode: proxies
+  # Where a level-0 request (a plain client, no persona) leaves from: pool
+  # under proxies (through the site's one plain exit, its scout's proxy),
+  # host under direct. null: the one the mode implies; the other is refused.
+  plain: null
+  # The User-Agent of a level-0 request that names none. null: kage/<version>.
+  # A deployment may name itself, as kage/2.0.0 (+https://example.org/bot).
+  plain_user_agent: null
+  direct:
+    # Personas that stand for the host's connection (1 to 4).
+    personas: 1
+    # Declared identity of the host personas. Declared values win and a geo
+    # lookup from the host only verifies them; null: the first lookup that
+    # answers decides (behind a carrier NAT or a VPN, declare them).
+    country: null
+    # A BCP 47 tag with the country as its region (de-AT); needs country.
+    locale: null
+    # Engines the host personas may be drawn on; null: personas.mix.
+    engines: null
+    # Exact names that may resolve to a private or loopback address under
+    # direct: the operator's own network. Link-local, metadata and
+    # multicast addresses are refused for every name.
+    private_names: []
 
 # The http path (spec §9): wreq with a browser's TLS, HTTP/2 and headers.
 http:

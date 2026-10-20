@@ -202,6 +202,7 @@ fn an_optional_field_is_left_out_and_a_nullable_one_is_written_as_null() {
     // down: what is not set is not written, and the sidecar's defaults apply.
     request.behavior = Some(BehaviorOptions {
         seed: None,
+        mode: None,
         entry: Some(Entry {
             strategy: EntryStrategy::Link,
             from_url: Some("https://www.example.org/".to_owned()),

@@ -5,7 +5,9 @@
 //! against these values at run time (`kage selftest http`), in an image
 //! that has no repository, so they are compiled in. The captures of the
 //! real browsers (`browser/<engine>-<major>.json`) are compiled in as well:
-//! they are what a browser persona must show the echo.
+//! they are what a browser persona must show the echo. `plain.json`, the
+//! plain client of level 0, is no profile's and is not embedded: its test
+//! reads it.
 
 // A build script talks to cargo through stdout.
 #![allow(clippy::print_stdout)]
@@ -31,6 +33,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 && path
                     .extension()
                     .is_some_and(|extension| extension == "json")
+                && path.file_stem().is_some_and(|stem| stem != "plain")
             {
                 files.push(path.canonicalize()?);
             }

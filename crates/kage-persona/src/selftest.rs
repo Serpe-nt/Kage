@@ -611,7 +611,7 @@ impl PersonaManager {
             .as_deref()
             .and_then(|echo| Url::parse(echo).ok());
         let own_pages = pages(&selftest.browser, false);
-        if (echo.is_none() && own_pages.is_empty()) || self.pool.egress_unsafe().await? {
+        if (echo.is_none() && own_pages.is_empty()) || self.egress_unsafe().await? {
             return Ok(0);
         }
         let waits = |error: &PersonaError| {

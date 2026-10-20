@@ -2,7 +2,7 @@
 //! persona and domain (decision D5).
 
 use chrono::{DateTime, Utc};
-use kage_core::domain::BandwidthUsage;
+use kage_core::domain::{BandwidthUsage, Exit};
 use kage_core::ids::PersonaId;
 use uuid::Uuid;
 
@@ -41,8 +41,8 @@ fn traffic(up: i64, down: i64) -> Result<Traffic, StoreError> {
 }
 
 impl BandwidthRepo<'_> {
-    /// Adds bytes to what is stored for their hour, persona and domain.
-    /// Everything is added in one transaction, or nothing.
+    /// Adds bytes to what is stored for their hour, persona, domain and
+    /// egress. Everything is added in one transaction, or nothing.
     ///
     /// # Errors
     ///
@@ -55,14 +55,15 @@ impl BandwidthRepo<'_> {
         let mut transaction = self.pool.begin().await?;
         for usage in usages {
             sqlx::query!(
-                "INSERT INTO bandwidth_usage (hour, persona_id, domain, bytes_up, bytes_down)
-                 VALUES ($1, $2, $3, $4, $5)
-                 ON CONFLICT (hour, persona_id, domain) DO UPDATE
+                "INSERT INTO bandwidth_usage (hour, persona_id, domain, egress, bytes_up, bytes_down)
+                 VALUES ($1, $2, $3, $4, $5, $6)
+                 ON CONFLICT (hour, persona_id, domain, egress) DO UPDATE
                  SET bytes_up = bandwidth_usage.bytes_up + EXCLUDED.bytes_up,
                      bytes_down = bandwidth_usage.bytes_down + EXCLUDED.bytes_down",
                 usage.hour,
-                usage.persona_id.as_uuid(),
+                usage.persona_id.map(|id| id.as_uuid()),
                 usage.domain,
+                usage.egress.as_str(),
                 to_i64((TABLE, "bytes_up"), usage.bytes_up)?,
                 to_i64((TABLE, "bytes_down"), usage.bytes_down)?,
             )
@@ -73,24 +74,31 @@ impl BandwidthRepo<'_> {
         Ok(())
     }
 
-    /// Everything counted from `since` on.
+    /// Everything counted from `since` on that left through `egress`:
+    /// the pool's is what the proxy plan's budget is judged on.
     ///
     /// # Errors
     ///
     /// Fails when the query fails.
-    pub async fn total_since(&self, since: DateTime<Utc>) -> Result<Traffic, StoreError> {
+    pub async fn total_since(
+        &self,
+        since: DateTime<Utc>,
+        egress: Exit,
+    ) -> Result<Traffic, StoreError> {
         let row = sqlx::query!(
             r#"SELECT COALESCE(SUM(bytes_up), 0)::bigint AS "up!",
                       COALESCE(SUM(bytes_down), 0)::bigint AS "down!"
-               FROM bandwidth_usage WHERE hour >= $1"#,
+               FROM bandwidth_usage WHERE hour >= $1 AND egress = $2"#,
             since,
+            egress.as_str(),
         )
         .fetch_one(self.pool)
         .await?;
         traffic(row.up, row.down)
     }
 
-    /// What each persona exchanged from `since` on, the heaviest first.
+    /// What each persona exchanged from `since` on, the heaviest first; a
+    /// plain client's bytes are no persona's.
     ///
     /// # Errors
     ///
@@ -100,7 +108,7 @@ impl BandwidthRepo<'_> {
         since: DateTime<Utc>,
     ) -> Result<Vec<(PersonaId, Traffic)>, StoreError> {
         struct Row {
-            persona_id: Uuid,
+            persona_id: Option<Uuid>,
             up: i64,
             down: i64,
         }
@@ -109,7 +117,7 @@ impl BandwidthRepo<'_> {
             r#"SELECT persona_id,
                       SUM(bytes_up)::bigint AS "up!",
                       SUM(bytes_down)::bigint AS "down!"
-               FROM bandwidth_usage WHERE hour >= $1
+               FROM bandwidth_usage WHERE hour >= $1 AND persona_id IS NOT NULL
                GROUP BY persona_id
                ORDER BY SUM(bytes_up) + SUM(bytes_down) DESC, persona_id"#,
             since,
@@ -117,11 +125,9 @@ impl BandwidthRepo<'_> {
         .fetch_all(self.pool)
         .await?
         .into_iter()
-        .map(|row| {
-            Ok((
-                PersonaId::from_uuid(row.persona_id),
-                traffic(row.up, row.down)?,
-            ))
+        .filter_map(|row| {
+            let persona = row.persona_id.map(PersonaId::from_uuid)?;
+            Some(traffic(row.up, row.down).map(|traffic| (persona, traffic)))
         })
         .collect()
     }

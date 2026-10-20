@@ -70,7 +70,6 @@ pub fn unanswered(outcome: Outcome, reason: &str) -> Classification {
         vendors: Vec::new(),
         rule: None,
         retryable: outcome.is_retryable(),
-        escalate: false,
         cooldown: CooldownClass::None,
         evidence: vec![format!("failure:{reason}")],
     }
@@ -556,7 +555,7 @@ mod tests {
     #[test]
     fn an_unanswered_attempt_keeps_the_hints_of_its_outcome() {
         let timeout = unanswered(Outcome::Timeout, "timeout");
-        assert!(timeout.retryable && !timeout.escalate);
+        assert!(timeout.retryable);
         assert_eq!(timeout.block, None);
         assert_eq!(timeout.evidence, ["failure:timeout"]);
         assert!(!unanswered(Outcome::SsrfDenied, "ssrf").retryable);

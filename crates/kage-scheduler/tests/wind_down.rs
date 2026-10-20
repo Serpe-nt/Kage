@@ -15,7 +15,7 @@ mod common;
 use std::time::Duration;
 
 use common::{DEFAULT_DOMAINS, World};
-use kage_core::domain::RenderMode;
+use kage_core::domain::Level;
 use kage_core::outcome::Outcome;
 use kage_core::schedule::planner::Refusal;
 use kage_core::schedule::queue::Priority;
@@ -27,7 +27,7 @@ const WAIT: Duration = Duration::from_secs(150);
 
 fn page(url: &str, priority: Priority) -> FetchOrder {
     FetchOrder {
-        render: RenderMode::Browser,
+        level: Level::Human,
         ..FetchOrder::get(Url::parse(url).unwrap(), priority)
     }
 }

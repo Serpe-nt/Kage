@@ -54,8 +54,15 @@ function env(name: string): string {
 const ENGINES = ['chromium', 'firefox'] as const;
 type EngineName = (typeof ENGINES)[number];
 
-/** Read fast: the test is about what comes back, not about the visit. */
-const QUICK = { behavior: { scroll_depth: 0, dwell_ms: 1000 }, timeout_ms: 60_000 } as const;
+/**
+ * Read fast, by a person (level 3): the test is about what comes back, not
+ * about the visit.
+ */
+const QUICK = {
+  level: 3,
+  behavior: { scroll_depth: 0, dwell_ms: 1000 },
+  timeout_ms: 60_000,
+} as const;
 
 const ESSAY = 'The lamplighter and the ledger';
 
@@ -82,7 +89,6 @@ async function refusal(client: KageClient, request: FetchRequest): Promise<strin
 function essayRequest(site: string, engine: EngineName): FetchRequest {
   return {
     url: `${site}/read/essay?reader=${engine}`,
-    render: 'browser',
     include: ['headers', 'extract'],
     persona: { engines: [engine] },
     cache_ttl_s: 600,
@@ -96,6 +102,7 @@ async function essay(client: KageClient, site: string, engine: EngineName) {
 
   const first = await finished(client, asking);
   assert.equal(first.outcome, 'ok', `${engine}: ${first.reason ?? first.outcome}`);
+  assert.equal(first.level, 3);
   assert.equal(first.persona?.engine, engine);
   assert.equal(first.cached, false);
   assert.equal(cachedAt(first), undefined);
@@ -201,7 +208,7 @@ async function otherInclude(client: KageClient, site: string, engine: EngineName
 
 /** A page the enforced file allows, and one it disallows. */
 async function enforced(client: KageClient, rules: string, engine: EngineName) {
-  const reading = { render: 'browser', persona: { engines: [engine] }, ...QUICK } as const;
+  const reading = { persona: { engines: [engine] }, ...QUICK } as const;
   const started = Date.now();
   const allowed = await finished(client, {
     ...reading,
@@ -343,11 +350,11 @@ async function main(): Promise<unknown> {
   // policy never asks for, less than the policy enforces, and a longer
   // life in the cache than results have.
   const refusals = [
-    await refusal(client, { url: `${site}/read/essay`, robots: 'enforce' }),
-    await refusal(client, { url: `${rules}/site/private`, robots: 'ignore' }),
-    await refusal(client, { url: `${rules}/site/private`, robots: 'report' }),
-    await refusal(client, { url: `${site}/read/essay`, cache_ttl_s: 86_401 }),
-    await refusal(client, { url: `${site}/read/essay`, extract: { links: false } }),
+    await refusal(client, { url: `${site}/read/essay`, level: 3, robots: 'enforce' }),
+    await refusal(client, { url: `${rules}/site/private`, level: 3, robots: 'ignore' }),
+    await refusal(client, { url: `${rules}/site/private`, level: 3, robots: 'report' }),
+    await refusal(client, { url: `${site}/read/essay`, level: 3, cache_ttl_s: 86_401 }),
+    await refusal(client, { url: `${site}/read/essay`, level: 3, extract: { links: false } }),
   ];
 
   const pages = [];

@@ -26,7 +26,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use kage_core::alert::{Alert, AlertKind, AlertSeverity, AlertSink};
-use kage_core::domain::{BandwidthUsage, hour_of};
+use kage_core::domain::{BandwidthUsage, Exit, hour_of};
 use kage_core::schedule::budget::{Budget, BudgetLevel, BudgetRules, assess};
 use kage_proxy::{Clock, Pool};
 use kage_store::Store;
@@ -58,7 +58,8 @@ pub trait Ledger: Send + Sync + fmt::Debug {
     /// Adds counted bytes to what is stored.
     async fn add(&self, usage: &[BandwidthUsage]) -> Result<(), SchedulerError>;
 
-    /// Everything Kage counted from `since` on.
+    /// Everything Kage counted through the pool from `since` on: what the
+    /// host's own connection carries costs nothing of the budget.
     async fn counted_since(&self, since: DateTime<Utc>) -> Result<u64, SchedulerError>;
 
     /// What the provider counted for the whole account from `since` on;
@@ -98,7 +99,12 @@ impl Ledger for StoreLedger {
     }
 
     async fn counted_since(&self, since: DateTime<Utc>) -> Result<u64, SchedulerError> {
-        Ok(self.store.bandwidth().total_since(since).await?.total())
+        Ok(self
+            .store
+            .bandwidth()
+            .total_since(since, Exit::Pool)
+            .await?
+            .total())
     }
 
     async fn provider_since(&self, since: DateTime<Utc>) -> Result<Option<u64>, SchedulerError> {
@@ -178,10 +184,19 @@ impl Bandwidth {
     /// Fails when the store fails; nothing is lost then.
     pub async fn flush(&self) -> Result<(), SchedulerError> {
         let drained = self.meter.drain();
-        let (up, down) = drained.iter().fold((0_u64, 0_u64), |(up, down), counted| {
-            (up + counted.bytes_up, down + counted.bytes_down)
-        });
-        metrics::bandwidth(up, down);
+        for egress in [Exit::Pool, Exit::Host] {
+            let (up, down) = drained
+                .iter()
+                .filter(|counted| counted.egress == egress)
+                .fold((0_u64, 0_u64), |(up, down), counted| {
+                    (up + counted.bytes_up, down + counted.bytes_down)
+                });
+            // The pool's series is there from the start, as before 2.0; the
+            // host's appears with its first byte.
+            if egress == Exit::Pool || up + down > 0 {
+                metrics::bandwidth(egress, up, down);
+            }
+        }
         let pending: Vec<Counted> = {
             let mut memory = self.memory();
             memory.unwritten.extend(drained);
@@ -196,6 +211,7 @@ impl Bandwidth {
             .map(|counted| BandwidthUsage {
                 hour,
                 persona_id: counted.persona,
+                egress: counted.egress,
                 domain: counted.domain.clone(),
                 bytes_up: counted.bytes_up,
                 bytes_down: counted.bytes_down,

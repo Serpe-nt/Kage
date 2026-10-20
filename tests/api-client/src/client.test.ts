@@ -24,6 +24,7 @@ import {
   waitForJob,
   type CrawlProgress,
   type Extract,
+  type FetchRequest,
   type FetchResult,
   type Job,
 } from './client.js';
@@ -61,6 +62,7 @@ function result(over: Partial<FetchResult>): FetchResult {
     id: ID,
     state: 'finished',
     outcome: 'ok',
+    level: 3,
     status: 200,
     redirects: [],
     artifacts: {},
@@ -68,7 +70,6 @@ function result(over: Partial<FetchResult>): FetchResult {
     timing: { total_ms: 12 },
     attempts: [],
     cached: false,
-    escalated: false,
     created_at: '2026-10-11T12:00:00Z',
     ...over,
   };
@@ -163,8 +164,37 @@ describe('the generated client', () => {
             'application/problem+json',
           );
         } else if (request.method === 'POST' && request.url === '/v1/fetch') {
-          const asked = JSON.parse(body) as { url: string };
-          if (asked.url.startsWith('http://127.')) {
+          const asked = JSON.parse(body) as { url: string; level?: number };
+          if (asked.level === undefined) {
+            // Every request names its level: nothing is decided for the caller.
+            json(
+              422,
+              {
+                type: 'urn:kage:problem:level_required',
+                title: 'The request names no level',
+                status: 422,
+                detail: 'level is required: 0, 1, 2 or 3',
+                code: 'level_required',
+                request_id: ID,
+                field: 'level',
+              },
+              'application/problem+json',
+            );
+          } else if (asked.level === 1) {
+            json(
+              422,
+              {
+                type: 'urn:kage:problem:level_unavailable',
+                title: 'No persona of this installation can be fetched at this level',
+                status: 422,
+                detail: 'no browser version of this installation has a verified http profile',
+                code: 'level_unavailable',
+                request_id: ID,
+                field: 'level',
+              },
+              'application/problem+json',
+            );
+          } else if (asked.url.startsWith('http://127.')) {
             json(
               422,
               {
@@ -180,6 +210,29 @@ describe('the generated client', () => {
             );
           } else if (asked.url.endsWith('/slow')) {
             json(202, { id: ID, state: 'running', job_id: null, result: `/v1/results/${ID}` });
+          } else if (asked.url.endsWith('/plain')) {
+            // A plain client's: no persona, and the exit it left from.
+            json(
+              200,
+              result({
+                level: 0,
+                final_url: asked.url,
+                raw_body: '<h1>plain</h1>',
+                persona: null,
+                attempts: [
+                  {
+                    n: 1,
+                    render: 'http',
+                    outcome: 'ok',
+                    status: 200,
+                    total_ms: 9,
+                    persona: null,
+                    engine: null,
+                    exit: 'pool',
+                  },
+                ],
+              }),
+            );
           } else if (asked.url.endsWith('/private/ledger')) {
             // The site's robots.txt is enforced and disallows the address.
             json(
@@ -398,7 +451,7 @@ describe('the generated client', () => {
     const client = createKageClient({ baseUrl, token: TOKEN });
     const fetched = await fetchPage(client, {
       url: 'https://example.org/listing',
-      render: 'browser',
+      level: 3,
       include: ['dom', 'headers'],
       persona: { engines: ['firefox'] },
       behavior: { scroll_depth: 0.3, dwell_ms: 3000 },
@@ -408,6 +461,7 @@ describe('the generated client', () => {
     assert.equal(fetched.state, 'finished');
     assert.ok('outcome' in fetched);
     assert.equal(fetched.outcome, 'ok');
+    assert.equal(fetched.level, 3);
     assert.equal(fetched.final_url, 'https://example.org/listing');
     const sent = seen.at(-1);
     assert.equal(sent?.method, 'POST');
@@ -416,7 +470,7 @@ describe('the generated client', () => {
     assert.equal(sent?.contentType, 'application/json');
     assert.deepEqual(JSON.parse(sent?.body ?? ''), {
       url: 'https://example.org/listing',
-      render: 'browser',
+      level: 3,
       include: ['dom', 'headers'],
       persona: { engines: ['firefox'] },
       behavior: { scroll_depth: 0.3, dwell_ms: 3000 },
@@ -427,7 +481,7 @@ describe('the generated client', () => {
   it('returns a fetch that runs on as accepted, and a block as a result', async () => {
     const client = createKageClient({ baseUrl, token: TOKEN });
 
-    const accepted = await fetchPage(client, { url: 'https://example.org/slow' });
+    const accepted = await fetchPage(client, { url: 'https://example.org/slow', level: 3 });
     assert.equal(accepted.state, 'running');
     assert.ok('result' in accepted);
     assert.equal(accepted.result, `/v1/results/${ID}`);
@@ -441,6 +495,7 @@ describe('the generated client', () => {
     const client = createKageClient({ baseUrl, token: TOKEN });
     const asking = {
       url: 'https://example.org/budget',
+      level: 3,
       include: ['headers', 'extract'],
       extract: { markdown: true, links: false },
       cache_ttl_s: 600,
@@ -470,15 +525,18 @@ describe('the generated client', () => {
 
     // A result without an extraction says so when it is asked for one, and
     // a fetch that runs on is no result yet.
-    const plain = await fetchPage(client, { url: 'https://example.org/listing' });
+    const plain = await fetchPage(client, { url: 'https://example.org/listing', level: 3 });
     assert.ok(isResult(plain));
     assert.throws(() => extractOf(plain), /has no extract/);
     assert.throws(() => cachedAt({ ...plain, cached: true }), /does not say since when/);
-    assert.equal(isResult(await fetchPage(client, { url: 'https://example.org/slow' })), false);
+    assert.equal(
+      isResult(await fetchPage(client, { url: 'https://example.org/slow', level: 3 })),
+      false,
+    );
 
     // More than a site's results may be served for is refused, with the most.
     await assert.rejects(
-      fetchPage(client, { url: 'https://example.org/too-long', cache_ttl_s: 86_401 }),
+      fetchPage(client, { url: 'https://example.org/too-long', level: 3, cache_ttl_s: 86_401 }),
       (error: unknown) => {
         assert.ok(error instanceof KageProblemError);
         assert.equal(error.status, 422);
@@ -495,6 +553,7 @@ describe('the generated client', () => {
     // A rule of the file: the result is a result, and names the rule.
     const denied = await fetchPage(client, {
       url: 'https://example.org/private/ledger',
+      level: 3,
       robots: 'enforce',
     });
     assert.ok(isResult(denied));
@@ -503,12 +562,64 @@ describe('the generated client', () => {
     assert.equal(denied.robots?.crawl_delay, 2.5);
 
     // A file that could not be had: why, and when to ask again.
-    const unknown = await fetchPage(client, { url: 'https://example.org/unknown' });
+    const unknown = await fetchPage(client, { url: 'https://example.org/unknown', level: 3 });
     assert.ok(isResult(unknown));
     const why = robotsDenial(unknown);
     assert.equal(why?.rule, undefined);
     assert.equal(why?.reason, 'robots_unavailable');
     assert.equal(why?.retryAt?.toISOString(), '2026-10-11T13:00:00.000Z');
+  });
+
+  it('fetches at level 0 with no persona, and is told what a level does not allow', async () => {
+    const client = createKageClient({ baseUrl, token: TOKEN });
+
+    // A plain client: no persona, and its attempt names the exit it left from.
+    const plain = await fetchPage(client, {
+      url: 'https://example.org/plain',
+      level: 0,
+      include: ['raw', 'headers'],
+    });
+    assert.ok(isResult(plain));
+    assert.equal(plain.level, 0);
+    assert.equal(plain.persona, null);
+    assert.equal(plain.raw_body, '<h1>plain</h1>');
+    assert.deepEqual(
+      plain.attempts.map((attempt) => [
+        attempt.render,
+        attempt.persona,
+        attempt.engine,
+        attempt.exit,
+      ]),
+      [['http', null, null, 'pool']],
+    );
+    assert.deepEqual(JSON.parse(seen.at(-1)?.body ?? ''), {
+      url: 'https://example.org/plain',
+      level: 0,
+      include: ['raw', 'headers'],
+    });
+
+    // Level 1 while no browser version has a verified http profile.
+    await assert.rejects(
+      fetchPage(client, { url: 'https://example.org/listing', level: 1 }),
+      (error: unknown) => {
+        assert.ok(error instanceof KageProblemError);
+        assert.equal(error.status, 422);
+        assert.equal(error.problem.code, 'level_unavailable');
+        assert.equal(error.problem['field'], 'level');
+        return true;
+      },
+    );
+
+    // The document makes the level required: a request without one does
+    // not compile, and the API refuses one that is sent all the same.
+    // @ts-expect-error `level` is missing.
+    const unleveled: FetchRequest = { url: 'https://example.org/listing' };
+    await assert.rejects(fetchPage(client, unleveled), (error: unknown) => {
+      assert.ok(error instanceof KageProblemError);
+      assert.equal(error.problem.code, 'level_required');
+      assert.equal(error.problem['field'], 'level');
+      return true;
+    });
   });
 
   it('reads an artifact as bytes', async () => {
@@ -520,11 +631,12 @@ describe('the generated client', () => {
 
   it('submits a job under a key that names it, and knows the job a key made before', async () => {
     const client = createKageClient({ baseUrl, token: TOKEN });
+    // The batch's level, and an item with a level of its own.
     const request = {
       type: 'batch',
       urls: ['https://example.org/0', 'https://example.org/1'],
-      items: [{ url: 'https://example.org/2', include: ['dom'] }],
-      defaults: { behavior: { scroll_depth: 0.3, dwell_ms: 3000 } },
+      items: [{ url: 'https://example.org/2', level: 2, include: ['dom'] }],
+      defaults: { level: 3, behavior: { scroll_depth: 0.3, dwell_ms: 3000 } },
       visitors: 1,
       webhook: {
         url: 'https://hooks.example.org/kage',
@@ -538,7 +650,7 @@ describe('the generated client', () => {
       {
         ...request,
         urls: [...request.urls],
-        items: [{ url: 'https://example.org/2', include: ['dom'] }],
+        items: [{ url: 'https://example.org/2', level: 2, include: ['dom'] }],
       },
       'nightly-1',
     );
@@ -553,13 +665,17 @@ describe('the generated client', () => {
 
     const again = await createJob(
       client,
-      { type: 'flow', actions: [{ action: 'goto', url: 'https://example.org/' }] },
+      { type: 'flow', level: 3, actions: [{ action: 'goto', url: 'https://example.org/' }] },
       'again',
     );
     assert.equal(again.replayed, true);
     assert.equal(again.job.id, JOB);
     // Without a key no header is sent.
-    await createJob(client, { type: 'batch', urls: ['https://example.org/0'] });
+    await createJob(client, {
+      type: 'batch',
+      urls: ['https://example.org/0'],
+      defaults: { level: 3 },
+    });
     assert.equal(seen.at(-1)?.idempotencyKey, undefined);
   });
 
@@ -619,7 +735,7 @@ describe('the generated client', () => {
       max_depth: 2,
       max_pages: 50,
       use_sitemaps: false,
-      defaults: { include: ['dom'] },
+      defaults: { level: 3, include: ['dom'] },
     };
 
     const submitted = await createCrawl(client, request, 'crawl-1');
@@ -660,13 +776,16 @@ describe('the generated client', () => {
 
   it('throws the problem document of a job that is refused or is not there', async () => {
     const client = createKageClient({ baseUrl, token: TOKEN });
-    await assert.rejects(createCrawl(client, { seeds: [] }), (error: unknown) => {
-      assert.ok(error instanceof KageProblemError);
-      assert.equal(error.status, 422);
-      assert.equal(error.problem.code, 'validation_failed');
-      assert.equal(error.problem['field'], 'seeds');
-      return true;
-    });
+    await assert.rejects(
+      createCrawl(client, { seeds: [], defaults: { level: 3 } }),
+      (error: unknown) => {
+        assert.ok(error instanceof KageProblemError);
+        assert.equal(error.status, 422);
+        assert.equal(error.problem.code, 'validation_failed');
+        assert.equal(error.problem['field'], 'seeds');
+        return true;
+      },
+    );
     const other = '0190a0b0-0000-7000-8000-00000000000c';
     for (const call of [
       () => readJob(client, other),
@@ -683,14 +802,17 @@ describe('the generated client', () => {
 
   it('throws the problem document of a refusal', async () => {
     const client = createKageClient({ baseUrl, token: TOKEN });
-    await assert.rejects(fetchPage(client, { url: 'http://127.0.0.1/admin' }), (error: unknown) => {
-      assert.ok(error instanceof KageProblemError);
-      assert.equal(error.status, 422);
-      assert.equal(error.problem.code, 'ssrf_denied');
-      assert.equal(error.problem['field'], 'url');
-      assert.match(error.message, /^ssrf_denied: /);
-      return true;
-    });
+    await assert.rejects(
+      fetchPage(client, { url: 'http://127.0.0.1/admin', level: 3 }),
+      (error: unknown) => {
+        assert.ok(error instanceof KageProblemError);
+        assert.equal(error.status, 422);
+        assert.equal(error.problem.code, 'ssrf_denied');
+        assert.equal(error.problem['field'], 'url');
+        assert.match(error.message, /^ssrf_denied: /);
+        return true;
+      },
+    );
     await assert.rejects(readArtifact(client, 'art_2'), (error: unknown) => {
       assert.ok(error instanceof KageProblemError);
       assert.equal(error.problem.code, 'artifact_not_found');

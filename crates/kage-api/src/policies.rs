@@ -19,7 +19,7 @@ use crate::state::ApiState;
 #[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub(crate) struct PolicyPreview {
     /// Every field of the policy as it resolves for the host: `host`,
-    /// `matched` (the entry that applies), `inherits`, `render`,
+    /// `matched` (the entry that applies), `inherits`, `min_level`,
     /// `countries`, `engines`, `pacing`, `pacing_locked`, `robots`,
     /// `referer_strategy`, `active_hours`, `min_dwell`, `behavior_locked`,
     /// `retries`, `breaker_threshold`, `breaker_pause`, `cooldowns`.
@@ -29,10 +29,10 @@ pub(crate) struct PolicyPreview {
     /// `policies/pacing-profiles.yaml`.
     #[schema(value_type = FreeForm)]
     pub(crate) pacing_profile: PacingProfile,
-    /// The path a request with `render: auto` takes first: `http` when the
-    /// policy says so, else `browser`.
-    #[schema(example = "browser")]
-    pub(crate) first_render: String,
+    /// The lowest level a request for the host may name (spec §25): one
+    /// below it is refused with `level_below_policy`, never raised.
+    #[schema(minimum = 0, maximum = 3, example = 0)]
+    pub(crate) min_level: u64,
     /// Until when the host is paused because too many requests to it were
     /// blocked; null when it is not. A request made before then ends as
     /// `provider_error` with reason `domain_paused`.
@@ -80,13 +80,9 @@ pub(crate) async fn preview(
     let paused_until = breaker
         .filter(|breaker| breaker.is_open(now))
         .and_then(|breaker| breaker.paused_until);
-    let first_render = policy
-        .render_for(kage_core::domain::RenderMode::Auto)
-        .as_str()
-        .to_owned();
     Ok(Json(PolicyPreview {
         pacing_profile: pacing.profile,
-        first_render,
+        min_level: u64::from(policy.min_level.number()),
         paused_until,
         policy,
     }))

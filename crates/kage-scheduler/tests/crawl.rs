@@ -24,7 +24,7 @@ use std::time::Duration;
 use chrono::{DateTime, Duration as Span, Utc};
 use common::{DEFAULT_DOMAINS, World, blocked};
 use kage_core::config::DEFAULT_SKIPPED_EXTENSIONS;
-use kage_core::domain::{BreakerState, RenderMode};
+use kage_core::domain::{BreakerState, Level};
 use kage_core::ids::{PersonaId, RequestId};
 use kage_core::outcome::Outcome;
 use kage_core::schedule::planner::{Refusal, Visitors};
@@ -139,7 +139,7 @@ impl Reader {
         });
         self.frontier.begin(pick.entry);
         let order = FetchOrder {
-            render: RenderMode::Browser,
+            level: Level::Human,
             visitors: Some(Visitors {
                 known: self.persona.into_iter().collect(),
                 max: 1,
@@ -166,7 +166,10 @@ impl Reader {
             match fetch {
                 JobFetch::Finished(report) => {
                     for attempt in &report.attempts {
-                        if attempt.outcome.is_block() && self.persona == Some(attempt.persona_id) {
+                        if attempt.outcome.is_block()
+                            && attempt.persona_id.is_some()
+                            && self.persona == attempt.persona_id
+                        {
                             self.persona = None;
                             self.tab.clear();
                         }
@@ -391,7 +394,7 @@ async fn no_more_personas_read_a_site_at_once_than_its_pacing_allows() {
             let mut page = 0;
             while read < 6 {
                 let order = FetchOrder {
-                    render: RenderMode::Browser,
+                    level: Level::Human,
                     visitors: Some(Visitors {
                         known: visitor.into_iter().collect(),
                         max: 1,
@@ -451,7 +454,7 @@ async fn what_a_crawl_takes_from_a_page_is_stored_with_its_result() {
                 <main><p>Some words a reader reads.</p><a href=\"/a\">a</a>\
                 <a href=\"/hid\" style=\"display:none\">hid</a></main></body></html>";
     let crawling = || FetchOrder {
-        render: RenderMode::Browser,
+        level: Level::Human,
         read_page: true,
         ..FetchOrder::get(Url::parse(url).unwrap(), Priority::Job)
     };

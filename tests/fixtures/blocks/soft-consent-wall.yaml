@@ -38,5 +38,4 @@ expect:
   rule: soft-consent-wall
   vendors: []
   retryable: false
-  escalate: true
   cooldown: none

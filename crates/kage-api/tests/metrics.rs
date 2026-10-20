@@ -47,11 +47,14 @@ async fn metrics_expose_the_series_of_the_specification() {
     let handle = kage_api::metrics::install().unwrap();
     assert!(kage_api::metrics::install().is_err());
 
-    // The http path first, a browser for what needs one, and a domain
-    // that is paused after two blocks.
-    let rules = "defaults: { render: http, pacing: fast, active_hours: ignore }\n\
-                 domains:\n  walled.kage.test: { render: browser, breaker_threshold: 2, breaker_pause: 30m, retries: 1 }\n";
-    let mut api = Api::start_with(2, 149, rules, |config| {
+    // Any level for the shop, and a domain that takes nothing below a
+    // person's browser and is paused after two blocks.
+    let rules = "defaults: { pacing: fast, active_hours: ignore }\n\
+                 domains:\n  walled.kage.test: { min_level: 3, breaker_threshold: 2, breaker_pause: 30m, retries: 1 }\n";
+    // Three personas: the plain client leaves through the proxy of the
+    // site's scout, which reads none of its pages, and the wall is met by
+    // the two others.
+    let mut api = Api::start_with(3, 149, rules, |config| {
         config.jobs.poll_interval =
             kage_core::duration::HumanDuration::new(std::time::Duration::from_millis(50));
         config.selftest.browser.pages = vec![SelftestPageConfig {
@@ -79,14 +82,23 @@ async fn metrics_expose_the_series_of_the_specification() {
         .mount(&api.lab.site)
         .await;
 
-    // Work: a page over http, a page in a browser, a wall met twice (the
-    // domain is paused), a request the scheduler refuses, a self-test, a
-    // replacement asked of the provider, and requests the API refuses.
+    // Work: a page by a plain client, a page by a persona's http client, a
+    // page in a browser, a wall met twice (the domain is paused), a
+    // request the scheduler refuses, a self-test, a replacement asked of
+    // the provider, and requests the API refuses.
+    let plain = send(
+        Method::POST,
+        "/v1/fetch",
+        Some(&fetch),
+        Some(json!({ "url": Api::url("/page?plain=1"), "level": 0 })),
+    )
+    .await;
+    assert_eq!(plain.json()["outcome"], "ok", "{:?}", plain.json());
     let page = send(
         Method::POST,
         "/v1/fetch",
         Some(&fetch),
-        Some(json!({ "url": Api::url("/page"), "render": "http" })),
+        Some(json!({ "url": Api::url("/page"), "level": 1 })),
     )
     .await;
     assert_eq!(page.json()["outcome"], "ok", "{:?}", page.json());
@@ -106,7 +118,7 @@ async fn metrics_expose_the_series_of_the_specification() {
         Some(json!({
             "type": "batch",
             "urls": [Api::url("/page?item=1"), Api::url("/page?item=2")],
-            "defaults": { "render": "http" },
+            "defaults": { "level": 1 },
         })),
     )
     .await;
@@ -161,7 +173,7 @@ async fn metrics_expose_the_series_of_the_specification() {
         Some(json!({
             "type": "crawl",
             "seeds": [Api::url("/crawl/")],
-            "defaults": { "render": "http" },
+            "defaults": { "level": 1 },
         })),
     )
     .await;
@@ -194,7 +206,7 @@ async fn metrics_expose_the_series_of_the_specification() {
         Method::POST,
         "/v1/fetch",
         Some(&fetch),
-        Some(json!({ "url": Api::url("/app"), "render": "browser" })),
+        Some(json!({ "url": Api::url("/app"), "level": 3 })),
     )
     .await;
     assert_eq!(rendered.json()["outcome"], "ok", "{:?}", rendered.json());
@@ -213,7 +225,7 @@ async fn metrics_expose_the_series_of_the_specification() {
         Method::POST,
         "/v1/fetch",
         Some(&fetch),
-        Some(json!({ "url": "http://walled.kage.test/" })),
+        Some(json!({ "url": "http://walled.kage.test/", "level": 3 })),
     )
     .await;
     assert_eq!(
@@ -226,7 +238,7 @@ async fn metrics_expose_the_series_of_the_specification() {
         Method::POST,
         "/v1/fetch",
         Some(&fetch),
-        Some(json!({ "url": "http://walled.kage.test/again" })),
+        Some(json!({ "url": "http://walled.kage.test/again", "level": 3 })),
     )
     .await;
     assert_eq!(
@@ -285,23 +297,35 @@ async fn metrics_expose_the_series_of_the_specification() {
     );
     let text = String::from_utf8(scraped.body.to_vec()).unwrap();
 
-    // The series of spec §20, with their labels.
+    // The series of spec §20, with their labels: a request and an attempt
+    // are counted by their level, never by the path of 1.x.
     let site = "domain=\"shop.kage.test\"";
-    expect(
-        &text,
-        "kage_requests_total",
-        &[site, "render=\"http\"", "outcome=\"ok\"", "vendor=\"none\""],
-    );
-    expect(
-        &text,
-        "kage_requests_total",
-        &[site, "render=\"browser\"", "outcome=\"ok\""],
-    );
+    for level in ["level=\"0\"", "level=\"1\"", "level=\"3\""] {
+        expect(
+            &text,
+            "kage_requests_total",
+            &[site, level, "outcome=\"ok\"", "vendor=\"none\""],
+        );
+        expect(
+            &text,
+            "kage_attempts_total",
+            &[site, level, "outcome=\"ok\""],
+        );
+    }
+    for series in ["kage_requests_total", "kage_attempts_total"] {
+        assert!(
+            !text
+                .lines()
+                .any(|line| line.starts_with(series) && line.contains("render=")),
+            "{series} has a render label:\n{text}"
+        );
+    }
     expect(
         &text,
         "kage_requests_total",
         &[
             "domain=\"walled.kage.test\"",
+            "level=\"3\"",
             "outcome=\"forbidden\"",
             "vendor=\"cloudflare\"",
         ],
@@ -309,14 +333,9 @@ async fn metrics_expose_the_series_of_the_specification() {
     expect(
         &text,
         "kage_attempts_total",
-        &[site, "render=\"http\"", "outcome=\"ok\""],
-    );
-    expect(
-        &text,
-        "kage_attempts_total",
         &[
             "domain=\"walled.kage.test\"",
-            "render=\"browser\"",
+            "level=\"3\"",
             "outcome=\"forbidden\"",
             "vendor=\"cloudflare\"",
         ],
@@ -325,12 +344,17 @@ async fn metrics_expose_the_series_of_the_specification() {
     expect(
         &text,
         "kage_attempt_duration_seconds_bucket",
-        &["render=\"http\"", "outcome=\"ok\"", "le=\"+Inf\""],
+        &["level=\"1\"", "outcome=\"ok\"", "le=\"+Inf\""],
     );
     expect(
         &text,
         "kage_attempt_duration_seconds_count",
-        &["render=\"browser\""],
+        &["level=\"3\""],
+    );
+    expect(
+        &text,
+        "kage_attempt_duration_seconds_count",
+        &["level=\"0\""],
     );
     expect(&text, "kage_persona_state", &["state=\"active\""]);
     expect(&text, "kage_persona_state", &["state=\"cooling\""]);
@@ -361,8 +385,23 @@ async fn metrics_expose_the_series_of_the_specification() {
         "kage_policy_breaker_threshold",
         &["domain=\"walled.kage.test\"", " 2"],
     );
-    expect(&text, "kage_bandwidth_bytes_total", &["direction=\"up\""]);
-    expect(&text, "kage_bandwidth_bytes_total", &["direction=\"down\""]);
+    // Bytes by their direction and by the kind of exit they left through:
+    // under `egress.mode: proxies` the pool, the plain client's included.
+    for direction in ["direction=\"up\"", "direction=\"down\""] {
+        expect(
+            &text,
+            "kage_bandwidth_bytes_total",
+            &[direction, "egress=\"pool\""],
+        );
+    }
+    // Nothing left from the host's own address.
+    assert!(
+        text.lines()
+            .filter(|line| line.starts_with("kage_bandwidth_bytes_total{")
+                && line.contains("egress=\"host\""))
+            .all(|line| line.ends_with(" 0")),
+        "{text}"
+    );
     expect(&text, "kage_bandwidth_budget_ratio", &[]);
     expect(
         &text,
@@ -395,7 +434,16 @@ async fn metrics_expose_the_series_of_the_specification() {
     expect(&text, "kage_job_items", &["state=\"queued\"", " 0"]);
     expect(&text, "kage_job_items", &["state=\"running\"", " 0"]);
     expect(&text, "kage_webhook_deliveries_pending", &[" 0"]);
-    expect(&text, "kage_jobs_accepted_total", &["job_type=\"batch\""]);
+    expect(
+        &text,
+        "kage_jobs_accepted_total",
+        &["job_type=\"batch\"", "level=\"1\""],
+    );
+    expect(
+        &text,
+        "kage_jobs_accepted_total",
+        &["job_type=\"crawl\"", "level=\"1\""],
+    );
     expect(
         &text,
         "kage_jobs_finished_total",
@@ -404,7 +452,12 @@ async fn metrics_expose_the_series_of_the_specification() {
     expect(
         &text,
         "kage_job_items_total",
-        &["job_type=\"batch\"", "state=\"succeeded\"", " 2"],
+        &[
+            "job_type=\"batch\"",
+            "state=\"succeeded\"",
+            "level=\"1\"",
+            " 2",
+        ],
     );
     // A crawl is a job, and says how its pages were reached, what it
     // left alone and what repeated.
@@ -416,7 +469,12 @@ async fn metrics_expose_the_series_of_the_specification() {
     expect(
         &text,
         "kage_job_items_total",
-        &["job_type=\"crawl\"", "state=\"succeeded\"", " 2"],
+        &[
+            "job_type=\"crawl\"",
+            "state=\"succeeded\"",
+            "level=\"1\"",
+            " 2",
+        ],
     );
     expect(
         &text,

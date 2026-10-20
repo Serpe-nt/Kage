@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use kage_core::config::process_env;
-use kage_core::domain::{ClaimedOs, Engine, PersonaState, ProxyState, RenderMode, Scope};
+use kage_core::domain::{ClaimedOs, Engine, Level, PersonaState, ProxyState, Scope};
 use kage_core::duration::HumanDuration;
 use kage_core::ids::{ApiKeyId, PersonaId, ProxyId};
 
@@ -138,10 +138,13 @@ struct FetchArgs {
     /// The page.
     #[arg(value_name = "URL")]
     url: url::Url,
-    /// The path: auto (the domain policy decides, and a block on the
-    /// http path moves the request to the browser), http or browser.
-    #[arg(long, default_value = "auto")]
-    render: RenderMode,
+    /// The camouflage level, required: 0 (a plain HTTP client that says
+    /// it is Kage, no persona), 1 (a persona's http client), 2 (a
+    /// persona's browser that loads the page and leaves) or 3 (a
+    /// persona's browser as a person). Below 3 Kage is not pretending to
+    /// be a person.
+    #[arg(long, value_name = "LEVEL")]
+    level: Level,
     /// Only this persona.
     #[arg(long, value_name = "PERSONA_ID")]
     persona: Option<PersonaId>,
@@ -187,7 +190,7 @@ impl From<FetchArgs> for fetch_cmd::FetchOptions {
     fn from(args: FetchArgs) -> Self {
         Self {
             url: args.url,
-            render: args.render,
+            level: args.level,
             persona: args.persona,
             engine: args.engine,
             timeout: args.timeout.map(HumanDuration::get),
@@ -851,7 +854,7 @@ mod tests {
     use std::time::Duration;
 
     use clap::{CommandFactory, Parser};
-    use kage_core::domain::{ClaimedOs, Engine, PersonaState, ProxyState, RenderMode};
+    use kage_core::domain::{ClaimedOs, Engine, Level, PersonaState, ProxyState};
     use kage_core::duration::HumanDuration;
     use kage_scheduler::RobotsWish;
 
@@ -866,13 +869,15 @@ mod tests {
     }
 
     #[test]
-    fn fetch_takes_a_url_and_leaves_the_rest_to_the_policy() {
-        let cli = Cli::try_parse_from(["kage", "fetch", "https://shop.example/page"]).unwrap();
+    fn fetch_takes_a_url_and_a_level_and_leaves_the_rest_to_the_policy() {
+        let cli =
+            Cli::try_parse_from(["kage", "fetch", "https://shop.example/page", "--level", "3"])
+                .unwrap();
         let Command::Fetch(plain) = cli.command else {
             panic!("expected the fetch command, got {:?}", cli.command);
         };
         assert_eq!(plain.url.as_str(), "https://shop.example/page");
-        assert_eq!(plain.render, RenderMode::Auto);
+        assert_eq!(plain.level, Level::Human);
         assert_eq!(
             (plain.persona, plain.engine, plain.timeout, plain.retries),
             (None, None, None, None)
@@ -891,8 +896,8 @@ mod tests {
             "kage",
             "fetch",
             "https://shop.example/page",
-            "--render",
-            "browser",
+            "--level",
+            "2",
             "--persona",
             "0199c1f2-6b7a-7c3e-9d41-2f8a5b6c7d8e",
             "--engine",
@@ -911,7 +916,7 @@ mod tests {
         let Command::Fetch(asked) = cli.command else {
             panic!("expected the fetch command, got {:?}", cli.command);
         };
-        assert_eq!(asked.render, RenderMode::Browser);
+        assert_eq!(asked.level, Level::Fast);
         assert_eq!(
             asked.persona.map(|persona| persona.to_string()).as_deref(),
             Some("0199c1f2-6b7a-7c3e-9d41-2f8a5b6c7d8e")
@@ -927,10 +932,28 @@ mod tests {
         assert!(asked.json);
 
         // Not a URL, not a path: refused before anything starts.
-        assert!(Cli::try_parse_from(["kage", "fetch", "not a url"]).is_err());
+        assert!(Cli::try_parse_from(["kage", "fetch", "not a url", "--level", "0"]).is_err());
+        // Nothing is decided for the caller: the level is named, and is one.
+        assert!(Cli::try_parse_from(["kage", "fetch", "https://shop.example/"]).is_err());
+        for wrong in ["4", "tor", "-1"] {
+            assert!(
+                Cli::try_parse_from(["kage", "fetch", "https://shop.example/", "--level", wrong])
+                    .is_err(),
+                "{wrong}"
+            );
+        }
+        // The path of 1.x is gone.
         assert!(
-            Cli::try_parse_from(["kage", "fetch", "https://shop.example/", "--render", "tor"])
-                .is_err()
+            Cli::try_parse_from([
+                "kage",
+                "fetch",
+                "https://shop.example/",
+                "--level",
+                "3",
+                "--render",
+                "browser"
+            ])
+            .is_err()
         );
         assert!(Cli::try_parse_from(["kage", "fetch"]).is_err());
     }
@@ -941,6 +964,8 @@ mod tests {
             "kage",
             "fetch",
             "https://shop.example/page",
+            "--level",
+            "1",
             "--extract",
             "--cache-ttl",
             "10m",
@@ -957,10 +982,11 @@ mod tests {
         assert_eq!(options.cache_ttl, Some(Duration::from_mins(10)));
         assert_eq!(options.robots, RobotsWish::Enforce);
         assert_eq!(options.url.as_str(), "https://shop.example/page");
+        assert_eq!(options.level, Level::Emulated);
         assert_eq!((options.timeout, options.retries), (None, None));
         // A word that is none of the four, and a time that is none.
         for refused in [["--robots", "obey"], ["--cache-ttl", "soon"]] {
-            let mut arguments = vec!["kage", "fetch", "https://shop.example/page"];
+            let mut arguments = vec!["kage", "fetch", "https://shop.example/page", "--level", "0"];
             arguments.extend(refused);
             assert!(Cli::try_parse_from(arguments).is_err(), "{refused:?}");
         }

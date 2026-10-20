@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// The document as `kage openapi` prints it.
 fn generated() -> String {
@@ -116,18 +116,85 @@ fn the_document_holds_together() {
         }
     }
 
+    every_request_names_its_level(&document);
+}
+
+/// What the document says of the requests and their levels (spec §16.4,
+/// §25), committed or served.
+fn every_request_names_its_level(document: &Value) {
+    let schemas = &document["components"]["schemas"];
+    let required = |schema: &Value| -> BTreeSet<String> {
+        schema["required"]
+            .as_array()
+            .unwrap_or_else(|| panic!("no required in {schema}"))
+            .iter()
+            .map(|name| name.as_str().unwrap().to_owned())
+            .collect()
+    };
+    let names = |list: &[&str]| -> BTreeSet<String> {
+        list.iter().map(|name| (*name).to_owned()).collect()
+    };
+
     // The request of a fetch is closed: a field the API does not know is
-    // an error, in the document as in the server.
-    let request = &document["components"]["schemas"]["FetchRequest"];
+    // an error, in the document as in the server. It names its level, a
+    // number from 0 to 3, and nothing is decided for it.
+    let request = &schemas["FetchRequest"];
     assert_eq!(request["additionalProperties"], false, "{request}");
-    assert_eq!(request["required"], serde_json::json!(["url"]));
-    // What the specification dropped is not in it.
-    assert!(request["properties"].get("locale").is_none());
-    assert!(request["properties"].get("proxy").is_none());
-    // The kind of request is one of three, navigation unless said.
-    let kind = &document["components"]["schemas"]["RequestKindField"];
+    assert_eq!(required(request), names(&["url", "level"]), "{request}");
+    let level = &request["properties"]["level"];
+    assert_eq!(level["type"], "integer", "{level}");
     assert_eq!(
-        kind["enum"],
-        serde_json::json!(["navigation", "fetch", "xhr"])
+        (&level["minimum"], &level["maximum"]),
+        (&json!(0), &json!(3))
     );
+    // What the specification dropped is not in it: the render mode of 1.x
+    // is the level's now.
+    for dropped in ["locale", "proxy", "render"] {
+        assert!(
+            request["properties"].get(dropped).is_none(),
+            "{dropped} in {request}"
+        );
+    }
+    // The kind of request is one of three, navigation unless said.
+    let kind = &schemas["RequestKindField"];
+    assert_eq!(kind["enum"], json!(["navigation", "fetch", "xhr"]));
+
+    // An item of a batch may take its level from the batch's defaults; a
+    // flow is a browser's, at 2 or 3.
+    assert_eq!(required(&schemas["BatchItem"]), names(&["url"]));
+    assert_eq!(
+        schemas["BatchJob"]["properties"]["items"]["items"]["$ref"],
+        "#/components/schemas/BatchItem"
+    );
+    let flow = &schemas["FlowJob"];
+    assert!(required(flow).contains("level"), "{flow}");
+    assert_eq!(flow["properties"]["level"]["minimum"], 2, "{flow}");
+
+    // A result names its level and nothing of an escalation; an attempt
+    // of a plain client names its exit, by kind only.
+    let result = &schemas["FetchResult"]["properties"];
+    assert!(result.get("level").is_some(), "{result}");
+    assert!(result.get("escalated").is_none(), "{result}");
+    assert_eq!(schemas["ExitField"]["enum"], json!(["host", "pool"]));
+    for member in ["persona", "engine", "exit"] {
+        assert!(
+            schemas["AttemptView"]["properties"].get(member).is_some(),
+            "{member}"
+        );
+    }
+    // The preview of a site's policy says its floor.
+    let preview = &schemas["PolicyPreview"];
+    assert!(required(preview).contains("min_level"), "{preview}");
+    assert!(
+        preview["properties"].get("first_render").is_none(),
+        "{preview}"
+    );
+}
+
+/// The same of the document the server serves, whether or not the
+/// committed one was written since.
+#[test]
+fn the_served_document_says_that_every_request_names_its_level() {
+    let document = serde_json::to_value(kage_api::openapi()).unwrap();
+    every_request_names_its_level(&document);
 }

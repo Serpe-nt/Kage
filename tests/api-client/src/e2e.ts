@@ -1,7 +1,7 @@
 /**
  * What the compose end-to-end test of the API runs (tests/e2e/api.sh): a
- * page fetched through `POST /v1/fetch` in the browser of a persona of
- * each engine, with a client that was generated from the API's document
+ * page fetched through `POST /v1/fetch` at level 3, in the browser of a
+ * persona of each engine, with a client that was generated from the API's document
  * and is not Rust. It reads the stored result and the kept artifacts
  * back, and checks that a refusal is a problem document.
  *
@@ -53,7 +53,7 @@ async function main(): Promise<unknown> {
   for (const engine of engines()) {
     const fetched = await fetchPage(client, {
       url,
-      render: 'browser',
+      level: 3,
       include: ['dom', 'headers', 'screenshot'],
       persona: { engines: [engine] },
       timeout_ms: 60_000,
@@ -61,10 +61,16 @@ async function main(): Promise<unknown> {
     assert.ok('outcome' in fetched, `${engine}: the fetch outlasted the wall time`);
     assert.equal(fetched.outcome, 'ok', `${engine}: ${fetched.reason ?? fetched.outcome}`);
     assert.equal(fetched.status, 200);
-    assert.equal(fetched.attempts.at(-1)?.render, 'browser');
+    assert.equal(fetched.level, 3);
+    // A persona's attempt, in its browser: no plain client's exit.
+    const attempt = fetched.attempts.at(-1);
+    assert.equal(attempt?.render, 'browser');
+    assert.equal(attempt.engine, engine);
+    assert.equal(attempt.exit ?? null, null);
     // A real persona of that engine, named by a handle and not by its id.
     assert.equal(fetched.persona?.engine, engine);
     assert.match(fetched.persona.id, /^p_[0-9a-f]{16}$/);
+    assert.equal(attempt.persona, fetched.persona.id);
     assert.ok(fetched.dom_html?.includes(expected), `${engine}: the document lacks ${expected}`);
     assert.ok((fetched.headers ?? []).some((header) => header.name === 'content-type'));
     assert.equal(fetched.behavior?.applied, 'policy');
@@ -87,6 +93,7 @@ async function main(): Promise<unknown> {
     const stored = await readResult(client, fetched.id);
     assert.ok('outcome' in stored);
     assert.equal(stored.outcome, 'ok');
+    assert.equal(stored.level, 3);
     assert.equal(stored.dom_html, fetched.dom_html);
     assert.deepEqual(stored.artifacts, fetched.artifacts);
     // What the answer said of the visit is stored with the result: the
@@ -111,7 +118,10 @@ async function main(): Promise<unknown> {
   }
 
   // A request that cannot be made is refused with a stable code.
-  const refusal = await fetchPage(client, { url: 'http://169.254.169.254/latest/meta-data/' }).then(
+  const refusal = await fetchPage(client, {
+    url: 'http://169.254.169.254/latest/meta-data/',
+    level: 3,
+  }).then(
     () => null,
     (error: unknown) => error,
   );

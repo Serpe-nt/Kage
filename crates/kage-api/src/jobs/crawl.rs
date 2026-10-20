@@ -19,6 +19,7 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use kage_core::config::{MAX_CRAWL_DEPTH, MAX_CRAWL_SEEDS};
+use kage_core::domain::Level;
 use kage_core::ids::PersonaId;
 use kage_core::urlnorm::{NormalizeOptions, normalize};
 use kage_crawl::frontier::{Counts, Limits};
@@ -31,7 +32,7 @@ use utoipa::ToSchema;
 
 use super::request::{Checks, WebhookField};
 use crate::error::{ApiError, ApiResult, ErrorCode};
-use crate::fetch::request::{FetchRequest, Planned, plan, url_refused};
+use crate::fetch::request::{FetchRequest, Planned, is_credential, level_of, plan, url_refused};
 use crate::fetch::terms::{CacheUse, settle};
 use crate::resolve::guard;
 use crate::schema::FreeForm;
@@ -74,7 +75,7 @@ const NOT_A_DEFAULT: [(&str, &str); 5] = [
     "deny": ["/login", "\\?sort="],
     "max_depth": 3,
     "max_pages": 50,
-    "defaults": { "include": ["dom", "headers"] }
+    "defaults": { "level": 3, "include": ["dom", "headers"] }
 }))]
 pub(crate) struct CrawlJob {
     /// Where the crawl starts: 1 to `crawl.max_seeds` (100) addresses. A
@@ -120,7 +121,11 @@ pub(crate) struct CrawlJob {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) use_sitemaps: Option<bool>,
     /// What every page is fetched with: any field of a fetch request but
-    /// `url`, `session_id`, `method`, `body` and `request_kind`.
+    /// `url`, `session_id`, `method`, `body` and `request_kind`. Its
+    /// `level` is required (`level_required`). At level 0 the links are
+    /// read from the page's markup and every page is typed, with no
+    /// `Referer`; a caller's `Cookie` and `Authorization` are not taken in
+    /// a job, which would have to keep them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Option<FreeForm>)]
     pub(crate) defaults: Option<Map<String, Value>>,
@@ -297,6 +302,45 @@ pub(crate) async fn plan_crawl(crawl: &CrawlJob, checks: Checks<'_>) -> ApiResul
             }
         }
     }
+    check_level(crawl)?;
+    plan_seeds(crawl, checks).await
+}
+
+/// What a crawl's defaults say about its level (spec §25): one is named,
+/// a crawl at level 0 has no visitors, and no caller's credential is kept
+/// for its pages.
+fn check_level(crawl: &CrawlJob) -> ApiResult<()> {
+    let defaults = crawl.defaults.as_ref();
+    let named = defaults.and_then(|defaults| defaults.get("level"));
+    if named.is_none() {
+        return Err(level_of(None, "defaults.level").err().unwrap_or_else(|| {
+            ApiError::new(ErrorCode::LevelRequired, "defaults.level is required")
+        }));
+    }
+    if let Some(Value::Object(headers)) = defaults.and_then(|defaults| defaults.get("headers"))
+        && let Some(name) = headers.keys().find(|name| is_credential(name))
+    {
+        return Err(ApiError::new(
+            ErrorCode::HeaderDenied,
+            format!(
+                "the header {name:?} is the caller's own credential, and a job keeps its pages' \
+                 requests until they run: Kage holds no credential"
+            ),
+        )
+        .with("header", name.as_str()));
+    }
+    let plain = named.and_then(Value::as_u64) == Some(u64::from(Level::Plain.number()));
+    if plain && crawl.visitors.is_some() {
+        return Err(ApiError::field(
+            "visitors",
+            "visitors are personas, and level 0 has none: leave visitors out",
+        ));
+    }
+    Ok(())
+}
+
+/// Checks a crawl and turns its seeds into orders.
+async fn plan_seeds(crawl: &CrawlJob, checks: Checks<'_>) -> ApiResult<PlannedCrawl> {
     let rules = rules(crawl, checks)?;
     let at = |error: ApiError, index: usize| {
         error
@@ -722,7 +766,13 @@ mod tests {
         }
     }
 
-    fn crawl(body: Value) -> CrawlJob {
+    /// A crawl as written, at level 3 where its defaults name none.
+    fn crawl(mut body: Value) -> CrawlJob {
+        let mut defaults = body.get("defaults").cloned().unwrap_or_else(|| json!({}));
+        if defaults.get("level").is_none() {
+            defaults["level"] = json!(3);
+            body["defaults"] = defaults;
+        }
         serde_json::from_value(body).unwrap()
     }
 

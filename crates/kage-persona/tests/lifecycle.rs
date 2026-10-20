@@ -1,5 +1,6 @@
 //! Generation and life of personas against a real Postgres, an in-process
-//! provider and mock sidecars (spec §6.1, §6.3).
+//! provider and mock sidecars (spec §6.1, §6.3), and the host's own
+//! personas under `egress.mode: direct` (§25).
 
 #![allow(
     clippy::unwrap_used,
@@ -16,8 +17,10 @@ use std::time::Duration;
 use chrono::Duration as Span;
 use common::{Harness, capital, geo, tally};
 use kage_core::alert::AlertKind;
+use kage_core::config::EgressMode;
 use kage_core::domain::{
-    ClaimedOs, CoolingReason, Engine, Persona, PersonaState, ProxyState, SessionId,
+    ClaimedOs, CoolingReason, Engine, Persona, PersonaState, ProxyProviderKind, ProxyState,
+    SessionId,
 };
 use kage_core::ids::PersonaId;
 use kage_core::persona::mix::MixEntry;
@@ -26,6 +29,8 @@ use kage_persona::lifecycle::GeoChange;
 use kage_persona::manager::{REASON_OPERATOR, REASON_PROXY_RETIRED, REASON_REGENERATED};
 use kage_persona::{PersonaError, PersonaEvent, PersonaManager, PersonaParts, Sidecars};
 use kage_proxy::Clock;
+use kage_proxy::health::GeoLookup;
+use kage_proxy::machine::{ExitObservation, ProbeReport};
 use serde_json::json;
 
 const COUNTRIES: [&str; 5] = ["AT", "DE", "FR", "GB", "IT"];
@@ -38,6 +43,120 @@ fn zone_of(country: &str) -> &'static str {
         "GB" => "Europe/London",
         _ => "Europe/Rome",
     }
+}
+
+#[tokio::test]
+async fn under_direct_the_host_has_personas_of_its_own_and_the_pools_wait() {
+    let harness = Harness::start_with(|config| {
+        config.egress.mode = EgressMode::Direct;
+        config.egress.direct.personas = 2;
+        config.egress.direct.country = Some("AT".parse().unwrap());
+        config.egress.direct.locale = Some("de-AT".to_owned());
+        config.egress.direct.engines = Some(vec![Engine::Firefox]);
+    })
+    .await;
+    // A proxy of the pool gets no persona: nothing leaves through it.
+    let pooled = harness.healthy_proxy("DE").await;
+    assert_eq!(harness.manager.ensure(pooled.id).await.unwrap(), None);
+
+    // The host's rows do, as declared: Austria, German, Firefox only.
+    let rows = harness
+        .pool
+        .keep_host_rows(2, Some("AT".parse().unwrap()))
+        .await
+        .unwrap();
+    let report = harness.manager.reconcile().await.unwrap();
+    assert_eq!(report.generated.len(), 2, "{report:?}");
+    let mut hosts = Vec::new();
+    for row in &rows {
+        let persona = harness
+            .store()
+            .personas()
+            .get_by_proxy(row.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(persona.engine, Engine::Firefox);
+        assert_eq!(
+            persona
+                .country
+                .map(|country| country.to_string())
+                .as_deref(),
+            Some("AT")
+        );
+        assert_eq!(persona.locale, "de-AT");
+        assert_eq!(persona.languages, ["de", "en-US", "en"]);
+        assert_eq!(persona.timezone, "Europe/Vienna");
+        let (proxy, _) = harness.manager.route(&persona).await.unwrap();
+        assert_eq!(proxy.provider, ProxyProviderKind::Host);
+        hosts.push(persona);
+    }
+
+    // A lookup that disagrees counts against the declared place and
+    // changes nobody's identity.
+    let at = harness.clock.now();
+    let berlin = GeoLookup {
+        country: "DE".parse().unwrap(),
+        city: Some("Berlin".to_owned()),
+        region: Some("Berlin".to_owned()),
+        asn: Some("AS3320".to_owned()),
+        org: None,
+        timezone: Some("Europe/Berlin".to_owned()),
+        loc: Some("52.5200,13.4050".to_owned()),
+    };
+    let ip = "203.0.113.77".parse().unwrap();
+    harness
+        .pool
+        .record_host_place(rows[0].id, ip, berlin, at)
+        .await
+        .unwrap()
+        .unwrap();
+    let followed = harness.manager.ensure(rows[0].id).await.unwrap().unwrap();
+    assert_eq!(
+        followed
+            .country
+            .map(|country| country.to_string())
+            .as_deref(),
+        Some("AT")
+    );
+    assert_eq!(
+        (followed.locale.as_str(), followed.timezone.as_str()),
+        ("de-AT", "Europe/Vienna")
+    );
+    assert_eq!(followed.state, hosts[0].state);
+
+    // A leak of the pool stops nothing that leaves from the host.
+    harness
+        .pool
+        .record_probe(
+            pooled.id,
+            &ProbeReport {
+                at,
+                exit: Ok(ExitObservation {
+                    ip,
+                    latency_ms: 90,
+                    connect_ms: None,
+                    tls_ms: None,
+                }),
+                leak: Some(true),
+                geo: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(harness.pool.egress_unsafe().await.unwrap());
+    harness.manager.route(&hosts[1]).await.unwrap();
+}
+
+#[tokio::test]
+async fn under_the_pool_the_hosts_own_rows_get_no_persona() {
+    let harness = Harness::start().await;
+    let (_, pooled) = harness.persona("DE").await;
+    let rows = harness.pool.keep_host_rows(1, None).await.unwrap();
+
+    assert_eq!(harness.manager.ensure(rows[0].id).await.unwrap(), None);
+    assert_eq!(harness.manager.reconcile().await.unwrap().generated, []);
+    assert!(harness.manager.route(&pooled).await.is_ok());
 }
 
 #[tokio::test]

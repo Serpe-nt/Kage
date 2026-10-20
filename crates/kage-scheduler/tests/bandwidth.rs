@@ -12,9 +12,10 @@ use async_trait::async_trait;
 use chrono::{DateTime, Datelike, Duration as Span, TimeZone, Utc};
 use common::{id, noon};
 use kage_core::alert::{AlertKind, AlertSeverity, AlertSink, MemoryAlertSink};
-use kage_core::domain::{BandwidthUsage, IDLE_DOMAIN};
+use kage_core::domain::{BandwidthUsage, Exit, IDLE_DOMAIN};
 use kage_core::schedule::budget::{Budget, BudgetLevel, BudgetRules};
 use kage_proxy::{Clock, TokioClock};
+use kage_scheduler::forwarder::Payer;
 use kage_scheduler::{Bandwidth, Ledger, Meter, SchedulerError, Term};
 
 #[derive(Debug, Default)]
@@ -76,7 +77,7 @@ impl Ledger for MonthLedger {
         Ok(kept
             .rows
             .iter()
-            .filter(|row| row.hour >= since)
+            .filter(|row| row.hour >= since && row.egress == Exit::Pool)
             .map(BandwidthUsage::total)
             .sum())
     }
@@ -156,12 +157,24 @@ async fn counts_are_written_by_the_hour_per_persona_and_domain() {
     }
     books.meter.add(id(0), 10, 20);
     books.meter.add(id(1), 300, 700);
+    // A plain client on the host's own connection: counted, and nothing
+    // of the provider's budget.
+    books.meter.add_for(
+        &Payer {
+            persona: None,
+            egress: Exit::Host,
+            domain: Some("shop.example".to_owned()),
+        },
+        50,
+        60,
+    );
     bandwidth.flush().await.unwrap();
 
     let hour = Utc.with_ymd_and_hms(2026, 7, 14, 10, 0, 0).unwrap();
     let row = |persona, domain: &str, bytes_up, bytes_down| BandwidthUsage {
         hour,
-        persona_id: id(persona),
+        persona_id: Some(id(persona)),
+        egress: Exit::Pool,
         domain: domain.to_owned(),
         bytes_up,
         bytes_down,
@@ -169,6 +182,14 @@ async fn counts_are_written_by_the_hour_per_persona_and_domain() {
     assert_eq!(
         books.ledger.kept().rows,
         [
+            BandwidthUsage {
+                hour,
+                persona_id: None,
+                egress: Exit::Host,
+                domain: "shop.example".to_owned(),
+                bytes_up: 50,
+                bytes_down: 60,
+            },
             row(0, IDLE_DOMAIN, 10, 20),
             row(0, "shop.example", 1_000, 9_000),
             row(1, IDLE_DOMAIN, 300, 700),
@@ -176,8 +197,8 @@ async fn counts_are_written_by_the_hour_per_persona_and_domain() {
     );
     // What was written is not written again.
     bandwidth.flush().await.unwrap();
-    assert_eq!(books.ledger.kept().rows.len(), 3);
-    assert_eq!(books.meter.totals(), (1_310, 9_720));
+    assert_eq!(books.ledger.kept().rows.len(), 4);
+    assert_eq!(books.meter.totals(), (1_360, 9_780));
 
     let budget = bandwidth.assess().await.unwrap();
     assert_eq!(budget.counted_bytes, 11_030);

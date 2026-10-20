@@ -29,6 +29,7 @@ use crate::secret::Secret;
 use crate::urlnorm::NormalizeOptions;
 
 mod crawl;
+mod egress;
 mod extract;
 mod http;
 mod jobs;
@@ -41,6 +42,10 @@ mod telemetry;
 pub use crawl::{
     CrawlConfig, DEFAULT_SKIPPED_EXTENSIONS, MAX_BACK_LIMIT, MAX_CRAWL_DEPTH, MAX_CRAWL_SEEDS,
     MAX_NEAR_DUPLICATE_BITS,
+};
+pub use egress::{
+    DEFAULT_PLAIN_USER_AGENT, DirectEgressConfig, EgressConfig, EgressMode, MAX_DIRECT_PERSONAS,
+    MAX_PLAIN_USER_AGENT, MAX_PRIVATE_NAMES,
 };
 pub use extract::{
     CacheConfig, ExtractConfig, MAX_ROBOTS_AGENTS, MAX_ROBOTS_BYTES, MAX_SCOUT_QUARANTINE,
@@ -403,6 +408,10 @@ pub struct Config {
     /// The proxy pool.
     #[serde(default)]
     pub proxies: ProxiesConfig,
+    /// Which connection carries the traffic, and where level 0 leaves from
+    /// (spec §25).
+    #[serde(default)]
+    pub egress: EgressConfig,
     /// The http path.
     #[serde(default)]
     pub http: HttpConfig,
@@ -627,6 +636,7 @@ impl Config {
         jobs::validate(&self.jobs, &self.webhooks).map_err(ConfigError::Invalid)?;
         crawl::validate(&self.crawl).map_err(ConfigError::Invalid)?;
         telemetry::validate(&self.telemetry).map_err(ConfigError::Invalid)?;
+        egress::validate(&self.egress).map_err(ConfigError::Invalid)?;
         extract::validate(
             self.extract,
             &self.robots,

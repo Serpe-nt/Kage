@@ -103,12 +103,23 @@ error_codes! {
     HeaderInvalid => ("header_invalid", UNPROCESSABLE_ENTITY, "A header cannot be sent as written"),
     /// A header has no known place in a `fetch()` or `XMLHttpRequest`.
     HeaderNotPlaceable => ("header_not_placeable", UNPROCESSABLE_ENTITY, "No capture of a real browser says where this header goes in such a request"),
-    /// `include` asks for something the render mode cannot give.
-    RenderIncludeConflict => ("render_include_conflict", UNPROCESSABLE_ENTITY, "The render mode cannot produce what include asks for"),
-    /// A `fetch()` or `XMLHttpRequest` was asked for without `render: http`.
-    RenderKindConflict => ("render_kind_conflict", UNPROCESSABLE_ENTITY, "Only the http path sends a fetch() or an XMLHttpRequest"),
-    /// A method, a body or caller headers were given without `render: http`.
-    RenderNeedsHttp => ("render_needs_http", UNPROCESSABLE_ENTITY, "A browser render is a plain navigation: a method, a body and headers need render http"),
+    /// The request names no `level` (spec §25): nothing is decided for
+    /// the caller.
+    LevelRequired => ("level_required", UNPROCESSABLE_ENTITY, "The request names no level"),
+    /// The level is below the floor the site's policy sets (`min_level`);
+    /// a request is never raised.
+    LevelBelowPolicy => ("level_below_policy", UNPROCESSABLE_ENTITY, "The policy for the site asks for a higher level"),
+    /// No persona can be fetched at the level: level 1 while no configured
+    /// engine major has an http profile.
+    LevelUnavailable => ("level_unavailable", UNPROCESSABLE_ENTITY, "No persona of this installation can be fetched at this level"),
+    /// `include` asks for something the level cannot give.
+    LevelIncludeConflict => ("level_include_conflict", UNPROCESSABLE_ENTITY, "The level cannot produce what include asks for"),
+    /// A `fetch()` or `XMLHttpRequest` was asked for at another level than 1.
+    LevelKindConflict => ("level_kind_conflict", UNPROCESSABLE_ENTITY, "Only level 1 sends a fetch() or an XMLHttpRequest"),
+    /// A method, a body or caller headers were given at level 2 or 3.
+    LevelNeedsHttp => ("level_needs_http", UNPROCESSABLE_ENTITY, "A browser visit is a plain navigation: a method, a body and headers need level 0 or 1"),
+    /// A session was named at level 0, which has no persona.
+    SessionNeedsPersona => ("session_needs_persona", UNPROCESSABLE_ENTITY, "A session is a persona's, and level 0 has none"),
     /// A `fetch()` or `XMLHttpRequest` was asked for without its page.
     RequestKindNeedsReferer => ("request_kind_needs_referer", UNPROCESSABLE_ENTITY, "A fetch() or XMLHttpRequest needs the page that makes it as its Referer"),
     /// A browser would preflight the request, and preflights are not emulated.
@@ -375,8 +386,8 @@ mod tests {
             StatusCode::TOO_MANY_REQUESTS
         );
         assert_eq!(
-            ErrorCode::RenderIncludeConflict.as_str(),
-            "render_include_conflict"
+            ErrorCode::LevelIncludeConflict.as_str(),
+            "level_include_conflict"
         );
         assert_eq!(
             ErrorCode::SessionPersonaConflict.status(),

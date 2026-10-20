@@ -59,7 +59,7 @@ use crate::timing::{self, ConnectionSetup, Phases};
 
 /// How much of a redirect's own body is read before the connection is
 /// given up on, so that the connection can be used for the next hop.
-const REDIRECT_BODY_BYTES: usize = 64 * 1024;
+pub(crate) const REDIRECT_BODY_BYTES: usize = 64 * 1024;
 
 /// Which checks a URL and its redirect hops must pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -219,13 +219,13 @@ impl Fetched {
 }
 
 /// The URLs of a fetch, hop by hop, with the checks its guard asks for.
-enum Trail {
+pub(crate) enum Trail {
     Guarded(RedirectChain),
     Open { hops: Vec<Url>, max: usize },
 }
 
 impl Trail {
-    fn start(url: &Url, guard: Guard, max: usize) -> Result<Self, HttpError> {
+    pub(crate) fn start(url: &Url, guard: Guard, max: usize) -> Result<Self, HttpError> {
         match guard {
             Guard::Target(policy) => RedirectChain::start(url, policy, max)
                 .map(Self::Guarded)
@@ -242,7 +242,7 @@ impl Trail {
         }
     }
 
-    fn current(&self) -> &Url {
+    pub(crate) fn current(&self) -> &Url {
         match self {
             Self::Guarded(chain) => chain.current(),
             // `hops` always holds the first URL.
@@ -250,14 +250,14 @@ impl Trail {
         }
     }
 
-    fn redirects(&self) -> usize {
+    pub(crate) fn redirects(&self) -> usize {
         match self {
             Self::Guarded(chain) => chain.redirects(),
             Self::Open { hops, .. } => hops.len() - 1,
         }
     }
 
-    fn downgraded(&self) -> bool {
+    pub(crate) fn downgraded(&self) -> bool {
         match self {
             Self::Guarded(chain) => chain.was_downgraded(),
             Self::Open { hops, .. } => hops
@@ -266,7 +266,7 @@ impl Trail {
         }
     }
 
-    fn follow(&mut self, location: &str) -> Result<Url, HttpError> {
+    pub(crate) fn follow(&mut self, location: &str) -> Result<Url, HttpError> {
         match self {
             Self::Guarded(chain) => match chain.follow(location) {
                 Ok(next) => Ok(next.clone()),
@@ -402,11 +402,11 @@ pub fn check_preflight(
     Ok(())
 }
 
-fn millis(duration: Duration) -> u64 {
+pub(crate) fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
-fn add(total: Option<Duration>, part: Option<Duration>) -> Option<Duration> {
+pub(crate) fn add(total: Option<Duration>, part: Option<Duration>) -> Option<Duration> {
     match (total, part) {
         (Some(total), Some(part)) => Some(total + part),
         (total, part) => total.or(part),
@@ -414,7 +414,7 @@ fn add(total: Option<Duration>, part: Option<Duration>) -> Option<Duration> {
 }
 
 /// Where a redirect points, for the statuses a browser follows.
-fn redirect_location(response: &wreq::Response) -> Option<String> {
+pub(crate) fn redirect_location(response: &wreq::Response) -> Option<String> {
     let status = response.status();
     let follows = matches!(
         status,

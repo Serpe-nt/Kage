@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use kage_core::config::{Config, RobotsConfig};
+use kage_core::config::{Config, EgressMode, RobotsConfig};
 use kage_core::domain::{Engine, RobotsVerdict};
 use kage_core::ids::PersonaId;
 use kage_core::outcome::Outcome;
@@ -119,12 +119,22 @@ pub struct RobotsSettings {
     pub agents: Vec<String>,
     /// How long a persona that read a site is kept from scouting it.
     pub scout_quarantine: Duration,
+    /// Whether a site's reader asks for its files itself: a host that
+    /// leaves from its own connection with one persona (`egress.mode:
+    /// direct`, `egress.direct.personas: 1`) has nobody else to ask, and
+    /// one address that both reads a site and asks for its `robots.txt`
+    /// is the cost the runbook names (spec §25).
+    pub own_scout: bool,
 }
 
 impl RobotsSettings {
     /// The settings of the configuration.
     pub fn from_config(config: &Config) -> Self {
-        Self::of(&config.robots)
+        Self {
+            own_scout: config.egress.mode == EgressMode::Direct
+                && config.egress.direct.personas == 1,
+            ..Self::of(&config.robots)
+        }
     }
 
     fn of(robots: &RobotsConfig) -> Self {
@@ -134,6 +144,7 @@ impl RobotsSettings {
             max_bytes: robots.max_bytes,
             agents: robots.agents.clone(),
             scout_quarantine: robots.scout_quarantine.get(),
+            own_scout: false,
         }
     }
 }
@@ -401,6 +412,17 @@ pub fn pick_scout(
         .map(|view| view.id)
 }
 
+/// The scout of a site whose reader asks for its files itself
+/// ([`RobotsSettings::own_scout`]): the one ready persona there is, whoever
+/// read the site. `None` when there is not exactly one.
+pub fn lone_scout(personas: &[PersonaView]) -> Option<PersonaId> {
+    let mut ready = personas.iter().filter(|view| view.ready);
+    match (ready.next(), ready.next()) {
+        (Some(only), None) => Some(only.id),
+        _ => None,
+    }
+}
+
 /// The scout of a site as the desk last looked it up: `None` inside for a
 /// site that has none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -529,6 +551,7 @@ mod tests {
             max_bytes: 512 * 1024,
             agents: vec!["kage".to_owned()],
             scout_quarantine: Duration::from_hours(720),
+            own_scout: false,
         }
     }
 

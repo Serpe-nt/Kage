@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use chrono::{DateTime, Utc};
-use common::lab::{LENIENT_FAST, Lab, MASTER_KEY, SITE, article};
-use kage_core::domain::AuditOutcome;
+use common::lab::{FAST, Lab, MASTER_KEY, SITE, article};
+use kage_core::domain::{AuditOutcome, Exit};
 use kage_core::ids::RequestId;
 use kage_core::outcome::Outcome;
 use kage_proxy::machine::{ExitObservation, ProbeReport};
@@ -106,7 +106,7 @@ impl Cli {
 
 #[tokio::test]
 async fn fetch_runs_one_request_through_the_whole_pipeline() {
-    let mut lab = Lab::start(2, 149, LENIENT_FAST).await;
+    let mut lab = Lab::start(2, 149, FAST).await;
     Mock::given(method("GET"))
         .and(path("/page"))
         .respond_with(
@@ -121,16 +121,16 @@ async fn fetch_runs_one_request_through_the_whole_pipeline() {
     let url = format!("http://{SITE}/page");
     let epoch = DateTime::<Utc>::UNIX_EPOCH;
 
-    // The policy sends this site to the http path: one attempt there, by a
-    // persona of the pool, through the command's own forwarder.
-    let fetched = cli.json(&[&url]).await;
+    // Level 1: one attempt on the http path, by a persona of the pool,
+    // through the command's own forwarder.
+    let fetched = cli.json(&[&url, "--level", "1"]).await;
     assert_eq!(fetched["outcome"], "ok", "{fetched}");
     assert_eq!(fetched["status"], 200);
     assert_eq!(fetched["final_url"], url);
-    assert_eq!(fetched["escalated"], false);
     let attempts = fetched["attempts"].as_array().unwrap();
     assert_eq!(attempts.len(), 1);
     assert_eq!(attempts[0]["render"], "http");
+    assert_eq!(attempts[0]["exit"], Value::Null);
     assert_eq!(attempts[0]["outcome"], "ok");
     assert_eq!(attempts[0]["seed"].as_str().unwrap().len(), 64);
     assert_eq!(fetched["pacing"]["applied"], "fast");
@@ -157,7 +157,12 @@ async fn fetch_runs_one_request_through_the_whole_pipeline() {
         fetched["relayed_bytes"]["down"].as_u64().unwrap(),
     );
     assert_eq!(relayed, lab.proxy_of(&persona).bytes());
-    let total = lab.store().bandwidth().total_since(epoch).await.unwrap();
+    let total = lab
+        .store()
+        .bandwidth()
+        .total_since(epoch, Exit::Pool)
+        .await
+        .unwrap();
     assert_eq!((total.bytes_up, total.bytes_down), relayed);
     // The request, its attempt and its result are in the store, and the
     // command is in the audit log.
@@ -191,8 +196,8 @@ async fn fetch_runs_one_request_through_the_whole_pipeline() {
     let rendered = cli
         .json(&[
             &url,
-            "--render",
-            "browser",
+            "--level",
+            "3",
             "--persona",
             &pinned.id.to_string(),
             "--timeout",
@@ -236,7 +241,7 @@ async fn fetch_runs_one_request_through_the_whole_pipeline() {
     assert_eq!(closed, 1);
 
     // In sentences, for a person.
-    let output = cli.run(&["fetch", &url]).await;
+    let output = cli.run(&["fetch", &url, "--level", "1"]).await;
     assert!(output.status.success(), "{}", text(&output.stderr));
     let sentences = text(&output.stdout);
     assert!(
@@ -256,7 +261,7 @@ async fn fetch_runs_one_request_through_the_whole_pipeline() {
         }));
     });
     let blocked = cli
-        .run(&["fetch", &url, "--render", "browser", "--retries", "0"])
+        .run(&["fetch", &url, "--level", "3", "--retries", "0"])
         .await;
     assert!(!blocked.status.success());
     let shown = text(&blocked.stdout);
@@ -285,7 +290,7 @@ async fn fetch_runs_one_request_through_the_whole_pipeline() {
         .record_probe(lab.personas[0].proxy_id, &report)
         .await
         .unwrap();
-    let refused = cli.run(&["fetch", &url, "--json"]).await;
+    let refused = cli.run(&["fetch", &url, "--level", "1", "--json"]).await;
     assert!(!refused.status.success());
     let document: Value = serde_json::from_slice(&refused.stdout).unwrap();
     assert_eq!(document["outcome"], "provider_error");
@@ -298,7 +303,9 @@ async fn fetch_runs_one_request_through_the_whole_pipeline() {
     );
 
     // What cannot be accepted is an error before anything starts.
-    let unknown = cli.run(&["fetch", &url, "--pacing", "warp"]).await;
+    let unknown = cli
+        .run(&["fetch", &url, "--level", "1", "--pacing", "warp"])
+        .await;
     assert!(!unknown.status.success());
     assert!(
         text(&unknown.stderr).contains("the request could not be accepted"),
@@ -309,8 +316,63 @@ async fn fetch_runs_one_request_through_the_whole_pipeline() {
 }
 
 #[tokio::test]
+async fn fetch_at_level_zero_is_a_plain_client_that_names_itself() {
+    let mut lab = Lab::start(2, 149, FAST).await;
+    Mock::given(method("GET"))
+        .and(path("/plain"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/html; charset=utf-8")
+                .set_body_string(article("Plain")),
+        )
+        .mount(&lab.site)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let cli = Cli::new(&lab, dir.path());
+    let url = format!("http://{SITE}/plain");
+
+    // Nobody's: no persona, the site's plain exit, and a client that says
+    // it is Kage.
+    let fetched = cli.json(&[&url, "--level", "0"]).await;
+    assert_eq!(fetched["outcome"], "ok", "{fetched}");
+    assert_eq!(fetched["persona"], Value::Null);
+    let attempts = fetched["attempts"].as_array().unwrap();
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(attempts[0]["exit"], "pool");
+    assert_eq!(attempts[0]["render"], "http");
+    assert_eq!(attempts[0]["persona_id"], Value::Null);
+    assert_eq!(attempts[0]["engine"], Value::Null);
+    let received = lab.received("/plain").await;
+    assert_eq!(received.len(), 1);
+    let agent = received[0]
+        .headers
+        .get("user-agent")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(agent.starts_with("kage/"), "{agent}");
+    let request: RequestId = serde_json::from_value(fetched["request_id"].clone()).unwrap();
+    let stored = lab.store().requests().get(request).await.unwrap().unwrap();
+    assert_eq!(stored.spec["level"], 0);
+
+    // A plain client has no persona to name.
+    let persona = lab.personas[0].id.to_string();
+    let refused = cli
+        .run(&["fetch", &url, "--level", "0", "--persona", &persona])
+        .await;
+    assert!(!refused.status.success());
+    assert!(
+        text(&refused.stderr).contains("--persona is not taken at level 0"),
+        "{}",
+        text(&refused.stderr)
+    );
+    lab.shut_down().await;
+}
+
+#[tokio::test]
 async fn fetch_returns_what_the_page_says_and_the_cache_answers_the_second_time() {
-    let mut lab = Lab::start(2, 149, LENIENT_FAST).await;
+    let mut lab = Lab::start(2, 149, FAST).await;
     Mock::given(method("GET"))
         .and(path("/read"))
         .respond_with(
@@ -332,6 +394,8 @@ async fn fetch_returns_what_the_page_says_and_the_cache_answers_the_second_time(
     let first_file = dir.path().join("first.html");
     let asked = [
         url.as_str(),
+        "--level",
+        "1",
         "--extract",
         "--cache-ttl",
         "10m",
@@ -369,6 +433,8 @@ async fn fetch_returns_what_the_page_says_and_the_cache_answers_the_second_time(
     let again_file = dir.path().join("again.html");
     let again = [
         url.as_str(),
+        "--level",
+        "1",
         "--extract",
         "--cache-ttl",
         "10m",
@@ -390,7 +456,15 @@ async fn fetch_returns_what_the_page_says_and_the_cache_answers_the_second_time(
 
     // In sentences, for a person.
     let output = cli
-        .run(&["fetch", &url, "--extract", "--cache-ttl", "10m"])
+        .run(&[
+            "fetch",
+            &url,
+            "--level",
+            "1",
+            "--extract",
+            "--cache-ttl",
+            "10m",
+        ])
         .await;
     assert!(output.status.success(), "{}", text(&output.stderr));
     let sentences = text(&output.stdout);
@@ -407,7 +481,9 @@ async fn fetch_returns_what_the_page_says_and_the_cache_answers_the_second_time(
 
     // A result with other parts is another entry: without the extraction
     // the page is fetched.
-    let other = cli.json(&[&url, "--cache-ttl", "10m"]).await;
+    let other = cli
+        .json(&[&url, "--level", "1", "--cache-ttl", "10m"])
+        .await;
     assert_eq!(other["cached"], false);
     assert_eq!(other["extract"], Value::Null);
     assert_eq!(lab.received("/read").await.len(), 2);
@@ -419,7 +495,7 @@ async fn fetch_returns_what_the_page_says_and_the_cache_answers_the_second_time(
         ("--robots", "enforce", "robots_ignored"),
         ("--cache-ttl", "2d", "--cache-ttl is at most 1d"),
     ] {
-        let refused = cli.run(&["fetch", &url, flag, value]).await;
+        let refused = cli.run(&["fetch", &url, "--level", "1", flag, value]).await;
         assert!(!refused.status.success());
         assert!(
             text(&refused.stderr).contains(said),

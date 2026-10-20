@@ -1,25 +1,27 @@
 //! The forwarder on real sockets (follow-up F10): a persona's client
 //! reaches its own proxy and no other, the provider's credentials are
 //! added on the way, every byte is counted, and what must not be relayed
-//! is not.
+//! is not. Since 2.0 (spec §25) also a plain client's exit, and the route
+//! with no upstream, which resolves and checks its targets itself.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::too_many_lines)]
 
 mod common;
 
 use std::collections::{HashMap, HashSet};
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use common::proxy::{PROXY_PASS, PROXY_USER, TestProxy, basic};
 use common::{config, id, persona};
-use kage_core::domain::{IDLE_DOMAIN, ProxyEndpoint, ProxyScheme};
-use kage_core::ids::PersonaId;
+use kage_core::domain::{Exit, IDLE_DOMAIN, ProxyEndpoint, ProxyScheme};
+use kage_core::ids::{PersonaId, ProxyId};
+use kage_http::HopResolver;
 use kage_persona::{Egress, Via};
 use kage_scheduler::forwarder::RouteRefusal;
-use kage_scheduler::{Forwarder, ForwarderSettings, Routes, Tokens};
+use kage_scheduler::{Forwarder, ForwarderSettings, PlainRoute, Routes, Tokens, Upstream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
@@ -28,27 +30,93 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const KEY: [u8; 32] = [7; 32];
 
-/// Which proxy each persona's traffic leaves through.
+/// Which proxy each persona's traffic leaves through, and each plain
+/// client's.
 #[derive(Debug, Default)]
 struct Table {
-    routes: Mutex<HashMap<PersonaId, Result<ProxyEndpoint, RouteRefusal>>>,
+    routes: Mutex<HashMap<PersonaId, Result<Upstream, RouteRefusal>>>,
+    plain: Mutex<Vec<(PlainRoute, Result<Upstream, RouteRefusal>)>>,
 }
 
 impl Table {
     fn set(&self, persona: PersonaId, route: Result<ProxyEndpoint, RouteRefusal>) {
-        self.routes.lock().unwrap().insert(persona, route);
+        self.routes
+            .lock()
+            .unwrap()
+            .insert(persona, route.map(Upstream::Proxy));
+    }
+
+    /// The persona leaves from the host's own connection.
+    fn set_direct(&self, persona: PersonaId) {
+        self.routes
+            .lock()
+            .unwrap()
+            .insert(persona, Ok(Upstream::Direct));
+    }
+
+    fn set_plain(&self, route: PlainRoute, upstream: Result<Upstream, RouteRefusal>) {
+        self.plain.lock().unwrap().push((route, upstream));
     }
 }
 
 #[async_trait]
 impl Routes for Table {
-    async fn upstream(&self, persona: PersonaId) -> Result<ProxyEndpoint, RouteRefusal> {
+    async fn upstream(&self, persona: PersonaId) -> Result<Upstream, RouteRefusal> {
         self.routes
             .lock()
             .unwrap()
             .get(&persona)
             .cloned()
             .unwrap_or(Err(RouteRefusal::UnknownPersona))
+    }
+
+    async fn plain(&self, route: PlainRoute) -> Result<Upstream, RouteRefusal> {
+        self.plain
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(known, _)| *known == route)
+            .map_or(Err(RouteRefusal::NotConfigured), |(_, upstream)| {
+                upstream.clone()
+            })
+    }
+}
+
+/// Names the forwarder resolves for a route with no upstream, from a
+/// table: `shop.kage.test` and `other.kage.test` are this machine, one
+/// name is the cloud's metadata address, and one has a public and a
+/// private address.
+#[derive(Debug)]
+struct Names(HashMap<&'static str, Vec<IpAddr>>);
+
+impl Default for Names {
+    fn default() -> Self {
+        let loopback = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        Self(HashMap::from([
+            ("shop.kage.test", vec![loopback]),
+            ("other.kage.test", vec![loopback]),
+            (
+                "metadata.kage.test",
+                vec![IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254))],
+            ),
+            (
+                "mixed.kage.test",
+                vec![
+                    IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34)),
+                    IpAddr::V4(Ipv4Addr::new(10, 0, 0, 7)),
+                ],
+            ),
+        ]))
+    }
+}
+
+#[async_trait]
+impl HopResolver for Names {
+    async fn resolve(&self, host: &str) -> Result<Vec<IpAddr>, String> {
+        self.0
+            .get(host)
+            .cloned()
+            .ok_or_else(|| format!("{host} is unknown"))
     }
 }
 
@@ -70,6 +138,8 @@ fn settings() -> ForwarderSettings {
         idle_timeout: Duration::from_secs(5),
         max_connections: 64,
         operator_hosts: HashSet::new(),
+        private_names: HashSet::new(),
+        resolver: Arc::new(Names::default()),
     }
 }
 
@@ -104,6 +174,24 @@ impl Rig {
     /// The `Proxy-Authorization` of a persona's clients.
     fn credential(&self, persona: PersonaId) -> String {
         basic(&persona.to_string(), &self.tokens.token(persona))
+    }
+
+    /// The `Proxy-Authorization` of a plain client of `route`.
+    fn plain_credential(&self, route: PlainRoute) -> String {
+        basic(&route.username(), &self.tokens.plain_token(route))
+    }
+
+    /// A client that asked for a tunnel with `credential`, and the head
+    /// of the answer.
+    async fn tunnel_with(&self, credential: &str, authority: &str) -> (Client, String) {
+        let mut client = self.client().await;
+        client
+            .send(&format!(
+                "CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\nProxy-Authorization: {credential}\r\n\r\n"
+            ))
+            .await;
+        let head = client.head().await;
+        (client, head)
     }
 
     async fn client(&self) -> Client {
@@ -264,7 +352,8 @@ async fn a_tunnel_goes_through_the_personas_own_proxy_and_every_byte_is_counted(
     tokio::time::sleep(Duration::from_millis(100)).await;
     let counted = rig.forwarder.meter().drain();
     assert_eq!(counted.len(), 1, "{counted:?}");
-    assert_eq!(counted[0].persona, id(0));
+    assert_eq!(counted[0].persona, Some(id(0)));
+    assert_eq!(counted[0].egress, Exit::Pool);
     assert_eq!(counted[0].domain, "shop.kage.test");
     assert_eq!(
         (counted[0].bytes_up, counted[0].bytes_down),
@@ -582,7 +671,7 @@ impl KeepAlive {
 
     fn endpoint(&self) -> ProxyEndpoint {
         ProxyEndpoint {
-            id: kage_core::ids::ProxyId::new(),
+            id: ProxyId::new(),
             host: self.addr.ip().to_string(),
             port: self.addr.port(),
             username: kage_core::secret::Secret::new(PROXY_USER),
@@ -926,15 +1015,182 @@ async fn every_persona_is_handed_the_forwarder_under_its_own_credential() {
     rig.stop().await;
 }
 
+#[tokio::test]
+async fn a_route_with_no_upstream_connects_only_to_addresses_it_checked() {
+    let mut rig = Rig::start(ForwarderSettings {
+        private_names: HashSet::from([
+            "shop.kage.test".to_owned(),
+            "metadata.kage.test".to_owned(),
+            "mixed.kage.test".to_owned(),
+        ]),
+        ..settings()
+    })
+    .await;
+    rig.table.set_plain(PlainRoute::Host, Ok(Upstream::Direct));
+    rig.table.set_direct(id(1));
+    let shop = shop().await;
+    let port = shop.address().port();
+    let host = rig.plain_credential(PlainRoute::Host);
+
+    // A plain request is sent on in origin form, without the credential.
+    let mut client = rig.client().await;
+    client
+        .send(&format!(
+            "GET http://shop.kage.test:{port}/page HTTP/1.1\r\nHost: shop.kage.test:{port}\r\n\
+             Proxy-Authorization: {host}\r\nConnection: close\r\n\r\n"
+        ))
+        .await;
+    let answer = client.rest().await;
+    assert!(answer.starts_with("HTTP/1.1 200 OK"), "{answer}");
+    assert!(answer.ends_with("hello from the shop"), "{answer}");
+    let received = shop.received_requests().await.unwrap();
+    assert_eq!(received.len(), 1);
+    assert_eq!(received[0].url.path(), "/page");
+    assert!(!received[0].headers.contains_key("proxy-authorization"));
+
+    // The forwarder opens a tunnel itself, for a plain client and for a
+    // host persona alike.
+    let authority = format!("shop.kage.test:{port}");
+    for credential in [host.clone(), rig.credential(id(1))] {
+        let (mut client, head) = rig.tunnel_with(&credential, &authority).await;
+        assert_eq!(head, "HTTP/1.1 200 Connection established\r\n\r\n");
+        client
+            .send("GET /page HTTP/1.1\r\nHost: shop.kage.test\r\nConnection: close\r\n\r\n")
+            .await;
+        let answer = client.rest().await;
+        assert!(answer.ends_with("hello from the shop"), "{answer}");
+    }
+    // Nothing went through the pool.
+    assert_eq!(rig.provider.seen().len(), 0);
+
+    // A name the operator did not list may not resolve to this machine;
+    // a listed one never to the metadata address, and not to a private
+    // address beside a public one either unless it is listed.
+    for refused in [
+        format!("other.kage.test:{port}"),
+        "metadata.kage.test:80".to_owned(),
+        "unknown.kage.test:443".to_owned(),
+    ] {
+        let (mut client, head) = rig.tunnel_with(&host, &refused).await;
+        assert!(head.starts_with("HTTP/1.1 403 "), "{refused}: {head}");
+        assert_eq!(client.rest().await, "", "{refused}");
+    }
+    let (_client, head) = rig.tunnel_with(&host, "mixed.kage.test:9").await;
+    assert!(!head.starts_with("HTTP/1.1 200 "), "{head}");
+
+    // The bytes are counted by their exit: the plain client's toward the
+    // host it went to, the host persona's as its own.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let counted = rig.forwarder.meter().drain();
+    assert!(
+        counted
+            .iter()
+            .all(|counted| counted.egress == Exit::Host && counted.bytes_down > 0),
+        "{counted:?}"
+    );
+    let plain: Vec<_> = counted
+        .iter()
+        .filter(|counted| counted.persona.is_none())
+        .collect();
+    assert_eq!(plain.len(), 1, "{counted:?}");
+    assert_eq!(plain[0].domain, "shop.kage.test");
+    assert!(
+        counted
+            .iter()
+            .any(|counted| counted.persona == Some(id(1)) && counted.domain == IDLE_DOMAIN)
+    );
+
+    // The stops of the pool do not hold the host's connection.
+    rig.forwarder.set_stop(Some("bandwidth_exhausted"));
+    let (_client, head) = rig.tunnel_with(&host, &authority).await;
+    assert_eq!(head, "HTTP/1.1 200 Connection established\r\n\r\n");
+    let (_client, head) = rig.tunnel(id(0), "shop.kage.test:443").await;
+    assert!(head.starts_with("HTTP/1.1 403 "), "{head}");
+    rig.stop().await;
+}
+
+#[tokio::test]
+async fn a_plain_clients_credential_names_its_exit_and_nothing_else() {
+    let mut rig = Rig::start(settings()).await;
+    let shop = shop().await;
+    rig.provider.route("shop.kage.test:443", *shop.address());
+    let (exit, other) = (
+        ProxyId::from_uuid(uuid::Uuid::from_u128(41)),
+        ProxyId::from_uuid(uuid::Uuid::from_u128(42)),
+    );
+    rig.table.set_plain(
+        PlainRoute::Pool(exit),
+        Ok(Upstream::Proxy(rig.provider.endpoint())),
+    );
+    rig.table
+        .set_plain(PlainRoute::Pool(other), Err(RouteRefusal::ProxyNotUsable));
+
+    // The site's plain exit: through that proxy, with the provider's
+    // credentials, counted toward the host for nobody.
+    let credential = rig.plain_credential(PlainRoute::Pool(exit));
+    let (mut client, head) = rig.tunnel_with(&credential, "shop.kage.test:443").await;
+    assert_eq!(head, "HTTP/1.1 200 Connection Established\r\n\r\n");
+    client
+        .send("GET /page HTTP/1.1\r\nHost: shop.kage.test\r\nConnection: close\r\n\r\n")
+        .await;
+    assert!(client.rest().await.ends_with("hello from the shop"));
+    let tunnels = rig.provider.tunnels();
+    assert_eq!(tunnels.len(), 1);
+    assert_eq!(
+        tunnels[0].header("proxy-authorization"),
+        Some(basic(PROXY_USER, PROXY_PASS))
+    );
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let counted = rig.forwarder.meter().drain();
+    assert_eq!(counted.len(), 1, "{counted:?}");
+    assert_eq!(
+        (
+            counted[0].persona,
+            counted[0].egress,
+            counted[0].domain.as_str()
+        ),
+        (None, Exit::Pool, "shop.kage.test")
+    );
+
+    // Another exit's token under this exit's name is no credential.
+    let forged = basic(
+        &PlainRoute::Pool(exit).username(),
+        &rig.tokens.plain_token(PlainRoute::Pool(other)),
+    );
+    let (_client, head) = rig.tunnel_with(&forged, "shop.kage.test:443").await;
+    assert!(head.starts_with("HTTP/1.1 407 "), "{head}");
+    // Nor is a persona's token, nor a plain token under a persona's name.
+    let as_persona = basic(&PlainRoute::Host.username(), &rig.tokens.token(id(0)));
+    let (_client, head) = rig.tunnel_with(&as_persona, "shop.kage.test:443").await;
+    assert!(head.starts_with("HTTP/1.1 407 "), "{head}");
+    let as_plain = basic(
+        &id(0).to_string(),
+        &rig.tokens.plain_token(PlainRoute::Host),
+    );
+    let (_client, head) = rig.tunnel_with(&as_plain, "shop.kage.test:443").await;
+    assert!(head.starts_with("HTTP/1.1 407 "), "{head}");
+
+    // An exit that cannot carry traffic, and the host's connection where
+    // the operator did not configure it, are refused.
+    for route in [PlainRoute::Pool(other), PlainRoute::Host] {
+        let credential = rig.plain_credential(route);
+        let (_client, head) = rig.tunnel_with(&credential, "shop.kage.test:443").await;
+        assert!(head.starts_with("HTTP/1.1 403 "), "{route:?}: {head}");
+    }
+    assert_eq!(rig.provider.tunnels().len(), 1);
+    rig.stop().await;
+}
+
 #[test]
 fn the_settings_come_from_the_configuration() {
-    let config = config(&[
+    let mut config = config(&[
         ("KAGE__FORWARDER__ADVERTISE", "http://kage-host:9911"),
         ("KAGE__FORWARDER__CONNECT_TIMEOUT", "7s"),
         ("KAGE__FORWARDER__IDLE_TIMEOUT", "2m"),
         ("KAGE__FORWARDER__MAX_CONNECTIONS", "12"),
         ("KAGE__SELFTEST__HTTP__ECHO_URL", "https://Echo:8443/"),
     ]);
+    config.egress.direct.private_names = vec!["Fixture.Kage.Test.".to_owned()];
 
     let settings = ForwarderSettings::from_config(&config);
 
@@ -943,4 +1199,9 @@ fn the_settings_come_from_the_configuration() {
     assert_eq!(settings.idle_timeout, Duration::from_mins(2));
     assert_eq!(settings.max_connections, 12);
     assert!(settings.operator_hosts.contains(&("echo".to_owned(), 8443)));
+    // A listed name in any spelling is its lower-case form.
+    assert_eq!(
+        settings.private_names,
+        HashSet::from(["fixture.kage.test".to_owned()])
+    );
 }

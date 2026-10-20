@@ -29,7 +29,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use chrono::{DateTime, Utc};
 use kage_core::alert::{AlertKind, AlertSeverity};
 use kage_core::config::Config;
-use kage_core::domain::{GeoRecord, Proxy, ProxyState};
+use kage_core::domain::{GeoRecord, Proxy, ProxyProviderKind, ProxyState};
 use kage_core::ids::ProxyId;
 use serde_json::json;
 use tokio::task::JoinSet;
@@ -420,11 +420,20 @@ impl HealthChecker {
         })
     }
 
-    /// Probes proxies now, whatever their schedule says: every live proxy,
-    /// or only those in `only`. A proxy in backoff has its backoff ended
-    /// first; a proxy that is being replaced is left alone. The host
-    /// address is read first if it is not known yet. For an operator's
-    /// `kage proxy health`.
+    /// The live proxies a probe is for: never the host's own rows, whose
+    /// exit is the host and which nothing is relayed through (spec §25).
+    async fn probed(&self) -> Result<Vec<Proxy>, PoolError> {
+        let mut live = self.pool.live().await?;
+        live.retain(|proxy| proxy.provider != ProxyProviderKind::Host);
+        Ok(live)
+    }
+
+    /// Probes proxies now, whatever their schedule says: every live proxy
+    /// of the pool, or only those in `only`. A proxy in backoff has its
+    /// backoff ended first; a proxy that is being replaced is left alone;
+    /// the host's own rows are never probed. The host address is read
+    /// first if it is not known yet. For an operator's `kage proxy
+    /// health`.
     ///
     /// # Errors
     ///
@@ -437,7 +446,7 @@ impl HealthChecker {
         let now = self.pool.clock().now();
         self.refresh_host_ip(now).await;
         let mut proxies = Vec::new();
-        for proxy in self.pool.live().await? {
+        for proxy in self.probed().await? {
             if only.is_some_and(|ids| !ids.contains(&proxy.id)) {
                 continue;
             }
@@ -537,7 +546,7 @@ impl HealthChecker {
     pub async fn tick(self: &Arc<Self>) -> Result<usize, PoolError> {
         let now = self.pool.clock().now();
         self.refresh_host_ip(now).await;
-        let live = self.pool.live().await?;
+        let live = self.probed().await?;
 
         let mut due: Vec<(DateTime<Utc>, &Proxy)> = Vec::new();
         {

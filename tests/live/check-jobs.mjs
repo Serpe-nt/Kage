@@ -148,6 +148,7 @@ const webhook = () => ({ url: env("KAGE_LIVE_HOOK_URL"), secret: env("KAGE_LIVE_
 function flowOf(engine, withWebhook) {
   return {
     type: "flow",
+    level: 3,
     actions: [
       { action: "goto", url: PAGE_A },
       { action: "wait_for", ms: SETTLE_A_MS },
@@ -175,7 +176,7 @@ async function run() {
     const answer = await api("POST", "/v1/fetch", {
       body: {
         url: PAGE_A,
-        render: "browser",
+        level: 3,
         include: ["dom", "headers", "screenshot"],
         persona: { engines: [engine] },
         timeout_ms: 150_000,
@@ -197,7 +198,7 @@ async function run() {
     batch = await createJob("batch", {
       type: "batch",
       urls: [PAGE_A, PAGE_B, PAGE_A, PAGE_B],
-      defaults: { include: ["dom", "headers"], timeout_ms: 150_000 },
+      defaults: { level: 3, include: ["dom", "headers"], timeout_ms: 150_000 },
       webhook: webhook(),
     });
     save("batch-accepted.json", batch);
@@ -256,7 +257,7 @@ async function run() {
 async function overflowBegin() {
   console.log(`==> a synchronous fetch of ${PAGE_A} against a wall time it outlasts`);
   const answer = await api("POST", "/v1/fetch", {
-    body: { url: PAGE_A, render: "browser", include: ["dom", "headers"], timeout_ms: 150_000 },
+    body: { url: PAGE_A, level: 3, include: ["dom", "headers"], timeout_ms: 150_000 },
   });
   expectStatus("the fetch that overflows", answer, 202);
   save("overflow-accepted.json", answer.json);

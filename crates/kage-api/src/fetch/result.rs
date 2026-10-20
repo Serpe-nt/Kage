@@ -22,8 +22,8 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use kage_browser::contract::{BodyEncoding, PageResult, ScrollEnd};
 use kage_core::domain::{
-    ArtifactKind, ArtifactRef, Attempt, BehaviorDone, ClaimedOs, ConsoleEntry, FetchRecord, Header,
-    PacingApplied, PersonaSummary, Render, RobotsVerdict, Timing, Visit,
+    ArtifactKind, ArtifactRef, Attempt, BehaviorDone, ClaimedOs, ConsoleEntry, Exit, FetchRecord,
+    Header, Level, PacingApplied, PersonaSummary, Render, RobotsVerdict, Timing, Visit,
 };
 use kage_core::ids::{ApiKeyId, ArtifactId, PersonaId, RequestId};
 use kage_core::outcome::{Block, Outcome};
@@ -118,6 +118,25 @@ impl From<Render> for RenderTaken {
     }
 }
 
+/// Where a plain client's attempt (level 0) left from: never an address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ExitField {
+    /// The host's own connection (`egress.plain: host`).
+    Host,
+    /// A proxy of the pool: the site's plain exit (`egress.plain: pool`).
+    Pool,
+}
+
+impl From<Exit> for ExitField {
+    fn from(exit: Exit) -> Self {
+        match exit {
+            Exit::Host => Self::Host,
+            Exit::Pool => Self::Pool,
+        }
+    }
+}
+
 /// The operating system a persona claims.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -168,7 +187,8 @@ pub(crate) struct PersonaView {
     pub(crate) country: Option<String>,
 }
 
-/// One try at a request by one persona.
+/// One try at a request: by one persona, or at level 0 by the plain
+/// client from its exit.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub(crate) struct AttemptView {
     /// 1 for the first attempt.
@@ -181,8 +201,12 @@ pub(crate) struct AttemptView {
     pub(crate) status: Option<u16>,
     /// How long it took, in milliseconds.
     pub(crate) total_ms: u64,
-    /// The persona that made it, as in `persona.id`.
-    pub(crate) persona: String,
+    /// The persona that made it, as in `persona.id`; null at level 0.
+    pub(crate) persona: Option<String>,
+    /// The engine of that persona; null at level 0.
+    pub(crate) engine: Option<EngineField>,
+    /// Where a level-0 attempt left from; null for a persona's.
+    pub(crate) exit: Option<ExitField>,
     /// Why it ended as it did when the site did not say, for example
     /// `proxy_failed`.
     pub(crate) reason: Option<String>,
@@ -413,6 +437,10 @@ pub(crate) struct FetchResult {
     /// When asking again is worth it, when Kage knows: the end of a
     /// domain's pause or of a persona's cooldown.
     pub(crate) retry_at: Option<DateTime<Utc>>,
+    /// The level the request was made at (spec §25); null for a result
+    /// stored before 2.0.
+    #[schema(minimum = 0, maximum = 3, example = 3)]
+    pub(crate) level: Option<u64>,
     /// The status of the last response.
     pub(crate) status: Option<u16>,
     /// The URL after redirects.
@@ -469,8 +497,6 @@ pub(crate) struct FetchResult {
     pub(crate) cached: bool,
     /// When the page of a result served from the cache was fetched.
     pub(crate) cached_at: Option<DateTime<Utc>>,
-    /// Whether the request moved from the http path to a browser.
-    pub(crate) escalated: bool,
     /// When the result was stored.
     pub(crate) created_at: DateTime<Utc>,
 }
@@ -669,7 +695,9 @@ impl Viewer<'_> {
             outcome: attempt.outcome.into(),
             status: attempt.status,
             total_ms: attempt.timing.total_ms,
-            persona: self.name(attempt.persona_id),
+            persona: attempt.persona_id.map(|persona| self.name(persona)),
+            engine: attempt.engine.map(Into::into),
+            exit: attempt.exit.map(Into::into),
             reason: attempt.reason.clone(),
             seed: attempt
                 .seed
@@ -831,6 +859,7 @@ fn visit_of(
 /// The result of a fetch the pipeline just made.
 pub(crate) fn from_report(
     report: &FetchReport,
+    level: Level,
     include: &Included,
     session: Option<&str>,
     viewer: &Viewer<'_>,
@@ -855,6 +884,7 @@ pub(crate) fn from_report(
         outcome: report.outcome.into(),
         reason: report.reason.clone(),
         retry_at: report.retry_at,
+        level: Some(u64::from(level.number())),
         status: last.and_then(|last| last.status),
         final_url: last.and_then(|last| last.final_url.clone()),
         redirects: last.map_or_else(Vec::new, |last| last.redirects.clone()),
@@ -885,7 +915,6 @@ pub(crate) fn from_report(
         session_id: session.map(str::to_owned),
         cached: false,
         cached_at: None,
-        escalated: report.escalated,
         created_at: crate::stored(report.finished_at),
     }
 }
@@ -893,7 +922,7 @@ pub(crate) fn from_report(
 /// The result of a fetch as it was stored. `bodies` are the stored
 /// document and body, read by the caller when the request asked for them.
 pub(crate) fn from_stored(
-    record: &FetchRecord,
+    (record, level): (&FetchRecord, Option<Level>),
     attempts: &[Attempt],
     bodies: Bodies,
     include: &Included,
@@ -910,6 +939,7 @@ pub(crate) fn from_stored(
         outcome: record.outcome.into(),
         reason: record.reason.clone(),
         retry_at: None,
+        level: level.map(|level| u64::from(level.number())),
         status: record.status,
         final_url: record.final_url.clone(),
         redirects: record.redirects.clone(),
@@ -941,10 +971,6 @@ pub(crate) fn from_stored(
         session_id: session.map(str::to_owned),
         cached: record.cached,
         cached_at: record.cached_at,
-        // An http attempt followed by a browser attempt.
-        escalated: attempts
-            .windows(2)
-            .any(|pair| pair[0].render == Render::Http && pair[1].render == Render::Browser),
         created_at: record.created_at,
     }
 }

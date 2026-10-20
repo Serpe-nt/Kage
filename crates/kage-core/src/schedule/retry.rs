@@ -1,34 +1,29 @@
-//! What follows an attempt (spec §3.2, §8.1, §8.3): the request is done,
-//! the same persona tries again in its browser, or another persona tries;
-//! and how long a blocked persona stays away from the domain.
+//! What follows an attempt (spec §3.2, §8.3, §25): the request is done or
+//! another attempt is made; and how long a blocked persona stays away from
+//! the domain.
 //!
-//! # Escalation
+//! # The level is the ceiling
 //!
-//! Under `render: auto` an attempt on the http path that was blocked makes
-//! the next attempt use the browser, once per request. Who makes it depends
-//! on what the block was:
-//!
-//! - A block a browser cures (a challenge the http path cannot answer, a
-//!   page that needs scripts): **the same persona** comes back in its
-//!   browser, as a person reloading would. The verdict on the persona is
-//!   then the browser's. It passes: nothing cools, the breaker counts
-//!   nothing. It is blocked: the persona cools once, for the browser's
-//!   block. It neither passes nor is blocked (a timeout, a broken
-//!   connection): the http block stands.
-//! - A refusal of the visitor (`forbidden`, `captcha`, `rate_limited`):
-//!   the persona cools and **another persona** makes the browser attempt.
+//! Nothing moves a request from one path to another. The level a request
+//! names decides its path once (spec §25): the http path at 0 and 1, the
+//! browser at 2 and 3. A block at level 0 or 1 is reported, never tried
+//! again in a browser.
 //!
 //! # Retries
 //!
-//! Every retry after a refusal, after a browser block, and after a failure
-//! that was not the site's verdict, is made by another persona.
+//! At levels 1 to 3 every retry, after a block or after a failure that was
+//! not the site's verdict, is made by another persona. At level 0 there is
+//! no persona: a failure that was not the site's verdict (a broken
+//! connection, a timeout, a server error) is tried again from the same
+//! exit, and a block is the request's answer at once, never asked again
+//! from another address.
 
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 
 use crate::classifier::Classification;
-use crate::domain::{Render, RenderMode};
+use crate::domain::{Level, Render};
 use crate::ids::PersonaId;
 use crate::outcome::{CooldownClass, Outcome};
 use crate::pacing::Lognormal;
@@ -40,10 +35,8 @@ use crate::seed::Seed;
 pub struct AttemptVerdict {
     /// The outcome.
     pub outcome: Outcome,
-    /// Whether another persona may try.
+    /// Whether another attempt may be made.
     pub retryable: bool,
-    /// Whether a block on the http path sends the request to the browser.
-    pub escalate: bool,
     /// How long the persona stays away, as a class.
     pub cooldown: CooldownClass,
     /// How sure the verdict is, from 0 to 1.
@@ -57,7 +50,6 @@ impl AttemptVerdict {
         Self {
             outcome,
             retryable: outcome.is_retryable(),
-            escalate: outcome.escalates_to_browser(),
             cooldown: outcome.default_cooldown(),
             confidence: 1.0,
         }
@@ -68,7 +60,6 @@ impl AttemptVerdict {
         Self {
             outcome: classification.outcome,
             retryable: classification.retryable,
-            escalate: classification.escalate,
             cooldown: classification.cooldown,
             confidence: classification
                 .block
@@ -92,13 +83,9 @@ impl AttemptVerdict {
 pub enum Step {
     /// Nothing: the attempt's result is the request's.
     Finish,
-    /// The same persona tries again in its browser.
-    EscalateSamePersona,
-    /// Another persona tries on this path.
-    RetryOtherPersona {
-        /// The path of the next attempt.
-        render: Render,
-    },
+    /// Another attempt on the request's path: by another persona, or at
+    /// level 0 from the same exit.
+    Retry,
 }
 
 /// What an attempt means for the request and for the persona that made it.
@@ -108,35 +95,28 @@ pub struct Ruling {
     pub step: Step,
     /// The block the persona answers for: it cools as this verdict says and
     /// the domain's breaker counts one. `None` when the persona has nothing
-    /// to answer for.
+    /// to answer for, and always at level 0, which has no persona: a site
+    /// that refuses a plain client says nothing about the personas.
     pub penalty: Option<AttemptVerdict>,
 }
 
 /// How far a request has come.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RequestProgress {
-    mode: RenderMode,
-    render: Render,
+    level: Level,
     max_attempts: u32,
     attempts: u32,
-    escalated: bool,
-    /// The http block of the persona that is now trying in its browser.
-    deferred: Option<AttemptVerdict>,
     used: Vec<PersonaId>,
     blocked: Vec<PersonaId>,
 }
 
 impl RequestProgress {
-    /// A request that asked for `mode`, starts on `first` and may be retried
-    /// `retries` times.
-    pub fn new(mode: RenderMode, first: Render, retries: u32) -> Self {
+    /// A request of `level` that may be retried `retries` times.
+    pub fn new(level: Level, retries: u32) -> Self {
         Self {
-            mode,
-            render: first,
+            level,
             max_attempts: retries.saturating_add(1),
             attempts: 0,
-            escalated: false,
-            deferred: None,
             used: Vec::new(),
             blocked: Vec::new(),
         }
@@ -145,24 +125,20 @@ impl RequestProgress {
     /// The same request taken up again after its attempts so far were
     /// made by a process that stopped: every earlier attempt counts toward
     /// the retry budget, the personas that made them are not asked again,
-    /// the ones that were blocked stay blocked, and a request that had
-    /// moved to the browser stays there.
+    /// and the ones that were blocked stay blocked.
     #[must_use]
     pub fn resumed(
         mut self,
-        earlier: impl IntoIterator<Item = (PersonaId, Render, Outcome)>,
+        earlier: impl IntoIterator<Item = (Option<PersonaId>, Outcome)>,
     ) -> Self {
-        for (persona, render, outcome) in earlier {
+        for (persona, outcome) in earlier {
             self.attempts = self.attempts.saturating_add(1);
+            let Some(persona) = persona else { continue };
             if !self.used.contains(&persona) {
                 self.used.push(persona);
             }
             if outcome.is_block() && !self.blocked.contains(&persona) {
                 self.blocked.push(persona);
-            }
-            if render == Render::Browser && self.render == Render::Http {
-                self.escalated = true;
-                self.render = Render::Browser;
             }
         }
         self
@@ -173,19 +149,19 @@ impl RequestProgress {
         self.attempts < self.max_attempts
     }
 
-    /// The path of the next attempt.
+    /// The level of the request.
+    pub const fn level(&self) -> Level {
+        self.level
+    }
+
+    /// The path of every attempt: the level's.
     pub const fn render(&self) -> Render {
-        self.render
+        self.level.render()
     }
 
     /// Attempts made so far.
     pub const fn attempts(&self) -> u32 {
         self.attempts
-    }
-
-    /// Whether the request moved from the http path to the browser.
-    pub const fn escalated(&self) -> bool {
-        self.escalated
     }
 
     /// Every persona that made an attempt, in order.
@@ -198,34 +174,15 @@ impl RequestProgress {
         &self.blocked
     }
 
-    /// Gives up the persona's own second try: its browser could not be
-    /// had. Returns the http block it was to cure, which now stands, and
-    /// the persona that answers for it; the next attempt is another
-    /// persona's.
-    pub fn forfeit(&mut self) -> Option<(PersonaId, AttemptVerdict)> {
-        let verdict = self.deferred.take()?;
-        let persona = *self.used.last()?;
-        self.blocked.push(persona);
-        Some((persona, verdict))
-    }
-
-    /// Whether a block on the http path may still send the request to the
-    /// browser: it asked for `auto`, is on the http path and has not moved
-    /// yet.
-    const fn may_escalate(&self) -> bool {
-        matches!(self.mode, RenderMode::Auto)
-            && matches!(self.render, Render::Http)
-            && !self.escalated
-    }
-
-    /// Records the attempt `persona` just made and says what follows.
-    pub fn record(&mut self, persona: PersonaId, verdict: AttemptVerdict) -> Ruling {
+    /// Records the attempt just made, by `persona` (`None` at level 0),
+    /// and says what follows.
+    pub fn record(&mut self, persona: Option<PersonaId>, verdict: AttemptVerdict) -> Ruling {
         self.attempts = self.attempts.saturating_add(1);
-        if !self.used.contains(&persona) {
+        if let Some(persona) = persona
+            && !self.used.contains(&persona)
+        {
             self.used.push(persona);
         }
-        // Set when this attempt was the persona's own escalation.
-        let unanswered = self.deferred.take();
         if verdict.outcome.is_success() {
             return Ruling {
                 step: Step::Finish,
@@ -234,50 +191,24 @@ impl RequestProgress {
         }
         let left = self.attempts < self.max_attempts;
         let blocked = verdict.outcome.is_block();
-
-        if blocked && verdict.escalate && self.may_escalate() {
-            if !verdict.is_refusal() {
-                if left {
-                    self.escalated = true;
-                    self.render = Render::Browser;
-                    self.deferred = Some(verdict);
-                    return Ruling {
-                        step: Step::EscalateSamePersona,
-                        penalty: None,
-                    };
-                }
-                // No attempt is left to cure it: the block stands.
-                self.blocked.push(persona);
-                return Ruling {
-                    step: Step::Finish,
-                    penalty: Some(verdict),
-                };
-            }
-            self.blocked.push(persona);
-            if left && verdict.retryable {
-                self.escalated = true;
-                self.render = Render::Browser;
-                return Ruling {
-                    step: Step::RetryOtherPersona {
-                        render: Render::Browser,
-                    },
-                    penalty: Some(verdict),
-                };
-            }
-            return Ruling {
-                step: Step::Finish,
-                penalty: Some(verdict),
+        let Some(persona) = persona else {
+            // A plain client: the site's refusal is its answer.
+            let step = if verdict.retryable && !blocked && left {
+                Step::Retry
+            } else {
+                Step::Finish
             };
-        }
-
-        let penalty = if blocked { Some(verdict) } else { unanswered };
-        if penalty.is_some() {
+            return Ruling {
+                step,
+                penalty: None,
+            };
+        };
+        let penalty = blocked.then_some(verdict);
+        if blocked {
             self.blocked.push(persona);
         }
         let step = if verdict.retryable && left {
-            Step::RetryOtherPersona {
-                render: self.render,
-            }
+            Step::Retry
         } else {
             Step::Finish
         };
@@ -355,7 +286,7 @@ mod tests {
         retry_pause,
     };
     use crate::classifier::Classification;
-    use crate::domain::{Render, RenderMode};
+    use crate::domain::{Level, Render};
     use crate::ids::PersonaId;
     use crate::outcome::{Block, BlockType, CooldownClass, Outcome, Vendor};
     use crate::pacing::Lognormal;
@@ -374,19 +305,19 @@ mod tests {
     #[test]
     fn a_plain_verdict_takes_its_hints_from_the_outcome() {
         let forbidden = verdict(Outcome::Forbidden);
-        assert!(forbidden.retryable && forbidden.escalate && forbidden.is_refusal());
+        assert!(forbidden.retryable && forbidden.is_refusal());
         assert_eq!(forbidden.cooldown, CooldownClass::Long);
         assert!((forbidden.confidence - 1.0).abs() < f32::EPSILON);
 
         let limited = verdict(Outcome::RateLimited);
-        assert!(limited.retryable && !limited.escalate && limited.is_refusal());
+        assert!(limited.retryable && limited.is_refusal());
         assert!(verdict(Outcome::Captcha).is_refusal());
         assert!(!verdict(Outcome::ChallengeFailed).is_refusal());
         assert!(!verdict(Outcome::SoftBlock).is_refusal());
         assert!(!verdict(Outcome::Timeout).is_refusal());
 
         let fine = verdict(Outcome::Ok);
-        assert!(!fine.retryable && !fine.escalate);
+        assert!(!fine.retryable);
         assert_eq!(fine.cooldown, CooldownClass::None);
     }
 
@@ -403,7 +334,6 @@ mod tests {
             vendors: Vec::new(),
             rule: Some("script-shell".to_owned()),
             retryable: false,
-            escalate: true,
             cooldown: CooldownClass::None,
             evidence: Vec::new(),
         };
@@ -411,7 +341,7 @@ mod tests {
         let verdict = AttemptVerdict::of(&classification);
 
         assert_eq!(verdict.outcome, Outcome::SoftBlock);
-        assert!(!verdict.retryable && verdict.escalate);
+        assert!(!verdict.retryable);
         assert_eq!(verdict.cooldown, CooldownClass::None);
         assert!((verdict.confidence - 0.6).abs() < f32::EPSILON);
         // Without a block report the verdict is certain.
@@ -426,31 +356,21 @@ mod tests {
     #[test]
     fn three_blocked_attempts_use_three_personas() {
         let [a, b, c] = [PersonaId::new(), PersonaId::new(), PersonaId::new()];
-        let mut request = RequestProgress::new(RenderMode::Browser, Render::Browser, 2);
+        let mut request = RequestProgress::new(Level::Human, 2);
         assert_eq!(request.render(), Render::Browser);
+        assert_eq!(request.level(), Level::Human);
         assert_eq!(request.attempts(), 0);
         let block = verdict(Outcome::Forbidden);
-        let again = Step::RetryOtherPersona {
-            render: Render::Browser,
+        let again = Ruling {
+            step: Step::Retry,
+            penalty: Some(block),
         };
 
-        assert_eq!(
-            request.record(a, block),
-            Ruling {
-                step: again,
-                penalty: Some(block)
-            }
-        );
-        assert_eq!(
-            request.record(b, block),
-            Ruling {
-                step: again,
-                penalty: Some(block)
-            }
-        );
+        assert_eq!(request.record(Some(a), block), again);
+        assert_eq!(request.record(Some(b), block), again);
         // The third attempt is the last: its block is the request's result.
         assert_eq!(
-            request.record(c, block),
+            request.record(Some(c), block),
             Ruling {
                 step: Step::Finish,
                 penalty: Some(block)
@@ -459,7 +379,79 @@ mod tests {
         assert_eq!(request.attempts(), 3);
         assert_eq!(request.used(), [a, b, c]);
         assert_eq!(request.blocked(), [a, b, c]);
-        assert!(!request.escalated());
+    }
+
+    #[test]
+    fn the_level_is_the_path_of_every_attempt_and_nothing_moves_it() {
+        assert_eq!(
+            Level::ALL.map(|level| RequestProgress::new(level, 2).render()),
+            [Render::Http, Render::Http, Render::Browser, Render::Browser]
+        );
+        // A block a browser would cure, on the http path of a persona: the
+        // request stays where its level put it, and another persona tries.
+        let [a, b] = [PersonaId::new(), PersonaId::new()];
+        for curable in [
+            Outcome::ChallengeFailed,
+            Outcome::SoftBlock,
+            Outcome::Forbidden,
+        ] {
+            let mut request = RequestProgress::new(Level::Emulated, 2);
+            let blocked = verdict(curable);
+            let ruling = request.record(Some(a), blocked);
+            assert_eq!(ruling.penalty, Some(blocked), "{curable}");
+            assert_eq!(
+                ruling.step,
+                if blocked.retryable {
+                    Step::Retry
+                } else {
+                    Step::Finish
+                },
+                "{curable}"
+            );
+            assert_eq!(request.render(), Render::Http, "{curable}");
+            request.record(Some(b), verdict(Outcome::Ok));
+            assert_eq!(request.render(), Render::Http, "{curable}");
+        }
+    }
+
+    #[test]
+    fn a_plain_client_is_never_asked_again_after_a_block_and_answers_for_nothing() {
+        for blocked in [
+            Outcome::Forbidden,
+            Outcome::RateLimited,
+            Outcome::Captcha,
+            Outcome::ChallengeFailed,
+            Outcome::SoftBlock,
+        ] {
+            let mut request = RequestProgress::new(Level::Plain, 5);
+            assert_eq!(
+                request.record(None, verdict(blocked)),
+                FINISHED,
+                "{blocked}"
+            );
+            assert_eq!(request.attempts(), 1);
+            assert_eq!(request.used(), []);
+            assert_eq!(request.blocked(), []);
+        }
+        // What was not the site's verdict is tried again, from the same exit,
+        // as long as the budget lasts, and never costs anybody anything.
+        let mut request = RequestProgress::new(Level::Plain, 2);
+        let again = Ruling {
+            step: Step::Retry,
+            penalty: None,
+        };
+        assert_eq!(request.record(None, verdict(Outcome::Timeout)), again);
+        assert_eq!(request.record(None, verdict(Outcome::ProviderError)), again);
+        assert_eq!(request.record(None, verdict(Outcome::Timeout)), FINISHED);
+        assert!(!request.attempts_left());
+        // A page is a page.
+        let mut fine = RequestProgress::new(Level::Plain, 2);
+        assert_eq!(fine.record(None, verdict(Outcome::Ok)), FINISHED);
+        // What nothing would change ends it at once.
+        for final_outcome in [Outcome::SsrfDenied, Outcome::RobotsDenied] {
+            let mut request = RequestProgress::new(Level::Plain, 2);
+            assert_eq!(request.record(None, verdict(final_outcome)), FINISHED);
+        }
     }
 
     #[test]
@@ -467,317 +459,112 @@ mod tests {
         let (first, second, third) = (PersonaId::new(), PersonaId::new(), PersonaId::new());
         // Three attempts in all; two were made before the server stopped,
         // the first of them blocked.
-        let progress = RequestProgress::new(RenderMode::Browser, Render::Browser, 2).resumed([
-            (first, Render::Browser, Outcome::Forbidden),
-            (second, Render::Browser, Outcome::Timeout),
+        let progress = RequestProgress::new(Level::Human, 2).resumed([
+            (Some(first), Outcome::Forbidden),
+            (Some(second), Outcome::Timeout),
         ]);
 
         assert_eq!(progress.attempts(), 2);
         assert_eq!(progress.used(), [first, second]);
         assert_eq!(progress.blocked(), [first]);
         assert!(progress.attempts_left());
-        assert!(!progress.escalated());
 
         // The one attempt that is left is the last.
         let mut progress = progress;
-        let ruling = progress.record(third, verdict(Outcome::Forbidden));
+        let ruling = progress.record(Some(third), verdict(Outcome::Forbidden));
         assert_eq!(ruling.step, Step::Finish);
         assert!(ruling.penalty.is_some());
         assert!(!progress.attempts_left());
 
-        // A request that had moved to the browser stays there.
-        let moved = RequestProgress::new(RenderMode::Auto, Render::Http, 2).resumed([
-            (first, Render::Http, Outcome::ChallengeFailed),
-            (first, Render::Browser, Outcome::Timeout),
+        // A persona that was blocked twice is listed once.
+        let twice = RequestProgress::new(Level::Fast, 3).resumed([
+            (Some(first), Outcome::ChallengeFailed),
+            (Some(first), Outcome::Forbidden),
         ]);
-        assert_eq!(moved.render(), Render::Browser);
-        assert!(moved.escalated());
-        assert_eq!(moved.used(), [first]);
-        assert_eq!(moved.blocked(), [first]);
+        assert_eq!(twice.used(), [first]);
+        assert_eq!(twice.blocked(), [first]);
+        // A plain client's attempts count and name nobody.
+        let plain = RequestProgress::new(Level::Plain, 2)
+            .resumed([(None, Outcome::Timeout), (None, Outcome::Forbidden)]);
+        assert_eq!(plain.attempts(), 2);
+        assert_eq!(plain.used(), []);
+        assert_eq!(plain.blocked(), []);
         // Nothing before: nothing changes.
-        let fresh = RequestProgress::new(RenderMode::Auto, Render::Http, 2);
+        let fresh = RequestProgress::new(Level::Emulated, 2);
         assert_eq!(fresh.clone().resumed([]), fresh);
         // A budget that is used up is used up.
-        let spent = RequestProgress::new(RenderMode::Browser, Render::Browser, 0).resumed([(
-            first,
-            Render::Browser,
-            Outcome::Timeout,
-        )]);
+        let spent =
+            RequestProgress::new(Level::Human, 0).resumed([(Some(first), Outcome::Timeout)]);
         assert!(!spent.attempts_left());
     }
 
     #[test]
     fn a_success_ends_the_request_and_costs_nothing() {
-        let mut request = RequestProgress::new(RenderMode::Auto, Render::Browser, 2);
+        let mut request = RequestProgress::new(Level::Human, 2);
         let persona = PersonaId::new();
 
-        assert_eq!(request.record(persona, verdict(Outcome::Ok)), FINISHED);
+        assert_eq!(
+            request.record(Some(persona), verdict(Outcome::Ok)),
+            FINISHED
+        );
         assert_eq!(request.attempts(), 1);
         assert_eq!(request.used(), [persona]);
         assert_eq!(request.blocked(), []);
 
-        let mut passed = RequestProgress::new(RenderMode::Auto, Render::Browser, 2);
+        let mut passed = RequestProgress::new(Level::Fast, 2);
         assert_eq!(
-            passed.record(persona, verdict(Outcome::ChallengePassed)),
+            passed.record(Some(persona), verdict(Outcome::ChallengePassed)),
             FINISHED
         );
     }
 
     #[test]
-    fn a_curable_http_block_sends_the_same_persona_to_its_browser_once() {
-        let [a, b] = [PersonaId::new(), PersonaId::new()];
-        for curable in [Outcome::ChallengeFailed, Outcome::SoftBlock] {
-            let mut request = RequestProgress::new(RenderMode::Auto, Render::Http, 2);
-
-            // The http block is not held against the persona yet.
-            assert_eq!(
-                request.record(a, verdict(curable)),
-                Ruling {
-                    step: Step::EscalateSamePersona,
-                    penalty: None
-                }
-            );
-            assert!(request.escalated());
-            assert_eq!(request.render(), Render::Browser);
-            assert_eq!(request.blocked(), []);
-
-            // Its browser is blocked too: one penalty, the browser's, and
-            // the retry is another persona's, on the browser.
-            let browser_block = verdict(Outcome::Captcha);
-            assert_eq!(
-                request.record(a, browser_block),
-                Ruling {
-                    step: Step::RetryOtherPersona {
-                        render: Render::Browser
-                    },
-                    penalty: Some(browser_block)
-                }
-            );
-            assert_eq!(request.used(), [a]);
-            assert_eq!(request.blocked(), [a]);
-
-            // The request never goes back to the http path and never
-            // escalates again.
-            assert_eq!(
-                request.record(b, verdict(curable)),
-                Ruling {
-                    step: Step::Finish,
-                    penalty: Some(verdict(curable))
-                }
-            );
-            assert_eq!(request.attempts(), 3);
-            assert_eq!(request.used(), [a, b]);
-        }
-    }
-
-    #[test]
-    fn a_browser_that_passes_after_an_http_block_leaves_the_persona_clean() {
-        let a = PersonaId::new();
-        let mut request = RequestProgress::new(RenderMode::Auto, Render::Http, 2);
-        request.record(a, verdict(Outcome::ChallengeFailed));
-
-        assert_eq!(
-            request.record(a, verdict(Outcome::ChallengePassed)),
-            FINISHED
-        );
-        assert_eq!(request.blocked(), []);
-        assert_eq!(request.attempts(), 2);
-    }
-
-    #[test]
-    fn an_http_block_stands_when_the_browser_gives_no_verdict() {
-        let [a, b] = [PersonaId::new(), PersonaId::new()];
-        let http_block = verdict(Outcome::ChallengeFailed);
-        let mut request = RequestProgress::new(RenderMode::Auto, Render::Http, 2);
-        request.record(a, http_block);
-
-        // The browser attempt timed out: the unanswered challenge is what
-        // the persona answers for, and another persona tries.
-        assert_eq!(
-            request.record(a, verdict(Outcome::Timeout)),
-            Ruling {
-                step: Step::RetryOtherPersona {
-                    render: Render::Browser
-                },
-                penalty: Some(http_block)
-            }
-        );
-        assert_eq!(request.blocked(), [a]);
-        // The debt is paid once: a later timeout of another persona costs
-        // nothing.
-        assert_eq!(
-            request.record(b, verdict(Outcome::Timeout)),
-            Ruling {
-                step: Step::Finish,
-                penalty: None
-            }
-        );
-        assert_eq!(request.blocked(), [a]);
-    }
-
-    #[test]
-    fn an_escalation_that_cannot_be_made_leaves_the_http_block_standing() {
-        let [a, b] = [PersonaId::new(), PersonaId::new()];
-        let http_block = verdict(Outcome::SoftBlock);
-        let mut request = RequestProgress::new(RenderMode::Auto, Render::Http, 2);
-        // Nothing to give up before anything was deferred.
-        assert_eq!(request.forfeit(), None);
-        request.record(a, http_block);
-
-        assert_eq!(request.forfeit(), Some((a, http_block)));
-        assert_eq!(request.blocked(), [a]);
-        // It is given up once, and the next persona does not inherit it.
-        assert_eq!(request.forfeit(), None);
-        assert_eq!(
-            request.record(b, verdict(Outcome::Timeout)),
-            Ruling {
-                step: Step::RetryOtherPersona {
-                    render: Render::Browser
-                },
-                penalty: None
-            }
-        );
-        assert_eq!(request.blocked(), [a]);
-    }
-
-    #[test]
-    fn a_curable_block_on_the_last_attempt_stands() {
-        let a = PersonaId::new();
-        let block = verdict(Outcome::SoftBlock);
-        let mut request = RequestProgress::new(RenderMode::Auto, Render::Http, 0);
-
-        assert_eq!(
-            request.record(a, block),
-            Ruling {
-                step: Step::Finish,
-                penalty: Some(block)
-            }
-        );
-        assert!(!request.escalated());
-        assert_eq!(request.render(), Render::Http);
-        assert_eq!(request.blocked(), [a]);
-    }
-
-    #[test]
-    fn a_refusal_on_the_http_path_cools_the_persona_and_another_takes_the_browser() {
-        let a = PersonaId::new();
-        for refusal in [Outcome::Forbidden, Outcome::Captcha] {
-            let block = verdict(refusal);
-            let mut request = RequestProgress::new(RenderMode::Auto, Render::Http, 2);
-
-            assert_eq!(
-                request.record(a, block),
-                Ruling {
-                    step: Step::RetryOtherPersona {
-                        render: Render::Browser
-                    },
-                    penalty: Some(block)
-                }
-            );
-            assert!(request.escalated());
-            assert_eq!(request.render(), Render::Browser);
-            assert_eq!(request.blocked(), [a]);
-        }
-        // On the last attempt, or when the rule says nobody else would do
-        // better, the refusal is the result.
-        let block = verdict(Outcome::Forbidden);
-        let mut last = RequestProgress::new(RenderMode::Auto, Render::Http, 0);
-        assert_eq!(
-            last.record(a, block),
-            Ruling {
-                step: Step::Finish,
-                penalty: Some(block)
-            }
-        );
-        assert!(!last.escalated());
-        let final_word = AttemptVerdict {
+    fn a_block_that_may_not_be_retried_ends_the_request_and_the_persona_answers_for_it() {
+        let persona = PersonaId::new();
+        let mut request = RequestProgress::new(Level::Human, 2);
+        let final_block = AttemptVerdict {
             retryable: false,
-            ..block
+            ..verdict(Outcome::Forbidden)
         };
-        let mut hopeless = RequestProgress::new(RenderMode::Auto, Render::Http, 2);
         assert_eq!(
-            hopeless.record(a, final_word),
+            request.record(Some(persona), final_block),
             Ruling {
                 step: Step::Finish,
-                penalty: Some(final_word)
+                penalty: Some(final_block)
             }
         );
-        assert!(!hopeless.escalated());
-        assert_eq!(hopeless.render(), Render::Http);
-    }
-
-    #[test]
-    fn a_rate_limit_and_an_explicit_http_request_stay_on_the_http_path() {
-        let a = PersonaId::new();
-        // `rate_limited` does not escalate: another address, same path.
-        let limited = verdict(Outcome::RateLimited);
-        let mut request = RequestProgress::new(RenderMode::Auto, Render::Http, 2);
-        assert_eq!(
-            request.record(a, limited),
-            Ruling {
-                step: Step::RetryOtherPersona {
-                    render: Render::Http
-                },
-                penalty: Some(limited)
-            }
-        );
-        assert!(!request.escalated());
-
-        // The caller asked for http: no escalation whatever the block.
-        let challenge = verdict(Outcome::ChallengeFailed);
-        let mut fixed = RequestProgress::new(RenderMode::Http, Render::Http, 2);
-        assert_eq!(
-            fixed.record(a, challenge),
-            Ruling {
-                step: Step::RetryOtherPersona {
-                    render: Render::Http
-                },
-                penalty: Some(challenge)
-            }
-        );
-        assert!(!fixed.escalated());
-        // A rule that says "do not escalate" is obeyed under auto too.
-        let stay = AttemptVerdict {
-            escalate: false,
-            ..challenge
-        };
-        let mut obedient = RequestProgress::new(RenderMode::Auto, Render::Http, 2);
-        assert_eq!(
-            obedient.record(a, stay).step,
-            Step::RetryOtherPersona {
-                render: Render::Http
-            }
-        );
+        assert_eq!(request.blocked(), [persona]);
     }
 
     #[test]
     fn failures_that_are_not_the_sites_verdict_retry_without_a_penalty() {
         let [a, b, c] = [PersonaId::new(), PersonaId::new(), PersonaId::new()];
-        let mut request = RequestProgress::new(RenderMode::Browser, Render::Browser, 2);
+        let mut request = RequestProgress::new(Level::Human, 2);
         let again = Ruling {
-            step: Step::RetryOtherPersona {
-                render: Render::Browser,
-            },
+            step: Step::Retry,
             penalty: None,
         };
 
-        assert_eq!(request.record(a, verdict(Outcome::Timeout)), again);
-        assert_eq!(request.record(b, verdict(Outcome::ProviderError)), again);
-        assert_eq!(request.record(c, verdict(Outcome::Timeout)), FINISHED);
+        assert_eq!(request.record(Some(a), verdict(Outcome::Timeout)), again);
+        assert_eq!(
+            request.record(Some(b), verdict(Outcome::ProviderError)),
+            again
+        );
+        assert_eq!(request.record(Some(c), verdict(Outcome::Timeout)), FINISHED);
         assert_eq!(request.blocked(), []);
 
         // What no other persona would change ends the request at once.
         for final_outcome in [Outcome::SsrfDenied, Outcome::RobotsDenied] {
-            let mut request = RequestProgress::new(RenderMode::Auto, Render::Http, 2);
-            assert_eq!(request.record(a, verdict(final_outcome)), FINISHED);
+            let mut request = RequestProgress::new(Level::Emulated, 2);
+            assert_eq!(request.record(Some(a), verdict(final_outcome)), FINISHED);
         }
         // Zero retries is one attempt.
-        let mut single = RequestProgress::new(RenderMode::Browser, Render::Browser, 0);
-        assert_eq!(single.record(a, verdict(Outcome::Timeout)), FINISHED);
+        let mut single = RequestProgress::new(Level::Human, 0);
+        assert_eq!(single.record(Some(a), verdict(Outcome::Timeout)), FINISHED);
         // A persona that made two attempts is listed once.
-        let mut request = RequestProgress::new(RenderMode::Browser, Render::Browser, u32::MAX);
-        request.record(a, verdict(Outcome::Timeout));
-        request.record(a, verdict(Outcome::Timeout));
+        let mut request = RequestProgress::new(Level::Human, u32::MAX);
+        request.record(Some(a), verdict(Outcome::Timeout));
+        request.record(Some(a), verdict(Outcome::Timeout));
         assert_eq!(request.used(), [a]);
         assert_eq!(request.attempts(), 2);
     }
@@ -799,7 +586,6 @@ mod tests {
                 &AttemptVerdict {
                     outcome,
                     retryable: true,
-                    escalate: true,
                     cooldown,
                     confidence,
                 },

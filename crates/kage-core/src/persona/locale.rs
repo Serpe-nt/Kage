@@ -248,6 +248,42 @@ pub fn resolve(
     }
 }
 
+/// The locale and the language list of a persona of `engine` whose locale
+/// the operator declared (`egress.direct.locale`, spec §25), for example
+/// `de-AT`: the list the browser ships for the tag's language, and the
+/// tag with its region. `None` for a tag without a region or a language
+/// no browser list is known for.
+pub fn declared(locale: &str, engine: Engine) -> Option<PersonaLocale> {
+    let region = region_of(locale)?.to_ascii_uppercase();
+    let language = match (
+        language_of(locale).to_ascii_lowercase().as_str(),
+        region.as_str(),
+    ) {
+        ("de", _) => Language::German,
+        ("fr", _) => Language::French,
+        ("it", _) => Language::Italian,
+        ("en", "US") => Language::AmericanEnglish,
+        ("en", "CA") => Language::CanadianEnglish,
+        ("en", _) => Language::BritishEnglish,
+        ("nl", _) => Language::Dutch,
+        ("es", _) => Language::Spanish,
+        ("pl", _) => Language::Polish,
+        ("pt", _) => Language::Portuguese,
+        ("ro", _) => Language::Romanian,
+        ("sv", _) => Language::Swedish,
+        _ => return None,
+    };
+    let languages = match engine {
+        Engine::Chromium => language.chrome(),
+        Engine::Firefox => language.firefox(),
+    };
+    Some(PersonaLocale {
+        locale: format!("{}-{region}", language.subtag()),
+        languages: languages.iter().map(|&tag| tag.to_owned()).collect(),
+        known: true,
+    })
+}
+
 /// The language subtag of a locale tag: `de` of `de-AT`.
 pub fn language_of(locale: &str) -> &str {
     locale.split('-').next().unwrap_or(locale)
@@ -278,7 +314,9 @@ pub fn known_countries() -> Vec<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{COUNTRIES, PersonaLocale, known_countries, language_of, region_of, resolve};
+    use super::{
+        COUNTRIES, PersonaLocale, declared, known_countries, language_of, region_of, resolve,
+    };
     use crate::domain::{CountryCode, Engine};
 
     fn of(country: &str, region: Option<&str>, engine: Engine) -> PersonaLocale {
@@ -291,6 +329,33 @@ mod tests {
 
     fn languages(country: &str, engine: Engine) -> String {
         of(country, None, engine).languages.join(",")
+    }
+
+    #[test]
+    fn a_declared_locale_speaks_what_the_browser_ships_for_its_language() {
+        // Austria declared as German: the German list, the Austrian tag.
+        let austrian = declared("de-AT", Engine::Chromium).unwrap();
+        assert_eq!(austrian.locale, "de-AT");
+        assert_eq!(austrian.languages, ["de-DE", "de", "en-US", "en"]);
+        assert_eq!(
+            declared("de-AT", Engine::Firefox).unwrap().languages,
+            ["de", "en-US", "en"]
+        );
+        // The language decides, not the country's default.
+        let swiss_french = declared("fr-CH", Engine::Chromium).unwrap();
+        assert_eq!(swiss_french.locale, "fr-CH");
+        assert_eq!(swiss_french.languages, ["fr-FR", "fr", "en-US", "en"]);
+        assert_eq!(
+            declared("en-US", Engine::Chromium).unwrap().languages,
+            ["en-US", "en"]
+        );
+        assert_eq!(
+            declared("en-IE", Engine::Chromium).unwrap().languages,
+            ["en-GB", "en-US", "en"]
+        );
+        // What no browser list is known for, and a tag without a region.
+        assert_eq!(declared("tlh-AT", Engine::Chromium), None);
+        assert_eq!(declared("de", Engine::Chromium), None);
     }
 
     /// The table of milestone M6's consult 4 for the pool's five countries.

@@ -126,22 +126,6 @@ impl Outcome {
             CooldownClass::None
         }
     }
-
-    /// Whether an attempt on the http path with this outcome makes the next
-    /// attempt use the browser when the render mode is `auto` (spec §8.1).
-    ///
-    /// The spec lists `challenge_*`; a passed challenge ends the request, so
-    /// only the failed one ever leads to another attempt.
-    pub const fn escalates_to_browser(self) -> bool {
-        matches!(
-            self,
-            Self::ChallengePassed
-                | Self::ChallengeFailed
-                | Self::Captcha
-                | Self::Forbidden
-                | Self::SoftBlock
-        )
-    }
 }
 
 impl fmt::Display for Outcome {
@@ -394,30 +378,11 @@ mod tests {
     }
 
     #[test]
-    fn success_and_escalation() {
+    fn success() {
         assert!(Outcome::Ok.is_success());
         assert!(Outcome::ChallengePassed.is_success());
         assert!(!Outcome::SoftBlock.is_success());
-
-        for outcome in [
-            Outcome::ChallengeFailed,
-            Outcome::ChallengePassed,
-            Outcome::Captcha,
-            Outcome::Forbidden,
-            Outcome::SoftBlock,
-        ] {
-            assert!(outcome.escalates_to_browser(), "{outcome}");
-        }
-        for outcome in [
-            Outcome::Ok,
-            Outcome::RateLimited,
-            Outcome::ProviderError,
-            Outcome::Timeout,
-            Outcome::SsrfDenied,
-            Outcome::RobotsDenied,
-        ] {
-            assert!(!outcome.escalates_to_browser(), "{outcome}");
-        }
+        assert!(!Outcome::ChallengeFailed.is_success());
     }
 
     #[test]

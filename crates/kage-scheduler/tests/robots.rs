@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use chrono::Duration as Span;
 use common::{DEFAULT_DOMAINS, World, blocked, file, id, server_error};
-use kage_core::domain::{Render, RenderMode, RobotsVerdict};
+use kage_core::domain::{Level, Render, RobotsVerdict};
 use kage_core::ids::{PersonaId, RequestId};
 use kage_core::outcome::Outcome;
 use kage_core::schedule::planner::Refusal;
@@ -30,7 +30,7 @@ use url::Url;
 
 /// One site whose file is enforced, one whose file is reported, and every
 /// other site left alone.
-const SITES: &str = "defaults: { render: browser, pacing: fast, active_hours: ignore }\n\
+const SITES: &str = "defaults: { pacing: fast, active_hours: ignore }\n\
                      domains:\n  enforced.example: { robots: enforce }\n  \
                      reported.example: { robots: report }\n";
 
@@ -41,7 +41,7 @@ const RULES: &str = "User-agent: *\nDisallow: /private\nCrawl-delay: 30\n\
 
 fn get(url: &str) -> FetchOrder {
     FetchOrder {
-        render: RenderMode::Browser,
+        level: Level::Human,
         ..FetchOrder::get(Url::parse(url).unwrap(), Priority::Sync)
     }
 }
@@ -812,6 +812,7 @@ async fn a_crawl_is_told_what_is_known_and_reads_the_sitemaps_a_file_names() {
         readers_needed: 2,
         priority: Priority::Job,
         patience: None,
+        level: Level::Human,
     };
     let (_keep, stop) = never();
 
@@ -943,7 +944,7 @@ async fn a_crawl_is_told_what_is_known_and_reads_the_sitemaps_a_file_names() {
             .unwrap(),
     );
     assert_eq!(report.outcome, Outcome::Ok);
-    assert_eq!(report.attempts[0].persona_id, scout);
+    assert_eq!(report.attempts[0].persona_id, Some(scout));
     assert_eq!(report.robots, None);
     for number in 0..8 {
         let page = world
@@ -951,7 +952,7 @@ async fn a_crawl_is_told_what_is_known_and_reads_the_sitemaps_a_file_names() {
             .fetch(get(&format!("https://enforced.example/{number}")))
             .await
             .unwrap();
-        assert_ne!(page.attempts[0].persona_id, scout);
+        assert_ne!(page.attempts[0].persona_id, Some(scout));
     }
     world.shut_down().await;
 }
@@ -960,7 +961,7 @@ async fn a_crawl_is_told_what_is_known_and_reads_the_sitemaps_a_file_names() {
 async fn a_scout_may_be_a_persona_the_policy_keeps_from_reading_the_site() {
     // Only Firefox reads the site, and every persona is a Chrome: nobody
     // reads it, and anybody may scout it.
-    let rules = "defaults: { render: browser, pacing: fast, active_hours: ignore }\n\
+    let rules = "defaults: { pacing: fast, active_hours: ignore }\n\
                  domains:\n  enforced.example: { robots: enforce, engines: [firefox] }\n";
     let mut world = World::new(2, rules);
     robots_txt(&world, |url| file(url, 200, RULES));

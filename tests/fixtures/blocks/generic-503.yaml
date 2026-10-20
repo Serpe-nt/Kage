@@ -25,5 +25,4 @@ expect:
   rule: generic-http-5xx
   vendors: []
   retryable: true
-  escalate: false
   cooldown: none

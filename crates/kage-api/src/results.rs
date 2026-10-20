@@ -196,7 +196,7 @@ pub(crate) async fn result(
         handles: state.handles(),
     };
     let result = from_stored(
-        &record,
+        (&record, request.level),
         &attempts,
         bodies,
         &include,

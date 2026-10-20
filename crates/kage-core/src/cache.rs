@@ -7,8 +7,8 @@
 //!
 //! - the address, normalized as a crawl normalizes it ([`crate::urlnorm`]);
 //! - the method, the body, the kind of request and the caller's headers;
-//! - the render mode as asked (`auto`, `http` and `browser` are three keys:
-//!   which path `auto` takes is the policy's to decide, and may change);
+//! - the level (spec §25): the same page read by a plain client and by a
+//!   person are two results, whatever they hold;
 //! - the include set, in any order (a result fetched with more parts is
 //!   not cut down to serve a request for fewer);
 //! - the options that shape what is captured (what the browser waits for,
@@ -25,13 +25,14 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use url::Url;
 
-use crate::domain::RenderMode;
+use crate::domain::Level;
 use crate::ids::ApiKeyId;
 use crate::urlnorm::{NormalizeOptions, normalize};
 
 /// The version of the key: raised when what goes into it changes, so that
-/// an entry written under an older meaning is never served.
-const VERSION: u32 = 1;
+/// an entry written under an older meaning is never served. 2 since the
+/// level replaced the render mode (2.0).
+const VERSION: u32 = 2;
 
 /// Everything that makes two requests one to the cache.
 #[derive(Debug, Clone)]
@@ -46,8 +47,8 @@ pub struct CacheKey<'a> {
     pub request_kind: &'a str,
     /// The caller's headers.
     pub headers: &'a [(String, String)],
-    /// The render mode as asked.
-    pub render: RenderMode,
+    /// The level the request named.
+    pub level: Level,
     /// The parts of the result that were asked for.
     pub include: &'a [&'a str],
     /// The options that shape what is captured, as the request wrote them.
@@ -147,7 +148,7 @@ impl CacheKey<'_> {
             "body": self.body.map(|body| hex(&Sha256::digest(body))),
             "kind": self.request_kind,
             "headers": headers,
-            "render": self.render.as_str(),
+            "level": self.level.number(),
             "include": include,
             "options": without_nulls(self.options),
             "scope": self.scope.map(|key| key.to_string()),
@@ -167,7 +168,7 @@ mod tests {
     use url::Url;
 
     use super::{CacheKey, canonical, hex, without_nulls};
-    use crate::domain::RenderMode;
+    use crate::domain::Level;
     use crate::ids::ApiKeyId;
     use crate::urlnorm::NormalizeOptions;
 
@@ -177,7 +178,7 @@ mod tests {
         body: Option<Vec<u8>>,
         kind: &'static str,
         headers: Vec<(String, String)>,
-        render: RenderMode,
+        level: Level,
         include: Vec<&'static str>,
         options: Value,
         scope: Option<ApiKeyId>,
@@ -191,7 +192,7 @@ mod tests {
                 body: None,
                 kind: "navigation",
                 headers: Vec::new(),
-                render: RenderMode::Auto,
+                level: Level::Human,
                 include: vec!["dom", "headers"],
                 options: json!({}),
                 scope: Some(ApiKeyId::new()),
@@ -209,7 +210,7 @@ mod tests {
                 body: self.body.as_deref(),
                 request_kind: self.kind,
                 headers: &self.headers,
-                render: self.render,
+                level: self.level,
                 include: &self.include,
                 options: &self.options,
                 scope: self.scope,
@@ -226,7 +227,7 @@ mod tests {
             body: base.body.clone(),
             kind: base.kind,
             headers: base.headers.clone(),
-            render: base.render,
+            level: base.level,
             include: base.include.clone(),
             options: base.options.clone(),
             scope: base.scope,
@@ -286,11 +287,11 @@ mod tests {
             ("a header", |request| {
                 request.headers = vec![("Accept".to_owned(), "application/json".to_owned())];
             }),
-            ("the render mode", |request| {
-                request.render = RenderMode::Browser;
+            ("another level", |request| {
+                request.level = Level::Fast;
             }),
-            ("another render mode", |request| {
-                request.render = RenderMode::Http;
+            ("the plain level", |request| {
+                request.level = Level::Plain;
             }),
             ("a part more", |request| request.include.push("extract")),
             ("a part fewer", |request| request.include = vec!["dom"]),

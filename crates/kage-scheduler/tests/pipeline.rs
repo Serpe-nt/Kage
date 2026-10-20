@@ -1,8 +1,8 @@
 //! One fetch through the scheduler and the pipeline, with a scripted
-//! executor in place of the two paths, on a paused clock: retries with a
-//! persona switch, escalation, cooldowns, the politeness pause, the
-//! breaker, the stops, and the hook for a synchronous fetch that takes too
-//! long (spec §3.2, §8, §11, §12).
+//! executor in place of the two paths, on a paused clock: the path of each
+//! level, retries with a persona switch, a plain client's exit, cooldowns,
+//! the politeness pause, the breaker, the stops, and the hook for a
+//! synchronous fetch that takes too long (spec §3.2, §8, §11, §12, §25).
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::too_many_lines)]
 
@@ -12,28 +12,29 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use chrono::Duration as Span;
-use common::{DEFAULT_DOMAINS, World, blocked, id, server_error, timed_out};
+use common::{DEFAULT_DOMAINS, World, blocked, id, persona, server_error, timed_out};
 use kage_core::alert::AlertKind;
-use kage_core::domain::{BreakerState, Render, RenderMode};
+use kage_core::domain::{BreakerState, Exit, Level, Render, RenderMode};
 use kage_core::outcome::Outcome;
 use kage_core::policy::PacingRequest;
 use kage_core::schedule::queue::Priority;
 use kage_scheduler::pipeline::attempt_seed;
-use kage_scheduler::{FetchOrder, JobFetch, SchedulerError, Synchronous};
+use kage_scheduler::{FetchOrder, JobFetch, PlainRoute, SchedulerError, Synchronous};
 use url::Url;
 
-/// Every request goes to the http path first.
-const LENIENT: &str = "defaults: { render: http }\ndomains: {}\n";
+/// A host without a pool: a plain client leaves from its own connection.
+const DIRECT: &[(&str, &str)] = &[("KAGE__EGRESS__MODE", "direct")];
 
 fn get(url: &str) -> FetchOrder {
     FetchOrder::get(Url::parse(url).unwrap(), Priority::Sync)
 }
 
 fn browser(url: &str) -> FetchOrder {
-    FetchOrder {
-        render: RenderMode::Browser,
-        ..get(url)
-    }
+    at(Level::Human, url)
+}
+
+fn at(level: Level, url: &str) -> FetchOrder {
+    FetchOrder { level, ..get(url) }
 }
 
 fn span(duration: Duration) -> Span {
@@ -53,13 +54,13 @@ async fn a_page_is_fetched_by_one_persona_and_everything_about_it_is_stored() {
     assert_eq!(report.outcome, Outcome::Ok);
     assert_eq!(report.reason, None);
     assert_eq!(report.block, None);
-    assert!(!report.escalated);
     assert_eq!(report.pacing.applied, "human");
     assert!(!report.pacing.request_ignored);
-    // The policy says `auto` and names no path: the browser.
+    // Level 3, the default of an order: the browser, as a person.
     assert_eq!(world.script.renders(), [Render::Browser]);
     let asked = world.script.seen();
     let job = &asked[0].job;
+    assert_eq!(job.level, Level::Human);
     assert_eq!(job.n, 1);
     assert_eq!(job.domain, "shop.example");
     assert!(job.starts_visit && job.keeps_visiting);
@@ -69,7 +70,9 @@ async fn a_page_is_fetched_by_one_persona_and_everything_about_it_is_stored() {
         panic!("one attempt, not {:?}", report.attempts);
     };
     assert_eq!(attempt.n, 1);
-    assert_eq!(attempt.persona_id, job.persona.id);
+    assert_eq!(attempt.persona_id, Some(job.persona.id));
+    assert_eq!(attempt.engine, Some(job.persona.engine));
+    assert_eq!(attempt.exit, None);
     assert_eq!(attempt.render, Render::Browser);
     assert_eq!(attempt.outcome, Outcome::Ok);
     assert_eq!(attempt.status, Some(200));
@@ -89,6 +92,8 @@ async fn a_page_is_fetched_by_one_persona_and_everything_about_it_is_stored() {
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].id, report.request);
     assert_eq!(requests[0].domain, "shop.example");
+    assert_eq!(requests[0].level, Some(Level::Human));
+    assert_eq!(requests[0].render, RenderMode::Browser);
     assert_eq!(requests[0].outcome, Some(Outcome::Ok));
     assert!(requests[0].finished_at.is_some());
     assert_eq!(world.backend.attempts(), report.attempts);
@@ -173,146 +178,194 @@ async fn three_blocked_attempts_are_made_by_three_personas() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn under_auto_a_block_a_browser_cures_sends_the_same_persona_to_its_browser() {
-    let mut world = World::new(5, LENIENT);
-    world.script.then(blocked(Outcome::ChallengeFailed, 0.9));
-
-    let report = world
-        .pipeline
-        .fetch(get("https://shop.example/a"))
-        .await
-        .unwrap();
-
-    assert_eq!(report.outcome, Outcome::Ok);
-    assert!(report.escalated);
-    assert_eq!(world.script.renders(), [Render::Http, Render::Browser]);
-    let personas = world.script.personas();
-    assert_eq!(personas[0], personas[1]);
-    // As a person who reloads would: at once, not a gap later.
-    let seen = world.script.seen();
-    assert_eq!(seen[1].at, report.attempts[0].finished_at);
-    assert_eq!(seen[0].job.timeout, world.config.http.timeout.get());
-    assert_eq!(seen[1].job.timeout, world.config.browser.timeout.get());
-    assert_eq!(seen[1].job.n, 2);
-
-    // The browser passed: the persona answers for nothing.
-    let state = world
-        .backend
-        .domain_state(personas[0], "shop.example")
-        .unwrap();
-    assert_eq!(state.cooldown_until, None);
-    assert_eq!(state.block_count_24h, 0);
-    assert_eq!(state.last_outcome, Some(Outcome::Ok));
-    assert_eq!(world.backend.breaker("shop.example"), None);
-    // Both attempts are on record, the blocked one with its block.
-    assert_eq!(report.attempts[0].outcome, Outcome::ChallengeFailed);
-    assert!(report.attempts[0].block.is_some());
-    assert_eq!(report.attempts[1].outcome, Outcome::Ok);
-    assert_eq!(report.block, None);
-    world.shut_down().await;
-}
-
-#[tokio::test(start_paused = true)]
-async fn a_request_moves_to_the_browser_exactly_once() {
-    let mut world = World::new(6, LENIENT);
-    for _ in 0..5 {
-        world.script.then(blocked(Outcome::ChallengeFailed, 1.0));
+async fn each_level_is_one_path_and_a_block_never_moves_a_request_up() {
+    let mut world = World::new(6, DEFAULT_DOMAINS);
+    for _ in 0..2 {
+        world.script.then(blocked(Outcome::ChallengeFailed, 0.9));
     }
-    let order = FetchOrder {
-        max_retries: Some(4),
-        ..get("https://shop.example/a")
-    };
 
-    let report = world.pipeline.fetch(order).await.unwrap();
-
-    assert_eq!(report.outcome, Outcome::ChallengeFailed);
-    assert!(report.escalated);
-    assert_eq!(
-        world.script.renders(),
-        [
-            Render::Http,
-            Render::Browser,
-            Render::Browser,
-            Render::Browser,
-            Render::Browser
-        ]
-    );
-    // The first persona came back in its browser; after that browser was
-    // blocked too, every retry is another persona's.
-    let personas = world.script.personas();
-    assert_eq!(personas[0], personas[1]);
-    assert_eq!(personas[1..].iter().collect::<BTreeSet<_>>().len(), 4);
-    // It cooled once, for the browser's block, and the breaker counted
-    // one block per persona.
-    let first = world
-        .backend
-        .domain_state(personas[0], "shop.example")
+    let report = world
+        .pipeline
+        .fetch(at(Level::Emulated, "https://shop.example/a"))
+        .await
         .unwrap();
-    assert_eq!(first.block_count_24h, 1);
-    assert!(first.cooldown_until.is_some());
+
+    // Level 1 is the http path, however the site answers: the block is
+    // another persona's turn on it, after a pause.
+    assert_eq!(report.outcome, Outcome::Ok);
+    assert_eq!(world.script.renders(), [Render::Http; 3]);
+    let seen = world.script.seen();
+    assert!(seen.iter().all(|seen| seen.job.level == Level::Emulated));
+    assert_eq!(seen[0].job.timeout, world.config.http.timeout.get());
+    let personas = world.script.personas();
+    assert_eq!(personas.iter().collect::<BTreeSet<_>>().len(), 3);
+    let pause = seen[1].at - report.attempts[0].finished_at;
+    assert!(pause >= Span::milliseconds(1600), "{pause}");
+    // Each blocked persona answers for its block at once.
+    for persona in &personas[..2] {
+        let state = world
+            .backend
+            .domain_state(*persona, "shop.example")
+            .unwrap();
+        assert_eq!(state.last_outcome, Some(Outcome::ChallengeFailed));
+        assert!(state.cooldown_until.is_some());
+    }
     assert_eq!(
         world
             .backend
             .breaker("shop.example")
             .unwrap()
             .block_count_1h,
-        4
+        2
     );
+    assert_eq!(world.backend.requests()[0].level, Some(Level::Emulated));
+    assert_eq!(world.backend.requests()[0].render, RenderMode::Http);
+
+    // Level 2 and 3 are the browser.
+    for level in [Level::Fast, Level::Human] {
+        let report = world
+            .pipeline
+            .fetch(at(level, "https://shop.example/b"))
+            .await
+            .unwrap();
+        assert_eq!(report.outcome, Outcome::Ok);
+        let seen = world.script.seen();
+        let last = &seen.last().unwrap().job;
+        assert_eq!((last.level, last.render), (level, Render::Browser));
+        assert_eq!(last.timeout, world.config.browser.timeout.get());
+    }
+    assert!(world.script.plain_seen().is_empty());
     world.shut_down().await;
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_refusal_on_the_http_path_cools_the_persona_and_another_takes_the_browser() {
-    let mut world = World::new(5, LENIENT);
-    world.script.then(blocked(Outcome::Forbidden, 1.0));
+async fn a_level_zero_fetch_is_nobodys_and_leaves_from_the_hosts_connection() {
+    let mut world = World::with(4, true, DEFAULT_DOMAINS, DIRECT);
 
     let report = world
         .pipeline
-        .fetch(get("https://shop.example/a"))
+        .fetch(at(Level::Plain, "https://shop.example/a"))
         .await
         .unwrap();
 
     assert_eq!(report.outcome, Outcome::Ok);
-    assert!(report.escalated);
-    assert_eq!(world.script.renders(), [Render::Http, Render::Browser]);
-    let personas = world.script.personas();
-    assert_ne!(personas[0], personas[1]);
-    let refused = world
-        .backend
-        .domain_state(personas[0], "shop.example")
+    assert_eq!(report.persona, None);
+    // No persona was asked for anything.
+    assert!(world.script.seen().is_empty());
+    let [seen] = world.script.plain_seen().try_into().unwrap();
+    assert_eq!(seen.job.route, PlainRoute::Host);
+    assert_eq!(seen.job.url.as_str(), "https://shop.example/a");
+    assert_eq!(seen.job.timeout, world.config.http.timeout.get());
+    let [attempt] = report.attempts.as_slice() else {
+        panic!("one attempt, not {:?}", report.attempts);
+    };
+    assert_eq!(attempt.persona_id, None);
+    assert_eq!(attempt.engine, None);
+    assert_eq!(attempt.exit, Some(Exit::Host));
+    assert_eq!(attempt.render, Render::Http);
+    assert_eq!(attempt.seed, None);
+    assert_eq!(world.backend.attempts(), report.attempts);
+    let requests = world.backend.requests();
+    assert_eq!(requests[0].level, Some(Level::Plain));
+    assert_eq!(requests[0].render, RenderMode::Http);
+    // Nobody's calendar counted the page; the site has no scout for it.
+    for number in 0..4 {
+        assert_eq!(world.backend.domain_state(id(number), "shop.example"), None);
+    }
+    assert_eq!(world.backend.scout_of("shop.example"), None);
+    assert_eq!(world.scheduler.in_flight(Render::Http), 0);
+    world.shut_down().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_level_zero_block_is_the_answer_and_nobody_answers_for_it() {
+    let mut world = World::with(4, true, DEFAULT_DOMAINS, DIRECT);
+    world.script.then_plain(blocked(Outcome::Forbidden, 1.0));
+
+    let report = world
+        .pipeline
+        .fetch(at(Level::Plain, "https://shop.example/a"))
+        .await
         .unwrap();
-    assert!(refused.cooldown_until.is_some());
-    assert_eq!(refused.last_outcome, Some(Outcome::Forbidden));
-    let served = world
-        .backend
-        .domain_state(personas[1], "shop.example")
+
+    // The policy's retries do not apply to a block at level 0.
+    assert_eq!(report.outcome, Outcome::Forbidden);
+    assert_eq!(report.attempts.len(), 1);
+    assert_eq!(world.script.plain_seen().len(), 1);
+    assert!(report.block.is_some());
+    // No persona cools and the site's breaker counts nothing.
+    assert_eq!(world.backend.breaker("shop.example"), None);
+    for number in 0..4 {
+        assert_eq!(world.backend.domain_state(id(number), "shop.example"), None);
+    }
+    world.shut_down().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_level_zero_failure_is_tried_again_from_the_same_exit_after_a_pause() {
+    let mut world = World::new(4, DEFAULT_DOMAINS);
+    world.script.then_plain(timed_out());
+
+    let report = world
+        .pipeline
+        .fetch(at(Level::Plain, "https://shop.example/a"))
+        .await
         .unwrap();
-    assert_eq!(served.cooldown_until, None);
-    assert_eq!(
-        world
-            .backend
-            .breaker("shop.example")
-            .unwrap()
-            .block_count_1h,
-        1
+
+    assert_eq!(report.outcome, Outcome::Ok);
+    let seen = world.script.plain_seen();
+    assert_eq!(seen.len(), 2);
+    // Under the pool, the site's plain exit is its scout's proxy: chosen
+    // for the first attempt, the same for the second.
+    let scout = world.backend.scout_of("shop.example").unwrap();
+    let number = (0..4).find(|number| id(*number) == scout).unwrap();
+    let route = PlainRoute::Pool(persona(number, true).proxy_id);
+    assert_eq!(seen[0].job.route, route);
+    assert_eq!(seen[1].job.route, route);
+    assert!(
+        report
+            .attempts
+            .iter()
+            .all(|attempt| attempt.exit == Some(Exit::Pool) && attempt.persona_id.is_none())
     );
+    let pause = seen[1].at - report.attempts[0].finished_at;
+    assert!(pause >= Span::milliseconds(1600), "{pause}");
+    // The scout itself read nothing.
+    assert!(world.script.seen().is_empty());
+    world.shut_down().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_level_zero_fetch_without_a_plain_exit_is_answered_with_the_reason() {
+    // Nobody may scout the site, so the pool has no exit for it.
+    let mut world = World::new(0, DEFAULT_DOMAINS);
+
+    let report = world
+        .pipeline
+        .fetch(at(Level::Plain, "https://shop.example/a"))
+        .await
+        .unwrap();
+
+    assert_eq!(report.outcome, Outcome::ProviderError);
+    assert_eq!(report.reason.as_deref(), Some("plain_exit_unavailable"));
+    assert!(report.retry_at.is_some());
+    assert_eq!(report.attempts, []);
+    assert!(world.script.plain_seen().is_empty());
     world.shut_down().await;
 }
 
 #[tokio::test(start_paused = true)]
 async fn a_rate_limit_is_another_personas_turn_on_the_same_path() {
-    let mut world = World::new(5, LENIENT);
+    let mut world = World::new(5, DEFAULT_DOMAINS);
     world.script.then(blocked(Outcome::RateLimited, 1.0));
 
     let report = world
         .pipeline
-        .fetch(get("https://shop.example/a"))
+        .fetch(at(Level::Emulated, "https://shop.example/a"))
         .await
         .unwrap();
 
-    // A browser is rate-limited like anything else: nothing to escalate.
     assert_eq!(report.outcome, Outcome::Ok);
-    assert!(!report.escalated);
     assert_eq!(world.script.renders(), [Render::Http, Render::Http]);
     let personas = world.script.personas();
     assert_ne!(personas[0], personas[1]);
@@ -325,15 +378,11 @@ async fn a_request_for_the_http_path_stays_on_it() {
     for _ in 0..3 {
         world.script.then(blocked(Outcome::ChallengeFailed, 1.0));
     }
-    let order = FetchOrder {
-        render: RenderMode::Http,
-        ..get("https://shop.example/a")
-    };
+    let order = at(Level::Emulated, "https://shop.example/a");
 
     let report = world.pipeline.fetch(order).await.unwrap();
 
     assert_eq!(report.outcome, Outcome::ChallengeFailed);
-    assert!(!report.escalated);
     assert_eq!(world.script.renders(), [Render::Http; 3]);
     assert_eq!(
         world
@@ -344,81 +393,6 @@ async fn a_request_for_the_http_path_stays_on_it() {
             .len(),
         3
     );
-    world.shut_down().await;
-}
-
-#[tokio::test(start_paused = true)]
-async fn an_http_block_stands_when_the_browser_neither_passes_nor_is_blocked() {
-    let mut world = World::new(5, LENIENT);
-    world
-        .script
-        .then(blocked(Outcome::ChallengeFailed, 1.0))
-        .then(timed_out());
-
-    let report = world
-        .pipeline
-        .fetch(get("https://shop.example/a"))
-        .await
-        .unwrap();
-
-    assert_eq!(report.outcome, Outcome::Ok);
-    assert_eq!(
-        world.script.renders(),
-        [Render::Http, Render::Browser, Render::Browser]
-    );
-    let personas = world.script.personas();
-    assert_eq!(personas[0], personas[1]);
-    assert_ne!(personas[1], personas[2]);
-    // The timeout said nothing; the block of the http attempt is what the
-    // persona answers for.
-    let state = world
-        .backend
-        .domain_state(personas[0], "shop.example")
-        .unwrap();
-    assert_eq!(state.last_outcome, Some(Outcome::ChallengeFailed));
-    assert!(state.cooldown_until.is_some());
-    assert_eq!(state.block_count_24h, 1);
-    world.shut_down().await;
-}
-
-#[tokio::test(start_paused = true)]
-async fn a_persona_whose_browser_cannot_be_had_gives_up_its_second_try() {
-    let mut world = World::new(5, LENIENT);
-    let backend = std::sync::Arc::clone(&world.backend);
-    // The persona is retired while its http attempt is under way.
-    world.script.then_with(move |job| {
-        backend.remove_persona(job.persona.id);
-        blocked(Outcome::ChallengeFailed, 1.0)
-    });
-
-    let report = world
-        .pipeline
-        .fetch(get("https://shop.example/a"))
-        .await
-        .unwrap();
-
-    assert_eq!(report.outcome, Outcome::Ok);
-    assert_eq!(world.script.renders(), [Render::Http, Render::Browser]);
-    let personas = world.script.personas();
-    assert_ne!(personas[0], personas[1]);
-    // The block it was to cure stands.
-    let state = world
-        .backend
-        .domain_state(personas[0], "shop.example")
-        .unwrap();
-    assert_eq!(state.last_outcome, Some(Outcome::ChallengeFailed));
-    assert!(state.cooldown_until.is_some());
-    assert_eq!(
-        world
-            .backend
-            .breaker("shop.example")
-            .unwrap()
-            .block_count_1h,
-        1
-    );
-    // The other persona did not come the moment the block arrived.
-    let pause = world.script.seen()[1].at - report.attempts[0].finished_at;
-    assert!(pause >= Span::milliseconds(1600), "{pause}");
     world.shut_down().await;
 }
 
@@ -451,7 +425,7 @@ async fn a_cooldown_is_the_policys_scaled_by_how_sure_the_signature_is() {
         let attempt = &report.attempts[0];
         let state = world
             .backend
-            .domain_state(attempt.persona_id, &domain)
+            .domain_state(attempt.persona_id.unwrap(), &domain)
             .unwrap();
         let cooldown = (state.cooldown_until.unwrap() - attempt.finished_at)
             .to_std()
@@ -808,7 +782,7 @@ async fn the_persona_of_a_session_is_never_replaced() {
         .unwrap();
     assert_eq!(report.outcome, Outcome::Forbidden);
     assert_eq!(report.attempts.len(), 1);
-    assert_eq!(report.attempts[0].persona_id, id(2));
+    assert_eq!(report.attempts[0].persona_id, Some(id(2)));
     world.shut_down().await;
 }
 
@@ -844,16 +818,16 @@ async fn a_request_can_ask_to_be_refused_instead_of_waiting() {
         .await
         .unwrap();
     assert_eq!(report.outcome, Outcome::Ok);
-    assert_eq!(report.attempts[0].persona_id, id(0));
+    assert_eq!(report.attempts[0].persona_id, Some(id(0)));
     assert!(report.attempts[0].started_at >= back_at);
     assert!(report.pacing.waited >= Duration::from_mins(119));
     world.shut_down().await;
 }
 
 #[tokio::test(start_paused = true)]
-async fn without_an_http_path_auto_is_the_browser_and_http_is_refused() {
+async fn without_an_http_path_level_one_is_refused_and_the_browser_is_not() {
     // No persona of this pool has a profile for its browser's major.
-    let mut world = World::with(4, false, LENIENT, &[]);
+    let mut world = World::with(4, false, DEFAULT_DOMAINS, &[]);
 
     let report = world
         .pipeline
@@ -862,12 +836,8 @@ async fn without_an_http_path_auto_is_the_browser_and_http_is_refused() {
         .unwrap();
     assert_eq!(report.outcome, Outcome::Ok);
     assert_eq!(world.script.renders(), [Render::Browser]);
-    assert!(!report.escalated);
 
-    let order = FetchOrder {
-        render: RenderMode::Http,
-        ..get("https://shop.example/b")
-    };
+    let order = at(Level::Emulated, "https://shop.example/b");
     let report = world.pipeline.fetch(order).await.unwrap();
     assert_eq!(report.outcome, Outcome::ProviderError);
     assert_eq!(report.reason.as_deref(), Some("no_persona"));

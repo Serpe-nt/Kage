@@ -350,12 +350,12 @@ mod tests {
         DOMAINS_FILE, PACING_FILE, PolicyLoadError, PolicySet, PolicyStore, SIGNATURES_FILE,
     };
     use crate::alert::{AlertKind, AlertSeverity, AlertSink, MemoryAlertSink};
-    use crate::domain::RenderMode;
+    use crate::domain::Level;
     use crate::pacing::PacingError;
     use crate::policy::PolicyError;
 
     const DOMAINS: &str =
-        "defaults:\n  pacing: human\ndomains:\n  example.org:\n    render: browser\n";
+        "defaults:\n  pacing: human\ndomains:\n  example.org:\n    min_level: 3\n";
     const PACING: &str = "
 human:
   gap_ms: { dist: lognormal, median: 4500, p95: 15000, min: 1500 }
@@ -386,8 +386,8 @@ rules:
         (Arc::new(store), alerts)
     }
 
-    fn render_of(store: &PolicyStore, host: &str) -> RenderMode {
-        store.current().domains.resolve(host).render
+    fn floor_of(store: &PolicyStore, host: &str) -> Level {
+        store.current().domains.resolve(host).min_level
     }
 
     /// Polls until `condition` holds; file system events arrive when the
@@ -471,7 +471,7 @@ rules:
         let dir = policy_dir();
         std::fs::write(
             dir.path().join(DOMAINS_FILE),
-            "defaults:\n  render: sideways\n",
+            "defaults:\n  min_level: sideways\n",
         )
         .unwrap();
         let alerts = Arc::new(MemoryAlertSink::new());
@@ -489,25 +489,25 @@ rules:
         let dir = policy_dir();
         let (store, alerts) = open(dir.path());
         assert_eq!(store.dir(), dir.path());
-        assert_eq!(render_of(&store, "example.org"), RenderMode::Browser);
+        assert_eq!(floor_of(&store, "example.org"), Level::Human);
         let before = store.current();
 
         std::fs::write(
             dir.path().join(DOMAINS_FILE),
-            DOMAINS.replace("browser", "http"),
+            DOMAINS.replace("min_level: 3", "min_level: 1"),
         )
         .unwrap();
         let reloaded = store.reload().unwrap();
 
         assert_eq!(
-            reloaded.domains.resolve("example.org").render,
-            RenderMode::Http
+            reloaded.domains.resolve("example.org").min_level,
+            Level::Emulated
         );
-        assert_eq!(render_of(&store, "example.org"), RenderMode::Http);
+        assert_eq!(floor_of(&store, "example.org"), Level::Emulated);
         // A snapshot taken earlier keeps the policy it was taken with.
         assert_eq!(
-            before.domains.resolve("example.org").render,
-            RenderMode::Browser
+            before.domains.resolve("example.org").min_level,
+            Level::Human
         );
         assert_eq!(alerts.alerts(), []);
         assert!(format!("{store:?}").contains("PolicyStore"));
@@ -520,13 +520,13 @@ rules:
 
         std::fs::write(
             dir.path().join(DOMAINS_FILE),
-            "domains:\n  example.org:\n    render: sideways\n",
+            "domains:\n  example.org:\n    min_level: sideways\n",
         )
         .unwrap();
         let error = store.reload().unwrap_err();
 
         assert!(matches!(error, PolicyLoadError::Domains { .. }));
-        assert_eq!(render_of(&store, "example.org"), RenderMode::Browser);
+        assert_eq!(floor_of(&store, "example.org"), Level::Human);
 
         let raised = alerts.alerts();
         assert_eq!(raised.len(), 1);
@@ -548,22 +548,22 @@ rules:
         // Fixing the file brings the store back in step, with no new alert.
         std::fs::write(
             dir.path().join(DOMAINS_FILE),
-            DOMAINS.replace("browser", "http"),
+            DOMAINS.replace("min_level: 3", "min_level: 1"),
         )
         .unwrap();
         store.reload().unwrap();
-        assert_eq!(render_of(&store, "example.org"), RenderMode::Http);
+        assert_eq!(floor_of(&store, "example.org"), Level::Emulated);
         assert_eq!(alerts.alerts().len(), 1);
 
         // A domain said twice is an error (F45): the policy in force stays,
         // and the alert says on which line.
         std::fs::write(
             dir.path().join(DOMAINS_FILE),
-            "domains:\n  example.org: { render: browser }\n  example.org: { render: http }\n",
+            "domains:\n  example.org: { min_level: 3 }\n  example.org: { min_level: 1 }\n",
         )
         .unwrap();
         assert!(store.reload().is_err());
-        assert_eq!(render_of(&store, "example.org"), RenderMode::Http);
+        assert_eq!(floor_of(&store, "example.org"), Level::Emulated);
         let raised = alerts.alerts();
         assert_eq!(raised.len(), 2);
         let said = raised[1].details["error"].as_str().unwrap();
@@ -593,7 +593,7 @@ rules:
         assert!(matches!(store.reload(), Err(PolicyLoadError::Read { .. })));
 
         assert_eq!(alerts.alerts().len(), 3);
-        assert_eq!(render_of(&store, "example.org"), RenderMode::Browser);
+        assert_eq!(floor_of(&store, "example.org"), Level::Human);
         assert_eq!(store.current().signatures.rules().len(), 1);
     }
 
@@ -606,12 +606,12 @@ rules:
 
         std::fs::write(
             dir.path().join(DOMAINS_FILE),
-            DOMAINS.replace("browser", "http"),
+            DOMAINS.replace("min_level: 3", "min_level: 1"),
         )
         .unwrap();
 
         eventually("the new policy is in force", || {
-            render_of(&store, "example.org") == RenderMode::Http
+            floor_of(&store, "example.org") == Level::Emulated
         });
         assert_eq!(alerts.alerts(), []);
     }
@@ -624,11 +624,11 @@ rules:
 
         // Editors and config management write a temporary file and rename it.
         let staged = dir.path().join(".domains.yaml.tmp");
-        std::fs::write(&staged, DOMAINS.replace("browser", "http")).unwrap();
+        std::fs::write(&staged, DOMAINS.replace("min_level: 3", "min_level: 1")).unwrap();
         std::fs::rename(&staged, dir.path().join(DOMAINS_FILE)).unwrap();
 
         eventually("the renamed file is in force", || {
-            render_of(&store, "example.org") == RenderMode::Http
+            floor_of(&store, "example.org") == Level::Emulated
         });
     }
 
@@ -641,15 +641,15 @@ rules:
         std::fs::write(dir.path().join(DOMAINS_FILE), "defaults:\n  retries: 99\n").unwrap();
         eventually("the alert is raised", || !alerts.alerts().is_empty());
         assert_eq!(alerts.alerts()[0].kind, AlertKind::PolicyReloadFailed);
-        assert_eq!(render_of(&store, "example.org"), RenderMode::Browser);
+        assert_eq!(floor_of(&store, "example.org"), Level::Human);
 
         std::fs::write(
             dir.path().join(DOMAINS_FILE),
-            DOMAINS.replace("browser", "http"),
+            DOMAINS.replace("min_level: 3", "min_level: 1"),
         )
         .unwrap();
         eventually("the fixed file is in force", || {
-            render_of(&store, "example.org") == RenderMode::Http
+            floor_of(&store, "example.org") == Level::Emulated
         });
     }
 
@@ -679,15 +679,15 @@ rules:
 
         std::fs::write(
             dir.path().join(DOMAINS_FILE),
-            DOMAINS.replace("browser", "http"),
+            DOMAINS.replace("min_level: 3", "min_level: 1"),
         )
         .unwrap();
         std::thread::sleep(Duration::from_millis(600));
 
-        assert_eq!(render_of(&store, "example.org"), RenderMode::Browser);
+        assert_eq!(floor_of(&store, "example.org"), Level::Human);
         // The store itself still works on demand.
         store.reload().unwrap();
-        assert_eq!(render_of(&store, "example.org"), RenderMode::Http);
+        assert_eq!(floor_of(&store, "example.org"), Level::Emulated);
     }
 
     #[test]

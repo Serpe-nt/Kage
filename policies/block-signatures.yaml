@@ -21,8 +21,6 @@
 # defaults to what the outcome implies (spec §6.3, §8.1, §8.3) and can be
 # overridden per rule:
 #   retryable: true | false       try again with another persona
-#   escalate: true | false        an http attempt is followed by a browser one
-#                                 under render auto
 #   cooldown: none | short | long how long the persona stays away from the
 #                                 domain; the domain policy turns the class
 #                                 into a duration (long = the outcome's own)
@@ -365,9 +363,8 @@ rules:
     confidence: 0.7
     priority: 31
     # Another persona would get the same shell: do not retry, do not cool
-    # anyone down, let the browser render it.
+    # anyone down.
     retryable: false
-    escalate: true
     cooldown: none
     description: A script-only shell on the http path. With render auto the next attempt uses the browser.
     when:
@@ -401,9 +398,8 @@ rules:
     outcome: soft_block
     confidence: 0.6
     priority: 30
-    # Another address gets the same wall; the browser path or a flow handles it.
+    # Another address gets the same wall; a level-3 visit or a flow handles it.
     retryable: false
-    escalate: true
     cooldown: none
     description: A password form instead of the content, reached at a login URL or announced as required.
     when:
@@ -421,9 +417,8 @@ rules:
     outcome: soft_block
     confidence: 0.6
     priority: 30
-    # Another address gets the same wall; the browser path or a flow handles it.
+    # Another address gets the same wall; a level-3 visit or a flow handles it.
     retryable: false
-    escalate: true
     cooldown: none
     description: A consent page in place of the content. A banner over a normal page has far more text.
     when:
@@ -468,7 +463,6 @@ rules:
     # breaker does not count it. The scheduler adds a politeness pause after
     # consecutive server errors so a site that is down is not hammered.
     retryable: true
-    escalate: false
     cooldown: none
     description: A server error with no vendor marker. Retried on another persona; no cooldown.
     when: { status: "500-599" }

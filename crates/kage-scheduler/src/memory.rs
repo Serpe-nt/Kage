@@ -15,7 +15,7 @@ use chrono::{DateTime, Utc};
 use kage_core::domain::{
     Attempt, DomainBreaker, FetchRecord, Persona, PersonaDomainState, RequestRecord,
 };
-use kage_core::ids::PersonaId;
+use kage_core::ids::{PersonaId, ProxyId};
 use kage_core::outcome::Outcome;
 use kage_core::persona::place;
 use kage_core::schedule::breaker::{Admission, BreakerChange, BreakerRules};
@@ -291,6 +291,16 @@ impl Backend for MemoryBackend {
     async fn save_robots(&self, entry: &RobotsCacheEntry) -> Result<(), SchedulerError> {
         self.put_robots(entry.clone());
         Ok(())
+    }
+
+    async fn plain_exit(&self, persona: PersonaId) -> Result<Option<ProxyId>, SchedulerError> {
+        // A persona's proxy is usable when the persona was put as usable.
+        Ok(self
+            .state()
+            .personas
+            .get(&persona)
+            .filter(|(persona, usable, _)| *usable && persona.is_live())
+            .map(|(persona, _, _)| persona.proxy_id))
     }
 
     async fn scout(&self, site: &str) -> Result<Option<PersonaId>, SchedulerError> {

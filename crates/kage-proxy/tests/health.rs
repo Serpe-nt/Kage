@@ -19,14 +19,14 @@ use chrono::{DateTime, TimeZone, Utc};
 use common::{Echo, GeoFixture, MASTER_KEY_BYTES, TestDb, TestProxy, loopback};
 use kage_core::alert::{AlertKind, MemoryAlertSink};
 use kage_core::config::{ProxyHealthConfig, StaticProxy};
-use kage_core::domain::{HealthFailure, Proxy, ProxyState};
+use kage_core::domain::{HealthFailure, Proxy, ProxyProviderKind, ProxyState, ReplaceReason};
 use kage_core::duration::HumanDuration;
 use kage_core::ids::ProxyId;
 use kage_core::seed::Seed;
 use kage_proxy::health::{HostIp, HttpProber};
 use kage_proxy::{
     Clock, CredentialCipher, HealthChecker, HealthSettings, ManualClock, Pool, PoolParts,
-    PoolRules, StaticListProvider,
+    PoolRules, ReplacementOutcome, StaticListProvider,
 };
 
 fn start() -> DateTime<Utc> {
@@ -249,6 +249,90 @@ async fn a_reachable_proxy_becomes_healthy_with_latency_exit_address_and_geo() {
         format!("kage/{}", env!("CARGO_PKG_VERSION"))
     );
     assert_eq!(net.alerts.alerts(), []);
+}
+
+#[tokio::test]
+async fn the_hosts_own_rows_are_never_probed_and_take_the_place_the_host_looks_up() {
+    let net = net(&[(2, "DE")]).await;
+    net.echo.set_geo(loopback(1), GeoFixture::vienna());
+    net.echo.set_geo(loopback(2), GeoFixture::berlin());
+    let ids = |rows: &[Proxy]| rows.iter().map(|row| row.id).collect::<Vec<_>>();
+
+    // Two rows for the host's own connection, declared Austrian.
+    let rows = net
+        .pool
+        .keep_host_rows(2, Some("AT".parse().unwrap()))
+        .await
+        .unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.provider_ref.as_str())
+            .collect::<Vec<_>>(),
+        ["host-1", "host-2"]
+    );
+    for row in &rows {
+        assert_eq!(row.provider, ProxyProviderKind::Host);
+        assert_eq!(row.state, ProxyState::Healthy);
+        assert_eq!(
+            row.country.map(|country| country.to_string()).as_deref(),
+            Some("AT")
+        );
+    }
+    // Kept again: nothing new.
+    let again = net.pool.keep_host_rows(2, None).await.unwrap();
+    assert_eq!(ids(&again), ids(&rows));
+
+    // The checker probes the pool's proxy and never a host row, whose exit
+    // is the host's own address and no leak.
+    let results = net.checker.check_now(None).await.unwrap();
+    assert_eq!(results.len(), 1);
+    net.checker.tick().await.unwrap();
+    assert!(!net.pool.egress_unsafe().await.unwrap());
+    for row in net.pool.host_rows().await.unwrap() {
+        assert_eq!(row.last_health, None);
+    }
+
+    // The host looks itself up, directly, and the row takes the place.
+    let host = HostIp::new(net.echo.url("/host"), Duration::from_secs(3)).unwrap();
+    let ip = host.refresh(start()).await.unwrap();
+    let lookup = host.lookup(&net.echo.url("/json")).await.unwrap();
+    assert_eq!(lookup.country.to_string(), "AT");
+    let placed = net
+        .pool
+        .record_host_place(rows[0].id, ip, lookup.clone(), start())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(placed.observed_geo().unwrap().ip, ip);
+    assert_eq!(placed.state, ProxyState::Healthy);
+    assert!(!placed.leak_detected());
+    assert!(!net.pool.egress_unsafe().await.unwrap());
+    // A proxy of the pool is no host row.
+    let pooled = net.stored(0).await.id;
+    assert!(
+        net.pool
+            .record_host_place(pooled, ip, lookup, start())
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Nobody replaces the host.
+    assert_eq!(
+        net.pool
+            .request_replacement(rows[1].id, ReplaceReason::Operator)
+            .await
+            .unwrap(),
+        ReplacementOutcome::Unsupported
+    );
+
+    // Fewer rows retire the rest, and none at all retires every one.
+    assert_eq!(
+        ids(&net.pool.keep_host_rows(1, None).await.unwrap()),
+        ids(&rows[..1])
+    );
+    assert_eq!(net.pool.keep_host_rows(0, None).await.unwrap(), []);
+    assert_eq!(net.pool.live().await.unwrap().len(), 1);
 }
 
 #[tokio::test]

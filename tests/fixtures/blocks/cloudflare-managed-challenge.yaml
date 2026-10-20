@@ -43,5 +43,4 @@ expect:
   rule: cloudflare-challenge-header
   vendors: [cloudflare]
   retryable: true
-  escalate: true
   cooldown: long

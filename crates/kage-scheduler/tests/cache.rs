@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use chrono::Duration as Span;
 use common::{DEFAULT_DOMAINS, World, blocked, document, file, page_with};
-use kage_core::domain::{DomainBreaker, RenderMode, SessionId, Visit};
+use kage_core::domain::{DomainBreaker, Level, SessionId, Visit};
 use kage_core::ids::{ApiKeyId, RequestId};
 use kage_core::outcome::Outcome;
 use kage_core::policy::RefererStrategy;
@@ -27,12 +27,11 @@ use kage_scheduler::{BehaviorApplied, CachePlan, FetchOrder, JobFetch};
 use tokio::sync::watch;
 use url::Url;
 
-const BROWSER: &str =
-    "defaults: { render: browser, pacing: fast, active_hours: ignore }\ndomains: {}\n";
+const BROWSER: &str = "defaults: { pacing: fast, active_hours: ignore }\ndomains: {}\n";
 
 fn get(url: &str) -> FetchOrder {
     FetchOrder {
-        render: RenderMode::Browser,
+        level: Level::Human,
         ..FetchOrder::get(Url::parse(url).unwrap(), Priority::Sync)
     }
 }

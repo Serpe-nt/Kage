@@ -59,8 +59,8 @@ const DASHBOARDS = [
     description: 'What is asked of Kage, how long it waits for a persona and its turn, and how attempts end.',
     panels: [
       series('Fetches by outcome, per minute', 'short', ['sum by (outcome) (rate(kage_requests_total[5m])) * 60', '{{outcome}}']),
-      series('Attempts by render, per minute', 'short', ['sum by (render) (rate(kage_attempts_total[5m])) * 60', '{{render}}']),
-      series('Attempt time p50 and p95', 's', [quantile(0.5, 'kage_attempt_duration_seconds', 'render'), 'p50 {{render}}'], [quantile(0.95, 'kage_attempt_duration_seconds', 'render'), 'p95 {{render}}']),
+      series('Attempts by level, per minute', 'short', ['sum by (level) (rate(kage_attempts_total[5m])) * 60', 'level {{level}}']),
+      series('Attempt time p50 and p95', 's', [quantile(0.5, 'kage_attempt_duration_seconds', 'level'), 'p50 level {{level}}'], [quantile(0.95, 'kage_attempt_duration_seconds', 'level'), 'p95 level {{level}}']),
       series('Wait for a persona and its turn p50 and p95', 's', [quantile(0.5, 'kage_scheduler_wait_seconds', 'kind'), 'p50 {{kind}}'], [quantile(0.95, 'kage_scheduler_wait_seconds', 'kind'), 'p95 {{kind}}']),
       series('Queue depth', 'short', ['sum by (kind) (kage_queue_depth)', '{{kind}}']),
       series('Attempts in flight', 'short', ['sum by (render) (kage_scheduler_in_flight)', '{{render}}']),

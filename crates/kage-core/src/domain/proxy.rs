@@ -17,6 +17,10 @@ string_enum! {
         Webshare => "webshare",
         /// A fixed list from configuration.
         Static => "static",
+        /// The host's own connection under `egress.mode: direct`: one row
+        /// per host persona, so that each keeps its one proxy. Never
+        /// synced, probed through, replaced or counted as a leak.
+        Host => "host",
     }
 }
 
@@ -394,7 +398,7 @@ mod tests {
         assert_string_enum(
             ProxyProviderKind::ALL,
             ProxyProviderKind::as_str,
-            &["webshare", "static"],
+            &["webshare", "static", "host"],
         );
         assert_string_enum(ProxyScheme::ALL, ProxyScheme::as_str, &["http"]);
         assert_string_enum(

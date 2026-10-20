@@ -216,45 +216,106 @@ export const DwellModeSchema = z.enum(['fixed', 'human']).meta({
 });
 export type DwellMode = z.infer<typeof DwellModeSchema>;
 
+/** What kind of visit the behavior of a navigation is (contract 1.5.0). */
+export const BehaviorModeSchema = z.enum(['human', 'still']).meta({
+  id: 'BehaviorMode',
+  description:
+    "What kind of visit a navigation is. `human`: the persona at its mouse and keyboard, as the other fields of the behavior say. `still`: the persona's browser loads the page and nothing else: no input at all (no pointer, no wheel, no key), a typed entry, the fixed dwell `dwell_ms`, no scrolling, no wandering, no patience. A page sees of it what it sees of a visitor whose hand rests.",
+});
+export type BehaviorMode = z.infer<typeof BehaviorModeSchema>;
+
+/** The fields of a behavior, before the rule that ties them to its mode. */
+const BehaviorOptionsFields = z.strictObject({
+  seed: SeedSchema.optional().describe(
+    "Seed of this request. With the persona's own seed it decides every movement; the same pair replays the same behavior. Absent: the sidecar draws one and returns it.",
+  ),
+  mode: BehaviorModeSchema.optional().describe(
+    'What kind of visit this is; default `human`. `still`: a visit that sends no input at all (no pointer, no wheel, no key), arrives by a typed navigation (`entry` absent, `direct` or `none`), dwells for the fixed `dwell_ms`, and neither scrolls, wanders nor waits with patience; a request that also names `scroll_depth`, `patience_ms`, `wander: true`, `dwell: human`, an entry by `link` or `search_engine`, or `from_open_page: true` is refused. Its report has the seed, the profile of the persona, the entry, the dwell, and every count 0. Since 1.5.0.',
+  ),
+  entry: EntrySchema.optional().describe(
+    'How the target is arrived at; default a typed navigation.',
+  ),
+  scroll_depth: z
+    .number()
+    .min(0)
+    .max(1)
+    .optional()
+    .describe(
+      'Scroll down to this share of the document with the wheel, a flick at a time, resting after each as long as the text in view takes the persona to skim. Absent: no scrolling.',
+    ),
+  dwell: DwellModeSchema.optional().describe('Where the dwell time comes from; default `fixed`.'),
+  wander: z
+    .boolean()
+    .optional()
+    .describe(
+      'Move the mouse a little now and then while dwelling, as an idle hand does; default true, and never in a `still` visit.',
+    ),
+  patience_ms: z
+    .number()
+    .int()
+    .min(1000)
+    .max(600_000)
+    .optional()
+    .describe(
+      'How long the persona goes on scrolling this page at most. With it, `timeout_ms` of the request bounds reaching the page only (the navigation, its waits, the challenge wait): the scrolling ends at `scroll_depth` or when the patience is used up, whichever comes first, and the dwell follows in full. Whoever asks draws it anew for every page, so that no two long pages are left after the same time. Absent: the scrolling and the dwell share what `timeout_ms` leaves, as before 1.3.0, and every page too long for that is left at the same moment.',
+    ),
+});
+
+/** A field of a behavior that a still visit cannot have, and why. */
+export interface StillConflict {
+  /** Where the field is, below the behavior. */
+  readonly path: readonly string[];
+  /** Why a still visit refuses it, as a sentence for the log. */
+  readonly message: string;
+}
+
+/**
+ * What a still visit (`mode: still`) is asked for besides itself: every
+ * field that asks for input, or for a time that only input fills. Empty for
+ * a behavior that is not still, and for a still one that asks for none of
+ * it. The schema refuses a request with any; an engine checks again before
+ * it loads anything.
+ */
+export function stillConflicts(behavior: z.infer<typeof BehaviorOptionsFields>): StillConflict[] {
+  if (behavior.mode !== 'still') {
+    return [];
+  }
+  const conflicts: StillConflict[] = [];
+  const refuse = (path: string[], message: string) => {
+    conflicts.push({ path, message });
+  };
+  if (behavior.scroll_depth !== undefined) {
+    refuse(['scroll_depth'], 'a still visit does not scroll');
+  }
+  if (behavior.patience_ms !== undefined) {
+    refuse(['patience_ms'], 'a still visit does not scroll, so it has no patience to spend');
+  }
+  if (behavior.wander === true) {
+    refuse(['wander'], 'a still visit does not move the mouse');
+  }
+  if (behavior.dwell === 'human') {
+    refuse(['dwell'], 'a still visit dwells for the fixed dwell_ms');
+  }
+  const { entry } = behavior;
+  if (entry?.strategy === 'link' || entry?.strategy === 'search_engine') {
+    refuse(['entry', 'strategy'], 'a still visit arrives by a typed navigation: direct or none');
+  }
+  if (entry?.from_open_page === true) {
+    refuse(['entry', 'from_open_page'], 'a still visit clicks nothing on the open page');
+  }
+  return conflicts;
+}
+
 /** What the behavior engine does during a navigation (spec §10.4). */
-export const BehaviorOptionsSchema = z
-  .strictObject({
-    seed: SeedSchema.optional().describe(
-      "Seed of this request. With the persona's own seed it decides every movement; the same pair replays the same behavior. Absent: the sidecar draws one and returns it.",
-    ),
-    entry: EntrySchema.optional().describe(
-      'How the target is arrived at; default a typed navigation.',
-    ),
-    scroll_depth: z
-      .number()
-      .min(0)
-      .max(1)
-      .optional()
-      .describe(
-        'Scroll down to this share of the document with the wheel, a flick at a time, resting after each as long as the text in view takes the persona to skim. Absent: no scrolling.',
-      ),
-    dwell: DwellModeSchema.optional().describe('Where the dwell time comes from; default `fixed`.'),
-    wander: z
-      .boolean()
-      .optional()
-      .describe(
-        'Move the mouse a little now and then while dwelling, as an idle hand does; default true.',
-      ),
-    patience_ms: z
-      .number()
-      .int()
-      .min(1000)
-      .max(600_000)
-      .optional()
-      .describe(
-        'How long the persona goes on scrolling this page at most. With it, `timeout_ms` of the request bounds reaching the page only (the navigation, its waits, the challenge wait): the scrolling ends at `scroll_depth` or when the patience is used up, whichever comes first, and the dwell follows in full. Whoever asks draws it anew for every page, so that no two long pages are left after the same time. Absent: the scrolling and the dwell share what `timeout_ms` leaves, as before 1.3.0, and every page too long for that is left at the same moment.',
-      ),
-  })
-  .meta({
-    id: 'BehaviorOptions',
-    description:
-      "What a persona does on a page besides loading it. All input is sent through the mouse and keyboard of the context's own display. Absent from a request: no input at all, a bare page load.",
-  });
+export const BehaviorOptionsSchema = BehaviorOptionsFields.superRefine((behavior, context) => {
+  for (const conflict of stillConflicts(behavior)) {
+    context.addIssue({ code: 'custom', path: [...conflict.path], message: conflict.message });
+  }
+}).meta({
+  id: 'BehaviorOptions',
+  description:
+    "What a persona does on a page besides loading it. All input is sent through the mouse and keyboard of the context's own display; a `still` visit sends none and is reported all the same. Absent from a request: no input at all, a bare page load.",
+});
 export type BehaviorOptions = z.infer<typeof BehaviorOptionsSchema>;
 
 /** Body of `POST /v1/contexts/{id}/navigate`. */

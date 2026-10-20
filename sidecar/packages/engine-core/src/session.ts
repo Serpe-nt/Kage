@@ -6,7 +6,9 @@ import {
   DEFAULT_NAVIGATE_TIMEOUT_MS,
   MAX_PAGE_LINKS,
   MAX_URL_LENGTH,
+  stillConflicts,
   type ArtifactRef,
+  type BehaviorOptions,
   type BehaviorReport,
   type CaptureOptions,
   type Cookie,
@@ -713,6 +715,45 @@ function countFrom(state: DocumentState, moment: number): void {
     }
   }
 }
+
+/** What a still visit (contract 1.5.0) needs to be reported: its seed. */
+interface StillVisit {
+  readonly seed: string;
+}
+
+/**
+ * Takes a still visit: the request's seed, or one drawn as for every other
+ * behavior. The contract refuses a still visit that also asks for input;
+ * the engine refuses it again, so that no caller that skipped the contract
+ * gets a hand it did not ask for, nor a still visit that ignored part of
+ * what it asked.
+ *
+ * @throws {EngineError} `invalid_request`, naming every field a still visit cannot have.
+ */
+function stillVisit(behavior: BehaviorOptions): StillVisit {
+  const conflicts = stillConflicts(behavior);
+  if (conflicts.length > 0) {
+    throw new EngineError(
+      'invalid_request',
+      conflicts
+        .map((conflict) => `${['behavior', ...conflict.path].join('.')}: ${conflict.message}`)
+        .join('; '),
+    );
+  }
+  return { seed: behavior.seed ?? randomBytes(32).toString('hex') };
+}
+
+/** The counts of a visit that sent no input at all. */
+const noInput = (): BehaviorCounts => ({
+  moves: 0,
+  positions: 0,
+  overshoots: 0,
+  clicks: 0,
+  notches: 0,
+  keys: 0,
+  typos: 0,
+  wanders: 0,
+});
 
 /**
  * One open persona context as both engines run it: navigation with its
@@ -1593,7 +1634,11 @@ export class PageSession {
     const remaining = () => Math.max(1, deadline - Date.now());
     const consoleStart = driver.console.mark();
     const behavior = request.behavior ?? null;
-    const acting = behavior === null ? null : await this.human(behavior.seed);
+    // A still visit (contract 1.5.0) is the persona's browser loading the
+    // page and nothing else: the input device is never opened, so nothing
+    // can be sent through it, and the visit is reported all the same.
+    const still = behavior?.mode === 'still' ? stillVisit(behavior) : null;
+    const acting = behavior === null || still !== null ? null : await this.human(behavior.seed);
     const entry = behavior?.entry ?? null;
     const filters = [request.capture.xhr];
 
@@ -1607,8 +1652,9 @@ export class PageSession {
     this.begin(filters);
     try {
       let typed = true;
-      if (entry !== null && acting !== null) {
-        if (entry.strategy === 'link' || entry.strategy === 'search_engine') {
+      if (entry !== null) {
+        // A still visit never clicks its way in: `stillVisit` refused that.
+        if (acting !== null && (entry.strategy === 'link' || entry.strategy === 'search_engine')) {
           const arrive =
             entry.strategy === 'link' && entry.from_open_page === true
               ? this.enterFromOpenPage(
@@ -1721,7 +1767,9 @@ export class PageSession {
           dwelled = patience === null ? Math.min(wanted, budget()) : wanted;
           await acting.human.dwell(dwelled, { wander: behavior.wander ?? true });
         } else if ((request.dwell_ms ?? 0) > 0) {
-          await sleep(Math.min(request.dwell_ms ?? 0, remaining()));
+          // A bare load and a still visit rest alike: a plain wait, no hand.
+          dwelled = Math.min(request.dwell_ms ?? 0, remaining());
+          await sleep(dwelled);
         }
       }
       await Promise.race([Promise.allSettled(this.document.bodies), sleep(BODY_WAIT_MS)]);
@@ -1742,9 +1790,11 @@ export class PageSession {
         wait,
         consoleStart,
         behavior:
-          acting === null
-            ? null
-            : this.report(acting.seed, acting.human.counts, dwelled, entryReport, patience, scroll),
+          acting !== null
+            ? this.report(acting.seed, acting.human.counts, dwelled, entryReport, patience, scroll)
+            : still !== null
+              ? this.report(still.seed, noInput(), dwelled, entryReport)
+              : null,
         started,
       },
     );

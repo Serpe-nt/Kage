@@ -44,8 +44,11 @@ function env(name: string): string {
 const ENGINES = ['chromium', 'firefox'] as const;
 type EngineName = (typeof ENGINES)[number];
 
-/** What every page of these crawls is fetched with: read fast, and read. */
-const READ = { behavior: { scroll_depth: 0.9, dwell_ms: 1000 }, timeout_ms: 30_000 };
+/**
+ * What every page of these crawls is fetched with: by a person (level 3),
+ * read fast, and read.
+ */
+const READ = { level: 3, behavior: { scroll_depth: 0.9, dwell_ms: 1000 }, timeout_ms: 30_000 };
 
 /**
  * A page of the fixture by a name that does not change with how its link
@@ -159,7 +162,8 @@ async function readingRoom(client: KageClient, site: string, engine: EngineName)
   const reader = readerOf(pages);
   assert.equal(reader.engine, engine);
   for (const { item } of pages) {
-    assert.equal(item.result?.attempts.at(-1)?.render, 'browser');
+    assert.equal(item.result?.level, 3);
+    assert.equal(item.result.attempts.at(-1)?.render, 'browser');
   }
 
   // How the pages were reached: the seed typed, and from then on by a
@@ -409,7 +413,7 @@ async function cancelled(client: KageClient, site: string) {
     max_depth: 32,
     max_pages: 30,
     deny: ['/site/(articles|about)?$'],
-    defaults: { behavior: { scroll_depth: 0, dwell_ms: 600 }, timeout_ms: 30_000 },
+    defaults: { level: 3, behavior: { scroll_depth: 0, dwell_ms: 600 }, timeout_ms: 30_000 },
   });
   await waitForJob(client, job.id, {
     timeoutMs: 180_000,
@@ -445,11 +449,14 @@ async function cancelled(client: KageClient, site: string) {
 /** A crawl that cannot be accepted is refused whole, and says what about. */
 async function refused(client: KageClient, site: string) {
   const codes: string[] = [];
+  const defaults = { level: 3 };
   for (const request of [
-    { seeds: [] },
-    { seeds: [`${site}/site/`, 'http://169.254.169.254/latest/meta-data'] },
-    { seeds: [`${site}/site/`], allow: ['('] },
-    { seeds: [`${site}/site/`, `${site}/site/private`], deny: ['/private'] },
+    { seeds: [], defaults },
+    { seeds: [`${site}/site/`, 'http://169.254.169.254/latest/meta-data'], defaults },
+    { seeds: [`${site}/site/`], allow: ['('], defaults },
+    { seeds: [`${site}/site/`, `${site}/site/private`], deny: ['/private'], defaults },
+    // Nothing is decided for the caller: a crawl's defaults name its level.
+    { seeds: [`${site}/site/`] },
   ] satisfies CrawlRequest[]) {
     const problem = await createCrawl(client, request).then(
       () => null,

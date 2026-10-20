@@ -678,10 +678,9 @@ pub fn cookie(name: &str, value: &str) -> Value {
     })
 }
 
-/// The domain rules the lab's tests share: the http path first, at the
-/// `fast` pace, whatever the hour of the machine's clock.
-pub const LENIENT_FAST: &str =
-    "defaults: { render: http, pacing: fast, active_hours: ignore }\ndomains: {}\n";
+/// The domain rules the lab's tests share: the `fast` pace, whatever the
+/// hour of the machine's clock.
+pub const FAST: &str = "defaults: { pacing: fast, active_hours: ignore }\ndomains: {}\n";
 
 /// See the module documentation.
 pub struct Lab {
@@ -780,7 +779,10 @@ impl Lab {
         // The forwarder, in front of whatever proxy the pool holds for a
         // persona.
         let key = config.secrets.master_key_bytes().unwrap();
-        let routes: Arc<dyn Routes> = Arc::new(PoolRoutes::new(store.clone(), Arc::clone(&pool)));
+        let routes: Arc<dyn Routes> = Arc::new(
+            PoolRoutes::new(store.clone(), Arc::clone(&pool))
+                .with_plain_exit(config.egress.plain_exit()),
+        );
         let (forwarder, listener) = Forwarder::bind(
             "127.0.0.1:0".parse().unwrap(),
             ForwarderSettings::from_config(&config),
@@ -843,12 +845,15 @@ impl Lab {
         ));
         let as_gate: Arc<dyn BrowserGate> = gate.clone();
         assert!(manager.set_gate(as_gate));
-        let executor: Arc<dyn AttemptExecutor> = Arc::new(PathExecutor::new(
-            Arc::clone(&manager),
-            Arc::clone(&verdicts),
-            &config,
-            Some(Arc::clone(forwarder.meter())),
-        ));
+        let executor: Arc<dyn AttemptExecutor> = Arc::new(
+            PathExecutor::new(
+                Arc::clone(&manager),
+                Arc::clone(&verdicts),
+                &config,
+                Some(Arc::clone(forwarder.meter())),
+            )
+            .with_plain(forwarder.egress()),
+        );
         let pipeline = Pipeline::new(
             Arc::clone(&scheduler),
             executor,

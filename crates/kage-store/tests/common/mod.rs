@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, SubsecRound, Utc};
 use kage_core::domain::{
-    ApiKey, ClaimedOs, Engine, Geolocation, KeyLimits, Persona, PersonaState, Proxy,
+    ApiKey, ClaimedOs, Engine, Geolocation, KeyLimits, Level, Persona, PersonaState, Proxy,
     ProxyProviderKind, ProxyScheme, ProxyState, RenderMode, RequestRecord, Scope, Screen,
 };
 use kage_core::ids::{ApiKeyId, PersonaId, ProxyId, RequestId};
@@ -174,8 +174,9 @@ pub fn request(api_key_id: Option<ApiKeyId>) -> RequestRecord {
         url: "https://example.org/listing?page=2".to_owned(),
         method: "GET".to_owned(),
         domain: "example.org".to_owned(),
-        render: RenderMode::Auto,
-        spec: serde_json::json!({ "url": "https://example.org/listing?page=2", "render": "auto" }),
+        render: RenderMode::Browser,
+        level: Some(Level::Human),
+        spec: serde_json::json!({ "url": "https://example.org/listing?page=2", "level": 3 }),
         created_at: now(),
         finished_at: None,
         outcome: None,

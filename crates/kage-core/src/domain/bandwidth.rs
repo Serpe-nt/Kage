@@ -2,20 +2,25 @@
 
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 
+use super::Exit;
 use crate::ids::PersonaId;
 
 /// The `domain` of bytes that passed outside any attempt: a browser's own
 /// traffic while its window is open.
 pub const IDLE_DOMAIN: &str = "(idle)";
 
-/// What one persona exchanged with its proxy in one hour while one domain
-/// was being fetched.
+/// What one persona, or the plain client, exchanged through the forwarder
+/// in one hour while one domain was being fetched, by the connection it
+/// left through.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BandwidthUsage {
     /// Start of the hour, UTC.
     pub hour: DateTime<Utc>,
-    /// The persona.
-    pub persona_id: PersonaId,
+    /// The persona; `None` for a plain client's bytes (level 0).
+    pub persona_id: Option<PersonaId>,
+    /// The connection the bytes left through: the pool's are the provider's
+    /// and count against the plan's budget, the host's do not.
+    pub egress: Exit,
     /// The host being fetched while the bytes passed, or [`IDLE_DOMAIN`].
     pub domain: String,
     /// Bytes sent towards the proxy.
@@ -41,6 +46,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     use super::{BandwidthUsage, IDLE_DOMAIN, hour_of};
+    use crate::domain::Exit;
     use crate::ids::PersonaId;
 
     #[test]
@@ -61,7 +67,8 @@ mod tests {
     fn the_total_is_both_directions() {
         let usage = BandwidthUsage {
             hour: hour_of(Utc::now()),
-            persona_id: PersonaId::new(),
+            persona_id: Some(PersonaId::new()),
+            egress: Exit::Pool,
             domain: IDLE_DOMAIN.to_owned(),
             bytes_up: 1200,
             bytes_down: 98_800,

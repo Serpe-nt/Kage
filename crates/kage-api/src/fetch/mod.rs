@@ -28,12 +28,12 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::http::header::{HeaderValue, LOCATION, RETRY_AFTER};
 use axum::response::{IntoResponse, Response};
-use kage_core::domain::{Persona, RenderMode, Scope, SessionId};
+use kage_core::domain::{Level, Persona, Scope, SessionId};
 use kage_core::policy::EffectivePolicy;
 use kage_persona::identity::http_spec;
 use kage_scheduler::{SchedulerError, Synchronous};
 
-use self::request::{FetchRequest, Planned, plan, url_refused};
+use self::request::{FetchRequest, Planned, kept_spec, plan, url_refused};
 use self::result::{FetchAccepted, Viewer, from_report, from_stored};
 use self::terms::{CacheUse, settle};
 use crate::auth::Caller;
@@ -68,9 +68,9 @@ pub(crate) fn conflict_of(
     if !policy.allows_country(persona.country) {
         return Some("policy.countries");
     }
-    // An http render by a persona whose browser has no http profile.
-    if planned.order.render == RenderMode::Http && http_spec(persona).is_err() {
-        return Some("render");
+    // Level 1 by a persona whose browser has no http profile.
+    if planned.order.level == Level::Emulated && http_spec(persona).is_err() {
+        return Some("level");
     }
     None
 }
@@ -176,6 +176,9 @@ fn failed(error: &SchedulerError) -> ApiError {
     ),
     security(("api_key" = ["fetch"]))
 )]
+// One request from its checks to its answer, in the order of the module's
+// steps.
+#[allow(clippy::too_many_lines)]
 pub(crate) async fn fetch(
     State(state): State<ApiState>,
     caller: Caller,
@@ -185,8 +188,8 @@ pub(crate) async fn fetch(
     let Some(engine) = state.engine() else {
         return Err(ApiError::new(
             ErrorCode::Unavailable,
-            "no proxy pool is configured, so nothing can be fetched: Kage never connects to a \
-             target directly",
+            "nothing can be fetched: no proxy pool is configured, and Kage connects to a target \
+             from the host's own address only under egress.mode: direct",
         ));
     };
     let policies = state.policies().current();
@@ -237,8 +240,8 @@ pub(crate) async fn fetch(
     let mut order = planned.order;
     order.api_key = Some(caller.key.id);
     // The request as it was accepted, for the record. It holds no secret:
-    // a caller cannot send one (cookies and credentials are refused).
-    order.spec = serde_json::to_value(&request).map_err(|error| ApiError::internal(&error))?;
+    // the value of a caller's own credential (level 0) is not kept.
+    order.spec = kept_spec(&request).map_err(|error| ApiError::internal(&error))?;
     let spec = order.spec.clone();
     let site = order
         .url
@@ -264,9 +267,16 @@ pub(crate) async fn fetch(
                 // that filled it, with the bodies it kept.
                 Some(record) => {
                     let bodies = crate::results::bodies(&state, record, &planned.include).await?;
-                    from_stored(record, &[], bodies, &planned.include, session, &viewer)
+                    from_stored(
+                        (record, Some(planned.level)),
+                        &[],
+                        bodies,
+                        &planned.include,
+                        session,
+                        &viewer,
+                    )
                 }
-                None => from_report(&report, &planned.include, session, &viewer),
+                None => from_report(&report, planned.level, &planned.include, session, &viewer),
             };
             Ok(Json(result).into_response())
         }
@@ -313,7 +323,11 @@ human:
   domain_rpm: 20
 ";
 
-    fn planned(body: serde_json::Value) -> super::Planned {
+    /// A request at level 3 unless the body names another.
+    fn planned(mut body: serde_json::Value) -> super::Planned {
+        if body.get("level").is_none() {
+            body["level"] = json!(3);
+        }
         let request: FetchRequest = serde_json::from_value(body).unwrap();
         plan(&request, &PacingProfiles::from_yaml(HUMAN).unwrap()).unwrap()
     }
@@ -373,15 +387,15 @@ human:
             conflict_of(&german, &planned(json!({ "url": url })), &french),
             Some("policy.countries")
         );
-        // A browser-only persona cannot make an http render.
+        // A browser-only persona cannot fetch at level 1.
         assert_eq!(
-            conflict_of(
-                &german,
-                &planned(json!({ "url": url, "render": "http" })),
-                &open
-            ),
-            Some("render")
+            conflict_of(&german, &planned(json!({ "url": url, "level": 1 })), &open),
+            Some("level")
         );
+        for level in [2, 3] {
+            let at = planned(json!({ "url": url, "level": level }));
+            assert_eq!(conflict_of(&german, &at, &open), None, "{level}");
+        }
     }
 
     #[test]

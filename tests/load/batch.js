@@ -92,7 +92,7 @@ export default function () {
       type: 'batch',
       urls,
       visitors: VISITORS,
-      defaults: { render: 'browser', behavior: { scroll_depth: 0, dwell_ms: 600 } },
+      defaults: { level: 3, behavior: { scroll_depth: 0, dwell_ms: 600 } },
     }),
     { ...asKey, tags: { name: 'create' } },
   );

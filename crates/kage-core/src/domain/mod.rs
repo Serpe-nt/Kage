@@ -9,6 +9,7 @@ mod cookie;
 mod fetch;
 mod health;
 mod job;
+mod level;
 mod persona;
 mod proxy;
 mod session;
@@ -23,7 +24,7 @@ pub use bandwidth::{BandwidthUsage, IDLE_DOMAIN, hour_of};
 pub use cookie::{CookieSameSite, HttpCookie};
 pub use fetch::{
     Artifact, ArtifactEncoding, ArtifactKind, ArtifactRef, Attempt, BehaviorDone, ConsoleEntry,
-    ContentHash, FetchRecord, Header, InvalidContentHash, MAX_CONSOLE_ENTRIES,
+    ContentHash, Exit, FetchRecord, Header, InvalidContentHash, MAX_CONSOLE_ENTRIES,
     MAX_CONSOLE_TEXT_BYTES, PacingApplied, PersonaSummary, REDACTED_COOKIE, RequestRecord,
     RobotsVerdict, Timing, Visit, redact_set_cookie,
 };
@@ -32,6 +33,7 @@ pub use job::{
     DeliveryState, FrontierEntry, FrontierSource, FrontierState, Job, JobItem, JobItemState,
     JobKind, JobOrigin, JobState, WebhookAttempt, WebhookDelivery, WebhookEvent,
 };
+pub use level::{InvalidLevel, Level};
 pub use persona::{CoolingReason, Geolocation, Persona, PersonaDomainState, PersonaState, Screen};
 pub use proxy::{
     GeoRecord, HealthFailure, Proxy, ProxyEndpoint, ProxyHealth, ProxyProviderKind,
@@ -74,8 +76,9 @@ string_enum! {
 }
 
 string_enum! {
-    /// What a request or a domain policy asks for; `auto` lets policy decide
-    /// (spec §8.1).
+    /// The path a request asked for, as stored: since 2.0 the one its level
+    /// implies (`http` or `browser`); `auto`, which let the domain's policy
+    /// decide, only in rows of 1.x (spec §8.1, §25).
     pub enum RenderMode {
         /// Let the domain policy decide.
         Auto => "auto",

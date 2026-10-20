@@ -1,27 +1,29 @@
 //! The request of `POST /v1/fetch` (spec §16.4) and what makes one
 //! acceptable.
 //!
-//! A request is refused, never quietly changed. What a browser cannot do
-//! (a method, a body, caller headers, a `fetch()` or an `XMLHttpRequest`)
-//! needs `render: http` and is refused under `browser` and `auto`, where it
-//! would otherwise be fetched as a plain navigation without it. What the
-//! http path cannot do (a DOM, a screenshot, a wait, behavior) is refused
-//! under `http`. What depends on the site (what its policy says about
+//! A request is refused, never quietly changed. Every request names its
+//! `level` (spec §25), and the level decides what else it may name (the
+//! table of [`plan`]): a method, a body and caller headers are the http
+//! path's (levels 0 and 1) and refused at 2 and 3, where a visit is a
+//! plain navigation that would be made without them; a `fetch()` or an
+//! `XMLHttpRequest` is level 1's; what only a browser produces (a DOM, a
+//! screenshot, a wait) is refused at 0 and 1; `behavior` is level 3's.
+//! What depends on the site (its floor, what its policy says about
 //! `robots.txt` and the response cache) is settled in
 //! [`terms`](super::terms).
 //!
 //! # What a caller may shorten
 //!
-//! A browser render behaves like a person by default: it scrolls to 0.6 to
-//! 0.9 of the page with pauses to read and dwells as that persona dwells,
-//! about 35 s a page at the median. `behavior` shortens that inside what
-//! the domain's policy allows: `scroll_depth: 0.3, dwell_ms: 3000` is about
-//! 11 s a page, `scroll_depth: 0, dwell_ms: 3000` about 5 s. `dwell_ms` is
-//! a median, not a constant: the dwell of every attempt is drawn around it
-//! and never falls below the policy's `min_dwell` (2 s unless the policy
-//! says otherwise). The pointer always moves; there is no field for a page
-//! nobody touches, because that is what the http path looks like. For the
-//! same reason `timeout_ms` of a browser render is at least 15 s.
+//! At level 3 a visit behaves like a person by default: it scrolls to 0.6
+//! to 0.9 of the page with pauses to read and dwells as that persona
+//! dwells, about 35 s a page at the median. `behavior` shortens that inside
+//! what the domain's policy allows: `scroll_depth: 0.3, dwell_ms: 3000` is
+//! about 11 s a page, `scroll_depth: 0, dwell_ms: 3000` about 5 s.
+//! `dwell_ms` is a median, not a constant: the dwell of every attempt is
+//! drawn around it and never falls below the policy's `min_dwell` (2 s
+//! unless the policy says otherwise). A page nobody touches is level 2,
+//! which says so. `timeout_ms` of a browser visit (2 and 3) is at least
+//! 15 s.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -32,12 +34,14 @@ use kage_browser::contract::{
     XhrCapture,
 };
 use kage_core::config::MAX_ATTEMPT_TIMEOUT;
-use kage_core::domain::{CountryCode, Engine, RenderMode, SessionId};
+use kage_core::domain::{CountryCode, Engine, Level, SessionId};
 use kage_core::pacing::{PacingProfile, PacingProfiles};
 use kage_core::policy::{MAX_RETRIES, PacingRequest, RefererStrategy};
 use kage_core::schedule::queue::Priority;
 use kage_core::ssrf::SsrfDenial;
-use kage_http::headers::{CallerHeaders, HeaderError, denied_reason, placed_in_scripted};
+use kage_http::headers::{
+    CallerHeaders, HeaderError, denied_reason, placed_in_scripted, plain_denied_reason,
+};
 use kage_http::{HttpError, RequestKind};
 use kage_scheduler::{BehaviorWish, FetchOrder, Keep, RobotsWish};
 use serde::{Deserialize, Serialize};
@@ -46,6 +50,47 @@ use utoipa::ToSchema;
 
 use crate::error::{ApiError, ApiResult, ErrorCode};
 use crate::schema::FreeForm;
+
+/// The headers a caller may give at level 0 that carry its own
+/// credential: sent to the request's origin only, never stored, never
+/// logged.
+pub(crate) const CREDENTIAL_HEADERS: [&str; 2] = ["cookie", "authorization"];
+
+/// What a stored request holds in place of a credential's value.
+pub(crate) const REDACTED: &str = "[redacted]";
+
+/// The request as it is kept: everything as given, but the value of a
+/// caller's credential header ([`CREDENTIAL_HEADERS`]), which Kage never
+/// holds.
+///
+/// # Errors
+///
+/// Fails when the request cannot be written as JSON.
+pub(crate) fn kept_spec(request: &FetchRequest) -> Result<serde_json::Value, serde_json::Error> {
+    let mut kept = request.clone();
+    for (name, value) in &mut kept.headers {
+        if is_credential(name) {
+            REDACTED.clone_into(value);
+        }
+    }
+    serde_json::to_value(&kept)
+}
+
+/// Whether a header is a caller's credential.
+pub(crate) fn is_credential(name: &str) -> bool {
+    CREDENTIAL_HEADERS
+        .iter()
+        .any(|credential| name.eq_ignore_ascii_case(credential))
+}
+
+/// Whether a kept request lost a credential it was made with: it cannot
+/// be made again as it was asked.
+pub(crate) fn lost_credential(request: &FetchRequest) -> bool {
+    request
+        .headers
+        .iter()
+        .any(|(name, value)| is_credential(name) && value == REDACTED)
+}
 
 /// The longest URL a request may name, in bytes (spec §16.4).
 pub(crate) const MAX_URL_BYTES: usize = 8 * 1024;
@@ -68,29 +113,26 @@ pub(crate) const MAX_DWELL: Duration = Duration::from_secs(60);
 /// The largest body the contract lets a browser keep.
 pub(crate) const MAX_BODY_BYTES: u64 = 100_000_000;
 
-/// The path a request asks for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum RenderField {
-    /// The domain's policy decides; an unknown domain is rendered in a
-    /// browser, and a block on the http path moves the request to one.
-    #[default]
-    Auto,
-    /// The http path: no JavaScript runs. Needs a persona with an http
-    /// profile for its browser's version.
-    Http,
-    /// A real browser.
-    Browser,
-}
-
-impl From<RenderField> for RenderMode {
-    fn from(render: RenderField) -> Self {
-        match render {
-            RenderField::Auto => Self::Auto,
-            RenderField::Http => Self::Http,
-            RenderField::Browser => Self::Browser,
-        }
-    }
+/// The level of a request as it names it: required, 0 to 3.
+///
+/// # Errors
+///
+/// `level_required` without one; `validation_failed` for a number that
+/// is no level.
+pub(crate) fn level_of(level: Option<u64>, field: &str) -> ApiResult<Level> {
+    let Some(number) = level else {
+        return Err(ApiError::new(
+            ErrorCode::LevelRequired,
+            format!(
+                "{field} is required: 0 (a plain HTTP client that says it is Kage), 1 (a \
+                 persona's http client), 2 (a persona's browser that loads the page and \
+                 leaves) or 3 (a persona's browser as a person). Nothing is decided for the \
+                 caller"
+            ),
+        )
+        .with("field", field));
+    };
+    Level::from_number(number).ok_or_else(|| ApiError::field(field, "the level is 0, 1, 2 or 3"))
 }
 
 /// What a request is on the http path.
@@ -507,7 +549,7 @@ impl Default for ExtractField {
 #[serde(deny_unknown_fields)]
 #[schema(example = json!({
     "url": "https://example.org/listing?page=2",
-    "render": "auto",
+    "level": 3,
     "include": ["dom", "headers", "xhr"],
     "persona": { "countries": ["DE", "AT"], "engines": ["chromium"] },
     "behavior": { "scroll_depth": 0.3, "dwell_ms": 3000 },
@@ -519,38 +561,54 @@ pub(crate) struct FetchRequest {
     /// that name no public site are refused (`ssrf_denied`).
     #[schema(max_length = 8192, example = "https://example.org/listing?page=2")]
     pub(crate) url: String,
-    /// `GET`, `HEAD` or `POST`. Anything but `GET` needs `render: http`.
+    /// `GET`, `HEAD` or `POST`. Anything but `GET` needs level 0 or 1.
     #[serde(default = "get")]
     #[schema(example = "GET")]
     pub(crate) method: String,
-    /// Headers of the request's own; at most 32, and only with
-    /// `render: http`. A browser sends its own headers and cannot be given
-    /// others without a page noticing. Headers that are the persona's
-    /// identity or the transport's are refused by name (`User-Agent`,
+    /// Headers of the request's own; at most 32, and only at level 0 or 1.
+    /// A browser sends its own headers and cannot be given others without a
+    /// page noticing. At level 1 headers that are the persona's identity or
+    /// the transport's are refused by name (`User-Agent`,
     /// `Accept-Language`, `Accept-Encoding`, `Cookie`, `Origin`, `Sec-*`,
-    /// `Proxy-*`, `Host` and others). A `Referer` names the page the
-    /// request comes from.
+    /// `Proxy-*`, `Host` and others), and a `Referer` names the page the
+    /// request comes from. At level 0 they are the caller's request as
+    /// given, `User-Agent`, `Cookie` and `Authorization` included: only the
+    /// transport's, `Proxy-*`, the forwarding family and `Accept-Encoding`
+    /// are refused. A caller's `Cookie` and `Authorization` go to the
+    /// request's origin only, never across a redirect to another, and are
+    /// neither stored nor logged.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) headers: BTreeMap<String, String>,
-    /// The body of a `POST`, as text; needs `render: http` and a
+    /// The body of a `POST`, as text; needs level 0 or 1 and a
     /// `Content-Type` header.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) body: Option<String>,
-    /// The path.
-    #[serde(default)]
-    pub(crate) render: RenderField,
+    /// The camouflage level (spec §25), required: 0, a plain HTTP client
+    /// that says it is Kage (`User-Agent: kage/<version>` unless the
+    /// request names its own), with no persona and no cookie jar; 1, a
+    /// persona's http client, a browser's wire fingerprint with no page
+    /// behaviour (refused with `level_unavailable` while no browser
+    /// version of this installation has a verified profile); 2, a
+    /// persona's browser that loads the page, sends no input and leaves; 3,
+    /// a persona's browser as a person. Below 3 Kage is not pretending to
+    /// be a person. A site's policy may set a floor (`level_below_policy`);
+    /// a request is never raised and never escalated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(required = true, value_type = u8, minimum = 0, maximum = 3, example = 3)]
+    pub(crate) level: Option<u64>,
     /// What the request is on the http path; anything but `navigation`
-    /// needs `render: http` and a `Referer` header naming the page that
-    /// makes the request.
+    /// needs level 1 and a `Referer` header naming the page that makes the
+    /// request.
     #[serde(default)]
     pub(crate) request_kind: RequestKindField,
     /// The parts of the result to return and to keep. Default: `dom` and
-    /// `headers`, or `raw` and `headers` with `render: http`.
+    /// `headers` at level 2 and 3, `raw` and `headers` at 0 and 1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) include: Option<Vec<Include>>,
     /// An open session of this key: the request is made by the session's
-    /// persona and by no other. Needs the `sessions` scope. A fetch never
-    /// opens a session; `POST /v1/sessions` does.
+    /// persona and by no other. Needs the `sessions` scope, and a level
+    /// with a persona (`session_needs_persona` at 0). A fetch never opens a
+    /// session; `POST /v1/sessions` does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(
         max_length = 64,
@@ -558,19 +616,20 @@ pub(crate) struct FetchRequest {
         example = "proj-a-42"
     )]
     pub(crate) session_id: Option<String>,
-    /// Which personas the request would have.
+    /// Which personas the request would have; not at level 0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) persona: Option<PersonaHints>,
     /// The pacing; ignored, and reported as ignored, when the domain's
-    /// policy locks pacing. On a browser render the gap is a floor under
-    /// the time on the page, so a faster profile shortens nothing there.
+    /// policy locks pacing. In a browser the gap is a floor under the time
+    /// on the page, so a faster profile shortens nothing there. Not at
+    /// level 0, which the site's own limits pace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) pacing: Option<PacingField>,
-    /// What a browser waits for; not with `render: http`.
+    /// What a browser waits for; at level 2 and 3.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) wait: Option<WaitField>,
     /// What the persona does on the page, where less than the default is
-    /// wanted; not with `render: http`.
+    /// wanted; at level 3 only (a level-2 visit does nothing on the page).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) behavior: Option<BehaviorField>,
     /// How the screenshot is taken; with `include: ["screenshot"]`.
@@ -580,14 +639,15 @@ pub(crate) struct FetchRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) pdf: Option<PdfField>,
     /// The longest one attempt may take, in milliseconds: at least 15000
-    /// when a browser may make it (`browser` and `auto`), at least 1000
-    /// with `http`, at most 300000. Default: 60000 in a browser, 30000 on
-    /// the http path.
+    /// in a browser (level 2 and 3), at least 1000 at 0 and 1, at most
+    /// 300000. Default: 60000 in a browser, 30000 on the http path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(minimum = 1000, maximum = 300_000)]
     pub(crate) timeout_ms: Option<u64>,
     /// Retries after the first attempt, each by another persona. Default:
-    /// the policy's (2).
+    /// the policy's (2). At level 0 only a failure that is not the site's
+    /// answer (the network, a timeout, a server error) is tried again, from
+    /// the same exit; a block is the answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(maximum = 10)]
     pub(crate) max_retries: Option<u32>,
@@ -638,9 +698,10 @@ impl Included {
     }
 
     /// What a request that was accepted earlier asked for; `None` when it
-    /// would not be accepted as it stands.
+    /// would not be accepted as it stands (a 1.x request names no level).
     pub(crate) fn of(request: &FetchRequest) -> Option<Self> {
-        included(request).ok()
+        let level = level_of(request.level, "level").ok()?;
+        included(request, level).ok()
     }
 
     /// Every part there is: for a stored request that named none.
@@ -672,6 +733,8 @@ pub(crate) struct Planned {
     pub(crate) countries: Vec<CountryCode>,
     /// The engines the request accepts.
     pub(crate) engines: Vec<Engine>,
+    /// The level.
+    pub(crate) level: Level,
 }
 
 /// What the guard's refusal of a URL is answered with.
@@ -731,13 +794,13 @@ fn parse_method(text: &str) -> ApiResult<http::Method> {
     }
 }
 
-/// The headers of a request, checked against the denylist and, for a
-/// script's request, against what has a place in one.
+/// The headers of a request, checked against the denylist of its level
+/// and, for a script's request, against what has a place in one.
 fn check_headers(
     request: &FetchRequest,
+    level: Level,
     kind: RequestKind,
-    target: &Url,
-    method: &http::Method,
+    (target, method): (&Url, &http::Method),
 ) -> ApiResult<Vec<(String, String)>> {
     if request.headers.len() > MAX_HEADERS {
         return Err(ApiError::new(
@@ -754,13 +817,24 @@ fn check_headers(
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect();
     // The refusal names the header and says why.
+    let denied = if level == Level::Plain {
+        plain_denied_reason
+    } else {
+        denied_reason
+    };
     for (name, _) in &pairs {
-        if let Some(reason) = denied_reason(name) {
+        if let Some(reason) = denied(name) {
             return Err(header_refused(&HeaderError::Denied {
                 name: name.clone(),
                 reason,
             }));
         }
+    }
+    if level == Level::Plain {
+        // The caller's request as given: its own Referer is a header like
+        // any other.
+        CallerHeaders::parse_plain(&pairs).map_err(|error| header_refused(&error))?;
+        return Ok(pairs);
     }
     let caller = CallerHeaders::parse(&pairs).map_err(|error| header_refused(&error))?;
     let referer = match caller.referer() {
@@ -813,23 +887,22 @@ fn check_headers(
 }
 
 /// The parts a request asks for: what it lists, else the default of its
-/// render mode.
-fn included(request: &FetchRequest) -> ApiResult<Included> {
+/// level.
+fn included(request: &FetchRequest, level: Level) -> ApiResult<Included> {
+    let browser = level.render() == kage_core::domain::Render::Browser;
     let parts: BTreeSet<Include> = match &request.include {
         Some(parts) => parts.iter().copied().collect(),
-        None if request.render == RenderField::Http => {
-            BTreeSet::from([Include::Raw, Include::Headers])
-        }
+        None if !browser => BTreeSet::from([Include::Raw, Include::Headers]),
         None => BTreeSet::from([Include::Dom, Include::Headers]),
     };
-    if request.render == RenderField::Http
-        && let Some(part) = parts.iter().find(|part| part.needs_browser())
-    {
+    if !browser && let Some(part) = parts.iter().find(|part| part.needs_browser()) {
         return Err(ApiError::new(
-            ErrorCode::RenderIncludeConflict,
+            ErrorCode::LevelIncludeConflict,
             format!(
-                "include asks for {:?} and render is http: only a browser produces it",
-                part.as_str()
+                "include asks for {:?} and level {} has no browser: only a browser produces it \
+                 (level 2 or 3)",
+                part.as_str(),
+                level.number()
             ),
         )
         .with("field", "include")
@@ -990,7 +1063,7 @@ fn behavior_of(request: &FetchRequest) -> ApiResult<Option<BehaviorWish>> {
     Ok((!wish.is_empty()).then_some(wish))
 }
 
-fn timeout_of(request: &FetchRequest) -> ApiResult<Option<Duration>> {
+fn timeout_of(request: &FetchRequest, level: Level) -> ApiResult<Option<Duration>> {
     let Some(millis) = request.timeout_ms else {
         return Ok(None);
     };
@@ -1001,7 +1074,7 @@ fn timeout_of(request: &FetchRequest) -> ApiResult<Option<Duration>> {
             format!("at most {}", MAX_ATTEMPT_TIMEOUT.as_millis()),
         ));
     }
-    let (least, why) = if request.render == RenderField::Http {
+    let (least, why) = if level.render() == kage_core::domain::Render::Http {
         (MIN_HTTP_TIMEOUT, "an attempt on the http path")
     } else {
         (
@@ -1057,43 +1130,41 @@ fn pacing_of(
     }
 }
 
-/// Checks a request and turns it into an order for the pipeline. Nothing
-/// here needs a persona, a session or the network; the guard's lookup of
-/// the URL's host, when it is on, is the handler's.
+/// What a level accepts besides what every level does (spec §25):
 ///
-/// # Errors
+/// | field | 0 | 1 | 2 | 3 |
+/// |---|---|---|---|---|
+/// | `method`, `body`, `headers` | yes (its own list) | yes | `level_needs_http` | `level_needs_http` |
+/// | `request_kind` `fetch`, `xhr` | `level_kind_conflict` | yes | `level_kind_conflict` | `level_kind_conflict` |
+/// | `session_id` | `session_needs_persona` | yes | yes | yes |
+/// | `persona` | no | yes | yes | yes |
+/// | `behavior` | no | no | no | yes |
+/// | `wait` | no | no | yes | yes |
+/// | `pacing` | no | yes | yes | yes |
+/// | `include` `dom`, `xhr`, `screenshot`, `pdf`, `console` | `level_include_conflict` | `level_include_conflict` | yes | yes |
+/// | `timeout_ms` at least | 1 s | 1 s | 15 s | 15 s |
 ///
-/// The first thing about the request that is not acceptable.
-// One request, checked top to bottom in the order of its fields.
-#[allow(clippy::too_many_lines)]
-pub(crate) fn plan(request: &FetchRequest, profiles: &PacingProfiles) -> ApiResult<Planned> {
-    let url = parse_url(&request.url)?;
-    let method = parse_method(&request.method)?;
-    let kind = RequestKind::from(request.request_kind);
-    let render = request.render;
-
-    if kind.is_scripted() && render != RenderField::Http {
+/// "no" is `validation_failed` naming the field.
+fn check_level(
+    request: &FetchRequest,
+    level: Level,
+    kind: RequestKind,
+    method: &http::Method,
+) -> ApiResult<()> {
+    let number = level.number();
+    if kind.is_scripted() && level != Level::Emulated {
         return Err(ApiError::new(
-            ErrorCode::RenderKindConflict,
-            "a fetch() or XMLHttpRequest is sent by the http path only: say render: http. A \
-             browser cannot be told to make one without running a script in the page",
+            ErrorCode::LevelKindConflict,
+            format!(
+                "a fetch() or XMLHttpRequest is a browser's request emulated, which is level \
+                 1's; this request is level {number}. A browser cannot be told to make one \
+                 without running a script in the page, and a plain client is not a page"
+            ),
         )
         .with("field", "request_kind"));
     }
-    if render == RenderField::Http {
-        for (field, given) in [
-            ("wait", request.wait.is_some()),
-            ("behavior", request.behavior.is_some()),
-        ] {
-            if given {
-                return Err(ApiError::field(
-                    field,
-                    format!("{field} is a browser's and render is http"),
-                ));
-            }
-        }
-    } else {
-        let what = if method != http::Method::GET {
+    if level.render() == kage_core::domain::Render::Browser {
+        let what = if *method != http::Method::GET {
             Some("method")
         } else if request.body.is_some() {
             Some("body")
@@ -1104,17 +1175,93 @@ pub(crate) fn plan(request: &FetchRequest, profiles: &PacingProfiles) -> ApiResu
         };
         if let Some(field) = what {
             return Err(ApiError::new(
-                ErrorCode::RenderNeedsHttp,
+                ErrorCode::LevelNeedsHttp,
                 format!(
-                    "{field} is given and render is not http: a browser render is a plain \
-                     navigation and would be fetched without it"
+                    "{field} is given at level {number}: a browser visit is a plain navigation \
+                     and would be made without it; levels 0 and 1 send it"
                 ),
             )
             .with("field", field));
         }
     }
+    if level == Level::Plain && request.session_id.is_some() {
+        return Err(ApiError::new(
+            ErrorCode::SessionNeedsPersona,
+            "a session is a persona's, and level 0 has no persona: name level 1, 2 or 3",
+        )
+        .with("field", "session_id"));
+    }
+    let refused: &[(&str, bool, &str)] = match level {
+        Level::Plain => &[
+            (
+                "persona",
+                request.persona.is_some(),
+                "level 0 has no persona to choose",
+            ),
+            (
+                "pacing",
+                request.pacing.is_some(),
+                "level 0 is paced by the site's own limits, not by a persona's",
+            ),
+            (
+                "wait",
+                request.wait.is_some(),
+                "a wait is a browser's (level 2 or 3)",
+            ),
+            (
+                "behavior",
+                request.behavior.is_some(),
+                "what a person does on a page is level 3's",
+            ),
+        ],
+        Level::Emulated => &[
+            (
+                "wait",
+                request.wait.is_some(),
+                "a wait is a browser's (level 2 or 3)",
+            ),
+            (
+                "behavior",
+                request.behavior.is_some(),
+                "what a person does on a page is level 3's",
+            ),
+        ],
+        Level::Fast => &[(
+            "behavior",
+            request.behavior.is_some(),
+            "a level-2 visit loads the page, does nothing on it and leaves after the policy's \
+             dwell; what a person does on a page is level 3's",
+        )],
+        Level::Human => &[],
+    };
+    for (field, given, why) in refused {
+        if *given {
+            return Err(ApiError::field(
+                field,
+                format!("{field} is not taken at level {number}: {why}"),
+            ));
+        }
+    }
+    Ok(())
+}
 
-    let headers = check_headers(request, kind, &url, &method)?;
+/// Checks a request and turns it into an order for the pipeline. Nothing
+/// here needs a persona, a session or the network; the guard's lookup of
+/// the URL's host, when it is on, and the site's floor are the handler's.
+///
+/// # Errors
+///
+/// The first thing about the request that is not acceptable.
+// One request, checked top to bottom in the order of its fields.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn plan(request: &FetchRequest, profiles: &PacingProfiles) -> ApiResult<Planned> {
+    let level = level_of(request.level, "level")?;
+    let url = parse_url(&request.url)?;
+    let method = parse_method(&request.method)?;
+    let kind = RequestKind::from(request.request_kind);
+    check_level(request, level, kind, &method)?;
+
+    let headers = check_headers(request, level, kind, (&url, &method))?;
     let body = match &request.body {
         None => None,
         Some(_) if method != http::Method::POST => {
@@ -1134,11 +1281,11 @@ pub(crate) fn plan(request: &FetchRequest, profiles: &PacingProfiles) -> ApiResu
         Some(text) => Some(Bytes::from(text.clone())),
     };
 
-    let include = included(request)?;
+    let include = included(request, level)?;
     let capture = capture_of(request, &include)?;
     let wait = wait_of(request)?;
     let behavior = behavior_of(request)?;
-    let timeout = timeout_of(request)?;
+    let timeout = timeout_of(request, level)?;
     let pacing = pacing_of(request, profiles)?;
 
     if request
@@ -1193,7 +1340,7 @@ pub(crate) fn plan(request: &FetchRequest, profiles: &PacingProfiles) -> ApiResu
         headers,
         body,
         kind,
-        render: render.into(),
+        level,
         engines: engines.clone(),
         prefer_countries: countries.clone(),
         pacing,
@@ -1223,6 +1370,7 @@ pub(crate) fn plan(request: &FetchRequest, profiles: &PacingProfiles) -> ApiResu
         session,
         countries,
         engines,
+        level,
     })
 }
 
@@ -1231,7 +1379,7 @@ mod tests {
     use std::time::Duration;
 
     use kage_browser::contract::{ScreenshotFormat, WaitUntil};
-    use kage_core::domain::{Engine, RenderMode};
+    use kage_core::domain::{Engine, Level};
     use kage_core::pacing::PacingProfiles;
     use kage_core::policy::{PacingRequest, RefererStrategy};
     use kage_core::ssrf::{DeniedRange, SsrfDenial};
@@ -1239,7 +1387,7 @@ mod tests {
     use kage_scheduler::RobotsWish;
     use serde_json::{Value, json};
 
-    use super::{FetchRequest, Include, Planned, plan, url_refused};
+    use super::{FetchRequest, Include, Planned, kept_spec, lost_credential, plan, url_refused};
     use crate::error::{ApiError, ErrorCode};
 
     const PROFILES: &str = "
@@ -1259,9 +1407,18 @@ fast:
   domain_rpm: 300
 ";
 
-    fn planned(body: Value) -> Result<Planned, ApiError> {
+    /// A request as it is planned, as written.
+    fn plan_as_written(body: Value) -> Result<Planned, ApiError> {
         let request: FetchRequest = serde_json::from_value(body).unwrap();
         plan(&request, &PacingProfiles::from_yaml(PROFILES).unwrap())
+    }
+
+    /// A request at level 3 unless the body names another.
+    fn planned(mut body: Value) -> Result<Planned, ApiError> {
+        if body.get("level").is_none() {
+            body["level"] = json!(3);
+        }
+        plan_as_written(body)
     }
 
     fn refused(body: Value) -> ApiError {
@@ -1279,7 +1436,7 @@ fast:
 
         assert_eq!(order.url.as_str(), "https://example.org/a?b=1");
         assert_eq!(order.method, http::Method::GET);
-        assert_eq!(order.render, RenderMode::Auto);
+        assert_eq!((order.level, planned.level), (Level::Human, Level::Human));
         assert_eq!(order.kind, RequestKind::Document);
         assert!(order.headers.is_empty() && order.body.is_none());
         assert_eq!((order.timeout, order.max_retries), (None, None));
@@ -1293,11 +1450,128 @@ fast:
         assert!(order.keep.dom && !order.keep.raw && !order.keep.screenshot);
         assert!(planned.session.is_none());
 
-        // On the http path the default is the body.
-        let http = planned_ok(json!({ "url": "https://example.org/", "render": "http" }));
-        assert!(http.include.has(Include::Raw) && !http.include.has(Include::Dom));
-        assert!(http.order.keep.raw && !http.order.keep.dom);
-        assert_eq!(http.order.render, RenderMode::Http);
+        // On the http path, levels 0 and 1, the default is the body.
+        for (number, level) in [(0, Level::Plain), (1, Level::Emulated)] {
+            let http = planned_ok(json!({ "url": "https://example.org/", "level": number }));
+            assert!(http.include.has(Include::Raw) && !http.include.has(Include::Dom));
+            assert!(http.order.keep.raw && !http.order.keep.dom);
+            assert_eq!(http.order.level, level);
+        }
+        let fast = planned_ok(json!({ "url": "https://example.org/", "level": 2 }));
+        assert_eq!(fast.order.level, Level::Fast);
+        assert!(fast.include.has(Include::Dom));
+    }
+
+    #[test]
+    fn a_request_names_its_level_and_the_level_decides_what_else_it_may_name() {
+        let url = "https://example.org/";
+        // Nothing is decided for the caller.
+        let missing = plan_as_written(json!({ "url": url })).unwrap_err();
+        assert_eq!(missing.code(), ErrorCode::LevelRequired);
+        assert_eq!(missing.problem().extensions["field"], "level");
+        let four = refused(json!({ "url": url, "level": 4 }));
+        assert_eq!(four.code(), ErrorCode::ValidationFailed);
+        assert_eq!(four.problem().extensions["field"], "level");
+        assert!(
+            serde_json::from_value::<FetchRequest>(json!({ "url": url, "level": "3" })).is_err()
+        );
+
+        // A session is a persona's.
+        let session = refused(json!({ "url": url, "level": 0, "session_id": "s1" }));
+        assert_eq!(session.code(), ErrorCode::SessionNeedsPersona);
+        assert_eq!(session.problem().extensions["field"], "session_id");
+        for level in 1..=3 {
+            planned_ok(json!({ "url": url, "level": level, "session_id": "s1" }));
+        }
+        // What only a persona has, and what only a browser does.
+        for (level, field, value) in [
+            (0, "persona", json!({ "countries": ["DE"] })),
+            (0, "pacing", json!({ "profile": "fast" })),
+            (0, "wait", json!({ "until": "load" })),
+            (1, "wait", json!({ "until": "load" })),
+            (0, "behavior", json!({ "dwell_ms": 3000 })),
+            (1, "behavior", json!({ "dwell_ms": 3000 })),
+            (2, "behavior", json!({ "dwell_ms": 3000 })),
+        ] {
+            let refused = refused(json!({ "url": url, "level": level, field: value }));
+            assert_eq!(
+                refused.code(),
+                ErrorCode::ValidationFailed,
+                "{level} {field}"
+            );
+            assert_eq!(
+                refused.problem().extensions["field"],
+                field,
+                "{level} {field}"
+            );
+        }
+        for (level, field, value) in [
+            (1, "persona", json!({ "countries": ["DE"] })),
+            (1, "pacing", json!({ "profile": "fast" })),
+            (2, "wait", json!({ "until": "load" })),
+            (2, "pacing", json!({ "profile": "fast" })),
+            (3, "behavior", json!({ "dwell_ms": 3000 })),
+        ] {
+            planned_ok(json!({ "url": url, "level": level, field: value }));
+        }
+        // What every level takes.
+        for level in 0..=3 {
+            planned_ok(json!({
+                "url": url, "level": level, "robots": "report", "cache_ttl_s": 60,
+                "include": ["headers", "extract"],
+            }));
+        }
+    }
+
+    #[test]
+    fn a_plain_client_sends_the_callers_own_headers_and_never_keeps_a_credential() {
+        let url = "https://example.org/";
+        let plain = |headers: Value| planned(json!({ "url": url, "level": 0, "headers": headers }));
+
+        // The caller's request as given, its credentials included.
+        let given = plain(json!({
+            "User-Agent": "acme-bot/2 (+https://acme.example/bot)",
+            "Cookie": "sid=abc", "Authorization": "Bearer t0k3n",
+            "Accept": "application/json", "Referer": "https://example.org/list",
+        }))
+        .unwrap();
+        assert_eq!(given.order.headers.len(), 5);
+        // What is the transport's or the proxy's is not the caller's.
+        for name in [
+            "Proxy-Authorization",
+            "X-Forwarded-For",
+            "Forwarded",
+            "Accept-Encoding",
+            "Host",
+            "Content-Length",
+            "Connection",
+            "Via",
+        ] {
+            let refused = plain(json!({ name: "x" })).unwrap_err();
+            assert_eq!(refused.code(), ErrorCode::HeaderDenied, "{name}");
+            assert_eq!(refused.problem().extensions["header"], name, "{name}");
+        }
+        // A method and a body, as at level 1.
+        let post = planned_ok(json!({
+            "url": url, "level": 0, "method": "POST", "body": "a=1",
+            "headers": { "Content-Type": "application/x-www-form-urlencoded" },
+        }));
+        assert_eq!(post.order.method, http::Method::POST);
+
+        // Kept, the request names the credential and not its value.
+        let request: FetchRequest = serde_json::from_value(json!({
+            "url": url, "level": 0,
+            "headers": { "cookie": "sid=abc", "AUTHORIZATION": "Bearer t0k3n", "X-Api": "1" },
+        }))
+        .unwrap();
+        let kept = kept_spec(&request).unwrap();
+        assert_eq!(kept["headers"]["cookie"], "[redacted]");
+        assert_eq!(kept["headers"]["AUTHORIZATION"], "[redacted]");
+        assert_eq!(kept["headers"]["X-Api"], "1");
+        assert!(!kept.to_string().contains("t0k3n") && !kept.to_string().contains("sid=abc"));
+        assert!(!lost_credential(&request));
+        let read_back: FetchRequest = serde_json::from_value(kept).unwrap();
+        assert!(lost_credential(&read_back));
     }
 
     fn planned_ok(body: Value) -> Planned {
@@ -1310,6 +1584,8 @@ fast:
             json!({ "url": "https://example.org/", "locale": "de-DE" }),
             json!({ "url": "https://example.org/", "behavior": { "wander": false } }),
             json!({ "url": "https://example.org/", "render": "direct" }),
+            // The path of 1.x is gone: the level names it.
+            json!({ "url": "https://example.org/", "level": 3, "render": "browser" }),
             json!({ "url": "https://example.org/", "include": ["cookies"] }),
             json!({ "render": "auto" }),
         ] {
@@ -1366,12 +1642,12 @@ fast:
     }
 
     #[test]
-    fn what_a_browser_cannot_send_needs_render_http() {
+    fn what_a_browser_cannot_send_needs_level_zero_or_one() {
         let url = "https://example.org/api";
         for (body, field) in [
             (json!({ "url": url, "method": "POST" }), "method"),
             (
-                json!({ "url": url, "method": "head", "render": "browser" }),
+                json!({ "url": url, "method": "head", "level": 2 }),
                 "method",
             ),
             (
@@ -1379,27 +1655,29 @@ fast:
                 "headers",
             ),
             (
-                json!({ "url": url, "headers": { "X-Requested-With": "XMLHttpRequest" }, "render": "browser" }),
+                json!({ "url": url, "headers": { "X-Requested-With": "XMLHttpRequest" }, "level": 2 }),
                 "headers",
             ),
         ] {
             let refused = refused(body.clone());
-            assert_eq!(refused.code(), ErrorCode::RenderNeedsHttp, "{body}");
+            assert_eq!(refused.code(), ErrorCode::LevelNeedsHttp, "{body}");
             assert_eq!(refused.problem().extensions["field"], field, "{body}");
         }
-        for render in ["auto", "browser"] {
+        // A script's request is a browser's emulated: level 1's only.
+        for level in [0, 2, 3] {
             assert_eq!(
                 code(json!({
-                    "url": url, "render": render, "request_kind": "fetch",
+                    "url": url, "level": level, "request_kind": "fetch",
                     "headers": { "Referer": "https://example.org/" },
                 })),
-                ErrorCode::RenderKindConflict
+                ErrorCode::LevelKindConflict,
+                "{level}"
             );
         }
 
-        // With render http all of it is accepted as written.
+        // At level 1 all of it is accepted as written.
         let post = planned_ok(json!({
-            "url": url, "render": "http", "method": "post",
+            "url": url, "level": 1, "method": "post",
             "headers": { "Content-Type": "application/x-www-form-urlencoded", "Referer": "https://example.org/form" },
             "body": "q=1",
         }));
@@ -1408,16 +1686,16 @@ fast:
         assert_eq!(post.order.headers.len(), 2);
 
         assert_eq!(
-            code(json!({ "url": url, "method": "PUT", "render": "http" })),
+            code(json!({ "url": url, "method": "PUT", "level": 1 })),
             ErrorCode::ValidationFailed
         );
         // A body is a POST's and says what it is.
         let refused = refused(json!({
-            "url": url, "render": "http", "body": "x", "headers": { "Content-Type": "text/plain" },
+            "url": url, "level": 1, "body": "x", "headers": { "Content-Type": "text/plain" },
         }));
         assert_eq!(refused.problem().extensions["field"], "body");
         assert_eq!(
-            code(json!({ "url": url, "render": "http", "method": "POST", "body": "x" })),
+            code(json!({ "url": url, "level": 1, "method": "POST", "body": "x" })),
             ErrorCode::ValidationFailed
         );
     }
@@ -1426,7 +1704,7 @@ fast:
     fn a_header_that_is_the_personas_or_the_transports_is_refused_by_name() {
         let with = |name: &str| {
             refused(json!({
-                "url": "https://example.org/", "render": "http", "headers": { name: "x" },
+                "url": "https://example.org/", "level": 1, "headers": { name: "x" },
             }))
         };
 
@@ -1451,21 +1729,21 @@ fast:
         assert_eq!(with("bad name").code(), ErrorCode::HeaderInvalid);
         assert_eq!(
             code(json!({
-                "url": "https://example.org/", "render": "http",
+                "url": "https://example.org/", "level": 1,
                 "headers": { "X-A": "line\nbreak" },
             })),
             ErrorCode::HeaderInvalid
         );
         assert_eq!(
             code(json!({
-                "url": "https://example.org/", "render": "http",
+                "url": "https://example.org/", "level": 1,
                 "headers": { "X-Token": "a", "x-token": "b" },
             })),
             ErrorCode::HeaderInvalid
         );
         assert_eq!(
             code(json!({
-                "url": "https://example.org/", "render": "http",
+                "url": "https://example.org/", "level": 1,
                 "headers": { "Referer": "about:blank" },
             })),
             ErrorCode::HeaderInvalid
@@ -1473,12 +1751,12 @@ fast:
         let many: serde_json::Map<String, Value> =
             (0..33).map(|n| (format!("X-H{n}"), json!("v"))).collect();
         assert_eq!(
-            code(json!({ "url": "https://example.org/", "render": "http", "headers": many })),
+            code(json!({ "url": "https://example.org/", "level": 1, "headers": many })),
             ErrorCode::HeaderInvalid
         );
         // What is neither is sent.
         planned_ok(json!({
-            "url": "https://example.org/", "render": "http",
+            "url": "https://example.org/", "level": 1,
             "headers": { "X-Requested-With": "XMLHttpRequest", "Authorization": "Bearer t" },
         }));
     }
@@ -1488,7 +1766,7 @@ fast:
         let api = "https://example.org/api/items";
         let fetch = |headers: Value, more: Value| {
             let mut body = json!({
-                "url": api, "render": "http", "request_kind": "fetch", "headers": headers,
+                "url": api, "level": 1, "request_kind": "fetch", "headers": headers,
             });
             body.as_object_mut()
                 .unwrap()
@@ -1507,7 +1785,7 @@ fast:
         .unwrap();
         assert_eq!(ok.order.kind, RequestKind::Fetch);
         let xhr = planned_ok(json!({
-            "url": api, "render": "http", "request_kind": "xhr",
+            "url": api, "level": 1, "request_kind": "xhr",
             "headers": { "Referer": "https://example.org/list" },
         }));
         assert_eq!(xhr.order.kind, RequestKind::Xhr);
@@ -1548,14 +1826,16 @@ fast:
     }
 
     #[test]
-    fn include_asks_only_for_what_the_render_mode_and_this_release_can_give() {
+    fn include_asks_only_for_what_the_level_and_this_release_can_give() {
         let url = "https://example.org/";
-        for part in ["dom", "xhr", "screenshot", "pdf", "console"] {
-            let refused = refused(json!({ "url": url, "render": "http", "include": [part] }));
-            assert_eq!(refused.code(), ErrorCode::RenderIncludeConflict, "{part}");
-            assert_eq!(refused.problem().extensions["include"], part);
+        for level in [0, 1] {
+            for part in ["dom", "xhr", "screenshot", "pdf", "console"] {
+                let refused = refused(json!({ "url": url, "level": level, "include": [part] }));
+                assert_eq!(refused.code(), ErrorCode::LevelIncludeConflict, "{part}");
+                assert_eq!(refused.problem().extensions["include"], part);
+            }
         }
-        planned_ok(json!({ "url": url, "render": "http", "include": ["raw", "headers"] }));
+        planned_ok(json!({ "url": url, "level": 1, "include": ["raw", "headers"] }));
 
         // Extraction is read from the document the visit captured: in a
         // browser that is the DOM, which is captured for it and kept only
@@ -1574,7 +1854,7 @@ fast:
         assert!(lean.order.keep.dom);
         let options = lean.order.extract.unwrap();
         assert!(!options.markdown && !options.links);
-        planned_ok(json!({ "url": url, "render": "http", "include": ["raw", "extract"] }));
+        planned_ok(json!({ "url": url, "level": 1, "include": ["raw", "extract"] }));
         assert!(planned_ok(json!({ "url": url })).order.extract.is_none());
         assert!(
             serde_json::from_value::<FetchRequest>(
@@ -1720,23 +2000,25 @@ fast:
         }
         // Behavior and waits are a browser's.
         for field in ["behavior", "wait"] {
-            let refused = refused(json!({ "url": url, "render": "http", field: {} }));
+            let refused = refused(json!({ "url": url, "level": 1, field: {} }));
             assert_eq!(refused.problem().extensions["field"], field);
         }
 
         // A browser attempt gets at least 15 s: less would be a bare load.
-        for render in ["auto", "browser"] {
-            let refused = refused(json!({ "url": url, "render": render, "timeout_ms": 14999 }));
-            assert_eq!(refused.code(), ErrorCode::TimeoutTooShort, "{render}");
+        for level in [2, 3] {
+            let refused = refused(json!({ "url": url, "level": level, "timeout_ms": 14999 }));
+            assert_eq!(refused.code(), ErrorCode::TimeoutTooShort, "{level}");
             assert_eq!(refused.problem().extensions["minimum_ms"], 15000);
-            let fits = planned_ok(json!({ "url": url, "render": render, "timeout_ms": 15000 }));
+            let fits = planned_ok(json!({ "url": url, "level": level, "timeout_ms": 15000 }));
             assert_eq!(fits.order.timeout, Some(Duration::from_secs(15)));
         }
-        assert_eq!(
-            code(json!({ "url": url, "render": "http", "timeout_ms": 999 })),
-            ErrorCode::TimeoutTooShort
-        );
-        planned_ok(json!({ "url": url, "render": "http", "timeout_ms": 1000 }));
+        for level in [0, 1] {
+            assert_eq!(
+                code(json!({ "url": url, "level": level, "timeout_ms": 999 })),
+                ErrorCode::TimeoutTooShort
+            );
+            planned_ok(json!({ "url": url, "level": level, "timeout_ms": 1000 }));
+        }
         // The hard cap of an attempt.
         assert_eq!(
             code(json!({ "url": url, "timeout_ms": 300_001 })),

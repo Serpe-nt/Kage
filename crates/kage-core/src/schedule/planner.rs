@@ -90,6 +90,11 @@ string_enum! {
         /// gives it, with `robots_denied` to a caller that waits for its
         /// page and as the reason a job's fetch is put off.
         RobotsUnavailable => "robots_unavailable",
+        /// A plain client of level 0 leaves through the site's one plain exit
+        /// of the pool (its scout's proxy, spec §25), and that exit cannot
+        /// carry traffic now or the site has none. Never the planner's own
+        /// answer: the pipeline gives it, and never sends another address.
+        PlainExitUnavailable => "plain_exit_unavailable",
     }
 }
 
@@ -210,10 +215,6 @@ pub struct Work {
     pub breaker_threshold: u32,
     /// See `breaker_threshold`.
     pub breaker_pause: StdDuration,
-    /// The persona's own second try at a page it just asked for (the
-    /// browser after its http attempt was blocked): it does not wait for
-    /// the persona's slot and is no new page of its pacing.
-    pub follow_up: bool,
     /// The pause before this attempt when it is a retry on another
     /// persona.
     pub retry_pause: Option<RetryPause>,
@@ -226,6 +227,14 @@ pub struct Work {
     /// `robots.txt` is enforced. A gap the persona's pacing draws shorter
     /// is this long and up to a fifth longer, never a constant.
     pub gap_floor: Option<StdDuration>,
+    /// A plain client's attempt (level 0, spec §25): no persona makes it,
+    /// so nothing of a persona's applies (no gap, no visit, no night, no
+    /// daily cap). The site's own gates hold it as they hold everybody: a
+    /// paused domain, the pause after server errors, the pacing's
+    /// `domain_concurrency` and `domain_rpm`, the global limit of the
+    /// http path. It is never a half-open breaker's trial: a site that
+    /// answers a plain client says nothing about the personas.
+    pub plain: bool,
 }
 
 /// A gap with a floor under it: the gap as drawn when it is at least the
@@ -286,11 +295,27 @@ pub struct Dispatch {
     pub breaker: BreakerRules,
 }
 
+/// A plain client's attempt (level 0) that may leave now: no persona, no
+/// visit, no slot.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlainDispatch {
+    /// The work.
+    pub work: Ticket,
+    /// Names the attempt until it is reported back.
+    pub grant: GrantId,
+    /// The domain.
+    pub domain: String,
+    /// How long the work waited in the queue.
+    pub waited: Duration,
+}
+
 /// What the planner decided about one waiting request.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Decision {
     /// It leaves now.
     Dispatch(Dispatch),
+    /// A plain client's attempt leaves now.
+    Plain(PlainDispatch),
     /// It is answered without an attempt.
     Refuse {
         /// The work.
@@ -363,7 +388,8 @@ struct DomainRun {
 
 #[derive(Debug)]
 struct Grant {
-    persona: PersonaId,
+    /// `None` for a plain client's attempt.
+    persona: Option<PersonaId>,
     engine: Engine,
     render: Render,
     domain: Option<String>,
@@ -384,6 +410,8 @@ enum Looked {
         /// Whether the persona's own slot timed the start.
         paced: bool,
     },
+    /// A plain client's attempt leaves.
+    GoPlain,
     /// Wait; until the moment given, or for something in flight to end.
     Wait(Option<DateTime<Utc>>),
     Refuse(Refusal, Option<DateTime<Utc>>),
@@ -684,6 +712,12 @@ impl Planner {
                         },
                     )));
                 }
+                Looked::GoPlain => {
+                    let Some(queued) = self.queue.remove(ticket) else {
+                        continue;
+                    };
+                    decisions.push(Decision::Plain(self.dispatch_plain(now, ticket, &queued)));
+                }
                 Looked::Wait(until) => wake = earlier(wake, until),
                 Looked::Refuse(reason, retry_at) => {
                     self.queue.remove(ticket);
@@ -718,6 +752,10 @@ impl Planner {
         if let Some(breaker) = &facts.breaker {
             match breaker.admission(now, &self.breaker_rules(work)) {
                 Admission::Flow => {}
+                // A plain client is never the trial of a breaker.
+                Admission::Trial if work.plain => {
+                    return Looked::Refuse(Refusal::DomainPaused, None);
+                }
                 Admission::Trial if !trials.contains(&work.domain) => trial = true,
                 Admission::Trial => return Looked::Refuse(Refusal::DomainPaused, None),
                 Admission::Paused { until } => {
@@ -763,6 +801,10 @@ impl Planner {
         if full {
             return Looked::Wait(None);
         }
+        // A plain client needs nothing more: no persona makes its attempt.
+        if work.plain {
+            return Looked::GoPlain;
+        }
 
         let possible = self.possible(now, queued, facts);
         if possible.is_empty() {
@@ -787,7 +829,7 @@ impl Planner {
         // A job that has the visitors it may have on the domain stays with
         // them; another persona comes only for one that cannot go on.
         let possible = match &work.visitors {
-            Some(visitors) if !work.follow_up => {
+            Some(visitors) => {
                 let staying: Vec<Possible<'_>> = possible
                     .iter()
                     .filter(|one| visitors.known.contains(&one.view.id) && !one.barred)
@@ -962,11 +1004,6 @@ impl Planner {
                     barred = true;
                 }
             }
-            if work.follow_up {
-                // Its own second try: the block and the page it already
-                // counted do not stand in its way.
-                at = now;
-            }
             // Where the hour is not looked at, everyone counts as awake.
             let (awake, up) = match work.active_hours {
                 ActiveHoursMode::Ignore => (true, now),
@@ -978,7 +1015,7 @@ impl Planner {
                 // A job never wakes a sleeper; a synchronous request may.
                 ActiveHoursMode::Prefer => !awake && work.priority != Priority::Sync,
             };
-            if sleeps_through && !work.follow_up {
+            if sleeps_through {
                 at = at.max(up);
             }
             if let Some(retry) = &work.retry_pause {
@@ -990,9 +1027,7 @@ impl Planner {
             // Whether anything but the persona's own pacing delays it.
             let held_back = at > now;
             let cadence = self.cadences.get(&(view.id, work.domain.clone()));
-            if let Some(cadence) = cadence
-                && !work.follow_up
-            {
+            if let Some(cadence) = cadence {
                 at = at.max(cadence.next_at);
             }
             let in_use = self.busy(view.id)
@@ -1006,12 +1041,11 @@ impl Planner {
                 visiting: !held_back
                     && cadence.is_some_and(|cadence| self.is_visiting(view.id, cadence, now)),
                 on_break: cadence.is_some_and(|cadence| cadence.on_break),
-                paced: !work.follow_up
-                    && cadence.is_some_and(|cadence| {
-                        let open_for = now.signed_duration_since(cadence.next_at);
-                        open_for >= Duration::zero() && open_for < PACED_TOLERANCE
-                    }),
-                barred: barred && !work.follow_up,
+                paced: cadence.is_some_and(|cadence| {
+                    let open_for = now.signed_duration_since(cadence.next_at);
+                    open_for >= Duration::zero() && open_for < PACED_TOLERANCE
+                }),
+                barred,
             });
         }
         possible
@@ -1110,21 +1144,16 @@ impl Planner {
             // The pacing in force changed: the persona paces anew.
             *cadence = fresh();
         }
-        let starts_visit = !visiting && !work.follow_up;
+        let starts_visit = !visiting;
         if starts_visit {
             cadence.pages = 0;
         }
-        if work.follow_up {
-            // The page was counted when it was first asked for.
-            cadence.pages = cadence.pages.max(1);
-        } else {
-            let gap = cadence.sampler.next_gap();
-            let wait = floored(gap.wait, work.gap_floor, &cadence.seed, cadence.pages);
-            cadence.next_at = now + chrono_of(wait);
-            cadence.on_break = gap.after_burst;
-            cadence.visiting = !(gap.after_visit || woken);
-            cadence.pages = cadence.pages.saturating_add(1);
-        }
+        let gap = cadence.sampler.next_gap();
+        let wait = floored(gap.wait, work.gap_floor, &cadence.seed, cadence.pages);
+        cadence.next_at = now + chrono_of(wait);
+        cadence.on_break = gap.after_burst;
+        cadence.visiting = !(gap.after_visit || woken);
+        cadence.pages = cadence.pages.saturating_add(1);
         cadence.last_start = now;
         let (page_of_visit, next_slot, pacing_seed) =
             (cadence.pages, cadence.next_at, cadence.seed);
@@ -1164,7 +1193,7 @@ impl Planner {
         self.grants.insert(
             grant,
             Grant {
-                persona,
+                persona: Some(persona),
                 engine,
                 render: work.render,
                 domain: Some(work.domain.clone()),
@@ -1187,6 +1216,40 @@ impl Planner {
             woken,
             pacing_seed,
             breaker: self.breaker_rules(work),
+        }
+    }
+
+    /// Books a plain client's attempt that leaves now: the domain's counts
+    /// and the http path's, nothing of a persona's.
+    fn dispatch_plain(
+        &mut self,
+        now: DateTime<Utc>,
+        ticket: Ticket,
+        queued: &Queued,
+    ) -> PlainDispatch {
+        let work = &queued.work;
+        let grant = GrantId(self.next_grant);
+        self.next_grant += 1;
+        self.http_in_flight += 1;
+        let domain = self.domains.entry(work.domain.clone()).or_default();
+        prune(&mut domain.starts, now, RPM_WINDOW);
+        domain.starts.push_back(now);
+        domain.in_flight += 1;
+        self.grants.insert(
+            grant,
+            Grant {
+                persona: None,
+                // No browser is held; the engine is never read for it.
+                engine: Engine::Chromium,
+                render: Render::Http,
+                domain: Some(work.domain.clone()),
+            },
+        );
+        PlainDispatch {
+            work: ticket,
+            grant,
+            domain: work.domain.clone(),
+            waited: now.signed_duration_since(queued.since),
         }
     }
 
@@ -1251,7 +1314,7 @@ impl Planner {
         self.grants.insert(
             grant,
             Grant {
-                persona,
+                persona: Some(persona),
                 engine,
                 render: Render::Browser,
                 domain: None,
@@ -1266,7 +1329,10 @@ impl Planner {
         let Some(grant) = self.grants.remove(&grant) else {
             return false;
         };
-        if let Some(run) = self.runs.get_mut(&grant.persona) {
+        if let Some(run) = grant
+            .persona
+            .and_then(|persona| self.runs.get_mut(&persona))
+        {
             run.busy = None;
         }
         match grant.render {
@@ -1287,7 +1353,10 @@ impl Planner {
                 .errors
                 .record(completion.courtesy, now, &self.rules.server_errors);
         }
-        if let Some(cadence) = self.cadences.get_mut(&(grant.persona, name)) {
+        let Some(persona) = grant.persona else {
+            return true;
+        };
+        if let Some(cadence) = self.cadences.get_mut(&(persona, name)) {
             if completion.blocked {
                 // It leaves: no more pages of this visit.
                 cadence.visiting = false;
