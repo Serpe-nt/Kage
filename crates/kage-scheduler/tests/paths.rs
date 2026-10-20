@@ -1,8 +1,8 @@
-//! Both fetch paths for real, one layer below the compose stack (spec §8,
-//! §9, §10): the scheduler over Postgres, the real executor, kage-http
+//! Every fetch path for real, one layer below the compose stack (spec §8,
+//! §9, §10, §25): the scheduler over Postgres, the real executor, kage-http
 //! through the forwarder and a stand-in provider proxy to a site, mock
-//! sidecars that answer the contract, and personas whose browser major has
-//! an http profile (chromium 149 with `chrome_149`).
+//! sidecars that answer the contract, personas whose browser major has an
+//! http profile (chromium 149 with `chrome_149`), and the plain client.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::too_many_lines)]
 
@@ -11,11 +11,12 @@ mod common;
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::lab::{LENIENT_FAST, Lab, SITE, article, cookie};
+use common::lab::{FAST, Lab, SITE, article, cookie};
 use common::proxy::{PROXY_PASS, PROXY_USER, basic};
 use kage_core::alert::{Alert, AlertKind, AlertSeverity, AlertSink};
+use kage_core::config::DEFAULT_PLAIN_USER_AGENT;
 use kage_core::domain::{
-    BreakerState, HealthFailure, IDLE_DOMAIN, Persona, ProxyState, Render, SubjectKind,
+    BreakerState, Exit, HealthFailure, IDLE_DOMAIN, Level, Persona, ProxyState, Render, SubjectKind,
 };
 use kage_core::ids::PersonaId;
 use kage_core::outcome::Outcome;
@@ -32,12 +33,19 @@ use uuid::Uuid;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
-/// Every request goes to the browser.
-const BROWSER_FAST: &str =
-    "defaults: { render: browser, pacing: fast, active_hours: ignore }\ndomains: {}\n";
-
+/// A page in a persona's browser, as a person (level 3).
 fn get(path: &str) -> FetchOrder {
     FetchOrder::get(Lab::url(path), Priority::Sync)
+}
+
+/// A page at `level`.
+fn at(level: Level, path: &str) -> FetchOrder {
+    FetchOrder { level, ..get(path) }
+}
+
+/// A page on a persona's http path (level 1).
+fn http(path: &str) -> FetchOrder {
+    at(Level::Emulated, path)
 }
 
 /// A page the persona reaches from `holder`, a page it has been reading.
@@ -48,6 +56,14 @@ fn get_from(path: &str, holder: &str) -> FetchOrder {
             max_backs: 3,
         }),
         ..get(path)
+    }
+}
+
+/// The same on the http path.
+fn http_from(path: &str, holder: &str) -> FetchOrder {
+    FetchOrder {
+        level: Level::Emulated,
+        ..get_from(path, holder)
     }
 }
 
@@ -99,7 +115,7 @@ fn waf_block() -> serde_json::Value {
 
 #[tokio::test]
 async fn the_http_path_leaves_through_the_forwarder_and_the_personas_own_proxy() {
-    let mut lab = Lab::start(2, 149, LENIENT_FAST).await;
+    let mut lab = Lab::start(2, 149, FAST).await;
     serve(
         &lab,
         "/page",
@@ -108,7 +124,7 @@ async fn the_http_path_leaves_through_the_forwarder_and_the_personas_own_proxy()
     .await;
     serve(&lab, "/next", page("The next page")).await;
 
-    let report = lab.pipeline.fetch(get("/page")).await.unwrap();
+    let report = lab.pipeline.fetch(http("/page")).await.unwrap();
 
     assert_eq!(report.outcome, Outcome::Ok, "{:?}", report.reason);
     let [attempt] = report.attempts.as_slice() else {
@@ -116,7 +132,9 @@ async fn the_http_path_leaves_through_the_forwarder_and_the_personas_own_proxy()
     };
     assert_eq!(attempt.render, Render::Http);
     assert_eq!(attempt.status, Some(200));
-    let persona = persona_of(&lab, attempt.persona_id);
+    assert_eq!(attempt.exit, None);
+    let persona = persona_of(&lab, attempt.persona_id.unwrap());
+    assert_eq!(attempt.engine, Some(persona.engine));
     assert_eq!(
         attempt.seed,
         Some(attempt_seed(&persona.seed, report.request, 1))
@@ -159,7 +177,8 @@ async fn the_http_path_leaves_through_the_forwarder_and_the_personas_own_proxy()
     tokio::time::sleep(Duration::from_millis(200)).await;
     let counted = lab.forwarder.meter().drain();
     assert_eq!(counted.len(), 1, "{counted:?}");
-    assert_eq!(counted[0].persona, persona.id);
+    assert_eq!(counted[0].persona, Some(persona.id));
+    assert_eq!(counted[0].egress, Exit::Pool);
     assert_eq!(counted[0].domain, SITE);
     assert_eq!((counted[0].bytes_up, counted[0].bytes_down), own.bytes());
     assert!(counted[0].bytes_down > fetched.body.len() as u64);
@@ -169,6 +188,7 @@ async fn the_http_path_leaves_through_the_forwarder_and_the_personas_own_proxy()
     let request = store.requests().get(report.request).await.unwrap().unwrap();
     assert_eq!(request.outcome, Some(Outcome::Ok));
     assert_eq!(request.domain, SITE);
+    assert_eq!(request.level, Some(Level::Emulated));
     let attempts = store
         .attempts()
         .list_for_request(report.request)
@@ -177,7 +197,7 @@ async fn the_http_path_leaves_through_the_forwarder_and_the_personas_own_proxy()
     // (The store keeps microseconds; everything else is as reported.)
     assert_eq!(attempts.len(), 1);
     assert_eq!(attempts[0].id, attempt.id);
-    assert_eq!(attempts[0].persona_id, persona.id);
+    assert_eq!(attempts[0].persona_id, Some(persona.id));
     assert_eq!(attempts[0].outcome, Outcome::Ok);
     assert_eq!(attempts[0].seed, attempt.seed);
     assert_eq!(attempts[0].timing, attempt.timing);
@@ -199,9 +219,9 @@ async fn the_http_path_leaves_through_the_forwarder_and_the_personas_own_proxy()
 
     // The next page of the visit is the same persona's, arrives from the
     // page before it, and brings the cookie the site set.
-    let next = lab.pipeline.fetch(get("/next")).await.unwrap();
+    let next = lab.pipeline.fetch(http("/next")).await.unwrap();
     assert_eq!(next.outcome, Outcome::Ok);
-    assert_eq!(next.attempts[0].persona_id, persona.id);
+    assert_eq!(next.attempts[0].persona_id, Some(persona.id));
     let received = lab.received("/next").await;
     assert_eq!(
         header(&received[0], "referer"),
@@ -216,18 +236,12 @@ async fn the_http_path_leaves_through_the_forwarder_and_the_personas_own_proxy()
 }
 
 #[tokio::test]
-async fn a_challenge_on_the_http_path_is_answered_in_the_same_personas_browser_and_cookies_flow() {
-    let mut lab = Lab::start(2, 149, LENIENT_FAST).await;
+async fn a_personas_cookies_flow_between_its_http_path_and_its_browser() {
+    let mut lab = Lab::start(1, 149, FAST).await;
     serve(
         &lab,
-        "/wall",
-        ResponseTemplate::new(403)
-            .insert_header("content-type", "text/html; charset=utf-8")
-            .insert_header("cf-mitigated", "challenge")
-            .insert_header("set-cookie", "pre=1; Path=/")
-            .set_body_string(
-                "<html><head><title>Just a moment...</title></head><body></body></html>",
-            ),
+        "/start",
+        page("The shop").insert_header("set-cookie", "pre=1; Path=/"),
     )
     .await;
     serve(&lab, "/after", page("Behind the wall")).await;
@@ -239,29 +253,19 @@ async fn a_challenge_on_the_http_path_is_answered_in_the_same_personas_browser_a
         );
     });
 
-    let report = lab.pipeline.fetch(get("/wall")).await.unwrap();
+    // Level 1: the persona's http path, whose jar keeps what the site set.
+    let start = lab.pipeline.fetch(http("/start")).await.unwrap();
+    assert_eq!(start.outcome, Outcome::Ok, "{:?}", start.reason);
+    let persona = persona_of(&lab, start.attempts[0].persona_id.unwrap());
 
-    // The http attempt met a challenge; the same persona came back in its
-    // browser, where the page was served.
+    // Level 3: the same persona's browser, the lab's only one.
+    let report = lab.pipeline.fetch(get("/wall")).await.unwrap();
     assert_eq!(report.outcome, Outcome::Ok, "{:?}", report.reason);
-    assert!(report.escalated);
-    let renders: Vec<Render> = report
-        .attempts
-        .iter()
-        .map(|attempt| attempt.render)
-        .collect();
-    assert_eq!(renders, [Render::Http, Render::Browser]);
-    assert_eq!(report.attempts[0].outcome, Outcome::ChallengeFailed);
-    assert_eq!(
-        report.attempts[0].block.as_ref().unwrap().vendor.as_str(),
-        "cloudflare"
-    );
-    assert_eq!(report.attempts[0].persona_id, report.attempts[1].persona_id);
-    let persona = persona_of(&lab, report.attempts[0].persona_id);
-    // Nothing to answer for: no cooldown, nothing on the breaker.
-    let facts = lab.backend.facts(SITE).await.unwrap();
-    assert_eq!(facts.states[&persona.id].cooldown_until, None);
-    assert_eq!(facts.breaker, None);
+    let [attempt] = report.attempts.as_slice() else {
+        panic!("one attempt, not {:?}", report.attempts);
+    };
+    assert_eq!(attempt.render, Render::Browser);
+    assert_eq!(attempt.persona_id, Some(persona.id));
 
     let (opened, navigated, imported, exported) = lab.chromium.with(|sidecar| {
         (
@@ -299,8 +303,8 @@ async fn a_challenge_on_the_http_path_is_answered_in_the_same_personas_browser_a
     assert_eq!(navigated.len(), 1);
     let asked = &navigated[0];
     assert_eq!(asked["url"], format!("http://{SITE}/wall"));
-    let seed = attempt_seed(&persona.seed, report.request, 2);
-    assert_eq!(report.attempts[1].seed, Some(seed));
+    let seed = attempt_seed(&persona.seed, report.request, 1);
+    assert_eq!(attempt.seed, Some(seed));
     let behavior = &asked["behavior"];
     assert_eq!(behavior["dwell"], "human");
     assert_eq!(behavior["wander"], true);
@@ -339,11 +343,11 @@ async fn a_challenge_on_the_http_path_is_answered_in_the_same_personas_browser_a
 
     // The persona's next page goes over the http path again, and carries
     // what its browser earned.
-    let after = lab.pipeline.fetch(get("/after")).await.unwrap();
+    let after = lab.pipeline.fetch(http("/after")).await.unwrap();
     assert_eq!(after.outcome, Outcome::Ok);
     assert_eq!(after.attempts.len(), 1);
     assert_eq!(after.attempts[0].render, Render::Http);
-    assert_eq!(after.attempts[0].persona_id, persona.id);
+    assert_eq!(after.attempts[0].persona_id, Some(persona.id));
     let received = lab.received("/after").await;
     let sent = header(&received[0], "cookie").unwrap();
     assert!(sent.contains("cf_clearance=xyz"), "{sent}");
@@ -353,7 +357,7 @@ async fn a_challenge_on_the_http_path_is_answered_in_the_same_personas_browser_a
 
 #[tokio::test]
 async fn the_next_page_of_a_reader_is_a_click_on_the_page_that_holds_its_link() {
-    let mut lab = Lab::start(1, 149, BROWSER_FAST).await;
+    let mut lab = Lab::start(1, 149, FAST).await;
     let url = |path: &str| format!("http://{SITE}{path}");
     let asked = |lab: &Lab, index: usize| {
         lab.chromium
@@ -423,7 +427,7 @@ async fn the_next_page_of_a_reader_is_a_click_on_the_page_that_holds_its_link() 
     let mut lab = Lab::start(
         1,
         149,
-        "defaults: { render: browser, pacing: fast, active_hours: ignore, referer_strategy: none }\ndomains: {}\n",
+        "defaults: { pacing: fast, active_hours: ignore, referer_strategy: none }\ndomains: {}\n",
     )
     .await;
     lab.pipeline.fetch(get("/list")).await.unwrap();
@@ -435,7 +439,7 @@ async fn the_next_page_of_a_reader_is_a_click_on_the_page_that_holds_its_link() 
 
 #[tokio::test]
 async fn on_the_http_path_the_page_that_holds_the_link_is_the_referer() {
-    let mut lab = Lab::start(1, 149, LENIENT_FAST).await;
+    let mut lab = Lab::start(1, 149, FAST).await;
     for at in ["/list", "/a", "/b", "/c", "/d"] {
         serve(&lab, at, page(at)).await;
     }
@@ -445,7 +449,7 @@ async fn on_the_http_path_the_page_that_holds_the_link_is_the_referer() {
     // comes from nowhere, whatever the caller names.
     let first = lab
         .pipeline
-        .fetch(get_from("/list", "/home"))
+        .fetch(http_from("/list", "/home"))
         .await
         .unwrap();
     assert_eq!(first.outcome, Outcome::Ok, "{:?}", first.reason);
@@ -454,20 +458,20 @@ async fn on_the_http_path_the_page_that_holds_the_link_is_the_referer() {
 
     // A later page arrives from the page that holds its link: here the
     // one before it, and then one read earlier, which is not the last.
-    let a = lab.pipeline.fetch(get_from("/a", "/list")).await.unwrap();
+    let a = lab.pipeline.fetch(http_from("/a", "/list")).await.unwrap();
     assert_eq!(
         referer_at(&lab, "/a").await,
         Some(format!("http://{SITE}/list"))
     );
     assert_eq!(reached(&a), Some(Reached::Link { backs: None }));
-    let b = lab.pipeline.fetch(get_from("/b", "/list")).await.unwrap();
+    let b = lab.pipeline.fetch(http_from("/b", "/list")).await.unwrap();
     assert_eq!(
         referer_at(&lab, "/b").await,
         Some(format!("http://{SITE}/list"))
     );
     assert_eq!(reached(&b), Some(Reached::Link { backs: None }));
     // Without one it is the page before it, as it was.
-    let c = lab.pipeline.fetch(get("/c")).await.unwrap();
+    let c = lab.pipeline.fetch(http("/c")).await.unwrap();
     assert_eq!(
         referer_at(&lab, "/c").await,
         Some(format!("http://{SITE}/b"))
@@ -477,7 +481,7 @@ async fn on_the_http_path_the_page_that_holds_the_link_is_the_referer() {
     // named that does not hold its link.
     let typed = FetchOrder {
         arrival: Some(Arrival::Typed),
-        ..get("/d")
+        ..http("/d")
     };
     let d = lab.pipeline.fetch(typed).await.unwrap();
     assert_eq!(referer_at(&lab, "/d").await, None);
@@ -487,7 +491,7 @@ async fn on_the_http_path_the_page_that_holds_the_link_is_the_referer() {
 
 #[tokio::test]
 async fn a_block_in_the_browser_closes_it_and_another_persona_comes() {
-    let mut lab = Lab::start(3, 149, BROWSER_FAST).await;
+    let mut lab = Lab::start(3, 149, FAST).await;
     lab.chromium
         .with(|sidecar| sidecar.next_pages.push_back(waf_block()));
 
@@ -515,9 +519,11 @@ async fn a_block_in_the_browser_closes_it_and_another_persona_comes() {
     assert_eq!(navigated.len(), 2);
     assert_eq!(closed, [navigated[0]["context_id"].as_str().unwrap()]);
     assert_eq!(exported.len(), 1);
-    assert_eq!(lab.manager.contexts().open(), [served.persona_id]);
+    assert_eq!(lab.manager.contexts().open(), [served.persona_id.unwrap()]);
     let facts = lab.backend.facts(SITE).await.unwrap();
-    let cooldown = (facts.states[&blocked.persona_id].cooldown_until.unwrap()
+    let cooldown = (facts.states[&blocked.persona_id.unwrap()]
+        .cooldown_until
+        .unwrap()
         - blocked.finished_at)
         .to_std()
         .unwrap();
@@ -526,7 +532,10 @@ async fn a_block_in_the_browser_closes_it_and_another_persona_comes() {
         cooldown >= expected.mul_f64(0.89) && cooldown <= expected.mul_f64(1.11),
         "{cooldown:?} against {expected:?}"
     );
-    assert_eq!(facts.states[&served.persona_id].cooldown_until, None);
+    assert_eq!(
+        facts.states[&served.persona_id.unwrap()].cooldown_until,
+        None
+    );
     // The breaker counted it, in the store.
     let breaker = lab
         .store()
@@ -547,7 +556,7 @@ async fn a_block_in_the_browser_closes_it_and_another_persona_comes() {
 
 #[tokio::test]
 async fn a_challenge_that_resolves_by_itself_is_the_page_and_one_that_does_not_is_a_block() {
-    let mut lab = Lab::start(3, 149, BROWSER_FAST).await;
+    let mut lab = Lab::start(3, 149, FAST).await;
     let challenge = |resolved: bool| {
         json!({
             "vendors": ["cloudflare"],
@@ -600,7 +609,7 @@ async fn a_challenge_that_resolves_by_itself_is_the_page_and_one_that_does_not_i
 
 #[tokio::test]
 async fn a_redirect_chain_that_leaves_for_a_private_address_ends_the_request() {
-    let mut lab = Lab::start(2, 149, BROWSER_FAST).await;
+    let mut lab = Lab::start(2, 149, FAST).await;
     let url = Lab::url("/redirect").to_string();
     lab.chromium.with(|sidecar| {
         sidecar.pages.insert(
@@ -627,16 +636,16 @@ async fn a_redirect_chain_that_leaves_for_a_private_address_ends_the_request() {
     assert_eq!(lab.chromium.with(|sidecar| sidecar.closed.len()), 1);
     let facts = lab.backend.facts(SITE).await.unwrap();
     assert_eq!(
-        facts.states[&report.attempts[0].persona_id].cooldown_until,
+        facts.states[&report.attempts[0].persona_id.unwrap()].cooldown_until,
         None
     );
     lab.shut_down().await;
 }
 
 #[tokio::test]
-async fn without_an_http_path_every_request_is_the_browsers_and_http_is_refused() {
+async fn without_an_http_path_level_one_is_refused_and_the_browser_is_not() {
     // Chromium 155: no profile exists for it, as in this release.
-    let mut lab = Lab::start(2, 155, LENIENT_FAST).await;
+    let mut lab = Lab::start(2, 155, FAST).await;
     serve(&lab, "/page", page("The shop")).await;
 
     let report = lab.pipeline.fetch(get("/page")).await.unwrap();
@@ -644,7 +653,6 @@ async fn without_an_http_path_every_request_is_the_browsers_and_http_is_refused(
     assert_eq!(report.outcome, Outcome::Ok, "{:?}", report.reason);
     assert_eq!(report.attempts.len(), 1);
     assert_eq!(report.attempts[0].render, Render::Browser);
-    assert!(!report.escalated);
     // No handoff: there is no jar to hand to.
     let last = report.last.as_ref().unwrap();
     assert_eq!(
@@ -654,11 +662,7 @@ async fn without_an_http_path_every_request_is_the_browsers_and_http_is_refused(
     assert_eq!(lab.chromium.with(|sidecar| sidecar.exported.len()), 0);
     assert_eq!(lab.received("/page").await.len(), 0);
 
-    let order = FetchOrder {
-        render: kage_core::domain::RenderMode::Http,
-        ..get("/page")
-    };
-    let refused = lab.pipeline.fetch(order).await.unwrap();
+    let refused = lab.pipeline.fetch(http("/page")).await.unwrap();
     assert_eq!(refused.outcome, Outcome::ProviderError);
     assert_eq!(refused.reason.as_deref(), Some("no_persona"));
     assert_eq!(refused.attempts, []);
@@ -666,8 +670,104 @@ async fn without_an_http_path_every_request_is_the_browsers_and_http_is_refused(
 }
 
 #[tokio::test]
+async fn a_plain_client_names_itself_and_leaves_through_the_sites_scouts_proxy() {
+    let mut lab = Lab::start(2, 149, FAST).await;
+    serve(
+        &lab,
+        "/plain",
+        page("The shop").insert_header("set-cookie", "sid=abc; Path=/"),
+    )
+    .await;
+
+    let report = lab
+        .pipeline
+        .fetch(at(Level::Plain, "/plain"))
+        .await
+        .unwrap();
+
+    assert_eq!(report.outcome, Outcome::Ok, "{:?}", report.reason);
+    assert_eq!(report.persona, None);
+    let [attempt] = report.attempts.as_slice() else {
+        panic!("one attempt, not {:?}", report.attempts);
+    };
+    assert_eq!(
+        (attempt.persona_id, attempt.engine, attempt.exit),
+        (None, None, Some(Exit::Pool))
+    );
+    assert_eq!(attempt.render, Render::Http);
+    assert_eq!(attempt.seed, None);
+    let fetched = report.last.as_ref().unwrap().fetched.as_ref().unwrap();
+    assert!(fetched.text().contains("<h1>The shop</h1>"));
+
+    // The site saw a client that names itself, and nothing of a person.
+    let received = lab.received("/plain").await;
+    assert_eq!(received.len(), 1);
+    assert_eq!(
+        header(&received[0], "user-agent"),
+        Some(DEFAULT_PLAIN_USER_AGENT.to_owned())
+    );
+    assert_eq!(header(&received[0], "accept"), Some("*/*".to_owned()));
+    assert_eq!(header(&received[0], "accept-language"), None);
+    assert_eq!(header(&received[0], "referer"), None);
+
+    // It left through the proxy of the site's scout, with the provider's
+    // credentials added by the forwarder; the other proxy saw nothing.
+    let site = kage_crawl::site::of_host(SITE);
+    let scout = lab.backend.scout(&site).await.unwrap().unwrap();
+    let scout = persona_of(&lab, scout);
+    let own = lab.proxy_of(&scout);
+    let plain = own.plain();
+    assert_eq!(plain.len(), 1);
+    assert_eq!(plain[0].target, format!("http://{SITE}/plain"));
+    assert_eq!(
+        plain[0].header("proxy-authorization"),
+        Some(basic(PROXY_USER, PROXY_PASS))
+    );
+    for other in lab.proxies.iter().filter(|proxy| proxy.addr != own.addr) {
+        assert_eq!(other.seen().len(), 0);
+    }
+    assert!(lab.pool.last_traffic(scout.proxy_id).is_some());
+
+    // Its bytes are nobody's: counted toward the site, through the pool.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let counted = lab.forwarder.meter().drain();
+    assert_eq!(counted.len(), 1, "{counted:?}");
+    assert_eq!((counted[0].persona, counted[0].egress), (None, Exit::Pool));
+    assert_eq!(counted[0].domain, SITE);
+    assert_eq!((counted[0].bytes_up, counted[0].bytes_down), own.bytes());
+
+    // It keeps nothing: the next one sends no cookie, from the same exit.
+    let again = lab
+        .pipeline
+        .fetch(at(Level::Plain, "/plain"))
+        .await
+        .unwrap();
+    assert_eq!(again.outcome, Outcome::Ok, "{:?}", again.reason);
+    let received = lab.received("/plain").await;
+    assert_eq!(received.len(), 2);
+    assert_eq!(header(&received[1], "cookie"), None);
+    assert_eq!(own.plain().len(), 2);
+
+    // Nobody's calendar counted a page; the store has them with their
+    // exit and their level.
+    let facts = lab.backend.facts(SITE).await.unwrap();
+    assert!(facts.states.is_empty(), "{:?}", facts.states);
+    let store = lab.store();
+    let attempts = store
+        .attempts()
+        .list_for_request(report.request)
+        .await
+        .unwrap();
+    assert_eq!(attempts[0].exit, Some(Exit::Pool));
+    assert_eq!(attempts[0].persona_id, None);
+    let request = store.requests().get(report.request).await.unwrap().unwrap();
+    assert_eq!(request.level, Some(Level::Plain));
+    lab.shut_down().await;
+}
+
+#[tokio::test]
 async fn a_domain_that_blocks_is_paused_in_the_store() {
-    let rules = "defaults: { render: browser, pacing: fast, active_hours: ignore, \
+    let rules = "defaults: { pacing: fast, active_hours: ignore, \
                  breaker_threshold: 2, breaker_pause: 30m, retries: 1 }\ndomains: {}\n";
     let mut lab = Lab::start(3, 149, rules).await;
     lab.chromium.with(|sidecar| {
@@ -703,7 +803,7 @@ async fn a_domain_that_blocks_is_paused_in_the_store() {
 
 #[tokio::test]
 async fn nothing_is_fetched_while_a_leak_is_on_record() {
-    let mut lab = Lab::start(2, 149, LENIENT_FAST).await;
+    let mut lab = Lab::start(2, 149, FAST).await;
     serve(&lab, "/page", page("The shop")).await;
     let leaking = lab.personas[0].proxy_id;
     let at = lab.now();
@@ -722,7 +822,7 @@ async fn nothing_is_fetched_while_a_leak_is_on_record() {
     lab.pool.record_probe(leaking, &report).await.unwrap();
     assert!(lab.pool.egress_unsafe().await.unwrap());
 
-    let refused = lab.pipeline.fetch(get("/page")).await.unwrap();
+    let refused = lab.pipeline.fetch(http("/page")).await.unwrap();
 
     assert_eq!(refused.outcome, Outcome::ProviderError);
     assert_eq!(refused.reason.as_deref(), Some("egress_unsafe"));
@@ -731,7 +831,7 @@ async fn nothing_is_fetched_while_a_leak_is_on_record() {
 
     // The operator looked into it and cleared the flag.
     lab.pool.clear_egress_unsafe().await.unwrap();
-    let served = lab.pipeline.fetch(get("/page")).await.unwrap();
+    let served = lab.pipeline.fetch(http("/page")).await.unwrap();
     assert_eq!(served.outcome, Outcome::Ok, "{:?}", served.reason);
     lab.shut_down().await;
 }
@@ -764,7 +864,7 @@ async fn tunnel_as(lab: &Lab, persona: PersonaId) -> String {
 
 #[tokio::test]
 async fn the_forwarder_relays_only_for_personas_that_may_send() {
-    let mut lab = Lab::start(3, 149, LENIENT_FAST).await;
+    let mut lab = Lab::start(3, 149, FAST).await;
     let (active, failing) = (lab.personas[0].clone(), lab.personas[1].clone());
 
     // A persona whose proxy carries traffic.
@@ -806,18 +906,18 @@ async fn the_forwarder_relays_only_for_personas_that_may_send() {
     // And the scheduler does not send work to the persona in backoff.
     serve(&lab, "/page", page("The shop")).await;
     for _ in 0..3 {
-        let report = lab.pipeline.fetch(get("/page")).await.unwrap();
+        let report = lab.pipeline.fetch(http("/page")).await.unwrap();
         assert_eq!(report.outcome, Outcome::Ok, "{:?}", report.reason);
-        assert_ne!(report.attempts[0].persona_id, failing.id);
+        assert_ne!(report.attempts[0].persona_id, Some(failing.id));
     }
     lab.shut_down().await;
 }
 
 #[tokio::test]
 async fn what_the_forwarder_counted_is_kept_by_the_hour_and_judged_against_the_cap() {
-    let mut lab = Lab::start(1, 149, LENIENT_FAST).await;
+    let mut lab = Lab::start(1, 149, FAST).await;
     serve(&lab, "/page", page("The shop")).await;
-    let report = lab.pipeline.fetch(get("/page")).await.unwrap();
+    let report = lab.pipeline.fetch(http("/page")).await.unwrap();
     assert_eq!(report.outcome, Outcome::Ok, "{:?}", report.reason);
     let persona = lab.personas[0].clone();
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -847,7 +947,7 @@ async fn what_the_forwarder_counted_is_kept_by_the_hour_and_judged_against_the_c
     let term = ledger.term(lab.now());
     assert!(term.start <= lab.now() && lab.now() < term.end);
     let bandwidth = lab.store().bandwidth();
-    let total = bandwidth.total_since(term.start).await.unwrap();
+    let total = bandwidth.total_since(term.start, Exit::Pool).await.unwrap();
     assert_eq!((total.bytes_up, total.bytes_down), (sent, received));
     let by_persona = bandwidth.by_persona_since(term.start).await.unwrap();
     assert_eq!(by_persona.len(), 1);
@@ -877,7 +977,7 @@ async fn what_the_forwarder_counted_is_kept_by_the_hour_and_judged_against_the_c
     lab.scheduler.set_bandwidth_stop(budget.stop);
     lab.forwarder.set_stop(Some("bandwidth_exhausted"));
     lab.manager.contexts().close_all().await;
-    let refused = lab.pipeline.fetch(get("/page")).await.unwrap();
+    let refused = lab.pipeline.fetch(http("/page")).await.unwrap();
     assert_eq!(refused.reason.as_deref(), Some("bandwidth_exhausted"));
     let head = tunnel_as(&lab, persona.id).await;
     assert!(head.starts_with("HTTP/1.1 403 "), "{head}");

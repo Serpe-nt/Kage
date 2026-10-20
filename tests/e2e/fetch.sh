@@ -6,11 +6,14 @@
 #
 # It shows, with `kage fetch` as the one way in:
 #   - a page of the fixture site fetched in a persona's browser on both
-#     engines, with the behavior of a person asked for and performed, at
-#     the pace of the domain's policy, through the forwarder and the
-#     persona's own proxy;
-#   - `render: http` refused for personas without an http profile, and
-#     `render: auto` going to the browser where the policy says http;
+#     engines at level 3, with the behavior of a person asked for and
+#     performed, at the pace of the domain's policy, through the forwarder
+#     and the persona's own proxy;
+#   - the same page at every level (spec §25), with what the site saw of
+#     each: a person at 3, a browser that loads the page and does nothing
+#     at 2, a plain client that says it is Kage at 0, from the site's
+#     scout's address; level 1 refused (no persona has an http profile),
+#     a request without a level refused, and a site's floor kept;
 #   - a challenge that resolves by itself waited for; one that does not is
 #     a block: the persona cools, another one tries, and the domain's
 #     breaker opens and answers the next request at once;
@@ -18,7 +21,7 @@
 #     carried for it.
 # It also measures what the forwarder adds to a connection.
 #
-# The http path and the cookie handoff cannot run here: no persona of this
+# Level 1 and the cookie handoff cannot run here: no persona of this
 # release has an http profile for its browser's major. They are proven one
 # layer down (crates/kage-scheduler/tests/paths.rs).
 #
@@ -39,23 +42,25 @@ export KAGE_PERSONAS_WARMUP=false
 policies="$(mktemp -d)"
 export KAGE_E2E_POLICIES="${policies}"
 cp policies/*.yaml "${policies}/"
+# The rules are entries of the shipped file's `domains` mapping, its last
+# key: a second `domains:` would be a duplicate key, which the loader
+# refuses.
+if grep --quiet '^domains: {}$' "${policies}/domains.yaml"; then
+    sed 's/^domains: {}$/domains:/' "${policies}/domains.yaml" > "${policies}/domains.tmp"
+    mv "${policies}/domains.tmp" "${policies}/domains.yaml"
+fi
+[ "$(grep '^[a-z_]*:' "${policies}/domains.yaml" | tail -n 1)" = 'domains:' ] \
+    || { echo "FAIL: the shipped domains.yaml does not end with its domains mapping" >&2; exit 1; }
 cat >> "${policies}/domains.yaml" << 'EOF'
-
-# Added by tests/e2e/fetch.sh.
-domains:
-  # Known lenient: the http path first.
+  # Added by tests/e2e/fetch.sh.
+  # Only a person is shown this one (spec §25): the floor.
   lenient.kage.test:
-    render: http
+    min_level: 3
   # Two blocks pause the site.
   fixture.kage.test:
     breaker_threshold: 2
     breaker_pause: 30m
 EOF
-# A `domains: {}` of the shipped file would be a second key of that name.
-if [ "$(grep --count '^domains:' "${policies}/domains.yaml")" -ne 1 ]; then
-    grep --invert-match '^domains: {}$' "${policies}/domains.yaml" > "${policies}/domains.tmp"
-    mv "${policies}/domains.tmp" "${policies}/domains.yaml"
-fi
 chmod --recursive a+rX "${policies}"
 
 compose=(docker compose --file deploy/compose.yaml --file deploy/compose.e2e.yaml
@@ -129,7 +134,7 @@ echo "    $(value "${personas}" "d.personas.map((p) => p.engine + ' ' + p.browse
 for engine in chromium firefox; do
     echo "==> a page of the fixture site, in the browser of a ${engine} persona"
     got "http://fixture:8088/__kage/reset" > /dev/null
-    fetch_json "http://fixture.kage.test:8088/" --engine "${engine}" --timeout 30s
+    fetch_json "http://fixture.kage.test:8088/" --level 3 --engine "${engine}" --timeout 30s
     [ "${fetch_status}" -eq 0 ] || fail "kage fetch failed for ${engine}: ${report}"
     check "the page was fetched in the browser" "${report}" \
         "d.outcome === 'ok' && d.status === 200 && d.attempts.length === 1 && d.attempts[0].render === 'browser' && d.attempts[0].engine === '${engine}' && d.title === 'Fixture home'"
@@ -154,29 +159,90 @@ for engine in chromium firefox; do
     echo "    $(value "${report}" "'dwelt ' + d.behavior.dwell_ms + ' ms, ' + d.behavior.moves + ' moves, document ' + d.document_bytes + ' B, relayed ' + d.relayed_bytes.up + ' B up and ' + d.relayed_bytes.down + ' B down'")"
 done
 
-echo "==> render http is refused: no persona has an http path"
-fetch_json "http://fixture.kage.test:8088/landing" --render http
-[ "${fetch_status}" -ne 0 ] || fail "render http was not refused: ${report}"
-check "refused with its reason, without an attempt" "${report}" \
-    "d.outcome === 'provider_error' && d.reason === 'no_persona' && d.attempts.length === 0"
-echo "    $(value "${report}" "d.outcome + ': ' + d.reason")"
+# seen_summary: what the fixture site saw since its last reset, in one
+# line: the requests, their paths, and the User-Agent they came with.
+seen_summary() {
+    value "$(got "http://fixture:8088/__kage/requests")" \
+        "d.length + ' requests (' + d.map((r) => r.path).join(' ') + '), User-Agent ' + ((d[0] && d[0].headers.find(([n]) => n.toLowerCase() === 'user-agent')) || [, '-'])[1].slice(0, 60)"
+}
 
-echo "==> render auto goes to the browser where the policy says http"
-fetch_json "http://lenient.kage.test:8088/landing" --timeout 30s
+echo "==> the same page at every level, and what the site saw of each (spec §25)"
+# 0 first: a plain client that says it is Kage, nobody's, from the site's
+# scout's address: the one persona that reads none of the site's pages (the
+# third of this pool; the two above read the site, and the browser levels
+# below never take the scout).
+got "http://fixture:8088/__kage/reset" > /dev/null
+fetch_json "http://fixture.kage.test:8088/" --level 0
+[ "${fetch_status}" -eq 0 ] || fail "kage fetch --level 0 failed: ${report}"
+check "level 0: a plain client, no persona, through the pool" "${report}" \
+    "d.outcome === 'ok' && d.status === 200 && d.persona === null && d.attempts.length === 1 && d.attempts[0].render === 'http' && d.attempts[0].exit === 'pool' && d.attempts[0].persona_id === null && d.attempts[0].engine === null"
+seen="$(got "http://fixture:8088/__kage/requests")"
+check "level 0: the site saw one request, from a client named kage" "${seen}" \
+    "d.length === 1 && d[0].path === '/' && d[0].headers.some(([n, v]) => n.toLowerCase() === 'user-agent' && v.startsWith('kage/')) && !d[0].headers.some(([n]) => n.toLowerCase() === 'accept-language')"
+echo "    level 0: $(seen_summary)"
+scout="$(psql "SELECT persona_id FROM site_scouts WHERE site LIKE '%kage.test' LIMIT 1")"
+[ -n "${scout}" ] || fail "the site has no scout after a plain fetch"
+readers="$(psql "SELECT count(*) FROM attempts WHERE persona_id = '${scout}'")"
+[ "${readers}" -eq 0 ] || fail "the site's plain exit is the address of a persona that read it"
+echo "    the plain exit is the scout's proxy; the scout read none of the site's pages"
+# 3: a person, in a browser, as above.
+got "http://fixture:8088/__kage/reset" > /dev/null
+fetch_json "http://fixture.kage.test:8088/" --level 3 --timeout 30s
+[ "${fetch_status}" -eq 0 ] || fail "kage fetch --level 3 failed: ${report}"
+check "level 3: a person in a browser" "${report}" \
+    "d.outcome === 'ok' && d.attempts.length === 1 && d.attempts[0].render === 'browser' && d.behavior.positions > 0"
+echo "    level 3: $(seen_summary)"
+# 2: the same browser, which loads the page, does nothing on it, and leaves
+# after the policy's own dwell drawn upward.
+got "http://fixture:8088/__kage/reset" > /dev/null
+fetch_json "http://fixture.kage.test:8088/" --level 2 --timeout 30s
+[ "${fetch_status}" -eq 0 ] || fail "kage fetch --level 2 failed: ${report}"
+check "level 2: a still visit in a browser" "${report}" \
+    "d.outcome === 'ok' && d.attempts.length === 1 && d.attempts[0].render === 'browser' && d.behavior !== null && d.behavior.positions === 0 && d.behavior.moves === 0 && d.behavior.notches === 0 && d.behavior.dwell_ms >= 2000 && d.behavior.entry.strategy === 'direct'"
+seen="$(got "http://fixture:8088/__kage/requests")"
+# The page's script asks for its items: a browser ran the page (its script
+# file itself may come from the browser's cache by now).
+check "level 2: the site saw a browser load the page and run its script" "${seen}" \
+    "['/', '/api/items?source=fetch'].every((path) => d.some((r) => r.path === path && r.headers.some(([n, v]) => n.toLowerCase() === 'user-agent' && v.includes('Mozilla/'))))"
+echo "    level 2: $(seen_summary); dwelt $(value "${report}" "d.behavior.dwell_ms") ms, no input"
+# 1: a persona's http client, which no persona of this release has.
+refused="$(kage fetch "http://fixture.kage.test:8088/" --level 1 2>&1)" \
+    && fail "level 1 was not refused: ${refused}"
+case "${refused}" in
+    *level_unavailable*) ;;
+    *) fail "level 1 was refused for another reason: ${refused}" ;;
+esac
+echo "    level 1: refused, level_unavailable (no browser of this release has an http profile)"
+# No level: nothing is decided for the caller.
+missing="$(kage fetch "http://fixture.kage.test:8088/" 2>&1)" && fail "a fetch without a level ran: ${missing}"
+case "${missing}" in
+    *--level*) ;;
+    *) fail "a fetch without a level was refused for another reason: ${missing}" ;;
+esac
+echo "    no level: refused before anything starts"
+
+echo "==> a site's floor: below it a request is refused, never raised"
+refused="$(kage fetch "http://lenient.kage.test:8088/landing" --level 2 2>&1)" \
+    && fail "a request below the floor ran: ${refused}"
+case "${refused}" in
+    *level_below_policy*) ;;
+    *) fail "a request below the floor was refused for another reason: ${refused}" ;;
+esac
+fetch_json "http://lenient.kage.test:8088/landing" --level 3 --timeout 30s
 [ "${fetch_status}" -eq 0 ] || fail "kage fetch failed: ${report}"
-check "one attempt, in the browser, not an escalation" "${report}" \
-    "d.outcome === 'ok' && d.attempts.length === 1 && d.attempts[0].render === 'browser' && d.escalated === false && d.title === 'Landing'"
-echo "    $(value "${report}" "d.attempts[0].render + ' by ' + d.attempts[0].engine")"
+check "at the floor: one attempt, a person in a browser" "${report}" \
+    "d.outcome === 'ok' && d.attempts.length === 1 && d.attempts[0].render === 'browser' && d.title === 'Landing'"
+echo "    level 2 refused (level_below_policy), level 3 by $(value "${report}" "d.attempts[0].engine")"
 
 echo "==> a challenge that resolves by itself is waited for"
-fetch_json "http://fixture.kage.test:8088/challenge" --timeout 40s
+fetch_json "http://fixture.kage.test:8088/challenge" --level 3 --timeout 40s
 [ "${fetch_status}" -eq 0 ] || fail "the challenge was not passed: ${report}"
 check "challenge_passed, with the page behind it" "${report}" \
     "d.outcome === 'challenge_passed' && d.attempts.length === 1 && d.challenge.interstitial === true && d.challenge.resolved === true && d.title === 'Behind the challenge'"
 echo "    $(value "${report}" "d.outcome + ' after ' + d.challenge.waited_ms + ' ms'")"
 
 echo "==> a challenge that does not resolve is a block: the persona cools, another one tries, the breaker opens"
-fetch_json "http://fixture.kage.test:8088/challenge/stuck" --timeout 45s --retries 1
+fetch_json "http://fixture.kage.test:8088/challenge/stuck" --level 3 --timeout 45s --retries 1
 [ "${fetch_status}" -ne 0 ] || fail "a stuck challenge was reported as fetched: ${report}"
 check "two attempts by two personas, both blocked" "${report}" \
     "d.outcome === 'challenge_failed' && d.attempts.length === 2 && d.attempts.every((a) => a.outcome === 'challenge_failed' && a.block !== null) && d.attempts[0].persona_id !== d.attempts[1].persona_id && d.block.vendor === 'cloudflare'"
@@ -184,7 +250,7 @@ cooling="$(psql "SELECT count(*) FROM persona_domain_state WHERE domain = 'fixtu
 [ "${cooling}" -eq 2 ] || fail "${cooling} personas cool for the site, expected 2"
 breaker="$(psql "SELECT state || ' ' || trips || ' ' || (paused_until > now() + interval '25 minutes') FROM domain_breakers WHERE domain = 'fixture.kage.test'")"
 [ "${breaker}" = 'open 1 true' ] || fail "the breaker of the site is: ${breaker}"
-fetch_json "http://fixture.kage.test:8088/"
+fetch_json "http://fixture.kage.test:8088/" --level 3
 [ "${fetch_status}" -ne 0 ] || fail "a paused domain was fetched: ${report}"
 check "the paused domain is answered at once" "${report}" \
     "d.outcome === 'provider_error' && d.reason === 'domain_paused' && d.attempts.length === 0 && d.retry_at !== null"

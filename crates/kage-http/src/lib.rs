@@ -20,6 +20,8 @@
 //! - [`selftest`]: the fingerprint self-test (spec §7.4), which compares what
 //!   an echo saw with the values recorded per profile.
 //! - [`timing`]: how connection setup is split into tunnel and handshake.
+//! - [`plain`]: the plain client of level 0 (spec §25): wreq untouched, a
+//!   minimal header set of Kage's, no persona and no jar.
 //!
 //! Every request goes through the client's proxy. Nothing in this crate
 //! connects anywhere directly, and nothing in it runs JavaScript or
@@ -33,6 +35,7 @@ pub mod echo;
 pub mod error;
 pub mod fetch;
 pub mod headers;
+pub mod plain;
 pub mod profile;
 pub mod selftest;
 pub mod site;
@@ -45,7 +48,11 @@ pub use cookies::{
 };
 pub use error::{HttpError, Stage};
 pub use fetch::{FetchSpec, Fetched, Guard, Hop};
-pub use headers::{CallerHeaders, FORWARDING_HEADERS, HeaderError, IdentityOverride, RequestKind};
+pub use headers::{
+    CallerHeaders, FORWARDING_HEADERS, HeaderError, IdentityOverride, RequestKind,
+    plain_denied_reason,
+};
+pub use plain::{PLAIN_ACCEPT, PLAIN_ACCEPT_ENCODING, PlainClient, PlainSpec};
 pub use profile::{Family, ProfileChoice, ProfileError};
 pub use subresources::SubresourceReport;
 
@@ -86,6 +93,24 @@ pub fn check_config(config: &kage_core::config::Config) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether level 1 can be had with this configuration (spec §25): an
+/// engine major the configuration names resolves to an http profile.
+/// While none does, level 1 is refused (`level_unavailable`): a persona's
+/// http client is a browser's wire fingerprint, and a version without a
+/// verified profile has none.
+pub fn level_one_available(config: &kage_core::config::Config) -> bool {
+    use kage_core::domain::{ClaimedOs, Engine};
+
+    [
+        (Engine::Chromium, config.engines.chromium.browser_major),
+        (Engine::Firefox, config.engines.firefox.browser_major),
+    ]
+    .into_iter()
+    .any(|(engine, major)| {
+        major.is_some_and(|major| profile::resolve(engine, major, ClaimedOs::Windows).is_some())
+    })
+}
+
 /// What the http path can present as in this build and with this
 /// configuration, for `kage config check`.
 pub fn describe(config: &kage_core::config::Config) -> serde_json::Value {
@@ -121,6 +146,8 @@ pub fn describe(config: &kage_core::config::Config) -> serde_json::Value {
             "firefox": engine(Engine::Firefox, config.engines.firefox.browser_major),
         },
         "fingerprint_fixtures": selftest::fixtures().len(),
+        // Whether a request may name level 1 (spec §25).
+        "level_one": level_one_available(config),
         // Whose echo a scheduled self-test would ask; none without the
         // operator's own.
         "scheduled_selftest": config.selftest.http.echo_url.is_some(),
@@ -131,7 +158,7 @@ pub fn describe(config: &kage_core::config::Config) -> serde_json::Value {
 mod tests {
     use kage_core::config::Config;
 
-    use super::{CRATE_NAME, check_config, describe};
+    use super::{CRATE_NAME, check_config, describe, level_one_available};
 
     fn config(extra: &[(&str, &str)]) -> Config {
         let mut pairs = vec![
@@ -173,6 +200,27 @@ mod tests {
         assert!(described["engines"]["chromium"]["profile"].is_null());
         assert_eq!(described["fingerprint_fixtures"], 48);
         assert_eq!(described["scheduled_selftest"], false);
+        // No major named: no level 1.
+        assert_eq!(described["level_one"], false);
+    }
+
+    #[test]
+    fn level_one_needs_a_named_major_with_a_profile() {
+        assert!(!level_one_available(&config(&[])));
+        // The shipped majors have no profile.
+        assert!(!level_one_available(&config(&[
+            ("KAGE__ENGINES__CHROMIUM__BROWSER_MAJOR", "155"),
+            ("KAGE__ENGINES__FIREFOX__BROWSER_MAJOR", "156"),
+        ])));
+        // One engine with one is enough.
+        for (key, major) in [
+            ("KAGE__ENGINES__CHROMIUM__BROWSER_MAJOR", "149"),
+            ("KAGE__ENGINES__FIREFOX__BROWSER_MAJOR", "151"),
+        ] {
+            let config = config(&[(key, major)]);
+            assert!(level_one_available(&config), "{key}");
+            assert_eq!(describe(&config)["level_one"], true);
+        }
     }
 
     #[test]

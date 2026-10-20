@@ -9,7 +9,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use kage_core::domain::{RenderMode, RobotsVerdict};
+use kage_core::domain::{Exit, Level, RobotsVerdict};
 use kage_core::ids::{PersonaId, RequestId};
 use kage_core::policy::RobotsMode;
 use kage_core::schedule::planner::Refusal;
@@ -116,6 +116,11 @@ pub struct ScoutNeed {
     /// How long the scout waits for its turn before it would rather be
     /// told when to come back; `None` waits as long as it takes.
     pub patience: Option<Duration>,
+    /// The level of the work that waits for the file (spec §25): a plain
+    /// client's file is asked for by the plain client, from the site's
+    /// plain exit; any other by the scout's browser, as a person who
+    /// typed its address.
+    pub level: Level,
 }
 
 /// A site's new scout, given by [`Pipeline::replace_scout`].
@@ -282,7 +287,14 @@ impl Pipeline {
             &all_readers,
             &policy,
             readers_needed,
-        );
+        )
+        // A host with one persona has nobody else to ask.
+        .or_else(|| {
+            self.robots
+                .own_scout
+                .then(|| robots::lone_scout(&personas))
+                .flatten()
+        });
         if let Some(scout) = picked
             && remembered != Some(scout)
         {
@@ -342,29 +354,43 @@ impl Pipeline {
         if let Some(known) = self.robots_fresh(&call.origin).await? {
             return Ok(Asked::Known(known));
         }
-        let Some(scout) = self
-            .choose_scout(
-                &call.site,
-                &call.host,
-                &call.need.readers,
-                call.need.readers_needed,
-            )
-            .await?
-        else {
-            metrics::robots("no_scout");
-            return Ok(Asked::NoScout);
+        let plain = call.need.level == Level::Plain;
+        // A plain client from the host's connection needs nobody; any other
+        // asks through the site's scout: its browser, or its proxy as the
+        // site's plain exit.
+        let scout = if plain && self.settings.plain_exit == Exit::Host {
+            None
+        } else {
+            let Some(scout) = self
+                .choose_scout(
+                    &call.site,
+                    &call.host,
+                    &call.need.readers,
+                    call.need.readers_needed,
+                )
+                .await?
+            else {
+                metrics::robots("no_scout");
+                return Ok(Asked::NoScout);
+            };
+            Some(scout)
         };
 
-        // As a person who typed the address: in the scout's browser, once.
         let mut order = FetchOrder::get(call.file.clone(), call.need.priority);
-        order.render = RenderMode::Browser;
+        if plain {
+            order.level = Level::Plain;
+        } else {
+            // As a person who typed the address: in the scout's browser,
+            // once.
+            order.level = Level::Human;
+            order.arrival = Some(Arrival::Typed);
+            order.pin = scout;
+        }
         // The file as the server sent it, beside what the browser made
         // of it.
         order.capture.raw = true;
-        order.arrival = Some(Arrival::Typed);
         order.max_retries = Some(0);
         order.max_body_bytes = Some(self.robots.max_bytes);
-        order.pin = Some(scout);
         order.scout = true;
         order.patience = call.need.patience;
         order.spec = serde_json::json!({ "url": call.file.as_str(), "robots": true });
@@ -387,7 +413,7 @@ impl Pipeline {
     async fn keep_answer(
         &self,
         call: &Call,
-        scout: PersonaId,
+        scout: Option<PersonaId>,
         report: &FetchReport,
     ) -> Result<Asked, SchedulerError> {
         let last = report.last.as_ref();
@@ -432,7 +458,8 @@ impl Pipeline {
         });
         tracing::info!(
             origin = call.origin,
-            persona = %scout,
+            persona = scout.as_ref().map(tracing::field::display),
+            level = call.need.level.label(),
             status,
             outcome = report.outcome.as_str(),
             unreachable = entry.unreachable,
@@ -517,6 +544,7 @@ impl Pipeline {
             readers_needed,
             priority: order.priority,
             patience: order.patience,
+            level: order.level,
         };
         let Some(mut call) = Self::call(&order.url, need) else {
             return Ok(Gate::Open);

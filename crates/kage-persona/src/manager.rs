@@ -31,17 +31,19 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use chrono::{DateTime, Utc};
 use kage_browser::contract::{GeneratePersonaRequest, PersonaSummary};
 use kage_core::alert::{Alert, AlertKind, AlertSeverity, AlertSink};
-use kage_core::config::Config;
+use kage_core::config::{Config, EgressMode};
 use kage_core::domain::{
     ClaimedOs, CoolingReason, Engine, HealthEvent, Persona, PersonaState, Proxy, ProxyEndpoint,
-    ProxyState, Render, SubjectKind,
+    ProxyProviderKind, ProxyState, Render, SubjectKind,
 };
 use kage_core::ids::{HealthEventId, PersonaId, ProxyId};
-use kage_core::persona::mix::{self, MixCounts};
+use kage_core::persona::locale;
+use kage_core::persona::mix::{self, MixCounts, MixEntry};
 use kage_core::persona::place::ZoneSource;
 use kage_core::persona::screen::{self, ScreenClass};
 use kage_core::persona::warmup::{self, PlannedVisit, WarmupSubject};
 use kage_core::persona::{self};
+use kage_core::seed::Seed;
 use kage_http::{ClientFactory, HttpSettings};
 use kage_proxy::{Clock, Pool, PoolEvent};
 use kage_store::{Store, StoreError};
@@ -396,17 +398,75 @@ impl PersonaManager {
             .get(persona.proxy_id)
             .await?
             .ok_or(PersonaError::ProxyNotFound(persona.proxy_id))?;
-        if !proxy.state.is_usable() {
+        // A row this installation does not leave through carries nothing:
+        // the pool's under `egress.mode: direct`, the host's under
+        // `proxies`.
+        if !proxy.state.is_usable() || !self.serves(&proxy) {
             return Err(PersonaError::ProxyNotUsable {
                 proxy: proxy.id,
                 state: proxy.state,
             });
         }
-        if self.pool.egress_unsafe().await? {
+        if self.egress_unsafe().await? {
             return Err(PersonaError::EgressUnsafe);
         }
         let endpoint = self.pool.endpoint(&proxy)?;
         Ok((proxy, endpoint))
+    }
+
+    /// Whether this installation keeps personas for a row and leaves
+    /// through it (spec §25): under `egress.mode: direct` the host's own
+    /// rows only, under `proxies` the pool's only. Never both: a site that
+    /// sees a visitor move from a residential address to the host's has
+    /// seen a bot.
+    pub fn serves(&self, proxy: &Proxy) -> bool {
+        (proxy.provider == ProxyProviderKind::Host)
+            == (self.config.egress.mode == EgressMode::Direct)
+    }
+
+    /// Whether a leak of the pool stops everything: not when nothing
+    /// leaves through the pool.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the store fails.
+    pub(crate) async fn egress_unsafe(&self) -> Result<bool, PersonaError> {
+        if self.config.egress.mode == EgressMode::Direct {
+            return Ok(false);
+        }
+        Ok(self.pool.egress_unsafe().await?)
+    }
+
+    /// The place of a persona of `engine` with `seed` behind `proxy`:
+    /// what the proxy's geo record says (spec §6.1). For a row of the
+    /// host's own connection what the operator declared wins (spec §25):
+    /// its country, which a lookup that disagrees only counts against
+    /// (`geo_mismatch`), and its locale.
+    fn place_for(&self, proxy: &Proxy, engine: Engine, seed: &Seed) -> Place {
+        let direct = &self.config.egress.direct;
+        if proxy.provider != ProxyProviderKind::Host || direct.country.is_none() {
+            return lifecycle::place_of(proxy, engine, seed);
+        }
+        let mut declared = proxy.clone();
+        declared.country = direct.country;
+        // A lookup that names another country says nothing of the declared
+        // place: neither its time zone nor its position is taken.
+        if declared
+            .observed_geo()
+            .is_some_and(|geo| Some(geo.country) != direct.country)
+            && let Some(health) = declared.last_health.as_mut()
+        {
+            health.geo = None;
+        }
+        let mut place = lifecycle::place_of(&declared, engine, seed);
+        if let Some(locale) = direct
+            .locale
+            .as_deref()
+            .and_then(|tag| locale::declared(tag, engine))
+        {
+            place.locale = locale;
+        }
+        place
     }
 
     /// A live persona's proxy, and the endpoint its browser or its http
@@ -470,7 +530,10 @@ impl PersonaManager {
         let Some(proxy) = self.pool.get(proxy).await? else {
             return Ok(None);
         };
-        if !proxy.state.is_live() {
+        // A row this installation does not leave through keeps what it has
+        // and gets nothing new: its personas wait for the mode they were
+        // made under.
+        if !proxy.state.is_live() || !self.serves(&proxy) {
             return Ok(None);
         }
         if let Some(existing) = self.store.personas().get_by_proxy(proxy.id).await? {
@@ -571,8 +634,28 @@ impl PersonaManager {
 
         // Engine and system: the entry the pool is shortest of, the
         // country of the new persona first.
-        let country = proxy.effective_country();
-        let entries = &self.config.personas.mix;
+        let country = self.place_for(proxy, Engine::Chromium, &seed).country;
+        // The host's personas run the engines the operator names, if any.
+        let named: Vec<MixEntry>;
+        let entries: &[MixEntry] = match &self.config.egress.direct.engines {
+            Some(engines) if proxy.provider == ProxyProviderKind::Host => {
+                named = self
+                    .config
+                    .personas
+                    .mix
+                    .iter()
+                    .filter(|entry| engines.contains(&entry.engine))
+                    .copied()
+                    .collect();
+                if named.is_empty() {
+                    return Err(PersonaError::Mix(
+                        "egress.direct.engines names no engine of personas.mix".to_owned(),
+                    ));
+                }
+                &named
+            }
+            _ => &self.config.personas.mix,
+        };
         let live = self.store.personas().list_live().await?;
         let (counts, totals) = MixCounts::of(
             entries,
@@ -590,7 +673,7 @@ impl PersonaManager {
             return Err(PersonaError::CrossOsClaim { engine, os });
         }
 
-        let place = lifecycle::place_of(proxy, engine, &seed);
+        let place = self.place_for(proxy, engine, &seed);
         let class = screen::draw(engine, os, &seed);
         let configured_major = match engine {
             Engine::Chromium => self.config.engines.chromium.browser_major,
@@ -717,7 +800,7 @@ impl PersonaManager {
     /// Brings a persona in step with its proxy: its state, and the place
     /// the proxy's geo record gives.
     async fn follow(&self, persona: Persona, proxy: &Proxy) -> Result<Persona, PersonaError> {
-        let place = lifecycle::place_of(proxy, persona.engine, &persona.seed);
+        let place = self.place_for(proxy, persona.engine, &persona.seed);
         let proxy_state = proxy.state;
         let Some((change, moved, cooled, updated)) = self
             .store
@@ -932,7 +1015,11 @@ impl PersonaManager {
         for persona in self.store.personas().list_live().await? {
             if let Some(proxy) = proxies.get(&persona.proxy_id) {
                 covered.insert(proxy.id);
-                self.follow(persona, proxy).await?;
+                // A persona of a row this installation does not leave
+                // through waits as it is.
+                if self.serves(proxy) {
+                    self.follow(persona, proxy).await?;
+                }
             } else {
                 report.retired.push(persona.id);
                 self.retire(persona.id, REASON_PROXY_RETIRED).await?;
@@ -940,7 +1027,9 @@ impl PersonaManager {
         }
         let mut missing: Vec<&Proxy> = proxies
             .values()
-            .filter(|proxy| proxy.state.is_usable() && !covered.contains(&proxy.id))
+            .filter(|proxy| {
+                proxy.state.is_usable() && self.serves(proxy) && !covered.contains(&proxy.id)
+            })
             .collect();
         // Oldest first, so that a restart draws the mix in the same order.
         missing.sort_by_key(|proxy| proxy.id);

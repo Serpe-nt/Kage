@@ -10,8 +10,15 @@
 # subdomain that does not override it.
 #
 # Fields:
-#   render             auto | http | browser. `http` marks a domain as known
-#                      lenient; with `auto` an unknown domain uses the browser.
+#   min_level          the lowest camouflage level a request for the domain
+#                      may name (spec §25), 0 to 3: 0 a plain HTTP client
+#                      that says it is Kage, 1 a persona's http client, 2 a
+#                      persona's browser that loads the page and leaves, 3
+#                      a persona's browser as a person. A request below it
+#                      is refused (level_below_policy), never raised. Kage's
+#                      own traffic (scouts, warm-up, self-tests) is not
+#                      judged by it. The `render` of 1.x is gone: a file
+#                      that still has it is refused.
 #   countries          only personas whose proxy is in one of these countries
 #   engines            only personas on these engines (chromium, firefox)
 #   pacing             a profile from pacing-profiles.yaml
@@ -54,13 +61,14 @@
 #                      enforce  only personas that are awake; at night
 #                               nothing is fetched from the domain
 #                      ignore   the hour is not looked at
-#   min_dwell          the shortest time a persona stays on a page of a
-#                      browser render, whatever a request asks for. A
-#                      request may shorten the default behavior (less
-#                      scrolling, a shorter dwell) but never below this:
-#                      a page's own scripts need the time to run and
-#                      report, and a page left at once is what the http
-#                      path looks like. Between 500ms and 45s.
+#   min_dwell          the shortest time a persona stays on a page in a
+#                      browser (level 2 and 3), whatever a request asks
+#                      for. A request may shorten the default behavior
+#                      (less scrolling, a shorter dwell) but never below
+#                      this: a page's own scripts need the time to run and
+#                      report. At level 2 the dwell is drawn above it
+#                      (median one and a half times, rarely three times).
+#                      Between 500ms and 45s.
 #   behavior_locked    true: requests cannot choose their own behavior; every
 #                      page gets the default (scroll to 0.6 to 0.9 of the
 #                      page, a human dwell)
@@ -95,7 +103,7 @@
 # use is decided in field validation (M13).
 
 defaults:
-  render: auto
+  min_level: 0
   pacing: human
   pacing_locked: false
   robots: ignore
@@ -116,12 +124,15 @@ defaults:
     soft_block: 6h
     short: 30m
 
-# There is no fixed target list, so no domain is configured out of the box.
-# Examples:
+# There is no fixed target list. The domains below are the detection pages
+# the self-tests and an operator's checks look at: only a person is shown
+# to them, never a client that is not pretending to be one.
+#
+# Further examples:
 #
 #   domains:
 #     "example.org":
-#       render: browser
+#       min_level: 3
 #       countries: ["DE", "AT"]
 #       engines: ["chromium", "firefox"]
 #       pacing: human
@@ -130,6 +141,12 @@ defaults:
 #       referer_strategy: search_engine
 #       cooldowns: { rate_limited: 2h, forbidden: 24h }
 #     "api.lenient.example":
-#       render: http
 #       pacing: fast
-domains: {}
+domains:
+  bot.sannysoft.com: { min_level: 3 }
+  abrahamjuliot.github.io: { min_level: 3 }
+  browserscan.net: { min_level: 3 }
+  pixelscan.net: { min_level: 3 }
+  browserleaks.com: { min_level: 3 }
+  fingerprint.com: { min_level: 3 }
+  demo.fingerprint.com: { min_level: 3 }

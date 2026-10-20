@@ -547,6 +547,93 @@ export function defineParitySuite(subject: ParitySubject): void {
       });
     });
 
+    it('sends nothing at all on a still visit, and reports the visit all the same (1.5.0)', async () => {
+      await withContext('still', async (context) => {
+        await site.reset();
+        const run = 'still-1';
+        const leave = secure(`/leave/?run=${run}`);
+        // The engine holds the rule of the contract too: a still visit that
+        // asks for a hand is refused, and nothing is loaded for it.
+        await expect(
+          go(context, leave, {
+            behavior: { seed: SEEDS.first, mode: 'still', scroll_depth: 0.5, wander: true },
+          }),
+        ).rejects.toMatchObject({ code: 'invalid_request' });
+        expect(await askedFor('/leave/')).toEqual([]);
+
+        const began = Date.now();
+        const visit = await go(context, leave, {
+          wait: { until: 'load', selector: 'body[data-ready]' },
+          dwell_ms: 1500,
+          behavior: { seed: SEEDS.first, mode: 'still', entry: { strategy: 'direct' } },
+        });
+        const took = Date.now() - began;
+        expect(visit.error).toBeNull();
+        expect(visit).toMatchObject({ status: 200, final_url: leave, title: 'Leave' });
+        expect(visit.behavior).toEqual({
+          seed: SEEDS.first,
+          profile_id: motorProfile(persona.seed).id,
+          entry: {
+            strategy: 'direct',
+            outcome: 'arrived',
+            from_url: null,
+            referer: null,
+            backs: null,
+          },
+          dwell_ms: 1500,
+          moves: 0,
+          positions: 0,
+          overshoots: 0,
+          clicks: 0,
+          notches: 0,
+          keys: 0,
+          typos: 0,
+          wanders: 0,
+          patience_ms: null,
+          scroll_reached: null,
+          scroll_ended_by: null,
+        });
+        expect(took).toBeGreaterThanOrEqual(1500);
+        // Arrived as a typed address arrives.
+        const arrived = await lastRequest(`/leave/?run=${run}`);
+        expect(headerOf(arrived, 'referer')).toBeNull();
+        expect(headerOf(arrived, 'sec-fetch-site')).toBe('none');
+
+        // Left by a typed address too; then the page says what it saw of its visitor.
+        const next = await go(context, secure('/landing?from=still'));
+        expect(next.error).toBeNull();
+        const left = await leaveReport(run);
+        const saw = left.events.map((event) => event.type);
+        measured('a still visit', {
+          took_ms: took,
+          saw,
+          moves: left.moves,
+          first_move: left.firstMove,
+          wheels: left.wheels,
+          activation: left.activation,
+        });
+        // No wheel, no button, no key, and nothing a browser takes for its user.
+        expect(left).toMatchObject({ wheels: 0, scrollY: 0, activation: false });
+        expect(pressesOf(left)).toEqual([]);
+        // And no hand: Chrome itself tells a page that has just loaded
+        // where a resting pointer is, with one `mousemove` about 100 ms in,
+        // as it does on a person's machine (docs/runbooks/engine-chromium.md);
+        // Firefox tells nothing. Any other movement, and any during the
+        // dwell, would have been sent.
+        expect(left.moves).toBeLessThanOrEqual(1);
+        if (left.moves === 1) {
+          expect(left.firstMove).toBe(left.lastMove);
+          expect(left.firstMove ?? Number.NaN).toBeLessThan(1000);
+        } else {
+          expect(left.firstMove).toBeNull();
+        }
+        for (const input of ['untrusted-mousemove', 'keydown', 'keyup']) {
+          expect(saw, input).not.toContain(input);
+        }
+        expect(saw).toContain('pagehide');
+      });
+    });
+
     it('keeps cookies across two opens of one persona and not across personas', async () => {
       const visits = (result: PageResult) =>
         /visits=(\d+)/.exec(

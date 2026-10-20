@@ -1,10 +1,13 @@
-//! What a site's policy and the configuration make of what a request says
-//! about `robots.txt`, the response cache and extraction (spec §14, §15).
+//! What a site's policy and the configuration make of a request's level and
+//! of what it says about `robots.txt`, the response cache and extraction
+//! (spec §14, §15, §25).
 //!
 //! [`request::plan`](super::request::plan) checks a request by itself.
-//! What is checked here needs the site: whether the request's wish about
-//! `robots.txt` is one its policy allows, for how long its result may be
-//! served from the cache and to whom, and the key the cache knows it by.
+//! What is checked here needs the site or the installation: whether the
+//! level is at the site's floor and can be had at all, whether the
+//! request's wish about `robots.txt` is one its policy allows, for how long
+//! its result may be served from the cache and to whom, and the key the
+//! cache knows it by.
 //! Policies are reloaded while the server runs, so a request is settled
 //! when it is accepted and again when it is worked.
 
@@ -12,8 +15,9 @@ use std::time::Duration;
 
 use kage_core::cache::CacheKey;
 use kage_core::config::Config;
+use kage_core::domain::Level;
 use kage_core::ids::ApiKeyId;
-use kage_core::policy::PolicySet;
+use kage_core::policy::{EffectivePolicy, PolicySet};
 use kage_scheduler::{CachePlan, Conflict, robots};
 use serde_json::{Map, Value};
 
@@ -35,8 +39,8 @@ pub(crate) enum CacheUse {
 }
 
 /// The fields of a request that shape what its result holds besides the
-/// address, the method, the body, the headers, the render mode and the
-/// include set: what the browser waits for, what the persona does on the
+/// address, the method, the body, the headers, the level and the include
+/// set: what the browser waits for, what the persona does on the
 /// page, how a screenshot and a PDF are made, which responses are kept,
 /// what is extracted, the size limit, and the persona hints.
 const SHAPING: [&str; 8] = [
@@ -49,6 +53,45 @@ const SHAPING: [&str; 8] = [
     "max_body_bytes",
     "persona",
 ];
+
+/// Whether the level can be had for the site: at or above its floor, and
+/// one this installation has.
+///
+/// # Errors
+///
+/// `level_below_policy` under the site's `min_level`, `level_unavailable`
+/// for level 1 while no configured browser version has an http profile.
+pub(crate) fn check_level(
+    level: Level,
+    policy: &EffectivePolicy,
+    config: &Config,
+    host: &str,
+) -> ApiResult<()> {
+    if !policy.admits(level) {
+        return Err(ApiError::new(
+            ErrorCode::LevelBelowPolicy,
+            format!(
+                "the policy for {host} asks for level {} at least, and this request is level \
+                 {}: a request is never raised. Name level {} or higher",
+                policy.min_level.number(),
+                level.number(),
+                policy.min_level.number()
+            ),
+        )
+        .with("field", "level")
+        .with("min_level", policy.min_level.number()));
+    }
+    if level == Level::Emulated && !kage_http::level_one_available(config) {
+        return Err(ApiError::new(
+            ErrorCode::LevelUnavailable,
+            "level 1 is a persona's http client with its browser's verified wire fingerprint, \
+             and no browser version this installation runs has one yet: name level 0 for a \
+             plain client, or 2 or 3 for a browser",
+        )
+        .with("field", "level"));
+    }
+    Ok(())
+}
 
 fn conflict(conflict: Conflict, host: &str) -> ApiError {
     let (code, detail) = match conflict {
@@ -97,6 +140,7 @@ pub(crate) fn settle(
         .unwrap_or_default();
     let policy = policies.domains.resolve(&host);
 
+    check_level(planned.level, &policy, config, &host)?;
     robots::mode(policy.robots, planned.order.robots).map_err(|wish| conflict(wish, &host))?;
 
     if let Some(options) = planned.order.extract.as_mut() {
@@ -154,7 +198,7 @@ pub(crate) fn settle(
         body: order.body.as_deref(),
         request_kind: request.request_kind.as_str(),
         headers: &order.headers,
-        render: order.render,
+        level: order.level,
         include: &include,
         options: &options,
         scope,
@@ -203,6 +247,7 @@ human:
 
     const DOMAINS: &str = "
 domains:
+  floored.example: { min_level: 2 }
   enforced.example: { robots: enforce }
   reported.example: { robots: report }
   shared.example: { cache: { shared: true, max_ttl: 10m, ttl: 2m } }
@@ -234,12 +279,29 @@ domains:
         }
     }
 
-    fn settled_as(body: Value, key: ApiKeyId, cache: CacheUse) -> Result<Planned, ApiError> {
+    /// An installation whose chromium has an http profile, so that level 1
+    /// can be had.
+    const WITH_LEVEL_ONE: &[(&str, &str)] = &[("KAGE__ENGINES__CHROMIUM__BROWSER_MAJOR", "149")];
+
+    /// A request settled; at level 3 unless the body names another.
+    fn settled_in(
+        mut body: Value,
+        key: ApiKeyId,
+        cache: CacheUse,
+        config: &Config,
+    ) -> Result<Planned, ApiError> {
+        if body.get("level").is_none() {
+            body["level"] = json!(3);
+        }
         let request: FetchRequest = serde_json::from_value(body).unwrap();
         let policies = policies();
         let mut planned = plan(&request, &policies.pacing).unwrap();
-        settle(&mut planned, &request, &config(&[]), &policies, key, cache)?;
+        settle(&mut planned, &request, config, &policies, key, cache)?;
         Ok(planned)
+    }
+
+    fn settled_as(body: Value, key: ApiKeyId, cache: CacheUse) -> Result<Planned, ApiError> {
+        settled_in(body, key, cache, &config(WITH_LEVEL_ONE))
     }
 
     fn settled(body: Value) -> Result<Planned, ApiError> {
@@ -252,6 +314,46 @@ domains:
             .order
             .cache
             .unwrap()
+    }
+
+    #[test]
+    fn a_level_is_had_at_the_sites_floor_or_above_and_level_one_needs_a_profile() {
+        let at = |host: &str, level: u64| {
+            settled(json!({ "url": format!("https://{host}/a"), "level": level }))
+        };
+        for level in 0..=3 {
+            assert!(at("quiet.example", level).is_ok(), "{level}");
+        }
+        // Under the floor: refused, never raised.
+        for level in [0, 1] {
+            let refused = at("www.floored.example", level).unwrap_err();
+            assert_eq!(refused.code(), ErrorCode::LevelBelowPolicy, "{level}");
+            let problem = refused.problem();
+            assert_eq!(problem.extensions["field"], "level");
+            assert_eq!(problem.extensions["min_level"], 2);
+        }
+        for level in [2, 3] {
+            let planned = at("floored.example", level).unwrap();
+            assert_eq!(u64::from(planned.level.number()), level);
+        }
+        // Level 1 in an installation whose browsers have no http profile.
+        let refused = settled_in(
+            json!({ "url": "https://quiet.example/a", "level": 1 }),
+            ApiKeyId::new(),
+            CacheUse::ReadAndFill,
+            &config(&[("KAGE__ENGINES__CHROMIUM__BROWSER_MAJOR", "155")]),
+        )
+        .unwrap_err();
+        assert_eq!(refused.code(), ErrorCode::LevelUnavailable);
+        for level in [0, 2, 3] {
+            let fine = settled_in(
+                json!({ "url": "https://quiet.example/a", "level": level }),
+                ApiKeyId::new(),
+                CacheUse::ReadAndFill,
+                &config(&[]),
+            );
+            assert!(fine.is_ok(), "{level}");
+        }
     }
 
     #[test]
@@ -294,6 +396,7 @@ domains:
     fn extraction_calls_thin_what_the_configuration_says() {
         let request: FetchRequest = serde_json::from_value(json!({
             "url": "https://quiet.example/a",
+            "level": 3,
             "include": ["extract"],
             "extract": { "markdown": false },
         }))
@@ -428,7 +531,7 @@ domains:
             json!({ "url": "https://QUIET.example/a?b=1#top" }),
             json!({ "url": "https://quiet.example/a?b=1&utm_campaign=x" }),
             json!({ "include": ["headers", "dom"] }),
-            json!({ "render": "auto", "method": "GET" }),
+            json!({ "level": 3, "method": "GET" }),
             // How long, how patiently and how politely is no part of it.
             json!({ "cache_ttl_s": 60 }),
             json!({ "timeout_ms": 20_000, "max_retries": 0 }),
@@ -442,13 +545,15 @@ domains:
         for other in [
             json!({ "url": "https://quiet.example/a?b=2" }),
             json!({ "url": "http://quiet.example/a?b=1" }),
-            json!({ "render": "browser" }),
-            json!({ "render": "http" }),
-            json!({ "render": "http", "method": "HEAD" }),
-            json!({ "render": "http", "headers": { "X-Api": "1" } }),
-            json!({ "render": "http", "method": "POST", "body": "a=1",
+            json!({ "level": 2 }),
+            json!({ "level": 1 }),
+            json!({ "level": 0 }),
+            json!({ "level": 1, "method": "HEAD" }),
+            json!({ "level": 1, "headers": { "X-Api": "1" } }),
+            json!({ "level": 0, "headers": { "X-Api": "1" } }),
+            json!({ "level": 1, "method": "POST", "body": "a=1",
                     "headers": { "Content-Type": "text/plain" } }),
-            json!({ "render": "http", "method": "POST", "body": "a=2",
+            json!({ "level": 1, "method": "POST", "body": "a=2",
                     "headers": { "Content-Type": "text/plain" } }),
             json!({ "include": ["dom"] }),
             json!({ "include": ["dom", "headers", "extract"] }),

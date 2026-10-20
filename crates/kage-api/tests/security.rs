@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use axum::body::Body;
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
 use axum::http::{Method, Request, StatusCode};
-use common::sched::lab::{LENIENT_FAST, article};
+use common::sched::lab::{FAST, article};
 use common::{Api, read_all, request};
 use kage_core::domain::Scope;
 use kage_core::duration::HumanDuration;
@@ -48,7 +48,7 @@ fn parsed(answer: &str) -> (u16, Option<Value>) {
 
 #[tokio::test]
 async fn a_body_or_a_request_target_past_its_limit_is_refused() {
-    let mut api = Api::start_with(0, 149, LENIENT_FAST, |config| {
+    let mut api = Api::start_with(0, 149, FAST, |config| {
         config.server.max_body_bytes = 4096;
         config.server.max_uri_bytes = 512;
     })
@@ -84,9 +84,13 @@ async fn a_body_or_a_request_target_past_its_limit_is_refused() {
     .await
     .problem(StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large");
     // A body below the limit is read: this one fails for what it says.
-    api.post(&token, "/v1/fetch", &json!({ "url": "ftp://example.org/" }))
-        .await
-        .problem(StatusCode::UNPROCESSABLE_ENTITY, "invalid_url");
+    api.post(
+        &token,
+        "/v1/fetch",
+        &json!({ "url": "ftp://example.org/", "level": 1 }),
+    )
+    .await
+    .problem(StatusCode::UNPROCESSABLE_ENTITY, "invalid_url");
 
     // A request target past its limit, with or without a key.
     let target = format!("/v1/policies/domains/example.org?pad={}", "x".repeat(600));
@@ -101,7 +105,7 @@ async fn a_body_or_a_request_target_past_its_limit_is_refused() {
 
 #[tokio::test]
 async fn the_listener_refuses_heads_that_are_too_long_and_cuts_off_clients_that_trickle() {
-    let mut api = Api::start_with(0, 149, LENIENT_FAST, |config| {
+    let mut api = Api::start_with(0, 149, FAST, |config| {
         config.server.max_header_bytes = 8192;
         config.server.max_headers = 16;
         config.server.header_read_timeout = millis(600);
@@ -238,7 +242,7 @@ async fn the_listener_refuses_heads_that_are_too_long_and_cuts_off_clients_that_
 
 #[tokio::test]
 async fn cors_is_off_until_origins_are_named() {
-    let mut api = Api::start(0, 149, LENIENT_FAST).await;
+    let mut api = Api::start(0, 149, FAST).await;
     let token = api.key(&[Scope::Fetch]).await;
     let at = "/v1/policies/domains/example.org";
     let with_origin = |verb: Method, origin: &str| {
@@ -305,7 +309,7 @@ async fn cors_is_off_until_origins_are_named() {
 
 #[tokio::test]
 async fn what_is_not_served_is_a_problem_document_too() {
-    let mut api = Api::start(0, 149, LENIENT_FAST).await;
+    let mut api = Api::start(0, 149, FAST).await;
     let token = api.key(&[Scope::Fetch, Scope::Sessions]).await;
 
     // No such path, with or without a key: nothing says which paths exist
@@ -382,7 +386,7 @@ async fn what_is_not_served_is_a_problem_document_too() {
 
 #[tokio::test]
 async fn readiness_says_what_is_missing_and_a_stop_lets_requests_in_flight_finish() {
-    let mut api = Api::start(1, 149, LENIENT_FAST).await;
+    let mut api = Api::start(1, 149, FAST).await;
     let token = api.key(&[Scope::Fetch]).await;
     Mock::given(method("GET"))
         .and(path("/slow"))
@@ -437,7 +441,7 @@ async fn readiness_says_what_is_missing_and_a_stop_lets_requests_in_flight_finis
     // A stop: readiness says so at once, the fetch in flight gets its
     // answer, and nothing new is accepted.
     let mut served = api.listen().await;
-    let body = json!({ "url": Api::url("/slow"), "render": "http" }).to_string();
+    let body = json!({ "url": Api::url("/slow"), "level": 1 }).to_string();
     let head = format!(
         "POST /v1/fetch HTTP/1.1\r\nHost: kage\r\nAuthorization: Bearer {token}\r\n\
          Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",

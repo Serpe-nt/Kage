@@ -159,6 +159,8 @@ fn the_fixtures_say_what_is_known_about_each_browser() {
                 .is_some_and(|extension| extension == "json")
         })
         .filter_map(|path| path.file_stem()?.to_str().map(str::to_owned))
+        // The plain client of level 0 is no profile's (tests/plain.rs).
+        .filter(|stem| stem != "plain")
         .collect();
     assert_eq!(on_disk, stems, "fixture files and mapped profiles differ");
 

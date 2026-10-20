@@ -72,7 +72,7 @@
     {
       "id": 2,
       "type": "timeseries",
-      "title": "Attempts by render, per minute",
+      "title": "Attempts by level, per minute",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -90,8 +90,8 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "sum by (render) (rate(kage_attempts_total[5m])) * 60",
-          "legendFormat": "{{render}}"
+          "expr": "sum by (level) (rate(kage_attempts_total[5m])) * 60",
+          "legendFormat": "level {{level}}"
         }
       ],
       "fieldConfig": {
@@ -138,8 +138,8 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "histogram_quantile(0.5, sum by (le, render) (rate(kage_attempt_duration_seconds_bucket[5m])))",
-          "legendFormat": "p50 {{render}}"
+          "expr": "histogram_quantile(0.5, sum by (le, level) (rate(kage_attempt_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50 level {{level}}"
         },
         {
           "datasource": {
@@ -147,8 +147,8 @@
             "uid": "prometheus"
           },
           "refId": "B",
-          "expr": "histogram_quantile(0.95, sum by (le, render) (rate(kage_attempt_duration_seconds_bucket[5m])))",
-          "legendFormat": "p95 {{render}}"
+          "expr": "histogram_quantile(0.95, sum by (le, level) (rate(kage_attempt_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95 level {{level}}"
         }
       ],
       "fieldConfig": {

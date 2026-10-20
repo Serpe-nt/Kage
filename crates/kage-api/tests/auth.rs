@@ -16,7 +16,7 @@ use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
-use common::sched::lab::{LENIENT_FAST, article};
+use common::sched::lab::{FAST, article};
 
 async fn with_header(api: &Api, value: &str) -> common::Reply {
     api.send(
@@ -32,7 +32,7 @@ async fn with_header(api: &Api, value: &str) -> common::Reply {
 
 #[tokio::test]
 async fn a_request_without_a_key_or_with_a_wrong_one_is_refused() {
-    let mut api = Api::start(0, 149, LENIENT_FAST).await;
+    let mut api = Api::start(0, 149, FAST).await;
     let (id, token) = api.key_with(&[Scope::Fetch], ROOMY).await;
 
     // No header at all.
@@ -80,7 +80,7 @@ async fn a_request_without_a_key_or_with_a_wrong_one_is_refused() {
 
 #[tokio::test]
 async fn a_disabled_key_is_refused_and_only_its_holder_learns_why() {
-    let mut api = Api::start(0, 149, LENIENT_FAST).await;
+    let mut api = Api::start(0, 149, FAST).await;
     let (id, token) = api.key_with(&[Scope::Fetch], ROOMY).await;
     let path = "/v1/policies/domains/example.org";
     assert_eq!(api.get(&token, path).await.status, StatusCode::OK);
@@ -109,7 +109,7 @@ async fn a_disabled_key_is_refused_and_only_its_holder_learns_why() {
 
 #[tokio::test]
 async fn every_endpoint_asks_for_its_own_scope() {
-    let mut api = Api::start(0, 149, LENIENT_FAST).await;
+    let mut api = Api::start(0, 149, FAST).await;
     let fetch = api.key(&[Scope::Fetch]).await;
     let sessions = api.key(&[Scope::Sessions]).await;
     let admin = api.key(&[Scope::Admin]).await;
@@ -162,7 +162,7 @@ async fn every_endpoint_asks_for_its_own_scope() {
         .post(
             &fetch,
             "/v1/fetch",
-            &json!({ "url": "https://example.org/", "session_id": "s1" }),
+            &json!({ "url": "https://example.org/", "level": 3, "session_id": "s1" }),
         )
         .await;
     assert_eq!(
@@ -202,7 +202,7 @@ async fn every_endpoint_asks_for_its_own_scope() {
 
 #[tokio::test]
 async fn a_key_at_its_requests_per_minute_is_told_how_long_to_wait() {
-    let mut api = Api::start(0, 149, LENIENT_FAST).await;
+    let mut api = Api::start(0, 149, FAST).await;
     let limits = KeyLimits {
         requests_per_minute: 3,
         ..ROOMY
@@ -229,7 +229,7 @@ async fn a_key_at_its_requests_per_minute_is_told_how_long_to_wait() {
 
 #[tokio::test]
 async fn the_api_as_a_whole_has_a_limit_that_counts_before_a_key_is_looked_at() {
-    let mut api = Api::start_with(0, 149, LENIENT_FAST, |config| {
+    let mut api = Api::start_with(0, 149, FAST, |config| {
         config.server.requests_per_minute = 4;
     })
     .await;
@@ -255,7 +255,7 @@ async fn the_api_as_a_whole_has_a_limit_that_counts_before_a_key_is_looked_at() 
 
 #[tokio::test]
 async fn a_key_has_so_many_requests_in_flight_and_so_many_pages_a_day() {
-    let mut api = Api::start(2, 149, LENIENT_FAST).await;
+    let mut api = Api::start(2, 149, FAST).await;
     Mock::given(method("GET"))
         .and(path("/slow"))
         .respond_with(
@@ -288,7 +288,7 @@ async fn a_key_has_so_many_requests_in_flight_and_so_many_pages_a_day() {
             Method::POST,
             "/v1/fetch",
             Some(&single),
-            Some(&json!({ "url": Api::url("/slow"), "render": "http" })),
+            Some(&json!({ "url": Api::url("/slow"), "level": 1 })),
         );
         tokio::spawn(async move { common::ask(&router, sent).await.status })
     };
@@ -309,7 +309,7 @@ async fn a_key_has_so_many_requests_in_flight_and_so_many_pages_a_day() {
         ..ROOMY
     };
     let (budgeted, token) = api.key_with(&[Scope::Fetch], limits).await;
-    let page = json!({ "url": Api::url("/page"), "render": "http" });
+    let page = json!({ "url": Api::url("/page"), "level": 1 });
     for _ in 0..2 {
         let reply = api.post(&token, "/v1/fetch", &page).await;
         assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.json());
@@ -321,9 +321,13 @@ async fn a_key_has_so_many_requests_in_flight_and_so_many_pages_a_day() {
     let wait: u64 = reply.header("retry-after").unwrap().parse().unwrap();
     assert!((1..=86_400).contains(&wait), "{wait}");
     // A request that is refused before it is a fetch is no page.
-    api.post(&token, "/v1/fetch", &json!({ "url": "ftp://example.org/" }))
-        .await
-        .problem(StatusCode::UNPROCESSABLE_ENTITY, "invalid_url");
+    api.post(
+        &token,
+        "/v1/fetch",
+        &json!({ "url": "ftp://example.org/", "level": 1 }),
+    )
+    .await
+    .problem(StatusCode::UNPROCESSABLE_ENTITY, "invalid_url");
     assert_eq!(
         api.get(&token, "/v1/policies/domains/example.org")
             .await

@@ -7,7 +7,7 @@ mod common;
 
 use axum::http::StatusCode;
 use common::Api;
-use common::sched::lab::{LENIENT_FAST, article};
+use common::sched::lab::{FAST, article};
 use kage_core::domain::Scope;
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
@@ -27,7 +27,7 @@ async fn serve(api: &Api, at: &str) {
 
 #[tokio::test]
 async fn a_session_is_opened_once_looked_at_and_ended() {
-    let mut api = Api::start(2, 149, LENIENT_FAST).await;
+    let mut api = Api::start(2, 149, FAST).await;
     let token = api.key(&[Scope::Sessions]).await;
     let other = api.key(&[Scope::Sessions]).await;
     let admin = api.key(&[Scope::Sessions, Scope::Admin]).await;
@@ -147,7 +147,7 @@ async fn a_session_is_opened_once_looked_at_and_ended() {
 
 #[tokio::test]
 async fn hints_and_a_domain_choose_a_new_sessions_persona_and_bind_an_open_one() {
-    let rules = "defaults: { render: http, pacing: fast, active_hours: ignore }\n\
+    let rules = "defaults: { pacing: fast, active_hours: ignore }\n\
                  domains:\n  firefox-only.example: { engines: [firefox] }\n";
     let mut api = Api::start(2, 149, rules).await;
     let token = api.key(&[Scope::Sessions]).await;
@@ -213,7 +213,7 @@ async fn hints_and_a_domain_choose_a_new_sessions_persona_and_bind_an_open_one()
 
 #[tokio::test]
 async fn a_fetch_in_a_session_is_made_by_its_persona_and_never_opens_or_moves_one() {
-    let mut api = Api::start(3, 149, LENIENT_FAST).await;
+    let mut api = Api::start(3, 149, FAST).await;
     let token = api.key(&[Scope::Fetch, Scope::Sessions]).await;
     let other = api.key(&[Scope::Fetch, Scope::Sessions]).await;
     serve(&api, "/a").await;
@@ -222,7 +222,7 @@ async fn a_fetch_in_a_session_is_made_by_its_persona_and_never_opens_or_moves_on
 
     // A fetch opens nothing.
     let fetch = |at: &str, session: &str, extra: Value| {
-        let mut body = json!({ "url": Api::url(at), "render": "http", "session_id": session });
+        let mut body = json!({ "url": Api::url(at), "level": 1, "session_id": session });
         for (name, value) in extra.as_object().cloned().unwrap_or_default() {
             body[name.as_str()] = value;
         }

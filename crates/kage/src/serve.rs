@@ -29,9 +29,10 @@ use kage_api::metrics::{MetricsHandle, UPKEEP_EVERY};
 use kage_api::serve::ServeSettings;
 use kage_api::{ApiParts, ApiState, DirectTransport, EngineParts};
 use kage_core::alert::AlertSink;
-use kage_core::config::Config;
+use kage_core::config::{Config, DirectEgressConfig, EgressMode};
 use kage_core::policy::PolicyStore;
 use kage_persona::PersonaProbeClients;
+use kage_proxy::health::HostIp;
 use kage_proxy::{HealthChecker, Pool, SystemClock};
 use kage_store::{ArtifactStore, Store};
 use tokio::net::TcpListener;
@@ -302,8 +303,9 @@ pub(crate) async fn serve(
 /// proxy, retires it with its proxy, and runs warm-up visits and scheduled
 /// self-tests, each of which asks the scheduler first. A health probe
 /// presents as the persona behind the proxy it checks. Without a provider
-/// nothing is started, and every fetch will fail: Kage never connects to a
-/// target directly.
+/// nothing is started, and every fetch will fail: under `egress.mode:
+/// proxies` Kage never connects to a target from the host's own address.
+/// Under `direct` see [`start_direct`].
 async fn start_proxy_pool(
     config: &Config,
     store: &Store,
@@ -314,6 +316,24 @@ async fn start_proxy_pool(
         Pool::from_config(config, store.clone(), Arc::clone(&alerts))
             .context("cannot set up the proxy pool")?,
     );
+    if config.egress.mode == EgressMode::Direct {
+        return start_direct(config, store, alerts, policies, pool).await;
+    }
+    // Under the pool none of the host's own rows may live: their personas
+    // retire with them (spec §25, never both).
+    let retired = pool
+        .host_rows()
+        .await
+        .context("cannot read the host's rows")?;
+    if !retired.is_empty() {
+        pool.keep_host_rows(0, None)
+            .await
+            .context("cannot retire the host's rows")?;
+        tracing::warn!(
+            rows = retired.len(),
+            "egress.mode is proxies: the host's own rows and their personas were retired"
+        );
+    }
     if pool.provider_kind().is_none() {
         let stored = pool
             .live()
@@ -392,6 +412,142 @@ async fn start_proxy_pool(
         tasks,
         engine: Some((engine, checker)),
     })
+}
+
+/// Starts what a host that leaves from its own connection runs
+/// (`egress.mode: direct`, spec §25, ADR 0012): its rows
+/// (`egress.direct.personas`), their place from the host's own geo lookup
+/// or the operator's declaration, the engine, and the persona manager,
+/// which generates, warms up and self-tests their personas like any. The
+/// pool is neither synced, probed nor used: nothing leaves through it.
+/// Without a declared country and without a lookup that answers there is
+/// no host persona yet, and level 0 works all the same; the lookup is
+/// tried again once per `proxies.health.geo_interval`.
+async fn start_direct(
+    config: &Config,
+    store: &Store,
+    alerts: Arc<dyn AlertSink>,
+    policies: Arc<PolicyStore>,
+    pool: Arc<Pool>,
+) -> anyhow::Result<Started> {
+    if pool.provider_kind().is_some() {
+        tracing::warn!(
+            "egress.mode is direct and a proxy provider is configured: the pool is idle, \
+             neither synced, probed nor used"
+        );
+    }
+    let health = &config.proxies.health;
+    let host = Arc::new(
+        HostIp::new(health.host_ip_url.clone(), health.timeout.get())
+            .context("cannot set up the host's own lookup")?,
+    );
+    let direct = config.egress.direct.clone();
+    let geo_url = health.geo_url.clone();
+    place_host(&pool, &host, &direct, geo_url.as_deref()).await?;
+
+    let mut engine = Engine::start(
+        config,
+        store,
+        Arc::clone(&pool),
+        alerts,
+        policies,
+        config.forwarder.bind,
+    )
+    .await?;
+    engine.serve();
+    let personas = Arc::clone(&engine.personas);
+    let stored = personas
+        .load()
+        .await
+        .context("cannot read the stored personas")?;
+    tracing::info!(
+        personas = stored,
+        host_personas = direct.personas,
+        declared_country = direct.country.map(|country| country.to_string()),
+        "egress.mode is direct: the host's own connection, no pool"
+    );
+    let probe_clients =
+        PersonaProbeClients::from_config(personas.directory(), &config.proxies.health)
+            .context("cannot set up the probe clients")?;
+    // Built for the admin API; never run, since nothing of the pool is
+    // probed under direct.
+    let checker = Arc::new(
+        HealthChecker::with_clients(config, Arc::clone(&pool), probe_clients)
+            .context("cannot set up the proxy health checks")?,
+    );
+    let every = health.geo_interval.get();
+    let tasks = vec![
+        tokio::spawn(personas.run(std::future::pending())),
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(every);
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+            // The first tick is now: the place was looked up at start.
+            ticker.tick().await;
+            loop {
+                ticker.tick().await;
+                if let Err(error) = place_host(&pool, &host, &direct, geo_url.as_deref()).await {
+                    tracing::warn!(%error, "the host's place could not be recorded");
+                }
+            }
+        }),
+    ];
+    Ok(Started {
+        tasks,
+        engine: Some((engine, checker)),
+    })
+}
+
+/// Looks the host's own address and place up, directly, keeps its rows,
+/// and records the place on each (spec §25). A declared country makes the
+/// rows without a lookup and is then only verified by it.
+///
+/// # Errors
+///
+/// Fails when the store fails. A lookup that does not answer is logged.
+async fn place_host(
+    pool: &Pool,
+    host: &HostIp,
+    direct: &DirectEgressConfig,
+    geo_url: Option<&str>,
+) -> anyhow::Result<()> {
+    let now = pool.clock().now();
+    let looked = match geo_url {
+        Some(url) => match host.refresh(now).await {
+            Ok(ip) => host.lookup(url).await.map(|lookup| (ip, lookup)),
+            Err(error) => Err(error),
+        }
+        .map_err(|error| error.to_string()),
+        None => Err("proxies.health.geo_url is not set".to_owned()),
+    };
+    if direct.country.is_none()
+        && let Err(error) = &looked
+    {
+        tracing::error!(
+            %error,
+            "egress.mode is direct and the host's place could not be looked up: no host persona \
+             until it can, or until egress.direct.country declares it; level 0 works all the same"
+        );
+        return Ok(());
+    }
+    let rows = pool
+        .keep_host_rows(direct.personas, direct.country)
+        .await
+        .context("cannot keep the host's rows")?;
+    match looked {
+        Ok((ip, lookup)) => {
+            for row in &rows {
+                pool.record_host_place(row.id, ip, lookup.clone(), now)
+                    .await
+                    .context("cannot record the host's place")?;
+            }
+        }
+        Err(error) => tracing::warn!(
+            %error,
+            "the host's place could not be looked up: the declared egress.direct.country stands \
+             unverified"
+        ),
+    }
+    Ok(())
 }
 
 /// The artifact retention job: one sweep at startup, then one per interval.

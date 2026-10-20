@@ -39,5 +39,4 @@ expect:
   rule: soft-login-wall
   vendors: []
   retryable: false
-  escalate: true
   cooldown: none

@@ -45,9 +45,11 @@ groups:
 
       # The blocks of the last hour on a domain against the blocks per hour
       # its policy allows before it pauses the domain (breaker_threshold).
+      # A block at level 0 (a plain client, no persona) is never counted by
+      # the breaker (spec §8.3), so it is not counted here either.
       - alert: KageBlockRateAboveThreshold
         expr: >-
-          sum by (domain) (increase(kage_attempts_total{outcome=~"rate_limited|forbidden|captcha|challenge_failed|soft_block"}[1h]))
+          sum by (domain) (increase(kage_attempts_total{level!="0",outcome=~"rate_limited|forbidden|captcha|challenge_failed|soft_block"}[1h]))
           >= on (domain) max by (domain) (kage_policy_breaker_threshold)
         labels:
           severity: warning

@@ -410,7 +410,8 @@ class Pacer {
     if (dwell <= 0) {
       return 0;
     }
-    const took = await this.rest(human, dwell, true);
+    // The idle hand wanders unless the flow asked it to rest (contract 1.5.0).
+    const took = await this.rest(human, dwell, this.pace.wander ?? true);
     this.dwelled += dwell;
     this.rested = true;
     return took;

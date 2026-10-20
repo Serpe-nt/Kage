@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT persona_id,\n                      SUM(bytes_up)::bigint AS \"up!\",\n                      SUM(bytes_down)::bigint AS \"down!\"\n               FROM bandwidth_usage WHERE hour >= $1\n               GROUP BY persona_id\n               ORDER BY SUM(bytes_up) + SUM(bytes_down) DESC, persona_id",
+  "query": "SELECT persona_id,\n                      SUM(bytes_up)::bigint AS \"up!\",\n                      SUM(bytes_down)::bigint AS \"down!\"\n               FROM bandwidth_usage WHERE hour >= $1 AND persona_id IS NOT NULL\n               GROUP BY persona_id\n               ORDER BY SUM(bytes_up) + SUM(bytes_down) DESC, persona_id",
   "describe": {
     "columns": [
       {
@@ -33,10 +33,10 @@
       ]
     },
     "nullable": [
-      false,
+      true,
       null,
       null
     ]
   },
-  "hash": "53ca83a655e761beebfe4f5ac925d70612073f2bf61d3521a0c7fd07eeeb69e2"
+  "hash": "7ae235bceee04be70753068e3f1dbbdf82a6fd6c97d390df52b2ba4d810f295d"
 }

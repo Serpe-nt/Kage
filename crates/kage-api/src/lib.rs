@@ -139,8 +139,17 @@ impl Modify for Security {
                        kage_<keyid>_<secret>`. Errors are RFC 9457 problem documents \
                        (`application/problem+json`) with a stable `code`; every answer carries \
                        `X-Request-Id`. A fetch that was made answers `200` whatever the site \
-                       did: a block is the result's `outcome`, not an HTTP error. See \
-                       docs/01-spec.md §16 and docs/runbooks/api.md.",
+                       did: a block is the result's `outcome`, not an HTTP error. Every \
+                       fetch names its camouflage `level`, and it costs what it says: 0 is a \
+                       plain HTTP client that says it is Kage, for pages that can be read \
+                       with curl; 1 is a persona's http client with its browser's wire \
+                       fingerprint and no page behaviour (refused while no browser version \
+                       has a verified profile); 2 is a persona's browser that loads the page \
+                       and leaves, for sites that need a browser but not a reader; 3 is a \
+                       person. Below 3 Kage is not pretending to be a person; a request's \
+                       level is the caller's responsibility, and a site's floor \
+                       (`min_level`) is the operator's. See docs/01-spec.md §16 and §25, \
+                       docs/runbooks/api.md and docs/runbooks/levels-and-egress.md.",
         license(name = "MIT OR Apache-2.0")
     ),
     tags(
@@ -532,7 +541,7 @@ mod tests {
         assert!(!properties.contains_key("locale"));
         for field in [
             "url",
-            "render",
+            "level",
             "request_kind",
             "include",
             "behavior",
@@ -540,10 +549,16 @@ mod tests {
         ] {
             assert!(properties.contains_key(field), "{field}");
         }
+        // The level is required, and `render` of 1.x is gone (spec §25).
+        assert!(!properties.contains_key("render"));
         assert_eq!(
             schemas["FetchRequest"]["required"],
-            serde_json::json!(["url"])
+            serde_json::json!(["url", "level"])
         );
+        assert_eq!(properties["level"]["type"], "integer");
+        assert_eq!(properties["level"]["maximum"], 3);
+        // A batch's item may leave its level to the defaults.
+        assert_eq!(schemas["BatchItem"]["required"], serde_json::json!(["url"]));
         assert_eq!(
             schemas["RequestKindField"]["enum"],
             serde_json::json!(["navigation", "fetch", "xhr"])

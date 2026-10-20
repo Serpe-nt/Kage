@@ -23,11 +23,13 @@ use kage_core::domain::{KeyLimits, Scope};
 use kage_core::duration::HumanDuration;
 use serde_json::{Value, json};
 
-/// Every request goes to the browser, and nobody asks for a `robots.txt`.
-const BROWSER_FAST: &str = "defaults: { render: browser, pacing: fast, active_hours: ignore, min_dwell: 500ms }\ndomains: {}\n";
+/// A persona may leave a page after half a second, and nobody asks for a
+/// `robots.txt`. Every request here is level 3: a person's browser.
+const BROWSER_FAST: &str =
+    "defaults: { pacing: fast, active_hours: ignore, min_dwell: 500ms }\ndomains: {}\n";
 
 /// The same, with the site's `robots.txt` enforced.
-const ENFORCED: &str = "defaults: { render: browser, pacing: fast, active_hours: ignore, min_dwell: 500ms }\ndomains:\n  kage.test: { robots: enforce }\n";
+const ENFORCED: &str = "defaults: { pacing: fast, active_hours: ignore, min_dwell: 500ms }\ndomains:\n  kage.test: { robots: enforce }\n";
 
 /// A worker that looks often: a test does not wait seconds for it.
 fn quick(config: &mut Config) {
@@ -152,6 +154,7 @@ async fn a_fetch_returns_what_the_page_says_and_the_cache_answers_the_second_tim
     );
     let asking = json!({
         "url": Api::url("/budget"),
+        "level": 3,
         "include": ["dom", "headers", "extract"],
         "behavior": { "scroll_depth": 0, "dwell_ms": 1000 },
         "cache_ttl_s": 600,
@@ -342,6 +345,7 @@ async fn where_a_robots_txt_is_enforced_a_scout_asks_and_what_it_disallows_is_no
     let quickly = |path: &str| {
         json!({
             "url": Api::url(path),
+            "level": 3,
             "behavior": { "scroll_depth": 0, "dwell_ms": 1000 },
             "max_retries": 0,
         })
@@ -457,6 +461,7 @@ async fn the_operator_gives_a_site_another_scout_and_the_trail_says_so() {
             "/v1/fetch",
             &json!({
                 "url": Api::url("/open"),
+                "level": 3,
                 "behavior": { "scroll_depth": 0, "dwell_ms": 1000 },
                 "max_retries": 0,
             }),
@@ -593,6 +598,7 @@ async fn a_crawl_keeps_to_an_enforced_robots_txt_and_reads_the_sitemaps_it_names
         "use_sitemaps": true,
         "max_depth": 2,
         "defaults": {
+            "level": 3,
             "include": ["dom", "headers", "extract"],
             "extract": { "markdown": false },
             "behavior": { "scroll_depth": 0, "dwell_ms": 1000 },
@@ -666,6 +672,7 @@ async fn a_crawl_keeps_to_an_enforced_robots_txt_and_reads_the_sitemaps_it_names
             "/v1/fetch",
             &json!({
                 "url": Api::url("/about"),
+                "level": 3,
                 "include": ["dom", "headers", "extract"],
                 "extract": { "markdown": false },
                 "behavior": { "scroll_depth": 0, "dwell_ms": 1000 },
@@ -716,6 +723,7 @@ async fn the_items_of_a_batch_are_answered_from_the_cache_and_a_flow_extracts_wh
         "type": "batch",
         "urls": [Api::url("/a"), Api::url("/b")],
         "defaults": {
+            "level": 3,
             "include": ["extract"],
             "behavior": { "scroll_depth": 0, "dwell_ms": 1000 },
             "cache_ttl_s": 600,
@@ -773,6 +781,7 @@ async fn the_items_of_a_batch_are_answered_from_the_cache_and_a_flow_extracts_wh
     });
     let flow = json!({
         "type": "flow",
+        "level": 3,
         "actions": [
             { "action": "goto", "url": Api::url("/a") },
             { "action": "extract", "include": ["extract"], "extract": { "links": false } },
@@ -816,7 +825,7 @@ async fn a_crawl_waits_for_an_enforced_robots_txt_and_reads_on_where_it_is_only_
         "seeds": [Api::url("/")],
         "use_sitemaps": true,
         "max_depth": 0,
-        "defaults": { "behavior": { "scroll_depth": 0, "dwell_ms": 1000 } },
+        "defaults": { "level": 3, "behavior": { "scroll_depth": 0, "dwell_ms": 1000 } },
     });
 
     // Enforced, and the file cannot be had: nothing of the origin is asked
@@ -843,7 +852,11 @@ async fn a_crawl_waits_for_an_enforced_robots_txt_and_reads_on_where_it_is_only_
     assert_eq!(paths(&api), ["/robots.txt"]);
     // A fetch of the origin is told the same, with the time to come back.
     let fetched = api
-        .post(&token, "/v1/fetch", &json!({ "url": Api::url("/") }))
+        .post(
+            &token,
+            "/v1/fetch",
+            &json!({ "url": Api::url("/"), "level": 3 }),
+        )
         .await
         .json();
     assert_eq!(fetched["outcome"], "robots_denied");

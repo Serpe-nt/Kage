@@ -13,7 +13,7 @@ mod common;
 
 use common::lab::{Lab, SITE};
 use kage_browser::contract::FlowAction;
-use kage_core::domain::{Render, RenderMode};
+use kage_core::domain::{Level, Render};
 use kage_core::outcome::Outcome;
 use kage_core::schedule::queue::Priority;
 use kage_scheduler::pipeline::attempt_seed;
@@ -21,8 +21,7 @@ use kage_scheduler::{Backend, Capture, FetchOrder, FlowPlan, Keep};
 use serde_json::{Value, json};
 
 /// Every request goes to the browser.
-const BROWSER_FAST: &str =
-    "defaults: { render: browser, pacing: fast, active_hours: ignore }\ndomains: {}\n";
+const BROWSER_FAST: &str = "defaults: { pacing: fast, active_hours: ignore }\ndomains: {}\n";
 
 fn site(path: &str) -> String {
     format!("http://{SITE}{path}")
@@ -70,7 +69,7 @@ fn search() -> Value {
 
 fn flow(steps: &Value) -> FetchOrder {
     FetchOrder {
-        render: RenderMode::Browser,
+        level: Level::Human,
         flow: Some(FlowPlan {
             actions: actions(steps),
             typos: false,
@@ -109,7 +108,7 @@ async fn a_flow_is_one_browser_attempt_paced_like_a_person_with_a_capture_per_st
     let persona = lab
         .personas
         .iter()
-        .find(|persona| persona.id == attempt.persona_id)
+        .find(|persona| Some(persona.id) == attempt.persona_id)
         .unwrap();
 
     // The sidecar was asked for the whole script once, in the persona's
@@ -189,6 +188,7 @@ async fn a_flow_is_one_browser_attempt_paced_like_a_person_with_a_capture_per_st
             persona: report.persona.clone(),
             extract: Some(kage_extract::Options::default()),
             spec: json!({ "flow": report.request, "step": 5, "action": "extract" }),
+            level: Level::Human,
         })
         .await
         .unwrap();
@@ -228,7 +228,7 @@ async fn a_flow_is_one_browser_attempt_paced_like_a_person_with_a_capture_per_st
 
 #[tokio::test]
 async fn a_request_may_slow_a_flow_down_but_never_below_the_policys_dwell() {
-    let rules = "defaults: { render: browser, pacing: fast, active_hours: ignore, min_dwell: 3s }\n\
+    let rules = "defaults: { pacing: fast, active_hours: ignore, min_dwell: 3s }\n\
                  domains: {}\n";
     let mut lab = Lab::start(1, 149, rules).await;
     let with_dwell = |millis: u64| FetchOrder {
@@ -261,6 +261,39 @@ async fn a_request_may_slow_a_flow_down_but_never_below_the_policys_dwell() {
     let applied = slow.last.as_ref().unwrap().behavior.as_ref().unwrap();
     assert!(applied.from_request);
     assert_eq!(applied.dwell, Some(std::time::Duration::from_secs(9)));
+    lab.shut_down().await;
+}
+
+#[tokio::test]
+async fn a_flow_at_level_two_rests_its_hand_and_dwells_the_policys_own_time() {
+    let rules = "defaults: { pacing: fast, active_hours: ignore, min_dwell: 3s }\n\
+                 domains: {}\n";
+    let mut lab = Lab::start(1, 149, rules).await;
+    let at = |level| FetchOrder {
+        level,
+        ..flow(&json!([{ "action": "goto", "url": site("/start") }]))
+    };
+
+    let still = lab.pipeline.fetch(at(Level::Fast)).await.unwrap();
+    let person = lab.pipeline.fetch(at(Level::Human)).await.unwrap();
+
+    assert_eq!(still.outcome, Outcome::Ok, "{:?}", still.reason);
+    assert_eq!(person.outcome, Outcome::Ok, "{:?}", person.reason);
+    let flows = lab.chromium.with(|sidecar| sidecar.flows.clone());
+    let paces: Vec<&Value> = flows
+        .iter()
+        .map(|asked| &asked["behavior"]["pace"])
+        .collect();
+    // Level 2: the floor drawn upward, the hand at rest.
+    assert_eq!(paces[0]["dwell_ms"], 4_500);
+    assert_eq!(paces[0]["min_dwell_ms"], 3_000);
+    assert_eq!(paces[0]["wander"], false);
+    // Level 3: the persona's own dwell, the hand as a person's.
+    assert_eq!(paces[1]["dwell_ms"], Value::Null);
+    assert_eq!(paces[1]["wander"], Value::Null);
+    let applied = still.last.as_ref().unwrap().behavior.as_ref().unwrap();
+    assert!(!applied.from_request);
+    assert_eq!(applied.dwell, Some(std::time::Duration::from_millis(4_500)));
     lab.shut_down().await;
 }
 
@@ -303,7 +336,7 @@ async fn a_step_that_fails_ends_the_flow_and_no_other_persona_tries_the_script()
     // Nothing to answer for.
     let facts = lab.backend.facts(SITE).await.unwrap();
     assert_eq!(
-        facts.states[&report.attempts[0].persona_id].cooldown_until,
+        facts.states[&report.attempts[0].persona_id.unwrap()].cooldown_until,
         None
     );
     assert_eq!(facts.breaker, None);
@@ -365,8 +398,15 @@ async fn a_wall_inside_a_flow_sends_another_persona_from_the_first_step() {
     assert_eq!(closed, [flows[0]["context_id"].as_str().unwrap()]);
     assert_eq!(asked_steps(&flows[1]), SEARCH);
     let facts = lab.backend.facts(SITE).await.unwrap();
-    assert!(facts.states[&blocked.persona_id].cooldown_until.is_some());
-    assert_eq!(facts.states[&served.persona_id].cooldown_until, None);
+    assert!(
+        facts.states[&blocked.persona_id.unwrap()]
+            .cooldown_until
+            .is_some()
+    );
+    assert_eq!(
+        facts.states[&served.persona_id.unwrap()].cooldown_until,
+        None
+    );
     let run = report.last.as_ref().unwrap().flow.as_ref().unwrap();
     assert!(run.ok);
     assert_eq!(run.steps.len(), 7);

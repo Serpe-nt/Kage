@@ -52,7 +52,8 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use kage_core::domain::{
-    ApiKey, Job, JobItem, JobItemState, JobKind, JobOrigin, JobState, SessionId, WebhookEvent,
+    ApiKey, Job, JobItem, JobItemState, JobKind, JobOrigin, JobState, Level, SessionId,
+    WebhookEvent,
 };
 use kage_core::ids::{JobId, JobItemId, PersonaId, RequestId};
 use kage_core::outcome::Outcome;
@@ -60,7 +61,7 @@ use kage_core::schedule::planner::{Refusal, Visitors};
 use kage_core::schedule::queue::Priority;
 use kage_proxy::CredentialCipher;
 use kage_scheduler::{
-    Arrival, Capture, FetchOrder, FetchReport, JobFetch, Running, SchedulerError, Stop,
+    Arrival, Capture, FetchOrder, FetchReport, INTERRUPTED, JobFetch, Running, SchedulerError, Stop,
 };
 use kage_store::StoreError;
 use serde_json::{Value, json};
@@ -75,7 +76,7 @@ use super::request::{
 use super::webhook::{self, WebhookSender};
 use crate::error::{ApiError, ErrorCode};
 use crate::fetch::conflict_of;
-use crate::fetch::request::{FetchRequest, Planned, plan};
+use crate::fetch::request::{FetchRequest, Planned, lost_credential, plan};
 use crate::fetch::terms::{CacheUse, settle};
 use crate::state::{ApiState, EngineParts};
 
@@ -374,10 +375,16 @@ impl Work {
     }
 
     /// The request of an item as the pipeline takes it, checked again
-    /// under the policies in force now.
+    /// under the policies in force now. A fetch carried on after its wall
+    /// time that held the caller's own credential (level 0) is not made
+    /// again after a restart: the credential was never kept, and the
+    /// request without it is not the one that was asked for.
     fn planned(&self, input: &Value, cache: CacheUse) -> Result<Planned, String> {
         let request: FetchRequest = serde_json::from_value(input.clone())
             .map_err(|_| ErrorCode::ValidationFailed.as_str().to_owned())?;
+        if lost_credential(&request) {
+            return Err(INTERRUPTED.to_owned());
+        }
         let policies = self.state.policies().current();
         let code = |error: ApiError| error.code().as_str().to_owned();
         let mut planned = plan(&request, &policies.pacing).map_err(code)?;
@@ -798,7 +805,8 @@ impl Runner {
         metrics::counter!(
             "kage_job_items_total",
             "job_type" => self.job.kind.as_str(),
-            "state" => state.as_str()
+            "state" => state.as_str(),
+            "level" => super::item_level(&self.job, &item.input),
         )
         .increment(1);
         if let Some(job) = self.store().job_items().finish(&item).await? {
@@ -919,7 +927,7 @@ impl Runner {
         // Whoever was turned away is not waited for.
         for attempt in &report.attempts {
             if attempt.outcome.is_block() {
-                known.retain(|persona| *persona != attempt.persona_id);
+                known.retain(|persona| Some(*persona) != attempt.persona_id);
             }
         }
         if report.outcome.is_success()
@@ -1489,6 +1497,12 @@ impl Runner {
         keeps: &[Option<StepKeep>],
     ) -> Result<(), WorkError> {
         let run = report.last.as_ref().and_then(|last| last.flow.as_ref());
+        // The level the flow ran at, as its stored request names it.
+        let level = match stored_request(&self.job.spec) {
+            Ok(JobRequest::Flow(flow)) => flow.level.and_then(Level::from_number),
+            _ => None,
+        }
+        .unwrap_or(Level::Human);
         for mut item in open {
             let is_last = item.input.get("final").and_then(Value::as_bool) == Some(true);
             if is_last {
@@ -1548,6 +1562,7 @@ impl Runner {
                         job: Some(self.job.id),
                         session: self.work.session.clone(),
                         persona: report.persona.clone(),
+                        level,
                         spec: json!({
                             "flow": report.request,
                             "step": index,

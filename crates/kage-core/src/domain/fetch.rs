@@ -6,7 +6,7 @@ use std::str::FromStr;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use super::{ClaimedOs, CountryCode, Engine, Render, RenderMode, SessionId};
+use super::{ClaimedOs, CountryCode, Engine, Level, Render, RenderMode, SessionId};
 use crate::ids::{ApiKeyId, ArtifactId, AttemptId, JobId, PersonaId, RequestId, ResultId};
 use crate::macros::string_enum;
 use crate::outcome::{Block, Outcome};
@@ -30,8 +30,12 @@ pub struct RequestRecord {
     pub method: String,
     /// The target host, the key for policy and pacing.
     pub domain: String,
-    /// The render mode the caller asked for.
+    /// The path the request asked for: the one its level implies; `auto`
+    /// only in rows of 1.x.
     pub render: RenderMode,
+    /// The camouflage level the request named (spec §25); `None` only in
+    /// rows of 1.x, which had none.
+    pub level: Option<Level>,
     /// The full request body as accepted (spec §16.4).
     pub spec: serde_json::Value,
     /// When the request was accepted.
@@ -77,10 +81,14 @@ pub struct Attempt {
     pub request_id: RequestId,
     /// 1 for the first attempt, 2 for the first retry, and so on.
     pub n: u32,
-    /// The persona used.
-    pub persona_id: PersonaId,
-    /// That persona's engine.
-    pub engine: Engine,
+    /// The persona used; `None` at level 0, which has none.
+    pub persona_id: Option<PersonaId>,
+    /// That persona's engine; `None` at level 0.
+    pub engine: Option<Engine>,
+    /// Where a level-0 attempt left from: the host's own connection or the
+    /// pool, through the site's one plain exit (spec §25); `None` for a
+    /// persona's attempt.
+    pub exit: Option<Exit>,
     /// The path taken.
     pub render: Render,
     /// When the attempt started.
@@ -187,6 +195,17 @@ pub struct RobotsVerdict {
     /// `Crawl-delay` in seconds, if declared.
     #[serde(default)]
     pub crawl_delay: Option<f64>,
+}
+
+string_enum! {
+    /// Which connection a request or its bytes left through (spec §25):
+    /// never an address, only which kind.
+    pub enum Exit {
+        /// The host's own connection.
+        Host => "host",
+        /// The proxy pool.
+        Pool => "pool",
+    }
 }
 
 string_enum! {

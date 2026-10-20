@@ -20,7 +20,7 @@ use kage_core::alert::AlertSink;
 use kage_core::cache::CacheKey;
 use kage_core::config::Config;
 use kage_core::domain::{
-    ArtifactKind, ArtifactRef, AuditOutcome, Engine as BrowserEngine, RenderMode,
+    ArtifactKind, ArtifactRef, AuditOutcome, Engine as BrowserEngine, Exit, Level, Render,
 };
 use kage_core::duration::HumanDuration;
 use kage_core::ids::PersonaId;
@@ -40,8 +40,8 @@ use crate::proxy_cmd::Session;
 pub(crate) struct FetchOptions {
     /// The page.
     pub(crate) url: Url,
-    /// The path: `auto`, `http` or `browser`.
-    pub(crate) render: RenderMode,
+    /// The camouflage level (spec §25).
+    pub(crate) level: Level,
     /// Only this persona.
     pub(crate) persona: Option<PersonaId>,
     /// Only personas on this engine.
@@ -246,6 +246,9 @@ fn order(
         .map(str::to_ascii_lowercase)
         .unwrap_or_default();
     let policy = policies.domains.resolve(&host);
+    let level = options.level;
+
+    check_level(options, &policy, config, &host)?;
 
     if let Err(conflict) = robots::mode(policy.robots, options.robots) {
         match conflict {
@@ -280,9 +283,10 @@ fn order(
     // An answer from the cache can only return what was stored, so a fetch
     // that may fill it keeps the document: the DOM of a browser attempt,
     // the body of an http one.
+    let browser = level.render() == Render::Browser;
     let keep = Keep {
-        dom: ttl.is_some() && options.render != RenderMode::Http,
-        raw: ttl.is_some() && options.render != RenderMode::Browser,
+        dom: ttl.is_some() && browser,
+        raw: ttl.is_some() && !browser,
         ..Keep::default()
     };
     let cache = ttl.map(|ttl| {
@@ -303,7 +307,7 @@ fn order(
             body: None,
             request_kind: "navigation",
             headers: &[],
-            render: options.render,
+            level,
             include: &include,
             options: &shaping,
             scope: None,
@@ -319,7 +323,7 @@ fn order(
     });
 
     Ok(FetchOrder {
-        render: options.render,
+        level,
         pin: options.persona,
         engines: options.engine.into_iter().collect(),
         timeout: options.timeout,
@@ -331,7 +335,7 @@ fn order(
         cache,
         spec: json!({
             "url": options.url.as_str(),
-            "render": options.render.as_str(),
+            "level": level.number(),
             "extract": options.extract,
             "cache_ttl_s": options.cache_ttl.map(|ttl| ttl.as_secs()),
             "robots": robots_word(options.robots),
@@ -339,6 +343,49 @@ fn order(
         }),
         ..FetchOrder::get(options.url.clone(), Priority::Sync)
     })
+}
+
+/// Whether the command's level can be had for the page's site (spec §25):
+/// at its floor or above, one this installation has, and with no persona
+/// options at level 0.
+///
+/// # Errors
+///
+/// What stands in the way, as a sentence.
+fn check_level(
+    options: &FetchOptions,
+    policy: &kage_core::policy::EffectivePolicy,
+    config: &Config,
+    host: &str,
+) -> anyhow::Result<()> {
+    let level = options.level;
+    if !policy.admits(level) {
+        bail!(
+            "the policy for {host} asks for level {} at least, and --level is {} (\
+             level_below_policy): a request is never raised",
+            policy.min_level.number(),
+            level.number()
+        );
+    }
+    if level == Level::Emulated && !kage_http::level_one_available(config) {
+        bail!(
+            "level 1 is a persona's http client with its browser's verified wire fingerprint, \
+             and no browser version this installation runs has one yet (level_unavailable): \
+             --level 0 is a plain client, 2 and 3 a browser"
+        );
+    }
+    if level == Level::Plain {
+        for (given, flag) in [
+            (options.persona.is_some(), "--persona"),
+            (options.engine.is_some(), "--engine"),
+            (options.pacing.is_some(), "--pacing"),
+        ] {
+            if given {
+                bail!("{flag} is not taken at level 0, which has no persona");
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The stored document of a result: the DOM a browser had, else the body
@@ -417,13 +464,13 @@ fn json_report(report: &FetchReport, shown: &Shown) -> Value {
         "retry_at": report.retry_at,
         "status": status,
         "final_url": final_url,
-        "escalated": report.escalated,
         "persona": report.persona,
         "block": report.block,
         "attempts": report.attempts.iter().map(|attempt| json!({
             "n": attempt.n,
             "persona_id": attempt.persona_id,
-            "engine": attempt.engine.as_str(),
+            "engine": attempt.engine.map(BrowserEngine::as_str),
+            "exit": attempt.exit.map(Exit::as_str),
             "render": attempt.render.as_str(),
             "outcome": attempt.outcome.as_str(),
             "status": attempt.status,
@@ -545,22 +592,24 @@ fn write_report(out: &mut impl Write, report: &FetchReport, shown: &Shown) -> an
         writeln!(out, "attempts:")?;
     }
     for attempt in &report.attempts {
+        // A plain client's attempt is nobody's: it says its exit.
+        let (engine, who) = match (attempt.engine, attempt.persona_id, attempt.exit) {
+            (Some(engine), Some(persona), _) => (engine.as_str(), format!("persona {persona}")),
+            (_, _, Some(exit)) => ("plain", format!("exit {}", exit.as_str())),
+            _ => ("-", "-".to_owned()),
+        };
         writeln!(
             out,
-            "  {}  {:<7}  {:<8}  persona {}  {}  {}  {} ms",
+            "  {}  {:<7}  {:<8}  {who}  {}  {}  {} ms",
             attempt.n,
             attempt.render.as_str(),
-            attempt.engine.as_str(),
-            attempt.persona_id,
+            engine,
             attempt.outcome,
             attempt
                 .status
                 .map_or_else(|| "-".to_owned(), |status| status.to_string()),
             attempt.timing.total_ms,
         )?;
-    }
-    if report.escalated {
-        writeln!(out, "the request moved from the http path to the browser")?;
     }
     writeln!(
         out,
@@ -627,7 +676,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use kage_core::config::Config;
     use kage_core::domain::{ArtifactKind, ArtifactRef, FetchRecord, RobotsVerdict};
-    use kage_core::domain::{Attempt, Engine, PersonaSummary, Render, RenderMode, Timing};
+    use kage_core::domain::{Attempt, Engine, Exit, Level, PersonaSummary, Render, Timing};
     use kage_core::ids::ArtifactId;
     use kage_core::ids::{AttemptId, PersonaId, RequestId, ResultId};
     use kage_core::outcome::{Block, BlockType, Outcome, Vendor};
@@ -726,7 +775,7 @@ domains:
     fn options() -> FetchOptions {
         FetchOptions {
             url: "https://shop.example/page".parse().unwrap(),
-            render: RenderMode::Auto,
+            level: Level::Human,
             persona: None,
             engine: None,
             timeout: None,
@@ -767,8 +816,9 @@ domains:
                 id: AttemptId::from_uuid(Uuid::from_u128(4)),
                 request_id: request,
                 n: 1,
-                persona_id: persona,
-                engine: Engine::Chromium,
+                persona_id: Some(persona),
+                engine: Some(Engine::Chromium),
+                exit: None,
                 render: Render::Browser,
                 started_at: at,
                 finished_at: at,
@@ -801,7 +851,6 @@ domains:
                 request_ignored: false,
                 waited: Duration::from_millis(700),
             },
-            escalated: true,
             extract: None,
             robots: None,
             page: None,
@@ -821,7 +870,7 @@ domains:
         let (config, policies) = (config(), policies());
         let plain = order(&options(), &config, &policies).unwrap();
         assert_eq!(plain.url.as_str(), "https://shop.example/page");
-        assert_eq!(plain.render, RenderMode::Auto);
+        assert_eq!(plain.level, Level::Human);
         assert_eq!(plain.priority, Priority::Sync);
         assert_eq!(
             (plain.pin, plain.timeout, plain.max_retries),
@@ -833,7 +882,7 @@ domains:
         let persona = PersonaId::from_uuid(Uuid::from_u128(9));
         let asked = order(
             &FetchOptions {
-                render: RenderMode::Browser,
+                level: Level::Fast,
                 persona: Some(persona),
                 engine: Some(Engine::Firefox),
                 timeout: Some(Duration::from_secs(40)),
@@ -845,7 +894,7 @@ domains:
             &policies,
         )
         .unwrap();
-        assert_eq!(asked.render, RenderMode::Browser);
+        assert_eq!(asked.level, Level::Fast);
         assert_eq!(asked.pin, Some(persona));
         assert_eq!(asked.engines, [Engine::Firefox]);
         assert_eq!(asked.timeout, Some(Duration::from_secs(40)));
@@ -854,7 +903,112 @@ domains:
             asked.pacing,
             Some(PacingRequest::Profile("fast".to_owned()))
         );
-        assert_eq!(asked.spec["render"], "browser");
+        assert_eq!(asked.spec["level"], 2);
+    }
+
+    #[test]
+    fn the_level_is_had_at_the_sites_floor_and_level_zero_takes_no_persona() {
+        let config = config();
+        let policies = PolicySet {
+            domains: DomainPolicies::from_yaml("domains:\n  floored.example: { min_level: 2 }\n")
+                .unwrap(),
+            ..policies()
+        };
+        let floored = |level| FetchOptions {
+            level,
+            ..at("https://floored.example/a")
+        };
+        for level in [Level::Plain, Level::Emulated] {
+            let refused = order(&floored(level), &config, &policies).unwrap_err();
+            assert!(
+                refused.to_string().contains("level_below_policy"),
+                "{refused}"
+            );
+        }
+        for level in [Level::Fast, Level::Human] {
+            assert_eq!(
+                order(&floored(level), &config, &policies).unwrap().level,
+                level
+            );
+        }
+        // No browser version of this configuration has an http profile.
+        let refused = order(
+            &FetchOptions {
+                level: Level::Emulated,
+                ..options()
+            },
+            &config,
+            &policies,
+        )
+        .unwrap_err();
+        assert!(
+            refused.to_string().contains("level_unavailable"),
+            "{refused}"
+        );
+        // A plain client has no persona to choose or to pace.
+        let persona = PersonaId::from_uuid(Uuid::from_u128(9));
+        for (asked, flag) in [
+            (
+                FetchOptions {
+                    persona: Some(persona),
+                    ..options()
+                },
+                "--persona",
+            ),
+            (
+                FetchOptions {
+                    engine: Some(Engine::Firefox),
+                    ..options()
+                },
+                "--engine",
+            ),
+            (
+                FetchOptions {
+                    pacing: Some("fast".to_owned()),
+                    ..options()
+                },
+                "--pacing",
+            ),
+        ] {
+            let plain = FetchOptions {
+                level: Level::Plain,
+                ..asked
+            };
+            let refused = order(&plain, &config, &policies).unwrap_err();
+            assert!(refused.to_string().contains(flag), "{refused}");
+        }
+        let plain = order(
+            &FetchOptions {
+                level: Level::Plain,
+                ..options()
+            },
+            &config,
+            &policies,
+        )
+        .unwrap();
+        assert_eq!(plain.spec["level"], 0);
+    }
+
+    #[test]
+    fn a_plain_clients_attempt_says_its_exit() {
+        let mut plain = report(Outcome::Ok);
+        plain.persona = None;
+        plain.attempts[0].persona_id = None;
+        plain.attempts[0].engine = None;
+        plain.attempts[0].exit = Some(Exit::Pool);
+        plain.attempts[0].render = Render::Http;
+        let text = said(&plain, &shown());
+        assert!(
+            text.contains("attempts:\n  1  http     plain     exit pool  ok"),
+            "{text}"
+        );
+        let document = json_report(&plain, &shown());
+        assert_eq!(document["attempts"][0]["exit"], "pool");
+        assert_eq!(document["attempts"][0]["engine"], serde_json::Value::Null);
+        assert_eq!(
+            document["attempts"][0]["persona_id"],
+            serde_json::Value::Null
+        );
     }
 
     #[test]
@@ -872,7 +1026,6 @@ domains:
             "{text}"
         );
         assert!(text.contains("  ok  200  3400 ms\n"), "{text}");
-        assert!(text.contains("the request moved from the http path to the browser\n"));
         assert!(text.contains("pacing: human, waited 0.7 s\n"), "{text}");
         assert!(text.contains("cookies handed over: 1 to the browser, 2 to the http path\n"));
         assert!(
@@ -896,7 +1049,6 @@ domains:
         let mut refused = report(Outcome::ProviderError);
         refused.attempts.clear();
         refused.last = None;
-        refused.escalated = false;
         refused.reason = Some("domain_paused".to_owned());
         refused.retry_at = Some(Utc.with_ymd_and_hms(2026, 10, 10, 12, 30, 0).unwrap());
         let mut out = Vec::new();
@@ -925,8 +1077,8 @@ domains:
 
         assert_eq!(document["outcome"], "ok");
         assert_eq!(document["status"], 200);
-        assert_eq!(document["escalated"], true);
         assert_eq!(document["attempts"][0]["render"], "browser");
+        assert_eq!(document["attempts"][0]["exit"], serde_json::Value::Null);
         assert_eq!(document["attempts"][0]["engine"], "chromium");
         assert_eq!(document["attempts"][0]["total_ms"], 3400);
         assert_eq!(document["pacing"]["applied"], "human");
@@ -979,17 +1131,17 @@ domains:
         assert_eq!(cache.key.len(), 64);
         assert_eq!(cache.url_key, "https://reported.example/a");
         // An answer from the cache can only return what was stored: the
-        // document is kept, whichever path gets the page.
-        assert!(asked.keep.dom && asked.keep.raw);
+        // document of the level's path is kept.
+        assert!(asked.keep.dom && !asked.keep.raw);
         assert!(!(asked.keep.xhr || asked.keep.screenshot || asked.keep.pdf));
         assert_eq!(asked.spec["extract"], true);
         assert_eq!(asked.spec["cache_ttl_s"], 600);
         assert_eq!(asked.spec["robots"], "enforce");
 
-        let kept = |render| {
+        let kept = |level| {
             let order = order(
                 &FetchOptions {
-                    render,
+                    level,
                     cache_ttl: Some(Duration::from_secs(1)),
                     ..options()
                 },
@@ -999,8 +1151,9 @@ domains:
             .unwrap();
             (order.keep.dom, order.keep.raw)
         };
-        assert_eq!(kept(RenderMode::Browser), (true, false));
-        assert_eq!(kept(RenderMode::Http), (false, true));
+        assert_eq!(kept(Level::Human), (true, false));
+        assert_eq!(kept(Level::Fast), (true, false));
+        assert_eq!(kept(Level::Plain), (false, true));
 
         // Left out, the site's policy decides; zero is never.
         let policys = order(&at("https://kept.example/a"), &config, &policies).unwrap();
@@ -1125,11 +1278,11 @@ domains:
                 ..options()
             },
             FetchOptions {
-                render: RenderMode::Browser,
+                level: Level::Fast,
                 ..options()
             },
             FetchOptions {
-                render: RenderMode::Http,
+                level: Level::Plain,
                 ..options()
             },
             FetchOptions {
@@ -1235,7 +1388,6 @@ domains:
         denied.attempts.clear();
         denied.last = None;
         denied.block = None;
-        denied.escalated = false;
         denied.robots = Some(RobotsVerdict {
             fetched: true,
             allowed: false,
@@ -1265,7 +1417,6 @@ domains:
         };
         hit.attempts.clear();
         hit.last = None;
-        hit.escalated = false;
         hit.artifacts = vec![
             ArtifactRef {
                 kind: ArtifactKind::RawBody,

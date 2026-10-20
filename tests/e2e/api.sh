@@ -9,22 +9,29 @@
 #     made with it through the admin API, its token shown once;
 #   - a request without a key, with a wrong key and with a key that lacks
 #     the scope refused with a problem document;
-#   - a page of the fixture site fetched through `POST /v1/fetch` in the
-#     browser of a real persona of each engine, by a TypeScript client that
-#     was generated from the API's OpenAPI document (tests/api-client),
-#     with the stored result and the kept document and screenshot read
-#     back;
+#   - a page of the fixture site fetched through `POST /v1/fetch` at level
+#     3 in the browser of a real persona of each engine, by a TypeScript
+#     client that was generated from the API's OpenAPI document
+#     (tests/api-client), with the stored result and the kept document and
+#     screenshot read back;
+#   - the same page at level 0 (spec §25): a plain client, nobody's, from
+#     the site's scout's address;
 #   - a session that pins its requests to one persona and never moves;
 #   - what a request may shorten of a persona's behaviour, and that the
 #     answer says what applied;
-#   - a target the SSRF guard refuses, and a header a caller may not set;
+#   - what cannot be asked for: no level, a target the SSRF guard refuses,
+#     a header a caller may not set, a session at level 0, a script's
+#     request in a browser, `render`, which 2.0 has no more;
 #   - the admin endpoints: personas, the pool, a policy reload, a self-test
 #     that runs in the server in the persona's own browser, a key revoked;
+#   - a request no persona can serve under the reloaded policy, answered
+#     as a result without an attempt;
 #   - an audit row for every admin call, and the series of `/metrics`.
 #
-# The http path cannot run here: no persona of this release has an http
-# profile for its browser's major (follow-up F30). It is proven one layer
-# down (crates/kage-api/tests/fetch.rs, on personas with a profile).
+# Level 1 cannot run here: no persona of this release has an http profile
+# for its browser's major (follow-up F30), and it is refused with
+# `level_unavailable`. It is proven one layer down
+# (crates/kage-api/tests/fetch.rs, on personas with a profile).
 #
 # Needs what `just setup` installs: docker, curl, and pnpm for the client.
 # It uses its own compose project name and host port.
@@ -71,6 +78,21 @@ trap cleanup EXIT
 fail() {
     echo "FAIL: $*" >&2
     exit 1
+}
+# add_domains: appends the domain rules on stdin to the `domains` mapping
+# of the copy of domains.yaml, which is the file's last key (`domains: {}`
+# while the shipped file names no domain). A second `domains:` would be a
+# duplicate key, which the policy loader refuses. The file is changed in
+# place, never replaced, while the server reads it.
+add_domains() {
+    local file="${policies}/domains.yaml"
+    if grep --quiet '^domains: {}$' "${file}"; then
+        sed 's/^domains: {}$/domains:/' "${file}" > "${scratch}/domains.tmp"
+        cat "${scratch}/domains.tmp" > "${file}"
+    fi
+    [ "$(grep '^[a-z_]*:' "${file}" | tail -n 1)" = 'domains:' ] \
+        || fail "${file} does not end with its domains mapping"
+    cat >> "${file}"
 }
 
 # A helper's node reads JSON, so the host needs no JSON tool (a sidecar
@@ -197,19 +219,19 @@ reader_id="$(value "${body}" "d.key.id")"
 echo "    client ${client_id} (fetch, sessions), reader ${reader_id} (fetch)"
 
 echo "==> no key, a wrong key and a key without the scope are refused"
-call POST /v1/fetch '' '{"url":"http://fixture.kage.test:8088/"}'
+call POST /v1/fetch '' '{"url":"http://fixture.kage.test:8088/","level":3}'
 problem 401 missing_key "no key"
-call POST /v1/fetch "${client}x" '{"url":"http://fixture.kage.test:8088/"}'
+call POST /v1/fetch "${client}x" '{"url":"http://fixture.kage.test:8088/","level":3}'
 problem 401 invalid_key "a wrong secret"
 call GET /v1/admin/personas "${client}"
 problem 403 scope_missing "a client at an admin endpoint"
-call POST /v1/fetch "${admin}" '{"url":"http://fixture.kage.test:8088/"}'
+call POST /v1/fetch "${admin}" '{"url":"http://fixture.kage.test:8088/","level":3}'
 problem 403 scope_missing "admin implies no other scope"
 call POST /v1/sessions "${reader}" '{}'
 problem 403 scope_missing "a key without the sessions scope"
 echo "    401 missing_key, 401 invalid_key, 403 scope_missing"
 
-echo "==> a page of the fixture site through POST /v1/fetch, in the browser of a persona of each engine, by the generated TypeScript client"
+echo "==> a page of the fixture site through POST /v1/fetch at level 3, in the browser of a persona of each engine, by the generated TypeScript client"
 summary="$(cd tests/api-client && pnpm --silent run build && KAGE_API_URL="${base}" KAGE_API_KEY="${client}" \
     KAGE_E2E_URL='http://fixture.kage.test:8088/' KAGE_E2E_EXPECT='Fixture home' \
     pnpm --silent run e2e)" || fail "the generated client failed"
@@ -224,7 +246,7 @@ problem 404 result_not_found "another key's result"
 call GET "/v1/results/${first}" "${client}"
 expect 200 "the client's own result"
 check "no proxy and no persona id in a client's result" "${body}" \
-    "/^p_/.test(d.persona.id) && d.attempts.every((a) => /^p_/.test(a.persona) && a.seed === undefined) && !JSON.stringify(d).includes('proxy')"
+    "d.level === 3 && /^p_/.test(d.persona.id) && d.attempts.every((a) => /^p_/.test(a.persona) && a.exit === null && a.seed === undefined) && !JSON.stringify(d).includes('proxy')"
 artifact="$(value "${body}" "d.artifacts.dom_html")"
 call GET "/v1/artifacts/${artifact}" "${reader}"
 problem 404 artifact_not_found "another key's artifact"
@@ -244,8 +266,17 @@ check "the admin sees the persona's id and the attempt's seed" "${personas}" "d.
 check "the attempt's seed is an admin's to see" "${body}" "typeof d.attempts[0].seed === 'string'"
 echo "    result ${first}: a client sees $(value "${summary}" "d.pages[0].persona"), an admin ${real}"
 
+# Asked now, while two of the three personas have read the site: the third
+# is the one left to be its scout, whose address is the site's plain exit.
+echo "==> the same page at level 0: a plain client, nobody's, from the site's scout's address"
+call POST /v1/fetch "${client}" '{"url":"http://fixture.kage.test:8088/","level":0}'
+expect 200 "a fetch at level 0"
+check "level 0: no persona, one attempt from the pool's plain exit, the page as it was sent" "${body}" \
+    "d.outcome === 'ok' && d.status === 200 && d.level === 0 && d.persona === null && d.attempts.length === 1 && d.attempts[0].render === 'http' && d.attempts[0].exit === 'pool' && d.attempts[0].persona === null && d.attempts[0].engine === null && typeof d.raw_body === 'string' && d.raw_body.includes('Fixture home') && !JSON.stringify(d).includes('proxy')"
+echo "    $(value "${body}" "'level ' + d.level + ': ' + d.outcome + ' ' + d.status + ', from the ' + d.attempts[0].exit + ' exit, ' + d.timing.total_ms + ' ms'")"
+
 echo "==> a session pins its requests to one persona and never moves"
-call POST /v1/fetch "${client}" '{"url":"http://fixture.kage.test:8088/landing","session_id":"visit-1","timeout_ms":30000}'
+call POST /v1/fetch "${client}" '{"url":"http://fixture.kage.test:8088/landing","level":3,"session_id":"visit-1","timeout_ms":30000}'
 problem 404 session_not_found "a fetch does not open a session"
 call POST /v1/sessions "${client}" '{"id":"visit-1","persona":{"engines":["firefox"]},"domain":"fixture.kage.test"}'
 expect 201 "a new session"
@@ -254,11 +285,11 @@ check "pinned to a firefox persona" "${body}" "d.id === 'visit-1' && d.persona.e
 call POST /v1/sessions "${client}" '{"id":"visit-1"}'
 expect 200 "the session is open already"
 for page in /landing /; do
-    call POST /v1/fetch "${client}" "{\"url\":\"http://fixture.kage.test:8088${page}\",\"session_id\":\"visit-1\",\"timeout_ms\":30000}"
+    call POST /v1/fetch "${client}" "{\"url\":\"http://fixture.kage.test:8088${page}\",\"level\":3,\"session_id\":\"visit-1\",\"timeout_ms\":30000}"
     expect 200 "a fetch in the session"
     check "the session's persona fetched ${page}" "${body}" "d.outcome === 'ok' && d.session_id === 'visit-1' && d.persona.id === '${pinned}' && d.attempts.length === 1"
 done
-call POST /v1/fetch "${client}" '{"url":"http://fixture.kage.test:8088/landing","session_id":"visit-1","persona":{"engines":["chromium"]},"timeout_ms":30000}'
+call POST /v1/fetch "${client}" '{"url":"http://fixture.kage.test:8088/landing","level":3,"session_id":"visit-1","persona":{"engines":["chromium"]},"timeout_ms":30000}'
 problem 409 session_persona_conflict "a constraint the session's persona fails"
 check "the conflict names the constraint and what the persona is" "${body}" "d.constraint === 'request.persona.engines' && d.engine === 'firefox' && d.persona === '${pinned}'"
 call GET /v1/sessions/visit-1 "${client}"
@@ -266,41 +297,51 @@ expect 200 "the session is still there"
 check "and has not moved" "${body}" "d.persona.id === '${pinned}'"
 call DELETE /v1/sessions/visit-1 "${client}"
 expect 204 "the session is ended"
-call POST /v1/fetch "${client}" '{"url":"http://fixture.kage.test:8088/landing","session_id":"visit-1","timeout_ms":30000}'
+call POST /v1/fetch "${client}" '{"url":"http://fixture.kage.test:8088/landing","level":3,"session_id":"visit-1","timeout_ms":30000}'
 problem 404 session_not_found "a session that ended is not reopened by a fetch"
 echo "    two pages by ${pinned}; a chromium constraint is a 409; ended; 404 afterwards"
 
 echo "==> a request may shorten what the persona does on a page, and the answer says what applied"
-call POST /v1/fetch "${client}" '{"url":"http://lenient.kage.test:8088/landing","render":"browser","include":["dom"],"behavior":{"scroll_depth":0,"dwell_ms":1000,"referer_strategy":"none"},"timeout_ms":30000}'
+call POST /v1/fetch "${client}" '{"url":"http://lenient.kage.test:8088/landing","level":3,"include":["dom"],"behavior":{"scroll_depth":0,"dwell_ms":1000,"referer_strategy":"none"},"timeout_ms":30000}'
 expect 200 "a fetch with its own behaviour"
 check "the request's behaviour applied, no lower than the policy's floor" "${body}" \
-    "d.outcome === 'ok' && d.behavior.applied === 'request' && d.behavior.request_ignored === false && d.behavior.scroll_depth === 0 && d.behavior.notches === 0 && d.behavior.referer_strategy === 'none' && d.behavior.dwell_ms >= 1500 && d.pacing.applied === 'human'"
+    "d.outcome === 'ok' && d.level === 3 && d.behavior.applied === 'request' && d.behavior.request_ignored === false && d.behavior.scroll_depth === 0 && d.behavior.notches === 0 && d.behavior.referer_strategy === 'none' && d.behavior.dwell_ms >= 1500 && d.pacing.applied === 'human'"
 quick="$(value "${body}" "'dwelt ' + d.behavior.dwell_ms + ' ms, ' + d.timing.total_ms + ' ms in all'")"
-call POST /v1/fetch "${client}" '{"url":"http://lenient.kage.test:8088/landing","timeout_ms":5000}'
+call POST /v1/fetch "${client}" '{"url":"http://lenient.kage.test:8088/landing","level":3,"timeout_ms":5000}'
 problem 422 timeout_too_short "a budget too short for a visit is refused, not clamped"
-echo "    no scrolling, ${quick}; a budget of 5 s is refused with timeout_too_short"
+call POST /v1/fetch "${client}" '{"url":"http://lenient.kage.test:8088/landing","level":2,"behavior":{"scroll_depth":0}}'
+problem 422 validation_failed "behaviour at level 2, a visit that does nothing on the page"
+check "the refusal names the field" "${body}" "d.field === 'behavior'"
+echo "    no scrolling, ${quick}; a budget of 5 s is refused with timeout_too_short, behaviour at level 2 with validation_failed"
 
 echo "==> what cannot be asked for is refused before anything is fetched"
 before="$(psql "SELECT count(*) FROM requests")"
-call POST /v1/fetch "${client}" '{"url":"http://127.0.0.1:8080/v1/admin/keys"}'
+call POST /v1/fetch "${client}" '{"url":"http://fixture.kage.test:8088/"}'
+problem 422 level_required "a request that names no level"
+check "the refusal names the field" "${body}" "d.field === 'level'"
+call POST /v1/fetch "${client}" '{"url":"http://127.0.0.1:8080/v1/admin/keys","level":3}'
 problem 422 ssrf_denied "the API's own address as a target"
-call POST /v1/fetch "${client}" '{"url":"http://postgres:5432/"}'
-problem 422 ssrf_denied "a name of the compose network"
-call POST /v1/fetch "${client}" '{"url":"http://fixture.kage.test:8088/","render":"http","headers":{"User-Agent":"curl/8"}}'
-problem 422 header_denied "a header that is the persona's"
-call POST /v1/fetch "${client}" '{"url":"http://fixture.kage.test:8088/","request_kind":"fetch"}'
-problem 422 render_kind_conflict "a script's request without render http"
-call POST /v1/fetch "${client}" '{"url":"http://fixture.kage.test:8088/","locale":"de-DE"}'
+call POST /v1/fetch "${client}" '{"url":"http://postgres:5432/","level":0}'
+problem 422 ssrf_denied "a name of the compose network, at level 0 too"
+call POST /v1/fetch "${client}" '{"url":"http://fixture.kage.test:8088/","level":0,"headers":{"X-Forwarded-For":"203.0.113.7"}}'
+problem 422 header_denied "a forwarding header, at level 0 too"
+check "the refusal names the header" "${body}" "d.header === 'X-Forwarded-For'"
+call POST /v1/fetch "${client}" '{"url":"http://fixture.kage.test:8088/","level":0,"session_id":"visit-1"}'
+problem 422 session_needs_persona "a session at level 0, which has no persona"
+call POST /v1/fetch "${client}" '{"url":"http://fixture.kage.test:8088/","level":3,"request_kind":"fetch"}'
+problem 422 level_kind_conflict "a script's request in a browser"
+call POST /v1/fetch "${client}" '{"url":"http://fixture.kage.test:8088/","level":3,"render":"browser"}'
+problem 422 validation_failed "render, which 2.0 has no more"
+call POST /v1/fetch "${client}" '{"url":"http://fixture.kage.test:8088/","level":3,"locale":"de-DE"}'
 problem 422 validation_failed "a field the API does not take"
+echo "    level_required, ssrf_denied twice, header_denied, session_needs_persona, level_kind_conflict, validation_failed twice"
+
+echo "==> level 1 is refused before anything is fetched: no persona of this release has an http profile"
+call POST /v1/fetch "${client}" '{"url":"http://fixture.kage.test:8088/landing","level":1}'
+problem 422 level_unavailable "level 1 while no browser major has a verified http profile"
 after="$(psql "SELECT count(*) FROM requests")"
 [ "${before}" = "${after}" ] || fail "a refused request was stored: ${before} before, ${after} after"
-echo "    ssrf_denied twice, header_denied, render_kind_conflict, validation_failed; nothing was fetched or stored"
-
-echo "==> render http is answered as a result: no persona of this release has an http path"
-call POST /v1/fetch "${client}" '{"url":"http://fixture.kage.test:8088/landing","render":"http"}'
-expect 200 "a fetch that found no persona"
-check "provider_error with its reason, without an attempt" "${body}" "d.outcome === 'provider_error' && d.reason === 'no_persona' && d.attempts.length === 0"
-echo "    $(value "${body}" "d.outcome + ': ' + d.reason")"
+echo "    level_unavailable; nothing that was refused was fetched or stored"
 
 echo "==> the admin endpoints: personas, proxies, the pool, the policies"
 call GET /v1/admin/personas "${admin}"
@@ -321,28 +362,30 @@ call GET /v1/admin/pool "${admin}"
 expect 200 "GET /v1/admin/pool"
 check "the pool at a glance" "${body}" "d.personas.live === 3 && d.personas.ready === 3 && d.bandwidth !== null"
 echo "    $(value "${body}" "'personas: ' + JSON.stringify(d.personas)")"
-cat >> "${policies}/domains.yaml" << 'EOF'
-
-# Added by tests/e2e/api.sh.
-domains:
+add_domains << 'EOF'
+  # Added by tests/e2e/api.sh.
   reloaded.kage.test:
-    render: browser
+    min_level: 2
     min_dwell: 3s
+  rules.kage.test:
+    countries: [JP]
 EOF
-if [ "$(grep --count '^domains:' "${policies}/domains.yaml")" -ne 1 ]; then
-    grep --invert-match '^domains: {}$' "${policies}/domains.yaml" > "${scratch}/domains.tmp"
-    cat "${scratch}/domains.tmp" > "${policies}/domains.yaml"
-fi
 call POST /v1/admin/policies/reload "${admin}"
 expect 200 "POST /v1/admin/policies/reload"
 check "the policies were read again" "${body}" "d.domains >= 1 && d.pacing_profiles >= 2 && d.signature_rules > 0"
 call GET /v1/policies/domains/www.reloaded.kage.test "${client}"
 expect 200 "GET /v1/policies/domains/{domain}"
-check "the new rule is in force" "${body}" "d.first_render === 'browser' && d.policy.min_dwell === '3s'"
-echo "    reloaded: $(value "${body}" "JSON.stringify(d.policy.matched) + ' renders in a ' + d.first_render + ', min_dwell ' + d.policy.min_dwell")"
+check "the new rule is in force" "${body}" "d.min_level === 2 && d.policy.min_level === 2 && d.policy.min_dwell === '3s'"
+echo "    reloaded: $(value "${body}" "JSON.stringify(d.policy.matched) + ' takes level ' + d.min_level + ' and above, min_dwell ' + d.policy.min_dwell")"
+
+echo "==> a request no persona can serve is answered as a result: the site takes personas from JP, and every one of this pool is in DE"
+call POST /v1/fetch "${client}" '{"url":"http://rules.kage.test:8088/landing","level":3}'
+expect 200 "a fetch that found no persona"
+check "provider_error with its reason, without an attempt" "${body}" "d.outcome === 'provider_error' && d.reason === 'no_persona' && d.attempts.length === 0"
+echo "    $(value "${body}" "d.outcome + ': ' + d.reason")"
 
 echo "==> a self-test runs in the server, in the persona's own browser, while real work has it open"
-call POST /v1/fetch "${client}" '{"url":"http://fixture.kage.test:8088/landing","persona":{"engines":["chromium"]},"timeout_ms":30000}'
+call POST /v1/fetch "${client}" '{"url":"http://fixture.kage.test:8088/landing","level":3,"persona":{"engines":["chromium"]},"timeout_ms":30000}'
 expect 200 "a fetch before the self-test"
 call POST "/v1/admin/personas/${target}/selftest" "${admin}"
 expect 200 "POST /v1/admin/personas/{id}/selftest"
@@ -407,8 +450,15 @@ for series in kage_requests_total kage_attempts_total kage_attempt_duration_seco
     grep --quiet "^${series}[{ ]" "${metrics}" || fail "no sample of ${series} in /metrics"
 done
 # One line with all three labels, in whatever order the exporter writes them.
-awk '/^kage_requests_total\{/ && /domain="fixture.kage.test"/ && /outcome="ok"/ && /render="browser"/ { found = 1 } END { exit !found }' "${metrics}" \
-    || fail "the fetches of the fixture site are not counted: $(grep '^kage_requests_total' "${metrics}" | head -5)"
+for level in 3 0; do
+    awk -v level="level=\"${level}\"" '/^kage_requests_total\{/ && /domain="fixture.kage.test"/ && /outcome="ok"/ && index($0, level) { found = 1 } END { exit !found }' "${metrics}" \
+        || fail "the fetches of the fixture site at level ${level} are not counted: $(grep '^kage_requests_total' "${metrics}" | head -8)"
+done
+if grep --quiet --extended-regexp '^kage_(requests|attempts)_total\{.*render=' "${metrics}"; then
+    fail "a fetch is counted by its render, not its level: $(grep '^kage_requests_total' "${metrics}" | head -5)"
+fi
+awk '/^kage_bandwidth_bytes_total\{/ && /direction="down"/ && /egress="pool"/ { found = 1 } END { exit !found }' "${metrics}" \
+    || fail "the bytes through the pool are not counted by their exit: $(grep '^kage_bandwidth_bytes_total' "${metrics}" | head -5)"
 grep --quiet '^sidecar_contexts_open{.*engine="firefox"' "${metrics}" || fail "the firefox sidecar's series are missing"
 families="$(grep --count '^# TYPE ' "${metrics}")"
 call GET /metrics

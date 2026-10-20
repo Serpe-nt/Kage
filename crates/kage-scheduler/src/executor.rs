@@ -35,8 +35,20 @@
 //! wall is a blocked attempt; a step that failed on a page that is no wall
 //! is the script's failure, which no other persona would change.
 //!
+//! **Level 2** (spec §25) is the browser path as a still visit: the
+//! persona's browser loads the page and nothing else (contract 1.5.0,
+//! `behavior.mode: still`): a typed entry, no input of any kind, no
+//! scrolling, no patience, and a dwell drawn above the policy's
+//! `min_dwell` ([`still_dwell`]). A crawl's next page at level 2 is still
+//! clicked (the hand travels to the link and clicks, and nothing else).
+//!
+//! **Level 0** is no persona's: the plain client ([`kage_http::PlainClient`])
+//! fetches through the forwarder under a plain credential, from the exit
+//! the pipeline names: the host's connection, or the site's one plain exit
+//! of the pool.
+//!
 //! Both paths end at the classifier with the signatures in force. A
-//! success postpones the next health probe of the persona's proxy.
+//! success postpones the next health probe of the proxy it went through.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -47,14 +59,14 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use kage_browser::contract::{
-    BehaviorOptions, CaptureOptions, DwellMode, Entry, EntryFallback, EntryOutcome, EntryStrategy,
-    FlowAction, FlowBehavior, FlowEvent, FlowPace, FlowRequest, NavigateRequest, PageResult, Wait,
-    WaitUntil,
+    BehaviorMode, BehaviorOptions, CaptureOptions, DwellMode, Entry, EntryFallback, EntryOutcome,
+    EntryStrategy, FlowAction, FlowBehavior, FlowEvent, FlowPace, FlowRequest, NavigateRequest,
+    PageResult, Wait, WaitUntil,
 };
 use kage_browser::{Navigation, navigation_bound, ssrf};
 use kage_core::classifier::{Classification, Observation};
 use kage_core::config::{BrowserConfig, Config};
-use kage_core::domain::{Header, Persona, Render, Timing};
+use kage_core::domain::{Exit, Header, Level, Persona, Render, Timing};
 use kage_core::ids::{PersonaId, RequestId};
 use kage_core::outcome::Outcome;
 use kage_core::pacing::Lognormal;
@@ -63,12 +75,12 @@ use kage_core::policy::{EffectivePolicy, RefererStrategy};
 use kage_core::schedule::politeness::Courtesy;
 use kage_core::seed::Seed;
 use kage_core::ssrf::SsrfPolicy;
-use kage_http::{FetchSpec, Fetched, Guard, HttpError, RequestKind};
+use kage_http::{FetchSpec, Fetched, Guard, HttpError, PlainSpec, RequestKind};
 use kage_persona::identity::http_spec;
 use kage_persona::{PersonaError, PersonaManager, Via};
 use url::Url;
 
-use crate::forwarder::Meter;
+use crate::forwarder::{ForwarderEgress, Meter, PlainRoute};
 use crate::verdicts::{Verdicts, cookies_set, courtesy_of, page_failure, unanswered};
 
 /// A scripted flow a browser attempt runs in place of loading one page
@@ -258,6 +270,39 @@ pub struct BehaviorApplied {
     pub seed: Seed,
 }
 
+/// What one attempt of a plain client (level 0) is asked to do.
+#[derive(Debug, Clone)]
+pub struct PlainJob {
+    /// The request the attempt belongs to.
+    pub request: RequestId,
+    /// 1 for the first attempt, 2 for the second, and so on.
+    pub n: u32,
+    /// Where it leaves from: the host's connection, or the site's plain
+    /// exit of the pool.
+    pub route: PlainRoute,
+    /// The page.
+    pub url: Url,
+    /// `GET`, `HEAD` or `POST`.
+    pub method: http::Method,
+    /// The caller's headers, as given.
+    pub headers: Vec<(String, String)>,
+    /// The caller's body, as given.
+    pub body: Option<Bytes>,
+    /// The host.
+    pub domain: String,
+    /// Longest the attempt may take.
+    pub timeout: Duration,
+    /// The largest body kept.
+    pub max_body_bytes: Option<u64>,
+}
+
+impl PlainJob {
+    /// The connection the attempt leaves through.
+    pub const fn exit(&self) -> Exit {
+        self.route.exit()
+    }
+}
+
 /// What one attempt is asked to do.
 #[derive(Debug, Clone)]
 pub struct AttemptJob {
@@ -267,6 +312,8 @@ pub struct AttemptJob {
     pub n: u32,
     /// The persona that makes it.
     pub persona: Persona,
+    /// The level of the request: 1 to 3 (level 0 is a [`PlainJob`]).
+    pub level: Level,
     /// The path.
     pub render: Render,
     /// The page.
@@ -418,6 +465,82 @@ pub trait AttemptExecutor: Send + Sync + fmt::Debug {
     /// Makes one attempt and says what it came to. An attempt never fails
     /// as a call: what went wrong is its outcome.
     async fn run(&self, job: &AttemptJob) -> AttemptOutput;
+
+    /// Makes one attempt of a plain client (level 0), as [`Self::run`].
+    async fn plain(&self, job: &PlainJob) -> AttemptOutput;
+}
+
+/// The dwell of a still visit (level 2, spec §25): drawn from the
+/// attempt's seed above the policy's `min_dwell` (`floor`), a median of one
+/// and a half times the floor and a 95th percentile of three times it, so
+/// that no two pages are left at the same instant and the visit replays. A
+/// draw below the floor is drawn again, never raised to it.
+pub fn still_dwell(floor: Duration, seed: &Seed) -> Duration {
+    let cap = MAX_FIXED_DWELL.as_secs_f64() * 1000.0;
+    let floor_ms = (floor.as_secs_f64() * 1000.0).clamp(1.0, cap / 3.0);
+    let shape = Lognormal {
+        median: 1.5 * floor_ms,
+        p95: 3.0 * floor_ms,
+        min: None,
+        max: Some(cap),
+    };
+    let mut rng = seed.child("still-dwell").rng();
+    for _ in 0..64 {
+        let value = shape.sample(&mut rng);
+        if value >= floor_ms {
+            return Duration::from_secs_f64(value / 1000.0);
+        }
+    }
+    floor
+}
+
+/// The behavior of a level-2 page (spec §25): a still visit, typed, with
+/// the dwell of [`still_dwell`]. With `link`, the page is a crawl's next
+/// one and is reached by a click there (the hand travels to the link and
+/// clicks, and nothing else: no reading scroll, no wander, no patience).
+/// No request changes any of it.
+pub fn still_behavior(
+    policy: &EffectivePolicy,
+    seed: &Seed,
+    link: Option<(&Url, u32)>,
+) -> (BehaviorOptions, BehaviorApplied) {
+    let dwell = still_dwell(policy.min_dwell.get(), seed);
+    let (mode, entry) = match link {
+        // A click is the hand's: the one way of reaching a page that
+        // sends input at this level.
+        Some((from, max_backs)) if policy.referer_strategy != RefererStrategy::None => {
+            (BehaviorMode::Human, entry_from(from, max_backs))
+        }
+        _ => (
+            BehaviorMode::Still,
+            Entry {
+                fallback: None,
+                from_open_page: None,
+                from_url: None,
+                max_backs: None,
+                strategy: EntryStrategy::Direct,
+            },
+        ),
+    };
+    let options = BehaviorOptions {
+        dwell: Some(DwellMode::Fixed),
+        entry: Some(entry),
+        mode: Some(mode),
+        patience_ms: None,
+        scroll_depth: None,
+        seed: Some(seed.to_string()),
+        wander: Some(false),
+    };
+    let applied = BehaviorApplied {
+        from_request: false,
+        request_ignored: false,
+        scroll_depth: None,
+        dwell: Some(dwell),
+        patience: None,
+        referer_strategy: RefererStrategy::Direct,
+        seed: *seed,
+    };
+    (options, applied)
 }
 
 /// The dwell of one attempt when a request names its median: drawn from
@@ -506,6 +629,7 @@ pub fn behavior_for(
                 RefererStrategy::Direct | RefererStrategy::SearchEngine => EntryStrategy::Direct,
             },
         }),
+        mode: Some(BehaviorMode::Human),
         patience_ms: u64::try_from(patience.as_millis()).ok(),
         scroll_depth,
         seed: Some(seed.to_string()),
@@ -574,18 +698,27 @@ pub fn navigation_for(
     job: &AttemptJob,
     browser: &BrowserConfig,
 ) -> (NavigateRequest, BehaviorApplied) {
-    let (mut behavior, applied) = behavior_for(
-        &job.policy,
-        browser,
-        &job.seed,
-        pacing_factor(&job.persona.seed),
-        job.behavior.as_ref(),
-    );
-    if let Some(Arrival::Link { from, max_backs }) = &job.arrival
-        && applied.referer_strategy != RefererStrategy::None
-    {
-        behavior.entry = Some(entry_from(from, *max_backs));
-    }
+    let link = match &job.arrival {
+        Some(Arrival::Link { from, max_backs }) => Some((from, *max_backs)),
+        Some(Arrival::Typed) | None => None,
+    };
+    let (behavior, applied) = if job.level == Level::Fast {
+        still_behavior(&job.policy, &job.seed, link)
+    } else {
+        let (mut behavior, applied) = behavior_for(
+            &job.policy,
+            browser,
+            &job.seed,
+            pacing_factor(&job.persona.seed),
+            job.behavior.as_ref(),
+        );
+        if let Some((from, max_backs)) = link
+            && applied.referer_strategy != RefererStrategy::None
+        {
+            behavior.entry = Some(entry_from(from, max_backs));
+        }
+        (behavior, applied)
+    };
     let request = NavigateRequest {
         artifact_prefix: None,
         behavior: Some(behavior),
@@ -624,12 +757,19 @@ pub fn flow_for(
     let dwell = wish
         .and_then(|wish| wish.dwell)
         .map(|median| median.max(floor));
+    // At level 2 a flow dwells the policy's own time drawn upward: a median
+    // of one and a half times `min_dwell` and, by the sidecar's draw, a
+    // 95th percentile of three times it, never below it (spec §25).
+    let still = (job.level == Level::Fast).then(|| floor.mul_f64(1.5));
+    let paced = dwell.or(still);
     let request = FlowRequest {
         actions: plan.actions.clone(),
         behavior: Some(FlowBehavior {
             pace: Some(FlowPace {
-                dwell_ms: dwell.map(millis),
+                dwell_ms: paced.map(millis),
                 min_dwell_ms: Some(millis(floor)),
+                // At level 2 the hand rests while it dwells.
+                wander: (job.level == Level::Fast).then_some(false),
             }),
             seed: Some(job.seed.to_string()),
             typos: Some(plan.typos),
@@ -646,7 +786,7 @@ pub fn flow_for(
         from_request: dwell.is_some(),
         request_ignored: asked.is_some() && wish.is_none(),
         scroll_depth: None,
-        dwell,
+        dwell: paced,
         patience: None,
         referer_strategy: RefererStrategy::Direct,
         seed: job.seed,
@@ -709,6 +849,11 @@ pub struct PathExecutor {
     /// The last page each persona fetched from each domain over the http
     /// path, and when: the `Referer` of its next one.
     last_pages: Mutex<LastPages>,
+    /// The forwarder's endpoints of plain clients; `None` makes no plain
+    /// attempt.
+    plain: Option<ForwarderEgress>,
+    /// What a plain client says unless its caller names another.
+    plain_user_agent: String,
 }
 
 /// The last page of each persona on each domain, and when it was fetched.
@@ -761,6 +906,85 @@ impl PathExecutor {
             max_redirects: usize::try_from(config.http.max_redirects).unwrap_or(usize::MAX),
             meter,
             last_pages: Mutex::new(HashMap::new()),
+            plain: None,
+            plain_user_agent: config.egress.plain_user_agent().to_owned(),
+        }
+    }
+
+    /// The same executor making plain attempts (level 0) through the
+    /// forwarder of `egress`.
+    #[must_use]
+    pub fn with_plain(mut self, egress: ForwarderEgress) -> Self {
+        self.plain = Some(egress);
+        self
+    }
+
+    /// One attempt of a plain client: its caller's request as given, from
+    /// its exit, through the forwarder.
+    async fn plain_attempt(&self, job: &PlainJob) -> AttemptOutput {
+        let Some(egress) = &self.plain else {
+            return AttemptOutput::failed(
+                Outcome::ProviderError,
+                "plain_unavailable",
+                Courtesy::NotTheSite,
+            )
+            .finally();
+        };
+        let endpoint = egress.plain_endpoint(job.route);
+        let client = match self.manager.http().plain(&endpoint, &self.plain_user_agent) {
+            Ok(client) => client,
+            Err(error) => return Self::unavailable(&PersonaError::Http(error)),
+        };
+        let spec = PlainSpec {
+            url: job.url.clone(),
+            method: job.method.clone(),
+            headers: job.headers.clone(),
+            body: job.body.clone(),
+            guard: Guard::Target(self.security),
+            timeout: Some(job.timeout),
+            max_body_bytes: job
+                .max_body_bytes
+                .and_then(|bytes| usize::try_from(bytes).ok()),
+            max_redirects: None,
+        };
+        let fetched = match client.fetch(&spec).await {
+            Ok(fetched) => fetched,
+            Err(error) => return Self::http_failure(&error),
+        };
+        let classification = self.verdicts.classify(&Observation {
+            render: Render::Http,
+            status: fetched.status,
+            url: fetched.final_url.to_string(),
+            headers: fetched.headers.clone(),
+            cookies: cookies_set(&fetched.headers),
+            body: fetched.text(),
+            browser: None,
+        });
+        if classification.outcome.is_success()
+            && let PlainRoute::Pool(proxy) = job.route
+        {
+            self.manager.pool().report_traffic_ok(proxy);
+        }
+        AttemptOutput {
+            courtesy: courtesy_of(classification.outcome, Some(fetched.status)),
+            classification,
+            reason: None,
+            status: Some(fetched.status),
+            final_url: Some(fetched.final_url.to_string()),
+            headers: fetched.headers.clone(),
+            redirects: fetched
+                .redirects()
+                .iter()
+                .map(|hop| hop.url.to_string())
+                .collect(),
+            timing: fetched.timing,
+            page: None,
+            fetched: Some(Box::new(fetched)),
+            cookies_to_browser: None,
+            cookies_to_http: None,
+            behavior: None,
+            flow: None,
+            reached: Some(Reached::Typed),
         }
     }
 
@@ -1206,6 +1430,12 @@ impl AttemptExecutor for PathExecutor {
             Render::Http => self.http(job).await,
             Render::Browser => self.browser(job).await,
         }
+    }
+
+    async fn plain(&self, job: &PlainJob) -> AttemptOutput {
+        // A plain client's bytes count toward the host they went to, at
+        // the forwarder.
+        self.plain_attempt(job).await
     }
 }
 

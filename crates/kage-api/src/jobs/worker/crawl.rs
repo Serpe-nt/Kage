@@ -38,7 +38,7 @@ use base64::Engine as _;
 use chrono::{DateTime, Utc};
 use kage_browser::contract::{BodyEncoding, NavigationErrorCode, PageResult};
 use kage_core::domain::{
-    FrontierEntry, FrontierSource, FrontierState, JobItem, JobItemState, JobState, RenderMode,
+    Exit, FrontierEntry, FrontierSource, FrontierState, JobItem, JobItemState, JobState, Level,
 };
 use kage_core::ids::{FrontierId, JobItemId, PersonaId, RequestId};
 use kage_core::outcome::Outcome;
@@ -277,6 +277,9 @@ struct Crawl {
     pinned: Option<PersonaId>,
     /// What the crawl's pages say about `robots.txt`.
     robots: RobotsWish,
+    /// The level of its pages (spec §25). At 0 every page is typed and
+    /// nobody is a site's visitor.
+    level: Level,
     frontier: Frontier,
     /// The stored identity of every entry, by position: its id and when
     /// the crawl came to know it.
@@ -368,12 +371,22 @@ impl Crawl {
             .and_then(|defaults| defaults.get("robots"))
             .and_then(|wish| serde_json::from_value::<RobotsField>(wish.clone()).ok())
             .map_or(RobotsWish::Policy, RobotsWish::from);
+        // A crawl of 1.x names none: its pages are refused when they are
+        // planned, with `level_required`.
+        let level = request
+            .defaults
+            .as_ref()
+            .and_then(|defaults| defaults.get("level"))
+            .and_then(Value::as_u64)
+            .and_then(Level::from_number)
+            .unwrap_or(Level::Human);
         Ok(Ok(Self {
             rules,
             defaults: request.defaults.clone(),
             session: request.session_id.clone(),
             pinned,
             robots,
+            level,
             frontier,
             known,
             items,
@@ -660,8 +673,13 @@ impl Crawl {
 
     /// The personas that may not read a page of a site in a place: the
     /// scouts, and the site's other visitors.
-    fn excluded(&self, site: &str, slot: usize) -> Vec<PersonaId> {
-        let mut excluded: Vec<PersonaId> = self.kept.scouts.values().flatten().copied().collect();
+    fn excluded(&self, site: &str, slot: usize, own_scout: bool) -> Vec<PersonaId> {
+        // A reader that is its own scout is kept from nothing for it.
+        let mut excluded: Vec<PersonaId> = if own_scout {
+            Vec::new()
+        } else {
+            self.kept.scouts.values().flatten().copied().collect()
+        };
         if let Some(slots) = self.kept.slots.get(site) {
             for (place, other) in slots.iter().enumerate() {
                 if place != slot
@@ -695,8 +713,10 @@ impl Crawl {
             .entry(entry)
             .map(|entry| entry.site.clone())
             .unwrap_or_default();
+        // A plain client has no tab to click from: every page is typed.
         let arrival = flight
             .from
+            .filter(|_| self.level != Level::Plain)
             .and_then(|from| self.open_at(entry_at(from)))
             .map_or(Arrival::Typed, |from| Arrival::Link {
                 from,
@@ -704,13 +724,13 @@ impl Crawl {
             });
         let tune = Tune {
             arrival: Some(arrival),
-            exclude: self.excluded(&site, flight.slot),
+            exclude: self.excluded(&site, flight.slot, runner.work.engine.pipeline.own_scout()),
             links: true,
             page: true,
         };
         // The page is its visitor's: the persona of its place once the
         // crawl has one there, and nobody else while that one can go on.
-        let visitors = self.session.is_none().then(|| Visitors {
+        let visitors = (self.session.is_none() && self.level != Level::Plain).then(|| Visitors {
             known: self
                 .kept
                 .slots
@@ -939,6 +959,7 @@ impl Crawl {
             },
             priority: Priority::Job,
             patience: Some(PATIENCE),
+            level: self.level,
         }
     }
 
@@ -994,47 +1015,57 @@ impl Crawl {
             }
             // The site's scout: whoever asked for its robots.txt or a
             // sitemap before, else one chosen now. One marked address a
-            // site, not two.
-            let scout = runner
-                .work
-                .engine
-                .pipeline
-                .scout_for(&url, &need.readers, need.readers_needed)
-                .await?;
-            let Some(scout) = scout else {
-                // Nobody but the reader could ask, and a reader does not.
-                self.note_sitemap(&file, "no_scout", 0);
-                self.persist(runner).await?;
-                continue;
+            // site, not two. A plain client on the host's connection asks
+            // itself.
+            let plain = self.level == Level::Plain;
+            let pipeline = &runner.work.engine.pipeline;
+            let scout = if plain && pipeline.settings().plain_exit == Exit::Host {
+                None
+            } else {
+                let scout = pipeline
+                    .scout_for(&url, &need.readers, need.readers_needed)
+                    .await?;
+                let Some(scout) = scout else {
+                    // Nobody but the reader could ask, and a reader does
+                    // not.
+                    self.note_sitemap(&file, "no_scout", 0);
+                    self.persist(runner).await?;
+                    continue;
+                };
+                Some(scout)
             };
-            // A scout the site turned away is not waited for through its
-            // cooldown, and nobody asks in its place: the crawl reads on
-            // without the file.
-            let barred = runner
-                .work
-                .engine
-                .pipeline
-                .scout_barred(scout, &url)
-                .await?;
-            if barred.is_some_and(|until| until > later(now, PATIENCE)) {
-                self.note_sitemap(&file, "no_scout", 0);
-                self.persist(runner).await?;
-                continue;
+            if let Some(scout) = scout {
+                // A scout the site turned away is not waited for through
+                // its cooldown, and nobody asks in its place: the crawl
+                // reads on without the file.
+                let barred = pipeline.scout_barred(scout, &url).await?;
+                if barred.is_some_and(|until| until > later(now, PATIENCE)) {
+                    self.note_sitemap(&file, "no_scout", 0);
+                    self.persist(runner).await?;
+                    continue;
+                }
             }
             let Ok(place) = Arc::clone(&runner.hub().in_flight).try_acquire_owned() else {
                 return Ok(true);
             };
             let mut order = FetchOrder::get(url, Priority::Job);
-            order.render = RenderMode::Browser;
+            if plain {
+                // The plain client, from the site's plain exit.
+                order.level = Level::Plain;
+            } else {
+                // As a person who typed the address, in the scout's
+                // browser.
+                order.level = Level::Human;
+                order.pin = scout;
+                order.arrival = Some(Arrival::Typed);
+            }
             // The file as the server sent it, beside what the browser
             // made of it.
             order.capture.raw = true;
             order.api_key = Some(runner.work.key.id);
             order.job = Some(runner.job.id);
             order.patience = Some(PATIENCE);
-            order.pin = Some(scout);
             order.scout = true;
-            order.arrival = Some(Arrival::Typed);
             // A scout asks once: a file that did not come is not asked for
             // again from another address.
             order.max_retries = Some(0);
@@ -1266,7 +1297,7 @@ impl Crawl {
                 let asked = report
                     .attempts
                     .iter()
-                    .map(|attempt| attempt.persona_id)
+                    .filter_map(|attempt| attempt.persona_id)
                     .chain(report.persona.as_ref().map(|persona| persona.id));
                 for persona in asked {
                     scouts.retain(|scout| *scout != persona);
@@ -1362,7 +1393,10 @@ impl Crawl {
         let slot = self.slot(site, flight.slot);
         let before = slot.persona;
         for attempt in &report.attempts {
-            if attempt.outcome.is_block() && slot.persona == Some(attempt.persona_id) {
+            if attempt.outcome.is_block()
+                && attempt.persona_id.is_some()
+                && slot.persona == attempt.persona_id
+            {
                 slot.persona = None;
             }
         }

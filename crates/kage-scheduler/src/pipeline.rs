@@ -1,15 +1,15 @@
 //! One fetch from the request to its result (spec §3.2, §8).
 //!
-//! 1. The SSRF guard looks at the URL; the domain's policy and the render
-//!    decision are resolved (spec §8.1): what the request asks for, else
-//!    what the policy says, else the browser.
+//! 1. The SSRF guard looks at the URL; the domain's policy is resolved.
+//!    The request's level (spec §25) decides its path once: the http path
+//!    at 0 and 1, the browser at 2 and 3. Nothing moves it later.
 //! 2. The scheduler grants a persona and its slot; the request waits for
 //!    it, or is answered at once when the domain is paused, egress is
 //!    unsafe, the bandwidth budget is used up or no persona can serve.
 //! 3. The executor makes the attempt and the classifier labels it.
 //! 4. What the attempt means is settled (cooldown, breaker), and the
-//!    rules of [`kage_core::schedule::retry`] say what follows: done, the
-//!    same persona in its browser, or another persona after a pause.
+//!    rules of [`kage_core::schedule::retry`] say what follows: done, or
+//!    another persona after a pause.
 //! 5. What the request asked to keep of its page is stored
 //!    ([`crate::archive`]), then the request, its attempts and its result.
 //!    The result's headers show the names of the cookies a site set and
@@ -23,6 +23,17 @@
 //! reads. After the last attempt, the document the visit captured is read
 //! once for what the request asked to have extracted and for what a crawl
 //! takes from it (`read`, spec §13, §14).
+//!
+//! # Level 0
+//!
+//! A plain client has no persona: the scheduler only holds it to the
+//! site's own gates ([`Scheduler::acquire_plain`]), and it leaves through
+//! its exit: the host's connection under `egress.plain: host`, or under
+//! `pool` the site's one plain exit, the proxy of the site's scout (chosen
+//! as a scout is, and the site's scout from then on), never another
+//! address. A block is its answer at once; a failure that was not the
+//! site's is tried again from the same exit after a pause. Nothing is
+//! settled on a persona or on the site's breaker.
 //!
 //! A synchronous fetch that takes longer than its wall time is not
 //! cancelled: [`Pipeline::fetch_sync`] hands back a [`Running`] fetch,
@@ -65,8 +76,9 @@ use chrono::{DateTime, Utc};
 use kage_browser::contract::{CaptureOptions, PageResult, Wait};
 use kage_core::config::{Config, MAX_ATTEMPT_TIMEOUT};
 use kage_core::domain::{
-    ArtifactRef, Attempt, CountryCode, Engine, FetchRecord, Header, Persona, PersonaSummary,
-    Render, RenderMode, RequestRecord, RobotsVerdict, SessionId, Visit, redact_set_cookie,
+    ArtifactRef, Attempt, CountryCode, Engine, Exit, FetchRecord, Header, Level, Persona,
+    PersonaSummary, Render, RenderMode, RequestRecord, RobotsVerdict, SessionId, Visit,
+    redact_set_cookie,
 };
 use kage_core::ids::{ApiKeyId, AttemptId, JobId, PersonaId, RequestId, ResultId};
 use kage_core::outcome::{Block, Outcome};
@@ -77,6 +89,7 @@ use kage_core::schedule::planner::{
 };
 use kage_core::schedule::politeness::Courtesy;
 use kage_core::schedule::queue::Priority;
+use kage_core::schedule::retry::retry_pause;
 use kage_core::schedule::retry::{AttemptVerdict, RequestProgress, Ruling, Step};
 use kage_core::schedule::selection::Network;
 use kage_core::seed::Seed;
@@ -99,12 +112,13 @@ use crate::SchedulerError;
 use crate::archive::{Archive, Archived, Keep};
 use crate::backend::Backend;
 use crate::executor::{
-    Arrival, AttemptExecutor, AttemptJob, AttemptOutput, BehaviorWish, FlowPlan, default_capture,
-    default_wait,
+    Arrival, AttemptExecutor, AttemptJob, AttemptOutput, BehaviorWish, FlowPlan, PlainJob,
+    default_capture, default_wait,
 };
+use crate::forwarder::PlainRoute;
 use crate::metrics;
 use crate::robots::{Desk, RobotsSettings, RobotsWish};
-use crate::scheduler::{Grant, Scheduler};
+use crate::scheduler::{Grant, PlainGrant, Scheduler};
 use crate::verdicts::Verdicts;
 
 /// One fetch as a caller asks for it.
@@ -121,8 +135,9 @@ pub struct FetchOrder {
     /// What the request is on the http path: a navigation, a `fetch()` or
     /// an `XMLHttpRequest`.
     pub kind: RequestKind,
-    /// The render mode asked for.
-    pub render: RenderMode,
+    /// The camouflage level (spec §25): the path of every attempt, and how
+    /// much of a person each is.
+    pub level: Level,
     /// Whose work it is.
     pub priority: Priority,
     /// The persona of the caller's session, when there is one.
@@ -194,8 +209,8 @@ pub struct FetchOrder {
 }
 
 impl FetchOrder {
-    /// A plain `GET` of a page with every default: render `auto`, the
-    /// policy's pacing and retries, the document captured.
+    /// A plain `GET` of a page with every default: level 3, the policy's
+    /// pacing and retries, the document captured.
     pub fn get(url: Url, priority: Priority) -> Self {
         Self {
             spec: serde_json::json!({ "url": url.as_str() }),
@@ -204,7 +219,7 @@ impl FetchOrder {
             headers: Vec::new(),
             body: None,
             kind: RequestKind::Document,
-            render: RenderMode::Auto,
+            level: Level::Human,
             priority,
             pin: None,
             engines: Vec::new(),
@@ -278,8 +293,6 @@ pub struct FetchReport {
     pub block: Option<Block>,
     /// The pacing that applied.
     pub pacing: PacingReport,
-    /// Whether the fetch moved from the http path to the browser.
-    pub escalated: bool,
     /// What was extracted from the page's document, when the request
     /// asked for it and the fetch got an HTML document.
     pub extract: Option<serde_json::Value>,
@@ -387,6 +400,8 @@ pub struct Capture<'a> {
     pub extract: Option<ExtractOptions>,
     /// What is recorded as the request: which step of which flow.
     pub spec: serde_json::Value,
+    /// The level of the flow: 2 or 3.
+    pub level: Level,
 }
 
 /// A stored capture point.
@@ -404,18 +419,24 @@ pub struct Kept {
     pub extract: Option<serde_json::Value>,
 }
 
+/// How long a plain client's request waits when the site has no plain
+/// exit that can carry traffic: a job comes back after it, a caller is
+/// told when.
+const PLAIN_EXIT_WAIT: Duration = Duration::from_mins(5);
+
 /// Tells work for a job to stop waiting: `true` once it should. An attempt
 /// that is under way is not cut by it.
 pub type Stop = tokio::sync::watch::Receiver<bool>;
 
 /// The span of one request through the pipeline (spec §20): its id, its
-/// domain and the render it asked for, never its address.
+/// domain and its level, never its address.
 fn fetch_span(id: RequestId, order: &FetchOrder) -> tracing::Span {
     tracing::info_span!(
         "pipeline.fetch",
         request = %id,
         domain = order.url.host_str().unwrap_or_default(),
-        render = order.render.as_str(),
+        level = order.level.label(),
+        render = order.level.render().as_str(),
         outcome = tracing::field::Empty,
     )
 }
@@ -446,6 +467,7 @@ const fn waits(refused: &crate::scheduler::Refused) -> bool {
         | Refusal::EgressUnsafe
         | Refusal::BandwidthExhausted
         | Refusal::RobotsUnavailable
+        | Refusal::PlainExitUnavailable
         | Refusal::ShuttingDown => true,
         // Nobody can serve it at all, unless the scheduler named the
         // moment somebody can.
@@ -468,6 +490,8 @@ pub struct PipelineSettings {
     pub security: SsrfPolicy,
     /// Whether a result shows the values of the cookies a site set.
     pub expose_set_cookie: bool,
+    /// Where level 0 leaves from (`egress.plain`).
+    pub plain_exit: Exit,
 }
 
 impl PipelineSettings {
@@ -480,6 +504,7 @@ impl PipelineSettings {
             retry_pause: config.scheduler.retry_pause.distribution(),
             security: config.security.ssrf(),
             expose_set_cookie: config.security.expose_set_cookie,
+            plain_exit: config.egress.plain_exit(),
         }
     }
 }
@@ -501,8 +526,15 @@ pub struct Pipeline {
     flights: Arc<Flights>,
 }
 
-/// Counts an attempt and writes its line in the log.
-fn note(attempt: &Attempt, domain: &str, dispatch: &Dispatch, output: &AttemptOutput) {
+/// Counts an attempt and writes its line in the log. `page_of_visit` is
+/// `None` for a plain client's attempt, which belongs to no visit.
+fn note(
+    attempt: &Attempt,
+    level: Level,
+    domain: &str,
+    page_of_visit: Option<u32>,
+    output: &AttemptOutput,
+) {
     let vendor = output
         .classification
         .vendors
@@ -510,7 +542,7 @@ fn note(attempt: &Attempt, domain: &str, dispatch: &Dispatch, output: &AttemptOu
         .map_or("", |vendor| vendor.as_str());
     metrics::attempt(
         domain,
-        attempt.render,
+        level,
         attempt.outcome,
         vendor,
         (attempt.finished_at - attempt.started_at)
@@ -519,15 +551,17 @@ fn note(attempt: &Attempt, domain: &str, dispatch: &Dispatch, output: &AttemptOu
     );
     tracing::info!(
         request = %attempt.request_id,
-        persona = %attempt.persona_id,
+        persona = attempt.persona_id.as_ref().map(tracing::field::display),
+        exit = attempt.exit.map(Exit::as_str),
         domain,
+        level = level.label(),
         render = attempt.render.as_str(),
         outcome = attempt.outcome.as_str(),
         vendor,
         n = attempt.n,
         status = attempt.status,
         total_ms = attempt.timing.total_ms,
-        page_of_visit = dispatch.page_of_visit,
+        page_of_visit,
         seed = attempt.seed.as_ref().map(tracing::field::display),
         "attempt"
     );
@@ -546,12 +580,6 @@ pub fn attempt_seed(persona: &Seed, request: RequestId, n: u32) -> Seed {
     )
 }
 
-/// The path of the first attempt (spec §8.1): what the request asks for,
-/// else what the policy says, else the browser.
-pub fn first_render(requested: RenderMode, policy: &EffectivePolicy) -> Render {
-    policy.render_for(requested)
-}
-
 /// How a request that is still under way stands.
 struct Course {
     order: FetchOrder,
@@ -564,9 +592,6 @@ struct Course {
     last: Option<AttemptOutput>,
     last_persona: Option<Persona>,
     waited: Duration,
-    /// The persona that makes the next attempt, when it is its own second
-    /// try.
-    follow_up: Option<PersonaId>,
     /// Networks of the personas that were blocked.
     avoid: Vec<Network>,
     /// The pause before the next attempt, when it is another persona's.
@@ -671,6 +696,13 @@ impl Pipeline {
     /// The settings the pipeline works with.
     pub const fn settings(&self) -> &PipelineSettings {
         &self.settings
+    }
+
+    /// Whether a site's reader asks for its files itself
+    /// ([`RobotsSettings::own_scout`]): then nobody is kept from reading a
+    /// site for being its scout.
+    pub fn own_scout(&self) -> bool {
+        self.robots.own_scout
     }
 
     fn backend(&self) -> &Arc<dyn Backend> {
@@ -786,10 +818,11 @@ impl Pipeline {
         let policies = self.verdicts.policies().current();
         let policy = policies.domains.resolve(&domain);
         let pacing = policy.pacing_for(order.pacing.as_ref(), &policies.pacing)?;
-        // The site's scout reads none of its pages. A session's persona is
-        // the session's, whatever else it is.
+        // The site's scout reads none of its pages, unless the reader is
+        // its own scout. A session's persona is the session's, whatever
+        // else it is.
         let site = kage_crawl::site::of_host(&domain);
-        let site_scout = if order.scout || order.pin.is_some() {
+        let site_scout = if order.scout || order.pin.is_some() || self.robots.own_scout {
             None
         } else {
             self.site_scout(&site).await?
@@ -802,7 +835,8 @@ impl Pipeline {
             url: order.url.to_string(),
             method: order.method.to_string(),
             domain: domain.clone(),
-            render: order.render,
+            render: RenderMode::from(order.level.render()),
+            level: Some(order.level),
             spec: order.spec.clone(),
             created_at: self.now(),
             finished_at: None,
@@ -815,13 +849,11 @@ impl Pipeline {
         let earlier = earlier.unwrap_or_default();
 
         let retries = order.max_retries.unwrap_or(policy.retries);
-        let progress =
-            RequestProgress::new(order.render, first_render(order.render, &policy), retries)
-                .resumed(
-                    earlier
-                        .iter()
-                        .map(|attempt| (attempt.persona_id, attempt.render, attempt.outcome)),
-                );
+        let progress = RequestProgress::new(order.level, retries).resumed(
+            earlier
+                .iter()
+                .map(|attempt| (attempt.persona_id, attempt.outcome)),
+        );
         // The networks of the personas that were blocked before the
         // request changed hands are avoided as if it had not.
         let avoid = if progress.blocked().is_empty() {
@@ -846,7 +878,6 @@ impl Pipeline {
             last: None,
             last_persona: None,
             waited: Duration::ZERO,
-            follow_up: None,
             avoid,
             retry: None,
             give_up_at,
@@ -962,6 +993,7 @@ impl Pipeline {
             method: http::Method::GET.to_string(),
             domain,
             render: RenderMode::Browser,
+            level: Some(capture.level),
             spec: capture.spec,
             created_at: now,
             finished_at: None,
@@ -1052,6 +1084,9 @@ impl Pipeline {
             Ok(course) => course,
             Err(ran) => return Ok(ran),
         };
+        if course.order.level == Level::Plain {
+            return Box::pin(self.run_plain(course, stop)).await;
+        }
 
         loop {
             // Waiting for a persona and its turn (spec §20).
@@ -1072,50 +1107,7 @@ impl Pipeline {
             };
             let grant = match granted {
                 Ok(grant) => grant,
-                Err(refused) => {
-                    // Under `auto` an http attempt nobody can make is a
-                    // browser attempt: no persona of this pool has an
-                    // http path until an engine major has a profile.
-                    if refused.reason == Refusal::NoPersona
-                        && course.progress.render() == Render::Http
-                        && course.order.render == RenderMode::Auto
-                        && course.attempts.is_empty()
-                    {
-                        course.progress = RequestProgress::new(
-                            course.order.render,
-                            Render::Browser,
-                            course.order.max_retries.unwrap_or(course.policy.retries),
-                        );
-                        continue;
-                    }
-                    if course.follow_up.is_some() {
-                        // The persona's own browser cannot be had: its
-                        // http block stands, and another persona tries.
-                        self.forfeit(&mut course).await?;
-                        continue;
-                    }
-                    // A job waits out what only says "not now".
-                    if course.waits_like_a_job(stop.is_some()) && waits(&refused) {
-                        return Ok(Ran::Deferred(Deferred {
-                            reason: refused.reason,
-                            retry_at: refused.retry_at,
-                        }));
-                    }
-                    // What was reached before stands; a request that never
-                    // got an attempt is answered with the reason.
-                    let (outcome, reason) = if course.attempts.is_empty() {
-                        (
-                            Outcome::ProviderError,
-                            Some(refused.reason.as_str().to_owned()),
-                        )
-                    } else {
-                        course.standing()
-                    };
-                    return finished(
-                        self.conclude(course, outcome, reason, refused.retry_at)
-                            .await?,
-                    );
-                }
+                Err(refused) => return self.refused(course, &refused, stop.is_some()).await,
             };
             let ruling = self.attempt(&mut course, grant).await?;
             // The server stopped waiting for the page: this process asks
@@ -1128,20 +1120,133 @@ impl Pipeline {
             // the request ends with what it got.
             let pinned_and_blocked = course.order.pin.is_some() && ruling.penalty.is_some();
             match ruling.step {
-                Step::RetryOtherPersona { .. } if !pinned_and_blocked => {
-                    course.follow_up = None;
+                Step::Retry if !pinned_and_blocked => {
                     course.retry = Some(self.retry_pause(&course));
                 }
-                Step::EscalateSamePersona => {
-                    course.follow_up = course.last_persona.as_ref().map(|persona| persona.id);
-                    course.retry = None;
-                }
-                Step::Finish | Step::RetryOtherPersona { .. } => {
+                Step::Finish | Step::Retry => {
                     let (outcome, reason) = course.standing();
                     return finished(self.conclude(course, outcome, reason, None).await?);
                 }
             }
         }
+    }
+
+    /// How a run ends whose next attempt the scheduler refused: a job waits
+    /// out what only says "not now"; otherwise what was reached before
+    /// stands, and a request that never got an attempt is answered with
+    /// the reason.
+    async fn refused(
+        &self,
+        course: Course,
+        refused: &crate::scheduler::Refused,
+        for_job: bool,
+    ) -> Result<Ran, SchedulerError> {
+        if course.waits_like_a_job(for_job) && waits(refused) {
+            return Ok(Ran::Deferred(Deferred {
+                reason: refused.reason,
+                retry_at: refused.retry_at,
+            }));
+        }
+        let (outcome, reason) = if course.attempts.is_empty() {
+            (
+                Outcome::ProviderError,
+                Some(refused.reason.as_str().to_owned()),
+            )
+        } else {
+            course.standing()
+        };
+        let report = self
+            .conclude(course, outcome, reason, refused.retry_at)
+            .await?;
+        Ok(Ran::Finished(Box::new(report)))
+    }
+
+    /// The attempts of a plain client (level 0) until it is done, deferred
+    /// or stopped: each through the site's gates and from its exit.
+    async fn run_plain(
+        &self,
+        mut course: Course,
+        mut stop: Option<Stop>,
+    ) -> Result<Ran, SchedulerError> {
+        loop {
+            let Some(route) = self.plain_route(&course).await? else {
+                let refused = crate::scheduler::Refused {
+                    reason: Refusal::PlainExitUnavailable,
+                    retry_at: self.later_by(PLAIN_EXIT_WAIT),
+                };
+                return self.refused(course, &refused, stop.is_some()).await;
+            };
+            let mut work = self.work(&course);
+            // A retry waits its pause, drawn as for a persona at the
+            // persona's middle pace.
+            if let Some(retry) = course.retry {
+                let pause = retry_pause(&retry.pause, 1.0, &retry.seed);
+                work.not_before = chrono::Duration::from_std(pause)
+                    .ok()
+                    .and_then(|pause| self.now().checked_add_signed(pause));
+            }
+            let acquiring = self
+                .scheduler
+                .acquire_plain(work)
+                .instrument(tracing::info_span!(
+                    "scheduler.wait",
+                    kind = ?course.order.priority,
+                    n = course.progress.attempts() + 1,
+                ));
+            let granted = match &mut stop {
+                Some(stop) => tokio::select! {
+                    granted = acquiring => granted,
+                    () = stopped(stop) => return Ok(Ran::Stopped),
+                },
+                None => acquiring.await,
+            };
+            let grant = match granted {
+                Ok(grant) => grant,
+                Err(refused) => return self.refused(course, &refused, stop.is_some()).await,
+            };
+            let ruling = self.attempt_plain(&mut course, grant, route).await?;
+            if course.was_cut() {
+                return self.after_cut(course, stop.is_some()).await;
+            }
+            match ruling.step {
+                Step::Retry => course.retry = Some(self.retry_pause(&course)),
+                Step::Finish => {
+                    let (outcome, reason) = course.standing();
+                    let report = self.conclude(course, outcome, reason, None).await?;
+                    return Ok(Ran::Finished(Box::new(report)));
+                }
+            }
+        }
+    }
+
+    /// The moment `wait` from now.
+    fn later_by(&self, wait: Duration) -> Option<DateTime<Utc>> {
+        chrono::Duration::from_std(wait)
+            .ok()
+            .and_then(|wait| self.now().checked_add_signed(wait))
+    }
+
+    /// Where a plain client's attempt leaves from: the host's connection,
+    /// or the proxy of the site's scout (chosen now when the site has none,
+    /// and its scout from then on). `None` when the pool has no plain exit
+    /// for the site that can carry traffic: nobody may scout it, or its
+    /// scout's proxy is down. Never another address.
+    async fn plain_route(&self, course: &Course) -> Result<Option<PlainRoute>, SchedulerError> {
+        if self.settings.plain_exit == Exit::Host {
+            return Ok(Some(PlainRoute::Host));
+        }
+        let scout = match self.site_scout(&course.site).await? {
+            Some(scout) => Some(scout),
+            None => self.scout_for(&course.order.url, &[], 1).await?,
+        };
+        let Some(scout) = scout else {
+            return Ok(None);
+        };
+        Ok(self
+            .backend()
+            .plain_exit(scout)
+            .await?
+            .map(PlainRoute::Pool))
     }
 
     /// How a run ends whose last attempt was cut: a fetch for a job
@@ -1232,34 +1337,6 @@ impl Pipeline {
         }
     }
 
-    /// Gives up a persona's own second try: the http block it was to cure
-    /// is settled as it stands, and the next attempt is another persona's.
-    async fn forfeit(&self, course: &mut Course) -> Result<(), SchedulerError> {
-        course.follow_up = None;
-        course.retry = Some(self.retry_pause(course));
-        let Some((id, verdict)) = course.progress.forfeit() else {
-            return Ok(());
-        };
-        let Some(persona) = course
-            .last_persona
-            .as_ref()
-            .filter(|persona| persona.id == id)
-        else {
-            return Ok(());
-        };
-        self.verdicts
-            .settle(
-                (persona.id, &persona.seed),
-                &course.domain,
-                verdict.outcome,
-                Some(&verdict),
-                false,
-                &self.verdicts.breaker_rules(&course.domain),
-            )
-            .await?;
-        Ok(())
-    }
-
     /// The next attempt of a request, as work for the scheduler.
     fn work(&self, course: &Course) -> Work {
         let order = &course.order;
@@ -1279,15 +1356,15 @@ impl Pipeline {
             domain: course.domain.clone(),
             priority: order.priority,
             render: course.progress.render(),
-            // Its own second try, else its session's persona.
-            pin: course.follow_up.or(order.pin),
-            exclude: if course.follow_up.is_some() || order.pin.is_some() {
+            // A session's persona.
+            pin: order.pin,
+            exclude: if order.pin.is_some() {
                 Vec::new()
             } else {
                 // Those that tried already, those the caller keeps out,
                 // and the site's scout, which reads none of its pages: the
                 // one known when the request began, or one chosen since.
-                let scout = if order.scout {
+                let scout = if order.scout || self.robots.own_scout {
                     None
                 } else {
                     self.desk
@@ -1311,9 +1388,8 @@ impl Pipeline {
                 course.policy.countries.clone()
             },
             prefer_countries: order.prefer_countries.clone(),
-            // A session's persona and a persona's own second try are not
-            // a matter of visitors.
-            visitors: if course.follow_up.is_some() || order.pin.is_some() {
+            // A session's persona is not a matter of visitors.
+            visitors: if order.pin.is_some() {
                 None
             } else {
                 order.visitors.clone()
@@ -1322,7 +1398,6 @@ impl Pipeline {
             active_hours: course.policy.active_hours,
             breaker_threshold: rules.threshold,
             breaker_pause: rules.pause,
-            follow_up: course.follow_up.is_some(),
             retry_pause: course.retry,
             not_before: None,
             gap_floor: course.gap_floor,
@@ -1330,6 +1405,7 @@ impl Pipeline {
                 let patience = chrono::Duration::from_std(order.patience?).ok()?;
                 self.now().checked_add_signed(patience)
             }),
+            plain: order.level == Level::Plain,
         }
     }
 
@@ -1346,7 +1422,7 @@ impl Pipeline {
                 blocked: false,
             });
             let verdict = AttemptVerdict::plain(Outcome::ProviderError);
-            return Ok(course.progress.record(dispatch.persona, verdict));
+            return Ok(course.progress.record(Some(dispatch.persona), verdict));
         };
         let seed = attempt_seed(&persona.seed, course.request.id, n);
         let job = self.job(course, &dispatch, &persona, n, seed);
@@ -1359,6 +1435,7 @@ impl Pipeline {
         let span = tracing::info_span!(
             "attempt",
             n,
+            level = course.order.level.label(),
             render = course.progress.render().as_str(),
             persona = %persona.id,
             outcome = tracing::field::Empty,
@@ -1377,22 +1454,19 @@ impl Pipeline {
         }
         metrics::breaker_threshold(&course.domain, dispatch.breaker.threshold);
         let verdict = AttemptVerdict::of(&output.classification);
-        let ruling = course.progress.record(persona.id, verdict);
+        let ruling = course.progress.record(Some(persona.id), verdict);
 
-        // What the persona answers for; an http block that its own
-        // browser is about to cure is nothing yet.
-        if ruling.step != Step::EscalateSamePersona {
-            self.verdicts
-                .settle(
-                    (persona.id, &persona.seed),
-                    &course.domain,
-                    outcome,
-                    ruling.penalty.as_ref(),
-                    dispatch.trial,
-                    &dispatch.breaker,
-                )
-                .await?;
-        }
+        // What the persona answers for.
+        self.verdicts
+            .settle(
+                (persona.id, &persona.seed),
+                &course.domain,
+                outcome,
+                ruling.penalty.as_ref(),
+                dispatch.trial,
+                &dispatch.breaker,
+            )
+            .await?;
         if ruling.penalty.is_some() {
             let network = self
                 .backend()
@@ -1413,8 +1487,9 @@ impl Pipeline {
             id: AttemptId::new(),
             request_id: course.request.id,
             n,
-            persona_id: persona.id,
-            engine: persona.engine,
+            persona_id: Some(persona.id),
+            engine: Some(persona.engine),
+            exit: None,
             render: dispatch.render,
             started_at,
             finished_at,
@@ -1432,10 +1507,96 @@ impl Pipeline {
                 .and_then(|patience| u64::try_from(patience.as_millis()).ok()),
         };
         self.backend().save_attempt(&attempt).await?;
-        note(&attempt, &course.domain, &dispatch, &output);
+        note(
+            &attempt,
+            course.order.level,
+            &course.domain,
+            Some(dispatch.page_of_visit),
+            &output,
+        );
         course.attempts.push(attempt);
         course.last = Some(output);
         course.last_persona = Some(persona);
+        Ok(ruling)
+    }
+
+    /// Makes a plain client's attempt (level 0), stores it, and says what
+    /// follows. Nobody answers for it: no persona cools and the site's
+    /// breaker counts nothing; only what it says about the site's health
+    /// (server errors) goes back to the scheduler.
+    async fn attempt_plain(
+        &self,
+        course: &mut Course,
+        grant: PlainGrant,
+        route: PlainRoute,
+    ) -> Result<Ruling, SchedulerError> {
+        course.waited += grant.dispatch().waited.to_std().unwrap_or(Duration::ZERO);
+        let n = course.progress.attempts() + 1;
+        let job = PlainJob {
+            request: course.request.id,
+            n,
+            route,
+            url: course.order.url.clone(),
+            method: course.order.method.clone(),
+            headers: course.order.headers.clone(),
+            body: course.order.body.clone(),
+            domain: course.domain.clone(),
+            timeout: course
+                .order
+                .timeout
+                .unwrap_or(self.settings.http_timeout)
+                .min(MAX_ATTEMPT_TIMEOUT),
+            max_body_bytes: course.order.max_body_bytes,
+        };
+        let _under_way = self.under_way.begin();
+        let span = tracing::info_span!(
+            "attempt",
+            n,
+            level = Level::Plain.label(),
+            render = Render::Http.as_str(),
+            exit = route.exit().as_str(),
+            outcome = tracing::field::Empty,
+            vendor = tracing::field::Empty,
+        );
+        let started_at = self.now();
+        let output = self
+            .under_way
+            .until_cut(self.executor.plain(&job).instrument(span.clone()))
+            .await;
+        let finished_at = self.now();
+        let outcome = output.outcome();
+        span.record("outcome", outcome.as_str());
+        if let Some(vendor) = output.classification.vendors.first() {
+            span.record("vendor", vendor.as_str());
+        }
+        let ruling = course
+            .progress
+            .record(None, AttemptVerdict::of(&output.classification));
+        grant.complete(output.courtesy);
+        let attempt = Attempt {
+            id: AttemptId::new(),
+            request_id: course.request.id,
+            n,
+            persona_id: None,
+            engine: None,
+            exit: Some(route.exit()),
+            render: Render::Http,
+            started_at,
+            finished_at,
+            status: output.status,
+            final_url: output.final_url.clone(),
+            outcome,
+            block: output.classification.block.clone(),
+            timing: output.timing,
+            seed: None,
+            reason: output.reason.clone(),
+            patience_ms: None,
+        };
+        self.backend().save_attempt(&attempt).await?;
+        note(&attempt, Level::Plain, &course.domain, None, &output);
+        course.attempts.push(attempt);
+        course.last = Some(output);
+        course.last_persona = None;
         Ok(ruling)
     }
 
@@ -1460,6 +1621,7 @@ impl Pipeline {
             request: course.request.id,
             n,
             persona: persona.clone(),
+            level: course.order.level,
             render: dispatch.render,
             url: course.order.url.clone(),
             method: course.order.method.clone(),
@@ -1571,19 +1733,17 @@ impl Pipeline {
         self.backend().finish(&record).await?;
         self.fill_cache(&course.order, &record, reading.thin).await;
         if let Some(call) = course.robots_due {
-            let readers = course.attempts.iter().map(|attempt| attempt.persona_id);
+            let readers = course
+                .attempts
+                .iter()
+                .filter_map(|attempt| attempt.persona_id);
             self.follow_up(call, readers);
         }
         let first_vendor = last
             .as_ref()
             .and_then(|last| last.classification.vendors.first())
             .map_or("", |vendor| vendor.as_str());
-        metrics::request(
-            &course.domain,
-            course.progress.render(),
-            outcome,
-            first_vendor,
-        );
+        metrics::request(&course.domain, course.order.level, outcome, first_vendor);
         Ok(FetchReport {
             request: course.request.id,
             result: record.id,
@@ -1599,7 +1759,6 @@ impl Pipeline {
             persona,
             block,
             pacing,
-            escalated: course.progress.escalated(),
             extract: reading.extract,
             robots: course.robots,
             page: reading.page,

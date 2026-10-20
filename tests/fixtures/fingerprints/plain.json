@@ -1,0 +1,21 @@
+{
+  "h2": {
+    "ja4": "t13d2811h2_257f3020b3a2_78e6aca7449b",
+    "akamai": "4:2097152;5:16384;6:16384|5177345|0|m,s,a,p",
+    "headers": [
+      "user-agent",
+      "accept",
+      "accept-encoding"
+    ]
+  },
+  "http1": {
+    "ja4": "t13d2811h2_257f3020b3a2_78e6aca7449b",
+    "akamai": null,
+    "headers": [
+      "host",
+      "user-agent",
+      "accept",
+      "accept-encoding"
+    ]
+  }
+}

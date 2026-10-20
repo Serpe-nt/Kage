@@ -55,7 +55,7 @@ use kage_core::seed::Seed;
 use kage_proxy::{Clock, TokioClock};
 use kage_scheduler::{
     AttemptExecutor, AttemptJob, AttemptOutput, Backend, MemoryBackend, Pipeline, PipelineSettings,
-    Scheduler, Verdicts, cooldown_rules, planner_rules,
+    PlainJob, Scheduler, Verdicts, cooldown_rules, planner_rules,
 };
 use tempfile::TempDir;
 use tokio::sync::oneshot;
@@ -275,7 +275,6 @@ fn answered(outcome: Outcome, block: Option<Block>, status: u16) -> AttemptOutpu
             rule: block.as_ref().map(|_| "test".to_owned()),
             block,
             retryable: outcome.is_retryable(),
-            escalate: outcome.escalates_to_browser(),
             cooldown: outcome.default_cooldown(),
             evidence: Vec::new(),
         },
@@ -312,12 +311,26 @@ type Reply = Box<dyn FnOnce(&AttemptJob) -> AttemptOutput + Send>;
 
 type Rule = Box<dyn Fn(&AttemptJob) -> Option<AttemptOutput> + Send>;
 
+type PlainRule = Box<dyn Fn(&PlainJob) -> Option<AttemptOutput> + Send>;
+
+/// One attempt of a plain client a [`Script`] was asked to make.
+#[derive(Debug, Clone)]
+pub struct SeenPlain {
+    /// The attempt.
+    pub job: PlainJob,
+    /// When it started.
+    pub at: DateTime<Utc>,
+}
+
 /// An executor that answers what a test scripted, in order, and a served
 /// page once the script is over. Every attempt takes `took` on the clock.
 pub struct Script {
     rules: Mutex<Vec<Rule>>,
     replies: Mutex<VecDeque<Reply>>,
     seen: Mutex<Vec<Seen>>,
+    plain_rules: Mutex<Vec<PlainRule>>,
+    plain_replies: Mutex<VecDeque<AttemptOutput>>,
+    plain_seen: Mutex<Vec<SeenPlain>>,
     took: Mutex<Duration>,
     clock: Arc<dyn Clock>,
 }
@@ -334,6 +347,9 @@ impl Script {
             rules: Mutex::new(Vec::new()),
             replies: Mutex::new(VecDeque::new()),
             seen: Mutex::new(Vec::new()),
+            plain_rules: Mutex::new(Vec::new()),
+            plain_replies: Mutex::new(VecDeque::new()),
+            plain_seen: Mutex::new(Vec::new()),
             took: Mutex::new(Duration::from_millis(800)),
             clock,
         }
@@ -359,6 +375,24 @@ impl Script {
     /// for beside the pages of a test (a `robots.txt`).
     pub fn when(&self, rule: impl Fn(&AttemptJob) -> Option<AttemptOutput> + Send + 'static) {
         self.rules.lock().unwrap().push(Box::new(rule));
+    }
+
+    /// The next attempt of a plain client gets this answer; once the
+    /// script is over, a served page.
+    pub fn then_plain(&self, output: AttemptOutput) -> &Self {
+        self.plain_replies.lock().unwrap().push_back(output);
+        self
+    }
+
+    /// Every attempt of a plain client `rule` has an answer for gets that
+    /// answer, before anything scripted in order.
+    pub fn when_plain(&self, rule: impl Fn(&PlainJob) -> Option<AttemptOutput> + Send + 'static) {
+        self.plain_rules.lock().unwrap().push(Box::new(rule));
+    }
+
+    /// Every attempt of a plain client asked for so far, in order.
+    pub fn plain_seen(&self) -> Vec<SeenPlain> {
+        self.plain_seen.lock().unwrap().clone()
     }
 
     /// The addresses of the attempts asked for so far, in order.
@@ -405,6 +439,26 @@ impl AttemptExecutor for Script {
         }
         let reply = self.replies.lock().unwrap().pop_front();
         reply.map_or_else(ok, |reply| reply(job))
+    }
+
+    async fn plain(&self, job: &PlainJob) -> AttemptOutput {
+        self.plain_seen.lock().unwrap().push(SeenPlain {
+            job: job.clone(),
+            at: self.clock.now(),
+        });
+        let took = *self.took.lock().unwrap();
+        tokio::time::sleep(took).await;
+        let ruled = self
+            .plain_rules
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|rule| rule(job));
+        if let Some(output) = ruled {
+            return output;
+        }
+        let reply = self.plain_replies.lock().unwrap().pop_front();
+        reply.unwrap_or_else(ok)
     }
 }
 
@@ -530,11 +584,11 @@ impl World {
             active_hours: policy.active_hours,
             breaker_threshold: rules.threshold,
             breaker_pause: rules.pause,
-            follow_up: false,
             retry_pause: None,
             not_before: None,
             give_up_at: None,
             gap_floor: None,
+            plain: false,
         }
     }
 

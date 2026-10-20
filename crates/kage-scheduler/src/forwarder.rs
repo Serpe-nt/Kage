@@ -31,21 +31,39 @@
 //!
 //! Targets see none of this: TLS is end to end, and the connection they
 //! see is the exit's.
+//!
+//! Since 2.0 (spec §25) two more kinds of route pass here:
+//!
+//! - **A plain client** (level 0) presents a credential that names no
+//!   persona, only its exit: `plain-host`, or `plain-<proxy id>` for the
+//!   one proxy of the pool that is the site's plain exit. Its bytes belong
+//!   to no persona and count toward the host they went to.
+//! - **No upstream.** A route to the host's own connection (a host persona
+//!   under `egress.mode: direct`, or a plain client under
+//!   `egress.plain: host`) has no proxy to resolve names: the forwarder
+//!   resolves the target itself, refuses it when any of its addresses lies
+//!   in a range the guard refuses (unless the operator named it in
+//!   `egress.direct.private_names`; link-local, metadata and multicast
+//!   addresses are refused for every name), connects to an address it
+//!   checked and to no other, answers a `CONNECT` itself and sends an
+//!   absolute-form request on in origin form. The stops of the pool (a
+//!   leak, the provider's budget) do not hold it: it uses neither.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::future::Future;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use hmac::{Hmac, KeyInit, Mac};
-use kage_core::domain::{IDLE_DOMAIN, Persona, ProxyEndpoint, ProxyScheme};
-use kage_core::ids::PersonaId;
+use kage_core::domain::{Exit, IDLE_DOMAIN, Persona, ProxyEndpoint, ProxyScheme};
+use kage_core::ids::{PersonaId, ProxyId};
 use kage_core::secret::Secret;
-use kage_core::ssrf::{SsrfPolicy, check_url};
+use kage_core::ssrf::{DeniedRange, SsrfPolicy, check_url, classify_ip};
+use kage_http::HopResolver;
 use kage_persona::{Egress, Via};
 use sha2::Sha256;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -67,8 +85,71 @@ const CHUNK: usize = 16 * 1024;
 /// What the token of a persona is made from, besides the key.
 const TOKEN_LABEL: &[u8] = b"kage-forwarder-token-v1";
 
+/// What the token of a plain client's exit is made from, besides the key.
+const PLAIN_TOKEN_LABEL: &[u8] = b"kage-forwarder-plain-token-v1";
+
+/// The user name of a plain client begins with this. Never a colon: a
+/// Basic credential ends its user name at the first one.
+const PLAIN_PREFIX: &str = "plain-";
+
 /// Hexadecimal characters of a token: 128 bits.
 const TOKEN_CHARS: usize = 32;
+
+/// Where a plain client's traffic leaves (spec §25): the host's own
+/// connection, or the one proxy of the pool that is a site's plain exit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PlainRoute {
+    /// The host's own connection.
+    Host,
+    /// This proxy of the pool.
+    Pool(ProxyId),
+}
+
+impl PlainRoute {
+    /// The user name a plain client of this route presents.
+    pub fn username(self) -> String {
+        match self {
+            Self::Host => format!("{PLAIN_PREFIX}host"),
+            Self::Pool(proxy) => format!("{PLAIN_PREFIX}{}", proxy.as_uuid()),
+        }
+    }
+
+    fn parse(rest: &str) -> Option<Self> {
+        if rest == "host" {
+            return Some(Self::Host);
+        }
+        Uuid::parse_str(rest)
+            .ok()
+            .map(|uuid| Self::Pool(ProxyId::from_uuid(uuid)))
+    }
+
+    /// The connection the route's bytes leave through.
+    pub const fn exit(self) -> Exit {
+        match self {
+            Self::Host => Exit::Host,
+            Self::Pool(_) => Exit::Pool,
+        }
+    }
+}
+
+/// Who presented a credential to the forwarder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Caller {
+    /// A persona's browser or http client.
+    Persona(PersonaId),
+    /// A plain client of level 0, by its exit.
+    Plain(PlainRoute),
+}
+
+impl Caller {
+    /// The persona, when it is one's.
+    pub const fn persona(self) -> Option<PersonaId> {
+        match self {
+            Self::Persona(persona) => Some(persona),
+            Self::Plain(_) => None,
+        }
+    }
+}
 
 // --- Credentials -----------------------------------------------------------
 
@@ -123,10 +204,41 @@ impl Tokens {
         text
     }
 
+    /// The token of a plain client's exit.
+    pub fn plain_token(&self, route: PlainRoute) -> String {
+        let mut text = Hmac::<Sha256>::new_from_slice(&self.key).map_or_else(
+            |_| String::new(),
+            |mut mac| {
+                mac.update(PLAIN_TOKEN_LABEL);
+                match route {
+                    PlainRoute::Host => mac.update(b"host"),
+                    PlainRoute::Pool(proxy) => mac.update(proxy.as_uuid().as_bytes()),
+                }
+                hex(&mac.finalize().into_bytes())
+            },
+        );
+        text.truncate(TOKEN_CHARS);
+        text
+    }
+
     /// The persona a credential names, when the token is that persona's.
     pub fn verify(&self, username: &str, password: &str) -> Option<PersonaId> {
-        let persona = PersonaId::from_uuid(Uuid::parse_str(username).ok()?);
-        let expected = self.token(persona);
+        match self.verify_caller(username, password)? {
+            Caller::Persona(persona) => Some(persona),
+            Caller::Plain(_) => None,
+        }
+    }
+
+    /// Who a credential names: a persona or a plain client's exit, when the
+    /// token is theirs.
+    pub fn verify_caller(&self, username: &str, password: &str) -> Option<Caller> {
+        let (caller, expected) = if let Some(rest) = username.strip_prefix(PLAIN_PREFIX) {
+            let route = PlainRoute::parse(rest)?;
+            (Caller::Plain(route), self.plain_token(route))
+        } else {
+            let persona = PersonaId::from_uuid(Uuid::parse_str(username).ok()?);
+            (Caller::Persona(persona), self.token(persona))
+        };
         // Compared without stopping at the first difference.
         let equal = expected.len() == password.len()
             && expected
@@ -134,7 +246,7 @@ impl Tokens {
                 .zip(password.bytes())
                 .fold(0_u8, |difference, (a, b)| difference | (a ^ b))
                 == 0;
-        (equal && !expected.is_empty()).then_some(persona)
+        (equal && !expected.is_empty()).then_some(caller)
     }
 }
 
@@ -147,6 +259,26 @@ pub struct ForwarderEgress {
     advertised: (String, u16),
     /// The forwarder as this process reaches it.
     local: SocketAddr,
+}
+
+impl ForwarderEgress {
+    /// The forwarder as this process's plain client reaches it, under the
+    /// credential of `route`. The endpoint's id is the route's proxy, or
+    /// the nil id for the host.
+    pub fn plain_endpoint(&self, route: PlainRoute) -> ProxyEndpoint {
+        let id = match route {
+            PlainRoute::Host => ProxyId::from_uuid(Uuid::nil()),
+            PlainRoute::Pool(proxy) => proxy,
+        };
+        ProxyEndpoint {
+            id,
+            host: self.local.ip().to_string(),
+            port: self.local.port(),
+            username: Secret::new(route.username()),
+            password: Secret::new(self.tokens.plain_token(route)),
+            scheme: ProxyScheme::Http,
+        }
+    }
 }
 
 impl Egress for ForwarderEgress {
@@ -173,6 +305,10 @@ impl Egress for ForwarderEgress {
 pub enum RouteRefusal {
     /// There is no such persona.
     UnknownPersona,
+    /// The route is one the configuration does not have: a plain client
+    /// of the host under `egress.mode: proxies`, or of the pool under
+    /// `direct`.
+    NotConfigured,
     /// The persona is cooling or retired.
     PersonaNotActive,
     /// Its proxy is in backoff, being replaced, or gone.
@@ -186,6 +322,7 @@ impl RouteRefusal {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::UnknownPersona => "unknown_persona",
+            Self::NotConfigured => "not_configured",
             Self::PersonaNotActive => "persona_not_active",
             Self::ProxyNotUsable => "proxy_not_usable",
             Self::Unavailable => "unavailable",
@@ -193,21 +330,64 @@ impl RouteRefusal {
     }
 }
 
-/// Finds the one proxy a persona's traffic may leave through.
+/// Where the forwarder connects for a caller.
+#[derive(Debug, Clone)]
+pub enum Upstream {
+    /// A proxy of the pool, with the provider's credentials.
+    Proxy(ProxyEndpoint),
+    /// The host's own connection: no proxy.
+    Direct,
+}
+
+impl Upstream {
+    /// The connection the bytes leave through.
+    pub const fn exit(&self) -> Exit {
+        match self {
+            Self::Proxy(_) => Exit::Pool,
+            Self::Direct => Exit::Host,
+        }
+    }
+}
+
+/// Finds the one way a caller's traffic may leave.
 #[async_trait]
 pub trait Routes: Send + Sync + fmt::Debug {
-    /// The persona's own proxy with the provider's credentials.
-    async fn upstream(&self, persona: PersonaId) -> Result<ProxyEndpoint, RouteRefusal>;
+    /// The persona's own proxy with the provider's credentials, or the
+    /// host's connection for a host persona.
+    async fn upstream(&self, persona: PersonaId) -> Result<Upstream, RouteRefusal>;
+
+    /// The exit of a plain client: the host's connection, or the proxy it
+    /// names when that proxy can carry traffic.
+    async fn plain(&self, route: PlainRoute) -> Result<Upstream, RouteRefusal>;
+}
+
+/// Resolves names with the system's resolver, for the routes that have no
+/// proxy to resolve them.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SystemResolver;
+
+#[async_trait]
+impl HopResolver for SystemResolver {
+    async fn resolve(&self, host: &str) -> Result<Vec<IpAddr>, String> {
+        let found = tokio::net::lookup_host((host, 0))
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut addresses: Vec<IpAddr> = found.map(|address| address.ip()).collect();
+        addresses.dedup();
+        Ok(addresses)
+    }
 }
 
 // --- The meter -------------------------------------------------------------
 
-/// Bytes one persona exchanged with its proxy while one domain was being
-/// fetched.
+/// Bytes one persona, or the plain client, exchanged through one exit
+/// while one domain was being fetched.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Counted {
-    /// The persona.
-    pub persona: PersonaId,
+    /// The persona; `None` for a plain client.
+    pub persona: Option<PersonaId>,
+    /// The connection the bytes left through.
+    pub egress: Exit,
     /// The domain being fetched, or `(idle)`.
     pub domain: String,
     /// Bytes sent towards the proxy.
@@ -216,10 +396,25 @@ pub struct Counted {
     pub bytes_down: u64,
 }
 
+/// Whose bytes the meter counts: a persona's, or a plain client's toward
+/// the host it went to, and through which exit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Payer {
+    /// The persona; `None` for a plain client.
+    pub persona: Option<PersonaId>,
+    /// The connection the bytes leave through.
+    pub egress: Exit,
+    /// The domain a plain client's connection goes to; a persona's bytes
+    /// count toward its label instead.
+    pub domain: Option<String>,
+}
+
+type MeterKey = (Option<PersonaId>, Exit, String);
+
 #[derive(Debug, Default)]
 struct MeterState {
     labels: HashMap<PersonaId, String>,
-    bytes: HashMap<(PersonaId, String), (u64, u64)>,
+    bytes: HashMap<MeterKey, (u64, u64)>,
 }
 
 /// Counts what passes, per persona and per domain being fetched.
@@ -258,18 +453,38 @@ impl Meter {
         }
     }
 
-    /// Adds bytes of a persona.
+    /// Adds bytes of a persona through the pool.
     pub fn add(&self, persona: PersonaId, up: u64, down: u64) {
+        self.add_for(
+            &Payer {
+                persona: Some(persona),
+                egress: Exit::Pool,
+                domain: None,
+            },
+            up,
+            down,
+        );
+    }
+
+    /// Adds bytes of whoever pays for them.
+    pub fn add_for(&self, payer: &Payer, up: u64, down: u64) {
         if up == 0 && down == 0 {
             return;
         }
         let mut state = self.state();
-        let domain = state
-            .labels
-            .get(&persona)
-            .cloned()
+        let domain = payer
+            .domain
+            .clone()
+            .or_else(|| {
+                payer
+                    .persona
+                    .and_then(|persona| state.labels.get(&persona).cloned())
+            })
             .unwrap_or_else(|| IDLE_DOMAIN.to_owned());
-        let entry = state.bytes.entry((persona, domain)).or_default();
+        let entry = state
+            .bytes
+            .entry((payer.persona, payer.egress, domain))
+            .or_default();
         entry.0 = entry.0.saturating_add(up);
         entry.1 = entry.1.saturating_add(down);
         drop(state);
@@ -281,14 +496,19 @@ impl Meter {
     pub fn drain(&self) -> Vec<Counted> {
         let mut counted: Vec<Counted> = std::mem::take(&mut self.state().bytes)
             .into_iter()
-            .map(|((persona, domain), (bytes_up, bytes_down))| Counted {
-                persona,
-                domain,
-                bytes_up,
-                bytes_down,
-            })
+            .map(
+                |((persona, egress, domain), (bytes_up, bytes_down))| Counted {
+                    persona,
+                    egress,
+                    domain,
+                    bytes_up,
+                    bytes_down,
+                },
+            )
             .collect();
-        counted.sort_by(|a, b| (a.persona, &a.domain).cmp(&(b.persona, &b.domain)));
+        counted.sort_by(|a, b| {
+            (a.persona, a.egress, &a.domain).cmp(&(b.persona, b.egress, &b.domain))
+        });
         counted
     }
 
@@ -382,6 +602,28 @@ impl Head {
         text.push_str("Proxy-Authorization: Basic ");
         text.push_str(&base64_encode(login.as_bytes()));
         text.push_str("\r\n\r\n");
+        text.into_bytes()
+    }
+
+    /// The head as it goes to the target itself, with no proxy between: in
+    /// origin form, without anything addressed to a proxy.
+    fn origin_form(&self, url: &Url) -> Vec<u8> {
+        let mut path = url.path().to_owned();
+        if let Some(query) = url.query() {
+            path.push('?');
+            path.push_str(query);
+        }
+        let mut text = format!("{} {} {}\r\n", self.method, path, self.version);
+        for line in &self.lines {
+            let name = header_name(line);
+            if !name.eq_ignore_ascii_case("proxy-authorization")
+                && !name.eq_ignore_ascii_case("proxy-connection")
+            {
+                text.push_str(line);
+                text.push_str("\r\n");
+            }
+        }
+        text.push_str("\r\n");
         text.into_bytes()
     }
 
@@ -493,6 +735,11 @@ pub struct ForwarderSettings {
     /// The operator's own hosts, by lower-case name and port, that are
     /// relayed although the guard would refuse them: the self-test pages.
     pub operator_hosts: HashSet<(String, u16)>,
+    /// Names, lower case, that may resolve to a private or loopback
+    /// address on a route with no upstream (`egress.direct.private_names`).
+    pub private_names: HashSet<String>,
+    /// How a route with no upstream resolves its targets.
+    pub resolver: Arc<dyn HopResolver>,
 }
 
 impl ForwarderSettings {
@@ -526,6 +773,14 @@ impl ForwarderSettings {
             max_connections: usize::try_from(config.forwarder.max_connections)
                 .unwrap_or(usize::MAX),
             operator_hosts,
+            private_names: config
+                .egress
+                .direct
+                .private_names
+                .iter()
+                .filter_map(|name| kage_core::policy::normalize_host(name))
+                .collect(),
+            resolver: Arc::new(SystemResolver),
         }
     }
 }
@@ -543,6 +798,8 @@ enum Refused {
     Target(String),
     /// The persona's traffic is not relayed.
     Route(RouteRefusal),
+    /// A route with no upstream found no address it may connect to.
+    Address(String),
     /// The persona's proxy could not be reached or did not answer.
     Upstream(String),
 }
@@ -620,8 +877,9 @@ impl Forwarder {
         }
     }
 
-    /// Refuses every new connection for a reason (a leak, the bandwidth
-    /// cap), or relays again with `None`.
+    /// Refuses every new connection through the pool for a reason (a leak,
+    /// the provider's bandwidth cap), or relays again with `None`. A route
+    /// with no upstream uses neither and is not stopped.
     pub fn set_stop(&self, stop: Option<&'static str>) {
         *self.stop.lock().unwrap_or_else(PoisonError::into_inner) = stop;
     }
@@ -703,9 +961,9 @@ impl Forwarder {
             // Not a request to a proxy: no answer.
             return Err(Refused::BadRequest);
         };
-        let Some(persona) = head
+        let Some(caller) = head
             .credentials()
-            .and_then(|(username, password)| self.tokens.verify(&username, &password))
+            .and_then(|(username, password)| self.tokens.verify_caller(&username, &password))
         else {
             // Asking for a credential is what any proxy does.
             let _ = client
@@ -718,16 +976,34 @@ impl Forwarder {
             return Err(Refused::Credential);
         };
         let tunnel = head.is_connect();
-        if let Some(reason) = self.stopped() {
-            return refuse(client, tunnel, Refused::Stopped(reason)).await;
-        }
         if let Err(reason) = self.check_target(&url, &host, port) {
             return refuse(client, tunnel, Refused::Target(reason)).await;
         }
-        let upstream = match self.routes.upstream(persona).await {
+        let route = match caller {
+            Caller::Persona(persona) => self.routes.upstream(persona).await,
+            Caller::Plain(route) => self.routes.plain(route).await,
+        };
+        let upstream = match route {
             Ok(upstream) => upstream,
             Err(refusal) => return refuse(client, tunnel, Refused::Route(refusal)).await,
         };
+        let payer = Payer {
+            persona: caller.persona(),
+            egress: upstream.exit(),
+            // A plain client's connection counts toward the host it goes to.
+            domain: matches!(caller, Caller::Plain(_)).then(|| host.clone()),
+        };
+        let upstream = match upstream {
+            Upstream::Proxy(upstream) => upstream,
+            Upstream::Direct => {
+                return self
+                    .direct(client, head, buffer, caller, &payer, (&host, port))
+                    .await;
+            }
+        };
+        if let Some(reason) = self.stopped() {
+            return refuse(client, tunnel, Refused::Stopped(reason)).await;
+        }
         let connecting = TcpStream::connect((upstream.host.as_str(), upstream.port));
         let mut server = match tokio::time::timeout(self.settings.connect_timeout, connecting).await
         {
@@ -741,16 +1017,140 @@ impl Forwarder {
             }
         };
         let _ = server.set_nodelay(true);
-        tracing::trace!(%persona, %host, port, tunnel = head.is_connect(), "relaying");
+        tracing::trace!(?caller, %host, port, tunnel = head.is_connect(), "relaying");
 
         if head.is_connect() {
-            self.tunnel(client, &mut server, &head, buffer, persona, &upstream)
+            self.tunnel(client, &mut server, &head, buffer, &payer, &upstream)
                 .await
         } else {
-            self.plain(client, server, head, buffer, persona, &upstream)
-                .await;
+            self.plain(
+                client,
+                server,
+                head,
+                buffer,
+                caller,
+                &payer,
+                Some(&upstream),
+            )
+            .await;
             Ok(())
         }
+    }
+
+    /// A route with no upstream: resolves the target, checks every address,
+    /// connects to a checked one, and relays a tunnel or plain requests.
+    async fn direct(
+        &self,
+        client: &mut TcpStream,
+        head: Head,
+        buffer: Vec<u8>,
+        caller: Caller,
+        payer: &Payer,
+        (host, port): (&str, u16),
+    ) -> Result<(), Refused> {
+        let tunnel = head.is_connect();
+        let addresses = match self.addresses(host, port).await {
+            Ok(addresses) => addresses,
+            Err(reason) => return refuse(client, tunnel, Refused::Address(reason)).await,
+        };
+        let mut server = None;
+        for address in addresses {
+            let connecting = TcpStream::connect(SocketAddr::new(address, port));
+            if let Ok(Ok(connected)) =
+                tokio::time::timeout(self.settings.connect_timeout, connecting).await
+            {
+                server = Some(connected);
+                break;
+            }
+        }
+        let Some(mut server) = server else {
+            let reason = Refused::Upstream(format!("no address of {host} answered"));
+            return refuse(client, tunnel, reason).await;
+        };
+        let _ = server.set_nodelay(true);
+        tracing::trace!(?caller, %host, port, tunnel, "relaying with no upstream");
+        if !tunnel {
+            self.plain(client, server, head, buffer, caller, payer, None)
+                .await;
+            return Ok(());
+        }
+        // The forwarder is the proxy here: it opens the tunnel itself.
+        let answer: &[u8] = b"HTTP/1.1 200 Connection established\r\n\r\n";
+        let failed = |error: std::io::Error| Refused::Upstream(error.to_string());
+        client.write_all(answer).await.map_err(failed)?;
+        self.relayed.fetch_add(1, Ordering::Relaxed);
+        if !buffer.is_empty() {
+            server.write_all(&buffer).await.map_err(failed)?;
+            self.meter.add_for(payer, buffer.len() as u64, 0);
+        }
+        self.pump_both(client, &mut server, payer).await;
+        Ok(())
+    }
+
+    /// The addresses of a target that a route with no upstream may connect
+    /// to: every address the name has must be one the guard allows, or a
+    /// private or loopback one of a name the operator listed; link-local,
+    /// metadata and multicast addresses never.
+    async fn addresses(&self, host: &str, port: u16) -> Result<Vec<IpAddr>, String> {
+        let operator = self
+            .settings
+            .operator_hosts
+            .contains(&(host.to_owned(), port));
+        let named = host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<IpAddr>()
+            .ok();
+        let addresses = match named {
+            Some(address) => vec![address],
+            None => self.settings.resolver.resolve(host).await?,
+        };
+        if addresses.is_empty() {
+            return Err(format!("{host} has no address"));
+        }
+        let private = operator || self.settings.private_names.contains(host);
+        for address in &addresses {
+            match classify_ip(*address) {
+                None => {}
+                Some(
+                    DeniedRange::Loopback
+                    | DeniedRange::Private
+                    | DeniedRange::Cgnat
+                    | DeniedRange::UniqueLocal,
+                ) if private => {}
+                Some(range) => {
+                    return Err(format!("{host} resolves to {address}, in {range:?}"));
+                }
+            }
+        }
+        Ok(addresses)
+    }
+
+    /// Relays both directions of an open tunnel, counting.
+    async fn pump_both(&self, client: &mut TcpStream, server: &mut TcpStream, payer: &Payer) {
+        let active = Activity::new();
+        let (mut client_read, mut client_write) = client.split();
+        let (mut server_read, mut server_write) = server.split();
+        let idle = self.settings.idle_timeout;
+        let up = pump(
+            &mut client_read,
+            &mut server_write,
+            idle,
+            &active,
+            |bytes| {
+                self.meter.add_for(payer, bytes, 0);
+            },
+        );
+        let down = pump(
+            &mut server_read,
+            &mut client_write,
+            idle,
+            &active,
+            |bytes| {
+                self.meter.add_for(payer, 0, bytes);
+            },
+        );
+        tokio::join!(up, down);
     }
 
     /// The guard: whether the forwarder may ask the proxy for this target.
@@ -780,13 +1180,13 @@ impl Forwarder {
         server: &mut TcpStream,
         head: &Head,
         early: Vec<u8>,
-        persona: PersonaId,
+        payer: &Payer,
         upstream: &ProxyEndpoint,
     ) -> Result<(), Refused> {
         let request = head.rewritten(upstream);
         let failed = |error: std::io::Error| Refused::Upstream(error.to_string());
         server.write_all(&request).await.map_err(failed)?;
-        self.meter.add(persona, request.len() as u64, 0);
+        self.meter.add_for(payer, request.len() as u64, 0);
 
         let mut answer = Vec::new();
         let status = tokio::time::timeout(
@@ -796,7 +1196,7 @@ impl Forwarder {
         .await
         .map_err(|_| Refused::Upstream("the proxy did not answer the tunnel".to_owned()))?
         .map_err(failed)?;
-        self.meter.add(persona, 0, answer.len() as u64);
+        self.meter.add_for(payer, 0, answer.len() as u64);
         // The proxy's own answer goes to the client as it came: a refusal
         // of the proxy is a failed tunnel to the browser.
         client.write_all(&answer).await.map_err(failed)?;
@@ -808,47 +1208,31 @@ impl Forwarder {
         self.relayed.fetch_add(1, Ordering::Relaxed);
         if !early.is_empty() {
             server.write_all(&early).await.map_err(failed)?;
-            self.meter.add(persona, early.len() as u64, 0);
+            self.meter.add_for(payer, early.len() as u64, 0);
         }
-
-        let active = Activity::new();
-        let (mut client_read, mut client_write) = client.split();
-        let (mut server_read, mut server_write) = server.split();
-        let idle = self.settings.idle_timeout;
-        let up = pump(
-            &mut client_read,
-            &mut server_write,
-            idle,
-            &active,
-            |bytes| {
-                self.meter.add(persona, bytes, 0);
-            },
-        );
-        let down = pump(
-            &mut server_read,
-            &mut client_write,
-            idle,
-            &active,
-            |bytes| {
-                self.meter.add(persona, 0, bytes);
-            },
-        );
-        tokio::join!(up, down);
+        self.pump_both(client, server, payer).await;
         Ok(())
     }
 
     /// Plain `http://` requests: every request head of the connection gets
-    /// the provider's credentials and passes the guard; answers are
-    /// relayed as they come.
+    /// the provider's credentials (or, with no upstream, goes on in origin
+    /// form to the one target the connection was opened to) and passes the
+    /// guard; answers are relayed as they come.
+    #[allow(clippy::too_many_arguments)] // One connection and what it is for.
+    #[allow(clippy::too_many_lines)] // Both directions of one connection.
     async fn plain(
         &self,
         client: &mut TcpStream,
         mut server: TcpStream,
         first: Head,
         mut buffer: Vec<u8>,
-        persona: PersonaId,
-        upstream: &ProxyEndpoint,
+        caller: Caller,
+        payer: &Payer,
+        upstream: Option<&ProxyEndpoint>,
     ) {
+        // With no upstream the connection reaches one target, and only
+        // requests for that target may follow on it.
+        let opened_for = target_of(&first).map(|(_, host, port)| (host, port));
         self.relayed.fetch_add(1, Ordering::Relaxed);
         let active = Activity::new();
         let idle = self.settings.idle_timeout;
@@ -860,17 +1244,21 @@ impl Forwarder {
             idle,
             &active,
             |bytes| {
-                self.meter.add(persona, 0, bytes);
+                self.meter.add_for(payer, 0, bytes);
             },
         );
         let up = async {
             let mut head = first;
             loop {
-                let request = head.rewritten(upstream);
+                let request = match (upstream, target_of(&head)) {
+                    (Some(upstream), _) => head.rewritten(upstream),
+                    (None, Some((url, _, _))) => head.origin_form(&url),
+                    (None, None) => break,
+                };
                 if server_write.write_all(&request).await.is_err() {
                     break;
                 }
-                self.meter.add(persona, request.len() as u64, 0);
+                self.meter.add_for(payer, request.len() as u64, 0);
                 active.touch();
                 let sent = send_body(
                     head.body(),
@@ -882,7 +1270,7 @@ impl Forwarder {
                 )
                 .await;
                 match sent {
-                    Ok(bytes) => self.meter.add(persona, bytes, 0),
+                    Ok(bytes) => self.meter.add_for(payer, bytes, 0),
                     Err(_) => break,
                 }
                 // The next request of the connection, when there is one.
@@ -896,16 +1284,16 @@ impl Forwarder {
                     }
                 };
                 let Some(next) = next else { break };
-                let same_persona = next
-                    .credentials()
-                    .and_then(|(username, password)| self.tokens.verify(&username, &password))
-                    == Some(persona);
+                let same_caller = next.credentials().and_then(|(username, password)| {
+                    self.tokens.verify_caller(&username, &password)
+                }) == Some(caller);
                 let allowed = !next.is_connect()
-                    && self.stopped().is_none()
+                    && (upstream.is_none() || self.stopped().is_none())
                     && target_of(&next).is_some_and(|(url, host, port)| {
                         self.check_target(&url, &host, port).is_ok()
+                            && (upstream.is_some() || opened_for.as_ref() == Some(&(host, port)))
                     });
-                if !(same_persona && allowed) {
+                if !(same_caller && allowed) {
                     // The connection ends: no answer of the forwarder's own
                     // may be mixed into the proxy's.
                     self.refused.fetch_add(1, Ordering::Relaxed);
@@ -1164,12 +1552,13 @@ async fn take_line<R: AsyncRead + Unpin>(
 mod tests {
     use std::sync::Arc;
 
-    use kage_core::domain::{ProxyEndpoint, ProxyScheme};
+    use kage_core::domain::{Exit, ProxyEndpoint, ProxyScheme};
     use kage_core::ids::{PersonaId, ProxyId};
     use kage_core::secret::Secret;
 
     use super::{
-        Body, Counted, Head, Meter, RouteRefusal, Tokens, base64_decode, base64_encode, target_of,
+        Body, Caller, Counted, Head, Meter, Payer, PlainRoute, RouteRefusal, Tokens, base64_decode,
+        base64_encode, target_of,
     };
 
     fn head(text: &str) -> Head {
@@ -1226,6 +1615,42 @@ mod tests {
             None
         );
         assert_eq!(format!("{tokens:?}"), "Tokens(..)");
+    }
+
+    #[test]
+    fn a_plain_clients_credential_names_its_exit_and_survives_basic_auth() {
+        let tokens = Tokens::new(&[7; 32]);
+        let proxy = ProxyId::new();
+        let routes = [PlainRoute::Host, PlainRoute::Pool(proxy)];
+        assert_eq!(routes[0].username(), "plain-host");
+        assert_eq!(routes[1].username(), format!("plain-{}", proxy.as_uuid()));
+
+        for route in routes {
+            let token = tokens.plain_token(route);
+            assert_eq!(token.len(), 32);
+            // A Basic credential ends the user name at its first colon.
+            let username = route.username();
+            assert!(!username.contains(':'), "{username}");
+            let encoded = base64_encode(format!("{username}:{token}").as_bytes());
+            let decoded = String::from_utf8(base64_decode(&encoded).unwrap()).unwrap();
+            let (user, password) = decoded.split_once(':').unwrap();
+            assert_eq!(
+                tokens.verify_caller(user, password),
+                Some(Caller::Plain(route))
+            );
+            // Nobody's persona.
+            assert_eq!(tokens.verify(user, password), None);
+        }
+        // One exit's token is not another's, nor a persona's.
+        let host = tokens.plain_token(PlainRoute::Host);
+        assert_eq!(tokens.verify_caller(&routes[1].username(), &host), None);
+        let persona = PersonaId::new();
+        assert_eq!(
+            tokens.verify_caller("plain-host", &tokens.token(persona)),
+            None
+        );
+        assert_eq!(tokens.verify_caller(&persona.to_string(), &host), None);
+        assert_eq!(tokens.verify_caller("plain-nobody", &host), None);
     }
 
     #[test]
@@ -1372,32 +1797,41 @@ mod tests {
         }
         meter.add(one, 7, 0);
         meter.add(one, 0, 0);
+        // A plain client's bytes are nobody's, counted by their exit
+        // toward the host they went to.
+        for egress in [Exit::Host, Exit::Pool] {
+            meter.add_for(
+                &Payer {
+                    persona: None,
+                    egress,
+                    domain: Some("example.net".to_owned()),
+                },
+                3,
+                4,
+            );
+        }
 
+        let counted = |persona, egress, domain: &str, bytes_up, bytes_down| Counted {
+            persona,
+            egress,
+            domain: domain.to_owned(),
+            bytes_up,
+            bytes_down,
+        };
         let mut expected = vec![
-            Counted {
-                persona: one,
-                domain: "(idle)".to_owned(),
-                bytes_up: 107,
-                bytes_down: 1000,
-            },
-            Counted {
-                persona: one,
-                domain: "example.org".to_owned(),
-                bytes_up: 11,
-                bytes_down: 22,
-            },
-            Counted {
-                persona: other,
-                domain: "(idle)".to_owned(),
-                bytes_up: 5,
-                bytes_down: 6,
-            },
+            counted(Some(one), Exit::Pool, "(idle)", 107, 1000),
+            counted(Some(one), Exit::Pool, "example.org", 11, 22),
+            counted(Some(other), Exit::Pool, "(idle)", 5, 6),
+            counted(None, Exit::Host, "example.net", 3, 4),
+            counted(None, Exit::Pool, "example.net", 3, 4),
         ];
-        expected.sort_by(|a, b| (a.persona, &a.domain).cmp(&(b.persona, &b.domain)));
+        expected.sort_by(|a, b| {
+            (a.persona, a.egress, &a.domain).cmp(&(b.persona, b.egress, &b.domain))
+        });
         assert_eq!(meter.drain(), expected);
         // Drained is forgotten; the totals are since the start.
         assert_eq!(meter.drain(), []);
-        assert_eq!(meter.totals(), (123, 1028));
+        assert_eq!(meter.totals(), (129, 1036));
     }
 
     #[test]

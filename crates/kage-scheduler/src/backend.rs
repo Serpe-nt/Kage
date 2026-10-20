@@ -16,9 +16,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use kage_core::domain::{
-    Attempt, FetchRecord, Persona, PersonaState, Proxy, ProxyEndpoint, RequestRecord,
+    Attempt, Exit, FetchRecord, Persona, PersonaState, Proxy, ProxyProviderKind, RequestRecord,
 };
-use kage_core::ids::{ApiKeyId, PersonaId};
+use kage_core::ids::{ApiKeyId, PersonaId, ProxyId};
 use kage_core::outcome::Outcome;
 use kage_core::persona::place;
 use kage_core::schedule::breaker::{Admission, BreakerChange, BreakerRules};
@@ -31,7 +31,7 @@ use kage_store::repo::{ResponseCacheEntry, RobotsCacheEntry};
 use tokio::time::Instant;
 
 use crate::SchedulerError;
-use crate::forwarder::{RouteRefusal, Routes};
+use crate::forwarder::{PlainRoute, RouteRefusal, Routes, Upstream};
 
 /// How long the forwarder trusts what it found out about a persona's
 /// proxy before it asks again.
@@ -121,6 +121,11 @@ pub trait Backend: Send + Sync + fmt::Debug {
     /// site has one that lives.
     async fn scout(&self, site: &str) -> Result<Option<PersonaId>, SchedulerError>;
 
+    /// The proxy of a persona when it can carry traffic now: a site's
+    /// plain exit under `egress.plain: pool` is its scout's (spec §25).
+    /// `None` when the persona is gone or its proxy is not usable.
+    async fn plain_exit(&self, persona: PersonaId) -> Result<Option<ProxyId>, SchedulerError>;
+
     /// Makes a persona the scout of a site.
     async fn set_scout(
         &self,
@@ -185,12 +190,29 @@ pub fn view_of(persona: &Persona, proxy: Option<&Proxy>) -> PersonaView {
 pub struct StoreBackend {
     store: Store,
     pool: Arc<Pool>,
+    /// Whether this installation leaves from the host's own connection
+    /// (`egress.mode: direct`): then only the host's personas are
+    /// scheduled, and a leak of the pool stops nothing.
+    direct: bool,
 }
 
 impl StoreBackend {
     /// A backend over the store and the pool.
     pub const fn new(store: Store, pool: Arc<Pool>) -> Self {
-        Self { store, pool }
+        Self {
+            store,
+            pool,
+            direct: false,
+        }
+    }
+
+    /// The same, for a host from which nothing leaves through the pool
+    /// (`egress.mode: direct`, spec §25): only the personas of the host's
+    /// own rows are scheduled, and the pool's leak flag stops nothing.
+    #[must_use]
+    pub const fn direct(mut self) -> Self {
+        self.direct = true;
+        self
     }
 }
 
@@ -204,12 +226,19 @@ impl Backend for StoreBackend {
             .into_iter()
             .map(|proxy| (proxy.id, proxy))
             .collect();
+        // Never both: the host's personas under `direct`, the pool's under
+        // `proxies` (spec §25).
         Ok(self
             .store
             .personas()
             .list_live()
             .await?
             .iter()
+            .filter(|persona| {
+                proxies
+                    .get(&persona.proxy_id)
+                    .is_none_or(|proxy| (proxy.provider == ProxyProviderKind::Host) == self.direct)
+            })
             .map(|persona| view_of(persona, proxies.get(&persona.proxy_id)))
             .collect())
     }
@@ -232,7 +261,28 @@ impl Backend for StoreBackend {
     }
 
     async fn egress_unsafe(&self) -> Result<bool, SchedulerError> {
+        if self.direct {
+            return Ok(false);
+        }
         Ok(self.pool.egress_unsafe().await?)
+    }
+
+    async fn plain_exit(&self, persona: PersonaId) -> Result<Option<ProxyId>, SchedulerError> {
+        let Some(persona) = self
+            .store
+            .personas()
+            .get(persona)
+            .await?
+            .filter(Persona::is_live)
+        else {
+            return Ok(None);
+        };
+        Ok(self
+            .pool
+            .get(persona.proxy_id)
+            .await?
+            .filter(|proxy| proxy.state.is_usable())
+            .map(|proxy| proxy.id))
     }
 
     async fn dispatched(
@@ -391,28 +441,69 @@ impl Backend for StoreBackend {
 }
 
 /// A route as it was last looked up, and when.
-type KnownRoute = (Instant, Result<ProxyEndpoint, RouteRefusal>);
+type KnownRoute = (Instant, Result<Upstream, RouteRefusal>);
 
 /// The forwarder's routes over the store and the pool: a persona's own
-/// proxy, when the persona is active and the proxy can carry traffic.
+/// proxy, when the persona is active and the proxy can carry traffic (the
+/// host's connection for a host persona); and a plain client's exit, as
+/// the configuration's `egress.plain` allows it.
 #[derive(Debug)]
 pub struct PoolRoutes {
     store: Store,
     pool: Arc<Pool>,
+    plain_exit: Exit,
+    /// Whether personas leave from the host's own connection only.
+    direct: bool,
     known: Mutex<HashMap<PersonaId, KnownRoute>>,
 }
 
 impl PoolRoutes {
-    /// Routes over the store and the pool.
+    /// Routes over the store and the pool, with plain clients leaving
+    /// through the pool (`egress.plain: pool`, the default).
     pub fn new(store: Store, pool: Arc<Pool>) -> Self {
         Self {
             store,
             pool,
+            plain_exit: Exit::Pool,
+            direct: false,
             known: Mutex::new(HashMap::new()),
         }
     }
 
-    async fn look_up(&self, id: PersonaId) -> Result<ProxyEndpoint, RouteRefusal> {
+    /// The same routes for a host that leaves from its own connection
+    /// (`egress.mode: direct`): a persona of the pool is refused, as a host
+    /// persona is under `proxies`. Never both (spec §25).
+    #[must_use]
+    pub const fn direct(mut self) -> Self {
+        self.direct = true;
+        self
+    }
+
+    /// The same routes with plain clients leaving through `exit`: the one
+    /// `egress.plain` names. A plain credential of the other exit is
+    /// refused.
+    #[must_use]
+    pub const fn with_plain_exit(mut self, exit: Exit) -> Self {
+        self.plain_exit = exit;
+        self
+    }
+
+    /// A proxy of the pool as the forwarder connects to it: the host's own
+    /// connection for a host row, else the proxy with its credentials.
+    fn upstream_of(&self, proxy: &Proxy, id: &dyn fmt::Display) -> Result<Upstream, RouteRefusal> {
+        if proxy.provider == ProxyProviderKind::Host {
+            return Ok(Upstream::Direct);
+        }
+        self.pool
+            .endpoint(proxy)
+            .map(Upstream::Proxy)
+            .map_err(|error| {
+                tracing::warn!(%id, %error, "the forwarder cannot open a proxy's credentials");
+                RouteRefusal::Unavailable
+            })
+    }
+
+    async fn look_up(&self, id: PersonaId) -> Result<Upstream, RouteRefusal> {
         let unavailable = |error: &dyn fmt::Display| {
             tracing::warn!(persona = %id, %error, "the forwarder cannot look up a persona's proxy");
             RouteRefusal::Unavailable
@@ -434,17 +525,38 @@ impl PoolRoutes {
             .get(persona.proxy_id)
             .await
             .map_err(|error| unavailable(&error))?
-            .filter(|proxy| proxy.state.is_usable())
+            .filter(|proxy| {
+                proxy.state.is_usable()
+                    && (proxy.provider == ProxyProviderKind::Host) == self.direct
+            })
             .ok_or(RouteRefusal::ProxyNotUsable)?;
-        self.pool
-            .endpoint(&proxy)
-            .map_err(|error| unavailable(&error))
+        self.upstream_of(&proxy, &id)
     }
 }
 
 #[async_trait]
 impl Routes for PoolRoutes {
-    async fn upstream(&self, persona: PersonaId) -> Result<ProxyEndpoint, RouteRefusal> {
+    async fn plain(&self, route: PlainRoute) -> Result<Upstream, RouteRefusal> {
+        if route.exit() != self.plain_exit {
+            return Err(RouteRefusal::NotConfigured);
+        }
+        let PlainRoute::Pool(id) = route else {
+            return Ok(Upstream::Direct);
+        };
+        let proxy = self
+            .pool
+            .get(id)
+            .await
+            .map_err(|error| {
+                tracing::warn!(proxy = %id, %error, "the forwarder cannot look up a plain exit");
+                RouteRefusal::Unavailable
+            })?
+            .filter(|proxy| proxy.state.is_usable() && proxy.provider != ProxyProviderKind::Host)
+            .ok_or(RouteRefusal::ProxyNotUsable)?;
+        self.upstream_of(&proxy, &id)
+    }
+
+    async fn upstream(&self, persona: PersonaId) -> Result<Upstream, RouteRefusal> {
         let cached = self
             .known
             .lock()

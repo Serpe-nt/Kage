@@ -3,16 +3,16 @@
 //!
 //! | Metric | Labels | What |
 //! |---|---|---|
-//! | `kage_requests_total` | `domain`, `render`, `outcome`, `vendor` | fetches that ended |
-//! | `kage_attempt_duration_seconds` | `render`, `outcome` | how long an attempt took |
-//! | `kage_attempts_total` | `domain`, `render`, `outcome`, `vendor` | attempts that ended |
+//! | `kage_requests_total` | `domain`, `level`, `outcome`, `vendor` | fetches that ended |
+//! | `kage_attempt_duration_seconds` | `level`, `outcome` | how long an attempt took |
+//! | `kage_attempts_total` | `domain`, `level`, `outcome`, `vendor` | attempts that ended |
 //! | `kage_scheduler_wait_seconds` | `kind` | how long work waited for a persona and its slot |
 //! | `kage_queue_depth` | `kind` | attempts waiting, by `sync` and `job` |
 //! | `kage_scheduler_in_flight` | `render` | attempts in flight |
 //! | `kage_scheduler_refusals_total` | `reason` | requests answered without an attempt |
 //! | `kage_breaker_open` | `domain` | 1 while a domain is paused |
 //! | `kage_policy_breaker_threshold` | `domain` | the blocks per hour that pause a domain under its policy, set at each attempt there |
-//! | `kage_bandwidth_bytes_total` | `direction` | bytes through the forwarder |
+//! | `kage_bandwidth_bytes_total` | `direction`, `egress` | bytes through the forwarder, by the exit they left through (`pool`, `host`) |
 //! | `kage_bandwidth_budget_ratio` | | the share of the bandwidth cap that is used |
 //! | `kage_cache_requests_total` | `result` | what the response cache did for a request: `hit`, `miss`, `stored`, `bypass`, `joined` |
 //! | `kage_robots_requests_total` | `result` | what came of asking for a `robots.txt`: `file`, `missing`, `unreachable`, `not_asked`, `no_scout` |
@@ -20,11 +20,12 @@
 //! | `kage_extract_duration_seconds` | | how long reading a page's document took |
 //!
 //! A domain is a label of unbounded cardinality in principle; in practice
-//! it is the set of sites the owner's projects fetch.
+//! it is the set of sites the owner's projects fetch. A level is its
+//! number, `0` to `3` (spec §25).
 
 use std::time::Duration;
 
-use kage_core::domain::Render;
+use kage_core::domain::{Exit, Level, Render};
 use kage_core::outcome::Outcome;
 use kage_core::schedule::planner::Refusal;
 use kage_core::schedule::queue::Priority;
@@ -41,11 +42,11 @@ fn vendor_label(vendor: &str) -> String {
 }
 
 /// A fetch ended.
-pub fn request(domain: &str, render: Render, outcome: Outcome, vendor: &str) {
+pub fn request(domain: &str, level: Level, outcome: Outcome, vendor: &str) {
     metrics::counter!(
         "kage_requests_total",
         "domain" => domain.to_owned(),
-        "render" => render.as_str(),
+        "level" => level.label(),
         "outcome" => outcome.as_str(),
         "vendor" => vendor_label(vendor),
     )
@@ -53,18 +54,18 @@ pub fn request(domain: &str, render: Render, outcome: Outcome, vendor: &str) {
 }
 
 /// An attempt ended.
-pub fn attempt(domain: &str, render: Render, outcome: Outcome, vendor: &str, took: Duration) {
+pub fn attempt(domain: &str, level: Level, outcome: Outcome, vendor: &str, took: Duration) {
     metrics::counter!(
         "kage_attempts_total",
         "domain" => domain.to_owned(),
-        "render" => render.as_str(),
+        "level" => level.label(),
         "outcome" => outcome.as_str(),
         "vendor" => vendor_label(vendor),
     )
     .increment(1);
     metrics::histogram!(
         "kage_attempt_duration_seconds",
-        "render" => render.as_str(),
+        "level" => level.label(),
         "outcome" => outcome.as_str(),
     )
     .record(took.as_secs_f64());
@@ -114,10 +115,21 @@ pub fn breaker(domain: &str, open: bool) {
     });
 }
 
-/// Bytes passed through the forwarder since the last report.
-pub fn bandwidth(up: u64, down: u64) {
-    metrics::counter!("kage_bandwidth_bytes_total", "direction" => "up").increment(up);
-    metrics::counter!("kage_bandwidth_bytes_total", "direction" => "down").increment(down);
+/// Bytes passed through the forwarder since the last report, through
+/// one exit.
+pub fn bandwidth(egress: Exit, up: u64, down: u64) {
+    metrics::counter!(
+        "kage_bandwidth_bytes_total",
+        "direction" => "up",
+        "egress" => egress.as_str(),
+    )
+    .increment(up);
+    metrics::counter!(
+        "kage_bandwidth_bytes_total",
+        "direction" => "down",
+        "egress" => egress.as_str(),
+    )
+    .increment(down);
 }
 
 /// The share of the bandwidth cap that is used.
@@ -154,7 +166,7 @@ pub fn extracted(took: Duration) {
 mod tests {
     use std::time::Duration;
 
-    use kage_core::domain::Render;
+    use kage_core::domain::{Exit, Level};
     use kage_core::outcome::Outcome;
     use kage_core::schedule::planner::Refusal;
     use kage_core::schedule::queue::Priority;
@@ -171,10 +183,10 @@ mod tests {
     fn recording_without_a_recorder_is_harmless() {
         // No exporter is installed in a test: every call must still be
         // safe to make.
-        super::request("example.org", Render::Browser, Outcome::Ok, "");
+        super::request("example.org", Level::Human, Outcome::Ok, "");
         super::attempt(
             "example.org",
-            Render::Http,
+            Level::Plain,
             Outcome::Forbidden,
             "cloudflare",
             Duration::from_millis(840),
@@ -185,7 +197,8 @@ mod tests {
         super::refused(Refusal::DomainPaused);
         super::breaker("example.org", true);
         super::breaker("example.org", false);
-        super::bandwidth(1200, 98_000);
+        super::bandwidth(Exit::Pool, 1200, 98_000);
+        super::bandwidth(Exit::Host, 0, 0);
         super::budget(0.41);
         super::cache("hit");
         super::robots("file");

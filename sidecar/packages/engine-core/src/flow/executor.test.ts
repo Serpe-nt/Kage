@@ -448,12 +448,15 @@ function pacedRig(options: { seed?: string; persona?: string; leaves?: readonly 
     },
   };
   let pointer = { x: 960, y: 540 };
+  /** Positions the mouse was sent to. */
+  let moved = 0;
   const nothing = () => Promise.resolve();
   const device: InputDevice = {
     screen: { width: 1920, height: 1080 },
     pointerPosition: () => Promise.resolve(pointer),
     pointerMove: (x, y) => {
       pointer = { x, y };
+      moved += 1;
       return Promise.resolve();
     },
     buttonDown: nothing,
@@ -553,7 +556,17 @@ function pacedRig(options: { seed?: string; persona?: string; leaves?: readonly 
       () => now,
     );
   const steps = () => events.filter((event) => event.type === 'step');
-  return { run, events, steps, pauses, calls, clicks, elapsed: () => now };
+  return {
+    run,
+    events,
+    steps,
+    pauses,
+    calls,
+    clicks,
+    human,
+    elapsed: () => now,
+    moved: () => moved,
+  };
 }
 
 const sorted = (values: readonly number[]) => [...values].sort((a, b) => a - b);
@@ -678,6 +691,57 @@ describe('a flow that paces itself', () => {
       'driver.press Tab',
       `waitForNavigation ${NAVIGATION_WATCH_MS}`,
     ]);
+  });
+
+  it('lets the hand rest through every dwell when the pace says wander: false (1.5.0)', async () => {
+    // Dwells longer than the longest an idle hand rests before it wanders.
+    const pace: FlowPace = { dwell_ms: 20_000, min_dwell_ms: 15_000 };
+    const pages = [page('a'), page('b'), page('c')];
+    const dwelling = async (wander: boolean | undefined) => {
+      const { run, pauses, human, moved } = pacedRig({ seed: seedOf(5) });
+      const outcome = await run(pages, wander === undefined ? pace : { ...pace, wander });
+      expect(outcome.ok).toBe(true);
+      // One dwell per page arrived on; nothing else was paused for.
+      expect(pauses.map((pause) => pause.step)).toEqual([0, 1, 2]);
+      for (const pause of pauses) {
+        expect(pause.ms).toBeGreaterThanOrEqual(15_000);
+      }
+      return { pauses, wanders: human.counts.wanders, moved: moved() };
+    };
+    const resting = await dwelling(false);
+    expect(resting.pauses.every((pause) => !pause.wander)).toBe(true);
+    // No wander path was played: the mouse was sent nowhere.
+    expect(resting).toMatchObject({ wanders: 0, moved: 0 });
+    // Absent and true are what a pace was before 1.5.0: the idle hand wanders.
+    for (const wander of [undefined, true]) {
+      const wandering = await dwelling(wander);
+      expect(wandering.pauses.every((pause) => pause.wander)).toBe(true);
+      expect(wandering.wanders, String(wander)).toBeGreaterThan(0);
+      expect(wandering.moved, String(wander)).toBeGreaterThan(0);
+    }
+  });
+
+  it('thinks before an action as it did when the hand rests through the dwells', async () => {
+    const actions: FlowAction[] = [
+      page('a'),
+      { action: 'extract', capture },
+      { action: 'click', selector: '#stay' },
+      { action: 'click', selector: '#stay' },
+    ];
+    const { run, pauses } = pacedRig({ seed: seedOf(6) });
+    expect((await run(actions, { dwell_ms: 4000, wander: false })).ok).toBe(true);
+    // The dwell on the page arrived on, then a thinking time before each click,
+    // the hand still all along.
+    expect(pauses.map((pause) => [pause.step, pause.wander])).toEqual([
+      [0, false],
+      [2, false],
+      [3, false],
+    ]);
+    const [shortest, longest] = HUMAN_BOUNDS.thinkingMs;
+    for (const pause of pauses.slice(1)) {
+      expect(pause.ms).toBeGreaterThanOrEqual(shortest);
+      expect(pause.ms).toBeLessThanOrEqual(longest);
+    }
   });
 
   it('draws every dwell around the median it was given, twice the median at most nineteen times in twenty', async () => {

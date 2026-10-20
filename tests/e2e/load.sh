@@ -62,19 +62,19 @@ load:
   domain_rpm: 20
 EOF
 fi
+# The rule is an entry of the shipped file's `domains` mapping, its last
+# key: a second `domains:` would be a duplicate key, which the policy
+# loader refuses, and `domains: {}` takes no entry.
+sed --in-place 's/^domains: {}$/domains:/' "${policies}/domains.yaml"
+[ "$(grep '^[a-z_]*:' "${policies}/domains.yaml" | tail -n 1)" = 'domains:' ] \
+    || { echo "FAIL: policies/domains.yaml does not end with its domains mapping" >&2; exit 1; }
 cat >> "${policies}/domains.yaml" << EOF
-
-# Added by tests/e2e/load.sh.
-domains:
+  # Added by tests/e2e/load.sh.
   fixture.kage.test:
     pacing: ${design}
     min_dwell: 500ms
     active_hours: ignore
 EOF
-if [ "$(grep --count '^domains:' "${policies}/domains.yaml")" -ne 1 ]; then
-    grep --invert-match '^domains: {}$' "${policies}/domains.yaml" > "${policies}/domains.tmp"
-    mv "${policies}/domains.tmp" "${policies}/domains.yaml"
-fi
 chmod --recursive a+rX "${policies}"
 scratch="$(mktemp -d)"
 evidence="${KAGE_E2E_EVIDENCE:-${scratch}}"

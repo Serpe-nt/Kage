@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import * as contract from './index.js';
 import {
+  BehaviorModeSchema,
   CONTRACT_SEMVER,
   CONTRACT_VERSION,
   COMMON_ERRORS,
@@ -31,6 +32,7 @@ import {
   contextPath,
   routePath,
   schemaId,
+  stillConflicts,
   type Endpoint,
 } from './index.js';
 
@@ -59,10 +61,12 @@ describe('contract basics', () => {
     expect(CONTRACT_SEMVER.startsWith('1.')).toBe(true);
     // 1.2.0 added the pace of a flow (M9). 1.3.0 added what a crawl needs (M10): the patience
     // of a page, the click on a link of the open page, and the links of a document. 1.4.0
-    // adds the move of a stored fingerprint to a new browser major (the Camoufox 156
-    // milestone), an endpoint of its own. All of it is optional in a request and
-    // additional in an answer.
-    expect(CONTRACT_SEMVER).toBe('1.4.0');
+    // added the move of a stored fingerprint to a new browser major (the Camoufox 156
+    // milestone), an endpoint of its own. 1.5.0 adds what the camouflage levels need
+    // (M14): the still visit of a navigation (`behavior.mode`) and a paced flow whose hand
+    // rests while it dwells (`behavior.pace.wander`). All of it is optional in a request
+    // and additional in an answer.
+    expect(CONTRACT_SEMVER).toBe('1.5.0');
     expect(HEALTH_PATH).toBe('/v1/health');
     expect(METRICS_PATH).toBe('/v1/metrics');
     for (const endpoint of Object.values<Endpoint>(ENDPOINTS)) {
@@ -309,7 +313,7 @@ describe('requests are strict', () => {
     expect(FlowActionSchema.safeParse({ action: 'teleport' }).success).toBe(false);
   });
 
-  it('takes the pace of a flow, with or without its two times, and nothing else in it', () => {
+  it('takes the pace of a flow, with or without its two times, and nothing it does not name', () => {
     const base = first('FlowRequest');
     const paced = (pace: unknown) =>
       FlowRequestSchema.safeParse({ ...base, behavior: { seed: '5f'.repeat(32), pace } }).success;
@@ -327,7 +331,8 @@ describe('requests are strict', () => {
     ).toBe(true);
     for (const refused of [
       { dwell: 4000 },
-      { dwell_ms: 4000, wander: true },
+      // `wander` joined the pace in 1.5.0; a field of a navigation's behavior did not.
+      { dwell_ms: 4000, scroll_depth: 0.5 },
       { dwell_ms: -1 },
       { dwell_ms: MAX_PACE_DWELL_MS + 1 },
       { dwell_ms: 1500.5 },
@@ -341,6 +346,30 @@ describe('requests are strict', () => {
       expect(paced(refused), JSON.stringify(refused)).toBe(false);
     }
     expect(FlowPaceSchema.parse({ dwell_ms: 4000 })).toEqual({ dwell_ms: 4000 });
+  });
+
+  it('lets the hand of a paced flow rest through its dwells (1.5.0), and takes a pace without it as before', () => {
+    const base = first('FlowRequest');
+    const paced = (pace: unknown) =>
+      FlowRequestSchema.safeParse({ ...base, behavior: { seed: '5f'.repeat(32), pace } }).success;
+    // Absent is true, as every pace was before 1.5.0.
+    expect(paced({ dwell_ms: 4000 })).toBe(true);
+    expect(paced({ dwell_ms: 4000, wander: true })).toBe(true);
+    expect(paced({ dwell_ms: 4000, min_dwell_ms: 1500, wander: false })).toBe(true);
+    expect(paced({ wander: false })).toBe(true);
+    for (const refused of [null, 'false', 0, 1, {}]) {
+      expect(paced({ wander: refused }), JSON.stringify(refused)).toBe(false);
+    }
+    expect(FlowPaceSchema.parse({ wander: false })).toEqual({ wander: false });
+    // The examples of 1.4.0 name none, and are taken unchanged; the one of 1.5.0 rests.
+    const [paced14, empty14, resting] = EXAMPLES['FlowRequest'] ?? [];
+    for (const example of [paced14, empty14]) {
+      expect(FlowRequestSchema.parse(example)).toEqual(example);
+      expect(JSON.stringify(example)).not.toContain('"wander"');
+    }
+    expect(FlowRequestSchema.parse(resting)).toMatchObject({
+      behavior: { pace: { wander: false } },
+    });
   });
 
   it('says of every step of a flow how much of it was pacing, or null', () => {
@@ -391,6 +420,81 @@ describe('requests are strict', () => {
     // A request of 1.2.0 names none of it and is taken as it was.
     expect(capture).not.toHaveProperty('links');
     expect(NavigateRequestSchema.safeParse(base).success).toBe(true);
+  });
+
+  it('takes a still visit (1.5.0) with a typed entry and a fixed dwell, and nothing that needs a hand', () => {
+    const base = first('NavigateRequest');
+    const seed = '5f'.repeat(32);
+    const issues = (behavior: unknown) => {
+      const parsed = NavigateRequestSchema.safeParse({ ...base, dwell_ms: 1500, behavior });
+      return parsed.success ? [] : parsed.error.issues.map((issue) => issue.path.join('.'));
+    };
+    const takes = (behavior: unknown) => issues(behavior).length === 0;
+    // Absent, `human` and `still` are all taken; absent is `human`, as it was in 1.4.0.
+    expect(BehaviorModeSchema.options).toEqual(['human', 'still']);
+    expect(takes({ seed })).toBe(true);
+    expect(takes({ seed, mode: 'human' })).toBe(true);
+    expect(takes({ seed, mode: 'still' })).toBe(true);
+    expect(takes({ mode: 'still' })).toBe(true);
+    // A typed entry, by either name, and the fields a still visit leaves as they are.
+    for (const strategy of ['direct', 'none'] as const) {
+      expect(takes({ mode: 'still', entry: { strategy } }), strategy).toBe(true);
+    }
+    expect(
+      takes({ mode: 'still', entry: { strategy: 'direct', from_open_page: false }, wander: false }),
+    ).toBe(true);
+    expect(takes({ mode: 'still', dwell: 'fixed' })).toBe(true);
+    // Everything that asks for input, or for a time only input fills, is refused,
+    // and the refusal names the field.
+    const link = { strategy: 'link', from_url: 'https://www.example.org/' };
+    for (const [behavior, path] of [
+      [{ scroll_depth: 0.5 }, 'behavior.scroll_depth'],
+      [{ scroll_depth: 0 }, 'behavior.scroll_depth'],
+      [{ patience_ms: 30_000 }, 'behavior.patience_ms'],
+      [{ wander: true }, 'behavior.wander'],
+      [{ dwell: 'human' }, 'behavior.dwell'],
+      [{ entry: link }, 'behavior.entry.strategy'],
+      [{ entry: { ...link, strategy: 'search_engine' } }, 'behavior.entry.strategy'],
+      [{ entry: { strategy: 'direct', from_open_page: true } }, 'behavior.entry.from_open_page'],
+    ] as const) {
+      expect(issues({ seed, mode: 'still', ...behavior }), path).toEqual([path]);
+      // The same fields in a human visit are what they were.
+      expect(takes({ seed, mode: 'human', ...behavior }), path).toBe(true);
+      expect(takes({ seed, ...behavior }), path).toBe(true);
+    }
+    expect(
+      issues({
+        mode: 'still',
+        scroll_depth: 0.4,
+        wander: true,
+        entry: { ...link, from_open_page: true },
+      }),
+    ).toEqual([
+      'behavior.scroll_depth',
+      'behavior.wander',
+      'behavior.entry.strategy',
+      'behavior.entry.from_open_page',
+    ]);
+    for (const refused of ['Still', 'idle', '', null, true]) {
+      expect(takes({ mode: refused }), JSON.stringify(refused)).toBe(false);
+    }
+    // The same rule, for an engine that checks again.
+    expect(stillConflicts({ mode: 'still', wander: true })).toEqual([
+      { path: ['wander'], message: 'a still visit does not move the mouse' },
+    ]);
+    expect(stillConflicts({ mode: 'human', wander: true, scroll_depth: 1 })).toEqual([]);
+    expect(stillConflicts({ scroll_depth: 1 })).toEqual([]);
+    // A request of 1.4.0 names no mode and is taken as it was, its example included.
+    for (const example of EXAMPLES['NavigateRequest'] ?? []) {
+      expect(NavigateRequestSchema.parse(example)).toEqual(example);
+    }
+    expect(base['behavior']).toBeUndefined();
+    const [, human] = EXAMPLES['NavigateRequest'] ?? [];
+    expect((human as { behavior: object }).behavior).not.toHaveProperty('mode');
+    // A flow has no mode.
+    expect(
+      FlowRequestSchema.safeParse({ ...first('FlowRequest'), behavior: { mode: 'still' } }).success,
+    ).toBe(false);
   });
 
   it('always says how a page was scrolled, how it was reached and which links it holds, or null', () => {

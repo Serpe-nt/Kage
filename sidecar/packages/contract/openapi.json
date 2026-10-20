@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Kage browser sidecar",
-    "version": "1.4.0",
+    "version": "1.5.0",
     "description": "Internal contract between Kage and its browser sidecars (spec §10.2). Generated from the zod schemas in sidecar/packages/contract; do not edit by hand. Regenerate with `just openapi`.",
     "license": {
       "name": "MIT OR Apache-2.0",
@@ -1123,6 +1123,14 @@
         "additionalProperties": false,
         "description": "Go back one history entry."
       },
+      "BehaviorMode": {
+        "type": "string",
+        "enum": [
+          "human",
+          "still"
+        ],
+        "description": "What kind of visit a navigation is. `human`: the persona at its mouse and keyboard, as the other fields of the behavior say. `still`: the persona's browser loads the page and nothing else: no input at all (no pointer, no wheel, no key), a typed entry, the fixed dwell `dwell_ms`, no scrolling, no wandering, no patience. A page sees of it what it sees of a visitor whose hand rests."
+      },
       "BehaviorOptions": {
         "type": "object",
         "properties": {
@@ -1130,6 +1138,10 @@
             "description": "Seed of this request. With the persona's own seed it decides every movement; the same pair replays the same behavior. Absent: the sidecar draws one and returns it.",
             "type": "string",
             "pattern": "^[0-9a-f]{64}$"
+          },
+          "mode": {
+            "description": "What kind of visit this is; default `human`. `still`: a visit that sends no input at all (no pointer, no wheel, no key), arrives by a typed navigation (`entry` absent, `direct` or `none`), dwells for the fixed `dwell_ms`, and neither scrolls, wanders nor waits with patience; a request that also names `scroll_depth`, `patience_ms`, `wander: true`, `dwell: human`, an entry by `link` or `search_engine`, or `from_open_page: true` is refused. Its report has the seed, the profile of the persona, the entry, the dwell, and every count 0. Since 1.5.0.",
+            "$ref": "#/components/schemas/BehaviorMode"
           },
           "entry": {
             "description": "How the target is arrived at; default a typed navigation.",
@@ -1146,7 +1158,7 @@
             "$ref": "#/components/schemas/DwellMode"
           },
           "wander": {
-            "description": "Move the mouse a little now and then while dwelling, as an idle hand does; default true.",
+            "description": "Move the mouse a little now and then while dwelling, as an idle hand does; default true, and never in a `still` visit.",
             "type": "boolean"
           },
           "patience_ms": {
@@ -1157,7 +1169,7 @@
           }
         },
         "additionalProperties": false,
-        "description": "What a persona does on a page besides loading it. All input is sent through the mouse and keyboard of the context's own display. Absent from a request: no input at all, a bare page load."
+        "description": "What a persona does on a page besides loading it. All input is sent through the mouse and keyboard of the context's own display; a `still` visit sends none and is reported all the same. Absent from a request: no input at all, a bare page load."
       },
       "BehaviorReport": {
         "type": "object",
@@ -2461,10 +2473,14 @@
             "type": "integer",
             "minimum": 0,
             "maximum": 45000
+          },
+          "wander": {
+            "description": "Whether the persona's idle hand wanders while it dwells on a page it arrived on; default true. False: the dwell sends no input at all, the hand rests. The thinking time before a step is the same either way. Since 1.5.0.",
+            "type": "boolean"
           }
         },
         "additionalProperties": false,
-        "description": "How a flow paces itself. Present, even empty: after every step that arrived on a page (a `goto`; a `click`, `press` or `back` after which a new document or another address was seen) the persona dwells there, its idle hand wandering, before the next step. And before every step other than the five that only read (`wait_for`, `assert`, `extract`, `screenshot`, `pdf`) it takes a thinking time of its own (log-normal, median 0.4 to 0.9 s by persona, 80 ms to 5 s), unless it has just dwelled or the step is the flow's first. So no two actions are a constant time apart and none follows a read at machine speed. The reading steps are never delayed and send no input. A click or a key of the driver (`human: false`) is then watched for a navigation as a person's is (1.2 s). Every time is drawn from the stream of the flow's seed, so the same flow replays. A pause never outlasts the flow's budget less a reserve for the captures; it counts in the `duration_ms` and `paced_ms` of its step, not against the step's `timeout_ms`. Absent: the flow runs its steps one right after the other."
+        "description": "How a flow paces itself. Present, even empty: after every step that arrived on a page (a `goto`; a `click`, `press` or `back` after which a new document or another address was seen) the persona dwells there, its idle hand wandering unless `wander` is false, before the next step. And before every step other than the five that only read (`wait_for`, `assert`, `extract`, `screenshot`, `pdf`) it takes a thinking time of its own (log-normal, median 0.4 to 0.9 s by persona, 80 ms to 5 s), unless it has just dwelled or the step is the flow's first. So no two actions are a constant time apart and none follows a read at machine speed. The reading steps are never delayed and send no input. A click or a key of the driver (`human: false`) is then watched for a navigation as a person's is (1.2 s). Every time is drawn from the stream of the flow's seed, so the same flow replays. A pause never outlasts the flow's budget less a reserve for the captures; it counts in the `duration_ms` and `paced_ms` of its step, not against the step's `timeout_ms`. Absent: the flow runs its steps one right after the other."
       },
       "FlowRequest": {
         "type": "object",
@@ -2662,6 +2678,62 @@
             },
             "behavior": {
               "pace": {}
+            }
+          },
+          {
+            "actions": [
+              {
+                "action": "goto",
+                "url": "https://example.org/"
+              },
+              {
+                "action": "click",
+                "selector": "a.next"
+              },
+              {
+                "action": "extract",
+                "capture": {
+                  "dom": true,
+                  "raw": true,
+                  "xhr": {
+                    "content_types": [
+                      "application/json"
+                    ],
+                    "max_bytes": 2000000
+                  },
+                  "console": true,
+                  "screenshot": {
+                    "full_page": false,
+                    "format": "webp",
+                    "quality": 80
+                  },
+                  "pdf": null
+                }
+              }
+            ],
+            "capture": {
+              "dom": true,
+              "raw": true,
+              "xhr": {
+                "content_types": [
+                  "application/json"
+                ],
+                "max_bytes": 2000000
+              },
+              "console": true,
+              "screenshot": {
+                "full_page": false,
+                "format": "webp",
+                "quality": 80
+              },
+              "pdf": null
+            },
+            "behavior": {
+              "seed": "5f1c0e9a7b3d2468ace013579bdf02468ace13579bdf0246813579bdf02468ac",
+              "pace": {
+                "dwell_ms": 4000,
+                "wander": false
+              }
             }
           }
         ]
@@ -3280,6 +3352,29 @@
               "scroll_depth": 0.8,
               "dwell": "human",
               "wander": true
+            }
+          },
+          {
+            "url": "https://example.org/listing?page=2",
+            "wait": {
+              "until": "load"
+            },
+            "capture": {
+              "dom": true,
+              "raw": false,
+              "xhr": null,
+              "console": false,
+              "screenshot": null,
+              "pdf": null
+            },
+            "timeout_ms": 45000,
+            "dwell_ms": 2400,
+            "behavior": {
+              "seed": "5f1c0e9a7b3d2468ace013579bdf02468ace13579bdf0246813579bdf02468ac",
+              "mode": "still",
+              "entry": {
+                "strategy": "direct"
+              }
             }
           }
         ]

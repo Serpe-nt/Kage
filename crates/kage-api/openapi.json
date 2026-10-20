@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Kage API",
-    "description": "Self-hosted page fetching API. Every request but `/healthz`, `/readyz` and `/openapi.json` carries an API key as `Authorization: Bearer kage_<keyid>_<secret>`. Errors are RFC 9457 problem documents (`application/problem+json`) with a stable `code`; every answer carries `X-Request-Id`. A fetch that was made answers `200` whatever the site did: a block is the result's `outcome`, not an HTTP error. See docs/01-spec.md §16 and docs/runbooks/api.md.",
+    "description": "Self-hosted page fetching API. Every request but `/healthz`, `/readyz` and `/openapi.json` carries an API key as `Authorization: Bearer kage_<keyid>_<secret>`. Errors are RFC 9457 problem documents (`application/problem+json`) with a stable `code`; every answer carries `X-Request-Id`. A fetch that was made answers `200` whatever the site did: a block is the result's `outcome`, not an HTTP error. Every fetch names its camouflage `level`, and it costs what it says: 0 is a plain HTTP client that says it is Kage, for pages that can be read with curl; 1 is a persona's http client with its browser's wire fingerprint and no page behaviour (refused while no browser version has a verified profile); 2 is a persona's browser that loads the page and leaves, for sites that need a browser but not a reader; 3 is a person. Below 3 Kage is not pretending to be a person; a request's level is the caller's responsibility, and a site's floor (`min_level`) is the operator's. See docs/01-spec.md §16 and §25, docs/runbooks/api.md and docs/runbooks/levels-and-egress.md.",
     "contact": {
       "name": "The Kage Authors"
     },
@@ -1859,15 +1859,36 @@
       },
       "AttemptView": {
         "type": "object",
-        "description": "One try at a request by one persona.",
+        "description": "One try at a request: by one persona, or at level 0 by the plain\nclient from its exit.",
         "required": [
           "n",
           "render",
           "outcome",
-          "total_ms",
-          "persona"
+          "total_ms"
         ],
         "properties": {
+          "engine": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EngineField",
+                "description": "The engine of that persona; null at level 0."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "exit": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ExitField",
+                "description": "Where a level-0 attempt left from; null for a persona's."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "n": {
             "type": "integer",
             "format": "int32",
@@ -1879,8 +1900,11 @@
             "description": "How it ended."
           },
           "persona": {
-            "type": "string",
-            "description": "The persona that made it, as in `persona.id`."
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The persona that made it, as in `persona.id`; null at level 0."
           },
           "reason": {
             "type": [
@@ -2020,6 +2044,234 @@
         },
         "additionalProperties": false
       },
+      "BatchItem": {
+        "type": "object",
+        "description": "A fetch request as an item of a batch: whatever it leaves out comes from the batch's defaults, the level among it; every item ends with one (level_required).",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "behavior": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BehaviorField",
+                "description": "What the persona does on the page, where less than the default is\nwanted; at level 3 only (a level-2 visit does nothing on the page)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "body": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The body of a `POST`, as text; needs level 0 or 1 and a\n`Content-Type` header."
+          },
+          "cache_ttl_s": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "For how many seconds the result may be served from the response\ncache: a later request that asks for the same is answered with it,\nwithout a visit, while it is no older than that request's own\n`cache_ttl_s`. 0 is never. Left out, the site's policy decides\n(never, unless the operator set `cache.ttl`). At most the site's\n`cache.max_ttl` (a day unless configured): more is refused with\n`cache_ttl_too_long`. Not in a session.",
+            "example": 600,
+            "minimum": 0
+          },
+          "extract": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ExtractField",
+                "description": "What is extracted; with `include: [\"extract\"]`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "headers": {
+            "type": "object",
+            "description": "Headers of the request's own; at most 32, and only at level 0 or 1.\nA browser sends its own headers and cannot be given others without a\npage noticing. At level 1 headers that are the persona's identity or\nthe transport's are refused by name (`User-Agent`,\n`Accept-Language`, `Accept-Encoding`, `Cookie`, `Origin`, `Sec-*`,\n`Proxy-*`, `Host` and others), and a `Referer` names the page the\nrequest comes from. At level 0 they are the caller's request as\ngiven, `User-Agent`, `Cookie` and `Authorization` included: only the\ntransport's, `Proxy-*`, the forwarding family and `Accept-Encoding`\nare refused. A caller's `Cookie` and `Authorization` go to the\nrequest's origin only, never across a redirect to another, and are\nneither stored nor logged.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "include": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/Include"
+            },
+            "description": "The parts of the result to return and to keep. Default: `dom` and\n`headers` at level 2 and 3, `raw` and `headers` at 0 and 1."
+          },
+          "level": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The camouflage level (spec §25), required: 0, a plain HTTP client\nthat says it is Kage (`User-Agent: kage/<version>` unless the\nrequest names its own), with no persona and no cookie jar; 1, a\npersona's http client, a browser's wire fingerprint with no page\nbehaviour (refused with `level_unavailable` while no browser\nversion of this installation has a verified profile); 2, a\npersona's browser that loads the page, sends no input and leaves; 3,\na persona's browser as a person. Below 3 Kage is not pretending to\nbe a person. A site's policy may set a floor (`level_below_policy`);\na request is never raised and never escalated.",
+            "example": 3,
+            "maximum": 3,
+            "minimum": 0
+          },
+          "max_body_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The largest body and document kept, in bytes; a longer one is cut.",
+            "maximum": 100000000,
+            "minimum": 1
+          },
+          "max_retries": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Retries after the first attempt, each by another persona. Default:\nthe policy's (2). At level 0 only a failure that is not the site's\nanswer (the network, a timeout, a server error) is tried again, from\nthe same exit; a block is the answer.",
+            "maximum": 10,
+            "minimum": 0
+          },
+          "method": {
+            "type": "string",
+            "description": "`GET`, `HEAD` or `POST`. Anything but `GET` needs level 0 or 1.",
+            "example": "GET"
+          },
+          "pacing": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PacingField",
+                "description": "The pacing; ignored, and reported as ignored, when the domain's\npolicy locks pacing. In a browser the gap is a floor under the time\non the page, so a faster profile shortens nothing there. Not at\nlevel 0, which the site's own limits pace."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pdf": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PdfField",
+                "description": "How the PDF is printed; with `include: [\"pdf\"]`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "persona": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PersonaHints",
+                "description": "Which personas the request would have; not at level 0."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request_kind": {
+            "$ref": "#/components/schemas/RequestKindField",
+            "description": "What the request is on the http path; anything but `navigation`\nneeds level 1 and a `Referer` header naming the page that makes the\nrequest."
+          },
+          "robots": {
+            "$ref": "#/components/schemas/RobotsField",
+            "description": "What to do about the site's `robots.txt`."
+          },
+          "screenshot": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ScreenshotField",
+                "description": "How the screenshot is taken; with `include: [\"screenshot\"]`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An open session of this key: the request is made by the session's\npersona and by no other. Needs the `sessions` scope, and a level\nwith a persona (`session_needs_persona` at 0). A fetch never opens a\nsession; `POST /v1/sessions` does.",
+            "example": "proj-a-42",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9_.-]{1,64}$"
+          },
+          "timeout_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The longest one attempt may take, in milliseconds: at least 15000\nin a browser (level 2 and 3), at least 1000 at 0 and 1, at most\n300000. Default: 60000 in a browser, 30000 on the http path.",
+            "maximum": 300000,
+            "minimum": 1000
+          },
+          "url": {
+            "type": "string",
+            "description": "The page: an `http` or `https` URL of at most 8192 bytes. Hosts\nthat name no public site are refused (`ssrf_denied`).",
+            "example": "https://example.org/listing?page=2",
+            "maxLength": 8192
+          },
+          "wait": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WaitField",
+                "description": "What a browser waits for; at level 2 and 3."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "xhr": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/XhrField",
+                "description": "Which responses of the page's scripts are kept; with\n`include: [\"xhr\"]`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "example": {
+          "behavior": {
+            "dwell_ms": 3000,
+            "scroll_depth": 0.3
+          },
+          "include": [
+            "dom",
+            "headers",
+            "xhr"
+          ],
+          "level": 3,
+          "persona": {
+            "countries": [
+              "DE",
+              "AT"
+            ],
+            "engines": [
+              "chromium"
+            ]
+          },
+          "timeout_ms": 60000,
+          "url": "https://example.org/listing?page=2",
+          "wait": {
+            "until": "network_idle"
+          }
+        }
+      },
       "BatchJob": {
         "type": "object",
         "description": "A batch: pages fetched one after another the way a visitor reads them.\n\nPer site a batch has one visitor: one persona reads its pages of that\nsite in the order given, in sittings, with the pauses a person makes,\nand comes back after its breaks; another persona takes over only when\nthat one cannot go on (it was blocked there, reached its daily cap, or\nis gone). A site therefore sees one household reading, not a list being\ndealt out to several addresses. That costs time: under the `human`\npacing about an hour for 50 pages of one site and a day for 300, which\nis the daily cap of one persona, and a batch that meets the night ends\nin the morning. `visitors` trades that for speed (about 20 minutes for\n50 pages with three), and a faster `pacing` does where the policy does\nnot lock it. Sites of one batch are independent and are read side by\nside.",
@@ -2028,7 +2280,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/FreeForm",
-                "description": "What every item is fetched with unless it says otherwise: any field\nof a fetch request but `url` and `session_id`."
+                "description": "What every item is fetched with unless it says otherwise: any field\nof a fetch request but `url` and `session_id`. An item that names\nno `level` takes the default's, and one of the two must name it\n(`level_required`). A caller's `Cookie` and `Authorization` are not\ntaken in a job, which would have to keep them until the item runs."
               },
               {
                 "type": "null"
@@ -2038,7 +2290,7 @@
           "items": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/FetchRequest"
+              "$ref": "#/components/schemas/BatchItem"
             },
             "description": "Pages that differ from `defaults`: each a fetch request of its own,\nwith whatever it sets taking the place of the default. They come\nafter `urls`."
           },
@@ -2093,7 +2345,8 @@
             "include": [
               "dom",
               "headers"
-            ]
+            ],
+            "level": 3
           },
           "type": "batch",
           "urls": [
@@ -2517,7 +2770,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/FreeForm",
-                "description": "What every page is fetched with: any field of a fetch request but\n`url`, `session_id`, `method`, `body` and `request_kind`."
+                "description": "What every page is fetched with: any field of a fetch request but\n`url`, `session_id`, `method`, `body` and `request_kind`. Its\n`level` is required (`level_required`). At level 0 the links are\nread from the page's markup and every page is typed, with no\n`Referer`; a caller's `Cookie` and `Authorization` are not taken in\na job, which would have to keep them."
               },
               {
                 "type": "null"
@@ -2618,7 +2871,8 @@
             "include": [
               "dom",
               "headers"
-            ]
+            ],
+            "level": 3
           },
           "deny": [
             "/login",
@@ -2839,9 +3093,13 @@
           "header_denied",
           "header_invalid",
           "header_not_placeable",
-          "render_include_conflict",
-          "render_kind_conflict",
-          "render_needs_http",
+          "level_required",
+          "level_below_policy",
+          "level_unavailable",
+          "level_include_conflict",
+          "level_kind_conflict",
+          "level_needs_http",
+          "session_needs_persona",
           "request_kind_needs_referer",
           "preflight_required",
           "timeout_too_short",
@@ -2871,6 +3129,14 @@
           "request_timeout",
           "unavailable",
           "internal"
+        ]
+      },
+      "ExitField": {
+        "type": "string",
+        "description": "Where a plain client's attempt (level 0) left from: never an address.",
+        "enum": [
+          "host",
+          "pool"
         ]
       },
       "ExtractField": {
@@ -3129,14 +3395,15 @@
         "type": "object",
         "description": "One fetch (spec §16.4).",
         "required": [
-          "url"
+          "url",
+          "level"
         ],
         "properties": {
           "behavior": {
             "oneOf": [
               {
                 "$ref": "#/components/schemas/BehaviorField",
-                "description": "What the persona does on the page, where less than the default is\nwanted; not with `render: http`."
+                "description": "What the persona does on the page, where less than the default is\nwanted; at level 3 only (a level-2 visit does nothing on the page)."
               },
               {
                 "type": "null"
@@ -3148,7 +3415,7 @@
               "string",
               "null"
             ],
-            "description": "The body of a `POST`, as text; needs `render: http` and a\n`Content-Type` header."
+            "description": "The body of a `POST`, as text; needs level 0 or 1 and a\n`Content-Type` header."
           },
           "cache_ttl_s": {
             "type": [
@@ -3173,7 +3440,7 @@
           },
           "headers": {
             "type": "object",
-            "description": "Headers of the request's own; at most 32, and only with\n`render: http`. A browser sends its own headers and cannot be given\nothers without a page noticing. Headers that are the persona's\nidentity or the transport's are refused by name (`User-Agent`,\n`Accept-Language`, `Accept-Encoding`, `Cookie`, `Origin`, `Sec-*`,\n`Proxy-*`, `Host` and others). A `Referer` names the page the\nrequest comes from.",
+            "description": "Headers of the request's own; at most 32, and only at level 0 or 1.\nA browser sends its own headers and cannot be given others without a\npage noticing. At level 1 headers that are the persona's identity or\nthe transport's are refused by name (`User-Agent`,\n`Accept-Language`, `Accept-Encoding`, `Cookie`, `Origin`, `Sec-*`,\n`Proxy-*`, `Host` and others), and a `Referer` names the page the\nrequest comes from. At level 0 they are the caller's request as\ngiven, `User-Agent`, `Cookie` and `Authorization` included: only the\ntransport's, `Proxy-*`, the forwarding family and `Accept-Encoding`\nare refused. A caller's `Cookie` and `Authorization` go to the\nrequest's origin only, never across a redirect to another, and are\nneither stored nor logged.",
             "additionalProperties": {
               "type": "string"
             },
@@ -3189,7 +3456,15 @@
             "items": {
               "$ref": "#/components/schemas/Include"
             },
-            "description": "The parts of the result to return and to keep. Default: `dom` and\n`headers`, or `raw` and `headers` with `render: http`."
+            "description": "The parts of the result to return and to keep. Default: `dom` and\n`headers` at level 2 and 3, `raw` and `headers` at 0 and 1."
+          },
+          "level": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The camouflage level (spec §25), required: 0, a plain HTTP client\nthat says it is Kage (`User-Agent: kage/<version>` unless the\nrequest names its own), with no persona and no cookie jar; 1, a\npersona's http client, a browser's wire fingerprint with no page\nbehaviour (refused with `level_unavailable` while no browser\nversion of this installation has a verified profile); 2, a\npersona's browser that loads the page, sends no input and leaves; 3,\na persona's browser as a person. Below 3 Kage is not pretending to\nbe a person. A site's policy may set a floor (`level_below_policy`);\na request is never raised and never escalated.",
+            "example": 3,
+            "maximum": 3,
+            "minimum": 0
           },
           "max_body_bytes": {
             "type": [
@@ -3207,20 +3482,20 @@
               "null"
             ],
             "format": "int32",
-            "description": "Retries after the first attempt, each by another persona. Default:\nthe policy's (2).",
+            "description": "Retries after the first attempt, each by another persona. Default:\nthe policy's (2). At level 0 only a failure that is not the site's\nanswer (the network, a timeout, a server error) is tried again, from\nthe same exit; a block is the answer.",
             "maximum": 10,
             "minimum": 0
           },
           "method": {
             "type": "string",
-            "description": "`GET`, `HEAD` or `POST`. Anything but `GET` needs `render: http`.",
+            "description": "`GET`, `HEAD` or `POST`. Anything but `GET` needs level 0 or 1.",
             "example": "GET"
           },
           "pacing": {
             "oneOf": [
               {
                 "$ref": "#/components/schemas/PacingField",
-                "description": "The pacing; ignored, and reported as ignored, when the domain's\npolicy locks pacing. On a browser render the gap is a floor under\nthe time on the page, so a faster profile shortens nothing there."
+                "description": "The pacing; ignored, and reported as ignored, when the domain's\npolicy locks pacing. In a browser the gap is a floor under the time\non the page, so a faster profile shortens nothing there. Not at\nlevel 0, which the site's own limits pace."
               },
               {
                 "type": "null"
@@ -3242,20 +3517,16 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/PersonaHints",
-                "description": "Which personas the request would have."
+                "description": "Which personas the request would have; not at level 0."
               },
               {
                 "type": "null"
               }
             ]
           },
-          "render": {
-            "$ref": "#/components/schemas/RenderField",
-            "description": "The path."
-          },
           "request_kind": {
             "$ref": "#/components/schemas/RequestKindField",
-            "description": "What the request is on the http path; anything but `navigation`\nneeds `render: http` and a `Referer` header naming the page that\nmakes the request."
+            "description": "What the request is on the http path; anything but `navigation`\nneeds level 1 and a `Referer` header naming the page that makes the\nrequest."
           },
           "robots": {
             "$ref": "#/components/schemas/RobotsField",
@@ -3277,7 +3548,7 @@
               "string",
               "null"
             ],
-            "description": "An open session of this key: the request is made by the session's\npersona and by no other. Needs the `sessions` scope. A fetch never\nopens a session; `POST /v1/sessions` does.",
+            "description": "An open session of this key: the request is made by the session's\npersona and by no other. Needs the `sessions` scope, and a level\nwith a persona (`session_needs_persona` at 0). A fetch never opens a\nsession; `POST /v1/sessions` does.",
             "example": "proj-a-42",
             "maxLength": 64,
             "pattern": "^[A-Za-z0-9_.-]{1,64}$"
@@ -3288,7 +3559,7 @@
               "null"
             ],
             "format": "int64",
-            "description": "The longest one attempt may take, in milliseconds: at least 15000\nwhen a browser may make it (`browser` and `auto`), at least 1000\nwith `http`, at most 300000. Default: 60000 in a browser, 30000 on\nthe http path.",
+            "description": "The longest one attempt may take, in milliseconds: at least 15000\nin a browser (level 2 and 3), at least 1000 at 0 and 1, at most\n300000. Default: 60000 in a browser, 30000 on the http path.",
             "maximum": 300000,
             "minimum": 1000
           },
@@ -3302,7 +3573,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/WaitField",
-                "description": "What a browser waits for; not with `render: http`."
+                "description": "What a browser waits for; at level 2 and 3."
               },
               {
                 "type": "null"
@@ -3332,6 +3603,7 @@
             "headers",
             "xhr"
           ],
+          "level": 3,
           "persona": {
             "countries": [
               "DE",
@@ -3341,7 +3613,6 @@
               "chromium"
             ]
           },
-          "render": "auto",
           "timeout_ms": 60000,
           "url": "https://example.org/listing?page=2",
           "wait": {
@@ -3362,7 +3633,6 @@
           "timing",
           "attempts",
           "cached",
-          "escalated",
           "created_at"
         ],
         "properties": {
@@ -3439,10 +3709,6 @@
             ],
             "description": "The document as the browser had it after the page settled; with\n`include: [\"dom\"]`. Null on the http path, which has no DOM: the\ndocument is `raw_body` there."
           },
-          "escalated": {
-            "type": "boolean",
-            "description": "Whether the request moved from the http path to a browser."
-          },
           "extract": {
             "oneOf": [
               {
@@ -3475,6 +3741,17 @@
             "type": "string",
             "format": "uuid",
             "description": "The request's id, as in `X-Request-Id`; `GET /v1/results/{id}`\nreturns this document again."
+          },
+          "level": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The level the request was made at (spec §25); null for a result\nstored before 2.0.",
+            "example": 3,
+            "maximum": 3,
+            "minimum": 0
           },
           "outcome": {
             "$ref": "#/components/schemas/OutcomeField",
@@ -3612,8 +3889,9 @@
       },
       "FlowJob": {
         "type": "object",
-        "description": "A flow: a script of steps one persona performs in its browser, as one\nvisit.\n\nThe persona arrives by a typed navigation, stays on every page it comes\nto for a while with its pointer moving, and pauses between its actions\nas a person does, so a flow takes longer than its steps: plan about ten\nseconds for every page it visits. A flow whose page turns out to be a\nwall is a blocked attempt: the persona leaves, and another one runs the\nflow again from its first step, inside the policy's retry budget (never\nin a session). A step that fails on a page that is no wall is the\nscript's failure and is not retried. The job's items are the steps, in\norder, and one last item for the page the flow ended on.",
+        "description": "A flow: a script of steps one persona performs in its browser, as one\nvisit, at level 2 or 3.\n\nThe persona arrives by a typed navigation, stays on every page it comes\nto for a while with its pointer moving, and pauses between its actions\nas a person does, so a flow takes longer than its steps: plan about ten\nseconds for every page it visits. A flow whose page turns out to be a\nwall is a blocked attempt: the persona leaves, and another one runs the\nflow again from its first step, inside the policy's retry budget (never\nin a session). A step that fails on a page that is no wall is the\nscript's failure and is not retried. The job's items are the steps, in\norder, and one last item for the page the flow ended on.",
         "required": [
+          "level",
           "actions"
         ],
         "properties": {
@@ -3630,7 +3908,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/FlowBehaviorField",
-                "description": "What the flow may change of how its persona behaves."
+                "description": "What the flow may change of how its persona behaves; at level 3."
               },
               {
                 "type": "null"
@@ -3657,6 +3935,14 @@
               "$ref": "#/components/schemas/Include"
             },
             "description": "What is returned and kept of the page the flow ends on: `dom` and\n`headers` unless said."
+          },
+          "level": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The camouflage level (spec §25), required: 2 or 3, since a flow is a\nbrowser's. At 2 the persona's idle hand rests while it dwells and\nits dwell is the policy's `min_dwell` drawn upward; `behavior` is\nlevel 3's.",
+            "example": 3,
+            "maximum": 3,
+            "minimum": 2
           },
           "max_body_bytes": {
             "type": [
@@ -3790,6 +4076,7 @@
             "dom",
             "headers"
           ],
+          "level": 3,
           "type": "flow"
         }
       },
@@ -5215,13 +5502,16 @@
         "required": [
           "policy",
           "pacing_profile",
-          "first_render"
+          "min_level"
         ],
         "properties": {
-          "first_render": {
-            "type": "string",
-            "description": "The path a request with `render: auto` takes first: `http` when the\npolicy says so, else `browser`.",
-            "example": "browser"
+          "min_level": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The lowest level a request for the host may name (spec §25): one\nbelow it is refused with `level_below_policy`, never raised.",
+            "example": 0,
+            "maximum": 3,
+            "minimum": 0
           },
           "pacing_profile": {
             "$ref": "#/components/schemas/FreeForm",
@@ -5237,7 +5527,7 @@
           },
           "policy": {
             "$ref": "#/components/schemas/FreeForm",
-            "description": "Every field of the policy as it resolves for the host: `host`,\n`matched` (the entry that applies), `inherits`, `render`,\n`countries`, `engines`, `pacing`, `pacing_locked`, `robots`,\n`referer_strategy`, `active_hours`, `min_dwell`, `behavior_locked`,\n`retries`, `breaker_threshold`, `breaker_pause`, `cooldowns`."
+            "description": "Every field of the policy as it resolves for the host: `host`,\n`matched` (the entry that applies), `inherits`, `min_level`,\n`countries`, `engines`, `pacing`, `pacing_locked`, `robots`,\n`referer_strategy`, `active_hours`, `min_dwell`, `behavior_locked`,\n`retries`, `breaker_threshold`, `breaker_pause`, `cooldowns`."
           }
         }
       },
@@ -5601,15 +5891,6 @@
           "direct",
           "none",
           "search_engine"
-        ]
-      },
-      "RenderField": {
-        "type": "string",
-        "description": "The path a request asks for.",
-        "enum": [
-          "auto",
-          "http",
-          "browser"
         ]
       },
       "RenderTaken": {

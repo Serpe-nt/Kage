@@ -94,13 +94,16 @@ tests:
     interval: 1m
     input_series:
       # Six blocks in the first half hour on shop.example, whose policy
-      # allows five per hour; two on news.example, which allows five too.
-      - series: 'kage_attempts_total{domain="shop.example",render="browser",outcome="forbidden",vendor="cloudflare"}'
+      # allows five per hour; two on news.example, which allows five too,
+      # and thirty there at level 0, which the breaker never counts.
+      - series: 'kage_attempts_total{domain="shop.example",level="3",outcome="forbidden",vendor="cloudflare"}'
         values: '0+0.2x30'
-      - series: 'kage_attempts_total{domain="shop.example",render="browser",outcome="ok",vendor=""}'
+      - series: 'kage_attempts_total{domain="shop.example",level="3",outcome="ok",vendor=""}'
         values: '0+10x30'
-      - series: 'kage_attempts_total{domain="news.example",render="http",outcome="captcha",vendor=""}'
+      - series: 'kage_attempts_total{domain="news.example",level="1",outcome="captcha",vendor=""}'
         values: '0 0 0 1 1 1 2x24'
+      - series: 'kage_attempts_total{domain="news.example",level="0",outcome="forbidden",vendor="generic"}'
+        values: '0+1x30'
       - series: 'kage_policy_breaker_threshold{domain="shop.example"}'
         values: '5x30'
       - series: 'kage_policy_breaker_threshold{domain="news.example"}'

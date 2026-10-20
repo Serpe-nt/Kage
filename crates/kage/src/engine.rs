@@ -12,6 +12,11 @@
 //!   request asks to keep of its page in the artifact store.
 //! - The bandwidth service keeps the budget of the proxy plan, and its
 //!   hard stop reaches the scheduler, the forwarder and the open browsers.
+//! - A plain client (level 0, spec §25) leaves through the forwarder too,
+//!   from its exit (`egress.plain`). Under `egress.mode: direct` nothing
+//!   uses the pool: its stops (a leak, the provider's budget) stop nothing,
+//!   and what leaves from the host's connection is counted but costs
+//!   nothing of the budget.
 //!
 //! `kage serve` runs all of it until shutdown; `kage fetch` runs it for
 //! one request.
@@ -24,7 +29,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use kage_core::alert::AlertSink;
-use kage_core::config::Config;
+use kage_core::config::{Config, EgressMode};
 use kage_core::policy::PolicyStore;
 use kage_core::schedule::budget::{Budget, BudgetRules};
 use kage_core::schedule::planner::Refusal;
@@ -106,6 +111,9 @@ pub(crate) struct Engine {
     pub(crate) pool: Arc<Pool>,
     context_idle: Duration,
     flush_interval: Duration,
+    /// Whether anything leaves through the pool (`egress.mode: proxies`):
+    /// only then do its stops apply.
+    pooled: bool,
     stops: Arc<Stops>,
     signals: Signals,
     tasks: Vec<JoinHandle<()>>,
@@ -159,6 +167,8 @@ impl Engine {
     /// Composes the engine and starts the forwarder and the scheduler.
     /// The forwarder listens on `bind`; a port of 0 takes a free one,
     /// which is then the one the sidecars are told.
+    // Composes the engine in the order of the module's list.
+    #[allow(clippy::too_many_lines)]
     pub(crate) async fn start(
         config: &Config,
         store: &Store,
@@ -171,7 +181,13 @@ impl Engine {
             .secrets
             .master_key_bytes()
             .context("secrets.master_key is not 32 bytes of hexadecimal")?;
-        let routes: Arc<dyn Routes> = Arc::new(PoolRoutes::new(store.clone(), Arc::clone(&pool)));
+        let pooled = config.egress.mode == EgressMode::Proxies;
+        let mut routes = PoolRoutes::new(store.clone(), Arc::clone(&pool))
+            .with_plain_exit(config.egress.plain_exit());
+        if !pooled {
+            routes = routes.direct();
+        }
+        let routes: Arc<dyn Routes> = Arc::new(routes);
         let (forwarder, listener) = Forwarder::bind(
             bind,
             ForwarderSettings::from_config(config),
@@ -194,8 +210,11 @@ impl Engine {
         );
 
         let clock = Arc::clone(pool.clock());
-        let backend: Arc<dyn Backend> =
-            Arc::new(StoreBackend::new(store.clone(), Arc::clone(&pool)));
+        let mut stored = StoreBackend::new(store.clone(), Arc::clone(&pool));
+        if !pooled {
+            stored = stored.direct();
+        }
+        let backend: Arc<dyn Backend> = Arc::new(stored);
         // A UUIDv7 carries 74 random bits; the seed draws ties and pauses,
         // it guards nothing.
         let seed = Seed::derive("scheduler", &[uuid::Uuid::now_v7().as_bytes()]);
@@ -221,12 +240,15 @@ impl Engine {
             Some(Arc::clone(&meter)),
         ));
         personas.set_gate(gate);
-        let executor: Arc<dyn AttemptExecutor> = Arc::new(PathExecutor::new(
-            Arc::clone(&personas),
-            Arc::clone(&verdicts),
-            config,
-            Some(Arc::clone(&meter)),
-        ));
+        let executor: Arc<dyn AttemptExecutor> = Arc::new(
+            PathExecutor::new(
+                Arc::clone(&personas),
+                Arc::clone(&verdicts),
+                config,
+                Some(Arc::clone(&meter)),
+            )
+            .with_plain(forwarder.egress()),
+        );
         // Bodies, screenshots and PDFs a request asks to keep go into the
         // artifact store, next to where the sidecars write their files.
         let archive: Arc<dyn Archive> = Arc::new(StoreArchive::new(ArtifactStore::new(
@@ -269,6 +291,7 @@ impl Engine {
             pool,
             context_idle: config.scheduler.context_idle.get(),
             flush_interval: config.bandwidth.flush_interval.get(),
+            pooled,
             stops: Arc::new(Stops::default()),
             signals,
             tasks,
@@ -276,13 +299,16 @@ impl Engine {
     }
 
     /// Where the budget stands goes to the scheduler and the forwarder.
+    /// Without the pool there is no provider's budget to stop for.
     fn on_budget(&self) -> impl FnMut(Budget) + Send + 'static {
         let scheduler = Arc::clone(&self.scheduler);
         let forwarder = Arc::clone(&self.forwarder);
         let stops = Arc::clone(&self.stops);
+        let pooled = self.pooled;
         move |budget: Budget| {
-            scheduler.set_bandwidth_stop(budget.stop);
-            stops.budget.store(budget.stop, Ordering::Relaxed);
+            let stop = pooled && budget.stop;
+            scheduler.set_bandwidth_stop(stop);
+            stops.budget.store(stop, Ordering::Relaxed);
             stops.apply(&forwarder);
         }
     }
@@ -311,6 +337,7 @@ impl Engine {
         let tend = tokio::spawn(tend(
             Arc::clone(&self.personas),
             Arc::clone(&self.pool),
+            self.pooled,
             Arc::clone(&self.forwarder),
             Arc::clone(&self.stops),
             self.context_idle,
@@ -347,10 +374,12 @@ impl Engine {
     }
 }
 
-/// See [`Engine::serve`].
+/// See [`Engine::serve`]. The pool's leak flag stops everything when
+/// anything leaves through the pool (`pooled`).
 async fn tend(
     personas: Arc<PersonaManager>,
     pool: Arc<Pool>,
+    pooled: bool,
     forwarder: Arc<Forwarder>,
     stops: Arc<Stops>,
     context_idle: Duration,
@@ -364,9 +393,11 @@ async fn tend(
             () = &mut shutdown => break,
             _ = ticker.tick() => {}
         }
-        match pool.egress_unsafe().await {
-            Ok(leak) => stops.leak.store(leak, Ordering::Relaxed),
-            Err(error) => tracing::warn!(%error, "cannot read the egress flag"),
+        if pooled {
+            match pool.egress_unsafe().await {
+                Ok(leak) => stops.leak.store(leak, Ordering::Relaxed),
+                Err(error) => tracing::warn!(%error, "cannot read the egress flag"),
+            }
         }
         stops.apply(&forwarder);
         let contexts = personas.contexts();
@@ -394,9 +425,8 @@ mod tests {
     use std::time::Duration;
 
     use async_trait::async_trait;
-    use kage_core::domain::ProxyEndpoint;
     use kage_core::ids::PersonaId;
-    use kage_scheduler::forwarder::RouteRefusal;
+    use kage_scheduler::forwarder::{PlainRoute, RouteRefusal, SystemResolver, Upstream};
     use kage_scheduler::{Forwarder, ForwarderSettings, Routes, Tokens};
 
     use super::Stops;
@@ -406,8 +436,12 @@ mod tests {
 
     #[async_trait]
     impl Routes for NoRoutes {
-        async fn upstream(&self, _: PersonaId) -> Result<ProxyEndpoint, RouteRefusal> {
+        async fn upstream(&self, _: PersonaId) -> Result<Upstream, RouteRefusal> {
             Err(RouteRefusal::UnknownPersona)
+        }
+
+        async fn plain(&self, _: PlainRoute) -> Result<Upstream, RouteRefusal> {
+            Err(RouteRefusal::NotConfigured)
         }
     }
 
@@ -421,6 +455,8 @@ mod tests {
                 idle_timeout: Duration::from_secs(1),
                 max_connections: 4,
                 operator_hosts: HashSet::new(),
+                private_names: HashSet::new(),
+                resolver: Arc::new(SystemResolver),
             },
             Tokens::new(&[1; 32]),
             Arc::new(NoRoutes),

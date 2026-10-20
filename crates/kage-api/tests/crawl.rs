@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use axum::http::{Method, StatusCode};
-use common::sched::lab::LENIENT_FAST;
+use common::sched::lab::FAST;
 use common::{Api, request};
 use kage_core::config::Config;
 use kage_core::domain::Scope;
@@ -28,8 +28,9 @@ use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
-/// Every request goes to the browser.
-const BROWSER_FAST: &str = "defaults: { render: browser, pacing: fast, active_hours: ignore, min_dwell: 500ms }\ndomains: {}\n";
+/// A persona may leave a page after half a second.
+const BROWSER_FAST: &str =
+    "defaults: { pacing: fast, active_hours: ignore, min_dwell: 500ms }\ndomains: {}\n";
 
 /// A worker that looks often: a test does not wait seconds for it.
 fn quick(config: &mut Config) {
@@ -243,7 +244,7 @@ async fn personas_of(api: &Api, request: &str) -> Vec<String> {
         .await
         .unwrap()
         .into_iter()
-        .map(|attempt| attempt.persona_id.to_string())
+        .map(|attempt| attempt.persona_id.unwrap().to_string())
         .collect()
 }
 
@@ -256,14 +257,14 @@ async fn count(api: &Api, table: &str) -> i64 {
 
 #[tokio::test]
 async fn a_crawl_reads_a_site_along_its_links_as_far_as_it_may() {
-    let mut api = Api::start_with(2, 149, LENIENT_FAST, quick).await;
+    let mut api = Api::start_with(2, 149, FAST, quick).await;
     serve(&api, &small_site(), Duration::ZERO).await;
     let token = api.key(&[Scope::Jobs, Scope::Crawl]).await;
     let body = json!({
         "type": "crawl",
         "seeds": [Api::url("/")],
         "max_depth": 4,
-        "defaults": { "render": "http", "include": ["headers"] },
+        "defaults": { "level": 1, "include": ["headers"] },
     });
 
     let reply = api.post(&token, "/v1/jobs", &body).await;
@@ -421,7 +422,7 @@ async fn a_crawl_reads_a_site_along_its_links_as_far_as_it_may() {
             &token,
             "/v1/jobs",
             &json!({
-                "type": "crawl", "seeds": [Api::url("/start")], "defaults": { "render": "http" },
+                "type": "crawl", "seeds": [Api::url("/start")], "defaults": { "level": 1 },
             }),
         )
         .await;
@@ -443,7 +444,7 @@ async fn a_crawl_reads_a_site_along_its_links_as_far_as_it_may() {
     let before = asked(&api).await.len();
     let shallow = json!({
         "type": "crawl", "seeds": [Api::url("/")], "max_depth": 1, "max_pages": 3,
-        "defaults": { "render": "http" },
+        "defaults": { "level": 1 },
     });
     let reply = api.post(&token, "/v1/jobs", &shallow).await;
     let id = reply.json()["id"].as_str().unwrap().to_owned();
@@ -473,7 +474,9 @@ async fn in_a_browser_a_crawl_clicks_its_way_and_never_follows_what_nobody_sees(
             .insert(Api::url("/"), (0.23, "patience".to_owned()));
     });
     let token = api.key(&[Scope::Jobs, Scope::Crawl]).await;
-    let body = json!({ "type": "crawl", "seeds": [Api::url("/")], "max_depth": 4 });
+    let body = json!({
+        "type": "crawl", "seeds": [Api::url("/")], "max_depth": 4, "defaults": { "level": 3 },
+    });
 
     let reply = api.post(&token, "/v1/jobs", &body).await;
     assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.json());
@@ -653,6 +656,7 @@ async fn sitemaps_are_read_by_a_scout_and_never_by_the_sites_reader() {
     let token = api.key(&[Scope::Jobs, Scope::Crawl]).await;
     let body = json!({
         "type": "crawl", "seeds": [Api::url("/")], "use_sitemaps": true, "max_depth": 1,
+        "defaults": { "level": 3 },
     });
 
     let reply = api.post(&token, "/v1/jobs", &body).await;
@@ -764,38 +768,57 @@ async fn sitemaps_are_read_by_a_scout_and_never_by_the_sites_reader() {
 
 #[tokio::test]
 async fn a_crawl_is_accepted_whole_or_not_at_all_and_needs_its_scope() {
-    let mut api = Api::start_with(1, 149, LENIENT_FAST, quick).await;
+    let mut api = Api::start_with(1, 149, FAST, quick).await;
     let jobs_only = api.key(&[Scope::Jobs]).await;
     let token = api.key(&[Scope::Jobs, Scope::Crawl]).await;
-    let body = json!({ "type": "crawl", "seeds": [Api::url("/")] });
+    let level = json!({ "level": 1 });
+    let body = json!({ "type": "crawl", "seeds": [Api::url("/")], "defaults": level });
 
     // A crawl asks a site for pages nobody named: a scope of its own.
     api.post(&jobs_only, "/v1/jobs", &body)
         .await
         .problem(StatusCode::FORBIDDEN, "scope_missing");
     for (refused, code, field) in [
+        // Every page of a crawl is fetched at the level of its defaults,
+        // and a crawl names it.
         (
-            json!({ "type": "crawl", "seeds": [] }),
-            "validation_failed",
-            "seeds",
+            json!({ "type": "crawl", "seeds": [Api::url("/")] }),
+            "level_required",
+            "defaults.level",
         ),
         (
-            json!({ "type": "crawl", "seeds": [Api::url("/")], "max_depth": 99 }),
-            "validation_failed",
-            "max_depth",
+            json!({ "type": "crawl", "seeds": [Api::url("/")], "defaults": { "include": ["headers"] } }),
+            "level_required",
+            "defaults.level",
         ),
+        // Visitors are personas, and a plain client has none.
         (
-            json!({ "type": "crawl", "seeds": [Api::url("/")], "allow": ["("] }),
-            "validation_failed",
-            "allow",
-        ),
-        (
-            json!({ "type": "crawl", "seeds": [Api::url("/")], "visitors": 11 }),
+            json!({ "type": "crawl", "seeds": [Api::url("/")], "visitors": 1, "defaults": { "level": 0 } }),
             "validation_failed",
             "visitors",
         ),
         (
-            json!({ "type": "crawl", "seeds": [Api::url("/"), Api::url("/login")], "deny": ["/login"] }),
+            json!({ "type": "crawl", "seeds": [], "defaults": level }),
+            "validation_failed",
+            "seeds",
+        ),
+        (
+            json!({ "type": "crawl", "seeds": [Api::url("/")], "max_depth": 99, "defaults": level }),
+            "validation_failed",
+            "max_depth",
+        ),
+        (
+            json!({ "type": "crawl", "seeds": [Api::url("/")], "allow": ["("], "defaults": level }),
+            "validation_failed",
+            "allow",
+        ),
+        (
+            json!({ "type": "crawl", "seeds": [Api::url("/")], "visitors": 11, "defaults": level }),
+            "validation_failed",
+            "visitors",
+        ),
+        (
+            json!({ "type": "crawl", "seeds": [Api::url("/"), Api::url("/login")], "deny": ["/login"], "defaults": level }),
             "validation_failed",
             "seeds",
         ),
@@ -806,11 +829,39 @@ async fn a_crawl_is_accepted_whole_or_not_at_all_and_needs_its_scope() {
             .problem(StatusCode::UNPROCESSABLE_ENTITY, code);
         assert_eq!(problem["field"], field, "{problem}");
     }
+    // A job keeps its pages' requests until they run, and Kage holds no
+    // caller's credential: a crawl takes none.
+    for (level, name) in [(0, "Cookie"), (0, "authorization"), (1, "Cookie")] {
+        let problem = api
+            .post(
+                &token,
+                "/v1/jobs",
+                &json!({
+                    "type": "crawl", "seeds": [Api::url("/")],
+                    "defaults": { "level": level, "headers": { name: "sid=1" } },
+                }),
+            )
+            .await
+            .problem(StatusCode::UNPROCESSABLE_ENTITY, "header_denied");
+        assert_eq!(problem["header"], name, "{problem}");
+    }
+    // What a seed's page could not be fetched with is refused as a fetch
+    // would be, and names the seed.
+    let below = api
+        .post(
+            &token,
+            "/v1/jobs",
+            &json!({ "type": "crawl", "seeds": [Api::url("/")], "defaults": { "level": 2, "behavior": { "dwell_ms": 3000 } } }),
+        )
+        .await
+        .problem(StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+    assert_eq!(below["field"], "behavior", "{below}");
+    assert_eq!(below["item"], 0, "{below}");
     let denied = api
         .post(
             &token,
             "/v1/jobs",
-            &json!({ "type": "crawl", "seeds": [Api::url("/"), "http://169.254.169.254/latest"] }),
+            &json!({ "type": "crawl", "seeds": [Api::url("/"), "http://169.254.169.254/latest"], "defaults": level }),
         )
         .await
         .problem(StatusCode::UNPROCESSABLE_ENTITY, "ssrf_denied");
@@ -818,7 +869,7 @@ async fn a_crawl_is_accepted_whole_or_not_at_all_and_needs_its_scope() {
     api.post(
         &token,
         "/v1/jobs",
-        &json!({ "type": "crawl", "seeds": [Api::url("/")], "personas": 2 }),
+        &json!({ "type": "crawl", "seeds": [Api::url("/")], "personas": 2, "defaults": level }),
     )
     .await
     .problem(StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
@@ -840,7 +891,7 @@ async fn a_crawl_is_accepted_whole_or_not_at_all_and_needs_its_scope() {
     assert_eq!(again.header("idempotency-replayed"), Some("true"));
     assert_eq!(again.json()["id"], first.json()["id"]);
     api.send(keyed(
-        &json!({ "type": "crawl", "seeds": [Api::url("/other")] }),
+        &json!({ "type": "crawl", "seeds": [Api::url("/other")], "defaults": level }),
     ))
     .await
     .problem(StatusCode::CONFLICT, "idempotency_key_reused");
@@ -850,7 +901,7 @@ async fn a_crawl_is_accepted_whole_or_not_at_all_and_needs_its_scope() {
 
 #[tokio::test]
 async fn a_cancel_stops_a_crawl_within_one_page_and_a_crawl_goes_on_after_a_restart() {
-    let mut api = Api::start_with(2, 149, LENIENT_FAST, quick).await;
+    let mut api = Api::start_with(2, 149, FAST, quick).await;
     // A chain of pages that each take a while.
     let chain: Vec<Leaf> = vec![
         leaf("/", &["/s/1"]),
@@ -867,7 +918,7 @@ async fn a_cancel_stops_a_crawl_within_one_page_and_a_crawl_goes_on_after_a_rest
     let token = api.key(&[Scope::Jobs, Scope::Crawl]).await;
     let body = json!({
         "type": "crawl", "seeds": [Api::url("/")], "max_depth": 20,
-        "defaults": { "render": "http" },
+        "defaults": { "level": 1 },
     });
     let cancel = |id: &str| format!("/v1/jobs/{id}/cancel");
 
@@ -948,7 +999,7 @@ async fn a_cancel_stops_a_crawl_within_one_page_and_a_crawl_goes_on_after_a_rest
 
 #[tokio::test]
 async fn a_page_whose_result_was_stored_when_the_crawl_changed_hands_keeps_its_links() {
-    let mut api = Api::start_with(2, 149, LENIENT_FAST, quick).await;
+    let mut api = Api::start_with(2, 149, FAST, quick).await;
     // A home page that takes a while and leads to two pages; one of its
     // links nobody can see.
     let mut home = leaf("/", &["/s/1", "/s/2"]);
@@ -958,7 +1009,7 @@ async fn a_page_whose_result_was_stored_when_the_crawl_changed_hands_keeps_its_l
     serve(&api, &rest, Duration::from_millis(50)).await;
     let token = api.key(&[Scope::Jobs, Scope::Crawl]).await;
     let body = json!({
-        "type": "crawl", "seeds": [Api::url("/")], "defaults": { "render": "http" },
+        "type": "crawl", "seeds": [Api::url("/")], "defaults": { "level": 1 },
     });
     let reply = api.post(&token, "/v1/jobs", &body).await;
     let id = reply.json()["id"].as_str().unwrap().to_owned();
@@ -1052,7 +1103,7 @@ async fn a_page_whose_result_was_stored_when_the_crawl_changed_hands_keeps_its_l
 async fn a_crawl_waits_out_what_holds_its_site_and_ends_at_its_deadline() {
     // A site that turns its reader away after the first page: the
     // breaker opens after two blocks and the crawl waits for it.
-    let rules = "defaults: { render: http, pacing: fast, active_hours: ignore, retries: 1, \
+    let rules = "defaults: { pacing: fast, active_hours: ignore, retries: 1, \
                  breaker_threshold: 2, breaker_pause: 30m }\ndomains: {}\n";
     let mut api = Api::start_with(3, 149, rules, quick).await;
     serve(&api, &[leaf("/", &["/wall", "/after"])], Duration::ZERO).await;
@@ -1072,7 +1123,7 @@ async fn a_crawl_waits_out_what_holds_its_site_and_ends_at_its_deadline() {
         .await;
     let token = api.key(&[Scope::Jobs, Scope::Crawl]).await;
     let body = json!({
-        "type": "crawl", "seeds": [Api::url("/")], "defaults": { "render": "http" },
+        "type": "crawl", "seeds": [Api::url("/")], "defaults": { "level": 1 },
     });
     let reply = api.post(&token, "/v1/jobs", &body).await;
     let id = reply.json()["id"].as_str().unwrap().to_owned();

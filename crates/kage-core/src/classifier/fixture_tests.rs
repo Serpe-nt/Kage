@@ -47,8 +47,6 @@ struct Expect {
     #[serde(default)]
     retryable: Option<bool>,
     #[serde(default)]
-    escalate: Option<bool>,
-    #[serde(default)]
     cooldown: Option<CooldownClass>,
 }
 
@@ -137,12 +135,6 @@ fn every_fixture_classifies_as_expected() {
             .is_some_and(|retryable| retryable != verdict.retryable)
         {
             problems.push(format!("retryable {}", verdict.retryable));
-        }
-        if expect
-            .escalate
-            .is_some_and(|escalate| escalate != verdict.escalate)
-        {
-            problems.push(format!("escalate {}", verdict.escalate));
         }
         if expect
             .cooldown
@@ -281,41 +273,38 @@ fn verdicts_carry_the_right_scheduler_hints() {
     let fixtures = fixtures();
     let hints = |name: &str| {
         let verdict = signatures.classify(&fixtures[name].observation);
-        (verdict.retryable, verdict.escalate, verdict.cooldown)
+        (verdict.retryable, verdict.cooldown)
     };
 
     // Another persona would get the same page: do not retry, cool nobody
-    // down, let the browser handle it.
+    // down.
     for name in ["soft-js-required", "soft-login-wall", "soft-consent-wall"] {
-        assert_eq!(hints(name), (false, true, CooldownClass::None), "{name}");
+        assert_eq!(hints(name), (false, CooldownClass::None), "{name}");
     }
-    // A failing server: retry elsewhere, no cooldown, no escalation.
-    assert_eq!(hints("generic-503"), (true, false, CooldownClass::None));
+    // A failing server: retry elsewhere, no cooldown.
+    assert_eq!(hints("generic-503"), (true, CooldownClass::None));
     // A bare status with no marker: a real block, weakly attributed.
-    assert_eq!(hints("generic-403"), (true, true, CooldownClass::Short));
-    assert_eq!(hints("generic-429"), (true, false, CooldownClass::Short));
+    assert_eq!(hints("generic-403"), (true, CooldownClass::Short));
+    assert_eq!(hints("generic-429"), (true, CooldownClass::Short));
     // Vendor blocks keep what the spec says about their outcome.
     assert_eq!(
         hints("cloudflare-managed-challenge"),
-        (true, true, CooldownClass::Long)
+        (true, CooldownClass::Long)
     );
-    assert_eq!(hints("datadome-captcha"), (true, true, CooldownClass::Long));
-    assert_eq!(
-        hints("akamai-access-denied"),
-        (true, true, CooldownClass::Long)
-    );
+    assert_eq!(hints("datadome-captcha"), (true, CooldownClass::Long));
+    assert_eq!(hints("akamai-access-denied"), (true, CooldownClass::Long));
     assert_eq!(
         hints("cloudflare-rate-limit-1015"),
-        (true, false, CooldownClass::Long)
+        (true, CooldownClass::Long)
     );
-    assert_eq!(hints("soft-empty-body"), (true, true, CooldownClass::Long));
-    // A fetched page has nothing to retry, escalate or cool down.
+    assert_eq!(hints("soft-empty-body"), (true, CooldownClass::Long));
+    // A fetched page has nothing to retry or cool down.
     for name in [
         "ok-cloudflare-site",
         "ok-404",
         "cloudflare-challenge-passed",
     ] {
-        assert_eq!(hints(name), (false, false, CooldownClass::None), "{name}");
+        assert_eq!(hints(name), (false, CooldownClass::None), "{name}");
     }
 }
 

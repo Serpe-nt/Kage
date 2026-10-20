@@ -38,19 +38,18 @@ policies="$(mktemp -d)"
 export KAGE_E2E_POLICIES="${policies}"
 cp policies/*.yaml "${policies}/"
 # The batch is a job, and a job never wakes a persona that sleeps: at
-# night in the personas' time zones it would wait for the morning.
+# night in the personas' time zones it would wait for the morning. The
+# rule is an entry of the shipped file's `domains` mapping, its last key:
+# a second `domains:` would be a duplicate key, which the policy loader
+# refuses, and `domains: {}` takes no entry.
+sed --in-place 's/^domains: {}$/domains:/' "${policies}/domains.yaml"
+[ "$(grep '^[a-z_]*:' "${policies}/domains.yaml" | tail -n 1)" = 'domains:' ] \
+    || { echo "FAIL: policies/domains.yaml does not end with its domains mapping" >&2; exit 1; }
 cat >> "${policies}/domains.yaml" << 'EOF'
-
-# Added by tests/e2e/observability.sh.
-domains:
+  # Added by tests/e2e/observability.sh.
   fixture.kage.test:
     active_hours: ignore
 EOF
-# A `domains: {}` of the shipped file would be a second key of that name.
-if [ "$(grep --count '^domains:' "${policies}/domains.yaml")" -ne 1 ]; then
-    grep --invert-match '^domains: {}$' "${policies}/domains.yaml" > "${policies}/domains.tmp"
-    mv "${policies}/domains.tmp" "${policies}/domains.yaml"
-fi
 chmod --recursive a+rX "${policies}"
 scratch="$(mktemp -d)"
 evidence="${KAGE_E2E_EVIDENCE:-${scratch}}"
@@ -147,12 +146,12 @@ check "three ready personas" "${personas}" "d.personas.length === 3 && d.persona
 echo "==> a page, a batch job with a webhook, a refused request"
 created="$(kage key create --name e2e-observability --scope fetch --scope jobs --json)"
 token="$(value "${created}" "d.token")"
-call POST /v1/fetch "${token}" '{"url":"http://fixture.kage.test:8088/landing","render":"browser","timeout_ms":60000}'
+call POST /v1/fetch "${token}" '{"url":"http://fixture.kage.test:8088/landing","level":3,"timeout_ms":60000}'
 expect 200 "POST /v1/fetch"
 request="$(printf '%s\n' "${headers}" | sed -n 's/^x-request-id: //p')"
 [ -n "${request}" ] || fail "the answer names no request: ${headers}"
-check "the page was fetched" "${body}" "d.outcome === 'ok'"
-call POST /v1/jobs "${token}" '{"type":"batch","urls":["http://fixture.kage.test:8088/listing?page=901","http://fixture.kage.test:8088/listing?page=902"],"webhook":{"url":"http://hooks.kage.test:8090/kage","secret":"e2e-only-webhook-secret"}}'
+check "the page was fetched, in a browser" "${body}" "d.outcome === 'ok' && d.level === 3"
+call POST /v1/jobs "${token}" '{"type":"batch","urls":["http://fixture.kage.test:8088/listing?page=901","http://fixture.kage.test:8088/listing?page=902"],"defaults":{"level":3},"webhook":{"url":"http://hooks.kage.test:8090/kage","secret":"e2e-only-webhook-secret"}}'
 expect 201 "POST /v1/jobs"
 job="$(value "${body}" "d.id")"
 for _ in $(seq 1 90); do
@@ -163,7 +162,7 @@ for _ in $(seq 1 90); do
     sleep 2
 done
 check "the job succeeded" "${body}" "d.state === 'succeeded'"
-call POST /v1/fetch "x${token}" '{"url":"http://fixture.kage.test:8088/"}'
+call POST /v1/fetch "x${token}" '{"url":"http://fixture.kage.test:8088/","level":3}'
 expect 401 "a wrong key"
 echo "    request ${request}, job ${job}"
 

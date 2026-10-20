@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use chrono::Duration as Span;
 use common::{DEFAULT_DOMAINS, World, blocked, timed_out};
-use kage_core::domain::{BreakerState, RenderMode};
+use kage_core::domain::{BreakerState, Level};
 use kage_core::ids::RequestId;
 use kage_core::outcome::Outcome;
 use kage_core::schedule::planner::{Refusal, Visitors};
@@ -28,7 +28,7 @@ use url::Url;
 
 fn page(url: &str) -> FetchOrder {
     FetchOrder {
-        render: RenderMode::Browser,
+        level: Level::Human,
         ..FetchOrder::get(Url::parse(url).unwrap(), Priority::Job)
     }
 }
@@ -257,7 +257,7 @@ async fn a_batch_stays_with_its_visitor_and_is_told_when_it_is_back() {
     );
     assert_eq!(report.outcome, Outcome::Ok);
     assert_eq!(report.attempts.len(), 2);
-    assert_eq!(report.attempts[0].persona_id, first);
+    assert_eq!(report.attempts[0].persona_id, Some(first));
     let second = report.persona.as_ref().unwrap().id;
     assert_ne!(second, first);
     // The next page names both; the one that cools does not count, so the
@@ -458,7 +458,7 @@ async fn a_synchronous_fetch_that_outlasted_its_wall_time_waits_like_a_job() {
     world.script.takes(Duration::from_secs(200));
     world.script.then(blocked(Outcome::Forbidden, 1.0));
     let order = FetchOrder {
-        render: RenderMode::Browser,
+        level: Level::Human,
         ..FetchOrder::get(
             Url::parse("https://wall.example/a").unwrap(),
             Priority::Sync,

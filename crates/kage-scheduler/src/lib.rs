@@ -53,9 +53,11 @@ pub use bandwidth::{Bandwidth, Ledger, StoreLedger, Term};
 pub use error::SchedulerError;
 pub use executor::{
     Arrival, AttemptExecutor, AttemptJob, AttemptOutput, BehaviorApplied, BehaviorWish, FlowPlan,
-    FlowRun, FlowStep, PathExecutor, Reached,
+    FlowRun, FlowStep, PathExecutor, PlainJob, Reached,
 };
-pub use forwarder::{Forwarder, ForwarderEgress, ForwarderSettings, Meter, Routes, Tokens};
+pub use forwarder::{
+    Forwarder, ForwarderEgress, ForwarderSettings, Meter, PlainRoute, Routes, Tokens, Upstream,
+};
 pub use memory::MemoryBackend;
 pub use pipeline::{
     CachePlan, Capture, CrawlReading, Deferred, FetchOrder, FetchReport, INTERRUPTED, JobFetch,
@@ -63,7 +65,7 @@ pub use pipeline::{
     ROBOTS_UNAVAILABLE, ReadLink, RobotsRead, Running, ScoutNeed, Stop, Synchronous, WoundDown,
 };
 pub use robots::{Conflict, RobotsSettings, RobotsWish};
-pub use scheduler::{Grant, Refused, Scheduler, SchedulerGate};
+pub use scheduler::{Grant, PlainGrant, Refused, Scheduler, SchedulerGate};
 pub use verdicts::Verdicts;
 
 /// Name of this crate as recorded in its manifest.

@@ -11,11 +11,12 @@ use kage_core::alert::{Alert, AlertKind, AlertSeverity};
 use kage_core::domain::{
     ArtifactKind, ArtifactRef, Attempt, AuditActor, AuditEvent, AuditOutcome, BehaviorDone,
     BreakerState, ClaimedOs, ConsoleEntry, CookieSameSite, CoolingReason, DomainBreaker, Engine,
-    FetchRecord, FrontierEntry, FrontierSource, FrontierState, GeoRecord, Header, HealthEvent,
-    HealthFailure, HttpCookie, Job, JobItem, JobItemState, JobKind, JobOrigin, JobState,
-    PacingApplied, Persona, PersonaDomainState, PersonaState, PersonaSummary, ProxyHealth,
-    ProxyProviderKind, ProxyReplacement, ProxyState, Render, ReplaceReason, RobotsVerdict, Scope,
-    SelftestRun, Session, SessionId, SessionLimits, SubjectKind, Timing, Visit,
+    Exit, FetchRecord, FrontierEntry, FrontierSource, FrontierState, GeoRecord, Header,
+    HealthEvent, HealthFailure, HttpCookie, Job, JobItem, JobItemState, JobKind, JobOrigin,
+    JobState, Level, PacingApplied, Persona, PersonaDomainState, PersonaState, PersonaSummary,
+    ProxyHealth, ProxyProviderKind, ProxyReplacement, ProxyState, Render, ReplaceReason,
+    RequestRecord, RobotsVerdict, Scope, SelftestRun, Session, SessionId, SessionLimits,
+    SubjectKind, Timing, Visit,
 };
 use kage_core::ids::{
     ApiKeyId, ArtifactId, AttemptId, AuditEventId, FrontierId, HealthEventId, JobId, JobItemId,
@@ -1274,8 +1275,9 @@ async fn requests_attempts_and_results_round_trip() {
         id: AttemptId::new(),
         request_id: request.id,
         n: 1,
-        persona_id: persona.id,
-        engine: Engine::Chromium,
+        persona_id: Some(persona.id),
+        engine: Some(Engine::Chromium),
+        exit: None,
         render: Render::Http,
         started_at: started,
         finished_at: started + Duration::milliseconds(840),
@@ -1299,7 +1301,7 @@ async fn requests_attempts_and_results_round_trip() {
     let succeeded = Attempt {
         id: AttemptId::new(),
         n: 2,
-        persona_id: other_persona.id,
+        persona_id: Some(other_persona.id),
         render: Render::Browser,
         started_at: started + Duration::seconds(5),
         finished_at: started + Duration::seconds(14),
@@ -1346,7 +1348,7 @@ async fn requests_attempts_and_results_round_trip() {
     // The attempt number is unique within a request.
     let duplicate = Attempt {
         id: AttemptId::new(),
-        ..blocked
+        ..blocked.clone()
     };
     assert!(
         store
@@ -2826,4 +2828,103 @@ async fn an_engine_upgrade_moves_the_browser_columns_once_and_nothing_else() {
             .unwrap(),
         None
     );
+}
+
+/// A request names its level, and an attempt at level 0 is a plain
+/// client's: no persona, no engine, the exit it left from. The table holds
+/// one or the other, never both, never neither (spec §25).
+#[tokio::test]
+async fn a_level_zero_attempt_names_its_exit_and_no_persona() {
+    let db = TestDb::migrated().await;
+    let store = &db.store;
+    let persona = common::seed_persona(store).await;
+    let plain = RequestRecord {
+        render: kage_core::domain::RenderMode::Http,
+        level: Some(Level::Plain),
+        ..common::request(None)
+    };
+    store.requests().insert(&plain).await.unwrap();
+    assert_eq!(
+        store.requests().get(plain.id).await.unwrap(),
+        Some(plain.clone())
+    );
+    // A request of 1.x had no level.
+    let old = RequestRecord {
+        level: None,
+        ..common::request(None)
+    };
+    store.requests().insert(&old).await.unwrap();
+    assert_eq!(
+        store.requests().get(old.id).await.unwrap().unwrap().level,
+        None
+    );
+    for level in Level::ALL {
+        let request = RequestRecord {
+            level: Some(level),
+            ..common::request(None)
+        };
+        store.requests().insert(&request).await.unwrap();
+        assert_eq!(
+            store
+                .requests()
+                .get(request.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .level,
+            Some(level)
+        );
+    }
+
+    let at = now();
+    let attempt =
+        |n: u32, persona: Option<PersonaId>, engine: Option<Engine>, exit: Option<Exit>| Attempt {
+            id: AttemptId::new(),
+            request_id: plain.id,
+            n,
+            persona_id: persona,
+            engine,
+            exit,
+            render: Render::Http,
+            started_at: at,
+            finished_at: at + Duration::milliseconds(120),
+            status: Some(200),
+            final_url: Some("https://example.org/".to_owned()),
+            outcome: Outcome::Ok,
+            block: None,
+            timing: Timing {
+                total_ms: 120,
+                ..Timing::default()
+            },
+            seed: None,
+            reason: None,
+            patience_ms: None,
+        };
+    let from_host = attempt(1, None, None, Some(Exit::Host));
+    let from_pool = attempt(2, None, None, Some(Exit::Pool));
+    store.attempts().insert(&from_host).await.unwrap();
+    store.attempts().insert(&from_pool).await.unwrap();
+    assert_eq!(
+        store.attempts().list_for_request(plain.id).await.unwrap(),
+        [from_host, from_pool]
+    );
+    // Neither a persona nor an exit, both, or a persona without its engine:
+    // refused by the table.
+    for (n, refused) in [
+        (3, attempt(3, None, None, None)),
+        (
+            4,
+            attempt(4, Some(persona.id), Some(Engine::Firefox), Some(Exit::Pool)),
+        ),
+        (5, attempt(5, Some(persona.id), None, None)),
+        (
+            6,
+            attempt(6, None, Some(Engine::Chromium), Some(Exit::Host)),
+        ),
+    ] {
+        assert!(
+            store.attempts().insert(&refused).await.is_err(),
+            "attempt {n}"
+        );
+    }
 }

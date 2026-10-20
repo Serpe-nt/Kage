@@ -28,7 +28,7 @@ pub use store::{
     SIGNATURES_FILE, WatchError,
 };
 
-use crate::domain::{CountryCode, Engine, Render, RenderMode};
+use crate::domain::{CountryCode, Engine, Level};
 use crate::duration::HumanDuration;
 use crate::macros::string_enum;
 use crate::outcome::{CooldownClass, Outcome};
@@ -306,14 +306,31 @@ impl Cooldowns {
     }
 }
 
+/// A field of 1.x that a policy file may no longer hold: it is read only
+/// to be refused with a message that says what took its place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Retired;
+
+impl<'de> Deserialize<'de> for Retired {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        serde::de::IgnoredAny::deserialize(deserializer).map(|_| Self)
+    }
+}
+
 /// One entry of `domains.yaml` as written: the `defaults` block or a domain.
 /// Every field is optional.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DomainRule {
-    /// Render mode. `http` marks the domain as known lenient.
+    /// The render mode of 1.x. Gone in 2.0: the request's level decides the
+    /// path (spec §25); a file that still names it is refused, pointing at
+    /// `min_level`.
+    #[serde(default, skip_serializing)]
+    pub render: Option<Retired>,
+    /// The lowest level a request for the site may name (spec §25); a
+    /// request below it is refused (`level_below_policy`), never raised.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub render: Option<RenderMode>,
+    pub min_level: Option<Level>,
     /// Only personas from these countries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub countries: Option<Vec<CountryCode>>,
@@ -370,6 +387,13 @@ impl DomainRule {
             field,
             reason: reason.to_owned(),
         };
+        if self.render.is_some() {
+            return Err(invalid(
+                "render",
+                "is gone in 2.0: every request names its level, which decides the path \
+                 (spec §25); set min_level for the lowest level the site accepts",
+            ));
+        }
         if self.countries.as_ref().is_some_and(Vec::is_empty) {
             return Err(invalid(
                 "countries",
@@ -494,8 +518,9 @@ pub struct EffectivePolicy {
     /// Every domain entry that applies, nearest first. Each field comes from
     /// the first of these that sets it, then from `defaults`.
     pub inherits: Vec<String>,
-    /// Render mode; `auto` means browser unless the request says otherwise.
-    pub render: RenderMode,
+    /// The lowest level a request for the site may name (spec §25); 0
+    /// unless set.
+    pub min_level: Level,
     /// Allowed persona countries; `None` allows any.
     pub countries: Option<Vec<CountryCode>>,
     /// Allowed engines.
@@ -533,18 +558,11 @@ pub struct EffectivePolicy {
 }
 
 impl EffectivePolicy {
-    /// The path an attempt takes (spec §8.1): the request's choice if it
-    /// makes one, else the policy's, else the browser.
-    pub fn render_for(&self, requested: RenderMode) -> Render {
-        requested
-            .fixed()
-            .or(self.render.fixed())
-            .unwrap_or(Render::Browser)
-    }
-
-    /// Whether the policy marks the domain as known lenient (`render: http`).
-    pub fn is_lenient(&self) -> bool {
-        self.render == RenderMode::Http
+    /// Whether a request of this level may be made of the site: at or
+    /// above the policy's floor (spec §25). A request below it is refused,
+    /// never raised.
+    pub fn admits(&self, level: Level) -> bool {
+        level >= self.min_level
     }
 
     /// Whether personas on `engine` may serve this domain.
@@ -736,7 +754,7 @@ impl DomainPolicies {
         );
 
         EffectivePolicy {
-            render: inherited(&rules, defaults, |rule| rule.render).unwrap_or(RenderMode::Auto),
+            min_level: inherited(&rules, defaults, |rule| rule.min_level).unwrap_or(Level::Plain),
             countries: inherited(&rules, defaults, |rule| rule.countries.clone()),
             engines: inherited(&rules, defaults, |rule| rule.engines.clone())
                 .unwrap_or_else(|| Engine::ALL.to_vec()),
@@ -853,7 +871,7 @@ mod tests {
         ActiveHoursMode, Cooldowns, DomainPolicies, DomainRule, PacingRequest, PacingSource,
         PolicyError, PolicyMatch, RefererStrategy, RobotsMode, normalize_host,
     };
-    use crate::domain::{Engine, Render, RenderMode};
+    use crate::domain::{Engine, Level};
     use crate::duration::HumanDuration;
     use crate::macros::test_support::assert_string_enum;
     use crate::outcome::Outcome;
@@ -861,7 +879,6 @@ mod tests {
 
     const SPEC_DOMAINS: &str = r#"
 defaults:
-  render: auto
   pacing: human
   robots: report
   retries: 2
@@ -869,7 +886,7 @@ defaults:
   breaker_pause: 30m
 domains:
   "example.org":
-    render: browser
+    min_level: 3
     countries: ["DE", "AT"]
     engines: ["chromium", "firefox"]
     pacing: human
@@ -878,7 +895,7 @@ domains:
     referer_strategy: search_engine
     cooldowns: { rate_limited: 2h, forbidden: 24h }
   "api.lenient.example":
-    render: http
+    min_level: 1
     pacing: fast
 "#;
 
@@ -945,7 +962,7 @@ domains:
   example.org:
     active_hours: enforce
   shop.example.org:
-    render: http
+    min_level: 1
 ",
         )
         .unwrap();
@@ -979,7 +996,7 @@ domains:
 
         assert_eq!(policy.host, "example.org");
         assert_eq!(policy.matched, PolicyMatch::Exact("example.org".to_owned()));
-        assert_eq!(policy.render, RenderMode::Browser);
+        assert_eq!(policy.min_level, Level::Human);
         assert_eq!(
             policy.countries,
             Some(vec!["DE".parse().unwrap(), "AT".parse().unwrap()])
@@ -1020,7 +1037,7 @@ domains:
                 PolicyMatch::Parent("example.org".to_owned()),
                 "{host}"
             );
-            assert_eq!(policy.render, RenderMode::Browser);
+            assert_eq!(policy.min_level, Level::Human);
             assert_eq!(policy.robots, RobotsMode::Enforce);
         }
 
@@ -1029,7 +1046,7 @@ domains:
             lenient.matched,
             PolicyMatch::Parent("api.lenient.example".to_owned())
         );
-        assert_eq!(lenient.render, RenderMode::Http);
+        assert_eq!(lenient.min_level, Level::Emulated);
         assert_eq!(lenient.pacing, "fast");
     }
 
@@ -1040,7 +1057,7 @@ defaults:
   cooldowns: { soft_block: 3h }
 domains:
   example.org:
-    render: http
+    min_level: 1
     robots: enforce
     retries: 1
     countries: [DE, AT]
@@ -1048,7 +1065,7 @@ domains:
     pacing_locked: true
     cooldowns: { rate_limited: 30m, forbidden: 12h }
   shop.example.org:
-    render: browser
+    min_level: 3
     cooldowns: { forbidden: 48h }
   cart.shop.example.org:
     retries: 0
@@ -1071,7 +1088,7 @@ domains:
         );
         assert_eq!(cart.retries, 0); // its own
         assert!(!cart.pacing_locked); // its own, overriding the lock above
-        assert_eq!(cart.render, RenderMode::Browser); // from shop.example.org
+        assert_eq!(cart.min_level, Level::Human); // from shop.example.org
         assert_eq!(cart.robots, RobotsMode::Enforce); // from example.org
         assert_eq!(cart.pacing, "fast"); // from example.org
         assert_eq!(cart.pacing_source, PacingSource::Domain);
@@ -1085,7 +1102,7 @@ domains:
         for host in ["shop.example.org", "eu.shop.example.org"] {
             let shop = policies.resolve(host);
             assert_eq!(shop.inherits, ["shop.example.org", "example.org"], "{host}");
-            assert_eq!(shop.render, RenderMode::Browser, "{host}");
+            assert_eq!(shop.min_level, Level::Human, "{host}");
             assert_eq!(shop.retries, 1, "{host}"); // from example.org, not defaults
             assert!(shop.pacing_locked, "{host}"); // the lock covers subdomains
             assert_eq!(shop.robots, RobotsMode::Enforce, "{host}");
@@ -1099,7 +1116,7 @@ domains:
         let blog = policies.resolve("blog.example.org");
         assert_eq!(blog.matched, PolicyMatch::Parent("example.org".to_owned()));
         assert_eq!(blog.inherits, ["example.org"]);
-        assert_eq!(blog.render, RenderMode::Http);
+        assert_eq!(blog.min_level, Level::Emulated);
         assert_eq!(blog.retries, 1);
 
         // An unrelated host sees none of it.
@@ -1107,7 +1124,7 @@ domains:
         assert_eq!(other.matched, PolicyMatch::Defaults);
         assert_eq!(other.inherits, Vec::<String>::new());
         assert_eq!(other.retries, 4); // the defaults block
-        assert_eq!(other.render, RenderMode::Auto);
+        assert_eq!(other.min_level, Level::Plain);
         assert_eq!(other.pacing, "human");
         assert_eq!(other.pacing_source, PacingSource::Default);
         assert!(!other.pacing_locked);
@@ -1256,7 +1273,7 @@ domains:
         let policy = policies().resolve("unknown.test");
 
         assert_eq!(policy.matched, PolicyMatch::Defaults);
-        assert_eq!(policy.render, RenderMode::Auto);
+        assert_eq!(policy.min_level, Level::Plain);
         assert_eq!(policy.pacing, "human");
         assert_eq!(policy.pacing_source, PacingSource::Default);
         assert_eq!(policy.robots, RobotsMode::Report);
@@ -1279,7 +1296,7 @@ domains:
 
         let policy = from_empty.resolve("anything.test");
         assert_eq!(policy.matched, PolicyMatch::Defaults);
-        assert_eq!(policy.render, RenderMode::Auto);
+        assert_eq!(policy.min_level, Level::Plain);
         assert_eq!(policy.pacing, "human");
         assert_eq!(policy.retries, 2);
         assert_eq!(policy.breaker_threshold, 5);
@@ -1291,7 +1308,7 @@ domains:
         let policies = DomainPolicies::from_yaml(
             "
 defaults:
-  render: http
+  min_level: 1
   robots: ignore
   retries: 0
   breaker_threshold: 9
@@ -1306,7 +1323,7 @@ defaults:
         .unwrap();
 
         let policy = policies.resolve("anything.test");
-        assert_eq!(policy.render, RenderMode::Http);
+        assert_eq!(policy.min_level, Level::Emulated);
         assert_eq!(policy.robots, RobotsMode::Ignore);
         assert_eq!(policy.retries, 0);
         assert_eq!(policy.breaker_threshold, 9);
@@ -1322,7 +1339,7 @@ defaults:
     #[test]
     fn ip_hosts_match_exactly_or_not_at_all() {
         let policies = DomainPolicies::from_yaml(
-            "domains:\n  \"203.0.113.7\": { render: http }\n  \"0.113.7\": { render: browser }\n",
+            "domains:\n  \"203.0.113.7\": { min_level: 1 }\n  \"0.113.7\": { min_level: 3 }\n",
         );
         // "0.113.7" is read as an IPv4 address by the URL standard.
         let policies = policies.unwrap();
@@ -1344,7 +1361,7 @@ defaults:
     #[test]
     fn internationalized_hosts_match_in_ascii_form() {
         let policies =
-            DomainPolicies::from_yaml("domains:\n  \"bücher.example\": { render: http }\n")
+            DomainPolicies::from_yaml("domains:\n  \"bücher.example\": { min_level: 1 }\n")
                 .unwrap();
 
         assert!(policies.domains().contains_key("xn--bcher-kva.example"));
@@ -1353,7 +1370,7 @@ defaults:
             "xn--bcher-kva.example",
             "www.BÜCHER.example",
         ] {
-            assert_eq!(policies.resolve(host).render, RenderMode::Http, "{host}");
+            assert_eq!(policies.resolve(host).min_level, Level::Emulated, "{host}");
         }
     }
 
@@ -1422,25 +1439,69 @@ defaults:
     }
 
     #[test]
-    fn render_decision_follows_spec_8_1() {
+    fn a_site_admits_its_floor_and_every_level_above_it_and_none_below() {
         let policies = policies();
+        // No floor: every level, the plain client included.
         let unknown = policies.resolve("unknown.test");
-        let protected = policies.resolve("example.org");
-        let lenient = policies.resolve("api.lenient.example");
-
-        // The request's explicit choice always wins.
-        for policy in [&unknown, &protected, &lenient] {
-            assert_eq!(policy.render_for(RenderMode::Http), Render::Http);
-            assert_eq!(policy.render_for(RenderMode::Browser), Render::Browser);
+        assert_eq!(unknown.min_level, Level::Plain);
+        for level in Level::ALL {
+            assert!(unknown.admits(level), "{level}");
         }
-        // auto: policy if set, lenient domains use http, everything else the browser.
-        assert_eq!(unknown.render_for(RenderMode::Auto), Render::Browser);
-        assert_eq!(protected.render_for(RenderMode::Auto), Render::Browser);
-        assert_eq!(lenient.render_for(RenderMode::Auto), Render::Http);
+        // A floor of 3: only a person.
+        let protected = policies.resolve("example.org");
+        assert_eq!(protected.min_level, Level::Human);
+        assert_eq!(
+            Level::ALL.map(|level| protected.admits(level)),
+            [false, false, false, true]
+        );
+        // A floor of 1: the persona's http client and above.
+        let lenient = policies.resolve("api.lenient.example");
+        assert_eq!(
+            Level::ALL.map(|level| lenient.admits(level)),
+            [false, true, true, true]
+        );
+        let two = with_domain("    min_level: 2\n").resolve("example.org");
+        assert_eq!(
+            Level::ALL.map(|level| two.admits(level)),
+            [false, false, true, true]
+        );
+    }
 
-        assert!(lenient.is_lenient());
-        assert!(!unknown.is_lenient());
-        assert!(!protected.is_lenient());
+    #[test]
+    fn the_render_of_1x_is_refused_and_names_what_took_its_place() {
+        for body in [
+            "    render: http\n",
+            "    render: browser\n",
+            "    render: auto\n",
+        ] {
+            let error = DomainPolicies::from_yaml(&format!("domains:\n  example.org:\n{body}"))
+                .unwrap_err();
+            let PolicyError::InvalidField { field, reason, .. } = &error else {
+                panic!("{error:?}");
+            };
+            assert_eq!(*field, "render");
+            assert!(reason.contains("min_level"), "{reason}");
+            assert!(reason.contains("level"), "{reason}");
+        }
+        let defaults = DomainPolicies::from_yaml("defaults:\n  render: http\n").unwrap_err();
+        assert!(
+            matches!(&defaults, PolicyError::InvalidField { scope, field: "render", .. } if scope == "defaults"),
+            "{defaults:?}"
+        );
+        // Whatever was written there, even what was never a render mode.
+        assert!(DomainPolicies::from_yaml("defaults:\n  render: { a: 1 }\n").is_err());
+    }
+
+    #[test]
+    fn a_floor_is_a_level_and_nothing_else() {
+        for refused in ["4", "-1", "\"2\"", "two", "1.5"] {
+            assert!(
+                DomainPolicies::from_yaml(&format!("defaults:\n  min_level: {refused}\n")).is_err(),
+                "{refused}"
+            );
+        }
+        let floor = DomainPolicies::from_yaml("defaults:\n  min_level: 2\n").unwrap();
+        assert_eq!(floor.resolve("any.test").min_level, Level::Fast);
     }
 
     #[test]
@@ -1611,7 +1672,6 @@ defaults:
     fn invalid_documents_are_parse_errors() {
         for text in [
             "defaults: [",
-            "defaults:\n  render: sideways\n",
             "defaults:\n  robots: maybe\n",
             "defaults:\n  breaker_pause: soon\n",
             "defaults:\n  retries: -1\n",
@@ -1706,7 +1766,7 @@ defaults:
             json["matched"],
             serde_json::json!({ "kind": "parent", "domain": "example.org" })
         );
-        assert_eq!(json["render"], "browser");
+        assert_eq!(json["min_level"], 3);
         assert_eq!(json["countries"], serde_json::json!(["DE", "AT"]));
         assert_eq!(json["breaker_pause"], "30m");
         assert_eq!(json["cooldowns"]["rate_limited"], "2h");
@@ -1724,7 +1784,7 @@ defaults:
         let rule = serde_json::to_value(&policies().domains()["api.lenient.example"]).unwrap();
         assert_eq!(
             rule,
-            serde_json::json!({ "render": "http", "pacing": "fast" })
+            serde_json::json!({ "min_level": 1, "pacing": "fast" })
         );
     }
 

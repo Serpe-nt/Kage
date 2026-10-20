@@ -67,6 +67,10 @@ use crate::provider::{
     ReplaceTicket, ReplacedProxy, StaticListProvider, WebshareProvider,
 };
 
+mod host;
+
+pub use self::host::{HOST_ADDRESS, host_ref};
+
 /// A replacement whose request left no trace at the provider is given up
 /// after this long, and its place in the budget freed.
 const UNTRACED_REPLACEMENT_GRACE: chrono::Duration = chrono::Duration::minutes(5);
@@ -888,9 +892,19 @@ impl Pool {
     /// `failing` as failed whatever its record says. The cause is then on
     /// the path (the host's network, the provider's gateway, the echo), not
     /// in the addresses.
+    /// The live proxies of the pool, without the host's own rows, which
+    /// no upkeep touches.
+    async fn pooled_live(&self) -> Result<Vec<Proxy>, PoolError> {
+        let mut live = self.store.proxies().list_live(None).await?;
+        live.retain(|proxy| proxy.provider != ProxyProviderKind::Host);
+        Ok(live)
+    }
+
     fn outage_suspected(live: &[Proxy], failing: Option<ProxyId>) -> bool {
         let probed: Vec<&Proxy> = live
             .iter()
+            // The host's own rows are never probed.
+            .filter(|proxy| proxy.provider != ProxyProviderKind::Host)
             .filter(|proxy| {
                 matches!(
                     proxy.state,
@@ -1460,13 +1474,16 @@ impl Pool {
         id: ProxyId,
         reason: ReplaceReason,
     ) -> Result<ReplacementOutcome, PoolError> {
+        let stored = self.store.proxies().get(id).await?;
+        // The host's own connection is nobody's to replace.
+        if stored
+            .as_ref()
+            .is_some_and(|proxy| proxy.provider == ProxyProviderKind::Host)
+        {
+            return Ok(ReplacementOutcome::Unsupported);
+        }
         let provider = self.provider()?;
-        let proxy = self
-            .store
-            .proxies()
-            .get(id)
-            .await?
-            .ok_or(PoolError::NotFound(id))?;
+        let proxy = stored.ok_or(PoolError::NotFound(id))?;
         if provider.kind() == ProxyProviderKind::Static {
             return Ok(ReplacementOutcome::Unsupported);
         }
@@ -1799,7 +1816,7 @@ impl Pool {
     pub async fn tick(&self) -> Result<TickReport, PoolError> {
         let now = self.clock.now();
         let mut report = TickReport::default();
-        let mut live = self.store.proxies().list_live(None).await?;
+        let mut live = self.pooled_live().await?;
 
         for proxy in &live {
             if proxy.state == ProxyState::Backoff
@@ -1815,7 +1832,7 @@ impl Pool {
         // A proxy whose backoff just ran out is owed a probe before
         // anything else is decided about it.
         if !report.expired.is_empty() {
-            live = self.store.proxies().list_live(None).await?;
+            live = self.pooled_live().await?;
         }
 
         let mut in_flight = false;

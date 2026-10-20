@@ -2,12 +2,13 @@
  * What the compose end-to-end test of jobs runs (tests/e2e/jobs.sh), with a
  * client that was generated from the API's document and is not Rust:
  *
- * - a batch of 50 pages of the fixture site, read by three visitors, to
- *   completion, with a result per item, submitted twice under one
- *   `Idempotency-Key`;
- * - a flow of several steps in the browser of a persona of each engine,
- *   with what each capturing step brought back;
- * - a batch that is cancelled while it is read.
+ * - a batch of 50 pages of the fixture site at level 3, read by three
+ *   visitors, to completion, with a result per item, submitted twice under
+ *   one `Idempotency-Key`;
+ * - a flow of several steps at level 3 in the browser of a persona of each
+ *   engine, with what each capturing step brought back;
+ * - a batch that is cancelled while it is read;
+ * - a flow to a metadata address and a batch that names no level, refused.
  *
  *   KAGE_API_URL          where the API listens
  *   KAGE_API_KEY          a key with the `jobs` and `fetch` scopes
@@ -64,6 +65,7 @@ async function batch(client: KageClient, site: string) {
     // what the caller pays for the batch to end within the test.
     visitors: 3,
     defaults: {
+      level: 3,
       include: ['dom', 'headers'],
       behavior: { scroll_depth: 0, dwell_ms: 600 },
       timeout_ms: 30_000,
@@ -89,7 +91,11 @@ async function batch(client: KageClient, site: string) {
   const again = await createJob(client, request, key);
   assert.equal(again.replayed, true);
   assert.equal(again.job.id, first.job.id);
-  const reused = await createJob(client, { type: 'batch', urls: [urls[0] ?? ''] }, key).then(
+  const reused = await createJob(
+    client,
+    { type: 'batch', urls: [urls[0] ?? ''], defaults: { level: 3 } },
+    key,
+  ).then(
     () => null,
     (error: unknown) => error,
   );
@@ -123,6 +129,8 @@ async function batch(client: KageClient, site: string) {
     assert.equal(result.status, 200);
     assert.equal(result.final_url, urls[index]);
     assert.equal(result.id, item.request_id);
+    // The batch's level, which every item took from its defaults.
+    assert.equal(result.level, 3);
     assert.equal(result.attempts.at(-1)?.render, 'browser');
     const persona = result.persona;
     assert.ok(persona !== undefined && persona !== null, `item ${index} names no persona`);
@@ -181,6 +189,8 @@ async function flow(client: KageClient, site: string, engine: (typeof ENGINES)[n
       { action: 'assert', selector: '#landing' },
       { action: 'screenshot' },
     ],
+    // A person's flow: the dwell it asks for is level 3's.
+    level: 3,
     include: ['dom', 'headers'],
     persona: { engines: [engine] },
     behavior: { dwell_ms: 800 },
@@ -260,6 +270,7 @@ async function flow(client: KageClient, site: string, engine: (typeof ENGINES)[n
   assert.equal(last.outcome, 'ok');
   const ended = resultOf(last);
   assert.equal(ended.final_url, `${site}/landing`);
+  assert.equal(ended.level, 3);
   assert.equal(ended.attempts.length, 1);
   assert.equal(ended.persona?.engine, engine);
 
@@ -284,7 +295,7 @@ async function cancelled(client: KageClient, site: string) {
   const { job } = await createJob(client, {
     type: 'batch',
     urls: Array.from({ length: pages }, (_, index) => `${site}/slow?ms=1500&n=${index + 1}`),
-    defaults: { behavior: { scroll_depth: 0, dwell_ms: 600 }, timeout_ms: 30_000 },
+    defaults: { level: 3, behavior: { scroll_depth: 0, dwell_ms: 600 }, timeout_ms: 30_000 },
   });
   await waitForJob(client, job.id, {
     timeoutMs: 180_000,
@@ -333,6 +344,7 @@ async function main(): Promise<unknown> {
   // A job that cannot be accepted whole is refused whole.
   const refusal = await createJob(client, {
     type: 'flow',
+    level: 3,
     actions: [
       { action: 'goto', url: `${site}/landing` },
       { action: 'goto', url: 'http://169.254.169.254/latest/meta-data/' },
@@ -345,7 +357,24 @@ async function main(): Promise<unknown> {
   assert.equal(refusal.problem.code, 'ssrf_denied');
   assert.equal(refusal.problem['step'], 1);
 
-  return { batch: read, flows, cancelled: stopped, refused: refusal.problem.code };
+  // Every item ends with a level, its own or the batch's: nothing is
+  // decided for the caller.
+  const unleveled = await createJob(client, { type: 'batch', urls: [`${site}/landing`] }).then(
+    () => null,
+    (error: unknown) => error,
+  );
+  assert.ok(unleveled instanceof KageProblemError, 'a batch without a level was accepted');
+  assert.equal(unleveled.status, 422);
+  assert.equal(unleveled.problem.code, 'level_required');
+  assert.equal(unleveled.problem['item'], 0);
+
+  return {
+    batch: read,
+    flows,
+    cancelled: stopped,
+    refused: refusal.problem.code,
+    unleveled: unleveled.problem.code,
+  };
 }
 
 try {

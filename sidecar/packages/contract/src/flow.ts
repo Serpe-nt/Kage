@@ -191,11 +191,17 @@ export const FlowPaceSchema = z
       .describe(
         'No dwell is shorter than this; default 0. A shorter draw is drawn again, never raised to the floor, so that dwells do not pile up at it.',
       ),
+    wander: z
+      .boolean()
+      .optional()
+      .describe(
+        "Whether the persona's idle hand wanders while it dwells on a page it arrived on; default true. False: the dwell sends no input at all, the hand rests. The thinking time before a step is the same either way. Since 1.5.0.",
+      ),
   })
   .meta({
     id: 'FlowPace',
     description:
-      "How a flow paces itself. Present, even empty: after every step that arrived on a page (a `goto`; a `click`, `press` or `back` after which a new document or another address was seen) the persona dwells there, its idle hand wandering, before the next step. And before every step other than the five that only read (`wait_for`, `assert`, `extract`, `screenshot`, `pdf`) it takes a thinking time of its own (log-normal, median 0.4 to 0.9 s by persona, 80 ms to 5 s), unless it has just dwelled or the step is the flow's first. So no two actions are a constant time apart and none follows a read at machine speed. The reading steps are never delayed and send no input. A click or a key of the driver (`human: false`) is then watched for a navigation as a person's is (1.2 s). Every time is drawn from the stream of the flow's seed, so the same flow replays. A pause never outlasts the flow's budget less a reserve for the captures; it counts in the `duration_ms` and `paced_ms` of its step, not against the step's `timeout_ms`. Absent: the flow runs its steps one right after the other.",
+      "How a flow paces itself. Present, even empty: after every step that arrived on a page (a `goto`; a `click`, `press` or `back` after which a new document or another address was seen) the persona dwells there, its idle hand wandering unless `wander` is false, before the next step. And before every step other than the five that only read (`wait_for`, `assert`, `extract`, `screenshot`, `pdf`) it takes a thinking time of its own (log-normal, median 0.4 to 0.9 s by persona, 80 ms to 5 s), unless it has just dwelled or the step is the flow's first. So no two actions are a constant time apart and none follows a read at machine speed. The reading steps are never delayed and send no input. A click or a key of the driver (`human: false`) is then watched for a navigation as a person's is (1.2 s). Every time is drawn from the stream of the flow's seed, so the same flow replays. A pause never outlasts the flow's budget less a reserve for the captures; it counts in the `duration_ms` and `paced_ms` of its step, not against the step's `timeout_ms`. Absent: the flow runs its steps one right after the other.",
   });
 export type FlowPace = z.infer<typeof FlowPaceSchema>;
 

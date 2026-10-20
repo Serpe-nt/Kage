@@ -48,10 +48,14 @@ export KAGE_PERSONAS_WARMUP=false
 policies="$(mktemp -d)"
 export KAGE_E2E_POLICIES="${policies}"
 cp policies/*.yaml "${policies}/"
+# The rules are entries of the shipped file's `domains` mapping, its last
+# key: a second `domains:` would be a duplicate key, which the policy
+# loader refuses, and `domains: {}` takes no entry.
+sed --in-place 's/^domains: {}$/domains:/' "${policies}/domains.yaml"
+[ "$(grep '^[a-z_]*:' "${policies}/domains.yaml" | tail -n 1)" = 'domains:' ] \
+    || { echo "FAIL: policies/domains.yaml does not end with its domains mapping" >&2; exit 1; }
 cat >> "${policies}/domains.yaml" << 'EOF'
-
-# Added by tests/e2e/extract.sh.
-domains:
+  # Added by tests/e2e/extract.sh.
   kage.test:
     pacing: fast
     min_dwell: 500ms
@@ -59,11 +63,6 @@ domains:
   rules.kage.test:
     robots: enforce
 EOF
-# A `domains: {}` of the shipped file would be a second key of that name.
-if [ "$(grep --count '^domains:' "${policies}/domains.yaml")" -ne 1 ]; then
-    grep --invert-match '^domains: {}$' "${policies}/domains.yaml" > "${policies}/domains.tmp"
-    mv "${policies}/domains.tmp" "${policies}/domains.yaml"
-fi
 chmod --recursive a+rX "${policies}"
 # What a call to the API answered.
 scratch="$(mktemp -d)"

@@ -453,6 +453,32 @@ pub fn denied_reason(name: &str) -> Option<&'static str> {
     }
 }
 
+/// Why a caller of a plain request (level 0, spec §25) may not set a
+/// header; `None` when it may. A plain client has no persona to protect:
+/// what a caller says about itself is the caller's (its `User-Agent`, its
+/// `Cookie`, its `Authorization`). What stays Kage's is the transport and
+/// the framing, everything addressed to a proxy, the forwarding family (a
+/// caller must not make Kage claim another client's address) and
+/// `Accept-Encoding` (Kage decodes the body).
+pub fn plain_denied_reason(name: &str) -> Option<&'static str> {
+    let name = name.to_ascii_lowercase();
+    if name.starts_with("proxy-") {
+        return Some("Proxy- headers belong to the connection to the proxy");
+    }
+    if is_forwarding(&name) {
+        return Some(
+            "it says that a proxy passed the request on, about a client address Kage cannot \
+             vouch for",
+        );
+    }
+    match name.as_str() {
+        "accept-encoding" => Some("Kage decodes the body and says which encodings it can"),
+        "host" | "connection" | "keep-alive" | "content-length" | "transfer-encoding" | "te"
+        | "trailer" | "upgrade" | "expect" | "via" => Some("it belongs to the transport"),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CallerHeader {
     name: HeaderName,
@@ -482,6 +508,25 @@ impl CallerHeaders {
     /// Fails, naming the header, when one is on the denylist, is given
     /// twice, or has a name or value that cannot be sent.
     pub fn parse<N: AsRef<str>, V: AsRef<str>>(pairs: &[(N, V)]) -> Result<Self, HeaderError> {
+        Self::parse_with(pairs, denied_reason)
+    }
+
+    /// Checks the headers a caller passed for a plain request (level 0),
+    /// against [`plain_denied_reason`].
+    ///
+    /// # Errors
+    ///
+    /// As [`CallerHeaders::parse`].
+    pub fn parse_plain<N: AsRef<str>, V: AsRef<str>>(
+        pairs: &[(N, V)],
+    ) -> Result<Self, HeaderError> {
+        Self::parse_with(pairs, plain_denied_reason)
+    }
+
+    fn parse_with<N: AsRef<str>, V: AsRef<str>>(
+        pairs: &[(N, V)],
+        denied: fn(&str) -> Option<&'static str>,
+    ) -> Result<Self, HeaderError> {
         if pairs.len() > MAX_CALLER_HEADERS {
             return Err(HeaderError::TooMany {
                 count: pairs.len(),
@@ -493,7 +538,7 @@ impl CallerHeaders {
             let spelled = name.as_ref().trim();
             let name = HeaderName::from_bytes(spelled.as_bytes())
                 .map_err(|_| HeaderError::InvalidName(spelled.to_owned()))?;
-            if let Some(reason) = denied_reason(name.as_str()) {
+            if let Some(reason) = denied(name.as_str()) {
                 return Err(HeaderError::Denied {
                     name: spelled.to_owned(),
                     reason,
@@ -537,6 +582,14 @@ impl CallerHeaders {
     /// The names of the headers the caller passed.
     pub fn names(&self) -> impl Iterator<Item = &HeaderName> {
         self.entries.iter().map(|entry| &entry.name)
+    }
+
+    /// Every header the caller passed, in the caller's order: its name, the
+    /// caller's spelling and its value.
+    pub fn entries(&self) -> impl Iterator<Item = (&HeaderName, &str, &HeaderValue)> {
+        self.entries
+            .iter()
+            .map(|entry| (&entry.name, entry.spelled.as_str(), &entry.value))
     }
 
     /// The same headers without one of them: a redirect that turns a POST

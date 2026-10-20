@@ -6,7 +6,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use kage_core::config::{Config, StaticProxy};
+use kage_core::config::{Config, EgressMode, ResolvedProvider, StaticProxy};
 use kage_core::policy::PolicySet;
 
 /// File used when `--config` is not given and it exists in the working
@@ -34,7 +34,10 @@ pub(crate) fn load(
 /// Validates the configuration, the policy directory it names and the
 /// proxy pool's settings, then writes one JSON document to `out`: the
 /// effective configuration, secrets redacted, a summary of the policies,
-/// and which proxy provider is in force.
+/// which proxy provider is in force, and where requests leave from with
+/// what deserves a second look (`egress.warnings`). A configuration that
+/// would use the pool and the host's own address for one site by turns is
+/// refused before (spec §25).
 pub(crate) fn check(
     file: Option<&Path>,
     env: impl IntoIterator<Item = (String, String)>,
@@ -81,10 +84,49 @@ pub(crate) fn check(
         "personas": kage_persona::describe(&config),
         // The scheduler's caps, the bandwidth budget and the forwarder.
         "scheduler": kage_scheduler::describe(&config),
+        // Where requests leave from (spec §25).
+        "egress": egress(&config),
     });
     serde_json::to_writer_pretty(&mut *out, &report).context("cannot write the report")?;
     writeln!(out).context("cannot write the report")?;
     Ok(())
+}
+
+/// Where requests leave from, and what deserves a second look.
+fn egress(config: &Config) -> serde_json::Value {
+    let egress = &config.egress;
+    let direct = egress.mode == EgressMode::Direct;
+    let mut warnings: Vec<String> = Vec::new();
+    if direct && config.proxy_provider() != ResolvedProvider::None {
+        warnings.push(
+            "egress.mode is direct and a proxy provider is configured: the pool is idle, neither \
+             synced, probed nor used"
+                .to_owned(),
+        );
+    }
+    if direct && egress.direct.country.is_none() && config.proxies.health.geo_url.is_none() {
+        warnings.push(
+            "egress.mode is direct with neither egress.direct.country nor \
+             proxies.health.geo_url: no host persona can be made, and only level 0 works"
+                .to_owned(),
+        );
+    }
+    if !egress.direct.private_names.is_empty() {
+        warnings.push(format!(
+            "egress.direct.private_names lets {} name(s) resolve to a private or loopback \
+             address on the host's own connection: {}",
+            egress.direct.private_names.len(),
+            egress.direct.private_names.join(", ")
+        ));
+    }
+    serde_json::json!({
+        "mode": egress.mode,
+        "plain": egress.plain_exit(),
+        "plain_user_agent": egress.plain_user_agent(),
+        "host_personas": if direct { egress.direct.personas } else { 0 },
+        "level_one": kage_http::level_one_available(config),
+        "warnings": warnings,
+    })
 }
 
 #[cfg(test)]
@@ -179,7 +221,8 @@ mod tests {
         let report: serde_json::Value = serde_json::from_str(&output).unwrap();
         let policies = &report["policies"];
 
-        assert_eq!(policies["domains"], 0);
+        // The detection pages, each with the floor of a person (spec §25).
+        assert_eq!(policies["domains"], 7);
         assert_eq!(
             policies["pacing_profiles"],
             serde_json::json!(["fast", "human"])
@@ -231,6 +274,86 @@ mod tests {
         assert_eq!(fixed["proxies"]["provider"], "static");
         assert_eq!(fixed["proxies"]["static_proxies"], 2);
         assert_eq!(fixed["config"]["proxies"]["static_list"], "[redacted]");
+    }
+
+    #[test]
+    fn where_requests_leave_from_is_reported_and_a_crossing_is_refused() {
+        let report = |file: Option<&Path>, extra: &[(&str, &str)]| -> serde_json::Value {
+            serde_json::from_str(&run(file, env(&shipped_policies(), extra)).unwrap()).unwrap()
+        };
+
+        // The pool, as in 1.x: level 0 through it, nothing to look at.
+        let pooled = report(None, &[]);
+        assert_eq!(pooled["egress"]["mode"], "proxies");
+        assert_eq!(pooled["egress"]["plain"], "pool");
+        assert_eq!(pooled["egress"]["host_personas"], 0);
+        assert_eq!(pooled["egress"]["level_one"], false);
+        assert_eq!(pooled["egress"]["warnings"], serde_json::json!([]));
+        assert!(
+            pooled["egress"]["plain_user_agent"]
+                .as_str()
+                .unwrap()
+                .starts_with("kage/")
+        );
+
+        // The host's own connection, with an idle pool and private names.
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("kage.yaml");
+        std::fs::write(
+            &file,
+            "egress:\n  mode: direct\n  direct:\n    personas: 2\n    private_names: [fixture.kage.test]\n",
+        )
+        .unwrap();
+        let direct = report(
+            Some(&file),
+            &[
+                ("KAGE__WEBSHARE__API_KEY", "ws-key-51aa"),
+                ("KAGE__ENGINES__CHROMIUM__BROWSER_MAJOR", "149"),
+            ],
+        );
+        assert_eq!(direct["egress"]["mode"], "direct");
+        assert_eq!(direct["egress"]["plain"], "host");
+        assert_eq!(direct["egress"]["host_personas"], 2);
+        assert_eq!(direct["egress"]["level_one"], true);
+        let warnings = direct["egress"]["warnings"].as_array().unwrap();
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings[0].as_str().unwrap().contains("the pool is idle"));
+        assert!(warnings[1].as_str().unwrap().contains("fixture.kage.test"));
+
+        // Neither a declared country nor a lookup: only level 0.
+        let blind_file = dir.path().join("blind.yaml");
+        std::fs::write(
+            &blind_file,
+            "egress:\n  mode: direct\nproxies:\n  health:\n    geo_url: null\n",
+        )
+        .unwrap();
+        let blind = report(Some(&blind_file), &[]);
+        let warnings = blind["egress"]["warnings"].as_array().unwrap();
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.as_str().unwrap().contains("only level 0 works")),
+            "{warnings:?}"
+        );
+
+        // Both crossings are refused.
+        for (mode, plain, said) in [
+            ("proxies", "host", "egress.plain host is refused"),
+            ("direct", "pool", "egress.plain pool is refused"),
+        ] {
+            let message = format!(
+                "{:#}",
+                run(
+                    None,
+                    env(
+                        &shipped_policies(),
+                        &[("KAGE__EGRESS__MODE", mode), ("KAGE__EGRESS__PLAIN", plain)],
+                    ),
+                )
+                .unwrap_err()
+            );
+            assert!(message.contains(said), "{message}");
+        }
     }
 
     #[test]

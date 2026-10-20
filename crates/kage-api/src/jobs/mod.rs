@@ -40,7 +40,7 @@ use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, KeyInit, Mac};
 use kage_core::domain::{
-    Job, JobItem, JobItemState, JobKind, JobOrigin, JobState, Scope, SessionId,
+    Job, JobItem, JobItemState, JobKind, JobOrigin, JobState, Level, Scope, SessionId,
 };
 use kage_core::ids::{JobId, JobItemId};
 use kage_store::repo::Created;
@@ -77,6 +77,36 @@ const DEFAULT_ITEMS_PAGE: u32 = 50;
 
 /// Deliveries of its webhook a job shows.
 const SHOWN_DELIVERIES: u32 = 20;
+
+/// The level of a job's items as a metric's label: the one they share, or
+/// `mixed`.
+fn shared_level(levels: impl Iterator<Item = Level>) -> &'static str {
+    let mut shared: Option<Level> = None;
+    for level in levels {
+        match shared {
+            Some(known) if known != level => return "mixed",
+            _ => shared = Some(level),
+        }
+    }
+    shared.map_or("none", Level::label)
+}
+
+/// The level of one item of a job as a metric's label: the item's own,
+/// else the job's (a flow's steps, a crawl's defaults); `none` for an
+/// item of 1.x.
+pub(crate) fn item_level(job: &Job, input: &Value) -> &'static str {
+    input
+        .get("level")
+        .or_else(|| job.spec.get("level"))
+        .or_else(|| {
+            job.spec
+                .get("defaults")
+                .and_then(|defaults| defaults.get("level"))
+        })
+        .and_then(Value::as_u64)
+        .and_then(Level::from_number)
+        .map_or("none", Level::label)
+}
 
 fn job_not_found() -> ApiError {
     ApiError::new(
@@ -345,20 +375,22 @@ pub(crate) async fn create(
         finished_at: None,
     };
     let mut crawl_start = None;
-    let (kind, items) = match &request {
+    let (kind, items, level) = match &request {
         JobRequest::Batch(batch) => {
             let planned = plan_batch(batch, checks).await?;
             let orders: Vec<&Planned> = planned.iter().map(|item| &item.planned).collect();
             check_session(&state, &caller, session.as_ref(), &orders).await?;
+            let level = shared_level(orders.iter().map(|order| order.level));
             let items = planned
                 .into_iter()
                 .zip(0_u64..)
                 .map(|(planned, seq)| item(seq, planned.input, Some(planned.site)))
                 .collect::<Vec<JobItem>>();
-            (JobKind::Batch, items)
+            (JobKind::Batch, items, level)
         }
         JobRequest::Flow(flow) => {
             let planned = plan_flow(flow, checks).await?;
+            let level = planned.planned.level.label();
             check_session(&state, &caller, session.as_ref(), &[&planned.planned]).await?;
             // One item per step, and one for the page the flow ends on.
             let mut items = Vec::with_capacity(flow.actions.len() + 1);
@@ -369,16 +401,17 @@ pub(crate) async fn create(
             }
             let last = u64::try_from(items.len()).unwrap_or(u64::MAX);
             items.push(item(last, json!({ "final": true }), Some(planned.site)));
-            (JobKind::Flow, items)
+            (JobKind::Flow, items, level)
         }
         JobRequest::Crawl(crawl) => {
             let planned = plan_crawl(crawl, checks).await?;
             let seeds: Vec<&Planned> = planned.seeds.iter().collect();
             check_session(&state, &caller, session.as_ref(), &seeds).await?;
+            let level = shared_level(seeds.iter().map(|seed| seed.level));
             crawl_start = Some(planned.start);
             // A crawl has no items yet: one is added for every page it
             // asks a site for.
-            (JobKind::Crawl, Vec::new())
+            (JobKind::Crawl, Vec::new(), level)
         }
     };
 
@@ -445,7 +478,12 @@ pub(crate) async fn create(
             .await
             .map_err(|error| ApiError::internal(&error))?;
     }
-    metrics::counter!("kage_jobs_accepted_total", "job_type" => kind.as_str()).increment(1);
+    metrics::counter!(
+        "kage_jobs_accepted_total",
+        "job_type" => kind.as_str(),
+        "level" => level,
+    )
+    .increment(1);
     state.jobs().wake();
 
     let view = view_of(&state, &job).await?;
@@ -526,15 +564,16 @@ async fn result_of(
         .ok()
         .and_then(|request| Included::of(&request))
         .unwrap_or_else(Included::everything);
-    let session = store
+    let stored = store
         .requests()
         .get(request)
         .await
-        .map_err(|error| ApiError::internal(&error))?
-        .and_then(|request| request.session_id);
+        .map_err(|error| ApiError::internal(&error))?;
+    let level = stored.as_ref().and_then(|request| request.level);
+    let session = stored.and_then(|request| request.session_id);
     // The document and the body stay artifacts: a page of items is a list.
     Ok(Some(from_stored(
-        &record,
+        (&record, level),
         &attempts,
         Bodies::default(),
         &include,

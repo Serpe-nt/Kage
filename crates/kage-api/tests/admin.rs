@@ -11,7 +11,7 @@
 mod common;
 
 use axum::http::{Method, StatusCode};
-use common::sched::lab::LENIENT_FAST;
+use common::sched::lab::FAST;
 use common::{Api, ECHO_PATH};
 use kage_core::config::{SelftestPageConfig, SelftestPageKind};
 use kage_core::domain::Scope;
@@ -51,7 +51,7 @@ fn secret_of(token: &str) -> &str {
 
 #[tokio::test]
 async fn personas_are_listed_shown_retired_and_made_again() {
-    let mut api = Api::start(2, 149, LENIENT_FAST).await;
+    let mut api = Api::start(2, 149, FAST).await;
     let (admin_id, admin) = api.key_with(&[Scope::Admin], common::ROOMY).await;
     let first = api.lab.personas[0].clone();
     let second = api.lab.personas[1].clone();
@@ -212,7 +212,7 @@ async fn personas_are_listed_shown_retired_and_made_again() {
 
 #[tokio::test]
 async fn a_self_test_runs_in_the_server_in_the_personas_own_browser() {
-    let mut api = Api::start_with(2, 155, LENIENT_FAST, |config| {
+    let mut api = Api::start_with(2, 155, FAST, |config| {
         config.selftest.browser.pages = vec![SelftestPageConfig {
             id: "probe".to_owned(),
             kind: SelftestPageKind::Probe,
@@ -230,7 +230,7 @@ async fn a_self_test_runs_in_the_server_in_the_personas_own_browser() {
         .post(
             &fetch,
             "/v1/fetch",
-            &json!({ "url": Api::url("/page"), "render": "browser", "max_retries": 0 }),
+            &json!({ "url": Api::url("/page"), "level": 3, "max_retries": 0 }),
         )
         .await
         .json();
@@ -363,7 +363,7 @@ async fn a_self_test_runs_in_the_server_in_the_personas_own_browser() {
 
 #[tokio::test]
 async fn proxies_the_pool_and_the_policies_are_an_admins_to_see_and_to_act_on() {
-    let mut api = Api::start(2, 149, LENIENT_FAST).await;
+    let mut api = Api::start(2, 149, FAST).await;
     // The policy preview is the `fetch` scope's.
     let admin = api.key(&[Scope::Admin, Scope::Fetch]).await;
     let proxy = api.lab.personas[0].proxy_id;
@@ -454,8 +454,8 @@ async fn proxies_the_pool_and_the_policies_are_an_admins_to_see_and_to_act_on() 
     let rules = api.lab.policy_dir().join("domains.yaml");
     std::fs::write(
         &rules,
-        "defaults: { render: http, pacing: fast, active_hours: ignore }\n\
-         domains:\n  news.example: { render: browser }\n  shop.example: { retries: 1 }\n",
+        "defaults: { pacing: fast, active_hours: ignore }\n\
+         domains:\n  news.example: { min_level: 2 }\n  shop.example: { retries: 1 }\n",
     )
     .unwrap();
     let reloaded = api
@@ -469,18 +469,26 @@ async fn proxies_the_pool_and_the_policies_are_an_admins_to_see_and_to_act_on() 
         .get(&admin, "/v1/policies/domains/www.news.example")
         .await
         .json();
-    assert_eq!(preview["first_render"], "browser", "{preview}");
-    std::fs::write(&rules, "defaults: { render: teleport }\n").unwrap();
-    let refused = api
-        .post(&admin, "/v1/admin/policies/reload", &json!({}))
-        .await;
-    let problem = refused.problem(StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
-    assert!(problem["kept"].is_string());
+    assert_eq!(preview["min_level"], 2, "{preview}");
+    assert!(preview.get("first_render").is_none(), "{preview}");
+    // A file of 1.x that still names a render mode is refused, as is a
+    // floor that is no level: the level of each request decides the path.
+    for invalid in [
+        "defaults: { render: http, pacing: fast }\n",
+        "domains:\n  news.example: { min_level: 4 }\n",
+    ] {
+        std::fs::write(&rules, invalid).unwrap();
+        let refused = api
+            .post(&admin, "/v1/admin/policies/reload", &json!({}))
+            .await;
+        let problem = refused.problem(StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+        assert!(problem["kept"].is_string(), "{invalid}: {problem}");
+    }
     let preview = api
         .get(&admin, "/v1/policies/domains/www.news.example")
         .await
         .json();
-    assert_eq!(preview["first_render"], "browser");
+    assert_eq!(preview["min_level"], 2);
 
     let events = trail(&api, &admin).await;
     let probe = events
@@ -505,13 +513,13 @@ async fn proxies_the_pool_and_the_policies_are_an_admins_to_see_and_to_act_on() 
         .filter(|event| event["action"] == "admin.policy.reload")
         .map(|event| event["outcome"].as_str().unwrap())
         .collect();
-    assert_eq!(reloads, ["success", "failure"]);
+    assert_eq!(reloads, ["success", "failure", "failure"]);
     api.shut_down().await;
 }
 
 #[tokio::test]
 async fn keys_are_made_rotated_and_revoked_and_their_tokens_shown_once() {
-    let mut api = Api::start(0, 149, LENIENT_FAST).await;
+    let mut api = Api::start(0, 149, FAST).await;
     let (admin_id, admin) = api.key_with(&[Scope::Admin], common::ROOMY).await;
     let probe = "/v1/policies/domains/example.org";
 
@@ -682,7 +690,7 @@ async fn keys_are_made_rotated_and_revoked_and_their_tokens_shown_once() {
 
 #[tokio::test]
 async fn without_a_pool_the_admin_endpoints_that_need_one_say_so() {
-    let mut api = Api::start(0, 149, LENIENT_FAST).await;
+    let mut api = Api::start(0, 149, FAST).await;
     let admin = api.key(&[Scope::Admin]).await;
     let bare = api.with_parts(|parts| parts.engine = None);
 

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT COALESCE(SUM(bytes_up), 0)::bigint AS \"up!\",\n                      COALESCE(SUM(bytes_down), 0)::bigint AS \"down!\"\n               FROM bandwidth_usage WHERE hour >= $1",
+  "query": "SELECT COALESCE(SUM(bytes_up), 0)::bigint AS \"up!\",\n                      COALESCE(SUM(bytes_down), 0)::bigint AS \"down!\"\n               FROM bandwidth_usage WHERE hour >= $1 AND egress = $2",
   "describe": {
     "columns": [
       {
@@ -18,7 +18,8 @@
     ],
     "parameters": {
       "Left": [
-        "Timestamptz"
+        "Timestamptz",
+        "Text"
       ]
     },
     "nullable": [
@@ -26,5 +27,5 @@
       null
     ]
   },
-  "hash": "8af2f1821d7d83d23f284ecfa0a9b1e1d3d70b22a20cdbdf2f2d4190899f18d8"
+  "hash": "35df8d0557ad584d7d9c57cf2705974a86a6e7e2a2244a90028ef45ae01ebb20"
 }

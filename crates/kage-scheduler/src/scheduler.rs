@@ -26,8 +26,8 @@ use kage_browser::{BrowserError, Navigation};
 use kage_core::domain::{Persona, Render};
 use kage_core::schedule::breaker::{Admission, BreakerRules};
 use kage_core::schedule::planner::{
-    Completion, Decision, Dispatch, GrantId, Held as PlannerHeld, Planner, PlannerRules, Refusal,
-    Work,
+    Completion, Decision, Dispatch, GrantId, Held as PlannerHeld, PlainDispatch, Planner,
+    PlannerRules, Refusal, Work,
 };
 use kage_core::schedule::politeness::Courtesy;
 use kage_core::schedule::queue::{Priority, Ticket};
@@ -60,6 +60,7 @@ pub struct Refused {
 
 enum Answer {
     Go(Grant),
+    GoPlain(PlainGrant),
     Refused(Refused),
 }
 
@@ -121,6 +122,57 @@ impl Grant {
 }
 
 impl Drop for Grant {
+    fn drop(&mut self) {
+        if !self.reported {
+            self.scheduler.complete(
+                self.dispatch.grant,
+                Completion {
+                    courtesy: Courtesy::NotTheSite,
+                    blocked: false,
+                },
+            );
+        }
+    }
+}
+
+/// A plain client's attempt (level 0) that may be made now: no persona.
+/// Report its end with [`PlainGrant::complete`]; a grant that is only
+/// dropped gives its slots back and says nothing about the site.
+pub struct PlainGrant {
+    dispatch: PlainDispatch,
+    scheduler: Arc<Scheduler>,
+    reported: bool,
+}
+
+impl fmt::Debug for PlainGrant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PlainGrant")
+            .field("dispatch", &self.dispatch)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PlainGrant {
+    /// What the planner decided: the domain, and how long the work waited.
+    pub const fn dispatch(&self) -> &PlainDispatch {
+        &self.dispatch
+    }
+
+    /// Reports how the attempt ended: only what it says about the site's
+    /// health counts (the pause after server errors).
+    pub fn complete(mut self, courtesy: Courtesy) {
+        self.reported = true;
+        self.scheduler.complete(
+            self.dispatch.grant,
+            Completion {
+                courtesy,
+                blocked: false,
+            },
+        );
+    }
+}
+
+impl Drop for PlainGrant {
     fn drop(&mut self) {
         if !self.reported {
             self.scheduler.complete(
@@ -215,6 +267,41 @@ impl Scheduler {
     ///
     /// [`Refused`] when the request is answered without an attempt.
     pub async fn acquire(self: &Arc<Self>, work: Work) -> Result<Grant, Refused> {
+        match self.wait_for(work).await? {
+            Answer::Go(grant) => Ok(grant),
+            Answer::GoPlain(_) => Err(Refused {
+                // Persona work is never dispatched as a plain client's.
+                reason: Refusal::NoPersona,
+                retry_at: None,
+            }),
+            Answer::Refused(refused) => Err(refused),
+        }
+    }
+
+    /// Waits for the site's gates for one attempt of a plain client (level
+    /// 0, spec §25): `work.plain` is set.
+    ///
+    /// Dropping the future takes the work out of the queue.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused`] when the request is answered without an attempt.
+    pub async fn acquire_plain(self: &Arc<Self>, work: Work) -> Result<PlainGrant, Refused> {
+        let work = Work {
+            plain: true,
+            ..work
+        };
+        match self.wait_for(work).await? {
+            Answer::GoPlain(grant) => Ok(grant),
+            Answer::Go(_) => Err(Refused {
+                reason: Refusal::NoPersona,
+                retry_at: None,
+            }),
+            Answer::Refused(refused) => Err(refused),
+        }
+    }
+
+    async fn wait_for(self: &Arc<Self>, work: Work) -> Result<Answer, Refused> {
         if self.shutting_down.load(Ordering::Relaxed) {
             return Err(Refused {
                 reason: Refusal::ShuttingDown,
@@ -240,14 +327,10 @@ impl Scheduler {
         let answer = receiver.await;
         waiting.answered = true;
         metrics::waited(priority, asked.elapsed());
-        match answer {
-            Ok(Answer::Go(grant)) => Ok(grant),
-            Ok(Answer::Refused(refused)) => Err(refused),
-            Err(_) => Err(Refused {
-                reason: Refusal::ShuttingDown,
-                retry_at: None,
-            }),
-        }
+        answer.map_err(|_| Refused {
+            reason: Refusal::ShuttingDown,
+            retry_at: None,
+        })
     }
 
     fn complete(&self, grant: GrantId, completion: Completion) {
@@ -299,6 +382,20 @@ impl Scheduler {
         for decision in decisions {
             match decision {
                 Decision::Dispatch(dispatch) => self.leave(dispatch, now).await,
+                Decision::Plain(dispatch) => {
+                    // Nothing of a persona's is counted for it.
+                    let ticket = dispatch.work;
+                    let grant = PlainGrant {
+                        dispatch,
+                        scheduler: Arc::clone(self),
+                        reported: false,
+                    };
+                    let sender = self.inner().waiting.remove(&ticket);
+                    if let Some(sender) = sender {
+                        // A caller that stopped waiting drops the grant.
+                        let _ = sender.send(Answer::GoPlain(grant));
+                    }
+                }
                 Decision::Refuse {
                     work,
                     reason,

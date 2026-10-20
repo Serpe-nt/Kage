@@ -47,20 +47,19 @@ export KAGE_E2E_SYNC_WALL_TIME=4s
 policies="$(mktemp -d)"
 export KAGE_E2E_POLICIES="${policies}"
 cp policies/*.yaml "${policies}/"
+# The rule is an entry of the shipped file's `domains` mapping, its last
+# key: a second `domains:` would be a duplicate key, which the policy
+# loader refuses, and `domains: {}` takes no entry.
+sed --in-place 's/^domains: {}$/domains:/' "${policies}/domains.yaml"
+[ "$(grep '^[a-z_]*:' "${policies}/domains.yaml" | tail -n 1)" = 'domains:' ] \
+    || { echo "FAIL: policies/domains.yaml does not end with its domains mapping" >&2; exit 1; }
 cat >> "${policies}/domains.yaml" << 'EOF'
-
-# Added by tests/e2e/jobs.sh.
-domains:
+  # Added by tests/e2e/jobs.sh.
   fixture.kage.test:
     pacing: fast
     min_dwell: 500ms
     active_hours: ignore
 EOF
-# A `domains: {}` of the shipped file would be a second key of that name.
-if [ "$(grep --count '^domains:' "${policies}/domains.yaml")" -ne 1 ]; then
-    grep --invert-match '^domains: {}$' "${policies}/domains.yaml" > "${policies}/domains.tmp"
-    mv "${policies}/domains.tmp" "${policies}/domains.yaml"
-fi
 chmod --recursive a+rX "${policies}"
 # What a call to the API answered.
 scratch="$(mktemp -d)"
@@ -170,12 +169,17 @@ client_id="$(value "${body}" "d.key.id")"
 call POST /v1/admin/keys "${admin}" '{"name":"e2e-fetch-only","scopes":["fetch"]}'
 expect 201 "POST /v1/admin/keys"
 fetch_only="$(value "${body}" "d.token")"
-call POST /v1/jobs "${fetch_only}" "{\"type\":\"batch\",\"urls\":[\"${site}/\"]}"
+call POST /v1/jobs "${fetch_only}" "{\"type\":\"batch\",\"urls\":[\"${site}/\"],\"defaults\":{\"level\":3}}"
 problem 403 scope_missing "a job without the jobs scope"
-call POST /v1/jobs "${client}" "{\"type\":\"batch\",\"urls\":[\"${site}/\"],\"webhook\":{\"url\":\"http://fixture.kage.test:8088/hook\",\"secret\":\"a secret of sixteen bytes or more\"}}"
+call POST /v1/jobs "${client}" "{\"type\":\"batch\",\"urls\":[\"${site}/\"],\"defaults\":{\"level\":3},\"webhook\":{\"url\":\"http://fixture.kage.test:8088/hook\",\"secret\":\"a secret of sixteen bytes or more\"}}"
 problem 422 webhook_origin_not_allowed "a receiver the operator did not list"
+# A job keeps its items until they run, and Kage holds no caller's
+# credential: a fetch may send one at level 0, a job may not.
+call POST /v1/jobs "${client}" "{\"type\":\"batch\",\"items\":[{\"url\":\"${site}/\",\"level\":0,\"headers\":{\"Cookie\":\"session=e2e\"}}]}"
+problem 422 header_denied "a caller's cookie kept by a job"
+check "the refusal names the header" "${body}" "d.header === 'Cookie' && d.item === 0"
 [ "$(psql "SELECT count(*) FROM jobs")" -eq 0 ] || fail "a refused job was stored"
-echo "    client ${client_id}; a job without the scope is 403, a receiver that is not listed 422"
+echo "    client ${client_id}; a job without the scope is 403, a receiver that is not listed 422, a cookie in a job 422"
 
 echo "==> a batch of 50 pages, a flow in each engine, and a cancel, by the generated TypeScript client"
 summary="$(cd tests/api-client && pnpm --silent run build && KAGE_API_URL="${base}" KAGE_API_KEY="${client}" \
@@ -186,7 +190,9 @@ check "the batch ended with every item succeeded, read by both engines" "${summa
 check "a flow ran in each engine, paced, with three captures" "${summary}" \
     "d.flows.length === 2 && d.flows[0].engine === 'chromium' && d.flows[1].engine === 'firefox' && d.flows.every((f) => f.captures === 3 && f.screenshot_bytes > 1000 && f.steps.length === 10) && d.flows[0].persona !== d.flows[1].persona"
 check "the cancel stopped the batch within one item" "${summary}" \
-    "d.cancelled.succeeded <= d.cancelled.succeeded_at_cancel + 1 && d.cancelled.succeeded + d.cancelled.cancelled === 30 && d.refused === 'ssrf_denied'"
+    "d.cancelled.succeeded <= d.cancelled.succeeded_at_cancel + 1 && d.cancelled.succeeded + d.cancelled.cancelled === 30"
+check "a job that cannot be accepted whole is refused whole: a flow to a metadata address, a batch without a level" "${summary}" \
+    "d.refused === 'ssrf_denied' && d.unleveled === 'level_required'"
 batch="$(value "${summary}" "d.batch.id")"
 echo "    batch ${batch}: 50 pages in $(value "${summary}" "d.batch.seconds") s by $(value "${summary}" "d.batch.visitors") visitors, $(value "${summary}" "JSON.stringify(d.batch.engines)")"
 echo "    $(value "${summary}" "d.flows.map((f) => f.engine + ': ' + f.seconds + ' s, steps ' + f.steps.map((s) => s.action + ' ' + s.ms + '/' + s.paced_ms).join(', ')).join('; ')")"
@@ -247,8 +253,15 @@ expect 200 "GET /metrics"
 metrics="${scratch}/metrics"
 printf '%s\n' "${body}" > "${metrics}"
 for series in kage_jobs kage_job_items kage_webhook_deliveries_pending kage_job_items_total \
-    kage_jobs_finished_total kage_webhook_deliveries_total; do
+    kage_jobs_accepted_total kage_jobs_finished_total kage_webhook_deliveries_total; do
     grep --quiet "^${series}[{ ]" "${metrics}" || fail "no sample of ${series} in /metrics"
+done
+# Jobs and their items are counted by their level (spec §25).
+for job_type in batch flow; do
+    awk -v job_type="job_type=\"${job_type}\"" '/^kage_jobs_accepted_total\{/ && index($0, job_type) && /level="3"/ { found = 1 } END { exit !found }' "${metrics}" \
+        || fail "the ${job_type} jobs are not counted at level 3: $(grep '^kage_jobs_accepted_total' "${metrics}" | head -8)"
+    awk -v job_type="job_type=\"${job_type}\"" '/^kage_job_items_total\{/ && index($0, job_type) && /state="succeeded"/ && /level="3"/ { found = 1 } END { exit !found }' "${metrics}" \
+        || fail "the items of the ${job_type} jobs are not counted at level 3: $(grep '^kage_job_items_total' "${metrics}" | head -8)"
 done
 awk '/^kage_jobs\{/ && /job_type="batch"/ && /state="succeeded"/ { found = 1 } END { exit !found }' "${metrics}" \
     || fail "the batch is not counted: $(grep '^kage_jobs' "${metrics}" | head -8)"
@@ -261,7 +274,7 @@ awk '/^kage_webhook_deliveries_total\{/ && /result="retry"/ { found = 1 } END { 
 echo "    $(grep '^kage_jobs{' "${metrics}" | tr '\n' ' ')"
 
 echo "==> a fetch that outlasts the wall time is carried on as a job, across a restart of the server"
-call POST /v1/fetch "${client}" "{\"url\":\"${site}/slow?ms=20000&n=overflow\",\"timeout_ms\":90000}"
+call POST /v1/fetch "${client}" "{\"url\":\"${site}/slow?ms=20000&n=overflow\",\"level\":3,\"timeout_ms\":90000}"
 expect 202 "a fetch of 20 s against a wall time of 4 s"
 request="$(value "${body}" "d.id")"
 carried="$(value "${body}" "d.job_id")"

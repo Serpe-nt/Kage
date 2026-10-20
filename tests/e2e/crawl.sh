@@ -55,20 +55,19 @@ export KAGE_E2E_PATIENCE_MAX=12s
 policies="$(mktemp -d)"
 export KAGE_E2E_POLICIES="${policies}"
 cp policies/*.yaml "${policies}/"
+# The rule is an entry of the shipped file's `domains` mapping, its last
+# key: a second `domains:` would be a duplicate key, which the policy
+# loader refuses, and `domains: {}` takes no entry.
+sed --in-place 's/^domains: {}$/domains:/' "${policies}/domains.yaml"
+[ "$(grep '^[a-z_]*:' "${policies}/domains.yaml" | tail -n 1)" = 'domains:' ] \
+    || { echo "FAIL: policies/domains.yaml does not end with its domains mapping" >&2; exit 1; }
 cat >> "${policies}/domains.yaml" << 'EOF'
-
-# Added by tests/e2e/crawl.sh.
-domains:
+  # Added by tests/e2e/crawl.sh.
   kage.test:
     pacing: fast
     min_dwell: 500ms
     active_hours: ignore
 EOF
-# A `domains: {}` of the shipped file would be a second key of that name.
-if [ "$(grep --count '^domains:' "${policies}/domains.yaml")" -ne 1 ]; then
-    grep --invert-match '^domains: {}$' "${policies}/domains.yaml" > "${policies}/domains.tmp"
-    mv "${policies}/domains.tmp" "${policies}/domains.yaml"
-fi
 cat >> "${policies}/pacing-profiles.yaml" << 'EOF'
 
 # Added by tests/e2e/crawl.sh: `fast`, and a rest of about a second between
@@ -192,7 +191,7 @@ client="$(value "${body}" "d.token")"
 call POST /v1/admin/keys "${admin}" '{"name":"e2e-jobs-only","scopes":["jobs","fetch"]}'
 expect 201 "POST /v1/admin/keys"
 jobs_only="$(value "${body}" "d.token")"
-call POST /v1/jobs "${jobs_only}" "{\"type\":\"crawl\",\"seeds\":[\"${site}/site/\"]}"
+call POST /v1/jobs "${jobs_only}" "{\"type\":\"crawl\",\"seeds\":[\"${site}/site/\"],\"defaults\":{\"level\":3}}"
 problem 403 scope_missing "a crawl without the crawl scope"
 [ "$(psql "SELECT count(*) FROM jobs")" -eq 0 ] || fail "a refused crawl was stored"
 echo "    a crawl without its scope is 403"
@@ -202,7 +201,7 @@ summary="$(cd tests/api-client && pnpm --silent run build && KAGE_API_URL="${bas
     KAGE_E2E_SITE="${site}" pnpm --silent run e2e:crawl)" || fail "the generated client failed"
 keep crawl-summary.json "${summary}"
 check "a crawl that cannot be accepted is refused whole" "${summary}" \
-    "JSON.stringify(d.refusals) === JSON.stringify(['validation_failed', 'ssrf_denied', 'validation_failed', 'validation_failed'])"
+    "JSON.stringify(d.refusals) === JSON.stringify(['validation_failed', 'ssrf_denied', 'validation_failed', 'validation_failed', 'level_required'])"
 check "the reading room was read in both engines, by a persona of each" "${summary}" \
     "d.rooms.length === 2 && d.rooms[0].engine === 'chromium' && d.rooms[1].engine === 'firefox' && d.rooms.every((r) => r.pages === 21) && d.rooms[0].persona !== d.rooms[1].persona"
 check "typed, click and back_click all occur in both engines, and few addresses are typed" "${summary}" \

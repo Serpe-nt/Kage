@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, request_id, n, persona_id, engine, render, started_at, finished_at, status,\n                    final_url, outcome, block, timing, seed, reason, patience_ms\n             FROM attempts WHERE request_id = $1 ORDER BY n",
+  "query": "SELECT id, request_id, n, persona_id, engine, exit, render, started_at, finished_at,\n                    status, final_url, outcome, block, timing, seed, reason, patience_ms\n             FROM attempts WHERE request_id = $1 ORDER BY n",
   "describe": {
     "columns": [
       {
@@ -60,6 +60,17 @@
       },
       {
         "ordinal": 5,
+        "name": "exit",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "attempts",
+            "name": "exit"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
         "name": "render",
         "type_info": "Text",
         "origin": {
@@ -70,7 +81,7 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "started_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -81,7 +92,7 @@
         }
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "finished_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -92,7 +103,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "status",
         "type_info": "Int4",
         "origin": {
@@ -103,7 +114,7 @@
         }
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "final_url",
         "type_info": "Text",
         "origin": {
@@ -114,7 +125,7 @@
         }
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "outcome",
         "type_info": "Text",
         "origin": {
@@ -125,7 +136,7 @@
         }
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "block",
         "type_info": "Jsonb",
         "origin": {
@@ -136,7 +147,7 @@
         }
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "timing",
         "type_info": "Jsonb",
         "origin": {
@@ -147,7 +158,7 @@
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "seed",
         "type_info": "Text",
         "origin": {
@@ -158,7 +169,7 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "reason",
         "type_info": "Text",
         "origin": {
@@ -169,7 +180,7 @@
         }
       },
       {
-        "ordinal": 15,
+        "ordinal": 16,
         "name": "patience_ms",
         "type_info": "Int8",
         "origin": {
@@ -189,8 +200,9 @@
       false,
       false,
       false,
-      false,
-      false,
+      true,
+      true,
+      true,
       false,
       false,
       false,
@@ -204,5 +216,5 @@
       true
     ]
   },
-  "hash": "9100ce33054959919d139222c3fa66e0803b40c4bf1330643b741d252525ad2f"
+  "hash": "4e5fd63207e8db3069fda02c63174c77648819ec984f549071991b7142723ac1"
 }

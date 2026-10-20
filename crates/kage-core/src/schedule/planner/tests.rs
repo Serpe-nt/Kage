@@ -12,8 +12,8 @@ use chrono::{DateTime, Duration, NaiveTime, TimeZone, Utc};
 use uuid::Uuid;
 
 use super::{
-    Completion, Decision, Dispatch, DomainFacts, Held, PersonaView, Planner, PlannerRules, Refusal,
-    RetryPause, Visitors, Work, floored,
+    Completion, Decision, Dispatch, DomainFacts, Held, PersonaView, PlainDispatch, Planner,
+    PlannerRules, Refusal, RetryPause, Visitors, Work, floored,
 };
 use crate::domain::{BreakerState, CountryCode, DomainBreaker, Engine, PersonaDomainState, Render};
 use crate::ids::PersonaId;
@@ -165,11 +165,11 @@ fn work(domain: &str) -> Work {
         active_hours: ActiveHoursMode::Ignore,
         breaker_threshold: 5,
         breaker_pause: StdDuration::from_mins(30),
-        follow_up: false,
         retry_pause: None,
         not_before: None,
         give_up_at: None,
         gap_floor: None,
+        plain: false,
     }
 }
 
@@ -325,6 +325,8 @@ impl Sim {
                         reason,
                         retry_at,
                     } => self.refused.push((now, work, reason, retry_at)),
+                    // The simulations make persona work only.
+                    Decision::Plain(plain) => panic!("{plain:?}"),
                 }
             }
         }
@@ -404,7 +406,7 @@ fn dispatched(decisions: &[Decision]) -> Vec<&Dispatch> {
         .iter()
         .filter_map(|decision| match decision {
             Decision::Dispatch(dispatch) => Some(dispatch),
-            Decision::Refuse { .. } => None,
+            Decision::Refuse { .. } | Decision::Plain(_) => None,
         })
         .collect()
 }
@@ -1378,54 +1380,6 @@ fn enforced_hours_hold_sync_requests_too_and_ignored_hours_hold_nothing() {
 }
 
 #[test]
-fn a_personas_own_second_try_does_not_wait_for_its_slot_or_its_cooldown() {
-    let mut sim = Sim::new(personas(2));
-    sim.takes = Box::new(|_| millis(300));
-    sim.ends = Box::new(|dispatch, _| {
-        if dispatch.render == Render::Http {
-            Outcome::ChallengeFailed
-        } else {
-            Outcome::Ok
-        }
-    });
-    sim.submit(Work {
-        render: Render::Http,
-        ..sync("example.org")
-    });
-    sim.run_until(noon() + millis(301));
-    let http = sim.log[0].clone();
-    // The simulated store cooled the persona for the challenge; its own
-    // escalation is not held by that, nor by the gap that runs.
-    assert!(sim.facts["example.org"].states[&http.1.persona].is_cooling(sim.now));
-    assert!(http.1.next_slot > sim.now);
-
-    sim.submit(Work {
-        pin: Some(http.1.persona),
-        follow_up: true,
-        ..sync("example.org")
-    });
-    sim.settle();
-
-    assert_eq!(sim.log.len(), 2);
-    let browser = &sim.log[1].1;
-    assert_eq!(browser.persona, http.1.persona);
-    assert_eq!(browser.render, Render::Browser);
-    // Still the same page of the same visit, and the slot did not move.
-    assert!(!browser.starts_visit);
-    assert_eq!(browser.page_of_visit, 1);
-    assert_eq!(browser.next_slot, http.1.next_slot);
-    // Without the mark the same request waits for the cooldown.
-    let mut sim = Sim::new(personas(1));
-    sim.state(id(0), "example.org").cooldown_until = Some(noon() + Duration::hours(1));
-    sim.submit(Work {
-        pin: Some(id(0)),
-        ..sync("example.org")
-    });
-    sim.settle();
-    assert_eq!(sim.log, []);
-}
-
-#[test]
 fn a_retry_is_not_made_before_its_pause_is_over() {
     let mut sim = Sim::new(personas(2));
     let after = noon() + secs(6);
@@ -1739,6 +1693,7 @@ fn refusal_names_are_the_reasons_callers_get() {
             "no_persona",
             "shutting_down",
             "robots_unavailable",
+            "plain_exit_unavailable",
         ],
     );
 }
@@ -3145,4 +3100,176 @@ fn a_site_that_asks_for_a_delay_gets_it_between_two_pages_of_a_persona() {
     different.sort_unstable();
     different.dedup();
     assert!(different.len() > 6, "{held:?}");
+}
+
+// --- A plain client (level 0, spec §25) -------------------------------------
+
+fn plain(domain: &str) -> Work {
+    Work {
+        render: Render::Http,
+        plain: true,
+        ..sync(domain)
+    }
+}
+
+fn plain_dispatched(decisions: &[Decision]) -> Vec<&PlainDispatch> {
+    decisions
+        .iter()
+        .filter_map(|decision| match decision {
+            Decision::Plain(plain) => Some(plain),
+            Decision::Dispatch(_) | Decision::Refuse { .. } => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_plain_client_leaves_with_no_persona_and_is_held_by_the_sites_gates() {
+    let mut planner = Planner::new(rules(), Seed::from_u64(3));
+    // No persona at all: a plain client needs none.
+    planner.set_personas(Vec::new());
+    let first = planner.submit(plain("example.org"), noon() - secs(1));
+    let decisions = planner.plan(noon(), &facts_for(&["example.org"]));
+    let [Decision::Plain(left)] = decisions.as_slice() else {
+        panic!("{decisions:?}");
+    };
+    assert_eq!(left.work, first);
+    assert_eq!(left.domain, "example.org");
+    assert_eq!(left.waited, secs(1));
+    assert_eq!(planner.in_flight(Render::Http), 1);
+    assert_eq!(planner.in_flight(Render::Browser), 0);
+
+    // The domain's concurrency holds it as it holds personas.
+    let mut tight = brisk();
+    tight.domain_concurrency = 1;
+    let second = planner.submit(
+        Work {
+            pacing: tight,
+            ..plain("example.org")
+        },
+        noon(),
+    );
+    assert_eq!(planner.plan(noon(), &facts_for(&["example.org"])), []);
+    assert!(planner.complete(
+        left.grant,
+        noon() + secs(1),
+        Completion {
+            courtesy: Courtesy::Answered,
+            blocked: false,
+        },
+    ));
+    assert_eq!(planner.in_flight(Render::Http), 0);
+    let decisions = planner.plan(noon() + secs(1), &facts_for(&["example.org"]));
+    assert_eq!(plain_dispatched(&decisions).len(), 1);
+    assert_eq!(plain_dispatched(&decisions)[0].work, second);
+    // Reported once.
+    assert!(!planner.complete(
+        left.grant,
+        noon() + secs(2),
+        Completion {
+            courtesy: Courtesy::Answered,
+            blocked: false,
+        },
+    ));
+}
+
+#[test]
+fn a_plain_client_counts_toward_the_sites_rpm_with_the_personas() {
+    let mut planner = Planner::new(rules(), Seed::from_u64(4));
+    planner.set_personas(personas(1));
+    let mut slow = brisk();
+    slow.domain_rpm = 2;
+    let paced = |work: Work| Work {
+        pacing: slow,
+        ..work
+    };
+    planner.submit(paced(plain("example.org")), noon());
+    planner.submit(paced(sync("example.org")), noon());
+    planner.submit(paced(plain("example.org")), noon());
+    let decisions = planner.plan(noon(), &facts_for(&["example.org"]));
+    // Two starts in the minute, one of each kind; the third waits for the
+    // minute to pass.
+    assert_eq!(plain_dispatched(&decisions).len(), 1);
+    assert_eq!(dispatched(&decisions).len(), 1);
+    assert_eq!(planner.depth(Priority::Sync), 1);
+    assert_eq!(planner.wake_at(), Some(noon() + Duration::minutes(1)));
+}
+
+#[test]
+fn a_plain_client_is_refused_by_a_stop_and_a_paused_site_and_is_never_a_trial() {
+    let mut planner = Planner::new(rules(), Seed::from_u64(5));
+    planner.set_personas(Vec::new());
+    planner.set_stop(Some(Refusal::EgressUnsafe));
+    planner.submit(plain("example.org"), noon());
+    let decisions = planner.plan(noon(), &facts_for(&["example.org"]));
+    assert!(
+        matches!(
+            decisions.as_slice(),
+            [Decision::Refuse {
+                reason: Refusal::EgressUnsafe,
+                ..
+            }]
+        ),
+        "{decisions:?}"
+    );
+    planner.set_stop(None);
+
+    // A breaker that waits for its one trial: the plain client does not
+    // take it, and is told the site is paused.
+    let breaker_rules = BreakerRules {
+        threshold: 5,
+        pause: StdDuration::from_mins(30),
+        max_pause: StdDuration::from_hours(6),
+        trial_timeout: StdDuration::from_mins(5),
+    };
+    let mut breaker = DomainBreaker::closed("example.org", noon() - Duration::hours(2));
+    for minute in 0..5 {
+        breaker.record_block(
+            noon() - Duration::hours(1) + Duration::minutes(minute),
+            &breaker_rules,
+        );
+    }
+    let mut facts = facts_for(&["example.org"]);
+    if let Some(known) = facts.get_mut("example.org") {
+        known.breaker = Some(breaker);
+    }
+    planner.submit(plain("example.org"), noon());
+    let decisions = planner.plan(noon(), &facts);
+    assert!(
+        matches!(
+            decisions.as_slice(),
+            [Decision::Refuse {
+                reason: Refusal::DomainPaused,
+                ..
+            }]
+        ),
+        "{decisions:?}"
+    );
+    // Server errors in a row hold it too.
+    let mut planner = Planner::new(rules(), Seed::from_u64(6));
+    planner.set_personas(Vec::new());
+    for second in 0..3 {
+        planner.submit(plain("example.org"), noon() + secs(second));
+        let decisions = planner.plan(noon() + secs(second), &facts_for(&["example.org"]));
+        let [Decision::Plain(left)] = decisions.as_slice() else {
+            panic!("{decisions:?}");
+        };
+        planner.complete(
+            left.grant,
+            noon() + secs(second),
+            Completion {
+                courtesy: Courtesy::ServerError,
+                blocked: false,
+            },
+        );
+    }
+    planner.submit(plain("example.org"), noon() + secs(3));
+    assert_eq!(
+        planner.plan(noon() + secs(3), &facts_for(&["example.org"])),
+        []
+    );
+    assert!(
+        planner
+            .server_error_pause("example.org", noon() + secs(3))
+            .is_some()
+    );
 }

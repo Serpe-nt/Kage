@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use axum::http::{Method, StatusCode};
 use chrono::{DateTime, Utc};
-use common::sched::lab::{LENIENT_FAST, SITE, article};
+use common::sched::lab::{FAST, SITE, article};
 use common::{Api, Background, ask, request};
 use hmac::{Hmac, KeyInit, Mac};
 use kage_api::jobs::webhook::retry_wait;
@@ -33,8 +33,9 @@ use sha2::Sha256;
 use wiremock::matchers::{method, path, path_regex};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-/// Every request goes to the browser.
-const BROWSER_FAST: &str = "defaults: { render: browser, pacing: fast, active_hours: ignore, min_dwell: 500ms }\ndomains: {}\n";
+/// A persona may leave a page after half a second.
+const BROWSER_FAST: &str =
+    "defaults: { pacing: fast, active_hours: ignore, min_dwell: 500ms }\ndomains: {}\n";
 
 /// A worker and a sender that look often: a test does not wait seconds for
 /// either.
@@ -100,13 +101,13 @@ async fn personas_of(api: &Api, item: &Value) -> Vec<String> {
         .await
         .unwrap()
         .into_iter()
-        .map(|attempt| attempt.persona_id.to_string())
+        .map(|attempt| attempt.persona_id.unwrap().to_string())
         .collect()
 }
 
 #[tokio::test]
 async fn a_batch_is_read_in_order_by_one_visitor_and_every_item_has_its_result() {
-    let mut api = Api::start_with(3, 149, LENIENT_FAST, quick).await;
+    let mut api = Api::start_with(3, 149, FAST, quick).await;
     pages(&api, "/p", page("A page")).await;
     pages(&api, "/other", page("Another page")).await;
     let token = api.key(&[Scope::Jobs, Scope::Fetch]).await;
@@ -116,7 +117,7 @@ async fn a_batch_is_read_in_order_by_one_visitor_and_every_item_has_its_result()
         "type": "batch",
         "urls": listed,
         "items": [{ "url": Api::url("/p/7"), "include": ["raw", "headers"] }],
-        "defaults": { "render": "http" },
+        "defaults": { "level": 1 },
     });
     let keyed = |body: &Value, key: &str| {
         let mut request = request(Method::POST, "/v1/jobs", Some(&token), Some(body));
@@ -155,7 +156,7 @@ async fn a_batch_is_read_in_order_by_one_visitor_and_every_item_has_its_result()
     assert_eq!(again.header("idempotency-replayed"), Some("true"));
     assert_eq!(again.json()["id"], id);
     let reordered = json!({
-        "defaults": { "render": "http" },
+        "defaults": { "level": 1 },
         "items": [{ "include": ["raw", "headers"], "url": Api::url("/p/7") }],
         "urls": listed,
         "type": "batch",
@@ -165,7 +166,9 @@ async fn a_batch_is_read_in_order_by_one_visitor_and_every_item_has_its_result()
     assert_eq!(again.json()["id"], id);
     // Another request under that key is a mistake, and says which job the
     // key names.
-    let different = json!({ "type": "batch", "urls": [Api::url("/other/1")] });
+    let different = json!({
+        "type": "batch", "urls": [Api::url("/other/1")], "defaults": { "level": 1 },
+    });
     let refused = api.send(keyed(&different, "nightly-1")).await;
     let problem = refused.problem(StatusCode::CONFLICT, "idempotency_key_reused");
     assert_eq!(problem["job_id"], id);
@@ -228,6 +231,8 @@ async fn a_batch_is_read_in_order_by_one_visitor_and_every_item_has_its_result()
         assert_eq!(result["state"], "finished", "{item}");
         assert_eq!(result["outcome"], "ok");
         assert_eq!(result["id"], item["request_id"]);
+        // The level of the batch's defaults, which the item did not name.
+        assert_eq!(result["level"], 1, "{item}");
         assert_eq!(result["raw_body"], Value::Null);
         let by = personas_of(&api, item).await;
         assert_eq!(by.len(), 1, "{item}");
@@ -311,7 +316,7 @@ type Case = (Value, &'static str, Option<(&'static str, Value)>);
 /// being read, and the job worker then left the site alone until then.
 #[tokio::test]
 async fn a_batch_waits_for_its_reader_and_not_for_a_persona_that_cools() {
-    let mut api = Api::start_with(2, 149, LENIENT_FAST, quick).await;
+    let mut api = Api::start_with(2, 149, FAST, quick).await;
     // Pages that take a moment: the second is asked for while the first
     // is being read.
     pages(
@@ -333,7 +338,7 @@ async fn a_batch_waits_for_its_reader_and_not_for_a_persona_that_cools() {
         "type": "batch",
         "urls": urls("/w", 4),
         "visitors": 2,
-        "defaults": { "render": "http" },
+        "defaults": { "level": 1 },
     });
     let reply = api.post(&token, "/v1/jobs", &batch).await;
     assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.json());
@@ -356,19 +361,21 @@ async fn a_batch_waits_for_its_reader_and_not_for_a_persona_that_cools() {
 
 #[tokio::test]
 async fn a_job_is_accepted_whole_or_not_at_all() {
-    let rules = "defaults: { render: browser, pacing: fast, active_hours: ignore }\n\
+    let rules = "defaults: { pacing: fast, active_hours: ignore }\n\
                  domains:\n  driven.kage.test: { driver_input: true }\n";
     let mut api = Api::start_with(1, 149, rules, quick).await;
     let token = api.key(&[Scope::Jobs]).await;
     let fetch_only = api.key(&[Scope::Fetch]).await;
     let batch = |change: Value| {
-        let mut body = json!({ "type": "batch", "urls": [Api::url("/a")] });
+        let mut body =
+            json!({ "type": "batch", "urls": [Api::url("/a")], "defaults": { "level": 3 } });
         for (name, value) in change.as_object().unwrap() {
             body[name.as_str()] = value.clone();
         }
         body
     };
-    let flow = |actions: Value| json!({ "type": "flow", "actions": actions });
+    let flow = |actions: Value| json!({ "type": "flow", "level": 3, "actions": actions });
+    let start = json!([{ "action": "goto", "url": Api::url("/start") }]);
     let hook = json!({ "url": "https://hooks.example.org/kage", "secret": "a secret of sixteen bytes or more" });
 
     // Who may: the `jobs` scope, and `sessions` for a session.
@@ -405,10 +412,59 @@ async fn a_job_is_accepted_whole_or_not_at_all() {
             "validation_failed",
             Some(("item", json!(1))),
         ),
+        // The render mode of 1.x is gone from an item as from a fetch.
+        (
+            batch(json!({ "items": [{ "url": Api::url("/b"), "render": "http" }] })),
+            "validation_failed",
+            Some(("item", json!(1))),
+        ),
         (
             batch(json!({ "defaults": { "url": Api::url("/c") } })),
             "validation_failed",
             None,
+        ),
+        // Every item ends with a level: its own, or the batch's default.
+        (
+            batch(json!({ "defaults": {} })),
+            "level_required",
+            Some(("item", json!(0))),
+        ),
+        (
+            batch(json!({
+                "defaults": {},
+                "items": [{ "url": Api::url("/b"), "level": 1 }],
+            })),
+            "level_required",
+            Some(("field", json!("level"))),
+        ),
+        // An item is checked at its level as a fetch would be.
+        (
+            batch(json!({
+                "items": [{ "url": Api::url("/b"), "level": 1, "include": ["dom"] }],
+            })),
+            "level_include_conflict",
+            Some(("item", json!(1))),
+        ),
+        // A job keeps its items until they run, and Kage holds no
+        // caller's credential: a batch takes none, at any level.
+        (
+            batch(json!({
+                "defaults": { "level": 0 },
+                "items": [{ "url": Api::url("/b"), "headers": { "Authorization": "Bearer t0k3n" } }],
+            })),
+            "header_denied",
+            Some(("item", json!(1))),
+        ),
+        (
+            batch(json!({ "defaults": { "level": 0, "headers": { "Cookie": "sid=1" } } })),
+            "header_denied",
+            Some(("header", json!("Cookie"))),
+        ),
+        // Visitors are personas, and a plain client has none.
+        (
+            batch(json!({ "visitors": 1, "defaults": { "level": 0 } })),
+            "validation_failed",
+            Some(("field", json!("visitors"))),
         ),
         // More visitors than the site's pacing has places for.
         (batch(json!({ "visitors": 11 })), "validation_failed", None),
@@ -444,6 +500,28 @@ async fn a_job_is_accepted_whole_or_not_at_all() {
             Some(("step", json!(1))),
         ),
         (flow(json!([])), "validation_failed", None),
+        // A flow is a script in a browser: it names level 2 or 3, and the
+        // habits of a person are level 3's.
+        (
+            json!({ "type": "flow", "actions": start }),
+            "level_required",
+            Some(("field", json!("level"))),
+        ),
+        (
+            json!({ "type": "flow", "level": 1, "actions": start }),
+            "validation_failed",
+            Some(("field", json!("level"))),
+        ),
+        (
+            json!({ "type": "flow", "level": 0, "actions": start }),
+            "validation_failed",
+            Some(("field", json!("level"))),
+        ),
+        (
+            json!({ "type": "flow", "level": 2, "actions": start, "behavior": { "dwell_ms": 4000 } }),
+            "validation_failed",
+            Some(("field", json!("behavior"))),
+        ),
     ];
     for (body, code, extension) in cases {
         let reply = api.post(&token, "/v1/jobs", &body).await;
@@ -456,7 +534,7 @@ async fn a_job_is_accepted_whole_or_not_at_all() {
     api.post(
         &token,
         "/v1/jobs",
-        &json!({ "type": "crawl", "seeds": [Api::url("/")] }),
+        &json!({ "type": "crawl", "seeds": [Api::url("/")], "defaults": { "level": 1 } }),
     )
     .await
     .problem(StatusCode::FORBIDDEN, "scope_missing");
@@ -495,6 +573,7 @@ async fn a_flow_runs_its_steps_in_one_browser_and_each_capture_is_a_result() {
     });
     let script = json!({
         "type": "flow",
+        "level": 3,
         "actions": [
             { "action": "goto", "url": Api::url("/start") },
             { "action": "type", "selector": "input[name=q]", "text": "lamp" },
@@ -609,7 +688,7 @@ async fn a_flow_runs_its_steps_in_one_browser_and_each_capture_is_a_result() {
 
 #[tokio::test]
 async fn a_cancel_stops_a_job_within_one_item() {
-    let mut api = Api::start_with(2, 149, LENIENT_FAST, quick).await;
+    let mut api = Api::start_with(2, 149, FAST, quick).await;
     pages(
         &api,
         "/slow",
@@ -617,8 +696,7 @@ async fn a_cancel_stops_a_job_within_one_item() {
     )
     .await;
     let token = api.key(&[Scope::Jobs]).await;
-    let batch =
-        json!({ "type": "batch", "urls": urls("/slow", 12), "defaults": { "render": "http" } });
+    let batch = json!({ "type": "batch", "urls": urls("/slow", 12), "defaults": { "level": 1 } });
 
     // Before anybody worked it: nothing of it is ever fetched.
     let reply = api.post(&token, "/v1/jobs", &batch).await;
@@ -753,7 +831,7 @@ async fn a_webhook_is_signed_and_retried_on_its_schedule() {
         .mount(&receiver)
         .await;
     let listed = origin.clone();
-    let mut api = Api::start_with(1, 149, LENIENT_FAST, move |config| {
+    let mut api = Api::start_with(1, 149, FAST, move |config| {
         quick(config);
         // The receiver is the operator's own, on this machine.
         config.webhooks.allowed_origins = vec![listed.clone()];
@@ -770,7 +848,7 @@ async fn a_webhook_is_signed_and_retried_on_its_schedule() {
         json!({
             "type": "batch",
             "urls": urls("/w", 3),
-            "defaults": { "render": "http" },
+            "defaults": { "level": 1 },
             "webhook": webhook,
         })
     };
@@ -1023,6 +1101,7 @@ async fn a_job_that_reports_its_progress_is_worked_whatever_its_kind() {
             "flow",
             json!({
                 "type": "flow",
+                "level": 3,
                 "actions": [
                     { "action": "goto", "url": Api::url("/start") },
                     { "action": "extract", "include": ["dom"] },
@@ -1036,7 +1115,7 @@ async fn a_job_that_reports_its_progress_is_worked_whatever_its_kind() {
             json!({
                 "type": "batch",
                 "urls": urls("/k", 3),
-                "defaults": { "render": "http" },
+                "defaults": { "level": 1 },
                 "webhook": webhook,
             }),
             3,
@@ -1046,7 +1125,7 @@ async fn a_job_that_reports_its_progress_is_worked_whatever_its_kind() {
             json!({
                 "type": "crawl",
                 "seeds": [Api::url("/k")],
-                "defaults": { "render": "http", "include": ["headers"] },
+                "defaults": { "level": 1, "include": ["headers"] },
                 "webhook": webhook,
             }),
             3,
@@ -1116,7 +1195,7 @@ async fn a_job_that_reports_its_progress_is_worked_whatever_its_kind() {
 #[tokio::test]
 async fn a_fetch_that_overflowed_is_a_job_and_its_result_is_there_after_a_restart() {
     // One block pauses the site for a few seconds.
-    let rules = "defaults: { render: http, pacing: fast, active_hours: ignore, \
+    let rules = "defaults: { pacing: fast, active_hours: ignore, \
                  breaker_threshold: 1, breaker_pause: 3s, retries: 2 }\ndomains: {}\n";
     let mut api = Api::start_with(2, 149, rules, |config| {
         quick(config);
@@ -1151,7 +1230,7 @@ async fn a_fetch_that_overflowed_is_a_job_and_its_result_is_there_after_a_restar
         .post(
             &token,
             "/v1/fetch",
-            &json!({ "url": Api::url("/slow"), "render": "http" }),
+            &json!({ "url": Api::url("/slow"), "level": 1 }),
         )
         .await;
 
@@ -1237,7 +1316,21 @@ async fn a_fetch_that_overflowed_is_a_job_and_its_result_is_there_after_a_restar
     assert_eq!(attempts.len(), 2, "{attempts:?}");
     assert!(attempts[0].outcome.is_block());
     assert!(attempts[1].outcome.is_success());
+    assert!(attempts.iter().all(|attempt| attempt.persona_id.is_some()));
     assert_ne!(attempts[0].persona_id, attempts[1].persona_id);
+    // A block at level 1 is the next persona's turn on the http path,
+    // never a browser's.
+    assert!(
+        attempts
+            .iter()
+            .all(|attempt| attempt.render == kage_core::domain::Render::Http),
+        "{attempts:?}"
+    );
+    assert!(
+        api.lab
+            .chromium
+            .with(|sidecar| sidecar.navigated.is_empty())
+    );
     assert_eq!(asked(&api, "/slow").await.len(), 2);
     let items = api.job_items(&token, &job).await;
     assert_eq!(items[0]["state"], "succeeded");
@@ -1248,7 +1341,7 @@ async fn a_fetch_that_overflowed_is_a_job_and_its_result_is_there_after_a_restar
 
 #[tokio::test]
 async fn a_carried_fetch_that_is_being_read_when_the_server_stops_is_finished_and_asked_for_once() {
-    let rules = "defaults: { render: http, pacing: fast, active_hours: ignore }\ndomains: {}\n";
+    let rules = "defaults: { pacing: fast, active_hours: ignore }\ndomains: {}\n";
     let mut api = Api::start_with(2, 149, rules, |config| {
         quick(config);
         config.scheduler.sync_wall_time = HumanDuration::new(Duration::from_millis(300));
@@ -1267,7 +1360,7 @@ async fn a_carried_fetch_that_is_being_read_when_the_server_stops_is_finished_an
         .post(
             &token,
             "/v1/fetch",
-            &json!({ "url": Api::url("/slow"), "render": "http" }),
+            &json!({ "url": Api::url("/slow"), "level": 1 }),
         )
         .await;
     assert_eq!(reply.status, StatusCode::ACCEPTED, "{:?}", reply.json());
@@ -1313,7 +1406,7 @@ async fn a_carried_fetch_that_is_being_read_when_the_server_stops_is_finished_an
 
 #[tokio::test]
 async fn a_job_waits_where_it_must_and_ends_when_it_may_wait_no_longer() {
-    let mut api = Api::start_with(2, 149, LENIENT_FAST, quick).await;
+    let mut api = Api::start_with(2, 149, FAST, quick).await;
     pages(&api, "/d", page("A page")).await;
     // Two pages a day.
     let (key, token) = api
@@ -1325,7 +1418,7 @@ async fn a_job_waits_where_it_must_and_ends_when_it_may_wait_no_longer() {
             },
         )
         .await;
-    let batch = json!({ "type": "batch", "urls": urls("/d", 3), "defaults": { "render": "http" } });
+    let batch = json!({ "type": "batch", "urls": urls("/d", 3), "defaults": { "level": 1 } });
     let reply = api.post(&token, "/v1/jobs", &batch).await;
     let id = reply.json()["id"].as_str().unwrap().to_owned();
 
@@ -1373,7 +1466,7 @@ async fn a_job_waits_where_it_must_and_ends_when_it_may_wait_no_longer() {
         .post(
             &token,
             "/v1/jobs",
-            &json!({ "type": "batch", "urls": urls("/d", 2) }),
+            &json!({ "type": "batch", "urls": urls("/d", 2), "defaults": { "level": 1 } }),
         )
         .await;
     assert_eq!(reply.status, StatusCode::CREATED);
@@ -1418,14 +1511,14 @@ async fn a_job_waits_where_it_must_and_ends_when_it_may_wait_no_longer() {
 
 #[tokio::test]
 async fn a_job_in_a_session_is_read_by_the_sessions_persona() {
-    let mut api = Api::start_with(3, 149, LENIENT_FAST, quick).await;
+    let mut api = Api::start_with(3, 149, FAST, quick).await;
     pages(&api, "/s", page("A page")).await;
     let token = api.key(&[Scope::Jobs, Scope::Sessions, Scope::Fetch]).await;
     let batch = |session: &str| {
         json!({
             "type": "batch",
             "urls": urls("/s", 4),
-            "defaults": { "render": "http" },
+            "defaults": { "level": 1 },
             "session_id": session,
         })
     };
@@ -1460,7 +1553,7 @@ async fn a_job_in_a_session_is_read_by_the_sessions_persona() {
         .post(
             &token,
             "/v1/fetch",
-            &json!({ "url": Api::url("/s/5"), "render": "http", "session_id": "proj-9" }),
+            &json!({ "url": Api::url("/s/5"), "level": 1, "session_id": "proj-9" }),
         )
         .await
         .json();
@@ -1476,7 +1569,7 @@ async fn a_job_in_a_session_is_read_by_the_sessions_persona() {
 
 #[tokio::test]
 async fn an_admin_purges_a_keys_data_and_retention_deletes_what_is_old() {
-    let mut api = Api::start_with(2, 149, LENIENT_FAST, quick).await;
+    let mut api = Api::start_with(2, 149, FAST, quick).await;
     pages(&api, "/x", page("A page")).await;
     let admin = api.key(&[Scope::Admin]).await;
     let (mine, token) = api
@@ -1485,8 +1578,8 @@ async fn an_admin_purges_a_keys_data_and_retention_deletes_what_is_old() {
     let (_, theirs) = api
         .key_with(&[Scope::Jobs, Scope::Fetch], common::ROOMY)
         .await;
-    let fetch = |path: &str| json!({ "url": Api::url(path), "render": "http" });
-    let batch = json!({ "type": "batch", "urls": urls("/x", 2), "defaults": { "render": "http" } });
+    let fetch = |path: &str| json!({ "url": Api::url(path), "level": 1 });
+    let batch = json!({ "type": "batch", "urls": urls("/x", 2), "defaults": { "level": 1 } });
 
     let work = api.work();
     let single = api.post(&token, "/v1/fetch", &fetch("/x/10")).await.json();

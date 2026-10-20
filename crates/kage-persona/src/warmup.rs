@@ -30,8 +30,8 @@
 
 use kage_browser::Navigation;
 use kage_browser::contract::{
-    BehaviorOptions, CaptureOptions, DwellMode, Entry, EntryStrategy, NavigateRequest,
-    NavigationErrorCode, Wait, WaitUntil,
+    BehaviorMode, BehaviorOptions, CaptureOptions, DwellMode, Entry, EntryStrategy,
+    NavigateRequest, NavigationErrorCode, Wait, WaitUntil,
 };
 use kage_core::alert::AlertSeverity;
 use kage_core::config::PatienceConfig;
@@ -99,6 +99,8 @@ fn visit_request(
         artifact_prefix: None,
         behavior: Some(BehaviorOptions {
             dwell: Some(DwellMode::Human),
+            // A warm-up visit is a person reading (D35).
+            mode: Some(BehaviorMode::Human),
             entry: Some(Entry {
                 fallback: None,
                 from_open_page: None,

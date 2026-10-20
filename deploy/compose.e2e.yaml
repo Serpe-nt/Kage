@@ -90,6 +90,11 @@ services:
       KAGE__BROWSER__PATIENCE__MEDIAN: ${KAGE_E2E_PATIENCE_MEDIAN:-38s}
       KAGE__BROWSER__PATIENCE__P95: ${KAGE_E2E_PATIENCE_P95:-110s}
       KAGE__BROWSER__PATIENCE__MAX: ${KAGE_E2E_PATIENCE_MAX:-4m}
+      # The direct test leaves from kage's own connection (spec §25): the
+      # pool stays idle, and the names of this world, which resolve to
+      # private addresses of the compose network, are the operator's own.
+      KAGE__EGRESS__MODE: ${KAGE_E2E_EGRESS_MODE:-proxies}
+      KAGE__EGRESS__DIRECT__PRIVATE_NAMES: ${KAGE_E2E_PRIVATE_NAMES:-[]}
     volumes:
       # The shipped policies with the domain rules of the test.
       - ${KAGE_E2E_POLICIES:?the test that uses this overlay sets it}:/etc/kage/policies:ro

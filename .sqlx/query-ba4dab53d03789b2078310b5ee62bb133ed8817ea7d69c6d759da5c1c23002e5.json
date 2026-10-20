@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO bandwidth_usage (hour, persona_id, domain, egress, bytes_up, bytes_down)\n                 VALUES ($1, $2, $3, $4, $5, $6)\n                 ON CONFLICT (hour, persona_id, domain, egress) DO UPDATE\n                 SET bytes_up = bandwidth_usage.bytes_up + EXCLUDED.bytes_up,\n                     bytes_down = bandwidth_usage.bytes_down + EXCLUDED.bytes_down",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Uuid",
+        "Text",
+        "Text",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ba4dab53d03789b2078310b5ee62bb133ed8817ea7d69c6d759da5c1c23002e5"
+}

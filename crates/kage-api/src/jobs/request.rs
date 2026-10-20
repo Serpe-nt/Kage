@@ -3,7 +3,8 @@
 //! A **batch** is a list of fetches. Each item is a [`FetchRequest`] and
 //! is checked by the code that checks a synchronous fetch, so an item is
 //! refused for what a fetch would be refused for, with the same code and
-//! the item's position. What the items share is given once as `defaults`.
+//! the item's position. What the items share is given once as `defaults`,
+//! the level among it: every item ends with one (`level_required`).
 //!
 //! A **flow** is a script of steps one persona performs in its browser
 //! (spec §10.5). It starts with a `goto`; every page it is sent to passes
@@ -17,10 +18,12 @@
 //! A job is accepted whole or not at all: nothing is stored for a job one
 //! of whose items is refused.
 
+use std::borrow::Cow;
 use std::time::Duration;
 
 use kage_browser::contract::{CaptureOptions, FlowAction};
 use kage_core::config::{Config, MAX_ATTEMPT_TIMEOUT};
+use kage_core::domain::Level;
 use kage_core::ids::ApiKeyId;
 use kage_core::pacing::PacingProfiles;
 use kage_core::policy::{DomainPolicies, PolicySet};
@@ -28,13 +31,15 @@ use kage_scheduler::{FetchOrder, FlowPlan, Keep};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use url::Url;
-use utoipa::ToSchema;
+use utoipa::openapi::RefOr;
+use utoipa::openapi::schema::Schema;
+use utoipa::{PartialSchema, ToSchema};
 
 use super::crawl::CrawlJob;
 use crate::error::{ApiError, ApiResult, ErrorCode};
 use crate::fetch::request::{
     ExtractField, FetchRequest, Include, PacingField, PdfField, PersonaHints, Planned,
-    ScreenshotField, XhrField, plan, url_refused,
+    ScreenshotField, XhrField, is_credential, level_of, plan, url_refused,
 };
 use crate::fetch::terms::{CacheUse, settle};
 use crate::resolve::{HostResolver, guard};
@@ -79,6 +84,39 @@ pub(crate) struct WebhookField {
     pub(crate) progress_every: Option<u32>,
 }
 
+/// One item of a batch: a fetch request whose fields may come from the
+/// batch's `defaults`, its `level` among them. Only its schema is a type
+/// of its own: an item is checked as the fetch request it becomes.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BatchItem;
+
+impl PartialSchema for BatchItem {
+    fn schema() -> RefOr<Schema> {
+        let mut schema = <FetchRequest as PartialSchema>::schema();
+        if let RefOr::T(Schema::Object(object)) = &mut schema {
+            object.required.retain(|name| name != "level");
+            object.description = Some(
+                "A fetch request as an item of a batch: whatever it leaves out comes from the \
+                 batch's defaults, the level among it; every item ends with one \
+                 (level_required)."
+                    .to_owned(),
+            );
+        }
+        schema
+    }
+}
+
+impl ToSchema for BatchItem {
+    fn name() -> Cow<'static, str> {
+        Cow::Borrowed("BatchItem")
+    }
+
+    fn schemas(schemas: &mut Vec<(String, RefOr<Schema>)>) {
+        schemas.push((FetchRequest::name().into_owned(), FetchRequest::schema()));
+        <FetchRequest as ToSchema>::schemas(schemas);
+    }
+}
+
 /// A batch: pages fetched one after another the way a visitor reads them.
 ///
 /// Per site a batch has one visitor: one persona reads its pages of that
@@ -98,7 +136,7 @@ pub(crate) struct WebhookField {
 #[schema(example = json!({
     "type": "batch",
     "urls": ["https://example.org/listing?page=1", "https://example.org/listing?page=2"],
-    "defaults": { "include": ["dom", "headers"], "behavior": { "scroll_depth": 0.3, "dwell_ms": 3000 } },
+    "defaults": { "level": 3, "include": ["dom", "headers"], "behavior": { "scroll_depth": 0.3, "dwell_ms": 3000 } },
     "webhook": { "url": "https://hooks.example.org/kage", "secret": "a secret of sixteen bytes or more", "progress_every": 10 }
 }))]
 pub(crate) struct BatchJob {
@@ -110,10 +148,13 @@ pub(crate) struct BatchJob {
     /// with whatever it sets taking the place of the default. They come
     /// after `urls`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[schema(value_type = Vec<FetchRequest>)]
+    #[schema(value_type = Vec<BatchItem>)]
     pub(crate) items: Vec<Value>,
     /// What every item is fetched with unless it says otherwise: any field
-    /// of a fetch request but `url` and `session_id`.
+    /// of a fetch request but `url` and `session_id`. An item that names
+    /// no `level` takes the default's, and one of the two must name it
+    /// (`level_required`). A caller's `Cookie` and `Authorization` are not
+    /// taken in a job, which would have to keep them until the item runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Option<FreeForm>)]
     pub(crate) defaults: Option<Map<String, Value>>,
@@ -433,7 +474,7 @@ pub(crate) struct FlowBehaviorField {
 }
 
 /// A flow: a script of steps one persona performs in its browser, as one
-/// visit.
+/// visit, at level 2 or 3.
 ///
 /// The persona arrives by a typed navigation, stays on every page it comes
 /// to for a while with its pointer moving, and pauses between its actions
@@ -448,6 +489,7 @@ pub(crate) struct FlowBehaviorField {
 #[serde(deny_unknown_fields)]
 #[schema(example = json!({
     "type": "flow",
+    "level": 3,
     "actions": [
         { "action": "goto", "url": "https://example.org/" },
         { "action": "click", "selector": "#next" },
@@ -457,6 +499,13 @@ pub(crate) struct FlowBehaviorField {
     "include": ["dom", "headers"]
 }))]
 pub(crate) struct FlowJob {
+    /// The camouflage level (spec §25), required: 2 or 3, since a flow is a
+    /// browser's. At 2 the persona's idle hand rests while it dwells and
+    /// its dwell is the policy's `min_dwell` drawn upward; `behavior` is
+    /// level 3's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(required = true, value_type = u8, minimum = 2, maximum = 3, example = 3)]
+    pub(crate) level: Option<u64>,
     /// The steps, at most 100. The first is a `goto`.
     #[schema(min_items = 1, max_items = 100)]
     pub(crate) actions: Vec<FlowStepField>,
@@ -490,7 +539,7 @@ pub(crate) struct FlowJob {
     /// where the policy locks it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) pacing: Option<PacingField>,
-    /// What the flow may change of how its persona behaves.
+    /// What the flow may change of how its persona behaves; at level 3.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) behavior: Option<FlowBehaviorField>,
     /// The whole time one run of the flow may take, in milliseconds:
@@ -663,6 +712,31 @@ pub(crate) async fn plan_batch(
             )
         })?;
         let mut one = plan(&request, checks.pacing()).map_err(|error| at_item(error, index))?;
+        if let Some(name) = request.headers.keys().find(|name| is_credential(name)) {
+            // Only a fetch the caller waits for may carry one: Kage holds
+            // no caller's credential, and a job keeps its items.
+            return Err(at_item(
+                ApiError::new(
+                    ErrorCode::HeaderDenied,
+                    format!(
+                        "the header {name:?} is the caller's own credential, and a job keeps its \
+                         items until they run: Kage holds no credential. Send the request with \
+                         POST /v1/fetch"
+                    ),
+                )
+                .with("header", name.as_str()),
+                index,
+            ));
+        }
+        if one.level == Level::Plain && batch.visitors.is_some() {
+            return Err(at_item(
+                ApiError::field(
+                    "visitors",
+                    "visitors are personas, and level 0 has none: leave visitors out",
+                ),
+                index,
+            ));
+        }
         settle(
             &mut one,
             &request,
@@ -775,13 +849,13 @@ fn check_selector(index: usize, selector: &str) -> ApiResult<()> {
 /// checks a fetch's `include`.
 fn capture_of(
     index: usize,
-    start: &str,
+    (start, level): (&str, Level),
     fields: Value,
     checks: Checks<'_>,
 ) -> ApiResult<(CaptureOptions, StepKeep)> {
     let mut request = Map::new();
     request.insert("url".to_owned(), json!(start));
-    request.insert("render".to_owned(), json!("browser"));
+    request.insert("level".to_owned(), json!(level.number()));
     if let Value::Object(fields) = fields {
         request.extend(fields);
     }
@@ -812,7 +886,7 @@ fn capture_of(
 #[allow(clippy::too_many_lines)]
 async fn steps_of(
     flow: &FlowJob,
-    start: &str,
+    start: (&str, Level),
     checks: Checks<'_>,
 ) -> ApiResult<(Vec<FlowAction>, Vec<Option<StepKeep>>)> {
     let mut actions = Vec::with_capacity(flow.actions.len());
@@ -1062,6 +1136,7 @@ async fn steps_of(
 /// The first refusal, with the position of its step as `step` when it is
 /// about one.
 pub(crate) async fn plan_flow(flow: &FlowJob, checks: Checks<'_>) -> ApiResult<PlannedFlow> {
+    let level = flow_level(flow)?;
     if flow.actions.is_empty() || flow.actions.len() > MAX_FLOW_STEPS {
         return Err(ApiError::field(
             "actions",
@@ -1094,7 +1169,7 @@ pub(crate) async fn plan_flow(flow: &FlowJob, checks: Checks<'_>) -> ApiResult<P
     // pacing and limits.
     let mut request = Map::new();
     request.insert("url".to_owned(), json!(first.url));
-    request.insert("render".to_owned(), json!("browser"));
+    request.insert("level".to_owned(), json!(level.number()));
     request.insert("timeout_ms".to_owned(), json!(timeout));
     for (name, value) in [
         ("include", json!(flow.include)),
@@ -1144,7 +1219,7 @@ pub(crate) async fn plan_flow(flow: &FlowJob, checks: Checks<'_>) -> ApiResult<P
         .map(str::to_ascii_lowercase)
         .unwrap_or_default();
 
-    let (actions, keeps) = steps_of(flow, &first.url, checks).await?;
+    let (actions, keeps) = steps_of(flow, (&first.url, level), checks).await?;
     driver_allowed(flow, &site, checks)?;
     planned.order = FetchOrder {
         flow: Some(FlowPlan {
@@ -1161,6 +1236,29 @@ pub(crate) async fn plan_flow(flow: &FlowJob, checks: Checks<'_>) -> ApiResult<P
         keeps,
         site,
     })
+}
+
+/// The level of a flow (spec §25): named, and a browser's; `behavior` is
+/// level 3's.
+fn flow_level(flow: &FlowJob) -> ApiResult<Level> {
+    let level = level_of(flow.level, "level")?;
+    if level.render() != kage_core::domain::Render::Browser {
+        return Err(ApiError::field(
+            "level",
+            format!(
+                "a flow is a script in a browser: level 2 or 3, not {}",
+                level.number()
+            ),
+        ));
+    }
+    if level == Level::Fast && flow.behavior.is_some() {
+        return Err(ApiError::field(
+            "behavior",
+            "a level-2 flow takes its steps and dwells the policy's own time with the hand at \
+             rest; what a person's habits change is level 3's",
+        ));
+    }
+    Ok(level)
 }
 
 /// Driver input is the operator's to allow, per site: refuses a flow with
@@ -1341,7 +1439,7 @@ pub(crate) fn stored_progress(spec: &Value) -> Option<u32> {
 mod tests {
     use kage_browser::contract::FlowAction;
     use kage_core::config::Config;
-    use kage_core::domain::SessionId;
+    use kage_core::domain::{Level, SessionId};
     use kage_core::ids::ApiKeyId;
     use kage_core::pacing::PacingProfiles;
     use kage_core::policy::{DomainPolicies, PolicySet};
@@ -1388,8 +1486,133 @@ mod tests {
         }
     }
 
-    fn job(body: Value) -> JobRequest {
+    /// A job as written, at level 3 where it names none: a flow's own, a
+    /// batch's or a crawl's defaults.
+    fn job(mut body: Value) -> JobRequest {
+        match body["type"].as_str() {
+            Some("flow") if body.get("level").is_none() => body["level"] = json!(3),
+            Some("batch" | "crawl") => {
+                let mut defaults = body.get("defaults").cloned().unwrap_or_else(|| json!({}));
+                if defaults.get("level").is_none() {
+                    defaults["level"] = json!(3);
+                    body["defaults"] = defaults;
+                }
+            }
+            _ => {}
+        }
         serde_json::from_value(body).unwrap()
+    }
+
+    #[tokio::test]
+    async fn every_item_of_a_batch_ends_with_a_level_and_a_job_keeps_no_credential() {
+        let config = config(&[]);
+        let policies = policies("");
+        let checks = Checks {
+            config: &config,
+            policies: &policies,
+            resolver: None,
+            key: ApiKeyId::new(),
+        };
+        let as_written = |body: Value| -> super::BatchJob {
+            let JobRequest::Batch(batch) = serde_json::from_value(body).unwrap() else {
+                panic!("not a batch");
+            };
+            batch
+        };
+
+        // Nothing names one: the first item is refused, and says so.
+        let none = plan_batch(
+            &as_written(json!({ "type": "batch", "urls": ["https://shop.example/a"] })),
+            checks,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(none.code(), ErrorCode::LevelRequired);
+        assert_eq!(none.problem().extensions["item"], 0);
+        // An item's own takes the default's place; one without it inherits.
+        let mixed = plan_batch(
+            &as_written(json!({
+                "type": "batch",
+                "urls": ["https://shop.example/a"],
+                "items": [{ "url": "https://shop.example/b", "level": 0 }],
+                "defaults": { "level": 2 },
+            })),
+            checks,
+        )
+        .await
+        .unwrap();
+        let levels: Vec<Level> = mixed.iter().map(|item| item.planned.level).collect();
+        assert_eq!(levels, [Level::Fast, Level::Plain]);
+        assert_eq!(mixed[1].input["level"], 0);
+        // An item that names none where the defaults name none either.
+        let half = plan_batch(
+            &as_written(json!({
+                "type": "batch",
+                "items": [{ "url": "https://shop.example/a", "level": 3 }, { "url": "https://shop.example/b" }],
+            })),
+            checks,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(half.code(), ErrorCode::LevelRequired);
+        assert_eq!(half.problem().extensions["item"], 1);
+
+        // A caller's credential is a fetch's to send, never a job's to keep.
+        for name in ["Cookie", "authorization"] {
+            let kept = plan_batch(
+                &as_written(json!({
+                    "type": "batch",
+                    "items": [{ "url": "https://shop.example/a", "level": 0, "headers": { name: "x" } }],
+                })),
+                checks,
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(kept.code(), ErrorCode::HeaderDenied, "{name}");
+            assert_eq!(kept.problem().extensions["header"], name);
+        }
+        // Visitors are personas, which level 0 has none of.
+        let visitors = plan_batch(
+            &as_written(json!({
+                "type": "batch", "urls": ["https://shop.example/a"], "visitors": 1,
+                "defaults": { "level": 0 },
+            })),
+            checks,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(visitors.problem().extensions["field"], "visitors");
+    }
+
+    #[tokio::test]
+    async fn a_flow_is_a_browsers_at_level_two_or_three() {
+        let open = policies("");
+        let goto = json!({ "action": "goto", "url": "https://shop.example/" });
+        let body = |level: Value, behavior: Option<Value>| {
+            let mut body = json!({ "type": "flow", "actions": [goto.clone()], "level": level });
+            if let Some(behavior) = behavior {
+                body["behavior"] = behavior;
+            }
+            body
+        };
+        for level in [2, 3] {
+            let planned = flow(body(json!(level), None), &open).await.unwrap();
+            assert_eq!(u64::from(planned.planned.level.number()), level);
+        }
+        for level in [0, 1] {
+            let refused = flow(body(json!(level), None), &open).await.unwrap_err();
+            assert_eq!(refused.code(), ErrorCode::ValidationFailed);
+            assert_eq!(refused.problem().extensions["field"], "level");
+        }
+        let missing = flow(body(Value::Null, None), &open).await.unwrap_err();
+        assert_eq!(missing.code(), ErrorCode::LevelRequired);
+        // What a person's habits change is level 3's.
+        let habits = json!({ "dwell_ms": 3000 });
+        let still = flow(body(json!(2), Some(habits.clone())), &open)
+            .await
+            .unwrap_err();
+        assert_eq!(still.problem().extensions["field"], "behavior");
+        flow(body(json!(3), Some(habits)), &open).await.unwrap();
     }
 
     async fn batch(body: Value, config: &Config, policies: &PolicySet) -> Result<usize, ApiError> {
@@ -1509,7 +1732,7 @@ mod tests {
         assert_eq!(denied.problem().extensions["item"], 1);
         let header = refused(json!({
             "type": "batch",
-            "items": [{ "url": "https://shop.example/a", "render": "http",
+            "items": [{ "url": "https://shop.example/a", "level": 1,
                         "headers": { "X-Forwarded-For": "203.0.113.7" } }],
         }))
         .await;
@@ -1522,7 +1745,7 @@ mod tests {
             "defaults": { "method": "POST" },
         }))
         .await;
-        assert_eq!(render.code(), ErrorCode::RenderNeedsHttp);
+        assert_eq!(render.code(), ErrorCode::LevelNeedsHttp);
         let unknown = refused(json!({
             "type": "batch",
             "items": [{ "url": "https://shop.example/a", "locale": "de" }],
@@ -1641,7 +1864,7 @@ mod tests {
         let order = &planned.planned.order;
         assert_eq!(planned.site, "shop.example");
         assert_eq!(order.url.as_str(), "https://shop.example/start");
-        assert_eq!(order.render, kage_core::domain::RenderMode::Browser);
+        assert_eq!(order.level, Level::Human);
         assert_eq!(order.timeout, Some(std::time::Duration::from_secs(240)));
         assert_eq!(order.engines, [kage_core::domain::Engine::Firefox]);
         assert_eq!(
@@ -1757,7 +1980,7 @@ mod tests {
             assert!(
                 matches!(
                     error.code(),
-                    ErrorCode::ValidationFailed | ErrorCode::RenderIncludeConflict
+                    ErrorCode::ValidationFailed | ErrorCode::LevelIncludeConflict
                 ),
                 "{step}: {error}"
             );
@@ -1984,7 +2207,7 @@ mod tests {
             json!({
                 "type": "batch",
                 "urls": ["https://shop.example/a", "https://shop.example/b"],
-                "defaults": { "render": "http" },
+                "defaults": { "level": 1 },
                 "visitors": 2,
             }),
             json!({

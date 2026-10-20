@@ -1,7 +1,7 @@
 //! The `requests`, `attempts` and `results` tables.
 
 use chrono::{DateTime, Utc};
-use kage_core::domain::{Attempt, FetchRecord, RequestRecord, SessionId};
+use kage_core::domain::{Attempt, Engine, Exit, FetchRecord, Level, RequestRecord, SessionId};
 use kage_core::ids::{ApiKeyId, AttemptId, JobId, PersonaId, RequestId, ResultId};
 use kage_core::outcome::Outcome;
 use uuid::Uuid;
@@ -27,6 +27,7 @@ struct RequestRow {
     method: String,
     domain: String,
     render: String,
+    level: Option<i16>,
     spec: serde_json::Value,
     created_at: DateTime<Utc>,
     finished_at: Option<DateTime<Utc>>,
@@ -47,6 +48,19 @@ impl TryFrom<RequestRow> for RequestRecord {
             method: row.method,
             domain: row.domain,
             render: parse((TABLE, "render"), &row.render)?,
+            level: row
+                .level
+                .map(|level| {
+                    u64::try_from(level)
+                        .ok()
+                        .and_then(Level::from_number)
+                        .ok_or_else(|| StoreError::Corrupt {
+                            table: TABLE,
+                            column: "level",
+                            reason: format!("{level} is not a level"),
+                        })
+                })
+                .transpose()?,
             spec: row.spec,
             created_at: row.created_at,
             finished_at: row.finished_at,
@@ -64,8 +78,8 @@ impl RequestRepo<'_> {
     pub async fn insert(&self, request: &RequestRecord) -> Result<(), StoreError> {
         sqlx::query!(
             "INSERT INTO requests (id, api_key_id, job_id, session_id, url, method, domain, render,
-                                   spec, created_at, finished_at, outcome)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+                                   level, spec, created_at, finished_at, outcome)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
             request.id.as_uuid(),
             request.api_key_id.map(|id| id.as_uuid()),
             request.job_id.map(|id| id.as_uuid()),
@@ -74,6 +88,7 @@ impl RequestRepo<'_> {
             request.method,
             request.domain,
             request.render.as_str(),
+            request.level.map(|level| i16::from(level.number())),
             request.spec,
             request.created_at,
             request.finished_at,
@@ -92,7 +107,7 @@ impl RequestRepo<'_> {
     pub async fn get(&self, id: RequestId) -> Result<Option<RequestRecord>, StoreError> {
         sqlx::query_as!(
             RequestRow,
-            "SELECT id, api_key_id, job_id, session_id, url, method, domain, render, spec,
+            "SELECT id, api_key_id, job_id, session_id, url, method, domain, render, level, spec,
                     created_at, finished_at, outcome
              FROM requests WHERE id = $1",
             id.as_uuid(),
@@ -239,8 +254,9 @@ struct AttemptRow {
     id: Uuid,
     request_id: Uuid,
     n: i32,
-    persona_id: Uuid,
-    engine: String,
+    persona_id: Option<Uuid>,
+    engine: Option<String>,
+    exit: Option<String>,
     render: String,
     started_at: DateTime<Utc>,
     finished_at: DateTime<Utc>,
@@ -263,8 +279,9 @@ impl TryFrom<AttemptRow> for Attempt {
             id: AttemptId::from_uuid(row.id),
             request_id: RequestId::from_uuid(row.request_id),
             n: to_u32((TABLE, "n"), row.n)?,
-            persona_id: PersonaId::from_uuid(row.persona_id),
-            engine: parse((TABLE, "engine"), &row.engine)?,
+            persona_id: row.persona_id.map(PersonaId::from_uuid),
+            engine: parse_opt((TABLE, "engine"), row.engine.as_deref())?,
+            exit: parse_opt((TABLE, "exit"), row.exit.as_deref())?,
             render: parse((TABLE, "render"), &row.render)?,
             started_at: row.started_at,
             finished_at: row.finished_at,
@@ -293,15 +310,16 @@ impl AttemptRepo<'_> {
     pub async fn insert(&self, attempt: &Attempt) -> Result<(), StoreError> {
         const TABLE: &str = "attempts";
         sqlx::query!(
-            "INSERT INTO attempts (id, request_id, n, persona_id, engine, render, started_at,
+            "INSERT INTO attempts (id, request_id, n, persona_id, engine, exit, render, started_at,
                                    finished_at, status, final_url, outcome, block, timing, seed,
                                    reason, patience_ms)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)",
             attempt.id.as_uuid(),
             attempt.request_id.as_uuid(),
             to_i32((TABLE, "n"), attempt.n)?,
-            attempt.persona_id.as_uuid(),
-            attempt.engine.as_str(),
+            attempt.persona_id.map(|id| id.as_uuid()),
+            attempt.engine.map(Engine::as_str),
+            attempt.exit.map(Exit::as_str),
             attempt.render.as_str(),
             attempt.started_at,
             attempt.finished_at,
@@ -333,8 +351,8 @@ impl AttemptRepo<'_> {
     ) -> Result<Vec<Attempt>, StoreError> {
         sqlx::query_as!(
             AttemptRow,
-            "SELECT id, request_id, n, persona_id, engine, render, started_at, finished_at, status,
-                    final_url, outcome, block, timing, seed, reason, patience_ms
+            "SELECT id, request_id, n, persona_id, engine, exit, render, started_at, finished_at,
+                    status, final_url, outcome, block, timing, seed, reason, patience_ms
              FROM attempts WHERE request_id = $1 ORDER BY n",
             request_id.as_uuid(),
         )

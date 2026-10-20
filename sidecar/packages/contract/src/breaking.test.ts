@@ -431,7 +431,7 @@ describe('findBreakingChanges', () => {
     delete schemas['PageLink'];
     delete schemas['ScrollEnd'];
     before.info['version'] = '1.2.0';
-    expect(now.info['version']).toBe('1.4.0');
+    expect(now.info['version']).toBe('1.5.0');
     const current = now.components['schemas'] as Record<string, JsonObject>;
     // Asked for with optional fields only, so that a caller of 1.2.0 is still served.
     for (const [name, fields] of [
@@ -499,6 +499,39 @@ describe('findBreakingChanges', () => {
     expect(named(current, 'UpgradePersonaResponse')['required']).toEqual(
       expect.arrayContaining(['fingerprint', 'summary', 'upgraded']),
     );
+  });
+
+  it('takes the still visit and the resting hand of a paced flow (1.5.0) as additions, and their removal as a break', () => {
+    const now = buildOpenApiDocument();
+    // The document as it was at 1.4.0: no mode in the behavior of a
+    // navigation, no wander in the pace of a flow.
+    const before = structuredClone(now);
+    const schemas = before.components['schemas'] as Record<string, JsonObject>;
+    delete properties(schemas['BehaviorOptions'])['mode'];
+    delete schemas['BehaviorMode'];
+    delete properties(schemas['FlowPace'])['wander'];
+    before.info['version'] = '1.4.0';
+    const current = now.components['schemas'] as Record<string, JsonObject>;
+    // Asked for with an optional field, so that a caller of 1.4.0 is still served.
+    const behavior = named(current, 'BehaviorOptions');
+    expect(properties(behavior)['mode']).toMatchObject({
+      $ref: '#/components/schemas/BehaviorMode',
+    });
+    expect(behavior['required'] ?? []).not.toContain('mode');
+    expect(named(current, 'BehaviorMode')['enum']).toEqual(['human', 'still']);
+    // A flow has no mode; its pace has an optional wander.
+    expect(properties(named(current, 'FlowBehavior'))['mode']).toBeUndefined();
+    const pace = named(current, 'FlowPace');
+    expect(properties(pace)['wander']).toMatchObject({ type: 'boolean' });
+    expect(pace['required'] ?? []).not.toContain('wander');
+    expect(checkBreaking(before, now)).toEqual({ changes: [], majorBumped: false, ok: true });
+    // The other way round it is what the check is for.
+    expect(
+      findBreakingChanges(now, before).map((change) => `${change.where}: ${change.what}`),
+    ).toEqual([
+      'POST /v1/contexts/{id}/navigate request.behavior.mode: is no longer accepted',
+      'POST /v1/contexts/{id}/flow request.behavior.pace.wander: is no longer accepted',
+    ]);
   });
 
   it('compares a schema used twice only once per direction', () => {

@@ -306,6 +306,16 @@ export const EXAMPLES: Readonly<Record<string, readonly unknown[]>> = {
         wander: true,
       },
     },
+    {
+      // A still visit (1.5.0): the persona's browser loads the page, rests
+      // for the dwell Kage drew, and sends no input at all.
+      url: 'https://example.org/listing?page=2',
+      wait: { until: 'load' },
+      capture: { dom: true, raw: false, xhr: null, console: false, screenshot: null, pdf: null },
+      timeout_ms: 45_000,
+      dwell_ms: 2400,
+      behavior: { seed: SEED, mode: 'still', entry: { strategy: 'direct' } },
+    },
   ],
   PageResult: [pageResult, failedPageResult],
   FlowRequest: [
@@ -340,6 +350,16 @@ export const EXAMPLES: Readonly<Record<string, readonly unknown[]>> = {
       capture,
       // An empty `pace`: the persona's own dwell, no floor.
       behavior: { pace: {} },
+    },
+    {
+      actions: [
+        { action: 'goto', url: 'https://example.org/' },
+        { action: 'click', selector: 'a.next' },
+        { action: 'extract', capture },
+      ],
+      capture,
+      // A paced flow whose hand rests while it dwells (1.5.0): no input but the click.
+      behavior: { seed: SEED, pace: { dwell_ms: 4000, wander: false } },
     },
   ],
   FlowEvent: [

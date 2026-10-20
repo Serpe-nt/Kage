@@ -1,5 +1,5 @@
 //! `POST /v1/fetch`, `GET /v1/results/{id}` and `GET /v1/artifacts/{id}`
-//! over both fetch paths (spec §16.3 to §16.5, §19): the router of `kage
+//! at every level (spec §16.3 to §16.5, §19, §25): the router of `kage
 //! serve` over the scheduler's lab.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::too_many_lines)]
@@ -9,17 +9,22 @@ mod common;
 use std::time::Duration;
 
 use axum::http::{Method, StatusCode};
-use common::sched::lab::{LENIENT_FAST, article};
+use common::sched::lab::{FAST, article};
 use common::{Api, ask, request};
-use kage_core::domain::{ContentHash, Scope};
+use kage_core::domain::{ContentHash, Level, Scope};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
-/// Every request goes to the browser, and a persona may leave a page
-/// after half a second.
-const BROWSER_FAST: &str = "defaults: { render: browser, pacing: fast, active_hours: ignore, min_dwell: 500ms }\ndomains: {}\n";
+/// A persona may leave a page after half a second.
+const BROWSER_FAST: &str =
+    "defaults: { pacing: fast, active_hours: ignore, min_dwell: 500ms }\ndomains: {}\n";
+
+/// A page of Cloudflare's that turns the visitor away.
+const CLOUDFLARE_WALL: &str = "<html><head><title>Attention Required! | Cloudflare</title></head>\
+                               <body><h1>Sorry, you have been blocked</h1>\
+                               <p>You are unable to access this site. Cloudflare Ray ID: 8f1</p></body></html>";
 
 fn page(title: &str) -> ResponseTemplate {
     ResponseTemplate::new(200).set_body_raw(article(title), "text/html; charset=utf-8")
@@ -49,9 +54,17 @@ fn site_header(request: &wiremock::Request, name: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// How many requests the store holds.
+async fn count_requests(api: &Api) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM requests")
+        .fetch_one(api.lab.store().pool())
+        .await
+        .unwrap()
+}
+
 #[tokio::test]
 async fn a_page_is_fetched_on_the_http_path_and_found_again_by_its_id() {
-    let mut api = Api::start(2, 149, LENIENT_FAST).await;
+    let mut api = Api::start(2, 149, FAST).await;
     serve(
         &api,
         "/page",
@@ -66,7 +79,7 @@ async fn a_page_is_fetched_on_the_http_path_and_found_again_by_its_id() {
         .post(
             &token,
             "/v1/fetch",
-            &json!({ "url": Api::url("/page"), "render": "http" }),
+            &json!({ "url": Api::url("/page"), "level": 1 }),
         )
         .await;
 
@@ -76,12 +89,15 @@ async fn a_page_is_fetched_on_the_http_path_and_found_again_by_its_id() {
     assert_eq!(result["outcome"], "ok");
     assert_eq!(result["status"], 200);
     assert_eq!(result["final_url"], Api::url("/page"));
-    assert_eq!(result["escalated"], false);
+    // The result names the level it was made at; nothing moves a request
+    // from one level to another, so nothing says it moved.
+    assert_eq!(result["level"], 1);
+    assert!(result.get("escalated").is_none(), "{result}");
     assert_eq!(result["cached"], false);
     // The request's id is the result's, and the answer's header.
     let id = result["id"].as_str().unwrap().to_owned();
     assert_eq!(reply.header("x-request-id"), Some(id.as_str()));
-    // An http render returns the body and the headers unless told
+    // The http path returns the body and the headers unless told
     // otherwise; it has no document.
     assert!(
         result["raw_body"]
@@ -116,6 +132,9 @@ async fn a_page_is_fetched_on_the_http_path_and_found_again_by_its_id() {
     assert_eq!(attempt["render"], "http");
     assert_eq!(attempt["outcome"], "ok");
     assert_eq!(attempt["persona"], handle);
+    assert_eq!(attempt["engine"], "chromium");
+    // A persona's attempt leaves through its own proxy: no exit to name.
+    assert_eq!(attempt["exit"], Value::Null);
     assert!(attempt.get("seed").is_none());
     let text = String::from_utf8_lossy(&reply.body).into_owned();
     for persona in &api.lab.personas {
@@ -187,7 +206,7 @@ async fn a_page_is_fetched_on_the_http_path_and_found_again_by_its_id() {
         "artifacts",
         "persona",
         "attempts",
-        "escalated",
+        "level",
     ] {
         assert_eq!(stored[member], result[member], "{member}");
     }
@@ -244,7 +263,8 @@ async fn a_page_is_fetched_on_the_http_path_and_found_again_by_its_id() {
         .unwrap()
         .unwrap();
     assert_eq!(record.api_key_id, Some(key));
-    assert_eq!(record.spec["render"], "http");
+    assert_eq!(record.level, Some(Level::Emulated));
+    assert_eq!(record.spec["level"], 1);
     api.shut_down().await;
 }
 
@@ -297,6 +317,7 @@ async fn a_page_is_fetched_in_a_browser_with_what_was_asked_for() {
             "/v1/fetch",
             &json!({
                 "url": url,
+                "level": 3,
                 "include": ["dom", "headers", "xhr", "console", "screenshot"],
                 "behavior": { "scroll_depth": 0, "dwell_ms": 3000, "referer_strategy": "none" },
                 "wait": { "until": "network_idle", "selector": "main", "extra_ms": 250 },
@@ -311,7 +332,10 @@ async fn a_page_is_fetched_in_a_browser_with_what_was_asked_for() {
     assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.json());
     let result = reply.json();
     assert_eq!(result["outcome"], "ok");
+    assert_eq!(result["level"], 3);
     assert_eq!(result["attempts"][0]["render"], "browser");
+    assert_eq!(result["attempts"][0]["engine"], "chromium");
+    assert_eq!(result["attempts"][0]["exit"], Value::Null);
     assert!(
         result["dom_html"]
             .as_str()
@@ -393,6 +417,7 @@ async fn a_page_is_fetched_in_a_browser_with_what_was_asked_for() {
     // The stored result has the document and the responses again.
     let id = result["id"].as_str().unwrap();
     let stored = api.get(&token, &format!("/v1/results/{id}")).await.json();
+    assert_eq!(stored["level"], 3);
     assert_eq!(stored["dom_html"], result["dom_html"]);
     assert_eq!(stored["xhr"], result["xhr"]);
     assert_eq!(stored["artifacts"], result["artifacts"]);
@@ -415,11 +440,15 @@ async fn a_page_is_fetched_in_a_browser_with_what_was_asked_for() {
     );
     assert!(seen_by_admin["behavior"]["seed"].is_string());
 
-    // Without `include`, a browser render returns the document and the
+    // Without `include`, a browser visit returns the document and the
     // headers, keeps the document, and behaves as the policy says. A key
     // with the admin scope is told the seed of what the persona did.
     let plain = api
-        .post(&admin, "/v1/fetch", &json!({ "url": Api::url("/other") }))
+        .post(
+            &admin,
+            "/v1/fetch",
+            &json!({ "url": Api::url("/other"), "level": 3 }),
+        )
         .await
         .json();
     assert_eq!(plain["outcome"], "ok", "{plain}");
@@ -492,6 +521,7 @@ async fn a_sidecar_cannot_hand_over_a_file_outside_its_part_of_the_artifacts_dir
             "/v1/fetch",
             &json!({
                 "url": url,
+                "level": 3,
                 "include": ["screenshot"],
                 "screenshot": { "full_page": true, "format": "webp" },
                 "max_retries": 0,
@@ -523,7 +553,7 @@ async fn count_artifacts(api: &Api) -> i64 {
 
 #[tokio::test]
 async fn a_policy_that_locks_behaviour_ignores_the_requests_and_says_so() {
-    let rules = "defaults: { render: browser, pacing: fast, active_hours: ignore }\n\
+    let rules = "defaults: { pacing: fast, active_hours: ignore }\n\
                  domains:\n  shop.kage.test: { behavior_locked: true, pacing_locked: true }\n";
     let mut api = Api::start(1, 155, rules).await;
     let token = api.key(&[Scope::Fetch]).await;
@@ -534,6 +564,7 @@ async fn a_policy_that_locks_behaviour_ignores_the_requests_and_says_so() {
             "/v1/fetch",
             &json!({
                 "url": Api::url("/page"),
+                "level": 3,
                 "behavior": { "scroll_depth": 0, "dwell_ms": 100 },
                 "pacing": { "profile": "human" },
             }),
@@ -558,277 +589,378 @@ async fn a_policy_that_locks_behaviour_ignores_the_requests_and_says_so() {
 
 #[tokio::test]
 async fn a_request_that_cannot_be_made_as_asked_is_refused_and_nothing_is_fetched() {
-    let mut api = Api::start(1, 149, LENIENT_FAST).await;
+    let mut api = Api::start(1, 149, FAST).await;
     let token = api.key(&[Scope::Fetch, Scope::Sessions]).await;
     let page = Api::url("/page");
     let listing = Api::url("/listing");
 
     let cases: Vec<(Value, StatusCode, &str)> = vec![
+        // The level, before anything else: nothing is decided for the
+        // caller, and a level is one of four.
+        (
+            json!({ "url": page }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "level_required",
+        ),
+        (
+            json!({ "url": page, "level": 4 }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation_failed",
+        ),
+        (
+            json!({ "url": page, "level": "1" }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation_failed",
+        ),
         // The URL, before anything is looked up.
         (
-            json!({ "url": "not a url" }),
+            json!({ "url": "not a url", "level": 3 }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_url",
         ),
         (
-            json!({ "url": "ftp://example.org/file" }),
+            json!({ "url": "ftp://example.org/file", "level": 3 }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_url",
         ),
         (
-            json!({ "url": "https://user:secret@example.org/" }),
+            json!({ "url": "https://user:secret@example.org/", "level": 3 }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_url",
         ),
         (
-            json!({ "url": "http://example.org:0/" }),
+            json!({ "url": "http://example.org:0/", "level": 3 }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_url",
         ),
-        // The SSRF guard (spec §19).
+        // The SSRF guard (spec §19), at every level.
         (
-            json!({ "url": "http://127.0.0.1/admin" }),
+            json!({ "url": "http://127.0.0.1/admin", "level": 0 }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "ssrf_denied",
         ),
         (
-            json!({ "url": "http://10.0.0.5/" }),
+            json!({ "url": "http://10.0.0.5/", "level": 1 }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "ssrf_denied",
         ),
         (
-            json!({ "url": "http://192.168.1.1/" }),
+            json!({ "url": "http://192.168.1.1/", "level": 2 }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "ssrf_denied",
         ),
         (
-            json!({ "url": "http://169.254.169.254/latest/meta-data/" }),
+            json!({ "url": "http://169.254.169.254/latest/meta-data/", "level": 0 }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "ssrf_denied",
         ),
         (
-            json!({ "url": "http://[::1]/" }),
+            json!({ "url": "http://[::1]/", "level": 3 }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "ssrf_denied",
         ),
         (
-            json!({ "url": "http://[fd00::1]/" }),
+            json!({ "url": "http://[fd00::1]/", "level": 3 }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "ssrf_denied",
         ),
         (
-            json!({ "url": "http://localhost/" }),
+            json!({ "url": "http://localhost/", "level": 3 }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "ssrf_denied",
         ),
         (
-            json!({ "url": "http://metadata.google.internal/" }),
+            json!({ "url": "http://metadata.google.internal/", "level": 0 }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "ssrf_denied",
         ),
         (
-            json!({ "url": "http://2130706433/" }),
+            json!({ "url": "http://2130706433/", "level": 3 }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "ssrf_denied",
         ),
         // A public address by number, while `security.allow_ip_targets` is off.
         (
-            json!({ "url": "http://93.184.216.34/" }),
+            json!({ "url": "http://93.184.216.34/", "level": 3 }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "ssrf_denied",
         ),
-        // The header denylist.
+        // The header denylist of a persona's http client: what is the
+        // persona's identity or the transport's.
         (
-            json!({ "url": page, "render": "http", "headers": { "User-Agent": "curl/8" } }),
+            json!({ "url": page, "level": 1, "headers": { "User-Agent": "curl/8" } }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "header_denied",
         ),
         (
-            json!({ "url": page, "render": "http", "headers": { "cookie": "sid=1" } }),
+            json!({ "url": page, "level": 1, "headers": { "cookie": "sid=1" } }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "header_denied",
         ),
         (
-            json!({ "url": page, "render": "http", "headers": { "Host": "other.example" } }),
+            json!({ "url": page, "level": 1, "headers": { "Host": "other.example" } }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "header_denied",
         ),
         (
-            json!({ "url": page, "render": "http", "headers": { "Sec-Fetch-Site": "none" } }),
+            json!({ "url": page, "level": 1, "headers": { "Sec-Fetch-Site": "none" } }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "header_denied",
         ),
         (
-            json!({ "url": page, "render": "http", "headers": { "Sec-CH-UA": "x" } }),
+            json!({ "url": page, "level": 1, "headers": { "Sec-CH-UA": "x" } }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "header_denied",
         ),
         (
-            json!({ "url": page, "render": "http", "headers": { "Accept-Language": "en" } }),
+            json!({ "url": page, "level": 1, "headers": { "Accept-Language": "en" } }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "header_denied",
         ),
         (
-            json!({ "url": page, "render": "http", "headers": { "Proxy-Authorization": "Basic eA==" } }),
+            json!({ "url": page, "level": 1, "headers": { "Proxy-Authorization": "Basic eA==" } }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "header_denied",
         ),
         (
-            json!({ "url": page, "render": "http", "headers": { "Via": "1.1 squid" } }),
+            json!({ "url": page, "level": 1, "headers": { "Via": "1.1 squid" } }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "header_denied",
         ),
         (
-            json!({ "url": page, "render": "http", "headers": { "bad name": "x" } }),
+            json!({ "url": page, "level": 1, "headers": { "bad name": "x" } }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "header_invalid",
         ),
         (
-            json!({ "url": page, "render": "http", "headers": { "X-Note": "line\nbreak" } }),
+            json!({ "url": page, "level": 1, "headers": { "X-Note": "line\nbreak" } }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "header_invalid",
         ),
         (
-            json!({ "url": page, "render": "http", "headers": { "Referer": "about:blank" } }),
+            json!({ "url": page, "level": 1, "headers": { "Referer": "about:blank" } }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "header_invalid",
+        ),
+        // The denylist of a plain client: its caller's request is its own,
+        // but the transport's, the proxy's and the forwarding family are
+        // not.
+        (
+            json!({ "url": page, "level": 0, "headers": { "Proxy-Authorization": "Basic eA==" } }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "header_denied",
+        ),
+        (
+            json!({ "url": page, "level": 0, "headers": { "X-Forwarded-For": "198.51.100.7" } }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "header_denied",
+        ),
+        (
+            json!({ "url": page, "level": 0, "headers": { "Forwarded": "for=198.51.100.7" } }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "header_denied",
+        ),
+        (
+            json!({ "url": page, "level": 0, "headers": { "Accept-Encoding": "identity" } }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "header_denied",
+        ),
+        (
+            json!({ "url": page, "level": 0, "headers": { "Host": "other.example" } }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "header_denied",
         ),
         // What only the http path sends, asked of a browser.
         (
-            json!({ "url": page, "headers": { "X-Note": "1" } }),
+            json!({ "url": page, "level": 3, "headers": { "X-Note": "1" } }),
             StatusCode::UNPROCESSABLE_ENTITY,
-            "render_needs_http",
+            "level_needs_http",
         ),
         (
-            json!({ "url": page, "method": "POST", "body": "a=1" }),
+            json!({ "url": page, "level": 3, "method": "POST", "body": "a=1" }),
             StatusCode::UNPROCESSABLE_ENTITY,
-            "render_needs_http",
+            "level_needs_http",
         ),
         (
-            json!({ "url": page, "render": "browser", "method": "HEAD" }),
+            json!({ "url": page, "level": 2, "method": "HEAD" }),
             StatusCode::UNPROCESSABLE_ENTITY,
-            "render_needs_http",
+            "level_needs_http",
+        ),
+        // A script's request is a browser's emulated: level 1's alone.
+        (
+            json!({ "url": page, "level": 3, "request_kind": "fetch", "headers": { "Referer": listing } }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "level_kind_conflict",
         ),
         (
-            json!({ "url": page, "request_kind": "fetch", "headers": { "Referer": listing } }),
+            json!({ "url": page, "level": 0, "request_kind": "xhr", "headers": { "Referer": listing } }),
             StatusCode::UNPROCESSABLE_ENTITY,
-            "render_kind_conflict",
+            "level_kind_conflict",
         ),
-        // A script's request.
         (
-            json!({ "url": page, "render": "http", "request_kind": "xhr" }),
+            json!({ "url": page, "level": 1, "request_kind": "xhr" }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "request_kind_needs_referer",
         ),
         (
-            json!({ "url": page, "render": "http", "request_kind": "fetch", "headers": { "Referer": listing, "X-Requested-With": "XMLHttpRequest" } }),
+            json!({ "url": page, "level": 1, "request_kind": "fetch", "headers": { "Referer": listing, "X-Requested-With": "XMLHttpRequest" } }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "header_not_placeable",
         ),
         (
-            json!({ "url": "https://api.example.org/items", "render": "http", "request_kind": "fetch", "method": "POST", "body": "{}", "headers": { "Referer": "https://www.example.org/", "Content-Type": "application/json" } }),
+            json!({ "url": "https://api.example.org/items", "level": 1, "request_kind": "fetch", "method": "POST", "body": "{}", "headers": { "Referer": "https://www.example.org/", "Content-Type": "application/json" } }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "preflight_required",
         ),
-        // What a browser cannot produce on the http path.
+        // What only a browser produces, asked of the http path.
         (
-            json!({ "url": page, "render": "http", "include": ["dom"] }),
+            json!({ "url": page, "level": 1, "include": ["dom"] }),
             StatusCode::UNPROCESSABLE_ENTITY,
-            "render_include_conflict",
+            "level_include_conflict",
         ),
         (
-            json!({ "url": page, "render": "http", "include": ["raw", "screenshot"] }),
+            json!({ "url": page, "level": 0, "include": ["raw", "screenshot"] }),
             StatusCode::UNPROCESSABLE_ENTITY,
-            "render_include_conflict",
+            "level_include_conflict",
+        ),
+        // What a level has no use for is refused, not ignored: a plain
+        // client has no persona and is paced by the site, the http path
+        // has no page to wait on, and a still visit does nothing on its
+        // page. A session is a persona's.
+        (
+            json!({ "url": page, "level": 0, "persona": { "countries": ["DE"] } }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation_failed",
+        ),
+        (
+            json!({ "url": page, "level": 0, "pacing": { "profile": "fast" } }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation_failed",
+        ),
+        (
+            json!({ "url": page, "level": 1, "wait": { "until": "load" } }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation_failed",
+        ),
+        (
+            json!({ "url": page, "level": 1, "behavior": { "dwell_ms": 3000 } }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation_failed",
+        ),
+        (
+            json!({ "url": page, "level": 2, "behavior": { "dwell_ms": 3000 } }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation_failed",
+        ),
+        (
+            json!({ "url": page, "level": 0, "session_id": "s1" }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "session_needs_persona",
         ),
         // Time.
         (
-            json!({ "url": page, "timeout_ms": 5000 }),
+            json!({ "url": page, "level": 3, "timeout_ms": 5000 }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "timeout_too_short",
         ),
         (
-            json!({ "url": page, "render": "http", "timeout_ms": 500 }),
+            json!({ "url": page, "level": 2, "timeout_ms": 14_999 }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "timeout_too_short",
         ),
         (
-            json!({ "url": page, "timeout_ms": 300_001 }),
+            json!({ "url": page, "level": 1, "timeout_ms": 500 }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "timeout_too_short",
+        ),
+        (
+            json!({ "url": page, "level": 0, "timeout_ms": 999 }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "timeout_too_short",
+        ),
+        (
+            json!({ "url": page, "level": 3, "timeout_ms": 300_001 }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "validation_failed",
         ),
         // Pacing and behaviour.
         (
-            json!({ "url": page, "pacing": { "profile": "warp" } }),
+            json!({ "url": page, "level": 3, "pacing": { "profile": "warp" } }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_pacing",
         ),
         (
-            json!({ "url": page, "behavior": { "scroll_depth": 1.5 } }),
+            json!({ "url": page, "level": 3, "behavior": { "scroll_depth": 1.5 } }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "validation_failed",
         ),
         (
-            json!({ "url": page, "behavior": { "dwell_ms": 600_000 } }),
+            json!({ "url": page, "level": 3, "behavior": { "dwell_ms": 600_000 } }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "validation_failed",
         ),
         (
-            json!({ "url": page, "max_retries": 11 }),
+            json!({ "url": page, "level": 3, "max_retries": 11 }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "validation_failed",
         ),
         (
-            json!({ "url": page, "persona": { "countries": ["Germany"] } }),
+            json!({ "url": page, "level": 3, "persona": { "countries": ["Germany"] } }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "validation_failed",
         ),
         // What the site's policy does not let a request ask for is
         // refused, not ignored.
         (
-            json!({ "url": page, "robots": "enforce" }),
+            json!({ "url": page, "level": 3, "robots": "enforce" }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "robots_ignored",
         ),
         (
-            json!({ "url": page, "cache_ttl_s": 86_401 }),
+            json!({ "url": page, "level": 3, "cache_ttl_s": 86_401 }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "cache_ttl_too_long",
         ),
         (
-            json!({ "url": page, "extract": { "links": false } }),
+            json!({ "url": page, "level": 3, "extract": { "links": false } }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "validation_failed",
         ),
-        // What the API does not take at all.
+        // What the API does not take at all, the render mode of 1.x among
+        // it: the level names the path.
         (
-            json!({ "url": page, "locale": "de-DE" }),
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "validation_failed",
-        ),
-        (
-            json!({ "url": page, "proxy": "http://127.0.0.1:8080" }),
+            json!({ "url": page, "level": 3, "locale": "de-DE" }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "validation_failed",
         ),
         (
-            json!({ "url": page, "render": "curl" }),
+            json!({ "url": page, "level": 3, "proxy": "http://127.0.0.1:8080" }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "validation_failed",
         ),
         (
-            json!({ "render": "http" }),
+            json!({ "url": page, "level": 1, "render": "http" }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation_failed",
+        ),
+        (
+            json!({ "url": page, "render": "browser" }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation_failed",
+        ),
+        (
+            json!({ "level": 1 }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "validation_failed",
         ),
         // Sessions.
         (
-            json!({ "url": page, "session_id": "has space" }),
+            json!({ "url": page, "level": 1, "session_id": "has space" }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_session_id",
         ),
         (
-            json!({ "url": page, "session_id": "never-opened" }),
+            json!({ "url": page, "level": 1, "session_id": "never-opened" }),
             StatusCode::NOT_FOUND,
             "session_not_found",
         ),
@@ -844,7 +976,7 @@ async fn a_request_that_cannot_be_made_as_asked_is_refused_and_nothing_is_fetche
         .post(
             &token,
             "/v1/fetch",
-            &json!({ "url": page, "timeout_ms": 5000 }),
+            &json!({ "url": page, "level": 3, "timeout_ms": 5000 }),
         )
         .await;
     let problem = reply.problem(StatusCode::UNPROCESSABLE_ENTITY, "timeout_too_short");
@@ -854,11 +986,56 @@ async fn a_request_that_cannot_be_made_as_asked_is_refused_and_nothing_is_fetche
         .post(
             &token,
             "/v1/fetch",
-            &json!({ "url": page, "render": "http", "headers": { "User-Agent": "curl/8" } }),
+            &json!({ "url": page, "level": 0, "timeout_ms": 999 }),
+        )
+        .await;
+    let problem = reply.problem(StatusCode::UNPROCESSABLE_ENTITY, "timeout_too_short");
+    assert_eq!(problem["minimum_ms"], 1_000);
+    let reply = api
+        .post(
+            &token,
+            "/v1/fetch",
+            &json!({ "url": page, "level": 1, "headers": { "User-Agent": "curl/8" } }),
         )
         .await;
     let problem = reply.problem(StatusCode::UNPROCESSABLE_ENTITY, "header_denied");
     assert_eq!(problem["header"], "User-Agent");
+    let reply = api
+        .post(
+            &token,
+            "/v1/fetch",
+            &json!({ "url": page, "level": 2, "method": "HEAD" }),
+        )
+        .await;
+    let problem = reply.problem(StatusCode::UNPROCESSABLE_ENTITY, "level_needs_http");
+    assert_eq!(problem["field"], "method");
+    let reply = api
+        .post(
+            &token,
+            "/v1/fetch",
+            &json!({ "url": page, "level": 0, "include": ["raw", "screenshot"] }),
+        )
+        .await;
+    let problem = reply.problem(StatusCode::UNPROCESSABLE_ENTITY, "level_include_conflict");
+    assert_eq!(problem["include"], "screenshot");
+    for (body, field) in [
+        (json!({ "url": page, "level": 4 }), "level"),
+        (
+            json!({ "url": page, "level": 0, "pacing": { "profile": "fast" } }),
+            "pacing",
+        ),
+        (
+            json!({ "url": page, "level": 2, "behavior": { "dwell_ms": 3000 } }),
+            "behavior",
+        ),
+        (
+            json!({ "url": page, "level": 3, "request_kind": "fetch", "headers": { "Referer": listing } }),
+            "request_kind",
+        ),
+    ] {
+        let reply = api.post(&token, "/v1/fetch", &body).await;
+        assert_eq!(reply.json()["field"], field, "{body}");
+    }
     // A body that is not JSON, or not said to be.
     let mut raw = request(Method::POST, "/v1/fetch", Some(&token), None);
     *raw.body_mut() = axum::body::Body::from("{\"url\": ");
@@ -868,7 +1045,7 @@ async fn a_request_that_cannot_be_made_as_asked_is_refused_and_nothing_is_fetche
         .await
         .problem(StatusCode::BAD_REQUEST, "invalid_request");
     let mut untyped = request(Method::POST, "/v1/fetch", Some(&token), None);
-    *untyped.body_mut() = axum::body::Body::from(json!({ "url": page }).to_string());
+    *untyped.body_mut() = axum::body::Body::from(json!({ "url": page, "level": 1 }).to_string());
     api.send(untyped)
         .await
         .problem(StatusCode::UNSUPPORTED_MEDIA_TYPE, "unsupported_media_type");
@@ -880,19 +1057,13 @@ async fn a_request_that_cannot_be_made_as_asked_is_refused_and_nothing_is_fetche
             .chromium
             .with(|sidecar| sidecar.navigated.is_empty())
     );
-    let since = chrono::Utc::now() - chrono::Duration::hours(1);
-    let stored: i64 = sqlx::query_scalar("SELECT count(*) FROM requests WHERE created_at >= $1")
-        .bind(since)
-        .fetch_one(api.lab.store().pool())
-        .await
-        .unwrap();
-    assert_eq!(stored, 0);
+    assert_eq!(count_requests(&api).await, 0);
     api.shut_down().await;
 }
 
 #[tokio::test]
 async fn a_redirect_to_a_denied_address_ends_the_fetch_and_returns_nothing_of_it() {
-    let mut api = Api::start(2, 149, LENIENT_FAST).await;
+    let mut api = Api::start(2, 149, FAST).await;
     let token = api.key(&[Scope::Fetch]).await;
     serve(
         &api,
@@ -916,7 +1087,7 @@ async fn a_redirect_to_a_denied_address_ends_the_fetch_and_returns_nothing_of_it
             .post(
                 &token,
                 "/v1/fetch",
-                &json!({ "url": Api::url(at), "render": "http", "include": ["raw", "headers"] }),
+                &json!({ "url": Api::url(at), "level": 1, "include": ["raw", "headers"] }),
             )
             .await;
         // A fetch was made and ended: the answer is a result.
@@ -961,7 +1132,7 @@ async fn a_redirect_to_a_denied_address_ends_the_fetch_and_returns_nothing_of_it
         .post(
             &token,
             "/v1/fetch",
-            &json!({ "url": url, "render": "browser", "include": ["dom", "headers", "xhr"] }),
+            &json!({ "url": url, "level": 3, "include": ["dom", "headers", "xhr"] }),
         )
         .await
         .json();
@@ -977,11 +1148,11 @@ async fn the_host_looks_names_up_only_when_told_to() {
     // Off (the default): a name is the proxy's to resolve. Nothing here
     // asks a resolver, so a name nobody can resolve is fetched and fails
     // as a fetch.
-    let mut api = Api::start(1, 149, LENIENT_FAST).await;
+    let mut api = Api::start(1, 149, FAST).await;
     let token = api.key(&[Scope::Fetch]).await;
     let body = json!({
         "url": "http://kage-no-such-host.invalid/",
-        "render": "http",
+        "level": 1,
         "max_retries": 0,
     });
     let reply = api.post(&token, "/v1/fetch", &body).await;
@@ -992,7 +1163,7 @@ async fn the_host_looks_names_up_only_when_told_to() {
 
     // On: the name is looked up here first, and one that resolves to
     // nothing is refused before a persona is asked.
-    let mut api = Api::start_with(1, 149, LENIENT_FAST, |config| {
+    let mut api = Api::start_with(1, 149, FAST, |config| {
         config.security.resolve_on_host = true;
     })
     .await;
@@ -1008,7 +1179,7 @@ async fn the_host_looks_names_up_only_when_told_to() {
 
 #[tokio::test]
 async fn a_fetch_that_outlasts_the_wall_time_is_answered_202_and_its_result_comes_later() {
-    let mut api = Api::start_with(1, 149, LENIENT_FAST, |config| {
+    let mut api = Api::start_with(1, 149, FAST, |config| {
         config.scheduler.sync_wall_time =
             kage_core::duration::HumanDuration::new(Duration::from_millis(300));
     })
@@ -1026,7 +1197,7 @@ async fn a_fetch_that_outlasts_the_wall_time_is_answered_202_and_its_result_come
         .post(
             &token,
             "/v1/fetch",
-            &json!({ "url": Api::url("/slow"), "render": "http" }),
+            &json!({ "url": Api::url("/slow"), "level": 1 }),
         )
         .await;
 
@@ -1072,6 +1243,8 @@ async fn a_fetch_that_outlasts_the_wall_time_is_answered_202_and_its_result_come
     }
     assert_eq!(result["state"], "finished", "{result}");
     assert_eq!(result["outcome"], "ok");
+    // The result a job carried on names the level of its request too.
+    assert_eq!(result["level"], 1);
     assert!(
         result["raw_body"]
             .as_str()
@@ -1102,7 +1275,7 @@ async fn a_fetch_that_outlasts_the_wall_time_is_answered_202_and_its_result_come
 
 #[tokio::test]
 async fn a_scripts_request_goes_out_as_one_and_a_navigation_as_a_navigation() {
-    let mut api = Api::start(1, 149, LENIENT_FAST).await;
+    let mut api = Api::start(1, 149, FAST).await;
     let token = api.key(&[Scope::Fetch]).await;
     serve(
         &api,
@@ -1128,7 +1301,7 @@ async fn a_scripts_request_goes_out_as_one_and_a_navigation_as_a_navigation() {
         .post(
             &token,
             "/v1/fetch",
-            &json!({ "url": Api::url("/api/items"), "render": "http" }),
+            &json!({ "url": Api::url("/api/items"), "level": 1 }),
         )
         .await
         .json();
@@ -1142,7 +1315,7 @@ async fn a_scripts_request_goes_out_as_one_and_a_navigation_as_a_navigation() {
             "/v1/fetch",
             &json!({
                 "url": Api::url("/api/items"),
-                "render": "http",
+                "level": 1,
                 "request_kind": "fetch",
                 "headers": { "Referer": listing, "Accept": "application/json" },
             }),
@@ -1158,7 +1331,7 @@ async fn a_scripts_request_goes_out_as_one_and_a_navigation_as_a_navigation() {
             "/v1/fetch",
             &json!({
                 "url": Api::url("/api/search"),
-                "render": "http",
+                "level": 1,
                 "request_kind": "xhr",
                 "method": "POST",
                 "body": "{\"q\":\"shoes\"}",
@@ -1220,9 +1393,7 @@ async fn a_block_is_a_result_and_what_the_api_cannot_do_is_a_problem() {
     let wall = json!({
         "status": 403,
         "title": "Attention Required! | Cloudflare",
-        "dom_html": "<html><head><title>Attention Required! | Cloudflare</title></head>\
-                     <body><h1>Sorry, you have been blocked</h1>\
-                     <p>You are unable to access this site. Cloudflare Ray ID: 8f1</p></body></html>",
+        "dom_html": CLOUDFLARE_WALL,
     });
     api.lab.chromium.with(|sidecar| {
         sidecar.next_pages.push_back(wall.clone());
@@ -1231,11 +1402,16 @@ async fn a_block_is_a_result_and_what_the_api_cannot_do_is_a_problem() {
 
     // Every persona met the wall: the answer is 200, and says who blocked.
     let reply = api
-        .post(&token, "/v1/fetch", &json!({ "url": Api::url("/guarded") }))
+        .post(
+            &token,
+            "/v1/fetch",
+            &json!({ "url": Api::url("/guarded"), "level": 3 }),
+        )
         .await;
     assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.json());
     let result = reply.json();
     assert_eq!(result["outcome"], "forbidden", "{result}");
+    assert_eq!(result["level"], 3);
     assert_eq!(result["status"], 403);
     assert_eq!(result["block"]["vendor"], "cloudflare");
     assert!(result["block"]["confidence"].as_f64().unwrap() > 0.5);
@@ -1247,14 +1423,313 @@ async fn a_block_is_a_result_and_what_the_api_cannot_do_is_a_problem() {
 
     // Without a pool nothing can be fetched: Kage never connects itself.
     let bare = api.with_parts(|parts| parts.engine = None);
-    let sent = request(
-        Method::POST,
-        "/v1/fetch",
-        Some(&token),
-        Some(&json!({ "url": Api::url("/page") })),
-    );
-    ask(&bare, sent)
+    for level in 0..=3 {
+        let sent = request(
+            Method::POST,
+            "/v1/fetch",
+            Some(&token),
+            Some(&json!({ "url": Api::url("/page"), "level": level })),
+        );
+        ask(&bare, sent)
+            .await
+            .problem(StatusCode::SERVICE_UNAVAILABLE, "unavailable");
+    }
+    api.shut_down().await;
+}
+
+/// 1.x moved a request that was blocked on the http path to the same
+/// persona's browser. 2.0 does not: the level is the request's ceiling. A
+/// block at level 1 is the next persona's turn on the http path, after a
+/// pause, and the result is the block when every turn met it.
+#[tokio::test]
+async fn a_block_at_level_one_is_another_personas_turn_and_never_a_browsers() {
+    let mut api = Api::start(2, 149, FAST).await;
+    let token = api.key(&[Scope::Fetch]).await;
+    serve(
+        &api,
+        "/guarded",
+        ResponseTemplate::new(403)
+            .insert_header("server", "cloudflare")
+            .insert_header("cf-ray", "8f1-FRA")
+            .set_body_raw(CLOUDFLARE_WALL, "text/html; charset=utf-8"),
+    )
+    .await;
+
+    let reply = api
+        .post(
+            &token,
+            "/v1/fetch",
+            &json!({ "url": Api::url("/guarded"), "level": 1, "max_retries": 1 }),
+        )
+        .await;
+
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.json());
+    let result = reply.json();
+    assert_eq!(result["outcome"], "forbidden", "{result}");
+    assert_eq!(result["level"], 1);
+    assert_eq!(result["block"]["vendor"], "cloudflare");
+    assert!(result.get("escalated").is_none(), "{result}");
+    let attempts = result["attempts"].as_array().unwrap();
+    assert_eq!(attempts.len(), 2, "{result}");
+    for attempt in attempts {
+        assert_eq!(attempt["render"], "http", "{attempt}");
+        assert_eq!(attempt["outcome"], "forbidden", "{attempt}");
+    }
+    assert_ne!(attempts[0]["persona"], attempts[1]["persona"]);
+    // The site saw two visitors on the wire, and no browser was opened.
+    assert_eq!(api.lab.received("/guarded").await.len(), 2);
+    let (navigated, opened) = api
+        .lab
+        .chromium
+        .with(|sidecar| (sidecar.navigated.len(), sidecar.opened.len()));
+    assert_eq!((navigated, opened), (0, 0));
+    api.shut_down().await;
+}
+
+#[tokio::test]
+async fn a_request_names_its_level_and_is_never_raised_to_the_floor_of_its_site() {
+    // The shop takes a persona's browser and nothing below it.
+    let rules = "defaults: { pacing: fast, active_hours: ignore, min_dwell: 500ms }\n\
+                 domains:\n  shop.kage.test: { min_level: 2 }\n";
+    let mut api = Api::start(1, 149, rules).await;
+    let token = api.key(&[Scope::Fetch]).await;
+    let page = Api::url("/page");
+
+    // Nothing is decided for a request that names no level.
+    let problem = api
+        .post(&token, "/v1/fetch", &json!({ "url": page }))
         .await
-        .problem(StatusCode::SERVICE_UNAVAILABLE, "unavailable");
+        .problem(StatusCode::UNPROCESSABLE_ENTITY, "level_required");
+    assert_eq!(problem["field"], "level");
+
+    // Below the site's floor a request is refused, not raised, and the
+    // refusal names the floor.
+    for level in [0, 1] {
+        let problem = api
+            .post(&token, "/v1/fetch", &json!({ "url": page, "level": level }))
+            .await
+            .problem(StatusCode::UNPROCESSABLE_ENTITY, "level_below_policy");
+        assert_eq!(problem["field"], "level", "{level}");
+        assert_eq!(problem["min_level"], 2, "{level}");
+    }
+    // The preview of the site's policy says the same; another site has
+    // the default floor.
+    let preview = api
+        .get(&token, "/v1/policies/domains/shop.kage.test")
+        .await
+        .json();
+    assert_eq!(preview["min_level"], 2, "{preview}");
+    let elsewhere = api
+        .get(&token, "/v1/policies/domains/example.org")
+        .await
+        .json();
+    assert_eq!(elsewhere["min_level"], 0, "{elsewhere}");
+    assert!(api.lab.site.received_requests().await.unwrap().is_empty());
+    assert!(
+        api.lab
+            .chromium
+            .with(|sidecar| sidecar.navigated.is_empty())
+    );
+    assert_eq!(count_requests(&api).await, 0);
+
+    // At the floor and above it the page is fetched in the persona's
+    // browser, at the level the request named: a still visit at 2, a
+    // person's at 3.
+    for level in [2, 3] {
+        let reply = api
+            .post(&token, "/v1/fetch", &json!({ "url": page, "level": level }))
+            .await;
+        assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.json());
+        let result = reply.json();
+        assert_eq!(result["outcome"], "ok", "{result}");
+        assert_eq!(result["level"], level);
+        assert_eq!(result["attempts"][0]["render"], "browser");
+    }
+    let navigated = api.lab.chromium.with(|sidecar| sidecar.navigated.clone());
+    let [still, person] = navigated.as_slice() else {
+        panic!("two navigations, not {navigated:?}");
+    };
+    assert_eq!(still["behavior"]["wander"], false, "{still}");
+    assert_eq!(still["behavior"]["scroll_depth"], Value::Null, "{still}");
+    assert!(
+        person["behavior"]["scroll_depth"].as_f64().unwrap() > 0.0,
+        "{person}"
+    );
+    api.shut_down().await;
+}
+
+#[tokio::test]
+async fn level_one_is_refused_where_no_browser_of_the_installation_has_an_http_profile() {
+    // Chromium 155 has no verified wire fingerprint of its own.
+    let mut api = Api::start(1, 155, BROWSER_FAST).await;
+    let token = api.key(&[Scope::Fetch]).await;
+    let page = Api::url("/page");
+
+    let problem = api
+        .post(&token, "/v1/fetch", &json!({ "url": page, "level": 1 }))
+        .await
+        .problem(StatusCode::UNPROCESSABLE_ENTITY, "level_unavailable");
+    assert_eq!(problem["field"], "level");
+    assert!(api.lab.site.received_requests().await.unwrap().is_empty());
+    assert_eq!(count_requests(&api).await, 0);
+
+    // The persona's browser is there all the same.
+    let result = api
+        .post(&token, "/v1/fetch", &json!({ "url": page, "level": 3 }))
+        .await
+        .json();
+    assert_eq!(result["outcome"], "ok", "{result}");
+    assert_eq!(result["level"], 3);
+    api.shut_down().await;
+}
+
+#[tokio::test]
+async fn a_session_is_a_personas_and_a_plain_client_has_none() {
+    let mut api = Api::start(1, 149, FAST).await;
+    let token = api.key(&[Scope::Fetch, Scope::Sessions]).await;
+    serve(&api, "/page", page("The shop")).await;
+    let opened = api
+        .post(&token, "/v1/sessions", &json!({ "id": "visit" }))
+        .await;
+    assert_eq!(opened.status, StatusCode::CREATED, "{:?}", opened.json());
+
+    // An open session does not give level 0 a persona.
+    let problem = api
+        .post(
+            &token,
+            "/v1/fetch",
+            &json!({ "url": Api::url("/page"), "level": 0, "session_id": "visit" }),
+        )
+        .await
+        .problem(StatusCode::UNPROCESSABLE_ENTITY, "session_needs_persona");
+    assert_eq!(problem["field"], "session_id");
+    assert!(api.lab.received("/page").await.is_empty());
+
+    // At a persona's level the session's persona makes it.
+    let result = api
+        .post(
+            &token,
+            "/v1/fetch",
+            &json!({ "url": Api::url("/page"), "level": 1, "session_id": "visit" }),
+        )
+        .await
+        .json();
+    assert_eq!(result["outcome"], "ok", "{result}");
+    assert_eq!(result["session_id"], "visit");
+    assert_eq!(result["persona"]["id"], opened.json()["persona"]["id"]);
+    api.shut_down().await;
+}
+
+#[tokio::test]
+async fn a_plain_client_says_it_is_kage_sends_the_callers_headers_and_keeps_no_credential() {
+    let mut api = Api::start(2, 149, FAST).await;
+    let token = api.key(&[Scope::Fetch]).await;
+    serve(
+        &api,
+        "/plain",
+        page("The shop").insert_header("set-cookie", "sid=fresh; Path=/"),
+    )
+    .await;
+
+    let reply = api
+        .post(
+            &token,
+            "/v1/fetch",
+            &json!({
+                "url": Api::url("/plain"),
+                "level": 0,
+                "headers": {
+                    "Cookie": "sid=abc123",
+                    "Authorization": "Bearer t0k3n",
+                    "X-Api": "1",
+                },
+            }),
+        )
+        .await;
+
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.json());
+    let result = reply.json();
+    assert_eq!(result["outcome"], "ok", "{result}");
+    assert_eq!(result["level"], 0);
+    // No persona made it: none is named, and nothing a persona does on a
+    // page is said.
+    assert_eq!(result["persona"], Value::Null);
+    assert_eq!(result["behavior"], Value::Null);
+    let [attempt] = result["attempts"].as_array().unwrap().as_slice() else {
+        panic!("one attempt, not {}", result["attempts"]);
+    };
+    assert_eq!(attempt["render"], "http");
+    assert_eq!(attempt["persona"], Value::Null);
+    assert_eq!(attempt["engine"], Value::Null);
+    // It left through the pool, the only exit there is under
+    // `egress.mode: proxies`.
+    assert_eq!(attempt["exit"], "pool");
+    assert!(
+        result["raw_body"]
+            .as_str()
+            .unwrap()
+            .contains("<h1>The shop</h1>")
+    );
+
+    // The site saw a client that says it is Kage, with the caller's own
+    // headers and nothing of a person.
+    let received = api.lab.received("/plain").await;
+    assert_eq!(received.len(), 1);
+    let agent = site_header(&received[0], "user-agent").unwrap();
+    assert!(agent.starts_with("kage/"), "{agent}");
+    assert_eq!(
+        site_header(&received[0], "cookie").as_deref(),
+        Some("sid=abc123")
+    );
+    assert_eq!(
+        site_header(&received[0], "authorization").as_deref(),
+        Some("Bearer t0k3n")
+    );
+    assert_eq!(site_header(&received[0], "x-api").as_deref(), Some("1"));
+    assert_eq!(site_header(&received[0], "accept-language"), None);
+    // One proxy of the pool carried it.
+    let carried: Vec<usize> = api
+        .lab
+        .proxies
+        .iter()
+        .map(|proxy| proxy.plain().len())
+        .collect();
+    assert_eq!(carried.iter().sum::<usize>(), 1, "{carried:?}");
+    // The caller's credentials are not in the answer.
+    let text = String::from_utf8_lossy(&reply.body).into_owned();
+    assert!(
+        !text.contains("abc123") && !text.contains("t0k3n"),
+        "{text}"
+    );
+
+    // The request is on record with the level and the headers it named,
+    // and without the values of the caller's credentials.
+    let id = result["id"].as_str().unwrap().to_owned();
+    let record = api
+        .lab
+        .store()
+        .requests()
+        .get(id.parse().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.level, Some(Level::Plain));
+    assert_eq!(record.spec["level"], 0);
+    assert_eq!(record.spec["headers"]["Cookie"], "[redacted]");
+    assert_eq!(record.spec["headers"]["Authorization"], "[redacted]");
+    assert_eq!(record.spec["headers"]["X-Api"], "1");
+    let kept = record.spec.to_string();
+    assert!(
+        !kept.contains("abc123") && !kept.contains("t0k3n"),
+        "{kept}"
+    );
+
+    // Found again by its id, as it was answered.
+    let stored = api.get(&token, &format!("/v1/results/{id}")).await;
+    assert_eq!(stored.status, StatusCode::OK, "{:?}", stored.json());
+    let stored = stored.json();
+    for member in ["level", "outcome", "persona", "attempts", "raw_body"] {
+        assert_eq!(stored[member], result[member], "{member}");
+    }
     api.shut_down().await;
 }
