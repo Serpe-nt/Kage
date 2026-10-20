@@ -33,16 +33,25 @@ stored proxy credentials sealed until the next sync with the provider
 ## 2. The proxies
 
 By default Kage fetches only through proxies, one persona per proxy
-([proxies.md](proxies.md)). Give it one of the two:
+([proxies.md](proxies.md), "Three ways to run"). Give it one of the two:
 
 - **Webshare**: add `KAGE_WEBSHARE_API_KEY=<key>` to `deploy/.env`. The
-  pool is the account's static residential proxies.
-- **A static list**: the list in `KAGE__PROXIES__STATIC_LIST` (one
-  `host:port:username:password:country` per line), or in a file named by
-  `KAGE__PROXIES__STATIC_LIST_FILE`, given to the `kage` service.
+  pool is the account's static residential proxies, placed where the geo
+  lookup finds them.
+- **A declared list** of any vendor's proxies: the list in
+  `KAGE__PROXIES__STATIC_LIST`, or better in a file named by
+  `KAGE__PROXIES__STATIC_LIST_FILE` (read again at every sync), given to
+  the `kage` service. One `host:port:username:password:country[:locale]`
+  per line, or the YAML form with `timezone` and `city`. **Each entry's
+  country is a declaration**: its persona speaks that country's language
+  (or the declared locale's) in its zone, and a lookup only verifies it.
+  An entry without a country carries no persona and serves level 0 only.
+  Its probes read the public echo `checkip.amazonaws.com`, whose operator
+  sees every proxy address; name your own echo to keep the pool private.
 
-Kage takes Webshare when its key is set, else the static list
-(`proxies.provider: auto`).
+Kage takes Webshare when its key is set, else the declared list
+(`proxies.provider: auto`). `kage config check` says which, and what it
+cannot do (a list replaces nothing).
 
 Without either the stack starts, the pool stays empty, and every fetch is
 answered without an attempt.

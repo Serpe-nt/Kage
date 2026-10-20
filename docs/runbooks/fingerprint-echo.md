@@ -154,6 +154,13 @@ The echo answers every path and method with one JSON document:
 | `http2` | `akamai`, the SETTINGS, the window update, priority frames, the pseudo-header order, and every header of the HEADERS frame in wire order. |
 | `http1` | For an HTTP/1.1 request instead: the request line and the header lines exactly as sent. |
 
+The same echo serves the pool's health probes: name it in
+`proxies.health.echo_url` (and `proxies.health.host_ip_url`, which the host
+reads directly) and the probes read `peer` from it instead of a public
+echo, so no third party sees the pool's addresses
+([proxies.md](proxies.md#the-echo-and-who-sees-the-pool)). A declared list
+needs this most: without it every probe reads `checkip.amazonaws.com`.
+
 A host name that starts with `h1.` is offered HTTP/1.1 only. That is how
 the HTTP/1.1 header tables are exercised against a client that prefers
 HTTP/2; give the name its own DNS record and include it in the certificate

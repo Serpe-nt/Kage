@@ -77,7 +77,7 @@ The outcome is `provider_error` and the reason says why:
 | `bandwidth_exhausted` | The bandwidth budget of the term is used up and `bandwidth.hard_stop` is on. | Below. |
 | `domain_paused` | The domain's circuit breaker is open; the answer names when to ask again. | Below. |
 | `no_persona` | No persona can serve the request: none is ready, none matches the engines and countries of the policy and the request, or none has an http path for level 1. | `kage persona list`. |
-| `plain_exit_unavailable` | Level 0 under the pool: the site's one plain exit (its scout's proxy) cannot carry traffic now, or nobody may scout the site. Nothing is sent from another address; `retry_at` says when to ask again, and a job's page waits. | [levels-and-egress.md](levels-and-egress.md#under-the-pool-egressmode-proxies). |
+| `plain_exit_unavailable` | Level 0 under the pool: the site's one plain exit (one of the pool's own plain exits, else its scout's proxy) cannot carry traffic now, or nobody may scout the site. Nothing is sent from another address; `retry_at` says when to ask again, and a job's page waits. | [levels-and-egress.md](levels-and-egress.md#under-the-pool-egressmode-proxies). |
 | `shutting_down` | The server is stopping: the request waited for a persona when the signal came, and nothing was asked of the site. | Ask again when it is back. |
 
 An attempt can end with a reason too, when it was not the site that

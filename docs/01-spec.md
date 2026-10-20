@@ -198,16 +198,17 @@ All ids are UUIDv7. Timestamps are UTC.
 | Field | Type | Notes |
 |---|---|---|
 | id | uuid | |
-| provider | enum | `webshare`, `static` |
-| provider_ref | text | Webshare proxy id |
+| provider | enum | `webshare`, `static` (the operator's declared list), `host` (the host's own connection, §25) |
+| provider_ref | text | the provider's id: Webshare's proxy id, a declared entry's `id` (`host:port` unless given), `host-1` to `host-4` |
 | host, port | text, int | |
 | username, password | bytea (both ciphertext, see §19) | |
 | scheme | enum | `http` (CONNECT). SOCKS5 unsupported in v1. |
-| country, city, asn | text | from provider; the observed geo record in `last_health` is authoritative for personas, the provider country is the fallback |
+| country, city, asn | text | from provider. For Webshare the observed geo record in `last_health` is authoritative for personas and the provider country is the fallback; for a provider that declares (`static`, and `host` under `egress.direct.country`) the country is a declaration the persona follows and a lookup only verifies (ADR 0013). `city` is informational |
+| locale, timezone | text | declared with the country (BCP 47 with the country as region; IANA); null for a provider that does not declare and where nothing was declared |
 | state | enum | `new`, `healthy`, `degraded`, `backoff`, `replacing`, `retired` |
 | consecutive_failures, backoff_until, backoff_count, failing_since | int, ts, int, ts | `backoff_count` is k; `failing_since` starts the unbroken failure run |
 | replacement_requested_at, replacement_reason, replacement_ticket | ts, enum (`unreachable`, `reputation`, `operator`), text | the replacement Kage requested; the monthly budget counts rows by request time |
-| last_health | jsonb | failure kind, latency_ms, exit_ip, leak_detected, geo (observed record: country, city, asn, timezone), geo_mismatches, reputation_score, usage_type, reputation_checked_at, reputation_bad_lookups |
+| last_health | jsonb | failure kind, latency_ms, exit_ip, leak_detected, geo (observed record: country, city, asn, timezone), geo_mismatches, exit_shared_with (the older live proxy whose exit address this one's probe also saw), reputation_score, usage_type, reputation_checked_at, reputation_bad_lookups |
 | created_at, retired_at | ts | `(provider, provider_ref)` is unique among non-retired rows only |
 
 ### Persona
@@ -281,26 +282,43 @@ attempts, robots verdict, cached flag.
 
 ### 6.1 Generation
 
-A persona is generated when a proxy is usable (`healthy` or `degraded`) and
-has none: on the pool's events, and at every sweep of the persona manager
-(`kage-persona`) for whatever no event announced. Its id is new, its seed
-derives from the id, and every draw below is seeded by it.
+A persona is generated when a proxy is usable (`healthy` or `degraded`),
+carries a persona, and has none: on the pool's events, and at every sweep
+of the persona manager (`kage-persona`) for whatever no event announced.
+Its id is new, its seed derives from the id, and every draw below is
+seeded by it. A proxy carries no persona when it is a declared entry
+without a country (a plain exit, §7.1, §25) or when its probe saw an older
+proxy's exit address (`exit_shared_with`, §7.3); a persona it had is
+retired (`undeclared`, `exit_shared`).
+
+**One rule for every declared identity** (ADR 0013): a row whose provider
+declares (`static`, the operator's list; `host`, the host's own connection
+under `egress.direct.country`) and that names a country is placed by its
+declaration, written on the row: the declared country; the declared
+locale, else the country's primary language (the region of a lookup that
+agrees on the country picks the language of a region that speaks another);
+the declared zone, else the zone of a lookup that agrees on the country,
+else the country's main zone; a position near the coordinates of a lookup
+that agrees on the country, else none. A lookup that names another country
+says nothing of the place: two in a row are `geo_mismatch` (§7.4), and the
+identity stays. The stand-in of a proxy's self-test (`kage selftest browser
+--proxy`) is placed by the same rule (`kage_persona::lifecycle::place_for`).
 
 Under `egress.mode: direct` (§25) the proxies are the host's own rows
 (provider `host`, one per `egress.direct.personas`): never probed,
 leak-checked or replaced, placed by the host's own geo lookup
 (`proxies.health.geo_url`, read directly, at start and once per
-`geo_interval`) or by `egress.direct.country` and `egress.direct.locale`,
-which win, a lookup that disagrees only counting against them
-(`geo_mismatch`). Their personas run the engines `egress.direct.engines`
-names, else the mix, and are warmed up and self-tested like any. Under
-`direct` the pool's personas wait unused, and under `proxies` the host's
-rows are retired: never both. A host with one persona has it ask for a
-site's files itself (it is its own scout).
+`geo_interval`) or by `egress.direct.country`, `locale` and `timezone`,
+declared by the rule above. Their personas run the engines
+`egress.direct.engines` names, else the mix, and are warmed up and
+self-tested like any. Under `direct` the pool's personas wait unused, and
+under `proxies` the host's rows are retired: never both. A host with one
+persona has it ask for a site's files itself (it is its own scout).
 
-1. **Geo.** Everything derives from the observed geo record of the proxy
-   (§7.4); the provider's country is the fallback only while no lookup has
-   succeeded. Timezone is the lookup's, else the country's primary zone.
+1. **Geo.** Everything derives from the declaration of a declared row (the
+   rule above), else from the observed geo record of the proxy (§7.4); the
+   provider's country is the fallback only while no lookup has succeeded.
+   Timezone is the lookup's, else the country's primary zone.
    The locale is the country's primary language with the country as its
    region (`de-AT`), and the language list is the one a stock installation
    of that browser ships with there, which differs by browser
@@ -460,7 +478,10 @@ site's files itself (it is its own scout).
 |---|---|
 | Proxy enters `backoff` or `replacing` | Persona `cooling` (`proxy_backoff`); no new sessions; existing sessions finish. Active again when the proxy is usable. |
 | Proxy `retired` (replaced, by Kage or by the provider itself) | Persona `retired`: its sessions end and its http cookies are deleted at once; `personas.archive_after` (10 min) later its profile directory is moved to `.archive/<persona id>` on the personas volume with a `persona.json` (ids, engine, system, the proxy's address without credentials, reason, times), and the archive is deleted after `personas.retention_days` (default 7). The row, the fingerprint, the per-domain state and the self-test runs stay. New persona generated for the replacement proxy; it inherits nothing. |
-| Geo record of the address changes | Same country: time zone and position follow, event `persona_geo_updated` at info. Another country (or a region of another language): locale and languages follow too, the event is a warning and the persona is `cooling` (`geo_changed`) until a self-test passes. Seed, fingerprint, screen and profile never change. |
+| Geo record of the address changes | Same country: time zone and position follow, event `persona_geo_updated` at info. Another country (or a region of another language): locale and languages follow too, the event is a warning and the persona is `cooling` (`geo_changed`) until a self-test passes. Seed, fingerprint, screen and profile never change. For a declared row only a lookup that agrees on the declared country moves the zone and the position; one that does not changes nothing (§6.1). |
+| Declaration corrected: another country, or a locale in another language | Persona `retired` (`declaration_changed`), archived as any; a new persona is generated from the corrected declaration and warms up. Its cookies and history were made under the wrong identity (ADR 0013, M15 consult 3c). The same for a host row whose `egress.direct.*` changed between two starts, and for a 1.x static entry whose persona the lookup had placed elsewhere, at the first 2.0 start. |
+| Declaration corrected: another zone or city, same country and language | The persona follows at once (`persona_geo_updated`, info), no cooling. |
+| Declared entry loses its country; or its proxy's probe sees an older proxy's exit address | Persona `retired` (`undeclared`, `exit_shared`); the proxy carries none while it lasts. A 1.x static entry without a country loses its persona at the first 2.0 start. |
 | Engine image bundles a newer browser major | At the persona's next open its document is moved to that major and stored, event `persona_browser_upgraded` at info (§6.2). Seed, device, place, profile, sessions and cookies stay. A firefox profile is first copied to `.upgrade/<persona id>`; the copy is deleted after `personas.upgrade_backup_days` (7). |
 | Block on domain D | `PersonaDomainState.cooldown_until = now + cooldown(D, block_type)`; defaults: `rate_limited` 2 h, `forbidden`/`captcha`/`challenge_failed` 24 h, `soft_block` 6 h. A rule may carry a cooldown class instead: `none`, `short` (policy key `short`, default 30 min, never longer than the outcome's own cooldown) or `long` (the outcome's cooldown). M7 scales the duration by the classification confidence. |
 | Daily cap reached on D | Persona ineligible for D until local midnight in the persona's timezone. |
@@ -493,42 +514,69 @@ move.
 
 ```rust
 #[async_trait]
-pub trait ProxyProvider: Send + Sync {
-    fn kind(&self) -> ProviderKind;                    // the `provider` column
+pub trait ProxyProvider: Send + Sync + Debug {
+    fn kind(&self) -> ProxyProviderKind;               // the `provider` column
+    fn capabilities(&self) -> Capabilities;            // what it offers besides listing, its echo
     async fn list(&self) -> Result<Vec<ProviderProxy>>;
-    async fn replace(&self, want: ReplaceSpec) -> Result<ReplaceTicket>;   // address + country
+    // Optional: the default bodies answer ProviderError::Unsupported { provider, operation }.
+    async fn replace(&self, proxy: &Proxy, want: ReplaceSpec) -> Result<ReplaceTicket>;  // address + country
     async fn replace_status(&self, ticket: &ReplaceTicket) -> Result<ReplaceState>;
-    async fn replaced(&self, since: DateTime<Utc>) -> Result<Vec<ProxyReplacement>>; // the replaced-proxy log
+    async fn replaced(&self, since: DateTime<Utc>) -> Result<Vec<ReplacedProxy>>;     // the replaced-proxy log
     async fn account(&self) -> Result<AccountInfo>;   // subscription + plan + config flags + stock
     async fn stats(&self, since: DateTime<Utc>) -> Result<Vec<ProxyActivity>>;
 }
+
+pub struct Capabilities {
+    pub replacement: bool, pub replaced_log: bool, pub account: bool, pub stats: bool,
+    pub echo: Option<&'static str>,                    // the provider's own echo (§7.4)
+}
 ```
 
-Implementations: `WebshareProvider` and `StaticListProvider`. The static
-list is a secret (`KAGE__PROXIES__STATIC_LIST`, env or `_FILE`, never the
-config file) because it holds passwords; it accepts `host:port:user:pass[:country]`
-lines or a YAML document with a `proxies:` list. `proxies.provider` is
-`auto | webshare | static | none`; `auto` picks Webshare when its key is
-set, else the static list, else none. Without a provider `kage serve` still
-starts, warns, and keeps health-checking stored proxies (a leak must not go
-unseen because a key went missing) but never syncs or replaces.
+The trait is the plugin surface (ADR 0013, M15). Listing is the one thing
+every provider does; the operations it does not offer answer
+`Unsupported` (operation `replacement`, `replaced_log`, `account` or
+`stats`) and the pool asks nothing of it: a proxy due for replacement
+stays in backoff probed at the cap (event `replacement_unsupported`, info,
+once per episode), no account means the budget window is the UTC month,
+no stats means the bandwidth budget is judged on Kage's own count, no
+replaced log means a missing proxy is retired after
+`proxies.missing_syncs` only. `kage proxy list`, `kage proxy health`, `GET
+/v1/admin/pool` and `kage config check` say what the provider does not
+offer. A provider is one module under `crates/kage-proxy/src/provider/`,
+its configuration section, its pins, and a pass of the conformance suite
+(`crates/kage-proxy/tests/provider_conformance.rs`: listing, credentials
+in no log line, `Debug` or error, the pool's edges through a real pool on
+Postgres, the replaced log where offered, a 429 waited out, typed errors)
+against a mock of its API; the suite also runs a provider written to
+break each rule once and fails it on every rule. `CONTRIBUTING.md` walks
+a contributor through it.
 
-Since 2.0 (ADR 0013, M15): the trait has `capabilities()`, and
-`replace`, `replaced`, `account` and `stats` are optional (a provider
-that lacks one answers `Unsupported`, which the pool, the CLI and the
-health page show as such); a provider is one module under
-`crates/kage-proxy/src/provider/`, its configuration section, its pins,
-and a pass of the conformance suite
-(`crates/kage-proxy/tests/provider_conformance.rs`) against a mock of
-its API, as `CONTRIBUTING.md` describes. A static entry carries
-`country` and may carry `locale` (BCP 47) and `city`; a persona is
-generated from the declared values as from an observed geo record
-(§6.1), `locale` overriding the country's primary language; an entry
-without a country gets no persona and serves level 0 only (§25), with a
-warning at start and in `kage config check`. Where a geo lookup is
-possible (§7.4) it verifies the declaration: a mismatch on two
-consecutive lookups is `geo_mismatch`, the proxy `degraded` with an
-alert, the declared identity kept until the operator resolves it.
+Implementations: `WebshareProvider` (everything, its own echo) and
+`StaticListProvider`, the operator's **declared list** (lists only). The
+list is a secret (`KAGE__PROXIES__STATIC_LIST`, env or `_FILE`, never the
+config file) because it holds passwords. Its line form is
+`host:port:username:password[:country[:locale]]`; its YAML form a
+`proxies:` list of entries with `host`, `port`, `username`, `password` (or
+`url: http://user:pass@host:port`, percent-decoded, `http` only), `id`
+(default `host:port`; entries that share a host and port, a gateway's
+sessions, need one each), `country` (ISO 3166-1 alpha-2), `locale` (BCP
+47, its region the country), `timezone` (IANA), `city` and `asn`
+(informational). A country the browser tables do not know without a
+locale whose language they know, a locale without a country or in another
+region, a zone that is no IANA zone, a scheme other than `http`, and two
+entries with the same proxy and login are refused, naming the entry and
+never its content. A list from a `_FILE` is read again at every sync; a
+version that does not parse is `ProviderError::InvalidList`, the pool keeps
+what it has, and `static_list_invalid` is raised once. The entries are
+**declared identities** (§6.1): an entry without a country carries no
+persona and is a **plain exit** (level 0, §25), with a warning at start and
+in `kage config check`; a changed country, locale or zone is announced
+(`PoolEvent::DeclarationChanged`) and corrected as §6.3 says.
+`proxies.provider` is `auto | webshare | static | none`; `auto` picks
+Webshare when its key is set, else the declared list, else none. Without a
+provider `kage serve` still starts, warns, and keeps health-checking stored
+proxies (a leak must not go unseen because a key went missing) but never
+syncs or replaces.
 
 ### 7.2 Webshare specifics
 
@@ -613,6 +661,13 @@ jittered into `[0.5 d, d]`, M = 3 consecutive backoff cycles AND
 backoff is probed at once; success resets everything, failure returns it
 with k + 1.
 
+Shared exit (decision D6, M15): a probe that reads an exit address an
+older live proxy's last probe also saw marks the later proxy
+(`exit_shared_with`): it is kept `degraded`, carries no persona and no
+level 0, and `proxy_exit_shared` names both until a probe sees an address
+of its own again. A leak, or a probe that read nothing, changes nothing
+of it; the host's own rows are never compared.
+
 Leak (exit IP equals host IP): `backoff` from any state, critical alert,
 never counts toward replacement, and sets the pool-wide `egress_unsafe`
 flag. While the flag is set the scheduler (M7) MUST refuse every dispatch;
@@ -644,24 +699,21 @@ row without it; never when the list is empty or shorter than half the pool.
 
 | Check | Default interval | Method |
 |---|---|---|
-| Reachability, latency, exit IP | 5 min × U(0.75, 1.25) per proxy from its seed; first probes spread over 2 min after boot; at most 3 in flight; real traffic through a proxy postpones its next probe (`Pool::report_traffic_ok`) | Through-proxy GET of the provider's own echo (`https://ipv4.webshare.io/`), so no third party sees the pool; a failed probe is retried once against the confirmation echo (`https://checkip.amazonaws.com/`) before it counts. Client from the `ProbeClientFactory` seam: the client of the persona behind the proxy when it has an http path (its profile, `User-Agent`, brand list and languages, on a fresh connection without its cookies), else one wreq-util profile (`proxies.health.profile`, default `chrome_149` on Windows). |
-| Leak | with reachability | Exit IP (from echo) ≠ host public IP; host IP learned at boot by a direct GET of the same echo, refreshed hourly. Leak → `backoff` + `egress_unsafe` (§7.3). |
-| Geo (country, city, ASN, timezone) | first check of a `new` proxy, on exit IP change, and every 24 h jittered | `https://ipinfo.io/json` through the proxy (not Cloudflare-fronted). The observed record is persisted as authoritative; a change is a health event. Mismatch with the provider country on two consecutive lookups → `degraded` and alert, proxy stays usable. Lookup failures are not health failures (retry after an hour). |
+| Reachability, latency, exit IP | 5 min × U(0.75, 1.25) per proxy from its seed; first probes spread over 2 min after boot; at most 3 in flight; real traffic through a proxy postpones its next probe (`Pool::report_traffic_ok`) | Through-proxy GET of `proxies.health.echo_url`: unset, the provider's own echo (`capabilities().echo`; Webshare's `https://ipv4.webshare.io/`, so no third party sees the pool), else the public echo `https://checkip.amazonaws.com/`, whose operator then sees every proxy address on the probe's schedule (ADR 0013); the operator's own echo (`kage echo serve`, O5) is the private choice. The answer is an address as text, or JSON with it under `ip`, `ip_address`, `ipAddress`, `query`, `origin` or `peer` (Kage's echo), with or without its port. A failed probe is retried once against the confirmation echo (`https://checkip.amazonaws.com/`) before it counts; when that is the echo in force, the retry is a second read on a fresh tunnel. Client from the `ProbeClientFactory` seam: the client of the persona behind the proxy when it has an http path (its profile, `User-Agent`, brand list and languages, on a fresh connection without its cookies), else one wreq-util profile (`proxies.health.profile`, default `chrome_149` on Windows). |
+| Leak | with reachability | Exit IP (from echo) ≠ host public IP; host IP learned at boot by a direct GET of `proxies.health.host_ip_url`, refreshed hourly: unset, the provider's own echo under `egress.mode: proxies`, else `https://api.ipify.org/`, an echo of another operator than the public probe echo's, so nobody outside sees both the host and the pool (always so under `direct`). Leak → `backoff` + `egress_unsafe` (§7.3). |
+| Geo (country, city, ASN, timezone) | first check of a `new` proxy, on exit IP change, and every 24 h jittered | `proxies.health.geo_url` (`https://ipinfo.io/json`) through the proxy (not Cloudflare-fronted); `null` switches it off, and nothing is verified then. The observed record is persisted; a change is a health event. For Webshare the record is authoritative; for a declared row it only verifies the declaration (§6.1). Mismatch with the provider's or the declared country on two consecutive lookups → `degraded` and `proxy_geo_mismatch`, proxy stays usable; for a declared row the alert says what a site with a geo database sees, and the persona keeps its declared identity. Lookup failures are not health failures (retry after an hour). |
 | Fingerprint self-test (http) | per PR in CI over loopback for every mapped profile; on demand (`kage selftest http --proxy --profile`) and two proxies per nightly live run against `selftest.http.third_party_url`; every 24 h × U(0.75, 1.25) per persona from its seed (`selftest.http.interval`; first run 2 to 30 min after generation; `kage selftest http --persona`, `kage persona selftest`), only against the operator's own echo (`selftest.http.echo_url`) and never against a third party on a timer; without an echo of the operator's nothing is scheduled | JA4, HTTP/2 Akamai string, header order, HTTP version and `User-Agent` equal the fixture recorded for the profile. The fingerprint is a function of the pins and the header code, not of the proxy, so the live runs only confirm that a real tunnel changes nothing. |
 | Fingerprint self-test (browser) | per PR on the fixture site's coherence probe; on demand (`kage selftest browser`) and two proxies per nightly live run against the third-party pages; every 24 h × U(0.75, 1.25) per persona from its seed (`selftest.browser.interval`), in the persona's own context, only against the operator's own pages (`selftest.browser.pages`: the probe and, when configured, the fingerprint echo), never a third party on a timer; without such pages nothing is scheduled. Every run is a row in `selftest_runs` | The sidecar loads the page list given in the request. Default: our own probe and echo. Third parties (`bot.sannysoft.com`, CreepJS) only on demand and in the live suite; BrowserScan and Pixelscan never in a default. Findings `{page, check, status, observed, expected, hard}`; hard failures (any automation flag, an identity mismatch against the persona, a transport mismatch on the echo) fail the run; score `100 × (1 − (fails + ½ warns) / known)` with `min_score` 90; an unreachable page yields `unknown`, changes no score and sets `complete: false`, so a test-site outage never cools a persona down. Page text and a screenshot are stored as artifacts. |
 | IP reputation | 24 h, one proxy at a time spread over the day, asked from the host directly | Provider trait with AbuseIPDB first; disabled without a key. Bad = `abuseConfidenceScore` ≥ `reputation.bad_score` (default 75) on two consecutive lookups → `replacing` when the budget allows, else `degraded` + alert. `usageType` recorded; Data Center or Hosting on a residential IP raises `reputation_usage_type_suspicious`, never an automatic replacement. A 429 pauses lookups for as long as it says, or 24 h. |
-| Account sync | 10 min | Subscription, plan, counts, replacement quota, the four `auto_replace_*` flags (alert while any is on, never changed by Kage), available countries. |
+| Account sync | 10 min, for a provider that offers its account | Subscription, plan, counts, replacement quota, the four `auto_replace_*` flags (alert while any is on, never changed by Kage), available countries. |
 
 All health traffic obeys pacing and never targets real target sites.
-
-Since 2.0 (ADR 0013): `proxies.health.echo_url` names the page the
-reachability probe fetches and the leak check compares with. For a
-provider with an echo of its own (Webshare) it defaults to that echo;
-for a declared list it defaults to the public echo above
-(`https://checkip.amazonaws.com/`), whose operator then sees every proxy
-address on the probe's schedule, as the runbook says; the operator's own
-echo (`selftest.http.echo_url`, O5) is the private alternative. The
-confirmation echo stays as it is.
+`kage proxy health` ends with how many proxies answered and how many did
+not (`N checked: L live, D dead`), so a declared list without a provider
+API shows its live and dead proxies from the echo; under `egress.mode:
+direct` it, and the admin probe, refuse: the pool is idle (F68).
+`kage config check` prints the endpoints in force
+(`proxies.health_endpoints`).
 
 ### 7.5 The forwarder and the bandwidth budget
 
@@ -2309,8 +2361,19 @@ exactly 32 bytes as 64 hex characters, validated at load),
 secret may also be given as `<NAME>_FILE`; an empty variable does not
 conflict with its `_FILE` form. Required for every command except
 `healthcheck`: database URL, sidecar token, master key; the others are
-optional. Startup fails on a missing required secret. `kage config check`
-validates and prints the effective config as JSON with secrets redacted.
+optional. Startup fails on a missing required secret. A static list given
+as `KAGE__PROXIES__STATIC_LIST_FILE` keeps its path
+(`proxies.static_list_file`, set by the loader only) and is read again at
+every sync (§7.1). `kage config check`
+validates and prints the effective config as JSON with secrets redacted,
+and reports under `proxies` the provider in force, its capabilities and
+the operations it does not offer, the declared list's plain exits, the
+health endpoints in force (`health_endpoints`: `proxies.health.echo_url`
+and `host_ip_url` are optional and resolve by provider and egress mode,
+§7.4) and warnings: entries without a country, the public echo in force,
+and, under `egress.mode: direct`, the `proxies.health` keys that are
+unused (`echo_url`, `confirm_url`, `interval`, `jitter`, `max_concurrent`,
+`startup_spread`, `profile`).
 Sections at this point: `server`, `database`, `secrets`, `sidecar`,
 `policies`, `artifacts`, `proxies` (with `proxies.health`), `webshare`,
 `reputation`, `http` (with `http.subresources`), `selftest` (`selftest.http`,
@@ -2403,7 +2466,8 @@ with `pool` are refused at load and by `kage config check`),
 `plain_user_agent` (`kage/<version>` unless set, at most 256 printable
 characters; an operator's own, as `acme-bot/1 (+https://acme.example/bot)`)
 and `direct`: `personas` (1, at most 4: the host's personas),
-`country` and `locale` (declared; a lookup only verifies them),
+`country`, `locale` and `timezone` (declared, by the rule of every
+declaration, §6.1; a lookup only verifies them),
 `engines` (the host personas' engines, a subset of `personas.mix`) and
 `private_names` (exact names that may resolve to a private or loopback
 address on the host's own connection; empty, and `kage config check`
@@ -2433,8 +2497,8 @@ keeps the last good policy and raises an alert.
 
 Tables: `proxies`, `personas`, `persona_domain_state`, `sessions`,
 `requests`, `attempts`, `results`, `artifacts`, `jobs`, `job_items`,
-`crawl_frontier`, `robots_cache`, `site_scouts`, `response_cache`,
-`api_keys`,
+`crawl_frontier`, `robots_cache`, `site_scouts`, `site_exits`,
+`response_cache`, `api_keys`,
 `audit_events`, `health_events`, `selftest_runs`, `domain_breakers`
 (with how often the breaker opened since the domain last answered well,
 `trips`, and when its one trial was let through, `trial_started_at`),
@@ -2466,7 +2530,12 @@ none, or that it could not be had; its site, when it was asked for and
 when it is due again) and is never swept by age: a row that is due says
 "ask again". `site_scouts` names the one persona per site (registrable
 domain) that asks for what no reader asks for; the row goes with the
-persona. `response_cache` points from a cache key to the result it
+persona. `site_exits` names the proxy a site's plain traffic leaves from
+when it is one of the pool's own plain exits (§25): chosen once, the
+site's from then on; a row whose proxy is retired means "choose again",
+and the rows of a plain exit that is given a country are deleted. The
+`proxies` row keeps what was declared besides the country: `locale` and
+`timezone` (migration 0018). `response_cache` points from a cache key to the result it
 serves, with the normalized URL, the API key the entry is for (null where
 a policy shares the site's pages), when the page was fetched and when the
 entry expires; an entry goes with its result and is swept when it
@@ -2691,7 +2760,7 @@ are gzip-compressed on disk.
 | Layer | Tooling | What |
 |---|---|---|
 | Rust unit | cargo test | pacing math, classifier rules, policy resolution, URL normalization, SSRF guard, persona scoring, state machines |
-| Rust integration | wiremock + a test CONNECT proxy + testcontainers Postgres | API handlers, provider client against a mock Webshare, store repositories, scheduler behavior with fake clock |
+| Rust integration | wiremock + a test CONNECT proxy + testcontainers Postgres | API handlers, provider client against a mock Webshare, the provider conformance suite (every provider against a mock of its API, and a deliberately broken one that must fail every rule; §7.1), store repositories, scheduler behavior with fake clock |
 | Sidecar unit | vitest | behavior engine determinism, contract schemas, capture filters |
 | Sidecar integration | vitest + Playwright against `tests/fixtures/site` | navigate, flow DSL, state export/import, artifact writing |
 | Contract | both | sidecar OpenAPI ↔ Rust generated types, breaking-change check |
@@ -2794,16 +2863,23 @@ or `direct` (the host's own connection). Under `direct`, one persona
 stands for the host (`egress.direct.personas`, default 1, at most a
 small number): its country, time zone, locale and languages come from
 the host's observed geo through the pool's lookup (§7.4), or from
-`egress.direct.country` and `egress.direct.locale` when declared; it is
+`egress.direct.country`, `egress.direct.locale` and
+`egress.direct.timezone` when declared (a declaration the lookup only
+verifies, as for a declared list, §6.1); it is
 generated, warmed, paced and self-tested like any persona; the forwarder
 fronts every client and browser with no upstream, so the SSRF guard and
 the byte count hold. Level 0's egress is `egress.plain`: `host` (the
 default under `direct`) or `pool` (the default under `proxies`): the
-site's plain traffic leaves through one address, its scout's (chosen by
-the scout rule when the site has none, and its scout from then on), as a
-plain proxy under a credential of its own (`plain-<proxy id>`); when that
-proxy cannot carry traffic the request waits or is refused
-(`plain_exit_unavailable`), never sent from another address. robots.txt
+site's plain traffic leaves through one address, as a plain proxy under a
+credential of its own (`plain-<proxy id>`): one of the pool's own **plain
+exits** when it has any (a declared entry without a country, which carries
+no persona and so reads no site as a person; chosen once per site by a
+draw seeded by the site and recorded in `site_exits`, ADR 0013), else its
+scout's (chosen by the scout rule when the site has none, and its scout
+from then on); when that proxy cannot carry traffic the request waits or
+is refused (`plain_exit_unavailable`), never sent from another address. A
+proxy that leaves by an older proxy's address carries no level 0 (§7.3).
+robots.txt
 and sitemaps at level 0 go the same way. An address that sends
 `kage/<version>` to a site is never one that reads it as a person. There
 is no mixed mode and `kage config check` refuses one: a site that sees a
