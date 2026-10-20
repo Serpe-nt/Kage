@@ -14,8 +14,10 @@
 #                                               32 random bytes as 64 hex characters
 #   KAGE__WEBSHARE__API_KEY           optional  Webshare API token; selects the Webshare provider
 #   KAGE__REPUTATION__ABUSEIPDB_KEY   optional  enables IP reputation lookups
-#   KAGE__PROXIES__STATIC_LIST        optional  a fixed proxy list, one host:port:username:password[:country]
-#                                               per line or a YAML list; selects the static provider
+#   KAGE__PROXIES__STATIC_LIST        optional  the declared proxy list, one
+#                                               host:port:username:password[:country[:locale]]
+#                                               per line or a YAML list; selects the static provider;
+#                                               as _FILE it is read again at every sync
 #
 # `kage config check` validates everything and prints the effective
 # configuration with the secrets redacted.
@@ -155,9 +157,13 @@ proxies:
     # The first probes after start are spread over this long.
     startup_spread: 2m
     # Echo read through every proxy: reachability, latency, exit address,
-    # leak check. The default is run by the proxy provider itself.
-    echo_url: https://ipv4.webshare.io/
-    # Second echo, tried once when the first fails. null disables it.
+    # leak check. null: the provider's own echo when it runs one (Webshare:
+    # https://ipv4.webshare.io/), else https://checkip.amazonaws.com/, whose
+    # operator then sees every proxy address. The operator's own echo
+    # (`kage echo serve`) is the private choice.
+    echo_url: null
+    # Second echo, tried once when the first fails; when it is the echo in
+    # force, a second read on a fresh tunnel. null disables it.
     confirm_url: https://checkip.amazonaws.com/
     # Geo lookup of the exit address: on the first check of a new proxy,
     # when the exit address changes, and once per geo_interval. null
@@ -167,7 +173,11 @@ proxies:
     # Lookups in a row that must disagree with the provider's country.
     geo_mismatches: 2
     # Echo read without a proxy to learn the host's own public address.
-    host_ip_url: https://ipv4.webshare.io/
+    # null: the provider's own echo when it runs one, else
+    # https://api.ipify.org/ (another operator than the probe's echo, so
+    # nobody outside sees both the host and the pool); under egress.mode
+    # direct always the latter.
+    host_ip_url: null
     host_ip_refresh: 1h
     # Emulation profile of the probe client until personas bring their own.
     profile: chrome_149
@@ -198,6 +208,9 @@ egress:
     country: null
     # A BCP 47 tag with the country as its region (de-AT); needs country.
     locale: null
+    # An IANA time zone (America/Chicago); needs country. null: the
+    # lookup's when it agrees on the country, else the country's main zone.
+    timezone: null
     # Engines the host personas may be drawn on; null: personas.mix.
     engines: null
     # Exact names that may resolve to a private or loopback address under

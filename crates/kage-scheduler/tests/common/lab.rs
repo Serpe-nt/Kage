@@ -36,10 +36,7 @@ use kage_core::seed::Seed;
 use kage_http::{ClientFactory, HttpSettings, StoreCookies};
 use kage_persona::{BrowserGate, Egress, PersonaManager, PersonaParts, Sidecars};
 use kage_proxy::machine::{ExitObservation, ProbeReport};
-use kage_proxy::provider::{
-    AccountInfo, ProviderError, ProviderProxy, ProxyActivity, ProxyProvider, ReplaceSpec,
-    ReplaceState, ReplaceTicket, ReplacedProxy,
-};
+use kage_proxy::provider::{Capabilities, ProviderError, ProviderProxy, ProxyProvider};
 use kage_proxy::{Clock, CredentialCipher, Pool, PoolParts, PoolRules, SystemClock};
 use kage_scheduler::{
     AttemptExecutor, Backend, Forwarder, ForwarderSettings, PathExecutor, Pipeline,
@@ -126,6 +123,8 @@ impl ListProvider {
             username: Secret::new(PROXY_USER),
             password: Secret::new(PROXY_PASS),
             country: country.parse().ok(),
+            locale: None,
+            timezone: None,
             city: None,
             asn: None,
             valid: Some(true),
@@ -145,34 +144,13 @@ impl ProxyProvider for ListProvider {
         ProxyProviderKind::Static
     }
 
+    // A declared list: it lists, and the rest is the trait's "unsupported".
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::LIST_ONLY
+    }
+
     async fn list(&self) -> Result<Vec<ProviderProxy>, ProviderError> {
         Ok(self.proxies.lock().unwrap().clone())
-    }
-
-    async fn replace(&self, _: &Proxy, _: ReplaceSpec) -> Result<ReplaceTicket, ProviderError> {
-        Err(ProviderError::Unsupported {
-            provider: ProxyProviderKind::Static,
-            operation: "replacement",
-        })
-    }
-
-    async fn replace_status(&self, _: &ReplaceTicket) -> Result<ReplaceState, ProviderError> {
-        Err(ProviderError::Unsupported {
-            provider: ProxyProviderKind::Static,
-            operation: "replacement",
-        })
-    }
-
-    async fn replaced(&self, _: DateTime<Utc>) -> Result<Vec<ReplacedProxy>, ProviderError> {
-        Ok(Vec::new())
-    }
-
-    async fn account(&self) -> Result<AccountInfo, ProviderError> {
-        Ok(AccountInfo::default())
-    }
-
-    async fn stats(&self, _: DateTime<Utc>) -> Result<Vec<ProxyActivity>, ProviderError> {
-        Ok(Vec::new())
     }
 }
 
@@ -719,7 +697,9 @@ impl Lab {
     /// A lab with `personas` personas of chromium at `major` (149 has an
     /// http path, 155 has none) under the domain rules `domains`.
     pub async fn start(personas: usize, major: u32, domains: &str) -> Self {
-        Self::start_with(personas, major, domains, |_| {}).await
+        // Boxed: the lab's start holds the whole configuration across its
+        // awaits, and a test's own future stays small.
+        Box::pin(Self::start_with(personas, major, domains, |_| {})).await
     }
 
     /// The same, with `change` applied to the configuration.

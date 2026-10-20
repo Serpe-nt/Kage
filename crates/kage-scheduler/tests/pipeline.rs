@@ -15,6 +15,7 @@ use chrono::Duration as Span;
 use common::{DEFAULT_DOMAINS, World, blocked, id, persona, server_error, timed_out};
 use kage_core::alert::AlertKind;
 use kage_core::domain::{BreakerState, Exit, Level, Render, RenderMode};
+use kage_core::ids::ProxyId;
 use kage_core::outcome::Outcome;
 use kage_core::policy::PacingRequest;
 use kage_core::schedule::queue::Priority;
@@ -351,6 +352,60 @@ async fn a_level_zero_fetch_without_a_plain_exit_is_answered_with_the_reason() {
     assert!(report.retry_at.is_some());
     assert_eq!(report.attempts, []);
     assert!(world.script.plain_seen().is_empty());
+    world.shut_down().await;
+}
+
+/// ADR 0013, consult 5a: a declared entry without a country carries no
+/// persona and is the pool's own plain exit. A site's level 0 leaves by one
+/// of them, chosen once and kept, before any scout's address; when it is
+/// down the request waits, never from another address.
+#[tokio::test(start_paused = true)]
+async fn level_zero_leaves_by_a_plain_exit_of_the_pools_own_and_keeps_it() {
+    let mut world = World::new(4, DEFAULT_DOMAINS);
+    let exits = [ProxyId::new(), ProxyId::new(), ProxyId::new()];
+    for exit in exits {
+        world.backend.put_plain_exit(exit, true);
+    }
+
+    let report = world
+        .pipeline
+        .fetch(at(Level::Plain, "https://shop.example/a"))
+        .await
+        .unwrap();
+
+    assert_eq!(report.outcome, Outcome::Ok);
+    let chosen = world.backend.site_exit_of("shop.example").unwrap();
+    assert!(exits.contains(&chosen));
+    let [seen] = world.script.plain_seen().try_into().unwrap();
+    assert_eq!(seen.job.route, PlainRoute::Pool(chosen));
+    assert_eq!(report.attempts[0].exit, Some(Exit::Pool));
+    // Nobody was made the site's scout, and no persona was asked anything.
+    assert_eq!(world.backend.scout_of("shop.example"), None);
+    assert!(world.script.seen().is_empty());
+
+    // The same site again, from another page: the same exit.
+    world
+        .pipeline
+        .fetch(at(Level::Plain, "https://www.shop.example/b"))
+        .await
+        .unwrap();
+    assert_eq!(
+        world.script.plain_seen()[1].job.route,
+        PlainRoute::Pool(chosen)
+    );
+
+    // Its exit goes down: the request is answered with the reason, and
+    // neither another exit nor a scout's address carries it.
+    world.backend.put_plain_exit(chosen, false);
+    let waiting = world
+        .pipeline
+        .fetch(at(Level::Plain, "https://shop.example/c"))
+        .await
+        .unwrap();
+    assert_eq!(waiting.reason.as_deref(), Some("plain_exit_unavailable"));
+    assert_eq!(world.script.plain_seen().len(), 2);
+    assert_eq!(world.backend.site_exit_of("shop.example"), Some(chosen));
+    assert_eq!(world.backend.scout_of("shop.example"), None);
     world.shut_down().await;
 }
 

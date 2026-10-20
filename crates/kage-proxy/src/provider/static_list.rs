@@ -1,33 +1,48 @@
-//! A fixed proxy list as a provider: for tests and for vendors without an
-//! API (spec §7.1).
+//! The operator's declared list as a provider (spec §7.1, ADR 0013): for
+//! proxies of any vendor, without an API.
+//!
+//! It lists and does nothing else: no replacement, no log of replaced
+//! proxies, no account, no stats, no echo of its own
+//! ([`Capabilities::LIST_ONLY`]). A static proxy that keeps failing stays
+//! in backoff until the operator edits the list.
+//!
+//! Every entry declares where its exit is (`country`, and optionally
+//! `locale` and `timezone`): its persona is made from that, and a geo
+//! lookup only verifies it. An entry without a country gets no persona and
+//! serves as a plain exit.
+//!
+//! A list given as a file (`KAGE__PROXIES__STATIC_LIST_FILE`) is read
+//! again at every listing, so an edit is picked up at the next sync; a
+//! version that does not parse is [`ProviderError::InvalidList`] and the
+//! pool keeps what it has. A list given in the variable needs a restart.
 
-use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use kage_core::config::{ProxiesConfig, StaticListError, StaticProxy};
-use kage_core::domain::{Proxy, ProxyProviderKind};
+use kage_core::domain::ProxyProviderKind;
 
-use super::{
-    AccountInfo, ProviderError, ProviderProxy, ProxyActivity, ProxyProvider, ReplaceSpec,
-    ReplaceState, ReplaceTicket, ReplacedProxy, Result,
-};
+use super::{Capabilities, ProviderError, ProviderProxy, ProxyProvider, Result};
 
-/// Serves a fixed list of proxies. It cannot replace a proxy: a static
-/// proxy that fails stays in backoff until an operator edits the list.
+/// Serves the declared list. See the module documentation.
 #[derive(Debug, Clone)]
 pub struct StaticListProvider {
     proxies: Vec<StaticProxy>,
+    file: Option<PathBuf>,
 }
 
 impl StaticListProvider {
     /// A provider over the given proxies.
     pub const fn new(proxies: Vec<StaticProxy>) -> Self {
-        Self { proxies }
+        Self {
+            proxies,
+            file: None,
+        }
     }
 
-    /// A provider over the list in `proxies.static_list`; an empty list
-    /// when the secret is not set.
+    /// A provider over the list in `proxies.static_list`, read again from
+    /// `proxies.static_list_file` at every listing when it came from a
+    /// file; an empty list when the secret is not set.
     ///
     /// # Errors
     ///
@@ -38,24 +53,34 @@ impl StaticListProvider {
             Some(list) => StaticProxy::parse_list(list.expose())?,
             None => Vec::new(),
         };
-        Ok(Self::new(proxies))
+        Ok(Self {
+            proxies,
+            file: config.static_list_file.clone(),
+        })
     }
 
-    /// How many proxies the list holds.
+    /// How many proxies the list held when the provider was built.
     pub const fn len(&self) -> usize {
         self.proxies.len()
     }
 
-    /// Whether the list is empty.
+    /// Whether the list was empty when the provider was built.
     pub const fn is_empty(&self) -> bool {
         self.proxies.is_empty()
     }
 
-    const fn unsupported(operation: &'static str) -> ProviderError {
-        ProviderError::Unsupported {
-            provider: ProxyProviderKind::Static,
-            operation,
-        }
+    /// The list in force: the file's as it reads now, else the one the
+    /// provider was built with.
+    async fn current(&self) -> Result<Vec<StaticProxy>> {
+        let Some(path) = &self.file else {
+            return Ok(self.proxies.clone());
+        };
+        // The error names the file's state, never its content.
+        let text = tokio::fs::read_to_string(path).await.map_err(|error| {
+            ProviderError::InvalidList(format!("the file cannot be read ({})", error.kind()))
+        })?;
+        StaticProxy::parse_list(&text)
+            .map_err(|error| ProviderError::InvalidList(error.to_string()))
     }
 }
 
@@ -65,57 +90,29 @@ impl ProxyProvider for StaticListProvider {
         ProxyProviderKind::Static
     }
 
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::LIST_ONLY
+    }
+
     async fn list(&self) -> Result<Vec<ProviderProxy>> {
         Ok(self
-            .proxies
-            .iter()
+            .current()
+            .await?
+            .into_iter()
             .map(|proxy| ProviderProxy {
-                provider_ref: proxy.id.clone(),
-                host: proxy.host.clone(),
+                provider_ref: proxy.id,
+                host: proxy.host,
                 port: proxy.port,
-                username: proxy.username.clone(),
-                password: proxy.password.clone(),
+                username: proxy.username,
+                password: proxy.password,
                 country: proxy.country,
-                city: proxy.city.clone(),
-                asn: proxy.asn.clone(),
+                locale: proxy.locale,
+                timezone: proxy.timezone,
+                city: proxy.city,
+                asn: proxy.asn,
                 valid: None,
             })
             .collect())
-    }
-
-    async fn replace(&self, _proxy: &Proxy, _want: ReplaceSpec) -> Result<ReplaceTicket> {
-        Err(Self::unsupported("replacement"))
-    }
-
-    async fn replace_status(&self, _ticket: &ReplaceTicket) -> Result<ReplaceState> {
-        Err(Self::unsupported("replacement"))
-    }
-
-    async fn replaced(&self, _since: DateTime<Utc>) -> Result<Vec<ReplacedProxy>> {
-        Ok(Vec::new())
-    }
-
-    async fn account(&self) -> Result<AccountInfo> {
-        let mut countries = BTreeMap::new();
-        for proxy in &self.proxies {
-            if let Some(country) = proxy.country {
-                *countries.entry(country.as_str().to_owned()).or_insert(0) += 1;
-            }
-        }
-        Ok(AccountInfo {
-            proxy_type: Some("static".to_owned()),
-            proxy_count: Some(u32::try_from(self.proxies.len()).unwrap_or(u32::MAX)),
-            countries,
-            // A static list has no replacements to hand out.
-            replacements_total: Some(0),
-            replacements_used: Some(0),
-            replacements_available: Some(0),
-            ..AccountInfo::default()
-        })
-    }
-
-    async fn stats(&self, _since: DateTime<Utc>) -> Result<Vec<ProxyActivity>> {
-        Ok(Vec::new())
     }
 }
 
@@ -127,7 +124,9 @@ mod tests {
     use kage_core::secret::Secret;
 
     use super::StaticListProvider;
-    use crate::provider::{ProviderError, ProxyProvider, ReplaceSpec, ReplaceTicket};
+    use crate::provider::{
+        Capabilities, Operation, ProviderError, ProxyProvider, ReplaceSpec, ReplaceTicket,
+    };
     use crate::test_support::proxy;
 
     const LIST: &str = "198.51.100.10:8080:user-a:pass-a:DE\n\
@@ -171,43 +170,45 @@ mod tests {
         );
     }
 
+    /// A declared list lists and does nothing else: every optional
+    /// operation answers that it is unsupported, as its capabilities say.
     #[tokio::test]
-    async fn the_account_counts_proxies_and_offers_no_replacements() {
-        let account = provider().account().await.unwrap();
-
-        assert_eq!(account.proxy_count, Some(4));
-        assert_eq!(account.countries["DE"], 2);
-        assert_eq!(account.countries["AT"], 1);
-        assert_eq!(account.countries.len(), 2);
-        assert_eq!(account.replacements_available, Some(0));
-        assert_eq!(account.auto_replace, None);
-        assert_eq!(account.plan_id, None);
-    }
-
-    #[tokio::test]
-    async fn a_static_list_cannot_replace_and_has_no_history() {
+    async fn a_static_list_only_lists() {
         let provider = provider();
-        let unsupported = ProviderError::Unsupported {
-            provider: ProxyProviderKind::Static,
-            operation: "replacement",
-        };
+        assert_eq!(provider.capabilities(), Capabilities::LIST_ONLY);
+        let unsupported =
+            |operation| ProviderError::unsupported(ProxyProviderKind::Static, operation);
 
         assert_eq!(
             provider
                 .replace(&proxy("198.51.100.10:8080"), ReplaceSpec::default())
                 .await
                 .unwrap_err(),
-            unsupported
+            unsupported(Operation::Replacement)
         );
         assert_eq!(
             provider
                 .replace_status(&ReplaceTicket("1".to_owned()))
                 .await
                 .unwrap_err(),
-            unsupported
+            unsupported(Operation::Replacement)
         );
-        assert_eq!(provider.replaced(Utc::now()).await.unwrap(), []);
-        assert_eq!(provider.stats(Utc::now()).await.unwrap(), []);
+        assert_eq!(
+            provider.replaced(Utc::now()).await.unwrap_err(),
+            unsupported(Operation::ReplacedLog)
+        );
+        assert_eq!(
+            provider.account().await.unwrap_err(),
+            unsupported(Operation::Account)
+        );
+        assert_eq!(
+            provider.stats(Utc::now()).await.unwrap_err(),
+            unsupported(Operation::Stats)
+        );
+        assert_eq!(
+            unsupported(Operation::ReplacedLog).to_string(),
+            "the static provider does not support replaced_log"
+        );
     }
 
     #[tokio::test]
@@ -215,7 +216,7 @@ mod tests {
         let mut config = ProxiesConfig::default();
         let empty = StaticListProvider::from_config(&config).unwrap();
         assert!(empty.is_empty());
-        assert_eq!(empty.account().await.unwrap().proxy_count, Some(0));
+        assert_eq!(empty.list().await.unwrap().len(), 0);
 
         config.static_list = Some(Secret::new(LIST));
         assert_eq!(StaticListProvider::from_config(&config).unwrap().len(), 4);

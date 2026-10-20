@@ -206,10 +206,14 @@ async fn the_proxy_commands_take_a_pool_from_empty_to_replaced() {
         lines[2].contains("healthy") && lines[2].contains("DE"),
         "{table}"
     );
+    // How many answered and how many did not, then the pool, then the
+    // provider and what it offers.
+    assert_eq!(lines[3], "2 checked: 2 live, 0 dead", "{table}");
     assert!(
-        lines[3].starts_with("2 checked; 2 live, 2 usable (2 healthy)"),
+        lines[4].starts_with("pool: 2 live, 2 usable (2 healthy)"),
         "{table}"
     );
+    assert_eq!(lines[5], "provider: webshare", "{table}");
     let listed = ok(&env, &["proxy", "list"]).await;
     assert!(
         listed.contains("CHECKED (UTC)") && !listed.contains("USERNAME"),
@@ -585,6 +589,17 @@ async fn the_server_syncs_the_pool_and_checks_its_health_by_itself() {
     let listed = json(&env, &["proxy", "list"]).await;
     assert_eq!(listed["proxies"][0]["state"], "healthy");
     assert_eq!(listed["proxies"][0]["provider"], "static");
+    // A declared list's entry: its country is a declaration, it carries a
+    // persona; the provider lists only (ADR 0013).
+    assert_eq!(listed["proxies"][0]["declared"], true);
+    assert_eq!(listed["proxies"][0]["carries_persona"], true);
+    assert_eq!(listed["proxies"][0]["plain_exit"], false);
+    assert_eq!(listed["provider"]["kind"], "static");
+    assert_eq!(
+        listed["provider"]["unsupported"],
+        serde_json::json!(["replacement", "replaced_log", "account", "stats"])
+    );
+    assert_eq!(listed["account"], Value::Null);
 
     // The list goes missing from the configuration. The proxy is still in
     // the pool, so the next server still checks it: a leak must not go
@@ -604,4 +619,22 @@ async fn the_server_syncs_the_pool_and_checks_its_health_by_itself() {
     }
     let listed = json(&env, &["proxy", "list"]).await;
     assert_eq!(listed["proxies"][0]["state"], "healthy");
+}
+
+/// F68: under `egress.mode: direct` the pool is idle, and an operator's
+/// `kage proxy health` says so instead of probing it.
+#[tokio::test(flavor = "multi_thread")]
+async fn under_direct_the_idle_pool_is_not_probed() {
+    let db = TestDb::migrated().await;
+    let mut env = base_env(&db);
+    env.push(("KAGE__EGRESS__MODE".to_owned(), "direct".to_owned()));
+
+    let refused = run(&env, &["proxy", "health"]).await;
+
+    assert!(!refused.status.success());
+    let said = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        said.contains("the pool is idle under egress.mode direct"),
+        "{said}"
+    );
 }

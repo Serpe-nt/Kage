@@ -30,9 +30,10 @@ use kage_api::serve::ServeSettings;
 use kage_api::{ApiParts, ApiState, DirectTransport, EngineParts};
 use kage_core::alert::AlertSink;
 use kage_core::config::{Config, DirectEgressConfig, EgressMode};
+use kage_core::domain::Declaration;
 use kage_core::policy::PolicyStore;
 use kage_persona::PersonaProbeClients;
-use kage_proxy::health::HostIp;
+use kage_proxy::health::{Endpoints, HostIp};
 use kage_proxy::{HealthChecker, Pool, SystemClock};
 use kage_store::{ArtifactStore, Store};
 use tokio::net::TcpListener;
@@ -334,6 +335,7 @@ async fn start_proxy_pool(
             "egress.mode is proxies: the host's own rows and their personas were retired"
         );
     }
+    warn_of_plain_exits(config);
     if pool.provider_kind().is_none() {
         let stored = pool
             .live()
@@ -414,6 +416,19 @@ async fn start_proxy_pool(
     })
 }
 
+/// Warns at start about the declared list's entries without a country
+/// (ADR 0013): they get no persona and serve as plain exits only.
+fn warn_of_plain_exits(config: &Config) {
+    let plain = kage_proxy::plain_exit_entries(config);
+    if !plain.is_empty() {
+        tracing::warn!(
+            entries = ?plain,
+            "entries of the declared proxy list name no country: they get no persona and serve as \
+             plain exits (level 0) only"
+        );
+    }
+}
+
 /// Starts what a host that leaves from its own connection runs
 /// (`egress.mode: direct`, spec §25, ADR 0012): its rows
 /// (`egress.direct.personas`), their place from the host's own geo lookup
@@ -437,8 +452,9 @@ async fn start_direct(
         );
     }
     let health = &config.proxies.health;
+    // Never the provider's echo: under direct the pool is idle (ADR 0013).
     let host = Arc::new(
-        HostIp::new(health.host_ip_url.clone(), health.timeout.get())
+        HostIp::new(Endpoints::from_config(config).host_ip, health.timeout.get())
             .context("cannot set up the host's own lookup")?,
     );
     let direct = config.egress.direct.clone();
@@ -529,8 +545,15 @@ async fn place_host(
         );
         return Ok(());
     }
+    // The declaration is written on the rows, as a declared list's entry
+    // is: one rule for every declaration (ADR 0013).
+    let declared = direct.country.map(|country| Declaration {
+        country,
+        locale: direct.locale.clone(),
+        timezone: direct.timezone.clone(),
+    });
     let rows = pool
-        .keep_host_rows(direct.personas, direct.country)
+        .keep_host_rows(direct.personas, declared.as_ref())
         .await
         .context("cannot keep the host's rows")?;
     match looked {

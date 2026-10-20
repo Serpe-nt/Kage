@@ -76,6 +76,8 @@ impl TestDb {
             password: SealedSecret::new(vec![2]),
             scheme: ProxyScheme::Http,
             country: None,
+            locale: None,
+            timezone: None,
             city: None,
             asn: None,
             state,

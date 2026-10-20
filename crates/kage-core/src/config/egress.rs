@@ -81,6 +81,11 @@ pub struct DirectEgressConfig {
     /// `country`.
     #[serde(default)]
     pub locale: Option<String>,
+    /// The persona's IANA time zone (`America/Chicago`), declared; it wins
+    /// over the lookup's. Needs `country`. Unset, the lookup's zone when it
+    /// agrees on the country, else the country's main zone.
+    #[serde(default)]
+    pub timezone: Option<String>,
     /// The engines the host personas may be drawn on; unset, the mix of
     /// `personas.mix`.
     #[serde(default)]
@@ -102,6 +107,7 @@ impl Default for DirectEgressConfig {
             personas: default_direct_personas(),
             country: None,
             locale: None,
+            timezone: None,
             engines: None,
             private_names: Vec::new(),
         }
@@ -174,36 +180,13 @@ pub(super) fn validate(egress: &EgressConfig) -> Result<(), String> {
             "egress.direct.personas must be between 1 and {MAX_DIRECT_PERSONAS}"
         ));
     }
-    if let Some(locale) = &direct.locale {
-        let Some(country) = direct.country else {
-            return Err(
-                "egress.direct.locale needs egress.direct.country: a locale overrides the \
-                 language of a country"
-                    .to_owned(),
-            );
-        };
-        match locale_region(locale) {
-            Some(_) if crate::persona::locale::declared(locale, Engine::Chromium).is_none() => {
-                return Err(format!(
-                    "egress.direct.locale: no browser list is known for the language of \
-                     {locale}; name one of de, fr, it, en, nl, es, pl, pt, ro, sv"
-                ));
-            }
-            Some(region) if region == country.as_str() => {}
-            Some(_) => {
-                return Err(format!(
-                    "egress.direct.locale must carry egress.direct.country as its region, as \
-                     xx-{country}"
-                ));
-            }
-            None => {
-                return Err(
-                    "egress.direct.locale is a BCP 47 tag of a language and a region, as de-AT"
-                        .to_owned(),
-                );
-            }
-        }
-    }
+    // The rule every declaration follows (ADR 0013).
+    super::declared::check(
+        direct.country,
+        direct.locale.as_deref(),
+        direct.timezone.as_deref(),
+        &|field| format!("egress.direct.{field}"),
+    )?;
     if let Some(engines) = &direct.engines {
         let mut sorted = engines.clone();
         sorted.sort_unstable();
@@ -235,16 +218,6 @@ pub(super) fn validate(egress: &EgressConfig) -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-/// The region of a `language-REGION` tag, upper-cased; `None` for anything
-/// else.
-fn locale_region(locale: &str) -> Option<String> {
-    let (language, region) = locale.split_once('-')?;
-    let language_ok =
-        (2..=3).contains(&language.len()) && language.bytes().all(|b| b.is_ascii_lowercase());
-    let region_ok = region.len() == 2 && region.bytes().all(|b| b.is_ascii_alphabetic());
-    (language_ok && region_ok).then(|| region.to_ascii_uppercase())
 }
 
 #[cfg(test)]
@@ -405,6 +378,33 @@ mod tests {
                 "{locale}"
             );
         }
+        // A zone, declared with its country; a country the tables do not
+        // know needs a locale whose language they know (ADR 0013).
+        assert_eq!(
+            with(|egress| {
+                egress.direct.country = Some("US".parse().unwrap());
+                egress.direct.timezone = Some("America/Chicago".to_owned());
+            }),
+            Ok(())
+        );
+        let zone =
+            with(|egress| egress.direct.timezone = Some("Europe/Vienna".to_owned())).unwrap_err();
+        assert!(
+            zone.contains("egress.direct.timezone needs egress.direct.country"),
+            "{zone}"
+        );
+        let japan = with(|egress| egress.direct.country = Some("JP".parse().unwrap())).unwrap_err();
+        assert!(
+            japan.contains("egress.direct.country: no browser language list is known for JP"),
+            "{japan}"
+        );
+        assert_eq!(
+            with(|egress| {
+                egress.direct.country = Some("JP".parse().unwrap());
+                egress.direct.locale = Some("en-JP".to_owned());
+            }),
+            Ok(())
+        );
         // Engines: at least one, each once.
         assert_eq!(
             with(|egress| egress.direct.engines = Some(vec![Engine::Firefox])),

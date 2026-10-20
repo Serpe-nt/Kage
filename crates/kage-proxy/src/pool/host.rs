@@ -7,14 +7,16 @@
 //! probed through, never part of the leak check, the outage share or the
 //! capacity, and never replaced. Its place is what the host's own geo
 //! lookup saw ([`Pool::record_host_place`]), or what the operator declared
-//! (`egress.direct.country`), which the lookup then only verifies.
+//! (`egress.direct.country`, `locale`, `timezone`), which is written on the
+//! row like a declared list's entry and which the lookup then only
+//! verifies (ADR 0013: one rule for every declaration).
 
 use std::net::IpAddr;
 
 use chrono::{DateTime, Utc};
 use kage_core::alert::AlertSeverity;
 use kage_core::domain::{
-    CountryCode, GeoRecord, Proxy, ProxyProviderKind, ProxyScheme, ProxyState,
+    Declaration, GeoRecord, Proxy, ProxyProviderKind, ProxyScheme, ProxyState,
 };
 use kage_core::ids::ProxyId;
 use serde_json::json;
@@ -54,10 +56,12 @@ impl Pool {
     }
 
     /// Makes the host's rows what the configuration says: `count` of them,
-    /// live and usable, the missing ones made with `country` as their
-    /// declared place, and those beyond `count` retired (their personas
-    /// with them). Returns the live host rows, in order. `count` 0 retires
-    /// every one: under `egress.mode: proxies` none may exist.
+    /// live and usable, each with `declared` as its declared place (the
+    /// missing ones made with it, the others given it when it changed,
+    /// which [`PoolEvent::DeclarationChanged`] announces), and those beyond
+    /// `count` retired (their personas with them). Returns the live host
+    /// rows, in order. `count` 0 retires every one: under
+    /// `egress.mode: proxies` none may exist.
     ///
     /// # Errors
     ///
@@ -65,7 +69,7 @@ impl Pool {
     pub async fn keep_host_rows(
         &self,
         count: u32,
-        country: Option<CountryCode>,
+        declared: Option<&Declaration>,
     ) -> Result<Vec<Proxy>, PoolError> {
         let now = self.clock.now();
         let mut report = ReconcileReport::default();
@@ -74,28 +78,68 @@ impl Pool {
                 self.retire(&row, now, "egress_mode", &mut report).await?;
             }
         }
-        let known: Vec<String> = self
-            .host_rows()
-            .await?
-            .into_iter()
-            .map(|row| row.provider_ref)
-            .collect();
+        let live = self.host_rows().await?;
+        for row in &live {
+            self.declare_host_row(row, declared).await?;
+        }
+        let known: Vec<&str> = live.iter().map(|row| row.provider_ref.as_str()).collect();
         for place in 1..=count {
             let provider_ref = host_ref(place);
-            if known.contains(&provider_ref) {
+            if known.contains(&provider_ref.as_str()) {
                 continue;
             }
-            self.add_host_row(provider_ref, country, now).await?;
+            self.add_host_row(provider_ref, declared, now).await?;
         }
         self.host_rows().await
+    }
+
+    /// Writes the declaration in force on a host row whose own differs,
+    /// and announces it: its persona is made again when the identity
+    /// changed, and follows when only the zone did (ADR 0013).
+    async fn declare_host_row(
+        &self,
+        row: &Proxy,
+        declared: Option<&Declaration>,
+    ) -> Result<(), PoolError> {
+        let country = declared.map(|declared| declared.country);
+        let locale = declared.and_then(|declared| declared.locale.clone());
+        let timezone = declared.and_then(|declared| declared.timezone.clone());
+        if row.country == country && row.locale == locale && row.timezone == timezone {
+            return Ok(());
+        }
+        let event = self.health_event(
+            Some(row.id),
+            "proxy_declaration_changed",
+            AlertSeverity::Info,
+            json!({
+                "from": { "country": row.country, "locale": row.locale, "timezone": row.timezone },
+                "to": { "country": country, "locale": locale, "timezone": timezone },
+            }),
+        );
+        let changed = self
+            .store
+            .proxies()
+            .modify_noting(row.id, |stored| {
+                stored.country = country;
+                stored.locale.clone_from(&locale);
+                stored.timezone.clone_from(&timezone);
+                ((), vec![event])
+            })
+            .await?;
+        if changed.is_some() {
+            tracing::info!(proxy = %row.id, "the host's declared place changed");
+            self.publish(PoolEvent::DeclarationChanged { proxy: row.id });
+        }
+        Ok(())
     }
 
     async fn add_host_row(
         &self,
         provider_ref: String,
-        country: Option<CountryCode>,
+        declared: Option<&Declaration>,
         now: DateTime<Utc>,
     ) -> Result<(), PoolError> {
+        let country = declared.map(|declared| declared.country);
         let id = ProxyId::new();
         let proxy = Proxy {
             id,
@@ -109,6 +153,8 @@ impl Pool {
             password: self.cipher.seal(id, CredentialField::Password, "")?,
             scheme: ProxyScheme::Http,
             country,
+            locale: declared.and_then(|declared| declared.locale.clone()),
+            timezone: declared.and_then(|declared| declared.timezone.clone()),
             city: None,
             asn: None,
             // Usable from the start: it is never probed into health.

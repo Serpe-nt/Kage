@@ -49,6 +49,8 @@ fn stored(ip: &str) -> Proxy {
         password: SealedSecret::new(vec![2]),
         scheme: ProxyScheme::Http,
         country: "DE".parse().ok(),
+        locale: None,
+        timezone: None,
         city: None,
         asn: None,
         state: ProxyState::Backoff,

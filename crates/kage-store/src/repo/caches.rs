@@ -2,7 +2,7 @@
 //! §14, §15).
 
 use chrono::{DateTime, Utc};
-use kage_core::ids::{ApiKeyId, PersonaId, ResultId};
+use kage_core::ids::{ApiKeyId, PersonaId, ProxyId, ResultId};
 
 use super::repository;
 use crate::StoreError;
@@ -164,6 +164,75 @@ impl SiteScoutRepo<'_> {
         .fetch_all(self.pool)
         .await?;
         Ok(readers.into_iter().map(PersonaId::from_uuid).collect())
+    }
+}
+
+repository!(
+    /// The one address a site's plain traffic (level 0) leaves from under
+    /// the pool, one per site (spec §25).
+    SiteExitRepo
+);
+
+impl SiteExitRepo<'_> {
+    /// The proxy a site's plain traffic leaves from, when one is recorded
+    /// and not retired. A retired one means "choose again".
+    ///
+    /// # Errors
+    ///
+    /// Fails when the query fails.
+    pub async fn get(&self, site: &str) -> Result<Option<ProxyId>, StoreError> {
+        let proxy = sqlx::query_scalar!(
+            "SELECT site_exit.proxy_id FROM site_exits site_exit
+             JOIN proxies proxy ON proxy.id = site_exit.proxy_id
+             WHERE site_exit.site = $1 AND proxy.state <> 'retired'",
+            site,
+        )
+        .fetch_optional(self.pool)
+        .await?;
+        Ok(proxy.map(ProxyId::from_uuid))
+    }
+
+    /// Records the proxy a site's plain traffic leaves from, in place of
+    /// whichever was.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the query fails, or the proxy does not exist.
+    pub async fn set(
+        &self,
+        site: &str,
+        proxy: ProxyId,
+        now: DateTime<Utc>,
+    ) -> Result<(), StoreError> {
+        sqlx::query!(
+            "INSERT INTO site_exits (site, proxy_id, chosen_at) VALUES ($1, $2, $3)
+             ON CONFLICT (site) DO UPDATE
+             SET proxy_id = EXCLUDED.proxy_id, chosen_at = EXCLUDED.chosen_at
+             WHERE site_exits.proxy_id <> EXCLUDED.proxy_id",
+            site,
+            proxy.as_uuid(),
+            now,
+        )
+        .execute(self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Forgets every site's plain exit through `proxy`, which from now on
+    /// carries a persona: each of those sites chooses again. Returns how
+    /// many sites lost it.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the query fails.
+    pub async fn release(&self, proxy: ProxyId) -> Result<u64, StoreError> {
+        let done = sqlx::query!(
+            "DELETE FROM site_exits WHERE proxy_id = $1",
+            proxy.as_uuid()
+        )
+        .execute(self.pool)
+        .await?;
+        Ok(done.rows_affected())
     }
 }
 

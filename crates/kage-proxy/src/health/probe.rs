@@ -42,7 +42,7 @@ use std::net::IpAddr;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use kage_core::config::ProxyHealthConfig;
+use kage_core::config::{Config, EgressMode, ProxyHealthConfig, ResolvedProvider};
 use kage_core::domain::{CountryCode, HealthFailure, ProxyEndpoint};
 use kage_http::headers::{DEFAULT_LANGUAGES, Identity, IdentityOverride};
 use kage_http::profile::{self, ProfileError};
@@ -52,6 +52,7 @@ use kage_http::{
 use url::Url;
 
 use crate::machine::ExitObservation;
+use crate::provider::{PUBLIC_ECHO_URL, capabilities_of};
 
 /// Longest body an echo or geo endpoint may send. An address is a few
 /// dozen bytes and a geo record a few hundred.
@@ -239,6 +240,66 @@ impl ProbeClientFactory for EmulatedClientFactory {
     }
 }
 
+/// The endpoints the health checks read, as the configuration resolves
+/// them (spec §7.4, ADR 0013).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Endpoints {
+    /// The echo every probe reads through the proxy: `proxies.health.echo_url`,
+    /// else the provider's own echo, else [`PUBLIC_ECHO_URL`].
+    pub echo: String,
+    /// The second echo, tried once before a failure counts; when it is
+    /// [`Self::echo`], a second read on a fresh tunnel.
+    pub confirm: Option<String>,
+    /// The geo lookup of an exit address; `None` switches it off.
+    pub geo: Option<String>,
+    /// The echo read without a proxy for the host's own address:
+    /// `proxies.health.host_ip_url`, else the provider's own echo under
+    /// `egress.mode: proxies`, else [`HOST_IP_ECHO_URL`].
+    pub host_ip: String,
+}
+
+/// The echo the host's own address is read from when nothing else is
+/// configured and the provider runs no echo, and always under
+/// `egress.mode: direct`: a public echo of another operator than
+/// [`PUBLIC_ECHO_URL`], so that nobody outside sees both the host and the
+/// pool (ADR 0013).
+pub const HOST_IP_ECHO_URL: &str = "https://api.ipify.org/";
+
+impl Endpoints {
+    /// The endpoints of `health` for `provider` under `mode`.
+    pub fn resolve(
+        health: &ProxyHealthConfig,
+        provider: ResolvedProvider,
+        mode: EgressMode,
+    ) -> Self {
+        let own = capabilities_of(provider).and_then(|capabilities| capabilities.echo);
+        Self {
+            echo: health
+                .echo_url
+                .clone()
+                .unwrap_or_else(|| own.unwrap_or(PUBLIC_ECHO_URL).to_owned()),
+            confirm: health.confirm_url.clone(),
+            geo: health.geo_url.clone(),
+            host_ip: health.host_ip_url.clone().unwrap_or_else(|| {
+                match (mode, own) {
+                    (EgressMode::Proxies, Some(own)) => own,
+                    _ => HOST_IP_ECHO_URL,
+                }
+                .to_owned()
+            }),
+        }
+    }
+
+    /// The endpoints the configuration resolves to.
+    pub fn from_config(config: &Config) -> Self {
+        Self::resolve(
+            &config.proxies.health,
+            config.proxy_provider(),
+            config.egress.mode,
+        )
+    }
+}
+
 /// Probes through the http path.
 #[derive(Debug)]
 pub struct HttpProber<F = EmulatedClientFactory> {
@@ -254,10 +315,10 @@ impl HttpProber<EmulatedClientFactory> {
     /// # Errors
     ///
     /// Fails when the emulation profile or platform is unknown.
-    pub fn from_config(config: &ProxyHealthConfig) -> Result<Self, ProbeClientError> {
+    pub fn from_config(config: &Config) -> Result<Self, ProbeClientError> {
         Ok(Self::new(
-            EmulatedClientFactory::from_config(config)?,
-            config,
+            EmulatedClientFactory::from_config(&config.proxies.health)?,
+            &Endpoints::from_config(config),
         ))
     }
 }
@@ -275,13 +336,13 @@ fn millis(value: u64) -> u32 {
 }
 
 impl<F: ProbeClientFactory> HttpProber<F> {
-    /// A prober with its own client factory and the configured endpoints.
-    pub fn new(factory: F, config: &ProxyHealthConfig) -> Self {
+    /// A prober with its own client factory and the given endpoints.
+    pub fn new(factory: F, endpoints: &Endpoints) -> Self {
         Self {
             factory,
-            echo_url: config.echo_url.clone(),
-            confirm_url: config.confirm_url.clone(),
-            geo_url: config.geo_url.clone(),
+            echo_url: endpoints.echo.clone(),
+            confirm_url: endpoints.confirm.clone(),
+            geo_url: endpoints.geo.clone(),
         }
     }
 
@@ -391,22 +452,33 @@ impl<F: ProbeClientFactory> Prober for HttpProber<F> {
 }
 
 /// Reads the caller's address from an echo's answer: a bare address, a JSON
-/// object with the address under a usual name, or `key=value` lines.
+/// object with the address under a usual name (`peer` is Kage's own echo,
+/// `kage echo serve`), or `key=value` lines. An address may carry the port
+/// the echo saw (`203.0.113.20:51234`, `[2001:db8::7]:443`).
 pub fn parse_ip(body: &str) -> Option<IpAddr> {
     let body = body.trim();
-    if let Ok(ip) = body.parse() {
+    if let Some(ip) = address(body) {
         return Some(ip);
     }
     if let Ok(serde_json::Value::Object(map)) = serde_json::from_str(body) {
-        return ["ip", "ip_address", "ipAddress", "query", "origin"]
+        return ["ip", "ip_address", "ipAddress", "query", "origin", "peer"]
             .iter()
-            .find_map(|key| map.get(*key)?.as_str()?.trim().parse().ok());
+            .find_map(|key| address(map.get(*key)?.as_str()?.trim()));
     }
     body.lines().find_map(|line| {
         let (key, value) = line.split_once('=')?;
         (key.trim() == "ip")
-            .then(|| value.trim().parse().ok())
+            .then(|| address(value.trim()))
             .flatten()
+    })
+}
+
+/// An address, alone or with a port.
+fn address(text: &str) -> Option<IpAddr> {
+    text.parse::<IpAddr>().ok().or_else(|| {
+        text.parse::<std::net::SocketAddr>()
+            .ok()
+            .map(|socket| socket.ip())
     })
 }
 
@@ -559,6 +631,18 @@ mod tests {
         }
         assert_eq!(parse_ip("2001:db8::7"), Some(ip("2001:db8::7")));
         assert_eq!(parse_ip(r#"{"ip":"2001:db8::7"}"#), Some(ip("2001:db8::7")));
+        // With the port the echo saw, as some echoes write it.
+        for body in [
+            "203.0.113.20:51234",
+            r#"{"ip": "203.0.113.20:51234", "http_version": "h2"}"#,
+            "ip=203.0.113.20:443",
+        ] {
+            assert_eq!(parse_ip(body), Some(ip("203.0.113.20")), "{body}");
+        }
+        assert_eq!(
+            parse_ip(r#"{"ip": "[2001:db8::7]:443"}"#),
+            Some(ip("2001:db8::7"))
+        );
 
         for body in [
             "",
@@ -572,6 +656,95 @@ mod tests {
             "999.0.0.1",
         ] {
             assert_eq!(parse_ip(body), None, "{body}");
+        }
+    }
+
+    /// ADR 0013, consult 4b: the provider's own echo, else the public one;
+    /// the host's address from the provider's echo under the pool, else
+    /// from an echo of another operator, so nobody outside sees both.
+    #[test]
+    fn the_endpoints_follow_the_provider_and_the_mode() {
+        use kage_core::config::{EgressMode, ResolvedProvider};
+
+        use super::{Endpoints, HOST_IP_ECHO_URL};
+
+        let health = ProxyHealthConfig::default();
+        let resolve = |provider, mode| Endpoints::resolve(&health, provider, mode);
+
+        let webshare = resolve(ResolvedProvider::Webshare, EgressMode::Proxies);
+        assert_eq!(webshare.echo, "https://ipv4.webshare.io/");
+        assert_eq!(webshare.host_ip, "https://ipv4.webshare.io/");
+        assert_eq!(
+            webshare.confirm.as_deref(),
+            Some("https://checkip.amazonaws.com/")
+        );
+        assert_eq!(webshare.geo.as_deref(), Some("https://ipinfo.io/json"));
+        for provider in [ResolvedProvider::Static, ResolvedProvider::None] {
+            let listed = resolve(provider, EgressMode::Proxies);
+            assert_eq!(listed.echo, "https://checkip.amazonaws.com/");
+            // The confirmation is then a second read of the same echo.
+            assert_eq!(listed.confirm.as_deref(), Some(listed.echo.as_str()));
+            assert_eq!(listed.host_ip, HOST_IP_ECHO_URL);
+        }
+        assert_eq!(HOST_IP_ECHO_URL, "https://api.ipify.org/");
+        // Under direct the host's address never comes from the provider.
+        let direct = resolve(ResolvedProvider::Webshare, EgressMode::Direct);
+        assert_eq!(direct.host_ip, HOST_IP_ECHO_URL);
+
+        // What the operator names wins, whatever the provider.
+        let own = ProxyHealthConfig {
+            echo_url: Some("https://echo.example.org/".to_owned()),
+            host_ip_url: Some("https://echo.example.org/host".to_owned()),
+            confirm_url: None,
+            geo_url: None,
+            ..ProxyHealthConfig::default()
+        };
+        for (provider, mode) in [
+            (ResolvedProvider::Webshare, EgressMode::Proxies),
+            (ResolvedProvider::Static, EgressMode::Direct),
+        ] {
+            let endpoints = Endpoints::resolve(&own, provider, mode);
+            assert_eq!(endpoints.echo, "https://echo.example.org/");
+            assert_eq!(endpoints.host_ip, "https://echo.example.org/host");
+            assert_eq!(endpoints.confirm, None);
+            assert_eq!(endpoints.geo, None);
+        }
+    }
+
+    /// The operator's own echo (`kage echo serve`, O5) is the private
+    /// choice of `proxies.health.echo_url` (ADR 0013): the probe reads the
+    /// address out of the echo's own answer, an observation of the
+    /// request.
+    #[test]
+    fn kages_own_echo_answers_an_address_the_probe_reads() {
+        use kage_http::echo::{ECHO_NAME, ECHO_VERSION, Observation, TlsObservation};
+
+        for peer in ["203.0.113.20", "2001:db8::7"] {
+            let observation = Observation {
+                echo: ECHO_NAME.to_owned(),
+                version: ECHO_VERSION,
+                peer: peer.to_owned(),
+                method: "GET".to_owned(),
+                path: "/".to_owned(),
+                http_version: "h2".to_owned(),
+                tls: TlsObservation {
+                    ja4: "t13d1516h2_8daaf6152771_02713d6af862".to_owned(),
+                    ja4_r: String::new(),
+                    version: "13".to_owned(),
+                    sni: Some("echo.example.org".to_owned()),
+                    alpn: vec!["h2".to_owned()],
+                    ciphers: Vec::new(),
+                    extensions: Vec::new(),
+                    groups: Vec::new(),
+                    signature_algorithms: Vec::new(),
+                },
+                http2: None,
+                http1: None,
+            };
+            // As the echo writes it: pretty JSON and a newline.
+            let body = format!("{}\n", serde_json::to_string_pretty(&observation).unwrap());
+
+            assert_eq!(parse_ip(&body), Some(ip(peer)), "{body}");
         }
     }
 

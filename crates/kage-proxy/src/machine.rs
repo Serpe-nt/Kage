@@ -40,6 +40,7 @@ use kage_core::domain::{
     CountryCode, GeoRecord, HealthFailure, Proxy, ProxyHealth, ProxyReplacement, ProxyState,
     ReplaceReason,
 };
+use kage_core::ids::ProxyId;
 
 use crate::provider::AutoReplace;
 
@@ -237,6 +238,14 @@ pub enum Effect {
     },
     /// A lookup agreed with the provider again.
     GeoMismatchCleared,
+    /// The probe saw the exit address of another live proxy, older than
+    /// this one: this one carries nothing while it lasts (decision D6).
+    ExitShared {
+        /// The older proxy that leaves by the same address.
+        with: ProxyId,
+    },
+    /// The proxy leaves by an address of its own again.
+    ExitSharedCleared,
     /// Enough lookups in a row scored the address as bad.
     ReputationBad {
         /// The latest score.
@@ -489,10 +498,38 @@ fn record_geo(
 }
 
 /// Whether a standing condition keeps a reachable proxy `degraded`: a
-/// confirmed geo mismatch or a confirmed bad reputation.
+/// confirmed geo mismatch, a confirmed bad reputation, or an exit address
+/// another live proxy leaves by too.
 fn is_degrading(health: &ProxyHealth, rules: &PoolRules) -> bool {
     health.geo_mismatches >= rules.geo_mismatches
         || health.reputation_bad_lookups >= rules.bad_lookups
+        || health.exit_shared_with.is_some()
+}
+
+/// Notes whether a probe saw the exit address of another live proxy that
+/// is older than this one (`shared`, which the pool finds among its live
+/// proxies): two proxies that leave by one address would be two personas
+/// on one address (decision D6), so the later one is marked and carries
+/// nothing while it lasts. Applied before [`apply_probe`], which then keeps
+/// the proxy `degraded`. A probe that read no exit address, or saw a leak,
+/// tells nothing about it and changes nothing.
+pub fn mark_shared_exit(
+    proxy: &mut Proxy,
+    report: &ProbeReport,
+    shared: Option<ProxyId>,
+) -> Vec<Effect> {
+    if report.exit.is_err() || report.leak == Some(true) {
+        return Vec::new();
+    }
+    let health = proxy
+        .last_health
+        .get_or_insert_with(|| ProxyHealth::new(report.at, false));
+    let before = std::mem::replace(&mut health.exit_shared_with, shared);
+    match (before, shared) {
+        (None, Some(with)) => vec![Effect::ExitShared { with }],
+        (Some(_), None) => vec![Effect::ExitSharedCleared],
+        _ => Vec::new(),
+    }
 }
 
 fn enter_backoff(proxy: &mut Proxy, now: DateTime<Utc>, jitter: f64, rules: &PoolRules) {

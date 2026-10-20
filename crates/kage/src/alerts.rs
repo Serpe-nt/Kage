@@ -14,6 +14,7 @@ pub(crate) fn subject_of(kind: AlertKind) -> SubjectKind {
         AlertKind::PolicyReloadFailed => SubjectKind::Policy,
         AlertKind::ProxyLeak
         | AlertKind::ProxyGeoMismatch
+        | AlertKind::ProxyExitShared
         | AlertKind::ProxyReputationBad
         | AlertKind::ReputationUsageTypeSuspicious
         | AlertKind::ReplacementBudgetExhausted
@@ -84,6 +85,7 @@ mod tests {
         let about_one_proxy = [
             AlertKind::ProxyLeak,
             AlertKind::ProxyGeoMismatch,
+            AlertKind::ProxyExitShared,
             AlertKind::ProxyReputationBad,
             AlertKind::ReputationUsageTypeSuspicious,
             AlertKind::ReplacementBudgetExhausted,
@@ -104,6 +106,7 @@ mod tests {
             AlertKind::ProviderAutoReplaceEnabled,
             AlertKind::ProviderAccount,
             AlertKind::ProviderSyncFailed,
+            AlertKind::StaticListInvalid,
             AlertKind::HostIpUnknown,
             AlertKind::HttpProfileMissing,
             AlertKind::DomainPaused,

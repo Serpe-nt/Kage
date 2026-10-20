@@ -28,6 +28,7 @@ use axum::http::StatusCode;
 use axum::http::header::{CACHE_CONTROL, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
+use kage_core::config::EgressMode;
 use kage_core::domain::{
     ApiKey, AuditActor, AuditEvent, KeyLimits, Persona, PersonaState, Proxy, ReplaceReason, Scope,
 };
@@ -648,15 +649,30 @@ pub(crate) struct ProxyAdminView {
     /// The proxy's id.
     #[schema(value_type = String, format = Uuid)]
     pub(crate) id: ProxyId,
-    /// `webshare` or `static`.
+    /// `webshare`, `static` (the operator's declared list) or `host` (the
+    /// host's own connection under `egress.mode: direct`).
     pub(crate) provider: String,
     /// Its address.
     pub(crate) host: String,
     /// Its port.
     pub(crate) port: u16,
-    /// The country the provider states.
+    /// The country the provider states: for a declared list and the host's
+    /// own rows the declared one, which the persona follows and a lookup
+    /// only verifies (ADR 0013); for Webshare a fallback the observed
+    /// country overrides.
     pub(crate) country: Option<String>,
-    /// The city the provider states.
+    /// The declared locale (BCP 47), when one is declared.
+    pub(crate) locale: Option<String>,
+    /// The declared IANA time zone, when one is declared.
+    pub(crate) timezone: Option<String>,
+    /// Whether `country`, `locale` and `timezone` are a declaration.
+    pub(crate) declared: bool,
+    /// Whether it carries a persona: not a declared entry without a
+    /// country, and not one that leaves by another proxy's address.
+    pub(crate) carries_persona: bool,
+    /// Whether it is one of the pool's plain exits only (level 0).
+    pub(crate) plain_exit: bool,
+    /// The city the provider states; informational.
     pub(crate) city: Option<String>,
     /// `new`, `healthy`, `degraded`, `backoff`, `replacing` or `retired`.
     pub(crate) state: String,
@@ -685,6 +701,11 @@ fn proxy_view(proxy: &Proxy) -> ProxyAdminView {
         host: proxy.host.clone(),
         port: proxy.port,
         country: proxy.country.map(|country| country.to_string()),
+        locale: proxy.locale.clone(),
+        timezone: proxy.timezone.clone(),
+        declared: proxy.declaration().is_some(),
+        carries_persona: proxy.carries_persona(),
+        plain_exit: proxy.is_plain_exit(),
         city: proxy.city.clone(),
         state: proxy.state.as_str().to_owned(),
         consecutive_failures: proxy.consecutive_failures,
@@ -793,7 +814,9 @@ fn replacement_view(outcome: &ReplacementOutcome) -> ReplacementView {
         ),
         ReplacementOutcome::Unsupported => (
             "unsupported",
-            "the provider cannot replace proxies".to_owned(),
+            "the provider does not offer replacement: a declared list is edited by its \
+             operator, and nobody replaces the host's own connection"
+                .to_owned(),
         ),
         ReplacementOutcome::NotEligible { state } => {
             ("not_eligible", format!("the proxy is {state}"))
@@ -851,7 +874,7 @@ pub(crate) async fn replace_proxy(
     responses(
         (status = 200, description = "The proxy after the probe.", body = ProxyAdminView),
         (status = 404, description = "`proxy_not_found`.", body = Problem, content_type = "application/problem+json"),
-        (status = 409, description = "`conflict`: the proxy is being replaced or is retired, and is not probed.", body = Problem, content_type = "application/problem+json"),
+        (status = 409, description = "`conflict`: the proxy is being replaced or is retired, and is not probed (`not_probed`); or the pool is idle under `egress.mode: direct` (`pool_idle`).", body = Problem, content_type = "application/problem+json"),
     ),
     security(("api_key" = ["admin"]))
 )]
@@ -860,6 +883,15 @@ pub(crate) async fn check_proxy(
     Path(id): Path<String>,
 ) -> ApiResult<Response> {
     let id: ProxyId = parse_id(&id, ErrorCode::ProxyNotFound)?;
+    // Under direct nothing of the pool is probed, nor the host's rows
+    // (F68).
+    if state.config().egress.mode == EgressMode::Direct {
+        return Err(ApiError::new(
+            ErrorCode::Conflict,
+            "the pool is idle under egress.mode direct: nothing of it is probed",
+        )
+        .with("reason", "pool_idle"));
+    }
     let engine = engine(&state)?;
     let known = engine
         .pool
@@ -900,6 +932,12 @@ pub(crate) struct PoolView {
     /// is in force. Null until it was first judged.
     #[schema(value_type = Option<FreeForm>)]
     pub(crate) bandwidth: Option<Value>,
+    /// The provider: its `kind`, its `capabilities` (replacement, the
+    /// replaced log, the account, the stats, its own echo) and the
+    /// operations it does not offer, `unsupported`. Null without a
+    /// provider (spec §7.1).
+    #[schema(value_type = Option<FreeForm>)]
+    pub(crate) provider: Option<Value>,
 }
 
 /// The pool and the bandwidth budget at a glance.
@@ -945,6 +983,14 @@ pub(crate) async fn pool(State(state): State<ApiState>) -> ApiResult<Json<PoolVi
             "browsers_open": engine.personas.contexts().open().len(),
         }),
         bandwidth: budget.and_then(|budget| serde_json::to_value(budget).ok()),
+        provider: match (engine.pool.provider_kind(), engine.pool.capabilities()) {
+            (Some(kind), Some(capabilities)) => Some(json!({
+                "kind": kind,
+                "capabilities": capabilities,
+                "unsupported": capabilities.unsupported(),
+            })),
+            _ => None,
+        },
     }))
 }
 

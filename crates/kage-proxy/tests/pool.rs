@@ -18,7 +18,7 @@ use kage_core::alert::{AlertKind, AlertSeverity, MemoryAlertSink};
 use kage_core::config::{Config, StaticProxy, WebshareConfig};
 use kage_core::domain::{
     GeoRecord, HealthEvent, HealthFailure, Proxy, ProxyHealth, ProxyProviderKind, ProxyState,
-    ReplaceReason,
+    ReplaceReason, SubjectKind,
 };
 use kage_core::duration::HumanDuration;
 use kage_core::ids::ProxyId;
@@ -26,9 +26,9 @@ use kage_core::secret::Secret;
 use kage_core::seed::Seed;
 use kage_proxy::machine::{ExitObservation, ProbeReport, ReputationReport};
 use kage_proxy::{
-    AutoReplace, BudgetWindow, CredentialCipher, CryptoError, ManualClock, Pool, PoolError,
-    PoolEvent, PoolParts, PoolRules, ProviderError, ProxyProvider, ReplacementOutcome,
-    StaticListProvider, WebshareProvider,
+    AutoReplace, BudgetWindow, Capabilities, Clock, CredentialCipher, CryptoError, ManualClock,
+    Operation, Pool, PoolError, PoolEvent, PoolParts, PoolRules, ProviderError, ProxyProvider,
+    ReplacementOutcome, StaticListProvider, WebshareProvider,
 };
 use serde_json::json;
 
@@ -1958,9 +1958,30 @@ async fn a_static_list_is_synced_but_never_replaced() {
         two.get(proxies[0].id).await.unwrap().unwrap().state,
         ProxyState::Backoff
     );
-    // Its account has nothing to alert on.
-    let account = two.sync_account().await.unwrap();
-    assert_eq!(account.proxy_count, Some(2));
+    // It is due and nobody can replace it: said once, at info, not alerted.
+    two.tick().await.unwrap();
+    let noted = db
+        .store
+        .health_events()
+        .recent(Some(SubjectKind::Proxy), 100)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|event| {
+            event.kind == "replacement_unsupported"
+                && event.subject_id == Some(proxies[0].id.as_uuid())
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(noted.len(), 1);
+    assert_eq!(noted[0].severity, AlertSeverity::Info);
+    assert_eq!(noted[0].details["provider"], "static");
+    // A declared list keeps no account: it is not asked, and nothing is
+    // alerted (spec §7.1, ADR 0013).
+    assert_eq!(two.capabilities(), Some(Capabilities::LIST_ONLY));
+    assert!(!two.offers(Operation::Account));
+    assert!(two.sync_account().await.unwrap_err().is_unsupported());
+    assert_eq!(two.account(), None);
+    assert_eq!(two.provider_traffic_since(start()).await.unwrap(), None);
     assert_eq!(alerts.alerts(), []);
 
     // The operator removes a line: after two syncs the proxy is retired.
@@ -2113,4 +2134,210 @@ async fn the_upkeep_loop_syncs_reads_the_account_and_keeps_going_until_stopped()
         .await
         .expect("the loop did not stop")
         .unwrap();
+}
+
+/// A pool over a declared list read from a file, and its alerts.
+fn declared_pool(
+    db: &TestDb,
+    file: &std::path::Path,
+) -> (Arc<Pool>, Arc<MemoryAlertSink>, Arc<ManualClock>) {
+    let alerts = Arc::new(MemoryAlertSink::new());
+    let clock = Arc::new(ManualClock::new(start()));
+    let provider = StaticListProvider::from_config(&kage_core::config::ProxiesConfig {
+        static_list_file: Some(file.to_path_buf()),
+        ..kage_core::config::ProxiesConfig::default()
+    })
+    .unwrap();
+    let pool = Arc::new(Pool::new(PoolParts {
+        store: db.store.clone(),
+        provider: Some(Arc::new(provider)),
+        cipher: CredentialCipher::new(&MASTER_KEY_BYTES),
+        rules: PoolRules::default(),
+        missing_syncs: 1,
+        alerts: alerts.clone(),
+        clock: clock.clone(),
+        seed: Seed::from_u64(3),
+    }));
+    (pool, alerts, clock)
+}
+
+/// ADR 0013, consult 1d: the list's file is read again at every sync; a
+/// changed declaration is written and announced, and an edit that does not
+/// parse changes nothing and is said once.
+#[tokio::test]
+async fn a_declared_list_is_read_again_and_a_broken_edit_changes_nothing() {
+    let db = TestDb::migrated().await;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("proxies.yaml");
+    let write = |text: &str| std::fs::write(&file, text).unwrap();
+    write(
+        "proxies:
+  - {id: vienna, host: 198.51.100.10, port: 8080, username: u, password: p1, country: AT, locale: de-AT}
+  - {id: zurich, host: 198.51.100.11, port: 8080, username: u, password: p2, country: CH, locale: fr-CH, timezone: Europe/Zurich}
+",
+    );
+    let (pool, alerts, _) = declared_pool(&db, &file);
+
+    assert_eq!(pool.reconcile().await.unwrap().added.len(), 2);
+    let live = pool.live().await.unwrap();
+    let zurich = live
+        .iter()
+        .find(|proxy| proxy.provider_ref == "zurich")
+        .unwrap();
+    assert_eq!(zurich.locale.as_deref(), Some("fr-CH"));
+    assert_eq!(zurich.timezone.as_deref(), Some("Europe/Zurich"));
+    let vienna = live
+        .iter()
+        .find(|proxy| proxy.provider_ref == "vienna")
+        .unwrap();
+    assert_eq!(vienna.declaration().unwrap().country.as_str(), "AT");
+
+    // The operator corrects Vienna: it is in Graz, and speaks English.
+    let mut events = pool.subscribe();
+    write(
+        "proxies:
+  - {id: vienna, host: 198.51.100.10, port: 8080, username: u, password: p1, country: AT, locale: en-AT, city: Graz}
+  - {id: zurich, host: 198.51.100.11, port: 8080, username: u, password: p2, country: CH, locale: fr-CH, timezone: Europe/Zurich}
+",
+    );
+    assert_eq!(pool.reconcile().await.unwrap().updated, [vienna.id]);
+    assert_eq!(
+        events.recv().await.unwrap(),
+        PoolEvent::DeclarationChanged { proxy: vienna.id }
+    );
+    let corrected = pool.get(vienna.id).await.unwrap().unwrap();
+    assert_eq!(corrected.locale.as_deref(), Some("en-AT"));
+    assert_eq!(corrected.city.as_deref(), Some("Graz"));
+    assert!(events.try_recv().is_err());
+
+    // An edit that does not parse: the pool keeps what it has, the alert
+    // names the rule, never the content, and is raised once.
+    write(
+        "proxies:\n  - {id: vienna, host: 198.51.100.10, port: 8080, username: u, password: p1, country: JP}\n",
+    );
+    for _ in 0..2 {
+        let error = pool.reconcile().await.unwrap_err();
+        assert!(matches!(
+            error,
+            PoolError::Provider(ProviderError::InvalidList(_))
+        ));
+        assert_eq!(pool.live().await.unwrap().len(), 2);
+    }
+    let raised: Vec<_> = alerts
+        .alerts()
+        .into_iter()
+        .filter(|alert| alert.kind == AlertKind::StaticListInvalid)
+        .collect();
+    assert_eq!(raised.len(), 1);
+    let said = raised[0].details["error"].as_str().unwrap();
+    assert!(said.contains("entry 1: country"), "{said}");
+    assert!(!said.contains("p1"), "{said}");
+    // A file that is gone is the same.
+    std::fs::remove_file(&file).unwrap();
+    assert!(pool.reconcile().await.is_err());
+    assert_eq!(pool.live().await.unwrap().len(), 2);
+    // Mended, it is in force again; broken once more, it is said again.
+    write("198.51.100.10:8080:u:p1:AT\n198.51.100.11:8080:u:p2:CH:fr-CH\n");
+    pool.reconcile().await.unwrap();
+    write("not a list");
+    assert!(pool.reconcile().await.is_err());
+    assert_eq!(
+        alerts
+            .alerts()
+            .into_iter()
+            .filter(|alert| alert.kind == AlertKind::StaticListInvalid)
+            .count(),
+        2
+    );
+}
+
+/// Decision D6, consult 5g of M15: a proxy whose probe sees an older
+/// proxy's exit address carries nothing until it leaves by its own.
+#[tokio::test]
+async fn a_proxy_that_leaves_by_an_older_ones_address_carries_nothing() {
+    let db = TestDb::migrated().await;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("proxies.txt");
+    // A gateway: one host and port, the exit chosen by the login, and an
+    // id for each entry.
+    std::fs::write(
+        &file,
+        "proxies:
+  - {id: s1, host: gw.example.net, port: 7000, username: session-1, password: p, country: AT}
+  - {id: s2, host: gw.example.net, port: 7000, username: session-2, password: p, country: AT}
+",
+    )
+    .unwrap();
+    let (pool, alerts, clock) = declared_pool(&db, &file);
+    pool.reconcile().await.unwrap();
+    let live = pool.live().await.unwrap();
+    let (older, later) = (&live[0], &live[1]);
+    let mut events = pool.subscribe();
+    let probe = |at: DateTime<Utc>, last: u8| ProbeReport {
+        at,
+        exit: Ok(ExitObservation {
+            ip: IpAddr::from([203, 0, 113, last]),
+            latency_ms: 90,
+            connect_ms: None,
+            tls_ms: None,
+        }),
+        leak: Some(false),
+        geo: None,
+    };
+
+    pool.record_probe(older.id, &probe(clock.now(), 9))
+        .await
+        .unwrap();
+    let after = pool
+        .record_probe(later.id, &probe(clock.now(), 9))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        after.last_health.as_ref().unwrap().exit_shared_with,
+        Some(older.id)
+    );
+    assert!(!after.carries_persona());
+    assert!(!after.is_plain_exit());
+    // The older one is untouched.
+    assert!(pool.get(older.id).await.unwrap().unwrap().carries_persona());
+    let raised: Vec<_> = alerts
+        .alerts()
+        .into_iter()
+        .filter(|alert| alert.kind == AlertKind::ProxyExitShared)
+        .collect();
+    assert_eq!(raised.len(), 1);
+    assert_eq!(raised[0].subject, Some(later.id.as_uuid()));
+    assert_eq!(raised[0].details["with"], json!(older.id));
+    let mut seen = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        seen.push(event);
+    }
+    assert!(seen.contains(&PoolEvent::ExitShared { proxy: later.id }));
+    // A second probe keeps it degraded, and says nothing new.
+    clock.advance(chrono::Duration::minutes(5));
+    let again = pool
+        .record_probe(later.id, &probe(clock.now(), 9))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(again.state, ProxyState::Degraded);
+
+    // It leaves by an address of its own again.
+    clock.advance(chrono::Duration::minutes(5));
+    let apart = pool
+        .record_probe(later.id, &probe(clock.now(), 10))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(apart.state, ProxyState::Healthy);
+    assert!(apart.carries_persona());
+    assert_eq!(
+        alerts
+            .alerts()
+            .into_iter()
+            .filter(|alert| alert.kind == AlertKind::ProxyExitShared)
+            .count(),
+        1
+    );
 }

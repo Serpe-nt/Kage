@@ -29,6 +29,7 @@ use crate::secret::Secret;
 use crate::urlnorm::NormalizeOptions;
 
 mod crawl;
+pub mod declared;
 mod egress;
 mod extract;
 mod http;
@@ -536,7 +537,9 @@ impl Config {
         }
 
         let mut missing = Vec::new();
+        let mut static_list_file = None;
         for (spec, direct, from_file) in secret_values {
+            let path = from_file.clone();
             let value = match (direct, from_file) {
                 (Some(_), Some(_)) => return Err(ConfigError::SecretConflict { env: spec.env }),
                 (Some(value), None) => Some(value),
@@ -545,7 +548,14 @@ impl Config {
             };
             // An empty secret is a mistake, not a value.
             match value.filter(|value| !value.is_empty()) {
-                Some(value) => figment = figment.merge((spec.key, value)),
+                Some(value) => {
+                    // The declared list is read again from its file at
+                    // every sync (ADR 0013), so its path is kept.
+                    if spec.key == "proxies.static_list" {
+                        static_list_file = path;
+                    }
+                    figment = figment.merge((spec.key, value));
+                }
                 None if spec.required => missing.push(spec.env),
                 None => {}
             }
@@ -554,9 +564,10 @@ impl Config {
             return Err(ConfigError::MissingSecrets(missing));
         }
 
-        let config: Self = figment
+        let mut config: Self = figment
             .extract()
             .map_err(|error| ConfigError::Invalid(crate::yaml::explain(error)))?;
+        config.proxies.static_list_file = static_list_file;
         config.validate()?;
         Ok(config)
     }
@@ -1085,6 +1096,24 @@ urls:
             assert!(!printed.contains("user-a"), "{printed}");
             assert_eq!(config.redacted()["proxies"]["static_list"], REDACTED);
         }
+        // The file is kept, to be read again at every sync; nothing of it
+        // is printed but its path.
+        let from_file = Config::load(
+            None,
+            with(&[("KAGE__PROXIES__STATIC_LIST_FILE", file.to_str().unwrap())]),
+        )
+        .unwrap();
+        assert_eq!(
+            from_file.proxies.static_list_file.as_deref(),
+            Some(file.as_path())
+        );
+        assert!(
+            from_file.redacted()["proxies"]
+                .get("static_list_file")
+                .is_none()
+        );
+        let from_env = Config::load(None, with(&[("KAGE__PROXIES__STATIC_LIST", list)])).unwrap();
+        assert_eq!(from_env.proxies.static_list_file, None);
 
         // A malformed list fails the load without being quoted.
         let message = invalid(Config::load(

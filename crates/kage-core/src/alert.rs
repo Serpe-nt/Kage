@@ -54,8 +54,12 @@ pub enum AlertKind {
     /// or an operator clears the flag.
     EgressUnsafe,
     /// A geo lookup placed a proxy's exit address in another country than
-    /// the provider states, twice in a row.
+    /// the provider states, or than the operator declared, twice in a row.
     ProxyGeoMismatch,
+    /// A proxy's probe saw the exit address of another live proxy: two
+    /// personas would share one address (decision D6). The later proxy
+    /// carries nothing until the operator fixes the list.
+    ProxyExitShared,
     /// The reputation provider scored a proxy's address as bad.
     ProxyReputationBad,
     /// The reputation provider classifies a residential proxy's address as
@@ -85,6 +89,9 @@ pub enum AlertKind {
     ProviderAccount,
     /// The provider API could not be reached or refused the request.
     ProviderSyncFailed,
+    /// The declared proxy list's file changed and does not parse: the last
+    /// good list stays in force.
+    StaticListInvalid,
     /// The host's own public address could not be learned, so the leak
     /// check cannot run.
     HostIpUnknown,
@@ -122,6 +129,7 @@ impl AlertKind {
         Self::ProxyLeak,
         Self::EgressUnsafe,
         Self::ProxyGeoMismatch,
+        Self::ProxyExitShared,
         Self::ProxyReputationBad,
         Self::ReputationUsageTypeSuspicious,
         Self::ReplacementBudgetExhausted,
@@ -133,6 +141,7 @@ impl AlertKind {
         Self::ProviderAutoReplaceEnabled,
         Self::ProviderAccount,
         Self::ProviderSyncFailed,
+        Self::StaticListInvalid,
         Self::HostIpUnknown,
         Self::HttpProfileMissing,
         Self::HttpSelftestFailed,
@@ -150,6 +159,7 @@ impl AlertKind {
             Self::ProxyLeak => "proxy_leak",
             Self::EgressUnsafe => "egress_unsafe",
             Self::ProxyGeoMismatch => "proxy_geo_mismatch",
+            Self::ProxyExitShared => "proxy_exit_shared",
             Self::ProxyReputationBad => "proxy_reputation_bad",
             Self::ReputationUsageTypeSuspicious => "reputation_usage_type_suspicious",
             Self::ReplacementBudgetExhausted => "replacement_budget_exhausted",
@@ -161,6 +171,7 @@ impl AlertKind {
             Self::ProviderAutoReplaceEnabled => "provider_auto_replace_enabled",
             Self::ProviderAccount => "provider_account",
             Self::ProviderSyncFailed => "provider_sync_failed",
+            Self::StaticListInvalid => "static_list_invalid",
             Self::HostIpUnknown => "host_ip_unknown",
             Self::HttpProfileMissing => "http_profile_missing",
             Self::HttpSelftestFailed => "http_selftest_failed",
@@ -344,6 +355,7 @@ mod tests {
                 "proxy_leak",
                 "egress_unsafe",
                 "proxy_geo_mismatch",
+                "proxy_exit_shared",
                 "proxy_reputation_bad",
                 "reputation_usage_type_suspicious",
                 "replacement_budget_exhausted",
@@ -355,6 +367,7 @@ mod tests {
                 "provider_auto_replace_enabled",
                 "provider_account",
                 "provider_sync_failed",
+                "static_list_invalid",
                 "host_ip_unknown",
                 "http_profile_missing",
                 "http_selftest_failed",

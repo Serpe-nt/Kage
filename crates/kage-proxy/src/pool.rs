@@ -63,8 +63,8 @@ use crate::machine::{
     budget_window_start,
 };
 use crate::provider::{
-    AccountInfo, ProviderError, ProviderProxy, ProxyProvider, ReplaceSpec, ReplaceState,
-    ReplaceTicket, ReplacedProxy, StaticListProvider, WebshareProvider,
+    AccountInfo, Capabilities, Operation, ProviderError, ProviderProxy, ProxyProvider, ReplaceSpec,
+    ReplaceState, ReplaceTicket, ReplacedProxy, StaticListProvider, WebshareProvider,
 };
 
 mod host;
@@ -116,6 +116,14 @@ pub enum PoolError {
     Setup(String),
 }
 
+impl PoolError {
+    /// Whether the provider does not offer what was asked: an answer, not
+    /// a failure (spec §7.1).
+    pub const fn is_unsupported(&self) -> bool {
+        matches!(self, Self::Provider(ProviderError::Unsupported { .. }))
+    }
+}
+
 /// Something that happened in the pool, for subscribers in other crates.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PoolEvent {
@@ -136,6 +144,20 @@ pub enum PoolEvent {
     /// A geo lookup placed a proxy somewhere else than before, or for the
     /// first time.
     GeoChanged {
+        /// The proxy.
+        proxy: ProxyId,
+    },
+    /// What the operator declared about a proxy changed: its country,
+    /// locale or time zone, or whether it declares one at all (ADR 0013).
+    /// Its persona is made again when the identity changed.
+    DeclarationChanged {
+        /// The proxy.
+        proxy: ProxyId,
+    },
+    /// A probe found that a proxy leaves by an older proxy's exit address,
+    /// or that it no longer does: whether it may carry a persona changed
+    /// (decision D6).
+    ExitShared {
         /// The proxy.
         proxy: ProxyId,
     },
@@ -304,6 +326,9 @@ struct Memory {
     account_problems: Vec<String>,
     /// The accepted automatic replacement settings last noted as on.
     accepted_auto_replace: Vec<&'static str>,
+    /// Proxies due for a replacement the provider cannot make, whose
+    /// `replacement_unsupported` event is written for this episode.
+    unreplaceable: HashSet<ProxyId>,
 }
 
 /// The proxy pool. See the module documentation.
@@ -407,6 +432,20 @@ impl Pool {
     /// Which provider the pool syncs with, if any.
     pub fn provider_kind(&self) -> Option<ProxyProviderKind> {
         self.provider.as_ref().map(|provider| provider.kind())
+    }
+
+    /// What the provider can do besides listing; `None` without a
+    /// provider.
+    pub fn capabilities(&self) -> Option<Capabilities> {
+        self.provider
+            .as_ref()
+            .map(|provider| provider.capabilities())
+    }
+
+    /// Whether the provider offers `operation`; `false` without one.
+    pub fn offers(&self, operation: Operation) -> bool {
+        self.capabilities()
+            .is_some_and(|capabilities| capabilities.offers(operation))
     }
 
     /// Pool events as they happen. A subscriber that falls more than 256
@@ -596,6 +635,10 @@ impl Pool {
         let Some(provider) = &self.provider else {
             return Ok(None);
         };
+        // A provider that counts nothing leaves Kage's own count to judge.
+        if !provider.capabilities().stats {
+            return Ok(None);
+        }
         let hours = provider.stats(since).await?;
         if hours.is_empty() {
             return Ok(None);
@@ -732,6 +775,12 @@ impl Pool {
                     AlertSeverity::Info,
                     json!({}),
                 )),
+                Effect::ExitSharedCleared => Some(self.health_event(
+                    subject,
+                    "proxy_exit_shared_cleared",
+                    AlertSeverity::Info,
+                    json!({}),
+                )),
                 Effect::ReputationRecovered => Some(self.health_event(
                     subject,
                     "proxy_reputation_recovered",
@@ -741,6 +790,7 @@ impl Pool {
                 Effect::Leak { .. }
                 | Effect::LeakCleared
                 | Effect::GeoMismatch { .. }
+                | Effect::ExitShared { .. }
                 | Effect::ReputationBad { .. }
                 | Effect::UsageTypeSuspicious { .. } => None,
             })
@@ -797,17 +847,33 @@ impl Pool {
                     tracing::warn!(proxy = %proxy.id, "the geo record of a proxy changed");
                     self.publish(PoolEvent::GeoChanged { proxy: proxy.id });
                 }
-                Effect::GeoMismatch { provider, observed } => self.raise_once(
-                    self.alert(
-                        AlertKind::ProxyGeoMismatch,
-                        AlertSeverity::Warning,
-                        "a proxy's exit address is in another country than the provider states",
-                        json!({ "provider": provider, "observed": observed, "host": proxy.host }),
-                    )
-                    .about(proxy.id),
-                ),
+                Effect::GeoMismatch { provider, observed } => {
+                    self.raise_once(geo_mismatch(proxy, provider, observed).at(self.clock.now()));
+                }
                 Effect::GeoMismatchCleared => {
                     self.settle(AlertKind::ProxyGeoMismatch, Some(proxy.id));
+                }
+                Effect::ExitShared { with } => {
+                    self.raise_once(
+                        self.alert(
+                            AlertKind::ProxyExitShared,
+                            AlertSeverity::Warning,
+                            "a proxy leaves by the exit address of an older one: two personas \
+                             would share one address, so it carries nothing (neither a persona \
+                             nor level 0) until the list is fixed",
+                            json!({
+                                "with": with,
+                                "exit_ip": proxy.last_health.as_ref().and_then(|health| health.exit_ip),
+                                "host": proxy.host, "port": proxy.port,
+                            }),
+                        )
+                        .about(proxy.id),
+                    );
+                    self.publish(PoolEvent::ExitShared { proxy: proxy.id });
+                }
+                Effect::ExitSharedCleared => {
+                    self.settle(AlertKind::ProxyExitShared, Some(proxy.id));
+                    self.publish(PoolEvent::ExitShared { proxy: proxy.id });
                 }
                 Effect::ReputationBad { score } => self.raise_once(
                     self.alert(
@@ -931,6 +997,24 @@ impl Pool {
         down * 2 > probed.len()
     }
 
+    /// The oldest other live proxy whose last probe saw the exit address
+    /// this report saw, when it is older than proxy `id`: the later of two
+    /// proxies that leave by one address carries nothing (decision D6).
+    /// The host's own rows share the host's address by design and are
+    /// never compared.
+    fn shared_exit(live: &[Proxy], id: ProxyId, report: &ProbeReport) -> Option<ProxyId> {
+        let exit = report.exit.as_ref().ok()?.ip;
+        let this = live.iter().find(|proxy| proxy.id == id)?;
+        live.iter()
+            .filter(|other| other.id != id && other.provider != ProxyProviderKind::Host)
+            .filter(|other| {
+                other.last_health.as_ref().and_then(|health| health.exit_ip) == Some(exit)
+            })
+            .filter(|other| (other.created_at, other.id) < (this.created_at, this.id))
+            .min_by_key(|other| (other.created_at, other.id))
+            .map(|other| other.id)
+    }
+
     /// Applies one probe to a proxy and stores the result. Returns the
     /// proxy as it is afterwards, or `None` when it does not exist.
     ///
@@ -945,6 +1029,7 @@ impl Pool {
         let live = self.store.proxies().list_live(None).await?;
         let failed = report.exit.is_err();
         let outage = failed && Self::outage_suspected(&live, Some(id));
+        let shared = Self::shared_exit(&live, id, report);
         let jitter = self.backoff_jitter(id, report.at);
         let rules = self.rules;
         let cause = match (&report.exit, report.leak) {
@@ -956,7 +1041,8 @@ impl Pool {
             .store
             .proxies()
             .modify_noting(id, |proxy| {
-                let effects = machine::apply_probe(proxy, report, outage, jitter, &rules);
+                let mut effects = machine::mark_shared_exit(proxy, report, shared);
+                effects.extend(machine::apply_probe(proxy, report, outage, jitter, &rules));
                 let records = self.records(proxy, &effects, cause);
                 ((proxy.clone(), effects), records)
             })
@@ -1071,7 +1157,18 @@ impl Pool {
         let listed = match provider.list().await {
             Ok(listed) => {
                 self.settle(AlertKind::ProviderSyncFailed, None);
+                self.settle(AlertKind::StaticListInvalid, None);
                 listed
+            }
+            Err(ProviderError::InvalidList(why)) => {
+                self.raise_once(self.alert(
+                    AlertKind::StaticListInvalid,
+                    AlertSeverity::Warning,
+                    "the declared proxy list's file changed and does not parse; the last good \
+                     list stays in force",
+                    json!({ "error": why }),
+                ));
+                return Err(ProviderError::InvalidList(why).into());
             }
             Err(error) => {
                 self.raise_once(self.alert(
@@ -1133,7 +1230,9 @@ impl Pool {
         }
         self.settle(AlertKind::ProviderListSuspect, None);
 
-        let replaced = if gone.is_empty() {
+        // Without a log of replaced proxies, a missing proxy is retired
+        // after `missing_syncs` syncs only.
+        let replaced = if gone.is_empty() || !provider.capabilities().replaced_log {
             Vec::new()
         } else {
             match provider.replaced(now - REPLACED_LOOKBACK).await {
@@ -1227,6 +1326,8 @@ impl Pool {
                 .seal(id, CredentialField::Password, item.password.expose())?,
             scheme: ProxyScheme::Http,
             country: item.country,
+            locale: item.locale.clone(),
+            timezone: item.timezone.clone(),
             city: item.city.clone(),
             asn: item.asn.clone(),
             state: ProxyState::New,
@@ -1247,7 +1348,8 @@ impl Pool {
             AlertSeverity::Info,
             json!({
                 "provider": kind, "provider_ref": proxy.provider_ref, "host": proxy.host,
-                "port": proxy.port, "country": proxy.country, "city": proxy.city,
+                "port": proxy.port, "country": proxy.country, "locale": proxy.locale,
+                "timezone": proxy.timezone, "city": proxy.city,
             }),
         );
         match self.store.proxies().insert_noting(&proxy, &[added]).await {
@@ -1283,6 +1385,18 @@ impl Pool {
         if known.country != item.country {
             changed.push("country");
         }
+        if known.locale != item.locale {
+            changed.push("locale");
+        }
+        if known.timezone != item.timezone {
+            changed.push("timezone");
+        }
+        // What a declaring provider says of a proxy is its persona's
+        // identity (ADR 0013); Webshare's country is a fallback only.
+        let declaration_changed = known.provider.declares_identity()
+            && changed
+                .iter()
+                .any(|field| matches!(*field, "country" | "locale" | "timezone"));
         if known.city != item.city {
             changed.push("city");
         }
@@ -1309,6 +1423,8 @@ impl Pool {
                     proxy.password = password;
                 }
                 proxy.country = item.country;
+                proxy.locale.clone_from(&item.locale);
+                proxy.timezone.clone_from(&item.timezone);
                 proxy.city.clone_from(&item.city);
                 if proxy.asn.is_none() {
                     proxy.asn.clone_from(&item.asn);
@@ -1322,6 +1438,9 @@ impl Pool {
             json!({ "changed": changed }),
         )
         .await;
+        if declaration_changed {
+            self.publish(PoolEvent::DeclarationChanged { proxy: known.id });
+        }
         Ok(true)
     }
 
@@ -1378,9 +1497,15 @@ impl Pool {
     ///
     /// # Errors
     ///
-    /// Fails when there is no provider or it fails.
+    /// Fails when there is no provider or it fails, and with
+    /// [`ProviderError::Unsupported`] without asking when the provider
+    /// keeps no account ([`PoolError::is_unsupported`]).
     pub async fn sync_account(&self) -> Result<AccountInfo, PoolError> {
-        let account = self.provider()?.account().await?;
+        let provider = self.provider()?;
+        if !provider.capabilities().account {
+            return Err(ProviderError::unsupported(provider.kind(), Operation::Account).into());
+        }
+        let account = provider.account().await?;
         let previous = self.memory().account.replace(account.clone());
         if previous.as_ref() != Some(&account) {
             self.event(
@@ -1484,7 +1609,7 @@ impl Pool {
         }
         let provider = self.provider()?;
         let proxy = stored.ok_or(PoolError::NotFound(id))?;
-        if provider.kind() == ProxyProviderKind::Static {
+        if !provider.capabilities().replacement {
             return Ok(ReplacementOutcome::Unsupported);
         }
         let account = self.account();
@@ -1859,6 +1984,13 @@ impl Pool {
                     machine::replacement_due(proxy, now, &self.rules).map(|reason| (proxy, reason))
                 })
                 .collect();
+            if !self.offers(Operation::Replacement) {
+                // Nothing is asked: the proxy stays in backoff, probed at
+                // the cap, until the address comes back or the operator
+                // edits the list.
+                self.note_unreplaceable(&due).await;
+                due.clear();
+            }
             // Unreachable before bad reputation; the longest failing first;
             // the worst score first.
             due.sort_by_key(|(proxy, reason)| {
@@ -1905,6 +2037,37 @@ impl Pool {
         Ok(report)
     }
 
+    /// Records once per episode that a proxy qualifies for a replacement
+    /// its provider cannot make (`replacement_unsupported`, info). An
+    /// episode ends when the proxy no longer qualifies.
+    async fn note_unreplaceable(&self, due: &[(&Proxy, ReplaceReason)]) {
+        let new: Vec<(ProxyId, ReplaceReason)> = {
+            let mut memory = self.memory();
+            memory
+                .unreplaceable
+                .retain(|id| due.iter().any(|(proxy, _)| proxy.id == *id));
+            due.iter()
+                .filter(|(proxy, _)| memory.unreplaceable.insert(proxy.id))
+                .map(|(proxy, reason)| (proxy.id, *reason))
+                .collect()
+        };
+        let provider = self.provider_kind();
+        for (proxy, reason) in new {
+            tracing::info!(
+                %proxy, reason = reason.as_str(),
+                "a proxy qualifies for replacement, which its provider does not offer; it stays \
+                 in backoff until it answers again or the list is edited"
+            );
+            self.event(
+                Some(proxy),
+                "replacement_unsupported",
+                AlertSeverity::Info,
+                json!({ "reason": reason, "provider": provider }),
+            )
+            .await;
+        }
+    }
+
     /// Runs the pool's upkeep until `shutdown` resolves: a sync with the
     /// provider and a read of its account at the start and then every
     /// `sync_interval` (spec §7.2), and a maintenance pass every `tick`.
@@ -1931,7 +2094,9 @@ impl Pool {
                     ),
                     Err(error) => tracing::warn!(%error, "cannot sync the proxy pool"),
                 }
-                if let Err(error) = self.sync_account().await {
+                if self.offers(Operation::Account)
+                    && let Err(error) = self.sync_account().await
+                {
                     tracing::warn!(%error, "cannot read the provider account");
                 }
             }
@@ -1974,6 +2139,43 @@ impl Pool {
             self.settle(AlertKind::PoolCapacityLow, None);
         }
     }
+}
+
+/// The alert of a geo mismatch confirmed by two lookups in a row. For a
+/// declared proxy it says what a site with a geo database sees and that
+/// the persona keeps its declared identity (ADR 0013), with the ways to
+/// resolve it; for a provider's statement, that personas go by the
+/// observed country (decision D5).
+fn geo_mismatch(proxy: &Proxy, stated: CountryCode, observed: CountryCode) -> Alert {
+    let (message, details) = if proxy.provider.declares_identity() {
+        (
+            format!(
+                "the geo lookup places the address of a proxy declared in {stated} in \
+                 {observed}, twice in a row: a site with a geo database sees a browser that \
+                 claims {stated} from an address in {observed}. Its persona keeps the declared \
+                 identity. Correct the declaration, leave its country out to make the entry a \
+                 plain exit, or switch the lookup off (proxies.health.geo_url: null)"
+            ),
+            json!({
+                "declared": stated, "locale": proxy.locale, "observed": observed,
+                "host": proxy.host,
+            }),
+        )
+    } else {
+        (
+            "a proxy's exit address is in another country than the provider states; its \
+             persona goes by the observed one"
+                .to_owned(),
+            json!({ "provider": stated, "observed": observed, "host": proxy.host }),
+        )
+    };
+    Alert::new(
+        AlertKind::ProxyGeoMismatch,
+        AlertSeverity::Warning,
+        message,
+        details,
+    )
+    .about(proxy.id)
 }
 
 /// Whether an entry of the provider's log is about this proxy: the same

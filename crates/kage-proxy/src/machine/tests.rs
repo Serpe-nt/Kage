@@ -15,7 +15,7 @@ use super::{
     ALLOWED_TRANSITIONS, Effect, ExitObservation, PoolRules, ProbeReport, ReplacementDecision,
     ReputationReport, apply_probe, apply_reputation, backoff_delay, budget_window_start,
     clear_leak, expire_backoff, fail_replacement, finish_replacement, is_allowed, is_hosting,
-    month_start, replacement_due, retire, start_replacement,
+    mark_shared_exit, month_start, replacement_due, retire, start_replacement,
 };
 use crate::test_support::{noon, proxy};
 
@@ -377,6 +377,68 @@ fn one_passing_check_restarts_the_six_hours() {
     // Seven hours after the first failure, but only two since the break.
     assert!(now >= noon() + Duration::hours(7));
     assert_eq!(replacement_due(&proxy, now, &rules), None);
+}
+
+/// Decision D6 and consult 5g of M15: a proxy that leaves by an older
+/// proxy's address is marked, kept `degraded` while it lasts, and clear
+/// again when it leaves by an address of its own.
+#[test]
+fn a_proxy_that_leaves_by_an_older_ones_address_is_degraded_while_it_lasts() {
+    let older = kage_core::ids::ProxyId::new();
+    let mut proxy = healthy(noon());
+
+    // A probe that read nothing, or saw a leak, says nothing of it.
+    assert_eq!(
+        mark_shared_exit(&mut proxy, &failed(noon()), Some(older)),
+        []
+    );
+    assert_eq!(
+        mark_shared_exit(&mut proxy, &leaked(noon()), Some(older)),
+        []
+    );
+    assert!(!proxy.exit_shared());
+
+    let at = noon() + Duration::minutes(5);
+    let effects = mark_shared_exit(&mut proxy, &ok(at), Some(older));
+    assert_eq!(effects, [Effect::ExitShared { with: older }]);
+    let effects = apply_probe(&mut proxy, &ok(at), false, MID, &rules());
+    assert_eq!(proxy.state, ProxyState::Degraded);
+    assert_eq!(
+        effects,
+        [changed(ProxyState::Healthy, ProxyState::Degraded)]
+    );
+    assert!(proxy.exit_shared());
+    assert!(!proxy.carries_persona());
+    // Still shared: nothing new is said.
+    let later = at + Duration::minutes(5);
+    assert_eq!(mark_shared_exit(&mut proxy, &ok(later), Some(older)), []);
+    apply_probe(&mut proxy, &ok(later), false, MID, &rules());
+    assert_eq!(proxy.state, ProxyState::Degraded);
+
+    // An address of its own again: cleared, and healthy at once.
+    let apart = later + Duration::minutes(5);
+    assert_eq!(
+        mark_shared_exit(&mut proxy, &ok(apart), None),
+        [Effect::ExitSharedCleared]
+    );
+    apply_probe(&mut proxy, &ok(apart), false, MID, &rules());
+    assert_eq!(proxy.state, ProxyState::Healthy);
+    assert!(proxy.carries_persona());
+
+    // A proxy never probed gets a record of its own.
+    let mut fresh = proxy_fixture();
+    assert_eq!(
+        mark_shared_exit(&mut fresh, &ok(noon()), Some(older)),
+        [Effect::ExitShared { with: older }]
+    );
+    assert_eq!(
+        fresh.last_health.as_ref().unwrap().exit_shared_with,
+        Some(older)
+    );
+}
+
+fn proxy_fixture() -> Proxy {
+    proxy("d-2")
 }
 
 #[test]

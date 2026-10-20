@@ -10,8 +10,9 @@ use kage_core::config::Config;
 use kage_store::{Store, StoreError};
 
 /// Every table spec §18 names. Milestone M6 added columns, no table; M7
-/// added `bandwidth_usage`, M9 the two tables of the webhook deliveries.
-const SPEC_TABLES: [&str; 23] = [
+/// added `bandwidth_usage`, M9 the two tables of the webhook deliveries,
+/// M15 `site_exits`.
+const SPEC_TABLES: [&str; 24] = [
     "api_keys",
     "artifacts",
     "attempts",
@@ -32,6 +33,7 @@ const SPEC_TABLES: [&str; 23] = [
     "robots_cache",
     "selftest_runs",
     "sessions",
+    "site_exits",
     "site_scouts",
     "webhook_attempts",
     "webhook_deliveries",

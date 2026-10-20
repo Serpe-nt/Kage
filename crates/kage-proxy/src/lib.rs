@@ -42,8 +42,10 @@ pub use pool::{
     ReconcileReport, ReplacementOutcome, TickReport,
 };
 pub use provider::{
-    AccountInfo, AutoReplace, ProviderError, ProviderProxy, ProxyActivity, ProxyProvider,
-    ReplaceSpec, ReplaceState, ReplaceTicket, ReplacedProxy, StaticListProvider, WebshareProvider,
+    AccountInfo, AutoReplace, Capabilities, Operation, PUBLIC_ECHO_URL, ProviderError,
+    ProviderProxy, ProxyActivity, ProxyProvider, ReplaceSpec, ReplaceState, ReplaceTicket,
+    ReplacedProxy, StaticListProvider, WEBSHARE_ECHO_URL, WebshareProvider, capabilities_of,
+    default_echo,
 };
 
 /// Name of this crate as recorded in its manifest.
@@ -67,11 +69,38 @@ pub fn check_config(config: &Config) -> Result<(), String> {
     Ok(())
 }
 
+/// The ids of the declared list's entries that name no country: they get
+/// no persona and serve as plain exits (level 0) only (ADR 0013). `kage
+/// serve` warns about them at start, and `kage config check` lists them.
+/// Empty without a declared list, or with one that does not parse.
+pub fn plain_exit_entries(config: &Config) -> Vec<String> {
+    config
+        .proxies
+        .static_list
+        .as_ref()
+        .and_then(|list| kage_core::config::StaticProxy::parse_list(list.expose()).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|entry| entry.country.is_none())
+        .map(|entry| entry.id)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use kage_core::config::Config;
 
-    use super::{CRATE_NAME, check_config};
+    use super::{CRATE_NAME, check_config, plain_exit_entries};
+
+    #[test]
+    fn entries_without_a_country_are_named_as_plain_exits() {
+        assert_eq!(plain_exit_entries(&config(&[])), Vec::<String>::new());
+        let listed = config(&[(
+            "KAGE__PROXIES__STATIC_LIST",
+            "198.51.100.10:8080:user:pass:AT\n198.51.100.11:8080:user:pass\n",
+        )]);
+        assert_eq!(plain_exit_entries(&listed), ["198.51.100.11:8080"]);
+    }
 
     fn config(extra: &[(&str, &str)]) -> Config {
         let mut pairs = vec![

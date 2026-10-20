@@ -122,9 +122,29 @@ pub trait Backend: Send + Sync + fmt::Debug {
     async fn scout(&self, site: &str) -> Result<Option<PersonaId>, SchedulerError>;
 
     /// The proxy of a persona when it can carry traffic now: a site's
-    /// plain exit under `egress.plain: pool` is its scout's (spec §25).
-    /// `None` when the persona is gone or its proxy is not usable.
+    /// plain exit under `egress.plain: pool` is its scout's when the pool
+    /// has no plain exit of its own (spec §25). `None` when the persona is
+    /// gone or its proxy is not usable.
     async fn plain_exit(&self, persona: PersonaId) -> Result<Option<ProxyId>, SchedulerError>;
+
+    /// The plain exit recorded for a site, and whether it can carry
+    /// traffic now: `None` when none is recorded or its proxy is retired,
+    /// which means "choose again" (ADR 0013, spec §25).
+    async fn site_exit(&self, site: &str) -> Result<Option<(ProxyId, bool)>, SchedulerError>;
+
+    /// The pool's own plain exits that can carry traffic now: proxies that
+    /// carry no persona (a declared entry without a country), oldest
+    /// first. A site's plain traffic prefers them, since they never read
+    /// any site as a person.
+    async fn plain_exits(&self) -> Result<Vec<ProxyId>, SchedulerError>;
+
+    /// Records the plain exit of a site, its own from then on.
+    async fn set_site_exit(
+        &self,
+        site: &str,
+        proxy: ProxyId,
+        at: DateTime<Utc>,
+    ) -> Result<(), SchedulerError>;
 
     /// Makes a persona the scout of a site.
     async fn set_scout(
@@ -394,6 +414,39 @@ impl Backend for StoreBackend {
         Ok(self.store.site_scouts().get(site).await?)
     }
 
+    async fn site_exit(&self, site: &str) -> Result<Option<(ProxyId, bool)>, SchedulerError> {
+        let Some(id) = self.store.site_exits().get(site).await? else {
+            return Ok(None);
+        };
+        // One that leaves by another proxy's address carries nothing.
+        let usable = self
+            .pool
+            .get(id)
+            .await?
+            .is_some_and(|proxy| proxy.state.is_usable() && !proxy.exit_shared());
+        Ok(Some((id, usable)))
+    }
+
+    async fn plain_exits(&self) -> Result<Vec<ProxyId>, SchedulerError> {
+        Ok(self
+            .pool
+            .live()
+            .await?
+            .into_iter()
+            .filter(|proxy| proxy.is_plain_exit() && proxy.state.is_usable())
+            .map(|proxy| proxy.id)
+            .collect())
+    }
+
+    async fn set_site_exit(
+        &self,
+        site: &str,
+        proxy: ProxyId,
+        at: DateTime<Utc>,
+    ) -> Result<(), SchedulerError> {
+        Ok(self.store.site_exits().set(site, proxy, at).await?)
+    }
+
     async fn set_scout(
         &self,
         site: &str,
@@ -551,7 +604,12 @@ impl Routes for PoolRoutes {
                 tracing::warn!(proxy = %id, %error, "the forwarder cannot look up a plain exit");
                 RouteRefusal::Unavailable
             })?
-            .filter(|proxy| proxy.state.is_usable() && proxy.provider != ProxyProviderKind::Host)
+            // One that leaves by another proxy's address carries nothing.
+            .filter(|proxy| {
+                proxy.state.is_usable()
+                    && proxy.provider != ProxyProviderKind::Host
+                    && !proxy.exit_shared()
+            })
             .ok_or(RouteRefusal::ProxyNotUsable)?;
         self.upstream_of(&proxy, &id)
     }

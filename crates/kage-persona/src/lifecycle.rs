@@ -17,7 +17,8 @@
 
 use chrono::{DateTime, Utc};
 use kage_core::domain::{
-    CoolingReason, CountryCode, Engine, Geolocation, Persona, PersonaState, Proxy, ProxyState,
+    CoolingReason, CountryCode, Declaration, Engine, Geolocation, Persona, PersonaState, Proxy,
+    ProxyState,
 };
 use kage_core::persona::locale::{self, PersonaLocale};
 use kage_core::persona::place::{self, ZoneSource};
@@ -139,6 +140,78 @@ pub fn place_of(proxy: &Proxy, engine: Engine, seed: &Seed) -> Place {
     }
 }
 
+/// The place of a persona of `engine` with `seed` behind `proxy`, by the
+/// one rule (spec §6.1, ADR 0013): what the operator declared, when the
+/// proxy carries a declaration ([`declared_place`]); else what its geo
+/// record says ([`place_of`]). The persona manager and the stand-in of a
+/// proxy's self-test both place by it.
+pub fn place_for(proxy: &Proxy, engine: Engine, seed: &Seed) -> Place {
+    match proxy.declaration() {
+        Some(declaration) => declared_place(proxy, &declaration, engine, seed),
+        None => place_of(proxy, engine, seed),
+    }
+}
+
+/// The place of a persona of `engine` with `seed` behind a proxy whose
+/// exit the operator declared (ADR 0013, one rule for a list's entry and
+/// the host's own rows): the declared country; the declared locale, else
+/// the country's primary language (the region of a lookup that agrees on
+/// the country picks the language of a region that speaks another); the
+/// declared zone, else the zone of a lookup that agrees on the country,
+/// else the country's main zone; a position near a lookup that agrees on
+/// the country, else none. A lookup that names another country says
+/// nothing of the declared place: it only counts as a mismatch.
+pub fn declared_place(
+    proxy: &Proxy,
+    declaration: &Declaration,
+    engine: Engine,
+    seed: &Seed,
+) -> Place {
+    let country = declaration.country;
+    let agreeing = proxy.observed_geo().filter(|geo| geo.country == country);
+    let (timezone, zone_source) = match declaration
+        .timezone
+        .as_deref()
+        .filter(|zone| place::is_zone(zone))
+    {
+        Some(zone) => (zone.to_owned(), ZoneSource::Declared),
+        None => place::timezone(
+            agreeing.and_then(|geo| geo.timezone.as_deref()),
+            Some(country),
+        ),
+    };
+    let locale = declaration
+        .locale
+        .as_deref()
+        .and_then(|tag| locale::declared(tag, engine))
+        .unwrap_or_else(|| {
+            locale::resolve(
+                Some(country),
+                agreeing.and_then(|geo| geo.region.as_deref()),
+                engine,
+            )
+        });
+    Place {
+        country: Some(country),
+        timezone,
+        zone_source,
+        locale,
+        geolocation: place::position(
+            agreeing.and_then(kage_core::domain::GeoRecord::coordinates),
+            seed,
+        ),
+    }
+}
+
+/// Whether a persona's identity is another than its proxy's declared place
+/// gives: another country, or a locale in another language (ADR 0013,
+/// consult 3c). Such a persona is made again; one whose zone or position
+/// only moved follows.
+pub fn declaration_moved(persona: &Persona, place: &Place) -> bool {
+    persona.country != place.country
+        || locale::language_of(&persona.locale) != locale::language_of(&place.locale.locale)
+}
+
 /// What a new geo record changed about a persona.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GeoChange {
@@ -196,7 +269,8 @@ mod tests {
     use kage_core::persona::place::ZoneSource;
 
     use super::{
-        GeoChange, cool_until_selftest, follow_geo, follow_proxy, place_of, retire, selftest_passed,
+        GeoChange, cool_until_selftest, declaration_moved, declared_place, follow_geo,
+        follow_proxy, place_of, retire, selftest_passed,
     };
     use crate::test_support::{persona, proxy};
 
@@ -349,6 +423,110 @@ mod tests {
         let position = place.geolocation.unwrap();
         assert!((position.latitude - 43.2965).abs() < 0.05);
         assert!((position.longitude - 5.3698).abs() < 0.07);
+    }
+
+    /// ADR 0013: what the operator declared is the persona's identity, and
+    /// a lookup only adds where it agrees.
+    #[test]
+    fn a_declared_place_is_the_declaration_and_what_an_agreeing_lookup_adds() {
+        let seed = kage_core::seed::Seed::from_u64(3);
+        let mut proxy = proxy("AT");
+        proxy.provider = kage_core::domain::ProxyProviderKind::Static;
+        let austria = proxy.declaration().unwrap();
+
+        // No lookup yet: the country's language and main zone, no position.
+        let place = declared_place(&proxy, &austria, Engine::Firefox, &seed);
+        assert_eq!(place.country.unwrap().as_str(), "AT");
+        assert_eq!(place.locale.locale, "de-AT");
+        assert_eq!(place.locale.languages, ["de", "en-US", "en"]);
+        assert_eq!(place.timezone, "Europe/Vienna");
+        assert_eq!(place.zone_source, ZoneSource::Country);
+        assert_eq!(place.geolocation, None);
+
+        // A lookup that agrees gives its zone and a position near it.
+        observed(&mut proxy, "AT", "Graz", "Europe/Vienna", "47.0707,15.4395");
+        let place = declared_place(&proxy, &austria, Engine::Firefox, &seed);
+        assert_eq!(place.zone_source, ZoneSource::Observed);
+        assert!((place.geolocation.unwrap().latitude - 47.0707).abs() < 0.05);
+
+        // One that places the address in France says nothing of it.
+        observed(&mut proxy, "FR", "Paris", "Europe/Paris", "48.8566,2.3522");
+        let place = declared_place(&proxy, &austria, Engine::Chromium, &seed);
+        assert_eq!(place.country.unwrap().as_str(), "AT");
+        assert_eq!(place.locale.locale, "de-AT");
+        // Chrome in Austria ships the German of Germany (spec §6.1).
+        assert_eq!(place.locale.languages, ["de-DE", "de", "en-US", "en"]);
+        assert_eq!(place.timezone, "Europe/Vienna");
+        assert_eq!(place.zone_source, ZoneSource::Country);
+        assert_eq!(place.geolocation, None);
+
+        // A declared locale overrides the country's language, and a
+        // declared zone the lookup's.
+        let swiss_french = kage_core::domain::Declaration {
+            country: "CH".parse().unwrap(),
+            locale: Some("fr-CH".to_owned()),
+            timezone: Some("Europe/Zurich".to_owned()),
+        };
+        observed(
+            &mut proxy,
+            "CH",
+            "Zurich",
+            "Europe/Busingen",
+            "47.3769,8.5417",
+        );
+        let place = declared_place(&proxy, &swiss_french, Engine::Chromium, &seed);
+        assert_eq!(place.locale.locale, "fr-CH");
+        assert_eq!(place.locale.languages, ["fr-FR", "fr", "en-US", "en"]);
+        assert_eq!(place.timezone, "Europe/Zurich");
+        assert_eq!(place.zone_source, ZoneSource::Declared);
+        assert!(place.geolocation.is_some());
+    }
+
+    /// Consult 3c: another country, or another language, is another
+    /// persona; a zone or a position is the same one moved.
+    #[test]
+    fn a_corrected_declaration_is_another_persona_when_the_identity_changes() {
+        let seed = kage_core::seed::Seed::from_u64(4);
+        let mut proxy = proxy("AT");
+        proxy.provider = kage_core::domain::ProxyProviderKind::Static;
+        let mut persona = persona(Engine::Chromium, 155);
+        let place = declared_place(
+            &proxy,
+            &proxy.declaration().unwrap(),
+            Engine::Chromium,
+            &seed,
+        );
+        follow_geo(&mut persona, &place);
+        assert!(!declaration_moved(&persona, &place));
+
+        // Another zone in the same country and language: the same persona.
+        proxy.timezone = Some("Europe/Berlin".to_owned());
+        let zone = declared_place(
+            &proxy,
+            &proxy.declaration().unwrap(),
+            Engine::Chromium,
+            &seed,
+        );
+        assert!(!declaration_moved(&persona, &zone));
+        // English in Austria: another language.
+        proxy.locale = Some("en-AT".to_owned());
+        let english = declared_place(
+            &proxy,
+            &proxy.declaration().unwrap(),
+            Engine::Chromium,
+            &seed,
+        );
+        assert!(declaration_moved(&persona, &english));
+        // Germany: another country, though the language is the same.
+        proxy.locale = None;
+        proxy.country = Some("DE".parse().unwrap());
+        let germany = declared_place(
+            &proxy,
+            &proxy.declaration().unwrap(),
+            Engine::Chromium,
+            &seed,
+        );
+        assert!(declaration_moved(&persona, &germany));
     }
 
     #[test]

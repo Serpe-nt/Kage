@@ -36,7 +36,7 @@ pub use job::{
 pub use level::{InvalidLevel, Level};
 pub use persona::{CoolingReason, Geolocation, Persona, PersonaDomainState, PersonaState, Screen};
 pub use proxy::{
-    GeoRecord, HealthFailure, Proxy, ProxyEndpoint, ProxyHealth, ProxyProviderKind,
+    Declaration, GeoRecord, HealthFailure, Proxy, ProxyEndpoint, ProxyHealth, ProxyProviderKind,
     ProxyReplacement, ProxyScheme, ProxyState, ReplaceReason,
 };
 pub use session::{InvalidSessionId, Session, SessionId, SessionLimits};

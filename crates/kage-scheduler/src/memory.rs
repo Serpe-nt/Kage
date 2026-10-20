@@ -37,6 +37,9 @@ struct State {
     records: Vec<FetchRecord>,
     robots: HashMap<String, RobotsCacheEntry>,
     scouts: HashMap<String, PersonaId>,
+    /// The pool's own plain exits, and whether each can carry traffic.
+    plain_exits: Vec<(ProxyId, bool)>,
+    site_exits: HashMap<String, ProxyId>,
     cache: HashMap<String, ResponseCacheEntry>,
 }
 
@@ -67,6 +70,19 @@ impl MemoryBackend {
     /// Takes a persona away.
     pub fn remove_persona(&self, id: PersonaId) {
         self.state().personas.remove(&id);
+    }
+
+    /// Adds a plain exit of the pool (a proxy that carries no persona), or
+    /// says again whether it can carry traffic.
+    pub fn put_plain_exit(&self, proxy: ProxyId, usable: bool) {
+        let mut state = self.state();
+        state.plain_exits.retain(|(known, _)| *known != proxy);
+        state.plain_exits.push((proxy, usable));
+    }
+
+    /// The plain exit recorded for a site.
+    pub fn site_exit_of(&self, site: &str) -> Option<ProxyId> {
+        self.state().site_exits.get(site).copied()
     }
 
     /// Sets or clears the leak flag.
@@ -301,6 +317,37 @@ impl Backend for MemoryBackend {
             .get(&persona)
             .filter(|(persona, usable, _)| *usable && persona.is_live())
             .map(|(persona, _, _)| persona.proxy_id))
+    }
+
+    async fn site_exit(&self, site: &str) -> Result<Option<(ProxyId, bool)>, SchedulerError> {
+        let state = self.state();
+        Ok(state.site_exits.get(site).and_then(|proxy| {
+            state
+                .plain_exits
+                .iter()
+                .find(|(known, _)| known == proxy)
+                .copied()
+        }))
+    }
+
+    async fn plain_exits(&self) -> Result<Vec<ProxyId>, SchedulerError> {
+        Ok(self
+            .state()
+            .plain_exits
+            .iter()
+            .filter(|(_, usable)| *usable)
+            .map(|(proxy, _)| *proxy)
+            .collect())
+    }
+
+    async fn set_site_exit(
+        &self,
+        site: &str,
+        proxy: ProxyId,
+        _at: DateTime<Utc>,
+    ) -> Result<(), SchedulerError> {
+        self.state().site_exits.insert(site.to_owned(), proxy);
+        Ok(())
     }
 
     async fn scout(&self, site: &str) -> Result<Option<PersonaId>, SchedulerError> {
