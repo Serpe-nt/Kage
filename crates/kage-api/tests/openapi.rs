@@ -176,10 +176,23 @@ fn every_request_names_its_level(document: &Value) {
     assert!(result.get("level").is_some(), "{result}");
     assert!(result.get("escalated").is_none(), "{result}");
     assert_eq!(schemas["ExitField"]["enum"], json!(["host", "pool"]));
-    for member in ["persona", "engine", "exit"] {
+    // Every member of an attempt is sent, null where it does not apply
+    // (level 0 has no persona, a persona's attempt no exit), so a client
+    // generated from the document may rely on each one but the seed, which
+    // only an admin key sees (F69).
+    let attempt = &schemas["AttemptView"];
+    assert_eq!(
+        required(attempt),
+        names(&[
+            "n", "render", "outcome", "status", "total_ms", "persona", "engine", "exit", "reason",
+        ]),
+        "{attempt}"
+    );
+    for member in ["status", "persona", "engine", "exit", "reason"] {
+        let property = &attempt["properties"][member];
         assert!(
-            schemas["AttemptView"]["properties"].get(member).is_some(),
-            "{member}"
+            property.to_string().contains("null"),
+            "{member} is not nullable: {property}"
         );
     }
     // The preview of a site's policy says its floor.

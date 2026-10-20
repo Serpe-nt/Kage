@@ -188,7 +188,8 @@ pub(crate) struct PersonaView {
 }
 
 /// One try at a request: by one persona, or at level 0 by the plain
-/// client from its exit.
+/// client from its exit. Every member but `seed` is always sent; one that
+/// does not apply is null.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub(crate) struct AttemptView {
     /// 1 for the first attempt.
@@ -198,17 +199,22 @@ pub(crate) struct AttemptView {
     /// How it ended.
     pub(crate) outcome: OutcomeField,
     /// The status of the response, when one arrived.
+    #[schema(required = true)]
     pub(crate) status: Option<u16>,
     /// How long it took, in milliseconds.
     pub(crate) total_ms: u64,
     /// The persona that made it, as in `persona.id`; null at level 0.
+    #[schema(required = true)]
     pub(crate) persona: Option<String>,
     /// The engine of that persona; null at level 0.
+    #[schema(required = true)]
     pub(crate) engine: Option<EngineField>,
     /// Where a level-0 attempt left from; null for a persona's.
+    #[schema(required = true)]
     pub(crate) exit: Option<ExitField>,
     /// Why it ended as it did when the site did not say, for example
     /// `proxy_failed`.
+    #[schema(required = true)]
     pub(crate) reason: Option<String>,
     /// The seed its behavior and pauses were drawn from. Admin keys only.
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -1859,12 +1859,17 @@
       },
       "AttemptView": {
         "type": "object",
-        "description": "One try at a request: by one persona, or at level 0 by the plain\nclient from its exit.",
+        "description": "One try at a request: by one persona, or at level 0 by the plain\nclient from its exit. Every member but `seed` is always sent; one that\ndoes not apply is null.",
         "required": [
           "n",
           "render",
           "outcome",
-          "total_ms"
+          "status",
+          "total_ms",
+          "persona",
+          "engine",
+          "exit",
+          "reason"
         ],
         "properties": {
           "engine": {

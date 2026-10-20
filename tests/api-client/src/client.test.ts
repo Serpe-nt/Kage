@@ -229,6 +229,7 @@ describe('the generated client', () => {
                     persona: null,
                     engine: null,
                     exit: 'pool',
+                    reason: null,
                   },
                 ],
               }),

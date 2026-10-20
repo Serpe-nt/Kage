@@ -636,11 +636,12 @@ export interface components {
         };
         /**
          * @description One try at a request: by one persona, or at level 0 by the plain
-         *     client from its exit.
+         *     client from its exit. Every member but `seed` is always sent; one that
+         *     does not apply is null.
          */
         AttemptView: {
-            engine?: components["schemas"]["EngineField"] | null;
-            exit?: components["schemas"]["ExitField"] | null;
+            engine: components["schemas"]["EngineField"] | null;
+            exit: components["schemas"]["ExitField"] | null;
             /**
              * Format: int32
              * @description 1 for the first attempt.
@@ -649,12 +650,12 @@ export interface components {
             /** @description How it ended. */
             outcome: components["schemas"]["OutcomeField"];
             /** @description The persona that made it, as in `persona.id`; null at level 0. */
-            persona?: string | null;
+            persona: string | null;
             /**
              * @description Why it ended as it did when the site did not say, for example
              *     `proxy_failed`.
              */
-            reason?: string | null;
+            reason: string | null;
             /** @description The path it took. */
             render: components["schemas"]["RenderTaken"];
             /** @description The seed its behavior and pauses were drawn from. Admin keys only. */
@@ -663,7 +664,7 @@ export interface components {
              * Format: int32
              * @description The status of the response, when one arrived.
              */
-            status?: number | null;
+            status: number | null;
             /**
              * Format: int64
              * @description How long it took, in milliseconds.
