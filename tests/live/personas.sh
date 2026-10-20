@@ -132,7 +132,9 @@ kage migrate > /dev/null
 # The server syncs the pool, probes every proxy and generates the personas,
 # exactly as in production. Nothing calls its API.
 echo "    starting kage serve; waiting up to ${wait_seconds} s for the personas"
-kage serve --bind 127.0.0.1:0 > "${workdir}/serve.log" 2>&1 &
+# The binary itself, not the function: `$!` must be the server, or the
+# cleanup leaves it running (as tests/live/jobs.sh).
+"${kage_bin}" serve --bind 127.0.0.1:0 > "${workdir}/serve.log" 2>&1 &
 server=$!
 
 count() {

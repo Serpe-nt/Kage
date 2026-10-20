@@ -168,13 +168,17 @@ for engine in ${engines}; do
     # The server reads the host's address, looks it up, and generates the
     # persona, exactly as in production. Nothing calls its API.
     echo "    starting kage serve; waiting up to ${wait_seconds} s for the host persona"
-    kage serve --bind 127.0.0.1:0 > "${workdir}/serve-${engine}.log" 2>&1 &
+    # The binary itself, not the function: `$!` must be the server, or a
+    # stop leaves it running with the forwarder's port (as tests/live/jobs.sh).
+    "${kage_bin}" serve --bind 127.0.0.1:0 > "${workdir}/serve-${engine}.log" 2>&1 &
     server=$!
     persona=""
     deadline=$(($(date +%s) + wait_seconds))
     while [ "$(date +%s)" -lt "${deadline}" ]; do
         kill -0 "${server}" 2> /dev/null || {
-            grep -E '"level":"(WARN|ERROR)"' "${workdir}/serve-${engine}.log" | tail -n 20 | scrubbed >&2 || true
+            # What it said last, whatever the form (an error of the start is
+            # no JSON line), without an address.
+            tail -n 30 "${workdir}/serve-${engine}.log" | scrubbed >&2 || true
             fail "kage serve stopped"
         }
         sleep 5
