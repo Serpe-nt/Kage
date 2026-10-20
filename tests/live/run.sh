@@ -42,6 +42,14 @@ if [ "${KAGE_LIVE_JOBS:-}" = "1" ]; then
     checks+=(tests/live/jobs.sh)
 fi
 
+# The host persona's check runs under `egress.mode: direct` and shows this
+# machine's own address to the two detection pages and the lookups: on
+# request only. It needs no provider secret and runs alone as
+# `KAGE_LIVE=1 KAGE_LIVE_HOST=1 tests/live/host-persona.sh`.
+if [ "${KAGE_LIVE_HOST:-}" = "1" ]; then
+    checks+=(tests/live/host-persona.sh)
+fi
+
 for check in "${checks[@]}"; do
     echo "==> ${check}"
     "${check}"
