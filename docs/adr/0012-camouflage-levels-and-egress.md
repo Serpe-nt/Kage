@@ -33,12 +33,16 @@ policy is the operator saying how little they will accept for that site.
      TLS, a `User-Agent` of `kage/<version>` unless the caller sets one,
      the caller's headers and body as given, no cookie jar (a `Cookie`
      header is the caller's). Egress is whatever `egress.plain` says:
-     the host's own address, or, under the pool, the one address of the
-     site's scout (the persona that asks the site for what no reader asks
-     for and never reads it; M14 found that rotating level 0 through the
-     pool would show a site the personas' own addresses sending
-     `kage/<version>`); `plain_exit_unavailable` when that proxy is not
-     usable, never another address.
+     the host's own address, or, under the pool, one address per site
+     and never the pool in turn: one of the pool's own plain exits (a
+     declared entry without a country, ADR 0013), chosen once per site
+     and kept, else the address of the site's scout (the persona that
+     asks the site for what no reader asks for and never reads it). M14
+     found that rotating level 0 through the pool would show a site the
+     personas' own addresses sending `kage/<version>`; an address that
+     does so must never be one that reads the site as a person.
+     `plain_exit_unavailable` when the site's exit is not usable, never
+     another address.
      The SSRF guard, the key's limits, the daily budget, robots.txt as
      the site's policy says and the cache apply as at every level.
    - **1, http-emulated**: a persona's http client (wreq with the
