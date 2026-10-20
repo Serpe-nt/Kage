@@ -158,9 +158,19 @@ of 1.x still queued names no level and fails at take-up with
   a pull-request template that is the definition of done; `CODEOWNERS`
   naming the release's files and the public ones; `CONTRIBUTING.md` with
   every `just` target and the definition of done.
+- **Badges from the repository's own data**: CI's `coverage-badge` job
+  writes the Rust workspace's line coverage, as the gate counts it, to the
+  `gh-pages` branch on every push to `main` (one file, one commit, with the
+  job's own token and `contents: write` alone), which shields.io draws;
+  `just lint-docs` holds the toolchain and licence badges to
+  `rust-toolchain.toml` and `Cargo.toml`; `just test-scripts` runs the
+  gate scripts' own tests (`docs/runbooks/repo.md`, "Badges").
 - `deploy/compose.yaml` takes where requests leave from and a declared list
   from `deploy/.env`: `KAGE_EGRESS_MODE` (`proxies` or `direct`) and
   `KAGE_STATIC_LIST_FILE`, a file the `kage` service mounts read-only.
+- `nightly-live.yaml` runs by hand the `suite` it is given (`load`, the
+  default, needing no secret; `live`; `both`), so that a release's load
+  test no longer starts the live job.
 - `tests/live/host-persona.sh` (`KAGE_LIVE=1 KAGE_LIVE_HOST=1`, never in
   the nightly run): the host persona of each engine under
   `egress.mode: direct`, placed by the lookup of the machine's own address

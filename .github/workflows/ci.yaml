@@ -107,6 +107,10 @@ jobs:
       - run: just lint-node
       - name: The dashboards and the alert rules of the observability profile
         run: just lint-observability
+      - name: The README's badges say what the repository says
+        run: just lint-docs
+      - name: The gate scripts' own tests
+        run: just test-scripts
       - name: The committed OpenAPI document is current and breaks no client
         env:
           KAGE_BASE_REF: ${{ github.event.pull_request.base.sha || 'origin/main' }}
@@ -212,6 +216,61 @@ jobs:
           name: mutants
           path: target/mutants/
           if-no-files-found: ignore
+
+  # The README's coverage badge (docs/runbooks/repo.md, "Badges"): on a push
+  # to main, the figure the rust job measured is written as the one file of
+  # the gh-pages branch, which shields.io renders. The only job that may
+  # write to the repository, and it checks nothing out and runs nothing of
+  # it. Not a check: it never runs on a pull request, and ci-ok does not
+  # wait for it.
+  coverage-badge:
+    name: coverage badge
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [rust]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    concurrency:
+      group: coverage-badge
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rust-coverage
+          path: ${{ runner.temp }}/coverage
+      - name: Write the figure to gh-pages when it changed
+        env:
+          # Passed through the environment, never interpolated into the script.
+          TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          badge="${RUNNER_TEMP}/coverage/badge.json"
+          echo "figure: $(cat "${badge}")"
+          work="${RUNNER_TEMP}/gh-pages"
+          git init --quiet --initial-branch gh-pages "${work}"
+          cd "${work}"
+          # The token goes in a header, as actions/checkout sends it: never
+          # in a URL, a remote's configuration or a log.
+          credential="$(printf 'x-access-token:%s' "${TOKEN}" | base64 --wrap=0)"
+          echo "::add-mask::${credential}"
+          git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ${credential}"
+          remote="https://github.com/${REPOSITORY}.git"
+          if git fetch --quiet --depth 1 "${remote}" gh-pages 2> /dev/null \
+              && git show FETCH_HEAD:coverage.json 2> /dev/null | cmp --silent - "${badge}"; then
+            echo "gh-pages already says this"
+            exit 0
+          fi
+          # One commit with one file and no parent: the branch is the figure
+          # and nothing else.
+          cp "${badge}" coverage.json
+          git add coverage.json
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit --quiet --message "coverage of ${GITHUB_SHA}"
+          git push --quiet --force "${remote}" HEAD:refs/heads/gh-pages
+          echo "gh-pages now says $(cat coverage.json)"
 
   # The single required status check for branch protection (docs/runbooks/repo.md).
   ci-ok:
