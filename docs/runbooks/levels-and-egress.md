@@ -140,23 +140,35 @@ from a residential address to the host's has seen a bot.
 ### Under the pool (`egress.mode: proxies`)
 
 Everything is 1.x's ([proxies.md](proxies.md), [personas.md](personas.md)),
-and level 0 leaves through one address per site: the proxy of the site's
-**scout**, the persona that asks for its `robots.txt` and never reads the
-site (chosen by the scout rule when the site has none, and its scout from
-then on). The plain client reaches it through the forwarder under a
-credential of its own (`plain-<proxy id>`), never a persona's. The reason
-is one sentence: **an address that sends `kage/<version>` must never be one
-that reads it as a person.** A persona that read a site from an address
-that also said "kage" to it is a bot that said so. The scout's address is
-already the one marked for the site by its `robots.txt`, so one address
-per site is marked, not two. `robots.txt` and sitemaps of a level-0
-request are asked for by the plain client from the same exit.
+and level 0 leaves through one address per site, its **plain exit**. The
+plain client reaches it through the forwarder under a credential of its
+own (`plain-<proxy id>`), never a persona's. The reason is one sentence:
+**an address that sends `kage/<version>` must never be one that reads it as
+a person.** A persona that read a site from an address that also said
+"kage" to it is a bot that said so. A site's plain exit is:
+
+1. **one of the pool's own plain exits**, when it has any: an entry of a
+   declared list without a country, which carries no persona and so reads
+   no site as a person (ADR 0013). A site that has none yet gets one of
+   the usable ones, by a draw seeded by the site, and keeps it while it
+   lives (`site_exits`). An operator who wants level 0 at scale dedicates a
+   few such entries to it ([proxies.md](proxies.md#plain-exits));
+2. else the proxy of the site's **scout**, the persona that asks for its
+   `robots.txt` and never reads the site (chosen by the scout rule when the
+   site has none, and its scout from then on). The scout's address is
+   already the one marked for the site by its `robots.txt`, so one address
+   per site is marked, not two.
+
+`robots.txt` and sitemaps of a level-0 request are asked for by the plain
+client from the same exit. A proxy that leaves by an older proxy's address
+(`proxy_exit_shared`) carries no level 0.
 
 When that exit cannot carry traffic, level 0 waits or is refused and is
 never sent from another address: a fetch is answered `provider_error` with
 the reason `plain_exit_unavailable` and a `retry_at`, and a job's page
-waits (`paused`). It happens when the scout's proxy is in backoff or being
-replaced, and when nobody may scout the site: a pool of one persona, or
+waits (`paused`). It happens when the site's plain exit, or its scout's
+proxy, is in backoff or being replaced, and, without plain exits of the
+pool's own, when nobody may scout the site: a pool of one persona, or
 every persona has read the site within `robots.scout_quarantine` (30
 days). What to do:
 

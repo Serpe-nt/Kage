@@ -7,7 +7,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 The next release is 2.0.0: camouflage levels and egress (spec §25, ADR
-0012, decision D50). **Drain the job queues before upgrading**: an item
+0012, decision D50), and a provider-agnostic pool with declared lists
+(spec §7.1, ADR 0013, decision D51). **Drain the job queues before
+upgrading**, and **give every entry of a static list its country** (below):
+an item
 of 1.x still queued names no level and fails at take-up with
 `level_required`; nothing is decided for the caller.
 
@@ -48,6 +51,33 @@ of 1.x still queued names no level and fails at take-up with
   `exit` (`host` or `pool`) instead; `attempts.persona_id` and
   `attempts.engine` became nullable in the store (migration 0017).
 - The policy preview says `min_level` in place of `first_render`.
+- **A static list's country is a declaration** (ADR 0013): the persona of
+  an entry follows the country, locale and zone the entry declares, and a
+  geo lookup only verifies them (`proxy_geo_mismatch` after two that
+  disagree, the persona's identity kept). In 1.x the lookup's country won.
+  At the first 2.0 start a persona whose lookup had placed it in another
+  country or language than its entry declares is made again
+  (`declaration_changed`), and **an entry without a country loses its
+  persona** (`undeclared`) and serves as a plain exit for level 0 only.
+  Add a country to every entry that should carry a persona.
+- A declared country the browser tables do not know (they know AT, BE,
+  CA, CH, DE, ES, FR, GB, IE, IT, LU, NL, PL, PT, RO, SE, US) is refused at
+  load unless the entry also declares a locale in a language they know;
+  1.x gave such a persona `en-US, en`. The same rule holds for
+  `egress.direct.country`.
+- **The probes of a static list read the public echo**
+  `https://checkip.amazonaws.com/` and the host's own address
+  `https://api.ipify.org/`, where 1.x read Webshare's echo whatever the
+  vendor; `proxies.health.echo_url` and `host_ip_url` are unset by default
+  and resolve by provider (Webshare's own echo for Webshare). Set them to
+  keep 1.x's endpoints, or to your own echo.
+- Entries of a static list that share a host and port (a gateway's
+  sessions) need an `id` each; their default ids collide and the list is
+  refused.
+- The `ProxyProvider` trait has `capabilities()`, and `replace`,
+  `replace_status`, `replaced`, `account` and `stats` answer
+  `Unsupported` by default; the static list now answers `Unsupported` for
+  all of them (in 1.x it returned an empty log, an account and no stats).
 
 ### Added
 
@@ -85,6 +115,39 @@ of 1.x still queued names no level and fails at take-up with
   `bandwidth_usage.egress`); only the pool's counts against the
   provider's budget. `kage_jobs_accepted_total` and `kage_job_items_total`
   carry `level`.
+- **Declared lists** (ADR 0013, M15): an entry declares `country`, and may
+  declare `locale` (BCP 47, overriding the country's language) and
+  `timezone` (IANA), with `city` informational; the YAML form also takes a
+  proxy as `url: http://user:pass@host:port`, and the line form a sixth
+  field, `host:port:username:password[:country[:locale]]`. A list given as
+  `KAGE__PROXIES__STATIC_LIST_FILE` is read again at every sync; an edit
+  that does not parse keeps the last good list (`static_list_invalid`). A
+  corrected country or language makes a new persona; a corrected zone moves
+  the one there is. `egress.direct.timezone` declares the host personas'
+  zone by the same rule.
+- **Plain exits**: a declared entry without a country carries no persona
+  and is level 0's preferred exit under the pool, one per site, kept
+  (`site_exits`, migration 0018; the declared `locale` and `timezone` on
+  `proxies` too).
+- **Provider capabilities**: `kage proxy list`, `kage proxy health`,
+  `GET /v1/admin/pool` (`provider`) and `kage config check` say what the
+  provider does not offer; a proxy due for a replacement its provider
+  cannot make stays in backoff with one `replacement_unsupported` event.
+  The admin proxy view and `kage proxy list --json` show `locale`,
+  `timezone`, `declared`, `carries_persona` and `plain_exit`.
+- **The provider conformance suite**
+  (`crates/kage-proxy/tests/provider_conformance.rs`) and the provider
+  guide in `CONTRIBUTING.md`.
+- `kage proxy health` ends with how many proxies are live and how many
+  dead (`4 checked: 3 live, 1 dead`; `live` and `dead` in its JSON), then
+  the pool's line on a line of its own (`pool: …`). `kage config check` reports the
+  health endpoints in force, the list's plain exits, and the
+  `proxies.health` keys unused under `egress.mode: direct`.
+- A proxy whose probe sees an older proxy's exit address carries nothing
+  until it leaves by its own (`proxy_exit_shared`).
+- The probe reads Kage's own echo (`kage echo serve`, its `peer`) and an
+  address written with its port, so the operator's echo can be
+  `proxies.health.echo_url`.
 
 ### Fixed
 
@@ -95,6 +158,9 @@ of 1.x still queued names no level and fails at take-up with
   proxy or its new state without the event; a slow runner's CLI test read
   a `healthy` proxy and no `proxy_added` (F65). The row and its events are
   now one write.
+- Under `egress.mode: direct` an operator's `kage proxy health` and the
+  admin probe still probed the idle pool; both refuse now ("the pool is
+  idle", F68).
 
 ## [1.0.2] - 2026-10-19
 

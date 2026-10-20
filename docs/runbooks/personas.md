@@ -17,8 +17,8 @@ A persona serves levels 1 to 3; a request at level 0 has none
 |---|---|
 | seed | Derived from the persona's id; stored; never changes. Everything below that is drawn hangs on it. |
 | engine and system | `personas.mix` (default: chromium on linux 40, firefox on windows 45, firefox on macos 15), drawn by what the pool is short of, the persona's own country first. Twenty proxies give 8, 9 and 3 give or take one (two at the most), and no country is all one browser. |
-| country, time zone, position | The observed geo record of the proxy (`kage proxy health`). The provider's country only while no lookup has succeeded. The position is a seeded point 0.5 to 4 km from the lookup's coordinates. |
-| locale and languages | A table per country (`kage_core::persona::locale`): the locale carries the country (`de-AT`), the language list is the one a stock installation of that browser ships with there. Chrome in Austria sends `de-DE, de, en-US, en`; Firefox sends `de, en-US, en`. A country without an entry gets `en-US, en` and the event `persona_locale_unknown`. |
+| country, time zone, position | For a provider that states where its addresses are (Webshare): the observed geo record of the proxy (`kage proxy health`), the provider's country only while no lookup has succeeded. For a **declared** entry (a declared list, a host row): the declaration, see below. The position is a seeded point 0.5 to 4 km from the lookup's coordinates. |
+| locale and languages | A table per country (`kage_core::persona::locale`): the locale carries the country (`de-AT`), the language list is the one a stock installation of that browser ships with there. Chrome in Austria sends `de-DE, de, en-US, en`; Firefox sends `de, en-US, en`. A declared locale (`fr-CH`) picks the browser's list for its language (Chrome `fr-FR, fr, en-US, en`). A country without an entry gets `en-US, en` and the event `persona_locale_unknown`; a declared country or locale without one is refused when the list is read. |
 | screen | A class from a seeded table per engine and system, asked of the generator by exact bounds. |
 | fingerprint | Generated once by the engine's sidecar from the seed and the constraints above, stored whole, sent back unchanged on every open. |
 | http profile | The wreq-util profile of the same browser major, if one exists (`kage config check` lists them). Chrome 155 and Firefox 156 have none: their personas are browser-only (`http_profile_missing`, once per engine and major), and level 1 is refused (`level_unavailable`). |
@@ -26,6 +26,34 @@ A persona serves levels 1 to 3; a request at level 0 has none
 
 Nothing of this is ever drawn again. `tables_version` records which tables
 a persona came from; new tables only apply to new personas.
+
+### Declared entries
+
+An entry of a declared list (and a host row with `egress.direct.country`)
+**declares** where its address is; the geo lookup only verifies it
+(ADR 0013, [proxies.md](proxies.md#a-declared-list)):
+
+- **Country and locale** are the declaration's, whatever a lookup says.
+  Without a declared locale the country's table gives it.
+- **Time zone**: the declared `timezone` when there is one
+  (`timezone_source: declared`); else the lookup's zone when the lookup
+  agrees on the country; else the country's main zone.
+- **Position**: from the lookup's coordinates, only when the lookup agrees
+  on the country; else none.
+- **A lookup that disagrees twice** (`proxy_geo_mismatch`) leaves the
+  persona as it is: it keeps the declared identity, the proxy is
+  `degraded` and still serves. Correct the declaration, or leave the
+  country out to make the entry a plain exit, or switch the lookup off.
+- **A corrected declaration** is followed at the next sync: a new country,
+  or a locale in another language, retires the persona
+  (`declaration_changed`) and the entry gets a new one; a new time zone or
+  city only moves the persona's zone.
+- **No country, no persona.** An entry without a country is a plain exit
+  for level 0 ([levels-and-egress.md](levels-and-egress.md#under-the-pool-egressmode-proxies));
+  a persona whose entry loses its country is retired (`undeclared`).
+- **One address, one persona.** A proxy that leaves by an address an older
+  proxy already leaves by carries nothing (`proxy_exit_shared`), and the
+  persona it had is retired (`exit_shared`).
 
 ## Commands
 
@@ -155,7 +183,7 @@ Health events about a persona have `subject_kind = persona`.
 | `persona_geo_updated` | info or warning | The geo record of the address changed. Info: same country, time zone and position followed. Warning: another country; locale and languages followed and the persona cools until a self-test passes. If the address really moved abroad for good, consider `kage proxy replace`: a household does not emigrate. |
 | `persona_warmup_visit`, `persona_warmed` | info (warning for a visit that did not arrive or was blocked) | One visit and its outcome; the persona is ready. |
 | `persona_selftest_passed`, `persona_selftest_failed`, `persona_selftest_inconclusive` | info, warning, warning | One run. Inconclusive: the test site could not be read; nothing changes. |
-| `persona_retired` | info | Why, and how many sessions and cookies went with it. |
+| `persona_retired` | info | Why (`proxy_retired`, `regenerated`, `operator`; for declared entries `declaration_changed`, `undeclared`, `exit_shared`), and how many sessions and cookies went with it. |
 | `persona_profile_archived`, `persona_profile_deleted` | info | Where the archive is; `archive: null` means there was no directory within reach. |
 | `persona_browser_upgraded` | info | The persona moved to the browser major its engine runs: engine, `from_major`, `to_major`, the browser version and the wreq profile of the new major (null: browser-only). One per persona and major; expected for every persona of an engine after an image with a newer browser is deployed. |
 

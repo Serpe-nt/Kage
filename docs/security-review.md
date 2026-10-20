@@ -69,7 +69,7 @@ operator's own networks, and it does not reach a browser's own requests
 | An API key's secret | its holder; the `api_keys` table holds its SHA-256 | compared in constant time (`subtle`); shown once | `kage key rotate` |
 | The sidecar token | `deploy/.env` → kage and both sidecars (`SIDECAR_TOKEN` or `SIDECAR_TOKEN_FILE`) | compared in constant time (`timingSafeEqual` over digests); the header goes to the sidecars only | runbook |
 | A persona's forwarder credential | the persona's browser and http client | HMAC of the persona id under the derived key, compared without an early exit; opens that persona's proxy only | follows the master key |
-| Proxy credentials (provider or static list) | sealed in Postgres; in kage's memory | never leave the kage process (the forwarder adds them), except for the stand-in self-tests of a proxy (accepted below) | runbook |
+| Proxy credentials (provider or declared list) | sealed in Postgres; in kage's memory; the declared list in its variable or its secret file, read again at every sync | never leave the kage process (the forwarder adds them), except for the stand-in self-tests of a proxy (accepted below) | runbook |
 | The provider key, the AbuseIPDB key | kage's environment | sent only to their `https` roots | runbook |
 | A webhook secret | sealed in Postgres | signs deliveries (HMAC-SHA256); never in an answer of the API | a new job |
 | The database password | Postgres's secret file and kage's `DATABASE_URL` | the database is on the stack's own network | runbook |
@@ -211,6 +211,21 @@ it.
 | E5 | low | A plain client says it is Kage: the address that sends `kage/<version>` to a site is marked for it, and a persona that reads the same site from that address is a bot that also said so | under the pool a site's plain traffic leaves through its scout's address only, the one persona that never reads the site; never from another (`plain_exit_unavailable`). Under `direct` the host has one address for everything: the runbook says so and names `min_level` as the operator's guard |
 | E6 | info | A caller's own `User-Agent`, `Accept` or other headers at level 0 make the plain client look like anything | accepted: level 0 is the caller's request as given and makes no claim to be a person; the transport's headers, `Proxy-*`, the forwarding family and `Accept-Encoding` are still refused |
 | E7 | info | The plain client's credential at the forwarder names an exit, not a persona (`plain-host`, `plain-<proxy id>`) | an HMAC token per exit under the forwarder's key; another exit's or a persona's token is refused, and the host's exit only when the mode allows it (`a_plain_clients_credential_names_its_exit_and_nothing_else`) |
+
+## 2.0: providers and declared lists
+
+Milestone M15 (ADR 0013, spec §7.1, §7.4) made the provider a plugin
+surface and the operator's own list a first-class way to run. Each threat
+below names what holds it and the test that shows it.
+
+| ID | Severity | Threat | What holds it |
+|---|---|---|---|
+| P1 | medium | A declared list is a secret: it holds every proxy's user name and password, now read again from its file at every sync | it is taken only from `KAGE__PROXIES__STATIC_LIST` or its `_FILE`, refused in the configuration file; `kage config check` prints `[redacted]` and the path only; a parse error names the entry and the rule and never quotes the list (`malformed_lists_are_rejected_without_quoting_them`, `a_declared_list_is_read_again_and_a_broken_edit_changes_nothing`); credentials are sealed at rest as any provider's |
+| P2 | medium | A provider module, Kage's or a contributor's, logs, prints or reports a credential or an API key | the conformance suite runs every operation and every failure of a provider (a 429, a refused key, a source that cannot be read) under a captured log subscriber, and fails it when any credential or key is in a log line, a `Debug` output or an error's text; a provider written to break that rule fails it (`the_suite_finds_what_a_broken_provider_breaks`) |
+| P3 | low | With a declared list and the defaults, the public echo's operator (`checkip.amazonaws.com`) sees every proxy address on the probe's schedule; in 1.x a declared list's probes read Webshare's echo instead, so a vendor that sold the operator nothing saw the pool and the host | the default is now per provider: the provider's own echo when it runs one, else the public echo (the owner's choice, D51); the host's own address is read from another operator's echo (`api.ipify.org`), so nobody outside sees both; `kage config check` warns while the public echo is in force and the runbook names the operator's own echo as the private choice (`the_endpoints_follow_the_provider_and_the_mode`, `the_proxy_provider_in_force_is_reported`) |
+| P4 | low | A declared identity the address does not have: a persona that claims a country a site's geo database places elsewhere is a tell on every page | a lookup verifies the declaration: two that disagree are `proxy_geo_mismatch`, the proxy `degraded`, and the alert says what a site sees; the operator corrects or removes the declaration (`a_declared_list_makes_personas_of_what_it_declares`); a declaration no persona can be made from (a country the tables do not know, a locale of another region) is refused at load rather than falling back to `en-US` |
+| P5 | low | Two entries that leave by one address (a gateway's sessions) would put two personas on one address (D6), linking them | a probe that sees an older proxy's exit address marks the later proxy: it carries neither a persona nor level 0 until it leaves by its own (`a_proxy_that_leaves_by_an_older_ones_address_carries_nothing`); two entries with the same proxy and login are refused at load |
+| P6 | info | A plain exit (an entry without a country) that the operator later gives a country reads as a person the sites it served at level 0 | its sites' records are deleted and they choose another exit; `plain_exit_released` (warning) says how many; the runbook says to add a new entry instead |
 
 ## Accepted exceptions
 
