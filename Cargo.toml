@@ -52,7 +52,7 @@ bytes = { version = "=1.12.1" }
 futures-util = { version = "=0.3.34", default-features = false, features = ["std"] }
 # The Mozilla root certificates wreq trusts by default, at the version wreq
 # resolves, so that a client can trust them plus one more authority.
-webpki-root-certs = { version = "=1.0.9" }
+webpki-root-certs = { version = "=1.0.10" }
 # utoipa, utoipa-axum and utoipa-swagger-ui are released together and are
 # pinned together. `vendored` keeps the Swagger UI build offline: without it
 # the build script downloads the UI bundle at compile time.

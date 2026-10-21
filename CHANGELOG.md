@@ -220,6 +220,16 @@ of 1.x still queued names no level and fails at take-up with
   stopped the start; it now counts as not set, like an empty secret
   variable, which is how compose passes an optional one.
 
+### Security
+
+- `rustls-webpki` 0.103.16 (RUSTSEC-2026-0382: certificate verification
+  could accept distrusted intermediates), `webpki-roots` and
+  `webpki-root-certs` 1.0.10 (RUSTSEC-2026-0381 and -0383: the bundled roots
+  trusted distrusted emSign intermediates). They decide which certificates
+  Kage's own clients accept (the roots wreq and the self-test client trust,
+  rustls' verification of the database's and the echo's); nothing a target
+  sees moves, and the recorded fingerprints are unchanged.
+
 ## [1.0.2] - 2026-10-19
 
 ### Fixed
