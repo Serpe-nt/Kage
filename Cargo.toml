@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "1.0.2"
+version = "2.0.0"
 edition = "2024"
 rust-version = "1.99"
 license = "MIT OR Apache-2.0"
@@ -19,16 +19,16 @@ publish = false
 # they enter Cargo.lock when first used.
 [workspace.dependencies]
 # --- Internal crates ------------------------------------------------------
-kage-api = { path = "crates/kage-api", version = "1.0.2" }
-kage-browser = { path = "crates/kage-browser", version = "1.0.2" }
-kage-core = { path = "crates/kage-core", version = "1.0.2" }
-kage-crawl = { path = "crates/kage-crawl", version = "1.0.2" }
-kage-extract = { path = "crates/kage-extract", version = "1.0.2" }
-kage-http = { path = "crates/kage-http", version = "1.0.2" }
-kage-persona = { path = "crates/kage-persona", version = "1.0.2" }
-kage-proxy = { path = "crates/kage-proxy", version = "1.0.2" }
-kage-scheduler = { path = "crates/kage-scheduler", version = "1.0.2" }
-kage-store = { path = "crates/kage-store", version = "1.0.2" }
+kage-api = { path = "crates/kage-api", version = "2.0.0" }
+kage-browser = { path = "crates/kage-browser", version = "2.0.0" }
+kage-core = { path = "crates/kage-core", version = "2.0.0" }
+kage-crawl = { path = "crates/kage-crawl", version = "2.0.0" }
+kage-extract = { path = "crates/kage-extract", version = "2.0.0" }
+kage-http = { path = "crates/kage-http", version = "2.0.0" }
+kage-persona = { path = "crates/kage-persona", version = "2.0.0" }
+kage-proxy = { path = "crates/kage-proxy", version = "2.0.0" }
+kage-scheduler = { path = "crates/kage-scheduler", version = "2.0.0" }
+kage-store = { path = "crates/kage-store", version = "2.0.0" }
 
 # --- Fingerprint-critical: bump together, re-test, never auto-merge --------
 # BoringSSL-linked (btls). Never combine with anything that links OpenSSL.

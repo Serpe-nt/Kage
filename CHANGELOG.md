@@ -6,13 +6,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-The next release is 2.0.0: camouflage levels and egress (spec §25, ADR
-0012, decision D50), and a provider-agnostic pool with declared lists
-(spec §7.1, ADR 0013, decision D51). **Drain the job queues before
+## [2.0.0] - 2026-10-24
+
+Camouflage levels and egress (spec §25, ADR 0012, decision D50), a
+provider-agnostic pool with declared lists (spec §7.1, ADR 0013, decision
+D51), and the public face of decision D52. **Drain the job queues before
 upgrading**, and **give every entry of a static list its country** (below):
-an item
-of 1.x still queued names no level and fails at take-up with
+an item of 1.x still queued names no level and fails at take-up with
 `level_required`; nothing is decided for the caller.
+`docs/runbooks/levels-and-egress.md`, "Upgrading from 1.x", is the whole
+upgrade.
 
 ### Breaking
 
