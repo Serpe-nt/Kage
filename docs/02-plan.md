@@ -1371,6 +1371,71 @@ release.
 fresh fork with no secret; the quick start transcript; `just ci` green;
 the release published with the attestations verified.
 
+**Status.** Merged on 2026-10-21 as
+[Serpe-nt/Kage#16](https://github.com/Serpe-nt/Kage/pull/16), eleven
+commits (`m16-handover.md`); the release steps follow on the owner's
+words (the bump pull request, the load job by hand with the nightly's new
+`suite` input, the signed tag `v2.0.0`, the digests pull request). Built:
+the README of D52 (the shinobi voice in five places, the levels, the
+egress modes, the three ways to run the pool, a result explained,
+"Measured, not promised" with the live scores quoted as they are and the
+known tells named, nothing claimed that is not set up); the five badges
+from the repository's own data (a `coverage-badge` job on pushes to
+`main` only, `contents: write` on that job alone, one orphan commit of
+one JSON file on `gh-pages`, shields.io rendering it; a lint check that
+holds the static badges to `rust-toolchain.toml` and `Cargo.toml`);
+`SECURITY.md` (GitHub's private advisory form, the latest line
+supported, tells as documented limits), `CODE_OF_CONDUCT.md`
+(Contributor Covenant 2.1), the issue forms, the pull-request template,
+`CODEOWNERS`, `CONTRIBUTING.md` polished with the gates and the provider
+guide; the compose pass-throughs for `KAGE_EGRESS_MODE` and
+`KAGE_STATIC_LIST_FILE`; the nightly's `workflow_dispatch` input `suite`;
+F66 (the hand goes to an element once the page rests from the wheel:
+not reproduced on `main` in eight crawl runs and thirty parity runs
+under the slow cgroup, but the suspected mechanism reproduced one layer
+down and fixed there, then twenty crawl runs green), F69, F71, F75, and
+a command-line forwarder fix that a host persona needed. Measured: the
+quick start proven word for word on an empty Docker machine (up in
+346 s, level 0 in 84 ms, level 3 by the host persona's Chrome in 38 s);
+the host persona's live self-test from the owner's home connection, 100
+of 100 for a Chrome and a Firefox persona, every check as in the pool's
+baselines, so no baseline of its own; the gate green on a clean clone
+with ten e2e scripts, the workspace's line coverage 95.7 % (the badge's
+figure), kage-core 99.5 %. The owner turned private vulnerability
+reporting on before the merge.
+
+**Follow-ups raised by M16** (after 2.0.0)
+- **F76:** the 56 schemas whose always-sent response members are
+  optional in the OpenAPI document (220 nullable, not required,
+  properties; request fields among them where optional is right).
+- **F77:** the sidecar's self-test report of a page that could not be
+  read says `passed: true, score: 100` beside the verdict `inconclusive`;
+  a report that read no page should not say it passed.
+- **F78:** nothing tests that the issue forms render; GitHub shows a
+  broken form as plain text, seen on the first new issue.
+- **F79:** `kage persona list` under `docker compose exec` prints a pool
+  INFO line on stdout before the table.
+- **F67 stands** (after 2.0.0): pipeline refusals in
+  `kage_scheduler_refusals_total`.
+
+---
+
+## After 2.0.0
+
+The phase's follow-ups, in the order the planner would take them, each a
+pull request of its own on the PR workflow: F70 (the `list_url`
+provider written from the guide), F76, F67, F77, F57 (the security
+review's six), F58 (the mutants job on a larger runner or the diff only),
+F64 (a typed navigation by the hand), F72 to F74, F78, F79, F55 (the
+`zip` ignore when `utoipa-swagger-ui` moves), the Camoufox and Chrome
+majors as upstream publishes them. M13, the field campaign, runs
+whenever the owner names sites, on the released images, and decides F31,
+F41, F53, F56, F59, F61 and F62 from its data. The owner's own items
+stay the owner's: the repository settings of `docs/runbooks/repo.md`
+(branch protection, Actions restrictions, the description and topics,
+wiki and projects off), the two Actions secrets and the nightly live
+suite.
+
 ---
 
 ## Session brief template
