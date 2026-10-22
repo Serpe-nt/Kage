@@ -1021,7 +1021,6 @@ async fn a_route_with_no_upstream_connects_only_to_addresses_it_checked() {
         private_names: HashSet::from([
             "shop.kage.test".to_owned(),
             "metadata.kage.test".to_owned(),
-            "mixed.kage.test".to_owned(),
         ]),
         ..settings()
     })
@@ -1064,19 +1063,22 @@ async fn a_route_with_no_upstream_connects_only_to_addresses_it_checked() {
     assert_eq!(rig.provider.seen().len(), 0);
 
     // A name the operator did not list may not resolve to this machine;
-    // a listed one never to the metadata address, and not to a private
-    // address beside a public one either unless it is listed.
+    // a listed one never to the metadata address; and one the operator did
+    // not list may not resolve to a private address beside a public one
+    // either. Each is refused by the check, before anything is dialled:
+    // nothing here reaches the internet (the public address of
+    // `mixed.kage.test` once was, and on a network that answers any
+    // connection the tunnel was opened).
     for refused in [
         format!("other.kage.test:{port}"),
         "metadata.kage.test:80".to_owned(),
         "unknown.kage.test:443".to_owned(),
+        "mixed.kage.test:9".to_owned(),
     ] {
         let (mut client, head) = rig.tunnel_with(&host, &refused).await;
         assert!(head.starts_with("HTTP/1.1 403 "), "{refused}: {head}");
         assert_eq!(client.rest().await, "", "{refused}");
     }
-    let (_client, head) = rig.tunnel_with(&host, "mixed.kage.test:9").await;
-    assert!(!head.starts_with("HTTP/1.1 200 "), "{head}");
 
     // The bytes are counted by their exit: the plain client's toward the
     // host it went to, the host persona's as its own.
