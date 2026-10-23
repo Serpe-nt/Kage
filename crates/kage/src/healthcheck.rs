@@ -67,8 +67,10 @@ fn check_status_line(response: &str) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddr;
+
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
+    use tokio::net::{TcpListener, TcpSocket};
 
     use super::{check_status_line, run};
     use crate::serve::test_support::RunningServer;
@@ -84,12 +86,15 @@ mod tests {
 
     #[tokio::test]
     async fn closed_port_fails() {
-        // Bind then drop to get a loopback port that nothing listens on.
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        drop(listener);
+        // A loopback port bound and not listening refuses every connection,
+        // and while the socket lives no other test can take it (a listener
+        // bound and dropped left it to whoever bound next).
+        let held = TcpSocket::new_v4().unwrap();
+        held.bind(SocketAddr::from(([127, 0, 0, 1], 0))).unwrap();
+        let addr = held.local_addr().unwrap();
 
         let error = run(addr).await.unwrap_err();
+        drop(held);
 
         assert!(format!("{error:#}").contains("cannot connect"), "{error:#}");
     }
