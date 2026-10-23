@@ -229,6 +229,16 @@ of 1.x still queued names no level and fails at take-up with
   Kage's own clients accept (the roots wreq and the self-test client trust,
   rustls' verification of the database's and the echo's); nothing a target
   sees moves, and the recorded fingerprints are unchanged.
+- `ctutils` 0.4.4 (RUSTSEC-2026-0385: mask generation and `u128`
+  comparisons that were to be constant-time could branch), under the
+  hashes, HMACs and the AEAD that seal credentials and sign tokens and
+  webhooks.
+- `tokio` 1.53.3 (RUSTSEC-2026-0386: `AsyncFd::new` and its siblings are
+  unsound). Kage calls none of them.
+- The sidecar: `zod` 4.6.6 (GHSA-mrhx-c7xc-m3w5: validating an oversized
+  constrained collection could exhaust memory; the contract document is
+  unchanged) and `fastify` 5.12.6 (GHSA-389g-gv7q-r4x8: a header
+  validation bypass through case-sensitive `propertyNames`).
 
 ## [1.0.2] - 2026-10-19
 
