@@ -5,6 +5,7 @@
 
 mod common;
 
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use common::BodySays;
@@ -24,7 +25,7 @@ use kage_core::ssrf::{DEFAULT_MAX_REDIRECTS, SsrfPolicy};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpSocket};
 use uuid::Uuid;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -610,12 +611,23 @@ async fn an_answer_outside_the_contract_is_an_error_and_never_a_guess() {
     );
 }
 
+/// A loopback port that refuses every connection while the returned
+/// socket lives: bound and not listening, so no server of another test
+/// running beside it can take the port. A listener bound and dropped to
+/// find a free port left it to whoever bound next, and a parallel test's
+/// mock answered `404` where a refusal was expected.
+fn refusing_port() -> (TcpSocket, SocketAddr) {
+    let socket = TcpSocket::new_v4().unwrap();
+    socket.bind(SocketAddr::from(([127, 0, 0, 1], 0))).unwrap();
+    let address = socket.local_addr().unwrap();
+    (socket, address)
+}
+
 #[tokio::test]
 async fn a_sidecar_that_cannot_be_reached_is_tried_again_and_then_reported() {
-    // A port nothing listens on: bind, note the address, close.
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    drop(listener);
+    // A port nothing listens on, held for the whole test (see
+    // `refusing_port`).
+    let (held, address) = refusing_port();
 
     let client = SidecarClient::new(&settings(&format!("http://{address}"))).unwrap();
     let started = std::time::Instant::now();
@@ -641,13 +653,12 @@ async fn a_sidecar_that_cannot_be_reached_is_tried_again_and_then_reported() {
         no_retry.health().await.unwrap_err(),
         BrowserError::Connect { attempts: 1, .. }
     ));
+    drop(held);
 }
 
 #[tokio::test]
 async fn a_sidecar_that_comes_up_between_attempts_is_reached() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    drop(listener);
+    let (held, address) = refusing_port();
     let client = SidecarClient::new(&SidecarSettings {
         connect_retries: 5,
         ..settings(&format!("http://{address}"))
@@ -656,10 +667,10 @@ async fn a_sidecar_that_comes_up_between_attempts_is_reached() {
 
     let call = tokio::spawn(async move { client.health().await });
     tokio::time::sleep(Duration::from_millis(300)).await;
-    let server = MockServer::builder()
-        .listener(std::net::TcpListener::bind(address).unwrap())
-        .start()
-        .await;
+    // The sidecar comes up on the very port: the held socket starts
+    // listening, so no other test can have taken it meanwhile.
+    let listener = held.listen(64).unwrap().into_std().unwrap();
+    let server = MockServer::builder().listener(listener).start().await;
     Mock::given(method("GET"))
         .and(path("/v1/health"))
         .respond_with(ResponseTemplate::new(200).set_body_json(example_json("HealthResponse", 0)))
