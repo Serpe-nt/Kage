@@ -50,7 +50,8 @@ shift
 if [ "${index}" = "-" ]; then
     exec node tests/field/field.mjs "$@"
 elif [ "${1:-}" = "check" ]; then
-    exec node tests/field/field.mjs check "${index}"
+    shift
+    exec node tests/field/field.mjs check "${index}" "$@"
 else
     exec node tests/field/field.mjs run "${index}" "$@"
 fi
