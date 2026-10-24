@@ -195,9 +195,10 @@ test: test-rust test-node test-scripts
 test-rust:
     cargo test --workspace --all-features --locked
 
-# The tests of the gate scripts in scripts/ (node's own runner).
+# The tests of the gate scripts in scripts/ and of the field campaign's
+# runner in tests/field/ (node's own runner).
 test-scripts:
-    node --test "scripts/*.test.mjs"
+    node --test "scripts/*.test.mjs" "tests/field/*.test.mjs"
 
 # Migrations apply from empty, are idempotent, `sqlx migrate info` is clean,
 # and .sqlx/ matches the queries. Uses a throwaway Postgres in Docker.
@@ -227,6 +228,7 @@ test-e2e: setup-env
     tests/e2e/jobs.sh
     tests/e2e/crawl.sh
     tests/e2e/extract.sh
+    tests/e2e/field.sh
     tests/e2e/observability.sh
     tests/e2e/load.sh
 
@@ -240,6 +242,13 @@ test-load: setup-env
 # Gated live suite: needs KAGE_LIVE=1 and secrets, never runs in PR CI.
 test-live:
     tests/live/run.sh
+
+# The field campaign's runner: one site's batch of today through the
+# running campaign stack, recorded (docs/runbooks/field-campaign.md, "A
+# session runs it"). It reads a real site: only with KAGE_FIELD=1 and the
+# round's private files, on the owner's approval of the list, never in CI.
+field index *args:
+    tests/field/field.sh {{ index }} {{ args }}
 
 # Mutation testing on kage-core: fails under a score of 70 % (spec §21, a
 # gate since M7). Not part of `ci`; run it before a milestone is merged.

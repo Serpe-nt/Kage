@@ -409,6 +409,18 @@ const routes = {
       ? html(res, page('Behind the challenge', '<h1 id="content">Content behind the challenge</h1>'))
       : html(res, CHALLENGE_PAGE, {}, 403),
   '/challenge/stuck': (_req, res) => html(res, STUCK_CHALLENGE_PAGE, {}, 403),
+  // The field runner's test (tests/e2e/field.sh): a page whose first link
+  // leads into a challenge that never resolves, so that a batch meets a
+  // wall with a page still to read, which nobody may then ask for.
+  '/wall/': (_req, res) =>
+    html(
+      res,
+      page(
+        'Before the wall',
+        '<h1>Before the wall</h1><p>Two ways lead on from here: <a href="/challenge/stuck">through the gate</a>, or <a href="/wall/after">around it</a>.</p>',
+      ),
+    ),
+  '/wall/after': (_req, res) => html(res, page('Around the wall', '<h1>Around the wall</h1><p>Nobody comes here.</p>')),
   '/spa': (_req, res) => html(res, SPA_PAGE, { 'x-fixture': 'spa' }),
   // One address, two documents: the page links to itself with a campaign
   // tag, and the document that arrives takes the tag out of its address,

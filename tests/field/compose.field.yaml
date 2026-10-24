@@ -1,0 +1,28 @@
+# Overlay for the stack a field campaign runs on (docs/runbooks/
+# field-campaign.md, "A session runs it"), on top of deploy/compose.yaml and
+# deploy/compose.observability.yaml:
+#
+#   docker compose --project-name kage-m13 \
+#       --env-file <primary checkout>/deploy/.env --env-file <private>/stack.env \
+#       --file deploy/compose.yaml --file deploy/compose.observability.yaml \
+#       --file tests/field/compose.field.yaml --profile observability up --detach --wait
+#
+# The round's policies are a private directory (KAGE_FIELD_POLICIES): the
+# shipped files with an entry per site of the round, which names the site
+# and is never committed. Everything else is the shipped configuration but
+# for the three settings below.
+services:
+  kage:
+    environment:
+      # A round never replaces an address by itself: a replacement retires
+      # the persona that is the measurement. The owner replaces by hand.
+      KAGE__PROXIES__REPLACEMENTS_PER_MONTH: "0"
+      # The round is driven by Claude acting for the owner, so a group a
+      # site's robots.txt writes for `Claude-User` applies in place of its
+      # group for everybody (spec §14).
+      KAGE__ROBOTS__AGENTS: '["kage","Claude-User"]'
+      # The shipped warm-up without Wikipedia's Special:Random, which
+      # Wikipedia's robots.txt disallows for everybody (follow-up F83).
+      KAGE__PERSONAS__WARMUP__SITES: '[{url="https://{language}.wikipedia.org/",countries=[]},{url="https://www.openstreetmap.org/",countries=[]},{url="https://orf.at/",countries=["AT"]},{url="https://www.geosphere.at/",countries=["AT"]},{url="https://www.tagesschau.de/",countries=["DE"]},{url="https://www.dwd.de/",countries=["DE"]},{url="https://www.franceinfo.fr/",countries=["FR"]},{url="https://meteofrance.com/",countries=["FR"]},{url="https://www.bbc.co.uk/news",countries=["GB"]},{url="https://www.metoffice.gov.uk/",countries=["GB"]},{url="https://www.rainews.it/",countries=["IT"]},{url="https://www.meteoam.it/",countries=["IT"]}]'
+    volumes:
+      - ${KAGE_FIELD_POLICIES:?name the round's private policies directory}:/etc/kage/policies:ro
