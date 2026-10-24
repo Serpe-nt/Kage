@@ -222,6 +222,14 @@ upgrade.
 - An empty `KAGE__…_FILE` variable was read as a file named by nothing and
   stopped the start; it now counts as not set, like an empty secret
   variable, which is how compose passes an optional one.
+- Since 1.0.0 every warm-up visit was judged a soft block: the visit
+  captured no document, and the classifier read the page it was served as
+  an empty body (F85). Each visit was logged as a warning, cooled its
+  persona for the warm-up site and counted toward that site's breaker,
+  and its proxy got no credit for the traffic; the visit itself, and the
+  persona's warm-up, still counted. A warm-up visit now captures the
+  document for the classifier alone, as every page a browser reads, and
+  is judged on it; nothing of it is stored or logged.
 
 ### Security
 
