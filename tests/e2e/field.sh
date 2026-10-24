@@ -216,7 +216,11 @@ check "the control was read by the persona named for it, and nothing blocked it"
 [ "$(value "${control}" "d.persona.id")" = "${reader}" ] || fail "the control was not read by the persona named for it"
 
 echo "==> the report: no host, no address, no id; the private record has them"
+field warmup
 field report "${scratch}/report.md" --title "Field report (e2e)"
+grep --quiet '^## Warm-up (F85)' "${scratch}/report.md" || fail "the report has no warm-up section"
+grep --quiet 'In all 0 warm-up visits made and 0 skipped by 3 personas' "${scratch}/report.md" \
+    || fail "the warm-up section does not count a stack without warm-up: $(grep -A 12 'Warm-up' "${scratch}/report.md")"
 report="$(cat "${scratch}/report.md")"
 keep report.md "${report}"
 for word in kage.test fixture wall.field field.test lenient harbour; do

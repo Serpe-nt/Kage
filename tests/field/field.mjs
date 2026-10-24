@@ -10,6 +10,7 @@
 //                                            (--persona: the reader of a control)
 //   node field.mjs record <index> --job <id> [--pass 2 --change <text>]
 //                                            the record of a batch again, from the store
+//   node field.mjs warmup                    the personas' warm-up, recorded (follow-up F85)
 //   node field.mjs report <file> [--title <text>]
 //                                            the round's anonymised report from the records
 //
@@ -49,6 +50,7 @@ import {
   policyDifferences,
   policyEntry,
   renderSection,
+  renderWarmup,
   scrubPrivate,
   sessionIds,
   sessionRequest,
@@ -179,6 +181,19 @@ WHERE breaker.domain = :'domain' OR right(breaker.domain, length(:'domain') + 1)
 const SCOUT = `
 SELECT scout.persona_id, scout.since FROM site_scouts scout
 WHERE scout.site = :'domain' OR right(:'domain', length(scout.site) + 1) = '.' || scout.site`;
+// Every live persona's warm-up: the visits made and skipped, and when it
+// was warmed (follow-up F85: Kage's own verdicts on them mean nothing).
+const WARMUP = `
+SELECT persona.id, persona.engine, persona.country, persona.warmup_visits, persona.warmed_at,
+       count(event.id) FILTER (WHERE event.details ->> 'outcome' <> 'skipped') AS made,
+       count(event.id) FILTER (WHERE event.details ->> 'outcome' = 'skipped') AS skipped,
+       min(event.at) AS first_visit, max(event.at) AS last_visit
+FROM personas persona
+LEFT JOIN health_events event
+  ON event.subject_id::text = persona.id::text AND event.kind = 'persona_warmup_visit'
+WHERE persona.retired_at IS NULL
+GROUP BY 1, 2, 3, 4, 5
+ORDER BY 1`;
 const ROBOTS = `
 SELECT cache.origin, cache.status, cache.fetched_at
 FROM robots_cache cache
@@ -487,14 +502,27 @@ function recordsOf(index) {
     .map((path) => JSON.parse(readFileSync(path, 'utf8')));
 }
 
+/** The private record of the personas' warm-up, for the report's section on it. */
+function warmup() {
+  const rows = sql(WARMUP, {});
+  writeJson(join(env('KAGE_FIELD_DIR'), 'records', 'warmup.json'), { at: new Date().toISOString(), personas: rows });
+  const made = rows.reduce((sum, row) => sum + Number(row.made), 0);
+  const skipped = rows.reduce((sum, row) => sum + Number(row.skipped), 0);
+  say(`${rows.length} personas: ${made} warm-up visits made, ${skipped} skipped, ${rows.filter((row) => row.warmed_at).length} warmed`);
+}
+
 /** The anonymised report of the round: one section per site that has a record. */
 function report(round, file, title) {
   const sections = [];
+  const firstBatch = {};
   for (const site of round.sites) {
     const passes = recordsOf(site.index);
     if (passes.length === 0) continue;
+    firstBatch[site.index] = passes[0].started_at;
     sections.push(renderSection(site, passes));
   }
+  const warmed = join(env('KAGE_FIELD_DIR'), 'records', 'warmup.json');
+  if (existsSync(warmed)) sections.push(renderWarmup(round, JSON.parse(readFileSync(warmed, 'utf8')).personas, firstBatch));
   const text = [`# ${title}`, '', ...sections].join('\n');
   const found = leaks(text, round);
   if (found.length > 0) throw new Error(`the report would carry ${found.join(', ')}: nothing written`);
@@ -554,6 +582,8 @@ async function main() {
       return assign(round);
     case 'policies':
       return policies(round);
+    case 'warmup':
+      return warmup();
     case 'entry':
       return process.stdout.write(policyEntry(siteOf(round, index), { key: `site-${index}.example`, comment: `site ${index}` }));
     case 'check': {
