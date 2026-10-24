@@ -463,6 +463,74 @@ async fn what_a_warm_up_visit_found_is_settled_like_any_attempt() {
     world.shut_down().await;
 }
 
+/// Follow-up F85: a warm-up visit is judged on the document it captured,
+/// as any page a browser reads. A page that shows nothing is still a soft
+/// block; the same page without its document, as every visit came back
+/// before 2.0.0, read as an empty body.
+#[tokio::test(start_paused = true)]
+async fn a_warm_up_visit_is_judged_on_the_document_it_captured() {
+    let mut world = World::new(3, DEFAULT_DOMAINS);
+    let gate = gate(&world);
+    let html = |mut page: PageResult| {
+        page.headers = serde_json::from_value(serde_json::json!([
+            { "name": "content-type", "value": "text/html; charset=utf-8" }
+        ]))
+        .unwrap();
+        page
+    };
+
+    // The page as a person read it, its document captured.
+    let read = Navigation::Page(Box::new(html(page(200))));
+    let judged = gate
+        .judge(&persona(0, true), "news.example", Ok(&read))
+        .await
+        .unwrap();
+    assert_eq!(
+        judged,
+        Judged {
+            outcome: Outcome::Ok,
+            status: Some(200)
+        }
+    );
+    let state = world.backend.domain_state(id(0), "news.example").unwrap();
+    assert_eq!(state.last_outcome, Some(Outcome::Ok));
+    assert_eq!(state.cooldown_until, None);
+    assert_eq!(world.backend.breaker("news.example"), None);
+
+    // A served page whose document renders no text: a soft block.
+    let mut blank = html(page(200));
+    blank.dom_html =
+        Some("<html><head><title>News</title></head><body><div></div></body></html>".to_owned());
+    let blank = Navigation::Page(Box::new(blank));
+    let judged = gate
+        .judge(&persona(1, true), "blog.example", Ok(&blank))
+        .await
+        .unwrap();
+    assert_eq!(
+        judged,
+        Judged {
+            outcome: Outcome::SoftBlock,
+            status: Some(200)
+        }
+    );
+    let state = world.backend.domain_state(id(1), "blog.example").unwrap();
+    assert_eq!(state.last_outcome, Some(Outcome::SoftBlock));
+    assert_eq!(state.block_count_24h, 1);
+
+    // The read page without its document: what every warm-up visit was
+    // judged on before the fix.
+    let mut bare = html(page(200));
+    bare.dom_html = None;
+    bare.raw_body = None;
+    let bare = Navigation::Page(Box::new(bare));
+    let judged = gate
+        .judge(&persona(2, true), "shop.example", Ok(&bare))
+        .await
+        .unwrap();
+    assert_eq!(judged.outcome, Outcome::SoftBlock);
+    world.shut_down().await;
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_warm_up_visits_bytes_count_toward_its_site() {
     let mut world = World::new(1, DEFAULT_DOMAINS);

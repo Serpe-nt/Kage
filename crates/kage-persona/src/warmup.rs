@@ -82,7 +82,10 @@ fn classify(navigation: &Navigation) -> (Outcome, Option<i64>) {
 
 /// The navigation of one warm-up visit: typed into the address bar, read
 /// like a person reads for as long as the persona's patience with this
-/// page lasts, nothing captured.
+/// page lasts. The document is captured for the classifier alone, as for
+/// every page a browser reads (follow-up F85: without it every page came
+/// back with no body and was judged an empty-body soft block); nothing of
+/// it is stored or logged, the visit keeps its outcome and its status.
 fn visit_request(
     persona: &Persona,
     visit: &PlannedVisit,
@@ -115,7 +118,8 @@ fn visit_request(
         }),
         capture: CaptureOptions {
             console: false,
-            dom: false,
+            // The classifier reads the document, as the executor's pages.
+            dom: true,
             links: None,
             pdf: None,
             raw: false,
@@ -452,7 +456,7 @@ mod tests {
     }
 
     #[test]
-    fn a_visit_is_typed_read_and_scrolled_and_captures_nothing() {
+    fn a_visit_is_typed_read_and_scrolled_and_captures_its_document_alone() {
         let persona = persona(Engine::Firefox, 156);
         let visit = |number| PlannedVisit {
             number,
@@ -496,8 +500,11 @@ mod tests {
         let depth = behavior.scroll_depth.unwrap();
         assert!((0.6..=0.9).contains(&depth), "{depth}");
         assert_eq!(behavior.seed.as_deref().map(str::len), Some(64));
+        // The document, for the classifier, and nothing else (F85: with
+        // nothing captured every page came back without a body).
         let capture = &request.capture;
-        assert!(!capture.dom && !capture.raw && !capture.console);
+        assert!(capture.dom);
+        assert!(!capture.raw && !capture.console && capture.links.is_none());
         assert!(capture.screenshot.is_none() && capture.pdf.is_none() && capture.xhr.is_none());
 
         // The same visit is the same every time; another visit, and
