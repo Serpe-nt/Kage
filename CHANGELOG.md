@@ -6,6 +6,36 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **The field campaign's runner** (`tests/field/`, `just field <index>`):
+  drives one site's batch of a day through the API of a running stack and
+  records it from the store, for a round a session runs on the owner's
+  typed approval of the list (`docs/runbooks/field-campaign.md`, "A
+  session runs it"). It deals each country's sites to its personas by a
+  seeded draw, writes the round's policy entries into a private
+  directory, pins every batch to the site's persona through a session (so
+  a block is never retried by another persona and no persona reads two
+  sites), runs one crawl at level 3 with a deny list for sign-in, account,
+  basket, checkout and search pages, cancels it at a block that cools the
+  persona past the day, at the end of the site's window or at a stop of
+  the pool or the bandwidth, and writes a private record and an
+  anonymised section that is refused when it would name a site, an
+  address, an id or a token. Its library is tested with node's runner in
+  `just test-scripts`; `tests/e2e/field.sh` runs it against the fixture
+  site in `just test-e2e`. `tests/field/compose.field.yaml` is the
+  campaign stack's overlay: the private policies, no automatic
+  replacement, `Claude-User` among `robots.agents`, and the warm-up
+  without Wikipedia's `Special:Random`.
+
+### Changed
+
+- `docs/runbooks/field-campaign.md`: a session the owner starts may run a
+  round on the owner's typed approval of the list; a committed report
+  names a site only as "Site N: <country> <category>, <vendor>".
+- The end-to-end world (`deploy/compose.e2e.yaml`) answers to a second
+  registrable name, `wall.field.test`, for the field runner's test.
+
 ## [2.0.1] - 2026-10-27
 
 ### Security

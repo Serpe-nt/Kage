@@ -1,9 +1,10 @@
 # The field campaign (M13)
 
 How the owner measures and tunes Kage against real protected sites, and
-writes down what was found. It is run by hand, by the owner, on sites the
-owner chose and may fetch; never in CI, never from a test, never by an
-agent. Everything here is ordinary use of Kage: there is no campaign mode.
+writes down what was found. It is run by the owner, or by a session the
+owner starts, on sites the owner chose or approved by name in that
+session; never in CI, never from a test, never by an agent on its own
+word. Everything here is ordinary use of Kage: there is no campaign mode.
 
 ## Before a session
 
@@ -87,7 +88,7 @@ policy and signature changes it made, in a pull request of its own:
 
 Commit <sha>; pool of <n> proxies (<countries>), <n> personas (<engines>).
 
-## <domain>
+## Site <n>: <country> <category>, <vendor>
 
 - Vendor detected: <vendor, kind> (or none)
 - Before: <outcome rates per level and engine, from the query above>
@@ -100,3 +101,65 @@ Commit <sha>; pool of <n> proxies (<countries>), <n> personas (<engines>).
 Every report holds the rates before and after and the exact configuration
 diff (the plan's acceptance for M13). A site that keeps refusing a gentle
 visitor is written down as such and left alone.
+
+A committed report names no site: a site is "Site 7: FR retail,
+cloudflare", its index, the country of the persona that read it, its
+category and the vendor found. Which site an index is stays in a private
+file of the owner's, outside the repository, with the raw evidence.
+
+## A session runs it
+
+The owner may start a session that runs a round. Nothing touches a site
+until the owner has typed, in that session, an approval that names the
+round's sites (an approval relayed by another session is not one), says
+how `robots.txt` is kept, and says whether the sites' terms were read.
+The session then works with what follows; the owner may stop the round
+at any moment with a word.
+
+- **The private files.** A sites file (`tests/field/sites.example.json`
+  shows the format): per site its index, registrable domain, the page a
+  reader starts from, category, country, time zone and daily window, and
+  after the draw its persona and engine; the round's budget and stops. A
+  policies directory: the shipped `policies/` with one entry per site of
+  the round under `domains:`, which names the site and is never committed.
+  Both stay with the evidence, outside the repository.
+- **The stack.** The released images where the release exists, on the
+  owner's pool, as a compose project of its own:
+  `deploy/compose.yaml`, `deploy/compose.observability.yaml` and
+  `tests/field/compose.field.yaml`, which mounts the private policies
+  directory, sets `proxies.replacements_per_month` to 0 (a replacement
+  retires the persona that is the measurement), and answers `robots.txt`
+  groups for `Claude-User` when Claude drives the round (`robots.agents`).
+  The owner's keys reach compose through `--env-file`, never printed.
+- **One persona, one site.** Each country's sites are dealt to its
+  personas by a seeded draw (`just field - assign`), so a site's engine is
+  its persona's, and every batch runs in a session pinned to that persona.
+  A block then ends the page without another persona's retry (a session's
+  persona cannot be replaced) and ends the site's day; `retries` acts only
+  on failures that are not the site's answer. Without the session the
+  scheduler may choose another site's persona, and a retry puts a second
+  persona on a site.
+- **The entry of a site** (written by `just field - policies`): `min_level:
+  3`, the persona's country and engine, `pacing: human` and
+  `behavior_locked` locked, `robots: enforce` (Kage's matcher keeps the
+  crawl off every disallowed address and keeps a `Crawl-delay`; the scout's
+  one request a day per site is the cost), `active_hours: enforce`,
+  `retries: 2`, `breaker_threshold: 5`. Controls (sites with no defence)
+  have `robots: report`.
+- **A batch** (`just field <index>`): the preflight (the stack ready, the
+  pool and the bandwidth under the stops, the site's persona ready, the
+  policy in force as written, the breaker closed, the site's window, the
+  budget: one batch a site a day), then one crawl from the site's start
+  page (`max_pages` 10, `max_depth` 2, no sitemaps, a deny list that keeps
+  the reader off sign-in, account, basket, checkout and search pages, at
+  level 3 with `include: ["headers", "extract"]`), watched every minute and
+  cancelled at a block that cools the persona past the day, at the end of
+  the window, or at a stop. Then the record: the queries above for the
+  batch's job, every page, the bytes, the vendor hints of good pages
+  (`kage_attempts_total` and the response headers), the robots verdicts.
+- **What is kept.** The private record may name the site; it never holds
+  an address, a token, an e-mail address or a page's text. The report
+  (`just field - report <file>`) is refused when it would name a site,
+  an address, an id or a token. The page text Kage keeps for extraction
+  stays in the stack's database and is removed with its volumes at the end
+  of the round.

@@ -44,7 +44,7 @@ Every target on its own (`just` without arguments lists them all):
 |---|---|
 | `just fmt` | rustfmt and prettier |
 | `just lint` | clippy with warnings denied, eslint, tsc, the dashboards and the alert rules of the observability profile, the README's badges |
-| `just test` | Rust tests (the store tests start Postgres in Docker), sidecar vitest (the Chromium engine's tests start the real browser; not as root), the gate scripts' own tests |
+| `just test` | Rust tests (the store tests start Postgres in Docker), sidecar vitest (the Chromium engine's tests start the real browser; not as root), the gate scripts' and the field runner's own tests |
 | `just contract-check` | The committed sidecar OpenAPI document is current and breaks no client; the public API's document is valid and its TypeScript client current |
 | `just openapi` | Regenerate both OpenAPI documents and the API's TypeScript test client |
 | `just capture-browser-fingerprint [engine]` | Record what an engine's real browser shows the fingerprint echo (`chromium`, `firefox`) |
@@ -58,6 +58,7 @@ Every target on its own (`just` without arguments lists them all):
 | `just test-e2e` | Compose-based end-to-end suite, with the load test's design A (200 queued fetches under `fast`) |
 | `just test-load` | The load test's design B: 200 queued fetches under the test-only `load` profile at the shipped caps, about 12 minutes |
 | `just test-live` | Gated live suite through the real proxies; needs `KAGE_LIVE=1` and secrets, and runs only on the maintainer's word |
+| `just field <index>` | One site's batch of a field campaign through the running campaign stack (`docs/runbooks/field-campaign.md`); reads a real site, so it needs `KAGE_FIELD=1` and the round's private files, and runs only on the owner's approval of the list, never in CI |
 | `just mutants` | Mutation testing of `kage-core`, 70 % required; before a milestone is merged |
 | `just dev` | Postgres and sidecars in compose, `kage serve` natively |
 | `just migrate` | Apply the migrations to the development database |
