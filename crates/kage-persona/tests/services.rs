@@ -649,7 +649,9 @@ async fn a_new_persona_warms_up_in_its_own_browser_before_it_is_ready() {
         json!("direct")
     );
     assert_eq!(navigated[0]["behavior"]["wander"], json!(true));
-    assert_eq!(navigated[0]["capture"]["dom"], json!(false));
+    // The document, for the classifier alone (F85).
+    assert_eq!(navigated[0]["capture"]["dom"], json!(true));
+    assert_eq!(navigated[0]["capture"]["raw"], json!(false));
     // The same sweep does not make the next visit.
     assert_eq!(harness.manager.warm_up_due().await.unwrap(), 0);
     let after_one = harness.reload(&persona).await;
