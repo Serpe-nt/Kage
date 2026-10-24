@@ -22,6 +22,7 @@ import {
   policyDifferences,
   policyEntry,
   renderSection,
+  renderWarmup,
   scrubPrivate,
   sessionIds,
   sessionRequest,
@@ -226,6 +227,10 @@ test('the policy entries are written under the shipped mapping, and the preview 
   assert.match(file, /"control\.example": # site C1/);
   assert.equal((file.match(/^domains:/gm) ?? []).length, 1);
   assert.throws(() => domainsFile('domains:\n  a: {}\ndefaults: {}\n', parsed), /does not end/);
+  const warmed = parseSites(round([SHOP, CONTROL], { warmup_hosts: ['de.wikipedia.org', 'www.tagesschau.de'] }));
+  assert.match(domainsFile(shipped, warmed), /"de\.wikipedia\.org": \{ breaker_threshold: 1000 \} # a warm-up host \(F85\)\n {2}"www\.tagesschau\.de"/);
+  assert.equal(parsed.warmup_hosts.length, 0);
+  assert.throws(() => parseSites(round([SHOP], { warmup_hosts: ['Not A Host'] })), /warmup_hosts/);
   assert.match(domainsFile('defaults: {}\ndomains: {}\n', parsed), /^domains:\n/m);
 
   const view = {
@@ -417,6 +422,21 @@ test('a site\'s section says what was read, how, and what blocked it, and leaks 
   assert.match(both, /Change: pacing `patient`/);
   assert.match(both, /\*\*After\*\* \(pass 2, 2026-10-27\)/);
   assert.match(both, /Decision: keep/);
+});
+
+test('the warm-up section counts visits made and skipped per site, and never shows a verdict', () => {
+  const parsed = parseSites(round([SHOP, CONTROL]));
+  const rows = [
+    { id: PERSONA_A, engine: 'firefox', country: 'FR', made: 3, skipped: 1, warmed_at: '2026-10-24T21:37:12Z' },
+    { id: PERSONA_B, engine: 'chromium', country: 'FR', made: 2, skipped: 0, warmed_at: null },
+  ];
+  const text = renderWarmup(parsed, rows, { 7: '2026-10-25T09:41:00Z' });
+  assert.match(text, /^## Warm-up \(F85\)\n/);
+  assert.match(text, /\| 7 \| firefox \| FR \| 3 \| 1 \| 2026-10-24T21:00Z \| yes \|/);
+  assert.match(text, /In all 5 warm-up visits made and 1 skipped by 2 personas/);
+  assert.doesNotMatch(text, /soft_block/);
+  assert.deepEqual(leaks(text, parsed), []);
+  assert.match(renderWarmup(parsed, rows, { 7: '2026-10-24T20:00:00Z' }), /\| 7 \| .* \| no \|/);
 });
 
 test('a median is the lower middle and ignores what is no number', () => {

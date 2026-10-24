@@ -116,6 +116,10 @@ export function parseSites(text) {
   if (!Number.isInteger(stops.max_round_bytes) || stops.max_round_bytes < 1) fail('stops.max_round_bytes', 'bytes');
   const deny = round.deny ?? COMMON_DENY;
   checkPatterns(deny, 'deny', fail);
+  const warmupHosts = round.warmup_hosts ?? [];
+  if (!Array.isArray(warmupHosts) || warmupHosts.some((host) => typeof host !== 'string' || !HOST.test(host))) {
+    fail('warmup_hosts', 'a list of lowercase host names');
+  }
   if (!Array.isArray(round.sites) || round.sites.length === 0) fail('sites', 'a list of at least one site');
   const indexes = new Set();
   const personas = new Map();
@@ -186,8 +190,17 @@ export function parseSites(text) {
       entry,
     };
   });
-  return { ...round, budget, stops, deny, sites };
+  return { ...round, budget, stops, deny, warmup_hosts: warmupHosts, sites };
 }
+
+/**
+ * The breaker threshold of a warm-up host during a round. Until follow-up
+ * F85, Kage judges every warm-up visit a soft block (the visit captures no
+ * document), so a warm-up host's breaker would open on visits that were
+ * fine and the persona's later visits there would be skipped; a threshold
+ * the round cannot reach keeps the warm-up what it is meant to be.
+ */
+export const WARMUP_BREAKER_THRESHOLD = 1000;
 
 function checkPatterns(list, where, fail) {
   if (!Array.isArray(list)) fail(where, 'a list of patterns');
@@ -394,7 +407,10 @@ export function domainsFile(shipped, round) {
   const keys = text.split('\n').filter((line) => /^[a-z_]+:/.test(line));
   if (keys.at(-1) !== 'domains:') throw new SitesError("the shipped domains.yaml does not end with its domains mapping");
   const entries = round.sites.map((site) => policyEntry(site)).join('');
-  return `${text}  # The field campaign's round ${round.round} (tests/field), never committed.\n${entries}`;
+  const warmup = round.warmup_hosts
+    .map((host) => `  "${host}": { breaker_threshold: ${WARMUP_BREAKER_THRESHOLD} } # a warm-up host (F85)\n`)
+    .join('');
+  return `${text}  # The field campaign's round ${round.round} (tests/field), never committed.\n${entries}${warmup}`;
 }
 
 /** What `GET /v1/policies/domains/{host}` must show for the site, as [field, expected, found]. */
@@ -712,6 +728,38 @@ export function renderSection(site, passes) {
     `- Pacing: ${pacing.pacing}; bandwidth: ${passes.map((pass) => `${megabytes(pass.bytes)} MB (${pass.pages.length ? megabytes(pass.bytes / pass.pages.length) : '0.0'} MB a page)`).join(', then ')}.`,
   );
   lines.push(`- Decision: ${(after ?? before).decision}.`, '');
+  return lines.join('\n');
+}
+
+/**
+ * The report's warm-up section (follow-up F85): per site, how many of its
+ * persona's warm-up visits were made and how many skipped, and whether the
+ * persona was warmed before its first batch. Kage's verdicts on warm-up
+ * visits are not shown: until F85 every one of them is a soft block.
+ * `rows` are the private warm-up record's, `firstBatch` maps a site's
+ * index to the start of its first batch.
+ */
+export function renderWarmup(round, rows, firstBatch = {}) {
+  const hour = (at) => (at ? `${String(at).slice(0, 13)}:00Z` : '-');
+  const lines = [
+    '## Warm-up (F85)',
+    '',
+    "Kage's verdicts on this round's warm-up visits mean nothing: a warm-up visit captures no document, so Kage judged every one a soft block (follow-up F85). The visits themselves were made as designed, through each persona's own browser with the behaviour engine. What counts is how many were made and how many were skipped (a visit is skipped when the persona may not go there, and counted toward `warmed_at` all the same), and whether a persona was warmed before its first batch.",
+    '',
+    '| Site | Engine | Country | Visits made | Skipped | Warmed at | Warmed before its first batch |',
+    '|---|---|---|---|---|---|---|',
+  ];
+  const sites = round.sites.filter((site) => !site.control && site.persona).sort((a, b) => Number(a.index) - Number(b.index));
+  for (const site of sites) {
+    const row = rows.find((one) => one.id === site.persona);
+    if (!row) continue;
+    const first = firstBatch[site.index];
+    const before = first && row.warmed_at ? (Date.parse(row.warmed_at) <= Date.parse(first) ? 'yes' : 'no') : '-';
+    lines.push(`| ${site.index} | ${row.engine} | ${row.country} | ${row.made} | ${row.skipped} | ${hour(row.warmed_at)} | ${before} |`);
+  }
+  const made = rows.reduce((sum, row) => sum + Number(row.made), 0);
+  const skipped = rows.reduce((sum, row) => sum + Number(row.skipped), 0);
+  lines.push('', `In all ${made} warm-up visits made and ${skipped} skipped by ${rows.length} personas; none of them is counted in the round's 600 page loads.`, '');
   return lines.join('\n');
 }
 
