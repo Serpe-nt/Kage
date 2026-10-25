@@ -560,8 +560,10 @@ async function policies(round) {
   const dir = env('KAGE_FIELD_POLICIES');
   const shipped = process.env.KAGE_FIELD_SHIPPED ?? join(repo, 'policies');
   mkdirSync(dir, { recursive: true });
+  // The other files are the shipped ones until the round changes one (a
+  // signature, a pacing profile): a change of the round's is kept.
   for (const name of readdirSync(shipped).filter((entry) => entry.endsWith('.yaml'))) {
-    if (name !== 'domains.yaml') copyFileSync(join(shipped, name), join(dir, name));
+    if (name !== 'domains.yaml' && !existsSync(join(dir, name))) copyFileSync(join(shipped, name), join(dir, name));
   }
   writeFileSync(join(dir, 'domains.yaml'), domainsFile(readFileSync(join(shipped, 'domains.yaml'), 'utf8'), round));
   const reloaded = await api('POST', '/v1/admin/policies/reload', { expect: [200, 422] });
