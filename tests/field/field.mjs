@@ -498,6 +498,7 @@ async function record(round, site, { job, session = null, started = null, ended 
 
 function decide(site, pass, blocked, pages) {
   if (site.control) return blocked ? 'the control was blocked: look at the stack before anything else' : 'control read as expected';
+  if (pages.length === 0) return 'nothing read: the batch ended before its first page';
   if (!blocked) {
     const passed = pages.filter((page) => page.outcome === 'challenge_passed').length;
     return passed > 0
