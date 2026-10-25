@@ -49,7 +49,11 @@
 version: 1
 
 settings:
-  max_body_bytes: 1048576
+  # The whole of a captured document: a page's scripts can grow its head
+  # past a mebibyte before the visit ends, and a body cut inside the head
+  # has no text for the soft-block rules to count (seen in the field
+  # campaign, M13; follow-up F88). A sidecar cuts a document at 10 MB.
+  max_body_bytes: 16777216
 
 rules:
   # --- Cloudflare ----------------------------------------------------------

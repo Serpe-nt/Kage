@@ -454,3 +454,56 @@ fn the_readme_lists_every_fixture_and_marks_synthetic_ones() {
         );
     }
 }
+
+/// A page whose head outgrows a mebibyte is judged by what follows it. The
+/// field campaign (M13) met one: the document is captured at the end of a
+/// visit, the page's scripts had added inline styles to its head until the
+/// head alone passed 1 MiB, and with the body cut there the classifier saw
+/// no text and judged a page full of it blank. The shipped signatures read
+/// the whole of a captured document (`settings.max_body_bytes`, 16 MiB;
+/// the sidecar cuts a document at 10 MB). Follow-up F88 is the code's own
+/// answer: a rule that counts text abstains on a body that was cut.
+#[test]
+fn a_page_whose_head_outgrows_a_mebibyte_is_judged_by_its_body() {
+    let styles = format!(
+        "<style>{}</style>",
+        ".grid-item{display:block}".repeat(48_000)
+    );
+    let text = "Search homes for sale and to rent near you, then compare them. ".repeat(20);
+    let body = format!(
+        "<!doctype html><html><head><title>Homes</title>{styles}</head>\
+         <body><main><h1>Find your next home</h1><p>{text}</p></main></body></html>"
+    );
+    assert!(
+        body.find("</head>").unwrap() > 1 << 20,
+        "the head alone passes 1 MiB"
+    );
+    let observation = Observation {
+        render: crate::domain::Render::Browser,
+        status: 200,
+        url: "https://www.listings.example/".to_owned(),
+        headers: vec![crate::domain::Header {
+            name: "content-type".to_owned(),
+            value: "text/html; charset=utf-8".to_owned(),
+        }],
+        cookies: Vec::new(),
+        body,
+        browser: Some(super::BrowserSignals::default()),
+    };
+
+    let verdict = signatures().classify(&observation);
+    assert_eq!(verdict.outcome, Outcome::Ok, "{verdict:?}");
+
+    // Cut at the old 1 MiB, the same page was a blank page.
+    let old = std::fs::read_to_string(SIGNATURES)
+        .unwrap()
+        .replace("max_body_bytes: 16777216", "max_body_bytes: 1048576");
+    let cut = SignatureSet::from_yaml(&old)
+        .unwrap()
+        .classify(&observation);
+    assert_eq!(cut.outcome, Outcome::SoftBlock, "{cut:?}");
+    assert_eq!(
+        cut.block.as_ref().map(|block| block.block_type.as_str()),
+        Some("blank_page")
+    );
+}
