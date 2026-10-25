@@ -357,6 +357,12 @@ async function run(round, site, options) {
       }
     }
     if (!cancel && now >= end) cancel = `the site's day ended at ${site.window.until} ${site.timezone}`;
+    // Under `enforce` a robots.txt that could not be had holds the batch,
+    // and the scout would ask the site again every `robots.error_ttl`: a
+    // refusal is the site's answer for the day.
+    if (!cancel && view.paused?.reason === 'robots_unavailable') {
+      cancel = 'its robots.txt could not be had by the scout (robots_unavailable), so nothing may be read under enforce';
+    }
     if (!cancel && view.paused?.until && Date.parse(view.paused.until) >= end.getTime()) {
       cancel = `the batch waits until ${view.paused.until} (${view.paused.reason}), past the site's day`;
     }
