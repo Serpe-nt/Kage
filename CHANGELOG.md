@@ -28,6 +28,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   replacement, `Claude-User` among `robots.agents`, and the warm-up
   without Wikipedia's `Special:Random`.
 
+### Fixed
+
+- **A page whose head outgrows a mebibyte is no longer judged blank.** The
+  block signatures read only the first `settings.max_body_bytes` of a
+  captured document (1 MiB); a page whose scripts grow its head past that
+  before the visit ends left the classifier nothing but head to read, and
+  the `soft-blank-page` rule judged a page full of text a soft block (seen
+  in the field campaign). The shipped `policies/block-signatures.yaml`
+  reads 16 MiB, more than a sidecar captures. A rule that counts text on a
+  cut body abstaining is follow-up F88.
+
 ### Changed
 
 - `docs/runbooks/field-campaign.md`: a session the owner starts may run a
