@@ -8,6 +8,7 @@ import {
   attemptsFromMetrics,
   cookieNames,
   COMMON_DENY,
+  consentIn,
   crawlRequest,
   dealPersonas,
   domainsFile,
@@ -437,6 +438,19 @@ test('the warm-up section counts visits made and skipped per site, and never sho
   assert.doesNotMatch(text, /soft_block/);
   assert.deepEqual(leaks(text, parsed), []);
   assert.match(renderWarmup(parsed, rows, { 7: '2026-10-24T20:00:00Z' }), /\| 7 \| .* \| no \|/);
+});
+
+test('a consent dialog is named by its platform, or found by its container and its answer', () => {
+  assert.equal(consentIn('<div id="onetrust-banner-sdk" class="otFlat">'), 'onetrust');
+  assert.equal(consentIn('<div id="usercentrics-root"></div>'), 'usercentrics');
+  assert.equal(consentIn('<script src="https://sdk.privacy-center.org/loader.js"></script>'), 'didomi');
+  assert.equal(consentIn('<div class="message-container sp_message_container_1234">'), 'sourcepoint');
+  assert.equal(consentIn('<div id="CybotCookiebotDialog">'), 'cookiebot');
+  assert.equal(consentIn('<div class="qc-cmp2-container">'), 'quantcast');
+  assert.equal(consentIn('<div class="cookie-layer"><button>Alle akzeptieren</button></div>'), 'unnamed');
+  assert.equal(consentIn('<div class="cookie-recipe">Oatmeal cookies</div>'), null);
+  assert.equal(consentIn('<main><p>An article.</p></main>'), null);
+  assert.equal(consentIn(null), null);
 });
 
 test('a median is the lower middle and ignores what is no number', () => {
