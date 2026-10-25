@@ -557,6 +557,31 @@ export function cookieNames(headers) {
   ].sort();
 }
 
+const CONSENT_PLATFORMS = [
+  ['onetrust', /id=["']onetrust-(banner-sdk|consent-sdk)["']|cdn\.cookielaw\.org/i],
+  ['usercentrics', /id=["']usercentrics-(root|cmp-ui)["']|<uc-[a-z-]+|usercentrics\.eu/i],
+  ['didomi', /id=["']didomi-(host|notice|popup)["']|privacy-center\.org/i],
+  ['sourcepoint', /sp_message_container|sp_message_iframe|sp-prod\.net/i],
+  ['cookiebot', /id=["']CybotCookiebotDialog["']|consent\.cookiebot\.com/i],
+  ['quantcast', /qc-cmp2-(container|ui)/i],
+  ['trustarc', /id=["'](truste-consent-track|consent_blackbar)["']|consent\.trustarc\.com/i],
+];
+const CONSENT_CONTAINER = /(?:id|class)=["'][^"']*(?:cookie|consent|gdpr|privacy-banner)[^"']*["']/i;
+const CONSENT_ANSWER =
+  /(?:accept|akzeptieren|zustimmen|einverstanden|ablehnen|accepter|refuser|tout accepter|accetta|accetto|rifiuta|reject|agree)/i;
+
+/**
+ * The consent dialog a captured document carries, by its platform's own
+ * markup (a container's id, its script's host), else `unnamed` for a
+ * container named for cookies or consent beside a button that answers it;
+ * null when none is seen. Read from the document, never kept with it.
+ */
+export function consentIn(html) {
+  const text = String(html ?? '');
+  for (const [platform, pattern] of CONSENT_PLATFORMS) if (pattern.test(text)) return platform;
+  return CONSENT_CONTAINER.test(text) && CONSENT_ANSWER.test(text) ? 'unnamed' : null;
+}
+
 /**
  * The samples of `kage_attempts_total` for the site's hosts in a /metrics
  * exposition: `{ level, outcome, vendor, count }`, summed over the hosts.
@@ -778,9 +803,16 @@ function summary(record) {
     .map(([name, n]) => `${name} ${n}`)
     .join(', ');
   const unread = record.unread?.length ?? 0;
+  const looked = record.pages.filter((page) => page.consent !== undefined);
+  const consent = looked.length
+    ? (tally(looked.map((page) => page.consent ?? 'none'))
+        .map(([name, n]) => `${name} ${n}`)
+        .join(', ') + ` of ${looked.length} documents`)
+    : 'not looked at (no document kept)';
   return [
     `${record.pages.length} pages asked, ${read} read${unread ? `, ${unread} left unread when the batch ended` : ''}`,
     `reached: ${reached || 'none'}`,
+    `consent dialog: ${consent}`,
     `a page took ${seconds === null ? '-' : (seconds / 1000).toFixed(1)} s at the median`,
     `scrolling ended by ${ends || '-'}`,
     `median words ${words ?? '-'}`,

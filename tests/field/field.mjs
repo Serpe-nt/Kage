@@ -37,6 +37,7 @@ import {
   afterBlock,
   attemptsFromMetrics,
   BLOCKS,
+  consentIn,
   cookieNames,
   crawlRequest,
   dealPersonas,
@@ -433,6 +434,13 @@ async function record(round, site, { job, session = null, started = null, ended 
         final_url: result.final_url ?? null,
       };
     });
+  // A batch that kept its documents (`--dom`): the consent dialog each
+  // carries, by name only; the document stays in the stack.
+  for (const page of pages) {
+    const item = items.find((one) => one.seq === page.seq);
+    const artifact = item?.result?.artifacts?.dom_html;
+    if (artifact) page.consent = consentIn((await api('GET', `/v1/artifacts/${artifact}`)).body);
+  }
   const metrics = attemptsFromMetrics((await api('GET', '/metrics')).body, site.domain);
   const bytes = sql(SITE_BYTES, { from: from.toISOString(), to: to.toISOString(), domain: site.domain })[0];
   const robotsRows = sql(ROBOTS, { domain: site.domain });
