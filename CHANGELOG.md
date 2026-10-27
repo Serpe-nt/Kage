@@ -6,6 +6,21 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- `zstd` 0.14.3 and `zstd-safe` 8.2.0 under the response decoders of the
+  HTTP path (level 0, and the proxy probes), which read what a site sends.
+  In 2.0.0 and every 1.x, a site that answered with a corrupt legacy zstd
+  frame could make a decoded body carry up to 32 KiB of stale memory of the
+  Kage process (RUSTSEC-2026-0403: the decoders stream through the affected
+  API, and legacy frames are compiled in); RUSTSEC-2026-0391 and -0398 are
+  about APIs the decoders do not use. `zstd-sys` 2.1.2 (RUSTSEC-2026-0410,
+  WebAssembly only). The older `zstd` 0.13.3 that `wreq-util` 0.2.0 uses to
+  decompress TLS certificates has no fixed release; it makes a fresh read
+  decoder for each certificate, which none of the three affects, and the
+  advisories are accepted for it until 2026-12-31 or a `wreq-util` on
+  `zstd` 0.14 (`docs/security-review.md`).
+
 ## [2.0.0] - 2026-10-24
 
 Camouflage levels and egress (spec §25, ADR 0012, decision D50), a

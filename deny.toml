@@ -21,6 +21,17 @@ ignore = [
     { id = "RUSTSEC-2026-0367", reason = "zip extracts only the checksummed Swagger UI bundle at compile time; review by 2026-12-31 or with utoipa-swagger-ui on zip 9 (F55)" },
     { id = "RUSTSEC-2026-0368", reason = "zip extracts only the checksummed Swagger UI bundle at compile time; review by 2026-12-31 or with utoipa-swagger-ui on zip 9 (F55)" },
     { id = "RUSTSEC-2026-0369", reason = "zip extracts only the checksummed Swagger UI bundle at compile time; review by 2026-12-31 or with utoipa-swagger-ui on zip 9 (F55)" },
+    # `zstd` 0.13.3 and its `zstd-safe` 7.3.0 come with wreq-util 0.2.0 (the
+    # newest; it requires zstd ^0.13.3, and the 0.13 line has no fix), which
+    # uses them for one thing: decompressing a TLS certificate a server
+    # compressed with zstd, which the Firefox profiles offer, with a fresh
+    # `zstd::stream::read::Decoder` for each certificate. tower-http's
+    # response decoders are on the fixed zstd 0.14.3 and zstd-safe 8.2.0.
+    # Review by 2026-12-31, or drop them with the first wreq-util on zstd
+    # 0.14 (F91, M16).
+    { id = "RUSTSEC-2026-0391", reason = "zstd 0.13.3 under wreq-util 0.2.0 makes a fresh read decoder per TLS certificate, never a context reused through with_context; review by 2026-12-31 or with wreq-util on zstd 0.14 (F91)" },
+    { id = "RUSTSEC-2026-0398", reason = "zstd 0.13.3 under wreq-util 0.2.0 has no seekable feature, where the flaw is; review by 2026-12-31 or with wreq-util on zstd 0.14 (F91)" },
+    { id = "RUSTSEC-2026-0403", reason = "wreq-util 0.2.0 decompresses TLS certificates with zstd's read decoder, which the advisory names as not affected; review by 2026-12-31 or with wreq-util on zstd 0.14 (F91)" },
 ]
 
 [licenses]
