@@ -505,7 +505,7 @@ function decide(site, pass, blocked, pages) {
     const passed = pages.filter((page) => page.outcome === 'challenge_passed').length;
     return passed > 0
       ? `keep; ${passed} challenge(s) passed: pass 2 may try one change`
-      : `keep: no block in ${pages.length} pages`;
+      : `keep: no refusal in ${pages.length} pages`;
   }
   return pass === 1 ? 'pass 2: one change, to be approved' : 'refuses a gentle visitor: left alone for the round';
 }
