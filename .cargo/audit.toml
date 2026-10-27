@@ -13,4 +13,18 @@ ignore = [
     "RUSTSEC-2026-0367",
     "RUSTSEC-2026-0368",
     "RUSTSEC-2026-0369",
+    # `zstd` 0.13.3 and its `zstd-safe` 7.3.0 come with wreq-util 0.2.0 (the
+    # newest; it requires zstd ^0.13.3, and the 0.13 line has no fix), which
+    # uses them for one thing: decompressing a TLS certificate a server
+    # compressed with zstd, which the Firefox profiles offer. It makes a
+    # fresh `zstd::stream::read::Decoder` for each certificate. -0391 is
+    # about a context reused through `with_context`, -0398 about the
+    # `seekable` feature, which 0.13.3 does not have, and -0403 about
+    # streaming into a `Vec` or through the write decoder; the advisory
+    # names the read decoder as not affected. tower-http's response
+    # decoders are on the fixed zstd 0.14.3 and zstd-safe 8.2.0. Review by
+    # 2026-12-31, or drop them with the first wreq-util on zstd 0.14 (F91).
+    "RUSTSEC-2026-0391",
+    "RUSTSEC-2026-0398",
+    "RUSTSEC-2026-0403",
 ]

@@ -234,6 +234,18 @@ below names what holds it and the test that shows it.
   `utoipa-swagger-ui` on `zip` 9, whichever comes first. `zip` unpacks only
   the vendored Swagger UI archive at build time, never an archive from
   outside. Follow-up F55 drops the ignore.
+- **RUSTSEC-2026-0391, -0398, -0403 (`zstd` 0.13.3, `zstd-safe` 7.3.0)**
+  are ignored in `deny.toml` and `.cargo/audit.toml` until 2026-12-31 or
+  the first `wreq-util` on `zstd` 0.14, whichever comes first. They come
+  with `wreq-util` 0.2.0, the newest, and the 0.13 line has no fix.
+  `wreq-util` uses them only to decompress a TLS certificate a server
+  compressed with zstd, which the Firefox profiles offer: a server Kage
+  connects to chooses that input. It makes a fresh read decoder for each
+  certificate, so none of the three applies: -0391 needs a context reused
+  through `with_context`, -0398 the `seekable` feature, which 0.13.3 does
+  not have, and -0403 names the read decoder as not affected. The response
+  decoders behind wreq (tower-http) are on the fixed `zstd` 0.14.3 and
+  `zstd-safe` 8.2.0. Follow-up F91 drops the ignore.
 - **The stand-in self-tests of a proxy** (`kage selftest http|browser
   --proxy`) hand the sidecar the provider's proxy with its credentials:
   there is no persona yet for the forwarder to name. An operator's
