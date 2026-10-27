@@ -455,7 +455,9 @@ async function record(round, site, { job, session = null, started = null, ended 
   const disallowed = pages.filter((page) => page.robots && page.robots.allowed === false).length;
   const blocks = pages.filter((page) => page.block).map((page) => ({ ...page.block, outcome: page.outcome }));
   const readers = [...new Set(pages.map((page) => page.persona).filter(Boolean))];
-  const hard = blocks.length > 0;
+  // A wall a person meets too (a page behind a sign-in, a consent wall) is
+  // recorded as the block it is, and is no refusal of the visitor.
+  const hard = blocks.some((block) => !(block.vendor === 'generic' && ['login_wall', 'consent_wall'].includes(block.type)));
   const kept = {
     round: round.round,
     index: site.index,
