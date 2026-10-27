@@ -221,7 +221,7 @@ function roundBytes(round) {
  * The preflight: everything that must hold before a batch begins. Contacts
  * no site; returns what the batch may do, or throws with the reason.
  */
-async function preflight(round, site, now = new Date()) {
+async function preflight(round, site, now = new Date(), { pass = 1 } = {}) {
   const problems = [];
   const ready = await api('GET', '/readyz', { expect: [200, 503] });
   if (ready.status !== 200) problems.push(`the stack is not ready: ${JSON.stringify(ready.body).slice(0, 300)}`);
@@ -253,7 +253,7 @@ async function preflight(round, site, now = new Date()) {
     problems.push(`it is ${localTime(now, site.timezone).clock} in ${site.timezone}, outside ${site.window.from} to ${site.window.until}`);
   }
   const counted = counts(round, site, now);
-  const allowed = pagesAllowed(site, round.budget, counted);
+  const allowed = pagesAllowed(site, round.budget, counted, { secondPass: pass > 1 });
   if (allowed.reason) problems.push(`budget: ${allowed.reason}`);
   return { problems, pool, persona, counted, pages: allowed.pages, bytes };
 }
@@ -305,7 +305,7 @@ function withReader(site, options) {
 async function run(round, site, options) {
   const started = new Date();
   const date = localTime(started, site.timezone).date;
-  const check = await preflight(round, site, started);
+  const check = await preflight(round, site, started, { pass: options.pass });
   if (check.problems.length > 0) {
     for (const problem of check.problems) say(`refused: ${problem}`);
     throw new Error(`site ${site.index} cannot be read now`);
@@ -321,7 +321,7 @@ async function run(round, site, options) {
   const created = await api('POST', '/v1/jobs', {
     body: request,
     expect: [200, 201],
-    headers: { 'idempotency-key': `${round.round}-${site.index}-${date}-p${options.pass}` },
+    headers: { 'idempotency-key': `${round.round}-${site.index}-${date}-p${options.pass}${options.rerun ? `-r${options.rerun}` : ''}` },
   });
   const job = created.body.id;
   say(`crawl ${job} accepted (${created.status})`);
@@ -604,7 +604,7 @@ async function main() {
     case 'entry':
       return process.stdout.write(policyEntry(siteOf(round, index), { key: `site-${index}.example`, comment: `site ${index}` }));
     case 'check': {
-      const check = await preflight(round, withReader(siteOf(round, index), options));
+      const check = await preflight(round, withReader(siteOf(round, index), options), new Date(), { pass: Number(options.pass ?? 1) });
       for (const problem of check.problems) say(`refused: ${problem}`);
       say(check.problems.length ? 'the batch may not begin' : `the batch may begin: ${check.pages} pages`);
       return undefined;
@@ -614,6 +614,7 @@ async function main() {
         pass: Number(options.pass ?? 1),
         change: options.change ?? null,
         dom: Boolean(options.dom),
+        rerun: options.rerun ?? null,
       });
     case 'record':
       return record(round, withReader(siteOf(round, index), options), {
