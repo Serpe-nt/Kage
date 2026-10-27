@@ -9,7 +9,7 @@
     "license": {
       "name": "MIT OR Apache-2.0"
     },
-    "version": "2.0.0"
+    "version": "2.0.1"
   },
   "paths": {
     "/healthz": {

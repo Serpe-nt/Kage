@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-10-27
+
 ### Security
 
 - `zstd` 0.14.3 and `zstd-safe` 8.2.0 under the response decoders of the
