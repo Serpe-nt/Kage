@@ -62,6 +62,7 @@ expect:
 | `cloudflare-challenge-passed.yaml` | synthetic | `challenge_passed` (interstitial resolved, cf_clearance) |
 | `akamai-access-denied.yaml` | synthetic | `forbidden`, akamai / access_denied |
 | `akamai-bot-manager-challenge.yaml` | synthetic | `challenge_failed`, akamai / bot_manager_challenge |
+| `akamai-reference-error.yaml` | synthetic, modelled on the field campaign (M13) | `forbidden`, akamai / access_denied (a branded denial with `x-reference-error`) |
 | `datadome-captcha.yaml` | synthetic | `captcha`, datadome / captcha |
 | `datadome-captcha-json.yaml` | synthetic | `captcha`, datadome / captcha (JSON answer to an XHR) |
 | `datadome-interstitial.yaml` | synthetic | `challenge_failed`, datadome / interstitial |

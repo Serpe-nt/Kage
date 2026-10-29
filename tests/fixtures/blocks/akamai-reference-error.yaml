@@ -1,0 +1,36 @@
+synthetic: true
+source: >-
+  Modelled on what the field campaign (M13) observed on 2026-10-29 from a
+  retail site behind the Akamai edge: status 403, the headers below with the
+  edge's own error reference in `x-reference-error` and its trace id, Bot
+  Manager's cookies (names only), a short page of the site's own branding
+  that names no vendor and has no "Access Denied" text. Hosts, references,
+  trace ids and the page's words are written by hand; nothing of the site is
+  kept.
+observation:
+  render: browser
+  status: 403
+  url: https://www.retailer.example/
+  headers:
+    - { name: content-type, value: text/html }
+    - { name: mime-version, value: "1.0" }
+    - { name: cache-control, value: "no-cache, no-store, must-revalidate" }
+    - { name: server-timing, value: "cdn-cache; desc=HIT" }
+    - { name: server-timing, value: "ak_p; desc=\"1760000000000_1_2_3_4_1_0_255\";dur=1" }
+    - { name: x-akamai-trace-id, value: "0.0f1e2d3c.1760000000.4b5a6978" }
+    - { name: x-reference-error, value: "18.0f1e2d3c.1760000000.4b5a6978" }
+  cookies:
+    - { name: bm_s, value: fixture-not-a-real-token }
+    - { name: bm_sc, value: fixture-not-a-real-token }
+  body: |
+    <!DOCTYPE html><html lang="de"><head><title>Retailer</title></head>
+    <body><main><h1>Retailer</h1>
+    <p>Reference Error: 0.0f1e2d3c.1760000000.4b5a6978</p>
+    <p>Wir können dir im Moment leider keinen Zugang zu unserer Seite geben.
+    Automatische Prüfungen haben beim Aufruf ein Sicherheitsproblem erkannt.</p>
+    </main></body></html>
+expect:
+  outcome: forbidden
+  vendor: akamai
+  type: access_denied
+  rule: akamai-reference-error
