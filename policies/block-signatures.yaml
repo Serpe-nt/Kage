@@ -144,6 +144,21 @@ rules:
             - body: 'errors(&#46;|\.)edgesuite(&#46;|\.)net'
             - body: 'Reference(&#32;|\s)(&#35;|#)\s*[0-9a-f]+(&#46;|\.)'
 
+  - id: akamai-reference-error
+    vendor: akamai
+    type: access_denied
+    outcome: forbidden
+    confidence: 0.95
+    priority: 85
+    description: >-
+      A denial the edge serves under a site's own branding, without the stock
+      "Access Denied" text: the reference of the edge's error in a header of
+      its own (seen in the field campaign, M13).
+    when:
+      all:
+        - status: 403
+        - header: { name: x-reference-error, regex: '^\d+\.[0-9a-f]+\.\d+\.[0-9a-f]+$' }
+
   - id: akamai-bot-manager-challenge
     vendor: akamai
     type: bot_manager_challenge
