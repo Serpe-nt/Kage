@@ -699,7 +699,10 @@ export function vendorOf(record) {
   if (blocked.length > 0) return tally(blocked)[0][0];
   const hinted = record.pages.flatMap((page) => page.vendors);
   const kage = record.metrics.map((row) => row.vendor);
-  const all = [...hinted, ...kage].filter((vendor) => vendor && !['none', 'generic', 'queue_it'].includes(vendor));
+  // A captcha widget on a page (a sign-in form's) does not front the site.
+  const all = [...hinted, ...kage].filter(
+    (vendor) => vendor && !['none', 'generic', 'queue_it', 'recaptcha', 'hcaptcha'].includes(vendor),
+  );
   return all.length > 0 ? tally(all)[0][0] : 'none seen';
 }
 
