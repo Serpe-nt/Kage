@@ -158,7 +158,7 @@ queue. Each job calls the same `just` targets a developer runs locally, and
 | `node` | `fmt-check-node`, `lint-node`, `lint-observability`, `lint-docs`, `test-scripts`, `contract-check`, `test-node`, `cov-node` | prettier, tsc, eslint, the dashboards and alert rules (promtool), the README's badges, the gate scripts' own tests, the sidecar contract, vitest, 80 % line coverage on `engine-core` |
 | `security` | `deny`, `hardening`, `secrets`, `sbom` | cargo-deny, cargo-audit, pnpm audit, sidecar license policy, `openssl-sys` check, the container checklist on the Dockerfiles and compose files, gitleaks, CycloneDX SBOMs |
 | `images` | `build-images`, `hardening-images`, `scan-images`, `sbom-images`, `test-e2e` | image builds, the container checklist on the images, Trivy (fixable HIGH and CRITICAL), SBOM per image, the stack end to end and the load test's design A |
-| `mutants` | `mutants` | reported on every pull request; the gate (70 % on `kage-core`) is run before a milestone is merged |
+| `mutants` | `mutants` | reported on every pull request, as far as a 26-minute budget reaches (the job ends green when the budget is spent, so the run is not cancelled and the CI badge does not read it as failing); the gate (70 % on `kage-core`) is run before a milestone is merged |
 | `coverage-badge` | none | on a push to `main` only: writes the figure `cov-rust` measured to the `gh-pages` branch ("Badges" below); not a check, and `ci-ok` does not wait for it |
 | `ci-ok` | none | fails unless all required jobs passed |
 

@@ -49,6 +49,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in the field campaign). The shipped `policies/block-signatures.yaml`
   reads 16 MiB, more than a sidecar captures. A rule that counts text on a
   cut body abstaining is follow-up F88.
+- The README's CI badge said failing while every gate passed. The
+  report-only `mutants` job ran into its 30-minute timeout on every run; a
+  job stopped by its timeout is cancelled even with `continue-on-error`,
+  so every run on `main` ended cancelled, which the badge shows as
+  failing. The job now stops its own run after 26 minutes and ends green,
+  with the same artifact (`docs/runbooks/repo.md`, the jobs table).
 
 ### Changed
 
