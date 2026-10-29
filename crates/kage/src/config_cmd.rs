@@ -267,7 +267,7 @@ mod tests {
         assert_eq!(policies["domains"], 7);
         assert_eq!(
             policies["pacing_profiles"],
-            serde_json::json!(["fast", "human"])
+            serde_json::json!(["fast", "human", "patient"])
         );
         assert!(policies["signature_rules"].as_u64().unwrap() >= 25);
         assert!(policies["signature_hints"].as_u64().unwrap() >= 10);

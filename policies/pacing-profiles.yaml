@@ -54,3 +54,20 @@ fast:
   daily_cap_per_persona_per_domain: 5000
   domain_concurrency: 10
   domain_rpm: 300
+
+# Slower than `human`: about twice its gaps and rests, shorter bursts,
+# longer breaks, one visitor at a time. The field campaign's first round
+# (M13) gave it to a site whose DataDome interstitial met a `human` reader
+# at its tenth page; under `patient` the same reader read 39 of 40 pages
+# with no challenge. One site and one day: a profile to choose, not the
+# default.
+patient:
+  gap_ms: { dist: lognormal, median: 9000, p95: 30000, min: 3000 }
+  rest_ms: { dist: lognormal, median: 4400, p95: 14000, min: 1400 }
+  burst_pages: { min: 3, max: 8 }
+  burst_break_ms: { dist: lognormal, median: 120000, p95: 480000 }
+  daily_cap_per_persona_per_domain: 150
+  domain_concurrency: 1
+  domain_rpm: 6
+  visit_bursts: { min: 1, max: 3 }
+  visit_break_ms: { dist: lognormal, median: 1500000, p95: 5400000 }
