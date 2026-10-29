@@ -1168,6 +1168,51 @@ F53, F56 and F59 wait for its data.
 - Each report includes before and after outcome rates and the exact
   configuration diff.
 
+**Status (round 1).** Run from 2026-10-24 to 2026-10-29 by session M13,
+started on the owner's typed "start M13" and run against twenty sites the
+planner picked and the owner approved by name in that session (the list,
+the two controls, `robots: enforce`, the `Claude-User` groups, the budget
+and the stops, and that the sites' terms were not read). Twenty EU retail,
+classifieds, property, rail-information, price-comparison and publishing
+sites, four per country in AT, DE, FR, GB and IT, one new persona per site
+behind a Webshare static residential address (9 Chrome, 11 Firefox by a
+seeded draw), level 3 only, the pages kept inside the stack and the
+committed report naming a site only by index, country, category and
+vendor. The owner changed the plan on the second day ("the caller must
+know it himself"): from then on each site got one crawl of 40 pages at
+depth 3, five sites at a time and one per country, no page cap per site
+or per round, pass 2 four hours or more after a block. Result, 442 pages
+asked and 851 MB (half of it warm-up), 0.3 % of the proxy plan's term:
+fifteen sites read cleanly for tens of pages, among them every Akamai
+site given another hour of the day, three of the four DataDome sites and
+a Kasada site nobody had expected; three were refused at the first page
+on the last evening and had no second pass (two Akamai, one DataDome);
+one Cloudflare site refused twice (a managed challenge, then a bare 403
+to the scout's robots.txt) and is "refuses a gentle visitor"; one site
+closed its robots.txt to the first scout and read 38 pages for a second.
+The round found four product bugs, one false positive of the classifier
+and the round's main product finding: a consent dialog that covers the
+page stops the hand, and the persona then types every address (under
+Didomi no click landed; under Usercentrics 8 of 9 did; without a dialog
+24 of 40 pages were reached by click). Merged as
+[Serpe-nt/Kage#24](https://github.com/Serpe-nt/Kage/pull/24): the
+runner `tests/field/` with `just field`, its unit tests and an e2e
+against the fixture site, `max_body_bytes` 16 MiB in the shipped
+signatures (F88) with a classifier test, the rule
+`akamai-reference-error` with a synthetic fixture, the `patient` pacing
+profile, the runbook's "A session runs it" and the report
+`docs/field-reports/2026-10-29.md`. Decided from its data: F59 (19 of
+439 dwells under the policy's 2 s `min_dwell`, the floor must bound the
+persona's own draw too) and F53 (a redirect's target is checked by
+neither robots.txt nor a crawl's `deny`); F31, F41, F56, F61 and F62 got
+no data. Raised: F83, F85 (fixed in 2.0.0), F86, F88, F89 and F90 (the
+list under "After 2.0.0"). A second round, when the owner wants it:
+return visits for the clean sites, a second pass for the three refused
+at page 1, and the consent answer once F89 is built. Lessons: the
+machine must stay on for the round's days (it went off twice and two
+slices never ran); a session's background launcher does not survive a
+shutdown; keep a batch's record even when it is cut.
+
 ---
 
 ## Phase 2.0 — levels, egress, providers, the public face
@@ -1404,6 +1449,34 @@ with ten e2e scripts, the workspace's line coverage 95.7 % (the badge's
 figure), kage-core 99.5 %. The owner turned private vulnerability
 reporting on before the merge.
 
+**The release.** Six pull requests after #16, all rebase-merged on the
+owner's words: #18 and #20 (`fix(deps)`, advisories that appeared during
+the release gates, with two test fixes beside them), #19 (`chore(release):
+2.0.0`), #21 (F85, found by the running field campaign: every warm-up
+visit was judged a soft block because the visit captured no document, in
+every 1.x too), #22 (`fix(deps)`: `zstd` 0.14.3, `zstd-safe` 8.2.0,
+`zstd-sys` 2.1.2, and the 2.0.1 bump), #23 (the digests of 2.0.1 in
+`deploy/compose.yaml`). **2.0.0 was published on 2026-10-27** on the
+owner's signed tag at `6b94d80`; RustSec advisories against both `zstd`
+lines had been published between its last load run and its tag, and by
+reading the code the one against legacy frames (RUSTSEC-2026-0403) is
+reachable at level 0 and in the proxy probes, where a site's compressed
+body is decoded by the Rust process; not reproduced. Published tags do
+not move, so 2.0.0 stands with a security note at the top of its release
+page and **2.0.1, the version to run, was published on 2026-10-29** at
+`552008b`, verified like 2.0.0 (the tag's signature, cosign on both
+images, the SLSA provenance and CycloneDX SBOM attestations, the SBOM
+listing the fixed crates). The older `zstd` 0.13 under `wreq-util`
+decodes only TLS certificates with a fresh decoder each and is accepted
+in `deny.toml` and `.cargo/audit.toml` until 2026-12-31 (F91). The load
+test's two failures on the way (59,689 and 59,893 ms against a 59,900 ms
+threshold, with every later binding window's median at 60,003 ms) were
+the measurement's own noise, not pacing drift (F84). Lessons for the
+next release: re-audit right before the tag whenever days pass after the
+gate; clear the nested Docker build cache before a release gate (a cached
+Debian layer kept an old `libbrotli1`); a hold must reach the owner
+before the tag.
+
 **Follow-ups raised by M16** (after 2.0.0)
 - **F76:** the 56 schemas whose always-sent response members are
   optional in the OpenAPI document (220 nullable, not required,
@@ -1417,24 +1490,86 @@ reporting on before the merge.
   INFO line on stdout before the table.
 - **F67 stands** (after 2.0.0): pipeline refusals in
   `kage_scheduler_refusals_total`.
+- **F80:** `setxkbmap`'s 10 s timeout on a loaded runner (a longer
+  timeout or one retry for the layout step).
+- **F81:** a Firefox parity test read a button hold of 19 ms on a loaded
+  runner.
+- **F82:** the `fast-uri` override to 3.1.9 / 4.2.3 in the sidecar and
+  the API client (four advisories, moderate and low, below the `pnpm
+  audit` gate; 2.0.0 and 2.0.1 ship with them, their changelogs do not
+  name them).
+- **F84:** the load test measures from the grant time (or the gate's own
+  clock), not from a start recorded after a database read, with its
+  tolerance argued against the measurement's noise; the site-side count
+  (21 to 23 arrivals in a busiest minute) is its other question.
+- **F86:** `observe_page` reads an absent body as empty, so a page
+  captured without a document is judged on nothing (how F85 hid); a page
+  with neither `dom_html` nor `raw_body` should say so, not look blank.
+- **F91:** drop the three `zstd` 0.13 ignores (RUSTSEC-2026-0391, -0398,
+  -0403) with the first `wreq-util` on `zstd` 0.14, or review them by
+  2026-12-31.
+- **F92:** the README's CI badge reads "failing" while `ci-ok` is green,
+  because the report-only mutants job reaches its 30-minute cap and
+  `continue-on-error` does not cover a timeout, so every run on `main`
+  ends `cancelled`; bound the run inside the job (`timeout --signal=INT
+  25m just mutants`, exit 124 accepted) or move the report to the nightly,
+  and the runbook's jobs table follows.
+- **F93:** five advisories against `zip` <= 9.0.4 (CVE-2026-115905 to
+  -115909) are on GitHub and will reach RustSec; `zip` 8.6.0 is build-only
+  under `utoipa-swagger-ui` (F55's reasoning): extend F55's exception or
+  move `utoipa-swagger-ui` when they do.
 
 ---
 
 ## After 2.0.0
 
-The phase's follow-ups, in the order the planner would take them, each a
-pull request of its own on the PR workflow: F70 (the `list_url`
-provider written from the guide), F76, F67, F77, F57 (the security
-review's six), F58 (the mutants job on a larger runner or the diff only),
-F64 (a typed navigation by the hand), F72 to F74, F78, F79, F55 (the
-`zip` ignore when `utoipa-swagger-ui` moves), the Camoufox and Chrome
-majors as upstream publishes them. M13, the field campaign, runs
-whenever the owner names sites, on the released images, and decides F31,
-F41, F53, F56, F59, F61 and F62 from its data. The owner's own items
-stay the owner's: the repository settings of `docs/runbooks/repo.md`
-(branch protection, Actions restrictions, the description and topics,
-wiki and projects off), the two Actions secrets and the nightly live
-suite.
+2.0.1 (2026-10-29) is the version to run; the field campaign's first
+round is done (M13 above). What remains, in the order the planner would
+take it, each a pull request of its own on the PR workflow, with the
+owner's word for every merge:
+
+1. **The public face and the gates:** F92 (the CI badge, a small pull
+   request), F82 (`fast-uri`), F93 when RustSec imports the `zip`
+   advisories, F55 when `utoipa-swagger-ui` moves, F91 by 2026-12-31.
+2. **What the field campaign found, the stealth items first:** F89 (the
+   behaviour engine answers a consent dialog by hand before its first
+   scroll, reject non-essential by default or accept where a site's policy
+   says so, the answer kept in the persona's profile so the next visit
+   sees no dialog, the result saying what it saw and answered; F64's
+   typed address stays the fallback); F90 (a 304 to the robots.txt scout
+   keeps the stored file and refreshes its TTL; with no stored file the
+   scout asks once more bypassing the HTTP cache; only that failing is
+   unreachable); F88 (rules that count visible text or body bytes abstain
+   on a body that was cut, the sidecar's rendered-text measure
+   preferred, `max_body_bytes` bounding the regex scan only); F86; F59
+   (the dwell floor bounds the persona's own draw); F53 (a redirect's
+   target checked by robots.txt and by `deny`); F83 (the shipped warm-up
+   list without `Special:Random` and without the pages that cost tens of
+   megabytes a visit; the round spent 400 MB of 851 on warm-up).
+3. **What the caller is told (the owner's ruling of 2026-10-25: no limits
+   per persona per query, the caller decides, and is told):** F87, an
+   advisory in the accept response of a fetch, job or crawl whose asked
+   volume exceeds what its visitors read in a day at the pacing in
+   force (how many days it will take, or that `visitors` or a custom
+   pacing changes that), and the README and the OpenAPI document saying
+   in plain words what a person's day on one site looks like and that
+   more from one address looks like a bot; the daily cap of the pacing
+   profile stays a default the caller may replace (D9), never a wall.
+4. **The rest of the phase's list:** F84, F70 (the `list_url` provider
+   written from the guide), F76, F67, F77, F57 (the security review's
+   six), F58 (the mutants job on a larger runner or the diff only), F72
+   to F74, F78, F79, F80, F81, the Camoufox and Chrome majors as upstream
+   publishes them.
+
+A second field round runs whenever the owner wants it, on the released
+images, by a session the owner starts: return visits for the clean sites,
+a second pass for the three refused at page 1, and the consent answer
+once F89 is built; F31, F41, F56, F61 and F62 still wait for data. The
+owner's own items stay the owner's: the repository settings of
+`docs/runbooks/repo.md` (branch protection, Actions restrictions, the
+description and topics, wiki and projects off; private vulnerability
+reporting is on), the two Actions secrets and the nightly live suite,
+and the sentence in `SECURITY.md` that promises an answer within a week.
 
 ---
 
