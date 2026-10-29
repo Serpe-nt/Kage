@@ -27,6 +27,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   campaign stack's overlay: the private policies, no automatic
   replacement, `Claude-User` among `robots.agents`, and the warm-up
   without Wikipedia's `Special:Random`.
+- **The field campaign's first report**, `docs/field-reports/2026-10-29.md`:
+  twenty sites read at level 3 by one persona each, the vendor found, the
+  outcome rates per site, engine and pacing, the consent dialogs against
+  the reader's clicks, the warm-up, and what the data says of the plan's
+  open items. It names no site.
+- **The `patient` pacing profile** in `policies/pacing-profiles.yaml`:
+  about twice `human`'s gaps and rests, shorter bursts, longer breaks, one
+  visitor at a time; a profile to choose, not the default.
+- **`akamai-reference-error`**, a block signature for a denial the Akamai
+  edge serves under a site's own branding, known by its
+  `x-reference-error` header, with a synthetic fixture.
 
 ### Fixed
 
