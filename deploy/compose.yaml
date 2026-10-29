@@ -5,15 +5,15 @@
 #
 # Only kage publishes a port. Images built from this repository are tagged
 # :dev; a release records the digests of the images it pushed here. Those
-# of 1.0.2, signed and attested by the release workflow (docs/runbooks/
+# of 2.0.1, signed and attested by the release workflow (docs/runbooks/
 # repo.md, Releases, says how to verify them), run without building kage
 # or the Chromium sidecar; the Firefox sidecar is not published (docs/adr/
 # 0008) and is built from the same tag:
 #
-#   git checkout v1.0.2 && scripts/dev-secrets.sh
+#   git checkout v2.0.1 && scripts/dev-secrets.sh
 #   docker compose --file deploy/compose.yaml build browser-firefox
-#   export KAGE_IMAGE=ghcr.io/serpe-nt/kage@sha256:f6151eee8644b562edbfaeb12e6e31b230ffd2ae98d398e98237e17ea545110f
-#   export KAGE_BROWSER_CHROMIUM_IMAGE=ghcr.io/serpe-nt/kage-browser-chromium@sha256:a226c508283fd9680f91203645a21f7ea5e81550aac57157c70d14b4cc938ac0
+#   export KAGE_IMAGE=ghcr.io/serpe-nt/kage@sha256:704980fd1be228f727fbc61c0682d1ed642a4ccd4bf95abc89ddf2f61a06baa6
+#   export KAGE_BROWSER_CHROMIUM_IMAGE=ghcr.io/serpe-nt/kage-browser-chromium@sha256:7e56f87a899819988188216903606daa64cca4aec5f86f3a8626037ae155a3bd
 #   docker compose --file deploy/compose.yaml up --detach --wait
 #
 # Two networks: `default`, where kage meets Postgres and has its way out to
