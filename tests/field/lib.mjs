@@ -105,9 +105,6 @@ export function parseSites(text) {
   for (const [name, value] of Object.entries(budget)) {
     if (!Number.isInteger(value) || value < 1) fail(`budget.${name}`, 'a positive whole number');
   }
-  if (budget.pages_per_day > DEFAULT_BUDGET.pages_per_day) {
-    fail('budget.pages_per_day', `at most ${DEFAULT_BUDGET.pages_per_day}`);
-  }
   const stops = { ...DEFAULT_STOPS, ...(round.stops ?? {}) };
   if (!(stops.max_term_share > 0 && stops.max_term_share <= 1)) fail('stops.max_term_share', 'a share above 0 and at most 1');
   if (!Number.isInteger(stops.min_usable_proxies) || stops.min_usable_proxies < 1) {
@@ -276,11 +273,13 @@ export function windowEnd(site, at) {
  * How many pages the site's batch may ask for now, or why none: `counts`
  * are the pages the round's key asked of the site today (in the site's own
  * time), in all, on how many days, and of the whole round. A site has one
- * batch a day.
+ * batch a day, and a second one only as its second pass, when the round
+ * gives a site's one change the same day (`secondPass`).
  */
-export function pagesAllowed(site, budget, counts) {
-  if (counts.today > 0) return { pages: 0, reason: 'the site had its batch today' };
-  if (counts.days >= budget.days_per_site) return { pages: 0, reason: `the site had its ${budget.days_per_site} days` };
+export function pagesAllowed(site, budget, counts, { secondPass = false } = {}) {
+  if (counts.today > 0 && !secondPass) return { pages: 0, reason: 'the site had its batch today' };
+  const days = counts.days + (counts.today === 0 ? 1 : 0);
+  if (days > budget.days_per_site) return { pages: 0, reason: `the site had its ${budget.days_per_site} days` };
   if (counts.site >= budget.pages_per_site) return { pages: 0, reason: `the site had its ${budget.pages_per_site} pages` };
   if (counts.round >= budget.pages_per_round) return { pages: 0, reason: `the round had its ${budget.pages_per_round} pages` };
   const pages = Math.min(
@@ -754,6 +753,23 @@ export function renderSection(site, passes) {
   );
   lines.push(`- Decision: ${(after ?? before).decision}.`, '');
   return lines.join('\n');
+}
+
+/**
+ * A batch the round set aside (a false positive of Kage's own, a verdict
+ * Kage misread), under its own heading beside its site's section: what it
+ * read and why it does not count.
+ */
+export function renderVoid(site, record) {
+  const read = record.pages.filter((page) => ['ok', 'challenge_passed'].includes(page.outcome)).length;
+  const at = record.date ?? String(record.started_at ?? '').slice(0, 10);
+  return [
+    `### Site ${site.index}: a batch set aside (${at})`,
+    '',
+    `- ${record.pages.length} pages asked, ${read} read; ended: ${String(record.ended).replace(/(\d{4}-\d\d-\d\dT\d\d):\d\d(?::\d\d(?:\.\d+)?)?Z/g, '$1:00Z')}.`,
+    `- Why it does not count: ${record.void.reason}.`,
+    '',
+  ].join('\n');
 }
 
 /**

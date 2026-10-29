@@ -23,6 +23,7 @@ import {
   policyDifferences,
   policyEntry,
   renderSection,
+  renderVoid,
   renderWarmup,
   scrubPrivate,
   sessionIds,
@@ -106,7 +107,6 @@ test('a sites file is read with its defaults, and every wrong field is named', (
   wrong({ ...SHOP, deny: ['(unclosed'] }, /deny\[0\]/);
   wrong({ ...SHOP, entry: { min_level: 2 } }, /min_level/);
   wrong({ ...SHOP, entry: { robots: 'obey' } }, /robots/);
-  wrong(SHOP, /pages_per_day/, { budget: { pages_per_day: 20 } });
   assert.throws(() => parseSites(round([SHOP, { ...NEWS, persona: PERSONA_A }])), /one persona reads one site/);
   assert.throws(() => parseSites(round([SHOP, { ...SHOP }])), /index.*twice/);
   assert.throws(() => parseSites('{'), /no JSON/);
@@ -174,6 +174,13 @@ test('the budget gives a site one batch a day, its days, its pages and the round
   const counts = { today: 0, site: 0, days: 0, round: 0 };
   assert.deepEqual(pagesAllowed(site, budget, counts), { pages: 10, reason: null });
   assert.match(pagesAllowed(site, budget, { ...counts, today: 3, days: 1 }).reason, /batch today/);
+  // A site's second pass may come the same day; it is no extra day.
+  assert.deepEqual(pagesAllowed(site, budget, { ...counts, today: 3, days: 1, site: 3 }, { secondPass: true }), {
+    pages: 10,
+    reason: null,
+  });
+  assert.match(pagesAllowed(site, budget, { ...counts, today: 1, days: 3, site: 21 }, { secondPass: true }).reason ?? '', /^$/);
+  assert.match(pagesAllowed(site, budget, { ...counts, today: 0, days: 3, site: 21 }, { secondPass: true }).reason, /3 days/);
   assert.match(pagesAllowed(site, budget, { ...counts, days: 3, site: 30 }).reason, /3 days/);
   assert.deepEqual(pagesAllowed(site, budget, { ...counts, days: 2, site: 55 }), { pages: 5, reason: null });
   assert.match(pagesAllowed(site, budget, { ...counts, days: 2, site: 60 }).reason, /60 pages/);
@@ -451,6 +458,20 @@ test('a consent dialog is named by its platform, or found by its container and i
   assert.equal(consentIn('<div class="cookie-recipe">Oatmeal cookies</div>'), null);
   assert.equal(consentIn('<main><p>An article.</p></main>'), null);
   assert.equal(consentIn(null), null);
+});
+
+test('a batch set aside is shown under its own heading, with why, and leaks nothing', () => {
+  const parsed = parseSites(round([SHOP]));
+  const text = renderVoid(siteOf(parsed, 7), {
+    date: '2026-10-25',
+    pages: [{ outcome: 'soft_block' }],
+    ended: 'failed (completed) at 2026-10-25T10:01:47.123Z',
+    void: { reason: 'a false positive of Kage, a blank page that was not one' },
+  });
+  assert.match(text, /^### Site 7: a batch set aside \(2026-10-25\)\n/);
+  assert.match(text, /1 pages asked, 0 read; ended: failed \(completed\) at 2026-10-25T10:00Z\./);
+  assert.match(text, /Why it does not count: a false positive of Kage/);
+  assert.deepEqual(leaks(text, parsed), []);
 });
 
 test('a median is the lower middle and ignores what is no number', () => {

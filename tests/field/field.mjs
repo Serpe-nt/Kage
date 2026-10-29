@@ -11,7 +11,7 @@
 //   node field.mjs record <index> --job <id> [--pass 2 --change <text>]
 //                                            the record of a batch again, from the store
 //   node field.mjs warmup                    the personas' warm-up, recorded (follow-up F85)
-//   node field.mjs report <file> [--title <text>]
+//   node field.mjs report <file> [--title <text>] [--prelude <file>] [--epilogue <file>]
 //                                            the round's anonymised report from the records
 //
 // Everything private comes from the environment and stays in the private
@@ -51,6 +51,7 @@ import {
   policyDifferences,
   policyEntry,
   renderSection,
+  renderVoid,
   renderWarmup,
   scrubPrivate,
   sessionIds,
@@ -529,18 +530,24 @@ function warmup() {
 }
 
 /** The anonymised report of the round: one section per site that has a record. */
-function report(round, file, title) {
+function report(round, file, title, options = {}) {
   const sections = [];
   const firstBatch = {};
+  const records = join(env('KAGE_FIELD_DIR'), 'records');
   for (const site of round.sites) {
     const passes = recordsOf(site.index);
     if (passes.length === 0) continue;
     firstBatch[site.index] = passes[0].started_at;
     sections.push(renderSection(site, passes));
+    for (const name of readdirSync(records).filter((entry) => entry.startsWith(`site-${site.index}-void-`)).sort()) {
+      sections.push(renderVoid(site, JSON.parse(readFileSync(join(records, name), 'utf8'))));
+    }
   }
   const warmed = join(env('KAGE_FIELD_DIR'), 'records', 'warmup.json');
   if (existsSync(warmed)) sections.push(renderWarmup(round, JSON.parse(readFileSync(warmed, 'utf8')).personas, firstBatch));
-  const text = [`# ${title}`, '', ...sections].join('\n');
+  // The round's own words before and after the sections, written by hand.
+  const part = (name) => (options[name] ? readFileSync(options[name], 'utf8').replace(/\n*$/, '\n') : null);
+  const text = [part('prelude') ?? `# ${title}\n`, ...sections, part('epilogue')].filter(Boolean).join('\n');
   const found = leaks(text, round);
   if (found.length > 0) throw new Error(`the report would carry ${found.join(', ')}: nothing written`);
   mkdirSync(dirname(file), { recursive: true });
@@ -625,7 +632,7 @@ async function main() {
         change: options.change ?? null,
       });
     case 'report':
-      return report(round, index, options.title ?? 'Field report');
+      return report(round, index, options.title ?? 'Field report', options);
     default:
       console.error('usage: field.mjs assign | policies | entry <index> | check <index> | run <index> | record <index> --job <id> | report <file>');
       process.exit(2);
