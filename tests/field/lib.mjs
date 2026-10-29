@@ -711,7 +711,10 @@ const OS_NAMES = { linux: 'Linux', windows: 'Windows', macos: 'macOS' };
 
 /** The heading of a site's section: `Site 7: FR retail, cloudflare`. */
 export function heading(site, vendor) {
-  return `Site ${site.index}: ${site.country} ${site.category}, ${vendor}`;
+  // A control is read by a persona of the day, of whatever country.
+  return site.control
+    ? `Site ${site.index}: ${site.category}, ${vendor}`
+    : `Site ${site.index}: ${site.country} ${site.category}, ${vendor}`;
 }
 
 /** A table of the runbook's first query (rates per level and engine). */
