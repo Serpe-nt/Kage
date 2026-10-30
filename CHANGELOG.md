@@ -102,6 +102,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `$id` and `$ref` of the sidecar's own schemas, never a URL a caller
   sends or a page holds. The API client is test tooling and is in no image.
 
+### Security
+
+- `utoipa-swagger-ui` 10.0.2 and `zip` 9.1.3, for five advisories against
+  `zip` 8.6.0: GHSA-m665-v7pm-7grj (critical), GHSA-9hj8-73fh-9963,
+  GHSA-hjqx-j4rw-g7xv and GHSA-q7v9-x93c-xqv3 (high), GHSA-8hxf-qr8p-62x4
+  (moderate). `zip` never touched user data: it is a build dependency, and
+  its one use is the build script of `utoipa-swagger-ui` unpacking the
+  vendored Swagger UI bundle, checksummed in `Cargo.lock`, at compile time.
+  It is not in the binary. The accepted exception for RUSTSEC-2026-0367,
+  -0368 and -0369 is gone with it, and the Swagger UI bundle is unchanged.
+
 ## [2.0.1] - 2026-10-27
 
 ### Security
