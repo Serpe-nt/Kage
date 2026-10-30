@@ -63,6 +63,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   names a site only as "Site N: <country> <category>, <vendor>".
 - The end-to-end world (`deploy/compose.e2e.yaml`) answers to a second
   registrable name, `wall.field.test`, for the field runner's test.
+- The workspace's `authors` and the OpenAPI document's contact name the
+  maintainer, `serpe-nt`; `SECURITY.md` promises an answer within two
+  weeks (it said one) and names its second section "What is not in
+  scope".
 
 ## [2.0.1] - 2026-10-27
 

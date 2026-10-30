@@ -17,10 +17,10 @@ fixture site of the end-to-end tests (`tests/fixtures/site`) for any site
 in it; never a real proxy credential, an API key or anyone's personal
 data.
 
-Kage has one maintainer, who aims to answer within a week and to follow
-with a fix or a written decision as soon as the work allows. A reporter is
-credited in the advisory and the changelog unless they would rather not
-be named. Please keep the report private until a fixed release is out or
+Kage has one maintainer, who aims to answer within two weeks and to
+follow with a fix or a written decision as soon as the work allows. A
+reporter is credited in the advisory and the changelog unless they would
+rather not be named. Please keep the report private until a fixed release is out or
 a date is agreed.
 
 ## Supported versions
@@ -66,7 +66,7 @@ Anything that breaks a promise of the specification's security section
 - **The release supply chain**: a tag the release workflow accepts that it
   should refuse, an image that is not the one signed and attested.
 
-## What is not
+## What is not in scope
 
 - **A site telling a persona apart from a person.** That is a tell, not a
   vulnerability: Kage exists to avoid them, and they are documented as
