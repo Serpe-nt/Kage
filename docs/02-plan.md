@@ -1206,9 +1206,10 @@ profile, the runbook's "A session runs it" and the report
 persona's own draw too) and F53 (a redirect's target is checked by
 neither robots.txt nor a crawl's `deny`); F31, F41, F56, F61 and F62 got
 no data. Raised: F83, F85 (fixed in 2.0.0), F86, F88, F89 and F90 (the
-list under "After 2.0.0"). A second round, when the owner wants it:
-return visits for the clean sites, a second pass for the three refused
-at page 1, and the consent answer once F89 is built. Lessons: the
+list under "After 2.0.0"); the merge review of the runner raised F94,
+its own debts. A second round, when the owner wants it, F94 fixed
+first: return visits for the clean sites, a second pass for the three
+refused at page 1, and the consent answer once F89 is built. Lessons: the
 machine must stay on for the round's days (it went off twice and two
 slices never ran); a session's background launcher does not survive a
 shutdown; keep a batch's record even when it is cut.
@@ -1508,16 +1509,35 @@ before the tag.
 - **F91:** drop the three `zstd` 0.13 ignores (RUSTSEC-2026-0391, -0398,
   -0403) with the first `wreq-util` on `zstd` 0.14, or review them by
   2026-12-31.
-- **F92:** the README's CI badge reads "failing" while `ci-ok` is green,
-  because the report-only mutants job reaches its 30-minute cap and
+- **F92 (fixed by [Serpe-nt/Kage#25](https://github.com/Serpe-nt/Kage/pull/25)):**
+  the README's CI badge read "failing" while `ci-ok` was green, because
+  the report-only mutants job reached its 30-minute cap and
   `continue-on-error` does not cover a timeout, so every run on `main`
-  ends `cancelled`; bound the run inside the job (`timeout --signal=INT
-  25m just mutants`, exit 124 accepted) or move the report to the nightly,
-  and the runbook's jobs table follows.
+  ended `cancelled`; the run is bounded inside the job (`timeout
+  --signal=INT --kill-after=1m 26m just mutants`, exit 124 accepted as
+  the budget spent) and the runbook's jobs table says so.
 - **F93:** five advisories against `zip` <= 9.0.4 (CVE-2026-115905 to
   -115909) are on GitHub and will reach RustSec; `zip` 8.6.0 is build-only
   under `utoipa-swagger-ui` (F55's reasoning): extend F55's exception or
   move `utoipa-swagger-ui` when they do.
+- **F94:** the field runner's merge review (`tests/field/`, at #24,
+  nothing blocking, for the session that runs the second round): the
+  watch loop of `run()` has no retry around its API calls, so one
+  transient error leaves the crawl unwatched with its session open
+  (retry a few times, then cancel the crawl and close the session);
+  `afterBlock` and `COOLDOWN_MS` copy the domain policy's cooldowns by
+  hand, without their jitter (the admin persona view says
+  `cooling_reason` but not `cooling_until`; expose it and read it);
+  `SITE_BYTES` counts from `date_trunc('hour', from)`, so a batch
+  started mid-hour is charged the hour's earlier traffic; `record()`
+  aborts when a consent artifact is gone (`GET /v1/artifacts/{id}`
+  expects only 200; a 404 is "no consent read"); `consentIn`'s "unnamed"
+  heuristic counts any cookie or consent class with accept or agree
+  anywhere in the page; `entry` rebuilds `site-${index}.example` instead
+  of calling `anonymousKey()`, without its lowercase; `leaks()` takes
+  redirect hosts as `extra` that `report()` never passes; the
+  hour-rounding regex is written twice (`summary()`, `renderVoid()`).
+  F88's two notes are under "After 2.0.0".
 
 ---
 
@@ -1528,9 +1548,9 @@ round is done (M13 above). What remains, in the order the planner would
 take it, each a pull request of its own on the PR workflow, with the
 owner's word for every merge:
 
-1. **The public face and the gates:** F92 (the CI badge, a small pull
-   request), F82 (`fast-uri`), F93 when RustSec imports the `zip`
-   advisories, F55 when `utoipa-swagger-ui` moves, F91 by 2026-12-31.
+1. **The public face and the gates:** F82 (`fast-uri`), F93 when
+   RustSec imports the `zip` advisories, F55 when `utoipa-swagger-ui`
+   moves, F91 by 2026-12-31 (F92, the CI badge, is fixed).
 2. **What the field campaign found, the stealth items first:** F89 (the
    behaviour engine answers a consent dialog by hand before its first
    scroll, reject non-essential by default or accept where a site's policy
@@ -1541,7 +1561,11 @@ owner's word for every merge:
    scout asks once more bypassing the HTTP cache; only that failing is
    unreachable); F88 (rules that count visible text or body bytes abstain
    on a body that was cut, the sidecar's rendered-text measure
-   preferred, `max_body_bytes` bounding the regex scan only); F86; F59
+   preferred, `max_body_bytes` bounding the regex scan only; until then
+   every body rule scans up to the 16 MiB the shipped signatures read,
+   and the classifier test
+   `a_page_whose_head_outgrows_a_mebibyte_is_judged_by_its_body` pins
+   the 1 MiB soft-block verdict F88 replaces); F86; F59
    (the dwell floor bounds the persona's own draw); F53 (a redirect's
    target checked by robots.txt and by `deny`); F83 (the shipped warm-up
    list without `Special:Random` and without the pages that cost tens of
@@ -1562,9 +1586,10 @@ owner's word for every merge:
    publishes them.
 
 A second field round runs whenever the owner wants it, on the released
-images, by a session the owner starts: return visits for the clean sites,
-a second pass for the three refused at page 1, and the consent answer
-once F89 is built; F31, F41, F56, F61 and F62 still wait for data. The
+images, by a session the owner starts, with F94 (the runner's review)
+fixed first: return visits for the clean sites, a second pass for the
+three refused at page 1, and the consent answer once F89 is built; F31,
+F41, F56, F61 and F62 still wait for data. The
 owner's own items stay the owner's: the repository settings of
 `docs/runbooks/repo.md` (branch protection, Actions restrictions, the
 description and topics, wiki and projects off; private vulnerability
