@@ -8,4 +8,4 @@
 # The owner's release key (ED25519, SHA256:V45tUo5iA8NHEp6I0f0HbRsvsQTJQJYU5+GjpqZYCqM),
 # made for release tags only on 2026-10-17. A key that is replaced or lost
 # is taken off this list in a pull request, and no tag it signs is accepted.
-serpens_deus@outlook.com namespaces="git" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG4S7XEhoV2iD0qcUiRzcfX9bsbPNyonNl0xY4h4X7+h
+329671730+Serpe-nt@users.noreply.github.com namespaces="git" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG4S7XEhoV2iD0qcUiRzcfX9bsbPNyonNl0xY4h4X7+h

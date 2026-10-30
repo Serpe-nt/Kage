@@ -86,6 +86,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   maintainer, `serpe-nt`; `SECURITY.md` promises an answer within two
   weeks (it said one) and names its second section "What is not in
   scope".
+- `.github/allowed_signers` names the tagger by the maintainer's GitHub
+  noreply address, the address every commit and tag is made under from
+  now on; the tags up to v2.0.1 verify against the list at their own
+  commit (`docs/runbooks/repo.md`, Releases).
 
 ## [2.0.1] - 2026-10-27
 
