@@ -93,9 +93,9 @@ comparison, together with the localized `de`, `fr`, `it` and `en-GB`
 | tower | 0.5.3 | locked | Since M3 also `kage-http`: `Layer` and `Service` for the layer that times connection setup. |
 | tower-http | 0.7.1 | locked (`kage-api`, first use in M8) | Default features off; `catch-panic` (a handler that panics is a `500` problem, and the connection lives on) and `cors` (only when `server.cors_allowed_origins` names origins). The body limit is axum's, the request id, the timeouts and the request log are the API's own layers, and nothing is compressed by the API. Same `http` 1 and `tower` 0.5 stack as axum 0.8. wreq still pulls 0.6.11 in for its decoders; the two do not meet. |
 | hyper, hyper-util | 1.12.0, 0.1.21 | locked (`kage-api`, direct since M8) | Both were in the lockfile through axum. hyper with `server` and `http1`, hyper-util with `server-graceful`, `service` and `tokio`: the listener of the API, because `axum::serve` has no switch for the limits of spec §19 (the size and count of headers, a deadline for the head of a request, a connection cap). HTTP/1.1 only, on purpose: hyper-util's protocol-detecting server (`server-auto`) waits for a connection's first bytes without a deadline, which a silent client can hold for ever; hyper's own HTTP/1 server starts the header deadline when the connection is accepted. |
-| utoipa | 6.0.0 (2026-09-22) | locked | Compatibility verified in M0: `utoipa-axum` 0.3.0 and `utoipa-swagger-ui` 10.0.1 both require `utoipa ^6.0.0` and `axum ^0.8.4`, and the three compile together. Pinned together. |
+| utoipa | 6.0.0 (2026-09-22) | locked | Compatibility verified in M0: `utoipa-axum` 0.3.0 and `utoipa-swagger-ui` 10.0.2 both require `utoipa ^6.0.0` and `axum ^0.8.4`, and the three compile together. Pinned together. |
 | utoipa-axum | 0.3.0 (2026-09-22) | locked | `kage-api` registers its route through it. |
-| utoipa-swagger-ui | 10.0.1 (2026-09-23) | locked | Features `axum` and `vendored`. Without `vendored` the build script downloads the Swagger UI bundle at compile time. |
+| utoipa-swagger-ui | 10.0.2 (2026-10-20) | locked | Features `axum` and `vendored`. Without `vendored` the build script downloads the Swagger UI bundle at compile time. Its build script unpacks the bundle of `utoipa-swagger-ui-vendored` 0.2.0 with `zip` 9.1.3, which has no other user in the workspace and is not in the binary. |
 | sqlx | 0.9.0 (2026-05-21) | locked (`kage-store`) | `postgres`, `runtime-tokio`, `tls-rustls-ring-webpki`, `chrono`, `uuid`, `json`, `migrate`, `macros`. Never `tls-native-tls` (OpenSSL conflict with BoringSSL). MSRV 1.94. |
 | serde, serde_json | 1.0.229, 1.0.151 | locked | |
 | tracing, tracing-subscriber | 0.1.44, 0.3.23 | locked | tracing-subscriber in `kage`, and since M15 in the tests of `kage-proxy` (feature `fmt`: the conformance suite reads a provider's log lines for credentials). |
@@ -171,17 +171,11 @@ and `btls-sys` only, and no `openssl-sys`, `openssl`, `native-tls` or
 Advisories: `cargo deny` fails on every advisory against the lockfile,
 "unmaintained" included, and so does `cargo audit` on every vulnerability.
 The one ignored from M10, RUSTSEC-2024-0449 (`unsafe-libyaml`, through
-`figment` and `serde_yaml`), went with that parser in M12 (F45). Three are
-ignored since M12, in `deny.toml` and in `.cargo/audit.toml`, decided with
-the planning session: RUSTSEC-2026-0367, -0368 and -0369 against `zip`
-8.6.0 (2026-10-09/10, fixed in `zip` 9). `zip` is only a build dependency of
-`utoipa-swagger-ui` 10.0.1, the newest, which requires `zip ^8.6`; its build
-script unpacks the vendored Swagger UI bundle, pinned by checksum in
-`Cargo.lock`, once at compile time, and nothing opens an archive at run
-time, while the advisories are about extracting an attacker's archive.
-Review by 2026-12-31, or drop them with the first `utoipa-swagger-ui` on
-`zip` 9 (follow-up F55). Three more since 2.0.1, decided with the owner
-in M16: RUSTSEC-2026-0391, -0398 and -0403 against `zstd` 0.13.3 and
+`figment` and `serde_yaml`), went with that parser in M12 (F45). The three
+ignored from M12 against `zip` 8.6.0, RUSTSEC-2026-0367, -0368 and -0369,
+went with `utoipa-swagger-ui` 10.0.2 on `zip` 9 (F55). Three are ignored
+since 2.0.1, in `deny.toml` and in `.cargo/audit.toml`, decided with the
+owner in M16: RUSTSEC-2026-0391, -0398 and -0403 against `zstd` 0.13.3 and
 `zstd-safe` 7.3.0 (published after 2026-10-25, fixed in `zstd` 0.14.3 and
 `zstd-safe` 8.2.0). They come with `wreq-util` 0.2.0, the newest, which
 requires `zstd ^0.13.3` and uses it only to decompress a TLS certificate a
@@ -334,3 +328,4 @@ the latest release, of 2026-06-26 (read from GitHub's API on
 | 2026-10-27 | M16 session (2.0.1) | Advisories published after 2026-10-25 against the two `zstd` lines failed `cargo audit` and `cargo deny` on `main`. tower-http's response decoders (through `async-compression` and `compression-codecs`): `zstd` 0.14.0 to 0.14.3 (RUSTSEC-2026-0391, data of an abandoned stream on a reused context) and `zstd-safe` 8.0.0 to 8.2.0 (RUSTSEC-2026-0398, `Seekable::decompress`; RUSTSEC-2026-0403, uninitialized memory after a failed legacy frame), with `cargo update --precise`; `zstd-sys` 2.1.0 to 2.1.2 for both lines (RUSTSEC-2026-0410, the WebAssembly allocator shim, which no Kage target builds), the bundled zstd library still 1.5.7. `wreq-util` 0.2.0's `zstd` 0.13.3 and `zstd-safe` 7.3.0 have no fixed release on their line: the three advisories are accepted for them in `deny.toml` and `.cargo/audit.toml` (the Advisories note above, F91). `Cargo.lock` moves those three and nothing else (539 packages); `sidecar/pnpm-lock.yaml` and `tests/api-client/pnpm-lock.yaml` are untouched. None is fingerprint-critical: what a ClientHello offers for certificate compression is `wreq-util`'s, which did not move; the recorded fingerprints are unchanged. `cargo deny`, `cargo audit`, `pnpm audit` (at the gate's `high`) and the openssl-sys check pass. |
 | 2026-10-30 | F95 session | No pin moved, no fingerprint-critical version changed, and no crate or package entered a lockfile; `Cargo.lock`, `sidecar/pnpm-lock.yaml` and `tests/api-client/pnpm-lock.yaml` are untouched. The sidecar contract moved to 1.6.0, additive: `attempts` of a self-test page report (`SelftestPageReport`), 2 when the sidecar loaded a page whose navigation failed a second time; `just contract-check` passes against the base. |
 | 2026-10-30 | F82 session | `fast-uri` 3.1.8 to 3.1.9 and 4.2.1 to 4.2.3 in `sidecar/pnpm-lock.yaml`, 3.1.8 to 3.1.9 in `tests/api-client/pnpm-lock.yaml`, by overrides in each project's `pnpm-workspace.yaml`, for GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr, GHSA-333x-w4r6-6crp and GHSA-xhq7-xmqj-769h. Nothing else moved in either lockfile. No fingerprint-critical version changed: patchright, playwright-core and camoufox-js are as they were. `pnpm audit` reports nothing in either project at any level. |
+| 2026-10-30 | F93 session | `utoipa-swagger-ui` 10.0.1 to 10.0.2, the newest, which differs from 10.0.1 by the `zip` bump and one line of its build script; `utoipa` 6.0.0 and `utoipa-axum` 0.3.0 stay, and `utoipa-swagger-ui-vendored` stays at 0.2.0, so the Swagger UI bundle is the same. `zip` 8.6.0 to 9.1.3 and `typed-path` 0.12.3 to 0.13.0; `nix` 0.31.3 and `cfg_aliases` 0.2.2 enter the lockfile, all behind `zip`, a build dependency of `utoipa-swagger-ui` alone. `tempfile` 3.27.0, test only, resolves `getrandom` 0.4.3 instead of 0.3.4 now that `zip` asks for it; both stay in the lockfile. `cargo tree -p kage -e normal` is the same as on `main` but for the `utoipa-swagger-ui` line. No fingerprint-critical version changed. The ignores RUSTSEC-2026-0367, -0368 and -0369 are gone from `deny.toml` and `.cargo/audit.toml`. |

@@ -58,7 +58,7 @@ webpki-root-certs = { version = "=1.0.10" }
 # the build script downloads the UI bundle at compile time.
 utoipa = { version = "=6.0.0" }
 utoipa-axum = { version = "=0.3.0" }
-utoipa-swagger-ui = { version = "=10.0.1", default-features = false, features = ["axum", "vendored"] }
+utoipa-swagger-ui = { version = "=10.0.2", default-features = false, features = ["axum", "vendored"] }
 # The API's own accept loop: a limit on the number and size of request
 # headers and a deadline for reading them, which `axum::serve` does not
 # offer. Both pinned at the versions axum 0.8.9 already locks.

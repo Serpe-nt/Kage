@@ -1056,7 +1056,8 @@ secrets and the first run of `nightly-live.yaml`; deleting the three
 merged branches on GitHub.
 
 **Follow-ups raised by M12** (after 1.0; each a pull request of its own)
-- **F55:** drop the `zip` ignore when `utoipa-swagger-ui` is on `zip` 9.
+- **F55 (fixed by [Serpe-nt/Kage#32](https://github.com/Serpe-nt/Kage/pull/32)):**
+  drop the `zip` ignore when `utoipa-swagger-ui` is on `zip` 9.
 - **F56 (M13, observe):** count `domain_rpm` at the moment a page's
   request leaves, if a site is ever seen to count by the minute.
 - **F57 (security review):** with `resolve_on_host` on, the forwarder
@@ -1517,7 +1518,8 @@ before the tag.
   ended `cancelled`; the run is bounded inside the job (`timeout
   --signal=INT --kill-after=1m 26m just mutants`, exit 124 accepted as
   the budget spent) and the runbook's jobs table says so.
-- **F93:** five advisories against `zip` <= 9.0.4 (CVE-2026-115905 to
+- **F93 (fixed by [Serpe-nt/Kage#32](https://github.com/Serpe-nt/Kage/pull/32)):**
+  five advisories against `zip` <= 9.0.4 (CVE-2026-115905 to
   -115909) are on GitHub and will reach RustSec; `zip` 8.6.0 is build-only
   under `utoipa-swagger-ui` (F55's reasoning): extend F55's exception or
   move `utoipa-swagger-ui` when they do.
@@ -1560,9 +1562,8 @@ round is done (M13 above). What remains, in the order the planner would
 take it, each a pull request of its own on the PR workflow, with the
 owner's word for every merge:
 
-1. **The public face and the gates:** F93 when RustSec imports the `zip`
-   advisories, F55 when `utoipa-swagger-ui` moves, F91 by 2026-12-31
-   (F82, `fast-uri`, and F92, the CI badge, are fixed).
+1. **The public face and the gates:** F91 by 2026-12-31 (F82, `fast-uri`,
+   F93 and F55, `zip`, and F92, the CI badge, are fixed).
 2. **What the field campaign found, the stealth items first:** F89 (the
    behaviour engine answers a consent dialog by hand before its first
    scroll, reject non-essential by default or accept where a site's policy

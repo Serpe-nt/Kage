@@ -229,11 +229,6 @@ below names what holds it and the test that shows it.
 
 ## Accepted exceptions
 
-- **RUSTSEC-2026-0367, -0368, -0369 (`zip` 8.6.0)** are ignored in
-  `deny.toml` and `.cargo/audit.toml` until 2026-12-31 or the first
-  `utoipa-swagger-ui` on `zip` 9, whichever comes first. `zip` unpacks only
-  the vendored Swagger UI archive at build time, never an archive from
-  outside. Follow-up F55 drops the ignore.
 - **RUSTSEC-2026-0391, -0398, -0403 (`zstd` 0.13.3, `zstd-safe` 7.3.0)**
   are ignored in `deny.toml` and `.cargo/audit.toml` until 2026-12-31 or
   the first `wreq-util` on `zstd` 0.14, whichever comes first. They come
