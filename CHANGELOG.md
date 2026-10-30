@@ -91,6 +91,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   now on; the tags up to v2.0.1 verify against the list at their own
   commit (`docs/runbooks/repo.md`, Releases).
 
+### Security
+
+- `fast-uri` 3.1.9 and 4.2.3 in the sidecar and 3.1.9 in the API test
+  client, by overrides, for four advisories: GHSA-w74x-v6f9-j3xg and
+  GHSA-wjr9-j795-jxcr (moderate), GHSA-333x-w4r6-6crp and
+  GHSA-xhq7-xmqj-769h (low). 2.0.0 and 2.0.1 ship 3.1.8 and 4.2.1 in the
+  sidecar, and their changelogs do not name them. There `fast-uri` is the
+  URI resolver of the schema compilers under fastify: it resolves the
+  `$id` and `$ref` of the sidecar's own schemas, never a URL a caller
+  sends or a page holds. The API client is test tooling and is in no image.
+
 ## [2.0.1] - 2026-10-27
 
 ### Security

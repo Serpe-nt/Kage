@@ -18,8 +18,16 @@ strictPeerDependencies: true
 # never called: the Firefox engine names the claimed system itself, and a
 # test keeps the package from ever being loaded. Re-verify on every
 # camoufox-js bump (docs/versions.md).
+#
+# fast-uri below 3.1.9 and 4.2.3 carries four advisories (F82). ajv asks for
+# ^3.0.1, fastify's ajv compiler and fast-json-stringify for ^4.0.0: both ranges
+# admit the fixed versions but neither requires them, so the override is what
+# keeps a lockfile from holding an older one. Each selector moves one line and
+# only that line. Drop them when the parents' ranges start at a fixed version.
 overrides:
   ua-parser-js: 1.0.41
+  fast-uri@3: 3.1.9
+  fast-uri@4: 4.2.3
 
 # Refuse to resolve a version published less than a day ago.
 minimumReleaseAge: 1440

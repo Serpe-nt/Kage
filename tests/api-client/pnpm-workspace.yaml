@@ -8,5 +8,12 @@ savePrefix: ''
 autoInstallPeers: false
 strictPeerDependencies: true
 
+# fast-uri below 3.1.9 carries four advisories (F82). The schema validator's
+# ajv asks for ^3.0.1, which admits the fixed version but does not require it,
+# so the override is what keeps a lockfile from holding an older one. Drop it
+# when ajv's range starts at a fixed version.
+overrides:
+  fast-uri@3: 3.1.9
+
 # Refuse to resolve a version published less than a day ago.
 minimumReleaseAge: 1440
