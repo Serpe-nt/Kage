@@ -64,9 +64,10 @@ describe('contract basics', () => {
     // added the move of a stored fingerprint to a new browser major (the Camoufox 156
     // milestone), an endpoint of its own. 1.5.0 adds what the camouflage levels need
     // (M14): the still visit of a navigation (`behavior.mode`) and a paced flow whose hand
-    // rests while it dwells (`behavior.pace.wander`). All of it is optional in a request
-    // and additional in an answer.
-    expect(CONTRACT_SEMVER).toBe('1.5.0');
+    // rests while it dwells (`behavior.pace.wander`). 1.6.0 adds how many times a
+    // self-test page was loaded (`attempts` of a page report, F95). All of it is optional
+    // in a request and additional in an answer.
+    expect(CONTRACT_SEMVER).toBe('1.6.0');
     expect(HEALTH_PATH).toBe('/v1/health');
     expect(METRICS_PATH).toBe('/v1/metrics');
     for (const endpoint of Object.values<Endpoint>(ENDPOINTS)) {

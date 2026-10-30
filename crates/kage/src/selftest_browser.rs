@@ -32,7 +32,7 @@ use anyhow::{Context, bail};
 use kage_browser::contract::{
     ClaimedOs, EchoExpectation, ExpectedIdentity, FindingStatus, GeneratePersonaRequest,
     OpenContextRequest, PersonaSummary, Proxy as ContextProxy, SelftestPage, SelftestPageKind,
-    SelftestRequest, SelftestResponse,
+    SelftestPageReport, SelftestPageStatus, SelftestRequest, SelftestResponse,
 };
 use kage_browser::{BrowserError, SidecarClient, SidecarSettings};
 use kage_core::config::{Config, SelftestPageConfig};
@@ -357,6 +357,30 @@ async fn browser_in(
     Ok(())
 }
 
+/// One line for every page that is worth a word: a page that could not be
+/// used, and a page the sidecar had to load twice (F95), which the table
+/// of findings does not show.
+pub(crate) fn page_notes(pages: &[SelftestPageReport]) -> Vec<String> {
+    pages
+        .iter()
+        .filter_map(|page| {
+            let twice = page.attempts.is_some_and(|attempts| attempts > 1);
+            match (page.status, twice) {
+                (SelftestPageStatus::Ok, false) => None,
+                (SelftestPageStatus::Ok, true) => {
+                    Some(format!("page {}: loaded on the second attempt", page.id))
+                }
+                (status, false) => Some(format!("page {}: {}", page.id, status.as_str())),
+                (status, true) => Some(format!(
+                    "page {}: {} after 2 attempts",
+                    page.id,
+                    status.as_str()
+                )),
+            }
+        })
+        .collect()
+}
+
 fn write_report(
     out: &mut impl Write,
     options: &BrowserSelftestOptions,
@@ -404,10 +428,8 @@ fn write_report(
         })
         .collect();
     table(out, &["PAGE", "CHECK", "RESULT", "OBSERVED"], &rows)?;
-    for page in &report.pages {
-        if page.status.as_str() != "ok" {
-            writeln!(out, "page {}: {}", page.id, page.status.as_str())?;
-        }
+    for line in page_notes(&report.pages) {
+        writeln!(out, "{line}")?;
     }
     writeln!(
         out,
@@ -446,8 +468,8 @@ mod tests {
     use kage_core::secret::SealedSecret;
 
     use super::{
-        BrowserSelftestOptions, claim_of, echo_expectation, pages_of, profile_dir_of, seed_of,
-        stand_in_os, write_report,
+        BrowserSelftestOptions, claim_of, echo_expectation, page_notes, pages_of, profile_dir_of,
+        seed_of, stand_in_os, write_report,
     };
 
     fn config() -> Config {
@@ -763,6 +785,13 @@ mod tests {
         for finding in &report.findings {
             assert!(table.contains(&finding.check), "{table}");
         }
+        // The example's second page did not arrive twice (F95): the table
+        // says so, and the JSON document carries the count.
+        assert!(
+            table.contains("page sannysoft: unreachable after 2 attempts\n"),
+            "{table}"
+        );
+        assert!(!table.contains("page probe:"), "{table}");
 
         let mut json = Vec::new();
         write_report(&mut json, &options(true), "seed", &summary, &report).expect("json");
@@ -775,6 +804,21 @@ mod tests {
             document["findings"].as_array().map(Vec::len),
             Some(report.findings.len())
         );
+        assert_eq!(document["pages"][0]["attempts"], 1);
+        assert_eq!(document["pages"][1]["attempts"], 2);
+
+        // A page that arrived on the second load is worth a line too; a
+        // page that arrived at once is not, and a sidecar of before 1.6.0
+        // says nothing of its loads.
+        let mut pages = report.pages.clone();
+        pages[1].status = kage_browser::contract::SelftestPageStatus::Ok;
+        pages[0].attempts = None;
+        assert_eq!(
+            page_notes(&pages),
+            ["page sannysoft: loaded on the second attempt"]
+        );
+        pages[1].attempts = Some(1);
+        assert_eq!(page_notes(&pages), Vec::<String>::new());
 
         // The first line names the engine that ran and what its persona
         // claims.

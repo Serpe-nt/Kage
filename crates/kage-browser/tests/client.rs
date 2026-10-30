@@ -17,6 +17,7 @@ use kage_browser::contract::{
 };
 use kage_browser::{
     BrowserError, Closed, Navigation, SidecarClient, SidecarSettings, navigation_bound,
+    selftest_bound,
 };
 use kage_core::config::Config;
 use kage_core::domain::Engine;
@@ -771,6 +772,94 @@ fn a_navigation_may_take_what_reaching_the_page_the_patience_and_the_dwell_take(
     assert_eq!(
         with(&|request| request["behavior"] = json!({ "dwell": "human" })),
         secs(60 + 45 + 30)
+    );
+}
+
+#[test]
+fn a_self_test_may_take_two_loads_of_every_page_and_the_pause_between_them() {
+    let secs = Duration::from_secs;
+    let page = |id: &str, settle_ms: Option<u64>| {
+        let mut page = json!({ "id": id, "url": "https://p.example.org/", "kind": "generic" });
+        if let Some(settle_ms) = settle_ms {
+            page["settle_ms"] = json!(settle_ms);
+        }
+        page
+    };
+    let bound = |pages: Option<Vec<Value>>, timeout_ms: Option<u64>| {
+        let mut request = example_json("SelftestRequest", 0);
+        if let Some(pages) = pages {
+            request["pages"] = json!(pages);
+        }
+        if let Some(timeout_ms) = timeout_ms {
+            request["timeout_ms"] = json!(timeout_ms);
+        }
+        selftest_bound(&serde_json::from_value::<SelftestRequest>(request).unwrap())
+    };
+    // Each page: the time to reach it, twice (the sidecar loads a page that
+    // did not arrive once more, F95), the pause between the two loads, and
+    // an allowance for the page's own tests; then a margin.
+    let per_page = |reach: u64| secs(2 * reach + 5 + 15);
+    assert_eq!(
+        bound(Some(vec![page("a", None)]), Some(45_000)),
+        per_page(45) + secs(30)
+    );
+    // A request without a time of its own gets the contract's default, 45 s.
+    assert_eq!(
+        bound(Some(vec![page("a", None), page("b", None)]), None),
+        per_page(45) * 2 + secs(30)
+    );
+    // A page's own settle time replaces the allowance.
+    assert_eq!(
+        bound(
+            Some(vec![page("a", Some(3000)), page("b", None)]),
+            Some(20_000)
+        ),
+        secs(2 * 20 + 5 + 3) + per_page(20) + secs(30)
+    );
+    // Without a page list the sidecar loads its own two pages.
+    assert_eq!(bound(None, Some(10_000)), per_page(10) * 2 + secs(30));
+    // More pages are waited for longer: the bound is the request's own, and
+    // never a constant.
+    let twelve = (0..12)
+        .map(|index| page(&format!("p{index}"), None))
+        .collect();
+    assert_eq!(
+        bound(Some(twelve), Some(45_000)),
+        per_page(45) * 12 + secs(30)
+    );
+}
+
+#[tokio::test]
+async fn a_self_test_is_waited_for_as_long_as_its_pages_may_take() {
+    let server = MockServer::start().await;
+    // The sidecar takes longer than the client waits for any other call:
+    // the two loads of a page are not cut off at the client's own timeout.
+    Mock::given(method("POST"))
+        .and(path(format!("/v1/contexts/{CONTEXT}/selftest")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(example_json("SelftestResponse", 0))
+                .set_delay(Duration::from_millis(1500)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = SidecarClient::new(&SidecarSettings {
+        timeout: Duration::from_millis(400),
+        ..settings(&server.uri())
+    })
+    .unwrap();
+    let report = client
+        .selftest(context(), &example::<SelftestRequest>("SelftestRequest", 0))
+        .await
+        .unwrap();
+    assert_eq!(
+        report
+            .pages
+            .iter()
+            .map(|page| page.attempts)
+            .collect::<Vec<_>>(),
+        [Some(1), Some(2)]
     );
 }
 

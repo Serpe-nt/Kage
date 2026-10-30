@@ -14,7 +14,11 @@
 //! the other path failed. A run is inconclusive when the test site could
 //! not be read (the echo did not answer, a page was unreachable and
 //! nothing that was read failed hard): it changes nothing, so that an
-//! outage of a test site never cools a persona down.
+//! outage of a test site never cools a persona down. The sidecar loads a
+//! browser page whose navigation failed once more after a short pause
+//! before it counts as unreachable (contract 1.6.0, F95); a page that
+//! arrived on the second load is judged as any other, and the stored run
+//! and the persona's event say which pages took two loads (`retried`).
 //!
 //! **Schedule.** The manager's sweep runs each path for each persona
 //! every `selftest.<path>.interval` (24 h) times a factor in
@@ -433,12 +437,20 @@ impl PersonaManager {
             .filter(|finding| finding.status == FindingStatus::Fail)
             .map(|finding| format!("{}/{}", finding.page, finding.check))
             .collect();
+        // The pages the sidecar had to load twice: a verdict that rests on
+        // a second load says so.
+        let retried: Vec<&str> = report
+            .pages
+            .iter()
+            .filter(|page| page.attempts.is_some_and(|attempts| attempts > 1))
+            .map(|page| page.id.as_str())
+            .collect();
         let persona = self
             .judged(
                 &persona,
                 &run,
                 verdict,
-                json!({ "failed": failed, "score": report.score }),
+                json!({ "failed": failed, "score": report.score, "retried": retried }),
             )
             .await?;
         Ok(BrowserRun {

@@ -765,10 +765,8 @@ fn write_browser(out: &mut impl Write, part: &Part<BrowserRun>) -> anyhow::Resul
                 })
                 .collect();
             table(out, &["PAGE", "CHECK", "RESULT", "OBSERVED"], &rows)?;
-            for page in &report.pages {
-                if page.status.as_str() != "ok" {
-                    writeln!(out, "page {}: {}", page.id, page.status.as_str())?;
-                }
+            for line in crate::selftest_browser::page_notes(&report.pages) {
+                writeln!(out, "{line}")?;
             }
         }
     }

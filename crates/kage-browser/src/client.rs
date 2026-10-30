@@ -66,6 +66,52 @@ const HUMAN_DWELL_CAP: Duration = Duration::from_secs(45);
 /// back.
 const NAVIGATION_MARGIN: Duration = Duration::from_secs(30);
 
+/// What a self-test page has to arrive when the request does not say: the
+/// contract's default.
+const DEFAULT_SELFTEST_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// How many times the sidecar loads a self-test page at most: once more
+/// after a navigation failure (contract 1.6.0, F95).
+const SELFTEST_LOAD_ATTEMPTS: u32 = 2;
+
+/// The sidecar's pause before it loads a self-test page a second time.
+const SELFTEST_RETRY_PAUSE: Duration = Duration::from_secs(5);
+
+/// The longest a self-test page is given to finish its own tests after it
+/// arrived when the request does not say: above the sidecar's longest
+/// default (12 s for a `creepjs` page).
+const SELFTEST_SETTLE_ALLOWANCE: Duration = Duration::from_secs(15);
+
+/// The longest a self-test takes when every page takes as long as it may:
+/// for each page, reaching it (`timeout_ms`) as many times as the sidecar
+/// tries, the pause between two tries, and the time its own tests get
+/// (`settle_ms`, else an allowance); and a margin for the evidence files
+/// and the way there and back.
+///
+/// It is derived from the request and from nothing else: a self-test of
+/// many pages, or one whose pages are loaded twice, is not cut off at the
+/// client's own timeout.
+pub fn selftest_bound(request: &SelftestRequest) -> Duration {
+    let reach = request
+        .timeout_ms
+        .map_or(DEFAULT_SELFTEST_TIMEOUT, Duration::from_millis);
+    let per_page = |settle_ms: Option<u64>| {
+        let settle = settle_ms.map_or(SELFTEST_SETTLE_ALLOWANCE, Duration::from_millis);
+        reach * SELFTEST_LOAD_ATTEMPTS
+            + SELFTEST_RETRY_PAUSE * (SELFTEST_LOAD_ATTEMPTS - 1)
+            + settle
+    };
+    // Without a page list the sidecar loads its own set: the probe and the
+    // echo, two pages with the default times.
+    let pages = request
+        .pages
+        .as_deref()
+        .map_or(per_page(None) * 2, |pages| {
+            pages.iter().map(|page| per_page(page.settle_ms)).sum()
+        });
+    pages + NAVIGATION_MARGIN
+}
+
 /// The longest a navigation takes when everything in it takes as long as
 /// it may: reaching the page (`timeout_ms`), the scrolling (the patience
 /// the request gives it, when it gives one) and the dwell, and a margin.
@@ -713,12 +759,29 @@ impl SidecarClient {
         context: Uuid,
         request: &SelftestRequest,
     ) -> Result<SelftestResponse, BrowserError> {
-        self.post(
-            "selftest",
-            &format!("/v1/contexts/{context}/selftest"),
-            request,
-        )
-        .await
+        const OPERATION: &str = "selftest";
+        // A self-test is waited for as long as its pages may take, each
+        // loaded twice at worst ([`selftest_bound`]), not as long as every
+        // call may.
+        let path = format!("/v1/contexts/{context}/selftest");
+        let body = Self::body(OPERATION, request)?;
+        let (status, bytes) = self
+            .send_within(
+                OPERATION,
+                wreq::Method::POST,
+                &path,
+                Some(body),
+                Some(selftest_bound(request)),
+            )
+            .await?;
+        if !(200..300).contains(&status) {
+            return Err(Self::refusal(OPERATION, status, &bytes));
+        }
+        serde_json::from_slice(&bytes).map_err(|error| BrowserError::Unexpected {
+            operation: OPERATION,
+            status,
+            detail: error.to_string(),
+        })
     }
 }
 

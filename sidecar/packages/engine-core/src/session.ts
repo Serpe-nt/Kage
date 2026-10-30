@@ -87,7 +87,7 @@ import {
 import { urlMatcher } from './flow/url-glob.js';
 import { SeededRandom } from './seeded-random.js';
 import type { TableRow } from './selftest/pages.js';
-import { runSelftest, type LoadedPage } from './selftest/run.js';
+import { NavigationFailed, runSelftest, type LoadedPage } from './selftest/run.js';
 
 /**
  * The part of a browser driver's page that the shared session uses. Both
@@ -2055,11 +2055,15 @@ export class PageSession {
     const { driver } = this.parts;
     const page = this.page;
     const started = Date.now();
+    // A failure of the navigation itself is typed, so that the run knows
+    // to load the page once more (F95); a failure in reading a page that
+    // arrived stays what it is.
     const response = await page
       .goto(target.url, { waitUntil: 'load', timeout: options.timeoutMs })
       .catch(async (thrown: unknown) => {
-        await driver.settleAfterFailure(driver.classifyError(thrown));
-        throw thrown;
+        const error = driver.classifyError(thrown);
+        await driver.settleAfterFailure(error);
+        throw new NavigationFailed(error, thrown);
       });
     let published: string | null = null;
     if (options.publishedSelector !== null) {
@@ -2093,6 +2097,7 @@ export class PageSession {
       artifactPrefix: request.artifact_prefix ?? `${env.defaultArtifactPrefix}/selftest`,
       defaultPages: this.parts.selftestPages,
       now: () => new Date(),
+      sleep,
     });
   }
 

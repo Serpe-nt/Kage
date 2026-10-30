@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Kage browser sidecar",
-    "version": "1.5.0",
+    "version": "1.6.0",
     "description": "Internal contract between Kage and its browser sidecars (spec §10.2). Generated from the zod schemas in sidecar/packages/contract; do not edit by hand. Regenerate with `just openapi`.",
     "license": {
       "name": "MIT OR Apache-2.0",
@@ -4639,7 +4639,13 @@
             "type": "integer",
             "minimum": 0,
             "maximum": 9007199254740991,
-            "description": "How long the page took."
+            "description": "How long the page took, every load and the pause between two loads included."
+          },
+          "attempts": {
+            "description": "How many times the page was loaded: 2 when its first load ended in a timeout, a proxy or a network error and it was loaded once more after a short pause, and is judged by that second load. A page that arrived is never loaded again, whatever its checks say. Absent from a sidecar of before 1.6.0, which loaded every page once. Since 1.6.0.",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2
           },
           "text": {
             "anyOf": [
@@ -4904,6 +4910,7 @@
                 "status": "ok",
                 "http_status": 200,
                 "duration_ms": 2130,
+                "attempts": 1,
                 "text": {
                   "path": "selftests/0199c1f5/probe.txt",
                   "bytes": 48211,
@@ -4923,13 +4930,14 @@
                 "kind": "sannysoft",
                 "status": "unreachable",
                 "http_status": null,
-                "duration_ms": 45000,
+                "duration_ms": 95000,
+                "attempts": 2,
                 "text": null,
                 "screenshot": null
               }
             ],
             "started_at": "2026-10-09T15:04:05Z",
-            "finished_at": "2026-10-09T15:04:52.500Z"
+            "finished_at": "2026-10-09T15:05:42.500Z"
           }
         ]
       },

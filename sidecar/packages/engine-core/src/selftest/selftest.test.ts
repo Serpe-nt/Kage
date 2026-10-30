@@ -9,7 +9,9 @@ import {
   ArtifactWriter,
   DEFAULT_SETTLE_MS,
   FindingList,
+  NavigationFailed,
   PROBE_REPORT_SELECTOR,
+  SELFTEST_RETRY_PAUSE_MS,
   judgeCreepjs,
   judgeEcho,
   judgeGeneric,
@@ -905,9 +907,12 @@ describe('runSelftest', () => {
     ...change,
   });
 
+  /** What the driver answers a page with: one answer, or one per load in turn. */
+  type Answer = LoadedPage | Error;
+
   async function run(
     pages: SelftestPage[] | undefined,
-    answers: Record<string, LoadedPage | Error>,
+    answers: Record<string, Answer | Answer[]>,
     request: Record<string, unknown> = {},
   ) {
     const root = await mkdtemp(path.join(tmpdir(), 'kage-selftest-'));
@@ -917,10 +922,14 @@ describe('runSelftest', () => {
       timeoutMs: number;
       publishedSelector: string | null;
     }[] = [];
+    const pauses: number[] = [];
     const driver: SelftestDriver = {
       load: (page, options) => {
         calls.push({ id: page.id, ...options });
-        const answer = answers[page.id];
+        const given = answers[page.id];
+        const answer = Array.isArray(given)
+          ? given[calls.filter((call) => call.id === page.id).length - 1]
+          : given;
         if (answer === undefined || answer instanceof Error) {
           return Promise.reject(answer ?? new Error('no such page'));
         }
@@ -936,10 +945,20 @@ describe('runSelftest', () => {
         artifactPrefix: 'selftests/run-1',
         defaultPages: [{ id: 'probe', url: 'https://echo.example.org/probe/', kind: 'probe' }],
         now: () => new Date(Date.UTC(2026, 9, 9, 12, 0, tick++)),
+        sleep: (ms) => {
+          pauses.push(ms);
+          return Promise.resolve();
+        },
       },
     );
-    return { response, calls, root };
+    return { response, calls, pauses, root };
   }
+
+  /** What a driver throws when the navigation to a page failed. */
+  const didNotArrive = (
+    code: 'timeout' | 'proxy_failed' | 'navigation_failed' | 'aborted',
+    message: string,
+  ) => new NavigationFailed({ code, message, net_error: null }, new Error(message));
 
   it('loads the configured pages when the request names none', async () => {
     const { response, calls, root } = await run(undefined, {
@@ -957,6 +976,7 @@ describe('runSelftest', () => {
         status: 'ok',
         http_status: 200,
         duration_ms: 1000,
+        attempts: 1,
         text: expect.objectContaining({
           path: 'selftests/run-1/probe.txt',
           content_type: 'text/plain; charset=utf-8',
@@ -1068,6 +1088,131 @@ describe('runSelftest', () => {
     expect(response.findings).toHaveLength(1);
   });
 
+  // F95: the first nightly live run (2026-10-30) lost its verdict on one page
+  // whose navigation timed out through one proxy, while the same page loaded
+  // through the other and every other check passed.
+  it('loads a page that did not arrive once more after a pause, and judges it as a first load', async () => {
+    const pages: SelftestPage[] = [
+      { id: 'sanny', url: 'https://bot.sannysoft.com/', kind: 'sannysoft' },
+      { id: 'creep', url: 'https://abrahamjuliot.github.io/creepjs/', kind: 'creepjs' },
+    ];
+    const { response, calls, pauses } = await run(
+      pages,
+      {
+        sanny: [
+          didNotArrive('timeout', 'page.goto: Timeout 45000ms exceeded.'),
+          loaded({
+            rows: [{ cells: ['WebDriver (New)', 'missing (passed)'], classes: ['', 'passed'] }],
+          }),
+        ],
+        creep: loaded({ text: '0% headless\n0% stealth' }),
+      },
+      { timeout_ms: 45_000 },
+    );
+    // The same page, the same options, after the fixed pause; the other page once.
+    expect(calls.map((call) => [call.id, call.timeoutMs])).toEqual([
+      ['sanny', 45_000],
+      ['sanny', 45_000],
+      ['creep', 45_000],
+    ]);
+    expect(pauses).toEqual([SELFTEST_RETRY_PAUSE_MS]);
+    expect(response.pages.map((page) => [page.id, page.status, page.attempts])).toEqual([
+      ['sanny', 'ok', 2],
+      ['creep', 'ok', 1],
+    ]);
+    // Judged by what the second load showed, with nothing unknown left of the first.
+    expect(
+      response.findings.map((finding) => [finding.page, finding.check, finding.status]),
+    ).toEqual([
+      ['sanny', 'sannysoft.WebDriver (New)', 'pass'],
+      ['creep', 'creepjs.headless', 'pass'],
+      ['creep', 'creepjs.stealth', 'pass'],
+    ]);
+    expect(response).toMatchObject({ passed: true, complete: true, score: 100 });
+  });
+
+  it('gives a page up after its second navigation failure, and says it tried twice', async () => {
+    const { response, calls, pauses } = await run(
+      [
+        { id: 'sanny', url: 'https://bot.sannysoft.com/', kind: 'sannysoft' },
+        { id: 'probe', url: 'https://echo.example.org/probe/', kind: 'probe' },
+      ],
+      {
+        sanny: [
+          didNotArrive('timeout', 'page.goto: Timeout 45000ms exceeded.'),
+          didNotArrive(
+            'proxy_failed',
+            'page.goto: net::ERR_TUNNEL_CONNECTION_FAILED at https://bot.sannysoft.com/',
+          ),
+        ],
+        probe: loaded({ published: JSON.stringify(report()) }),
+      },
+    );
+    expect(calls.map((call) => call.id)).toEqual(['sanny', 'sanny', 'probe']);
+    expect(pauses).toEqual([SELFTEST_RETRY_PAUSE_MS]);
+    expect(response.pages.map((page) => [page.id, page.status, page.attempts])).toEqual([
+      ['sanny', 'unreachable', 2],
+      ['probe', 'ok', 1],
+    ]);
+    // The finding names the failure that decided: the second one.
+    expect(response.findings[0]).toMatchObject({
+      page: 'sanny',
+      check: 'page',
+      status: 'unknown',
+      observed: 'page.goto: net::ERR_TUNNEL_CONNECTION_FAILED at https://bot.sannysoft.com/',
+    });
+    // Unreachable as before: no verdict on it, the run incomplete, nothing failed.
+    expect(response).toMatchObject({ passed: true, complete: false });
+  });
+
+  it('loads a page again only after a navigation failure worth it, never a page that arrived', async () => {
+    const { response, calls, pauses } = await run(
+      [
+        // Arrived and shows an automation flag: judged, not loaded again.
+        { id: 'red', url: 'https://bot.sannysoft.com/', kind: 'sannysoft' },
+        // Arrived and could not be read: unreachable at once.
+        { id: 'unread', url: 'https://a.example.org/', kind: 'generic' },
+        // Turned into a download: the same would happen again.
+        { id: 'download', url: 'https://b.example.org/file', kind: 'generic' },
+        // Did not arrive for the network: loaded once more.
+        { id: 'net', url: 'https://c.example.org/', kind: 'generic' },
+      ],
+      {
+        red: loaded({
+          rows: [{ cells: ['WebDriver (New)', 'present (failed)'], classes: ['', 'failed'] }],
+        }),
+        unread: new Error('the screenshot could not be taken'),
+        download: didNotArrive('aborted', 'page.goto: Download is starting'),
+        net: [didNotArrive('navigation_failed', 'page.goto: net::ERR_CONNECTION_RESET'), loaded()],
+      },
+    );
+    expect(calls.map((call) => call.id)).toEqual(['red', 'unread', 'download', 'net', 'net']);
+    expect(pauses).toEqual([SELFTEST_RETRY_PAUSE_MS]);
+    expect(response.pages.map((page) => [page.id, page.status, page.attempts])).toEqual([
+      ['red', 'ok', 1],
+      ['unread', 'unreachable', 1],
+      ['download', 'unreachable', 1],
+      ['net', 'ok', 2],
+    ]);
+    expect(response.findings.filter((finding) => finding.status === 'unknown')).toEqual([
+      expect.objectContaining({ page: 'unread', observed: 'the screenshot could not be taken' }),
+      expect.objectContaining({ page: 'download', observed: 'page.goto: Download is starting' }),
+    ]);
+    // The red row of the page that arrived fails the run as it always did.
+    expect(response).toMatchObject({ passed: false, complete: false });
+    // The error class itself: the contract's code, the message, the cause.
+    const failure = didNotArrive('timeout', 'page.goto: Timeout 45000ms exceeded.');
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).toMatchObject({
+      name: 'NavigationFailed',
+      code: 'timeout',
+      message: 'page.goto: Timeout 45000ms exceeded.',
+      retried: true,
+    });
+    expect(failure.cause).toBeInstanceOf(Error);
+    expect(didNotArrive('aborted', 'closed').retried).toBe(false);
+  });
+
   it('reports a thrown value that is not an error', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'kage-selftest-'));
     const response = await runSelftest(
@@ -1079,6 +1224,7 @@ describe('runSelftest', () => {
         artifactPrefix: 'p',
         defaultPages: [],
         now: () => new Date(0),
+        sleep: () => Promise.resolve(),
       },
     );
     expect(response.findings[0]?.observed).toBe('plain string');
@@ -1094,6 +1240,7 @@ describe('runSelftest', () => {
         artifactPrefix: 'p',
         defaultPages: [],
         now: () => new Date(0),
+        sleep: () => Promise.resolve(),
       },
     );
     expect(response).toMatchObject({

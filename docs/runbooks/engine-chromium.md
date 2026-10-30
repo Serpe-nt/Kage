@@ -196,7 +196,15 @@ a `fail` on an automation flag, an identity mismatch or a transport
 mismatch is hard and fails the test whatever the score. `unknown` (a page
 that could not be reached or read) changes no score and sets
 `complete: false`, so an outage of a test page never counts against a
-persona.
+persona. A page whose navigation fails (`page.goto` ends in a timeout, a
+proxy or a network error) is loaded once more after a fixed pause of five
+seconds before it counts as unreachable, so a page run by others may see
+the exit address twice in one run; the page's report says how many loads
+it took (`attempts`), and `kage selftest browser` prints "loaded on the
+second attempt" for such a page. A page that arrived is judged as it is
+and never loaded again, whatever its checks say (F95: the first nightly
+live run lost its verdict on one timed-out load of bot.sannysoft.com
+through one proxy).
 
 | Page kind | What it is | Who runs it |
 |---|---|---|

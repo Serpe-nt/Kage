@@ -195,7 +195,20 @@ export const SelftestPageReportSchema = z
       .int()
       .nullable()
       .describe("Status of the page's main response; null without one."),
-    duration_ms: z.number().int().nonnegative().describe('How long the page took.'),
+    duration_ms: z
+      .number()
+      .int()
+      .nonnegative()
+      .describe('How long the page took, every load and the pause between two loads included.'),
+    attempts: z
+      .number()
+      .int()
+      .min(1)
+      .max(2)
+      .optional()
+      .describe(
+        'How many times the page was loaded: 2 when its first load ended in a timeout, a proxy or a network error and it was loaded once more after a short pause, and is judged by that second load. A page that arrived is never loaded again, whatever its checks say. Absent from a sidecar of before 1.6.0, which loaded every page once. Since 1.6.0.',
+      ),
     text: ArtifactRefSchema.nullable().describe(
       'The visible text of the page as a file, as evidence.',
     ),
