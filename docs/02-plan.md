@@ -1495,7 +1495,8 @@ before the tag.
   timeout or one retry for the layout step).
 - **F81:** a Firefox parity test read a button hold of 19 ms on a loaded
   runner.
-- **F82:** the `fast-uri` override to 3.1.9 / 4.2.3 in the sidecar and
+- **F82 (fixed by [Serpe-nt/Kage#PRNUM](https://github.com/Serpe-nt/Kage/pull/PRNUM)):**
+  the `fast-uri` override to 3.1.9 / 4.2.3 in the sidecar and
   the API client (four advisories, moderate and low, below the `pnpm
   audit` gate; 2.0.0 and 2.0.1 ship with them, their changelogs do not
   name them).
@@ -1559,9 +1560,9 @@ round is done (M13 above). What remains, in the order the planner would
 take it, each a pull request of its own on the PR workflow, with the
 owner's word for every merge:
 
-1. **The public face and the gates:** F82 (`fast-uri`), F93 when
-   RustSec imports the `zip` advisories, F55 when `utoipa-swagger-ui`
-   moves, F91 by 2026-12-31 (F92, the CI badge, is fixed).
+1. **The public face and the gates:** F93 when RustSec imports the `zip`
+   advisories, F55 when `utoipa-swagger-ui` moves, F91 by 2026-12-31
+   (F82, `fast-uri`, and F92, the CI badge, are fixed).
 2. **What the field campaign found, the stealth items first:** F89 (the
    behaviour engine answers a consent dialog by hand before its first
    scroll, reject non-essential by default or accept where a site's policy
