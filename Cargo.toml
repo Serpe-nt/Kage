@@ -9,7 +9,7 @@ rust-version = "1.99"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Serpe-nt/Kage"
 homepage = "https://github.com/Serpe-nt/Kage"
-authors = ["The Kage Authors"]
+authors = ["serpe-nt"]
 publish = false
 
 # Every dependency is pinned to an exact version (`=x.y.z`); see
