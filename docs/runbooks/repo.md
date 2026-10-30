@@ -309,9 +309,15 @@ KAGE_LIVE=1 KAGE__WEBSHARE__API_KEY=... KAGE__SECRETS__MASTER_KEY=... just test-
 
    The public half of the key is listed in `.github/allowed_signers` on
    `main`, one line per key, with the tagger's e-mail address:
-   `<e-mail> namespaces="git" ssh-ed25519 AAAA...`. Check a tag before it is
-   pushed with `git -c gpg.ssh.allowedSignersFile=.github/allowed_signers
-   verify-tag vX.Y.Z`.
+   `<e-mail> namespaces="git" ssh-ed25519 AAAA...`. The address is the one
+   the tag is made under (`git config user.email`): the maintainer's
+   GitHub noreply address, so that no tag or commit carries a personal
+   address; a tag made under another address is refused even when the
+   right key signed it. Check a tag before it is pushed with `git -c
+   gpg.ssh.allowedSignersFile=.github/allowed_signers verify-tag vX.Y.Z`.
+   The tags up to v2.0.1 were made under an earlier address: they verify
+   against the list as it was at their own commit (`git show
+   vX.Y.Z:.github/allowed_signers`), not against the one on `main`.
 4. `release.yaml` refuses a tag that is lightweight, unsigned, signed by a
    key the list on `main` does not hold, not on `main`, or not the
    workspace version. Then, for `ghcr.io/serpe-nt/kage` and
