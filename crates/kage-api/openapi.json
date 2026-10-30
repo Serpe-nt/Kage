@@ -4,7 +4,7 @@
     "title": "Kage API",
     "description": "Self-hosted page fetching API. Every request but `/healthz`, `/readyz` and `/openapi.json` carries an API key as `Authorization: Bearer kage_<keyid>_<secret>`. Errors are RFC 9457 problem documents (`application/problem+json`) with a stable `code`; every answer carries `X-Request-Id`. A fetch that was made answers `200` whatever the site did: a block is the result's `outcome`, not an HTTP error. Every fetch names its camouflage `level`, and it costs what it says: 0 is a plain HTTP client that says it is Kage, for pages that can be read with curl; 1 is a persona's http client with its browser's wire fingerprint and no page behaviour (refused while no browser version has a verified profile); 2 is a persona's browser that loads the page and leaves, for sites that need a browser but not a reader; 3 is a person. Below 3 Kage is not pretending to be a person; a request's level is the caller's responsibility, and a site's floor (`min_level`) is the operator's. See docs/01-spec.md §16 and §25, docs/runbooks/api.md and docs/runbooks/levels-and-egress.md.",
     "contact": {
-      "name": "The Kage Authors"
+      "name": "serpe-nt"
     },
     "license": {
       "name": "MIT OR Apache-2.0"
