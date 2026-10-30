@@ -500,6 +500,7 @@ export const EXAMPLES: Readonly<Record<string, readonly unknown[]>> = {
           status: 'ok',
           http_status: 200,
           duration_ms: 2130,
+          attempts: 1,
           text: { ...artifact, path: 'selftests/0199c1f5/probe.txt', content_type: 'text/plain' },
           screenshot: {
             ...artifact,
@@ -513,13 +514,15 @@ export const EXAMPLES: Readonly<Record<string, readonly unknown[]>> = {
           kind: 'sannysoft',
           status: 'unreachable',
           http_status: null,
-          duration_ms: 45_000,
+          // Two loads of 45 s and the pause between them (1.6.0).
+          duration_ms: 95_000,
+          attempts: 2,
           text: null,
           screenshot: null,
         },
       ],
       started_at: '2026-10-09T15:04:05Z',
-      finished_at: '2026-10-09T15:04:52.500Z',
+      finished_at: '2026-10-09T15:05:42.500Z',
     },
   ],
 };

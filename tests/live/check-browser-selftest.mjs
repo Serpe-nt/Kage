@@ -5,7 +5,8 @@
 // The report is the output of `kage selftest browser --json`. The check
 // passes when the sidecar passed the self-test, no check carries an
 // automation flag or an identity mismatch (a hard failure), every page
-// could be read, and no check is worse than in the recorded baseline
+// could be read (a page the sidecar had to load twice counts as read, and
+// the check says so; F95), and no check is worse than in the recorded baseline
 // (`<baseline directory>/<engine>-<major>-live.json`). An engine and major
 // without a baseline fail the check: record one first. A recording run of
 // a major that has none yet is judged against the newest baseline of an
@@ -54,7 +55,13 @@ const name = `${report.engine} ${persona.browser_version} on ${persona.claimed_o
 
 console.log(`    ${name}: score ${report.score} of 100, threshold ${report.min_score}`);
 for (const page of pages) {
-  console.log(`      page ${page.id} (${page.kind}): ${page.status}, HTTP ${page.http_status ?? "-"}`);
+  // A sidecar of 1.6.0 says how many times it loaded the page: twice when
+  // the first navigation failed (F95). An older one loaded every page once.
+  const attempts = page.attempts ?? 1;
+  const loads = attempts > 1 ? `, loaded on attempt ${attempts}` : "";
+  console.log(
+    `      page ${page.id} (${page.kind}): ${page.status}, HTTP ${page.http_status ?? "-"}${loads}`,
+  );
   if (page.status !== "ok") {
     problems.push(`page ${page.id} is ${page.status}: the verdict would rest on fewer checks`);
   }

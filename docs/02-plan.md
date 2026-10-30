@@ -1538,6 +1538,17 @@ before the tag.
   redirect hosts as `extra` that `report()` never passes; the
   hour-rounding regex is written twice (`summary()`, `renderVoid()`).
   F88's two notes are under "After 2.0.0".
+- **F95 (fixed by [Serpe-nt/Kage#29](https://github.com/Serpe-nt/Kage/pull/29)):**
+  the browser self-test retries an unreachable detection page once; the
+  first nightly live run of 2026-10-30 failed on one timed-out load of
+  bot.sannysoft.com through one proxy while the other three self-tests
+  passed. The sidecar loads a page whose navigation failed (a timeout, a
+  proxy or a network error) a second time after a fixed pause of five
+  seconds, through the same context, proxy and persona, and judges it by
+  that load; a page that fails twice stays `unreachable`, a page that
+  arrived is never loaded again. The page report says how many loads a
+  page took (`attempts`, contract 1.6.0, additive), the live check prints
+  it, and its rule that a verdict rests on all checks is unchanged.
 
 ---
 

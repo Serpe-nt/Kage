@@ -431,7 +431,7 @@ describe('findBreakingChanges', () => {
     delete schemas['PageLink'];
     delete schemas['ScrollEnd'];
     before.info['version'] = '1.2.0';
-    expect(now.info['version']).toBe('1.5.0');
+    expect(now.info['version']).toBe('1.6.0');
     const current = now.components['schemas'] as Record<string, JsonObject>;
     // Asked for with optional fields only, so that a caller of 1.2.0 is still served.
     for (const [name, fields] of [
@@ -531,6 +531,28 @@ describe('findBreakingChanges', () => {
     ).toEqual([
       'POST /v1/contexts/{id}/navigate request.behavior.mode: is no longer accepted',
       'POST /v1/contexts/{id}/flow request.behavior.pace.wander: is no longer accepted',
+    ]);
+  });
+
+  it('takes the attempts of a self-test page (1.6.0) as an addition, and their removal as a break', () => {
+    const now = buildOpenApiDocument();
+    // The document as it was at 1.5.0: a page report without `attempts`.
+    const before = structuredClone(now);
+    const schemas = before.components['schemas'] as Record<string, JsonObject>;
+    delete properties(schemas['SelftestPageReport'])['attempts'];
+    before.info['version'] = '1.5.0';
+    const current = now.components['schemas'] as Record<string, JsonObject>;
+    // Reported, not required: a reader of a 1.5.0 sidecar's answer takes an absent
+    // count as one load.
+    const page = named(current, 'SelftestPageReport');
+    expect(properties(page)['attempts']).toMatchObject({ type: 'integer', minimum: 1, maximum: 2 });
+    expect(page['required'] ?? []).not.toContain('attempts');
+    expect(checkBreaking(before, now)).toEqual({ changes: [], majorBumped: false, ok: true });
+    // The other way round Kage would lose a field it reads.
+    expect(
+      findBreakingChanges(now, before).map((change) => `${change.where}: ${change.what}`),
+    ).toEqual([
+      'POST /v1/contexts/{id}/selftest response 200.pages[].attempts: is no longer returned',
     ]);
   });
 

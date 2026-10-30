@@ -1266,3 +1266,195 @@ async fn the_copies_kept_before_an_upgrade_go_after_the_backup_window() {
     );
     assert_eq!(harness.manager.sweep().await.upgrade_copies_deleted, 1);
 }
+
+/// The sidecar's answer when its first load of the probe failed and the
+/// second arrived (contract 1.6.0, F95): the page is `ok` with two
+/// attempts, judged by what the second load showed.
+fn answer_after_a_second_load(passed: bool) -> serde_json::Value {
+    let mut answer = selftest_answer(passed);
+    answer["pages"] = json!([{
+        "id": "probe",
+        "url": "https://fixture.kage.test/probe/",
+        "kind": "probe",
+        "status": "ok",
+        "http_status": 200,
+        "duration_ms": 52_000,
+        "attempts": 2,
+        "text": null,
+        "screenshot": null,
+    }]);
+    answer
+}
+
+#[tokio::test]
+async fn a_page_loaded_on_the_second_attempt_is_judged_as_if_it_had_loaded_first() {
+    // F95: the first nightly live run (2026-10-30) lost a verdict on a page
+    // whose first navigation timed out; the sidecar now loads such a page
+    // once more and the run is judged by that load.
+    let harness = Harness::start_with(|config| {
+        config.personas.mix = only(Engine::Firefox, ClaimedOs::Windows);
+        config.selftest.browser.pages = probe_page();
+    })
+    .await;
+    let (_, persona) = harness.persona("AT").await;
+    let runs = || async {
+        harness
+            .store()
+            .selftest_runs()
+            .recent(persona.id, 50)
+            .await
+            .unwrap()
+    };
+
+    // The page arrived on the second load and showed nothing wrong: the
+    // run passes as any other, and the stored run says how many loads the
+    // page took.
+    harness
+        .firefox
+        .with(|state| state.selftest = answer_after_a_second_load(true));
+    let run = harness
+        .manager
+        .selftest_browser(persona.id, pages(&harness.config.selftest.browser, false))
+        .await
+        .unwrap();
+    assert_eq!(run.verdict, Verdict::Passed);
+    assert_eq!(run.persona.state, PersonaState::Active);
+    assert_eq!(run.report.pages[0].attempts, Some(2));
+    let stored = runs().await;
+    assert_eq!(stored.len(), 1);
+    assert!(stored[0].passed);
+    assert_eq!(stored[0].findings["verdict"], json!("passed"));
+    assert_eq!(stored[0].findings["complete"], json!(true));
+    assert_eq!(stored[0].findings["pages"][0]["attempts"], json!(2));
+    assert_eq!(
+        harness
+            .count_events(&persona, "persona_selftest_passed")
+            .await,
+        1
+    );
+    // The sidecar was asked once: the second load is the sidecar's, through
+    // the same context, the same proxy and the same persona.
+    let (opened, tested) = harness
+        .firefox
+        .with(|state| (state.opened.len(), state.selftested.len()));
+    assert_eq!((opened, tested), (1, 1));
+
+    // The page arrived on the second load and showed an automation flag: a
+    // failure like any other, which cools the persona; the alert names the
+    // page that was loaded twice.
+    harness
+        .firefox
+        .with(|state| state.selftest = answer_after_a_second_load(false));
+    let failed = harness
+        .manager
+        .selftest_browser(persona.id, pages(&harness.config.selftest.browser, false))
+        .await
+        .unwrap();
+    assert_eq!(failed.verdict, Verdict::Failed);
+    assert_eq!(failed.persona.state, PersonaState::Cooling);
+    assert_eq!(
+        failed.persona.cooling_reason,
+        Some(CoolingReason::SelftestFailed)
+    );
+    let alerts: Vec<_> = harness
+        .alerts
+        .alerts()
+        .into_iter()
+        .filter(|alert| alert.kind == AlertKind::BrowserSelftestFailed)
+        .collect();
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0].details["retried"], json!(["probe"]));
+    assert_eq!(
+        alerts[0].details["failed"],
+        json!(["probe/navigator.webdriver"])
+    );
+}
+
+#[tokio::test]
+async fn a_page_that_did_not_arrive_twice_is_unreachable_and_no_verdict() {
+    let harness = Harness::start_with(|config| {
+        config.personas.mix = only(Engine::Firefox, ClaimedOs::Windows);
+        config.selftest.browser.pages = probe_page();
+    })
+    .await;
+    let (_, persona) = harness.persona("AT").await;
+
+    // Both loads failed: the page is unreachable exactly as before, with
+    // the count of the loads, and nothing is known of the persona.
+    let mut outage = selftest_answer(true);
+    outage["complete"] = json!(false);
+    outage["findings"] = json!([{
+        "page": "probe",
+        "check": "page",
+        "status": "unknown",
+        "hard": false,
+        "weight": 1,
+        "observed": "page.goto: Timeout 45000ms exceeded.",
+        "expected": null,
+    }]);
+    outage["pages"] = json!([{
+        "id": "probe",
+        "url": "https://fixture.kage.test/probe/",
+        "kind": "probe",
+        "status": "unreachable",
+        "http_status": null,
+        "duration_ms": 95_000,
+        "attempts": 2,
+        "text": null,
+        "screenshot": null,
+    }]);
+    harness.firefox.with(|state| state.selftest = outage);
+    let run = harness
+        .manager
+        .selftest_browser(persona.id, pages(&harness.config.selftest.browser, false))
+        .await
+        .unwrap();
+    assert_eq!(run.verdict, Verdict::Inconclusive);
+    assert_eq!(run.persona.state, PersonaState::Active);
+    assert_eq!(run.persona.cooling_reason, None);
+    assert_eq!(run.report.pages[0].attempts, Some(2));
+    let stored = harness
+        .store()
+        .selftest_runs()
+        .recent(persona.id, 50)
+        .await
+        .unwrap();
+    assert_eq!(stored.len(), 1);
+    assert!(!stored[0].passed);
+    assert_eq!(stored[0].findings["verdict"], json!("inconclusive"));
+    assert_eq!(
+        stored[0].findings["pages"][0]["status"],
+        json!("unreachable")
+    );
+    assert_eq!(stored[0].findings["pages"][0]["attempts"], json!(2));
+    assert_eq!(
+        harness
+            .count_events(&persona, "persona_selftest_inconclusive")
+            .await,
+        1
+    );
+    assert_eq!(
+        harness
+            .alerts
+            .alerts()
+            .into_iter()
+            .filter(|alert| alert.kind == AlertKind::BrowserSelftestFailed)
+            .count(),
+        0
+    );
+    // A sidecar of before 1.6.0 says nothing of its loads; the page is read
+    // as loaded once.
+    let mut older = selftest_answer(true);
+    older["pages"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("attempts");
+    harness.firefox.with(|state| state.selftest = older);
+    let run = harness
+        .manager
+        .selftest_browser(persona.id, pages(&harness.config.selftest.browser, false))
+        .await
+        .unwrap();
+    assert_eq!(run.verdict, Verdict::Passed);
+    assert_eq!(run.report.pages[0].attempts, None);
+}

@@ -41,6 +41,25 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The browser self-test loads a detection page once more when its
+  navigation failed.** The first nightly live run (2026-10-30) lost its
+  verdict on one page: the Firefox self-test through the second of its two
+  proxies got `page.goto: Timeout 45000ms exceeded` on bot.sannysoft.com,
+  the page counted as `unreachable`, and the live check refused a verdict
+  that would rest on fewer checks, while the other three self-tests of the
+  run scored 100 of 100. The sidecar now loads a page whose navigation
+  ended in a timeout, a proxy or a network error a second time after a
+  fixed pause of five seconds, through the same context, proxy and
+  persona, and judges it by that load; a page that fails twice stays
+  `unreachable` as before, and a page that arrived is never loaded again,
+  whatever its checks say. The page report says how many loads a page took
+  (`attempts`, contract 1.6.0, additive), the stored run and the persona's
+  self-test event carry it (`retried`), `kage selftest browser` and `kage
+  persona selftest` print it, and the live check prints the attempt a page
+  was loaded on; its rule that a verdict rests on all checks is unchanged.
+  Kage waits for a self-test as long as its pages may take with their
+  second loads, not as long as every sidecar call may. The runbooks say
+  that a detection page may see an address twice in one run (F95).
 - **A page whose head outgrows a mebibyte is no longer judged blank.** The
   block signatures read only the first `settings.max_body_bytes` of a
   captured document (1 MiB); a page whose scripts grow its head past that

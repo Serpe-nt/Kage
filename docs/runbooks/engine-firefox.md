@@ -358,7 +358,10 @@ validation (M13).
 ## The self-test on Firefox
 
 `kage selftest browser --engine firefox` and the live check work as on
-chromium (`engine-chromium.md`, "Checking a persona: the self-test"). What
+chromium (`engine-chromium.md`, "Checking a persona: the self-test"),
+the second load of a page whose navigation failed included: a page run by
+others may see the exit address twice in one run, and the page's report
+says so (`attempts: 2`). What
 the two third-party pages show of a Firefox persona was recorded live on
 2026-10-18 on Camoufox 156 through two proxies, one stand-in claiming
 Windows and one macOS (`tests/fixtures/selftest/firefox-156-live.json`,
