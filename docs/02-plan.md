@@ -1495,7 +1495,7 @@ before the tag.
   timeout or one retry for the layout step).
 - **F81:** a Firefox parity test read a button hold of 19 ms on a loaded
   runner.
-- **F82 (fixed by [Serpe-nt/Kage#PRNUM](https://github.com/Serpe-nt/Kage/pull/PRNUM)):**
+- **F82 (fixed by [Serpe-nt/Kage#31](https://github.com/Serpe-nt/Kage/pull/31)):**
   the `fast-uri` override to 3.1.9 / 4.2.3 in the sidecar and
   the API client (four advisories, moderate and low, below the `pnpm
   audit` gate; 2.0.0 and 2.0.1 ship with them, their changelogs do not
