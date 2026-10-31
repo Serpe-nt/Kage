@@ -107,14 +107,35 @@ export function classifyNavigationError(error: unknown): NavigationError {
   return { code: 'navigation_failed', message, net_error: net };
 }
 
-/** What the engine hands over when a context is open. */
-export interface ChromiumContextParts {
-  readonly context: BrowserContext;
+/**
+ * The address of the history entry before the open one, read from the
+ * browser process (`Page.getNavigationHistory`, which the driver's own way
+ * back reads too); `null` when the tab holds none. No page can see it.
+ */
+async function entryBefore(session: CDPSession): Promise<string | null> {
+  const history = await session.send('Page.getNavigationHistory');
+  return history.entries[history.currentIndex - 1]?.url ?? null;
+}
+
+/**
+ * One tab of a context, made the persona's before its first navigation:
+ * the driver's page, the engine's own debugger session on it (log entries,
+ * screenshots, PDFs, cookies, the history) and the reader of its documents.
+ */
+export interface ChromiumTab {
   readonly page: Page;
-  /** A debugger session on the page: log entries, screenshots, PDFs, cookies. */
   readonly session: CDPSession;
   /** Reads the page over that session, so that no read is the driver's. */
   readonly reader: PageReader;
+}
+
+/** What the engine hands over when a context is open. */
+export interface ChromiumContextParts {
+  readonly context: BrowserContext;
+  /** The tab the browser began with. */
+  readonly tab: ChromiumTab;
+  /** Opens another tab of the same window and makes it the persona's: a fresh tab for a request (F96). */
+  readonly openTab: () => Promise<ChromiumTab>;
   /** A debugger session on the browser: the whole cookie jar. */
   readonly browserSession: CDPSession;
   readonly browserVersion: string;
@@ -142,22 +163,43 @@ export interface ChromiumContextParts {
 export class ChromiumContext implements EngineContext, SessionDriver {
   readonly browserVersion: string;
   readonly applied: AppliedIdentity;
-  readonly page: DriverPage;
   readonly console = new ConsoleLog();
   private readonly protocols = new Map<string, string>();
   private readonly pageSession: PageSession;
+  /** The open tab; replaced by {@link ChromiumContext.freshPage}. */
+  private tab: ChromiumTab;
+  private driverPage: DriverPage;
   private closed = false;
 
   constructor(private readonly parts: ChromiumContextParts) {
     this.browserVersion = parts.browserVersion;
     this.applied = parts.applied;
-    // The driver navigates and waits for load states; every read of the
-    // page is the reader's, because the driver's grants user activation.
-    this.page = pageWithReader(parts.page, parts.reader);
+    this.tab = parts.tab;
+    this.driverPage = this.adopt(parts.tab);
+    this.pageSession = new PageSession({
+      driver: this,
+      personaSeed: parts.personaSeed,
+      selftestPages: parts.selftestPages,
+      log: parts.log,
+    });
+  }
+
+  /** The open tab as the session drives it. */
+  get page(): DriverPage {
+    return this.driverPage;
+  }
+
+  /**
+   * Makes a tab the one this context drives: the driver navigates and
+   * waits for load states; every read of the page is the reader's, because
+   * the driver's grants user activation; the browser's own log entries and
+   * the protocol of responses come over the tab's debugger session.
+   */
+  private adopt(tab: ChromiumTab): DriverPage {
     // Entries the browser itself logs (failed loads, security and
     // deprecation messages). This is not the console API: reading that
     // needs a debugger domain pages can detect.
-    parts.session.on('Log.entryAdded', (event) => {
+    tab.session.on('Log.entryAdded', (event) => {
       this.console.add({
         level: LOG_LEVELS[event.entry.level] ?? 'info',
         source: event.entry.source,
@@ -165,7 +207,7 @@ export class ChromiumContext implements EngineContext, SessionDriver {
         url: event.entry.url ?? null,
       });
     });
-    parts.session.on('Network.responseReceived', (event) => {
+    tab.session.on('Network.responseReceived', (event) => {
       if (event.type === 'Document' && event.response.protocol !== undefined) {
         if (this.protocols.size > 200) {
           this.protocols.clear();
@@ -173,12 +215,21 @@ export class ChromiumContext implements EngineContext, SessionDriver {
         this.protocols.set(event.response.url, event.response.protocol);
       }
     });
-    this.pageSession = new PageSession({
-      driver: this,
-      personaSeed: parts.personaSeed,
-      selftestPages: parts.selftestPages,
-      log: parts.log,
-    });
+    return pageWithReader(tab.page, tab.reader, () => entryBefore(tab.session));
+  }
+
+  /**
+   * Replaces the open tab by a fresh one of the same window (F96). The new
+   * tab is there before the old one goes: a window whose last tab closes
+   * closes itself.
+   */
+  async freshPage(): Promise<void> {
+    const next = await this.parts.openTab();
+    const previous = this.tab;
+    this.tab = next;
+    this.driverPage = this.adopt(next);
+    await previous.page.close().catch(() => undefined);
+    await previous.session.detach().catch(() => undefined);
   }
 
   classifyError(thrown: unknown): NavigationError {
@@ -197,7 +248,7 @@ export class ChromiumContext implements EngineContext, SessionDriver {
     }
     for (
       let waited = 0;
-      waited < 2000 && !this.parts.page.url().startsWith(ERROR_PAGE);
+      waited < 2000 && !this.tab.page.url().startsWith(ERROR_PAGE);
       waited += 50
     ) {
       await sleep(50);
@@ -214,14 +265,14 @@ export class ChromiumContext implements EngineContext, SessionDriver {
     if (!options.full_page) {
       // The viewport as it is: nothing in the page changes or fires.
       const shot = await captureWhenDrawn(() =>
-        this.parts.session.send('Page.captureScreenshot', image),
+        this.tab.session.send('Page.captureScreenshot', image),
       );
       return { data: Buffer.from(shot.data, 'base64'), sideEffects: [], format: options.format };
     }
-    const metrics = await this.parts.session.send('Page.getLayoutMetrics');
+    const metrics = await this.tab.session.send('Page.getLayoutMetrics');
     const size = metrics.cssContentSize;
     const shot = await captureWhenDrawn(() =>
-      this.parts.session.send('Page.captureScreenshot', {
+      this.tab.session.send('Page.captureScreenshot', {
         ...image,
         captureBeyondViewport: true,
         clip: {
@@ -243,7 +294,7 @@ export class ChromiumContext implements EngineContext, SessionDriver {
 
   async pdf(options: PdfOptions): Promise<{ data: Buffer; sideEffects: SideEffect[] }> {
     const paper = PAPER[options.format ?? 'a4'];
-    const printed = await this.parts.session.send('Page.printToPDF', {
+    const printed = await this.tab.session.send('Page.printToPDF', {
       landscape: options.landscape ?? false,
       printBackground: options.print_background ?? true,
       paperWidth: paper.width,
@@ -266,7 +317,7 @@ export class ChromiumContext implements EngineContext, SessionDriver {
   }
 
   async setCookie(cookie: Cookie): Promise<boolean> {
-    const result = await this.parts.session.send('Network.setCookie', toBrowserCookieParam(cookie));
+    const result = await this.tab.session.send('Network.setCookie', toBrowserCookieParam(cookie));
     return result.success;
   }
 

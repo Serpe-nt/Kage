@@ -183,6 +183,12 @@ pub struct FetchOrder {
     /// reading (a crawl's next page): by a link of a page it holds, or by
     /// a typed address. `None` leaves it to the path.
     pub arrival: Option<Arrival>,
+    /// The tab a browser attempt runs in (F96): the pages of one crawl name
+    /// their job and share one tab, so that the next page is reached by a
+    /// click on the page before, which the tab still holds. `None`, as for
+    /// every other request, and the attempt starts in a fresh tab that
+    /// holds nothing of what came before it.
+    pub tab: Option<String>,
     /// Personas that may not take the fetch, whoever else may: the one
     /// that read a crawl's sitemaps is not the one that reads its pages.
     /// A pinned fetch has its persona whatever this says.
@@ -239,6 +245,7 @@ impl FetchOrder {
             patience: None,
             flow: None,
             arrival: None,
+            tab: None,
             exclude: Vec::new(),
             robots: RobotsWish::Policy,
             scout: false,
@@ -1668,6 +1675,7 @@ impl Pipeline {
             max_body_bytes: course.order.max_body_bytes,
             flow: course.order.flow.clone(),
             arrival: course.order.arrival.clone(),
+            tab: course.order.tab.clone(),
         }
     }
 

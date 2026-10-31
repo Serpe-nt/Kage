@@ -355,6 +355,12 @@ pub struct AttemptJob {
     /// reading; `None` leaves it to the path: a typed address in a
     /// browser, the page before as `Referer` on the http path.
     pub arrival: Option<Arrival>,
+    /// The tab a browser attempt runs in (F96): a crawl's pages name their
+    /// job and share one tab, so that the next page is reached by a click
+    /// on the page before, which the tab still holds. `None`, as for every
+    /// other request, and the attempt starts in a fresh tab that holds
+    /// nothing of what came before it.
+    pub tab: Option<String>,
 }
 
 /// What an attempt came to.
@@ -732,6 +738,7 @@ pub fn navigation_for(
             .dwell
             .and_then(|dwell| u64::try_from(dwell.as_millis()).ok()),
         max_body_bytes: job.max_body_bytes,
+        tab: job.tab.clone(),
         timeout_ms: u64::try_from(job.timeout.as_millis()).ok(),
         url: job.url.to_string(),
         wait: job.wait.clone(),

@@ -48,13 +48,18 @@ fn http(path: &str) -> FetchOrder {
     at(Level::Emulated, path)
 }
 
-/// A page the persona reaches from `holder`, a page it has been reading.
+/// The tab the reader's pages share, as a crawl names it (F96).
+const CRAWL_TAB: &str = "crawl-0199c1f4";
+
+/// A page the persona reaches from `holder`, a page it has been reading,
+/// as a page of a crawl: in the crawl's tab.
 fn get_from(path: &str, holder: &str) -> FetchOrder {
     FetchOrder {
         arrival: Some(Arrival::Link {
             from: Lab::url(holder),
             max_backs: 3,
         }),
+        tab: Some(CRAWL_TAB.to_owned()),
         ..get(path)
     }
 }

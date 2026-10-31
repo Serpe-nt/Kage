@@ -336,12 +336,16 @@ describe('navigate through an authenticated proxy', () => {
 describe('what captures leave behind in the page', () => {
   it('leaves nothing for a DOM read and a viewport screenshot, a resize for a full page, two events for a PDF', async () => {
     // What one load of the events page noticed while it was the page. Its
-    // own farewell (it is navigated away from later) does not count.
+    // own farewell does not count: the next request opens a fresh tab
+    // (F96), which the page that was open sees as its window losing focus
+    // and its tab closing, as when a person opens a new tab.
     const events = async (run: string) =>
       (await site.reports())
         .filter((report) => report['page'] === 'events' && report['run'] === run)
         .map((report) => String(report['what']))
-        .filter((event) => event !== 'pagehide' && event !== 'visibilitychange');
+        .filter(
+          (event) => event !== 'pagehide' && event !== 'visibilitychange' && event !== 'blur',
+        );
 
     await withContext('events', async (context) => {
       await site.reset();

@@ -227,6 +227,16 @@ below names what holds it and the test that shows it.
 | P5 | low | Two entries that leave by one address (a gateway's sessions) would put two personas on one address (D6), linking them | a probe that sees an older proxy's exit address marks the later proxy: it carries neither a persona nor level 0 until it leaves by its own (`a_proxy_that_leaves_by_an_older_ones_address_carries_nothing`); two entries with the same proxy and login are refused at load |
 | P6 | info | A plain exit (an entry without a country) that the operator later gives a country reads as a person the sites it served at level 0 | its sites' records are deleted and they choose another exit; `plain_exit_released` (warning) says how many; the runbook says to add a new entry instead |
 
+## 2.0.2: the QA round's critical findings
+
+QA round one (2026-10-30, `docs/qa/2026-10-30.md`) found behaviour of the
+running stack against the promises above. Each row names what holds it
+now and the tests that show it.
+
+| ID | Severity | Threat | What holds it |
+|---|---|---|---|
+| Q1 | high | A persona's tab kept its history from request to request: a flow's `back` walked into the page another key's request had left there, and its capture reported that page's address and document (F96, finding jobs-01), against "other keys' data" above and §16.5; Chromium reported a way back onto the blank start page as a success | every navigation, flow and self-test starts in a fresh tab of the persona's window, which holds nothing of what came before, and a way back never lands on the blank page a tab begins with (`PageSession.tabFor` and `goBack` in engine-core, each engine's `freshPage`); only a crawl's pages share a tab, named by Kage with the crawl's job (`NavigateRequest.tab`, contract 1.7.0), and no API consumer can name one (engine-core `the tab a request runs in`, the parity suites' `starts every request in a fresh tab`, the scheduler's `paths` and `crawl` tests; the finding's `repro.sh` ends `NOT-REPRODUCED` on both engines) |
+
 ## Accepted exceptions
 
 - **RUSTSEC-2026-0391, -0398, -0403 (`zstd` 0.13.3, `zstd-safe` 7.3.0)**

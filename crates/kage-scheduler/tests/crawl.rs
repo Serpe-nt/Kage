@@ -25,7 +25,7 @@ use chrono::{DateTime, Duration as Span, Utc};
 use common::{DEFAULT_DOMAINS, World, blocked};
 use kage_core::config::DEFAULT_SKIPPED_EXTENSIONS;
 use kage_core::domain::{BreakerState, Level};
-use kage_core::ids::{PersonaId, RequestId};
+use kage_core::ids::{JobId, PersonaId, RequestId};
 use kage_core::outcome::Outcome;
 use kage_core::schedule::planner::{Refusal, Visitors};
 use kage_core::schedule::queue::Priority;
@@ -100,6 +100,8 @@ struct Reader {
     pages: usize,
     tab: Vec<EntryId>,
     persona: Option<PersonaId>,
+    /// The crawl itself: its pages name it as their tab (F96).
+    job: JobId,
     /// Personas that never read a page of the crawl: its scouts.
     exclude: Vec<PersonaId>,
     /// Every wait the scheduler asked for, and why.
@@ -115,6 +117,7 @@ impl Reader {
             pages,
             tab: Vec::new(),
             persona: None,
+            job: JobId::new(),
             exclude: Vec::new(),
             waits: Vec::new(),
             ways: Vec::new(),
@@ -147,6 +150,7 @@ impl Reader {
             patience: Some(Duration::from_mins(5)),
             arrival: Some(arrival),
             exclude: self.exclude.clone(),
+            tab: Some(self.job.to_string()),
             ..FetchOrder::get(page, Priority::Job)
         };
         Some((pick.entry, order))
@@ -299,6 +303,12 @@ async fn a_crawl_is_one_visitor_reading_at_a_readers_pace_and_resting_between_pa
             }
             other => panic!("the order does not say what the frontier said: {other:?}"),
         }
+        // Every page of the crawl, typed or clicked, runs in the crawl's own
+        // tab, which no other request shares (F96).
+        assert_eq!(
+            seen.job.tab.as_deref(),
+            Some(reader.job.to_string().as_str())
+        );
     }
     world.shut_down().await;
 }

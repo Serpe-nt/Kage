@@ -431,7 +431,7 @@ describe('findBreakingChanges', () => {
     delete schemas['PageLink'];
     delete schemas['ScrollEnd'];
     before.info['version'] = '1.2.0';
-    expect(now.info['version']).toBe('1.6.0');
+    expect(now.info['version']).toBe('1.7.0');
     const current = now.components['schemas'] as Record<string, JsonObject>;
     // Asked for with optional fields only, so that a caller of 1.2.0 is still served.
     for (const [name, fields] of [
@@ -554,6 +554,31 @@ describe('findBreakingChanges', () => {
     ).toEqual([
       'POST /v1/contexts/{id}/selftest response 200.pages[].attempts: is no longer returned',
     ]);
+  });
+
+  it('takes the tab of a navigation (1.7.0) as an addition, and its removal as a break', () => {
+    const now = buildOpenApiDocument();
+    // The document as it was at 1.6.0: a navigation that names no tab.
+    const before = structuredClone(now);
+    const schemas = before.components['schemas'] as Record<string, JsonObject>;
+    delete properties(schemas['NavigateRequest'])['tab'];
+    before.info['version'] = '1.6.0';
+    const current = now.components['schemas'] as Record<string, JsonObject>;
+    // Asked for with an optional field only: a sidecar of 1.6.0 is asked for
+    // nothing it does not know unless Kage names a tab, and a request that
+    // names none starts in a fresh tab (F96).
+    const request = named(current, 'NavigateRequest');
+    expect(properties(request)['tab']).toMatchObject({
+      type: 'string',
+      minLength: 1,
+      maxLength: 128,
+    });
+    expect(request['required'] ?? []).not.toContain('tab');
+    expect(checkBreaking(before, now)).toEqual({ changes: [], majorBumped: false, ok: true });
+    // The other way round a crawl could no longer name its tab.
+    expect(
+      findBreakingChanges(now, before).map((change) => `${change.where}: ${change.what}`),
+    ).toEqual(['POST /v1/contexts/{id}/navigate request.tab: is no longer accepted']);
   });
 
   it('compares a schema used twice only once per direction', () => {
