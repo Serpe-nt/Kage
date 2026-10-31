@@ -1522,7 +1522,8 @@ before the tag.
   five advisories against `zip` <= 9.0.4 (CVE-2026-115905 to
   -115909) are on GitHub and will reach RustSec; `zip` 8.6.0 is build-only
   under `utoipa-swagger-ui` (F55's reasoning): extend F55's exception or
-  move `utoipa-swagger-ui` when they do.
+  move `utoipa-swagger-ui` when they do. Moved: `utoipa-swagger-ui`
+  10.0.2 on `zip` 9, F55 with it, the three ignores dropped.
 - **F94:** the field runner's merge review (`tests/field/`, at #24,
   nothing blocking, for the session that runs the second round): the
   watch loop of `run()` has no retry around its API calls, so one
@@ -1555,16 +1556,217 @@ before the tag.
 
 ---
 
+## QA round one (2026-10-30)
+
+One QA agent per topic, eleven in all, ran against the released stack in
+the closed fixture world (commit `15ba60e`, 2.0.1 and what followed),
+hunting for behaviour that contradicts the specification, the OpenAPI
+document, the runbooks or plain correctness. The report is
+`docs/qa/2026-10-30.md`
+([Serpe-nt/Kage#33](https://github.com/Serpe-nt/Kage/pull/33)): 103
+findings after merging duplicates, 3 critical, 14 high, 32 medium, 54 low,
+every one reproduced by the session on a stack of its own, and what each
+topic covered and found clean. No code was changed. The session's evidence,
+a `finding.md` and a `repro.sh` per finding that prints what it sees and
+ends `REPRODUCED` or `NOT-REPRODUCED`, is in the planner's notes folder
+(`qa-evidence/`), not committed: a fix session gets the scripts of its
+findings with its brief and keeps them as the regression check. The round
+broke its own rule once, recorded in the report: one agent ran the debug
+binary's `kage proxy health` outside the firewall rule, so one GET probably
+left to the default public host-address lookup, with no credential and no
+site's data in it; the way out was closed at once.
+
+The findings as plan items, several of one root under one number, in the
+order of severity (the report's "Proposed plan items" names the rows):
+
+- **F96 (critical):** a persona's tab keeps no history across flows or
+  keys, and `back` at a flow's start fails; today a flow's `back` walks
+  into the page another key's flow left in the persona's tab, on both
+  engines (jobs-01; §10.5, §16.5, the security review).
+- **F97 (critical):** a page cannot overflow the stack: the parse and the
+  walk of the extractor are bounded and the result says what they could
+  read; today 5000 nested elements kill the kage process, and everything
+  in flight with it (extract-01).
+- **F98 (critical):** `resolve_on_host` resolves the redirect hops of the
+  http path at level 0 too, each before it is asked for; today a hop to a
+  name with a private address is followed and its body returned
+  (ssrf-01; §19).
+- **F99 (high):** level 0 reads robots.txt and sitemaps from the plain
+  attempt's body; today a robots.txt first asked for at level 0 is stored
+  empty for a day, so `enforce` enforces nothing at any level, and a
+  level 0 crawl reads no sitemap (api-01, crawl-02, ssrf-05, crawl-03).
+- **F100 (high):** the http path decodes a document as a browser does,
+  by header, `<meta>` and sniffing; today every page is read as UTF-8,
+  and a crawl asks for addresses no page names (extract-03, crawl-04).
+- **F101 (high):** every `goto` of a flow meets its own site's policy as
+  a fetch of that address would, and a wall is booked to the site that
+  showed it, not to the flow's first site (jobs-05, jobs-06).
+- **F102 (high):** one outcome, `ssrf_denied`, for a denied hop in both
+  engines and both egress modes, never retried and nothing kept; today
+  Chromium ends `ok` on `chrome-error://chromewebdata/` with the error
+  page as artifacts, a browser's redirect to a denied target is
+  `provider_error`, and `direct` says `connection_failed` three times
+  (ssrf-02, api-04, ssrf-03, ssrf-07).
+- **F103 (high):** a page cannot stop a sidecar: a bound on a read, and
+  a restart when the sidecar does not answer; today a script that builds
+  a DOM 3000 levels deep leaves Chromium at 100 % for good and every
+  Chromium fetch `sidecar_error` until an operator restarts it
+  (extract-02).
+- **F104 (high):** one normal form of a host: one trailing dot is the
+  same site to the breaker, the cooldowns, the pace and the plain exit,
+  and two or more are refused on every road (policy-01, ssrf-04).
+- **F105 (high):** `kage selftest browser --proxy` works on the shipped
+  compose or says it cannot, and a run that read no page is no pass
+  (cli-02).
+- **F106 (high):** waiting synchronous fetches keep to
+  `domain_concurrency` and `visitor_wait` as a batch does, instead of
+  recruiting every persona in turn (sched-01; D37, §8.2).
+- **F107 (high):** a batch sent during a pool outage is `paused` with
+  `no_persona` and resumes when the proxies return, not `failed` within
+  two seconds (sched-04; §16.6).
+- **F108 (high):** an attempt that failed before the site had a say is
+  the proxy's failure, not the site's: it counts nothing against the
+  domain, the next attempt takes a healthy persona, and the reason says
+  so (sched-05).
+- **F109 (high):** a cancel reaches a carried fetch and a job queued
+  behind `jobs.max_running` at once, and a request whose job ended
+  without it answers `200` with what ended it, not `202` (sched-07,
+  jobs-07, jobs-03, auth-03).
+- **F110 (high):** counters exist from 0 at start, or the alerts and
+  panels see a first event; today `increase()` misses every series'
+  first value, so `KageWebhookFailing` and `KageBlockRateAboveThreshold`
+  fire one event late, and `alerts.test.yml` starts its series where the
+  real exposition never does (secrecy-01).
+- **F111 (high):** `KagePoolUnavailable` holds through backoff's
+  expiries; today each expiry shows a proxy `degraded` for one scrape and
+  the rule's `for: 10m` starts again, so it never fired in 18 minutes
+  with every proxy down (secrecy-02).
+- **F112:** a NUL in a string is refused at the API with 422 naming the
+  field, not `500 internal` with the body in Postgres' log (api-02,
+  secrecy-10).
+- **F113:** `POST /v1/admin/personas/{id}/selftest` reads its body under
+  the rules of §19 like the other routes: 408, 413 as a problem, 415,
+  400 (api-03).
+- **F114:** the OpenAPI document names every status an operation answers
+  (401, 403, 429, 400, 408, 413, 415, 422, 500) and a binary schema for
+  `GET /v1/artifacts/{id}` (api-05, docs-02).
+- **F115:** a parse refusal is 422 and names its field and step, a null
+  or a wrong type for an enumerated field included (api-06, api-07,
+  jobs-08).
+- **F116:** a verdict needs a document to judge, with F86: a successful
+  HEAD, a step that captures without the document, a 204, a page whose
+  content is in frames and an empty 200 with no type get one outcome at
+  every level, and none of them is a block (api-08, jobs-02, policy-08,
+  policy-09, extract-07).
+- **F117:** decide what a key with `admin` and `jobs` reads and cancels
+  of another key's jobs, write it into §16.3, and put a cancel on the
+  audit trail (auth-02).
+- **F118:** a crawl takes links from HTML only (crawl-01).
+- **F119:** `enforce` covers the sitemaps it would ask for: none under a
+  disallowed prefix (crawl-05; D46).
+- **F120:** a link answered with a file to save ends the item with one
+  request, the reader stays and the tab is not forgotten (crawl-06).
+- **F121:** `/readyz` answers `503 stopping` for as long as the server
+  stops, or the runbook and §16.1 say the listener goes at the signal
+  (jobs-04, api-16).
+- **F122:** a body cut at `max_body_bytes` says so, and the half page is
+  neither called complete nor cached (extract-04; §9).
+- **F123:** `extract.links` at levels 2 and 3 leaves out, or marks, what
+  the browser reports hidden, as the crawl already does (extract-06;
+  D48).
+- **F124:** a cache hit whose body is gone is a miss and a visit, not
+  `cached: true` with `raw_body: null` (extract-08).
+- **F125:** every signature rule has a status or text bound, so a long
+  article quoting a vendor's text is not a block (policy-02).
+- **F126:** after a breaker's pause level 0 goes on without waiting for
+  a browser request, and `kage_breaker_open` is read from the store at
+  the scrape (policy-03, secrecy-03).
+- **F127:** an empty `domains.yaml` changes nothing on a reload, like
+  the two other files (policy-04; §17).
+- **F128:** a client that hangs up leaves the queue, and
+  `kage_api_requests_in_flight` comes down (sched-02, sched-03).
+- **F129:** one backoff cycle per backoff, whatever an operator probes
+  (sched-06; §7.3).
+- **F130:** a page that waits for a persona says `paused`, with its
+  reason and until when (sched-08; §8.4).
+- **F131:** a bounded `method` label on the API metrics (secrecy-04).
+- **F132:** every nested key can be overridden alone by the environment
+  (cli-01).
+- **F133:** a password in a URL is refused or redacted on every road:
+  `kage fetch`, `config check`'s four URL keys, the database URL's
+  unknown parameters (cli-03, cli-06, cli-08).
+- **F134:** the API's small conformance items: `created_at` equal in the
+  answer and the read-back, `%ff` in a path as a problem, the HTTP
+  layer's 431 and 400, 414 for a long target, a body on an endpoint that
+  takes none, duplicate keys in a job, `+json` media types,
+  `daily_page_budget`'s maximum (api-09 to api-15, auth-01).
+- **F135:** the audit trail's gaps: `/metrics` and `/docs` refusals, and
+  a CLI mutation whose audit event fails (auth-04, auth-06).
+- **F136:** what the loaders take and cannot mean: a wildcard CORS
+  origin, a wildcard in `private_names`, a TTL over the bound, a preview
+  of what is no host name (auth-05, cli-12, extract-11, policy-06).
+- **F137:** the CLI and compose edges: a bare relative
+  `KAGE_STATIC_LIST_FILE`, `dev-secrets.sh` on a last line with no
+  newline, values the check takes that `serve` panics on,
+  `egress.direct.engines` outside the mix, `--output` to an unwritable
+  path, `--timeout` outside the API's bounds, `null` from the
+  environment (cli-04, cli-05, cli-07, cli-09, cli-10, cli-11, cli-13).
+- **F138:** a refused hop's cookie and storage: clean them, or say in
+  §19 that they stay with their origin (ssrf-06).
+- **F139:** crawl counters: a link no request can be made for is
+  `skipped`, and a page that waits is not `fetching` (crawl-07,
+  crawl-08).
+- **F140:** flow and webhook words: `human` on every action or the spec
+  says which, `webhook.deliveries` per attempt or the text says per
+  event, a `wait_for` cut by its timeout is no success (jobs-09,
+  jobs-10, jobs-11).
+- **F141 (the owner's question):** is a `<main>` of only a table, a
+  list or short paragraphs content? D48 says a page without a candidate
+  has none; an ADR, or a sentence in §14 and the runbook (extract-05).
+- **F142:** artifacts honour a client's refusal of gzip, and markdown
+  escapes what the page says (extract-09, extract-10).
+- **F143:** what a result and a label say of a block or a visit: the
+  metrics' `vendor` is who blocked, `referer_strategy: search_engine` is
+  refused or the result says typed, a 407 keeps its status (policy-07,
+  policy-10, policy-11).
+- **F144:** observability's small items: `engine` on the sidecars' event
+  loop series, `span_id` in sidecar lines, the sidecar log shape, §20's
+  list of families, `RUST_LOG` and `LOG_LEVEL` through compose, a
+  redirect target's query at debug (secrecy-06 to secrecy-09,
+  secrecy-11, secrecy-12).
+- **F145:** a document sweep: `block.type` in the block report runbook,
+  the coverage-gated crates and packages in `repo.md`, `monthly_cap_gb`,
+  the changelog's dates, `docker compose` commands with their file, the
+  pacing "that never fetches", D2, D4, D17 and D38 marked as replaced,
+  the first-start sizes (docs-01, policy-05, docs-03 to docs-09).
+
+The round did not reach level 1 (F30), `https` targets, a replacement
+that replaces, real-length timers, two servers on one database, DNS
+rebinding, WebRTC, the /24 and ASN rules, or the Grafana, Jaeger and
+Collector images; the report says so under "What the round did not
+cover". A second QA round runs on the owner's word once the critical and
+high items are fixed, those gaps first.
+
+---
+
 ## After 2.0.0
 
 2.0.1 (2026-10-29) is the version to run; the field campaign's first
-round is done (M13 above). What remains, in the order the planner would
-take it, each a pull request of its own on the PR workflow, with the
-owner's word for every merge:
+round is done (M13 above) and QA round one is reported (above). What
+remains, in the order the planner would take it, each a pull request of
+its own on the PR workflow, with the owner's word for every merge:
 
-1. **The public face and the gates:** F91 by 2026-12-31 (F82, `fast-uri`,
-   F93 and F55, `zip`, and F92, the CI badge, are fixed).
-2. **What the field campaign found, the stealth items first:** F89 (the
+1. **The gates:** F91 by 2026-12-31 (F82, F93 and F55 are fixed by
+   [Serpe-nt/Kage#31](https://github.com/Serpe-nt/Kage/pull/31) and
+   [Serpe-nt/Kage#32](https://github.com/Serpe-nt/Kage/pull/32); F92,
+   the CI badge, by
+   [Serpe-nt/Kage#25](https://github.com/Serpe-nt/Kage/pull/25)).
+2. **What QA round one found, the critical and the high first:** F96,
+   F97 and F98 each a pull request of its own, then F99 to F111, grouped
+   by crate where one session can carry a few; every fix keeps the
+   report's reproduction as its regression test, and the OpenAPI document
+   and the runbooks move with it.
+3. **What the field campaign found, the stealth items first:** F89 (the
    behaviour engine answers a consent dialog by hand before its first
    scroll, reject non-essential by default or accept where a site's policy
    says so, the answer kept in the persona's profile so the next visit
@@ -1578,12 +1780,13 @@ owner's word for every merge:
    every body rule scans up to the 16 MiB the shipped signatures read,
    and the classifier test
    `a_page_whose_head_outgrows_a_mebibyte_is_judged_by_its_body` pins
-   the 1 MiB soft-block verdict F88 replaces); F86; F59
-   (the dwell floor bounds the persona's own draw); F53 (a redirect's
-   target checked by robots.txt and by `deny`); F83 (the shipped warm-up
-   list without `Special:Random` and without the pages that cost tens of
-   megabytes a visit; the round spent 400 MB of 851 on warm-up).
-3. **What the caller is told (the owner's ruling of 2026-10-25: no limits
+   the 1 MiB soft-block verdict F88 replaces); F86 (with F116, its QA
+   cases); F59 (the dwell floor bounds the persona's own draw); F53 (a
+   redirect's target checked by robots.txt and by `deny`); F83 (the
+   shipped warm-up list without `Special:Random` and without the pages
+   that cost tens of megabytes a visit; the round spent 400 MB of 851 on
+   warm-up).
+4. **What the caller is told (the owner's ruling of 2026-10-25: no limits
    per persona per query, the caller decides, and is told):** F87, an
    advisory in the accept response of a fetch, job or crawl whose asked
    volume exceeds what its visitors read in a day at the pacing in
@@ -1592,7 +1795,10 @@ owner's word for every merge:
    in plain words what a person's day on one site looks like and that
    more from one address looks like a bot; the daily cap of the pacing
    profile stays a default the caller may replace (D9), never a wall.
-4. **The rest of the phase's list:** F84, F70 (the `list_url` provider
+5. **QA round one's medium and low items:** F112 to F140 and F142 to
+   F145, the document sweep F145 first since it corrects what the next
+   sessions read; F141 is the owner's question, an ADR or a sentence.
+6. **The rest of the phase's list:** F84, F70 (the `list_url` provider
    written from the guide), F76, F67, F77, F57 (the security review's
    six), F58 (the mutants job on a larger runner or the diff only), F72
    to F74, F78, F79, F80, F81, the Camoufox and Chrome majors as upstream
@@ -1602,12 +1808,11 @@ A second field round runs whenever the owner wants it, on the released
 images, by a session the owner starts, with F94 (the runner's review)
 fixed first: return visits for the clean sites, a second pass for the
 three refused at page 1, and the consent answer once F89 is built; F31,
-F41, F56, F61 and F62 still wait for data. The
-owner's own items stay the owner's: the repository settings of
-`docs/runbooks/repo.md` (branch protection, Actions restrictions, the
-description and topics, wiki and projects off; private vulnerability
-reporting is on), the two Actions secrets and the nightly live suite,
-and the sentence in `SECURITY.md` that promises an answer within a week.
+F41, F56, F61 and F62 still wait for data. The owner's items of 2.0.1
+are done (2026-10-30): the repository settings of `docs/runbooks/repo.md`,
+the two Actions secrets and the nightly live suite, whose first scheduled
+run passed on 2026-10-31, and the sentence in `SECURITY.md` that promises
+an answer within two weeks.
 
 ---
 
