@@ -173,9 +173,11 @@ impl ClientSpec {
 /// an extra one, made from the Kage host. None is made unless a resolver is
 /// given to the factory: a lookup from the host shows the operator's
 /// resolver to the target's name servers, which a per-session host name
-/// turns into a link between the operator's network and the request. Which
-/// resolver, if any, serves fetches is decided where the guard is wired to
-/// the API (milestone M8).
+/// turns into a link between the operator's network and the request.
+/// `kage serve` and the persona commands give the factory the host's
+/// resolver under `security.resolve_on_host`; every client the factory
+/// then builds, the persona's and the plain one of level 0, resolves each
+/// hop before asking for it (`fetch::check_addresses`).
 #[async_trait]
 pub trait HopResolver: Send + Sync + fmt::Debug {
     /// The addresses `host` resolves to.
@@ -267,6 +269,12 @@ impl ClientFactory {
     /// The limits and timeouts of the clients.
     pub const fn settings(&self) -> &HttpSettings {
         &self.settings
+    }
+
+    /// The resolver every client of the factory checks each hop with, when
+    /// one was given; `None` leaves the names to the proxy.
+    pub const fn resolver(&self) -> Option<&Arc<dyn HopResolver>> {
+        self.resolver.as_ref()
     }
 
     /// The client of `spec` that leaves through `proxy`. It is built on
@@ -468,6 +476,12 @@ impl HttpClient {
     /// The limits and timeouts of the client.
     pub const fn settings(&self) -> &HttpSettings {
         &self.settings
+    }
+
+    /// The resolver each hop is checked with before it is asked for, when
+    /// the factory was given one.
+    pub const fn resolver(&self) -> Option<&Arc<dyn HopResolver>> {
+        self.resolver.as_ref()
     }
 
     /// Saves the cookies when they changed and the client keeps any.

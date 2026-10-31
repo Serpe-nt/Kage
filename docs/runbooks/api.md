@@ -911,9 +911,12 @@ Kage looks no name up by default: the proxy resolves, and a lookup from
 this host would tell the name servers of every target who is asking.
 `security.resolve_on_host: true` also resolves targets, the redirect hops
 of the http path and webhook hosts here, with the system's resolver, and
-refuses a name with an address in a denied range or with none. Turn it on
-when the proxies are your own and could reach your own networks; leave it
-off behind a residential provider.
+refuses a name with an address in a denied range or with none. The hops
+are resolved at every level, each before it is asked for: by the persona's
+client of level 1 and by the plain client of level 0 alike, and a name this
+host cannot look up counts as one with no address. Turn it on when the
+proxies are your own and could reach your own networks; leave it off
+behind a residential provider.
 
 ## When a request is refused
 

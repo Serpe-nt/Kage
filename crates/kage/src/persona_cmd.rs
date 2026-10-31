@@ -25,7 +25,7 @@ use kage_core::domain::{
 };
 use kage_core::ids::PersonaId;
 use kage_core::persona::mix::MixEntry;
-use kage_http::{ClientFactory, HttpSettings, StoreCookies};
+use kage_http::{ClientFactory, CookieBackend, HttpSettings, StoreCookies};
 use kage_persona::identity::http_spec;
 use kage_persona::manager::REASON_OPERATOR;
 use kage_persona::selftest::{BrowserRun, HttpRun, Verdict, pages};
@@ -106,17 +106,10 @@ pub(crate) fn build(
             })
         })
         .transpose()?;
-    let mut http = ClientFactory::new(
-        HttpSettings::from_config(&config.http),
+    let http = Arc::new(http_factory(
+        config,
         Arc::new(StoreCookies::new(store.clone())),
-    );
-    // The opt-in host-side lookup of the SSRF guard (spec §19): every hop
-    // of the http path is resolved here too, and refused when its name
-    // points into a denied range. Off by default: the proxy resolves.
-    if config.security.resolve_on_host {
-        http = http.with_resolver(Arc::new(kage_api::resolve::HostResolver::system()));
-    }
-    let http = Arc::new(http);
+    ));
     PersonaManager::new(PersonaParts {
         store: store.clone(),
         pool,
@@ -127,6 +120,22 @@ pub(crate) fn build(
         echo_trust_anchor,
     })
     .context("cannot set up the persona manager")
+}
+
+/// The client factory of the http path, the server's and a command's
+/// alike. Under `security.resolve_on_host` it carries the host's resolver
+/// (spec §19), so that every client it builds, the persona's and the plain
+/// one of level 0, resolves each redirect hop here and refuses one whose
+/// name points into a denied range, or has no address, before it is asked
+/// for. Off by default: the proxy resolves, and no name a consumer asks for
+/// is looked up from this host.
+pub(crate) fn http_factory(config: &Config, cookies: Arc<dyn CookieBackend>) -> ClientFactory {
+    let http = ClientFactory::new(HttpSettings::from_config(&config.http), cookies);
+    if config.security.resolve_on_host {
+        http.with_resolver(Arc::new(kage_api::resolve::HostResolver::system()))
+    } else {
+        http
+    }
 }
 
 /// Runs `work` with a session and a manager, and closes the session
@@ -945,13 +954,19 @@ pub(crate) async fn selftest(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use kage_core::config::Config;
-    use kage_core::domain::{ClaimedOs, Engine, Persona, PersonaState, Screen};
+    use kage_core::domain::{
+        ClaimedOs, Engine, Persona, PersonaState, ProxyEndpoint, ProxyScheme, Screen,
+    };
     use kage_core::ids::{PersonaId, ProxyId};
     use kage_core::persona::mix::default_mix;
     use kage_core::persona::{self};
+    use kage_core::secret::Secret;
+    use kage_http::{ClientSpec, MemoryCookies, ProfileChoice};
 
-    use super::{Paths, SelftestOptions, distribution, echo_of};
+    use super::{Paths, SelftestOptions, distribution, echo_of, http_factory};
 
     fn config() -> Config {
         Config::load(
@@ -977,6 +992,59 @@ mod tests {
             echo: echo.map(str::to_owned),
             json: false,
         }
+    }
+
+    #[test]
+    fn the_hosts_resolver_reaches_both_clients_of_the_http_path_when_the_setting_is_on() {
+        let proxy = ProxyEndpoint {
+            id: ProxyId::new(),
+            host: "127.0.0.1".to_owned(),
+            port: 3128,
+            username: Secret::new("user"),
+            password: Secret::new("pass"),
+            scheme: ProxyScheme::Http,
+        };
+        let spec = ClientSpec::new(ProfileChoice::named("chrome_149", ClaimedOs::Windows).unwrap());
+        let mut config = config();
+
+        // Off, the default: no name a consumer asks for is looked up here.
+        let factory = http_factory(&config, Arc::new(MemoryCookies::new()));
+        assert!(factory.resolver().is_none());
+        assert!(
+            factory
+                .plain(&proxy, "kage/test")
+                .unwrap()
+                .resolver()
+                .is_none()
+        );
+        assert!(
+            factory
+                .ephemeral(&spec, &proxy)
+                .unwrap()
+                .resolver()
+                .is_none()
+        );
+
+        // On: the factory `kage serve` and the persona commands build from
+        // hands the host's resolver to the plain client of level 0 and to
+        // the persona's client alike (F98).
+        config.security.resolve_on_host = true;
+        let factory = http_factory(&config, Arc::new(MemoryCookies::new()));
+        assert!(factory.resolver().is_some());
+        assert!(
+            factory
+                .plain(&proxy, "kage/test")
+                .unwrap()
+                .resolver()
+                .is_some()
+        );
+        assert!(
+            factory
+                .ephemeral(&spec, &proxy)
+                .unwrap()
+                .resolver()
+                .is_some()
+        );
     }
 
     #[test]

@@ -17,7 +17,11 @@
 //! memory for that one request; nothing is kept. The caller's own `Cookie`
 //! and `Authorization` go to the origin of the request only and never on a
 //! hop to another origin. Redirects are followed one hop at a time through
-//! the SSRF guard's chain, as on the persona's http path.
+//! the SSRF guard's chain, as on the persona's http path, and when the
+//! factory was given a resolver (`security.resolve_on_host`) every hop's
+//! name is resolved on the host and a hop into a denied range is refused
+//! before it is asked for, as on that path (F98: the plain client once
+//! skipped that check).
 //!
 //! Like every client of this crate it leaves through a proxy: the
 //! forwarder, under a credential that names no persona, which connects to
@@ -40,12 +44,12 @@ use url::Url;
 use wreq::cookie::{CookieStore, Cookies};
 use wreq_proto::ext::OnPreserveHeaderCallback;
 
-use crate::client::{ClientFactory, HttpSettings};
+use crate::client::{ClientFactory, HopResolver, HttpSettings};
 use crate::cookies::{CookieContext, CookieJar};
 use crate::error::{HttpError, Stage, from_wreq};
 use crate::fetch::{
-    Fetched, Guard, Hop, REDIRECT_BODY_BYTES, Trail, add, millis, read_body, redirect_location,
-    version_name,
+    Fetched, Guard, Hop, REDIRECT_BODY_BYTES, Trail, add, check_addresses, millis, read_body,
+    redirect_location, version_name,
 };
 use crate::headers::CallerHeaders;
 use crate::site;
@@ -85,12 +89,16 @@ pub struct PlainClient {
     wreq: wreq::Client,
     settings: HttpSettings,
     user_agent: HeaderValue,
+    /// The factory's resolver: every hop is checked by its addresses before
+    /// it is asked for, when there is one.
+    resolver: Option<Arc<dyn HopResolver>>,
 }
 
 impl std::fmt::Debug for PlainClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PlainClient")
             .field("user_agent", &self.user_agent)
+            .field("resolver", &self.resolver)
             .finish_non_exhaustive()
     }
 }
@@ -98,7 +106,9 @@ impl std::fmt::Debug for PlainClient {
 impl ClientFactory {
     /// A plain client (level 0) that leaves through `proxy` (the forwarder,
     /// under a plain credential) and says `user_agent` unless a request
-    /// names another. Nothing is kept: no cookies, no client.
+    /// names another. Nothing is kept: no cookies, no client. It checks
+    /// every hop with the factory's resolver, when the factory was given
+    /// one, as the persona's client does.
     ///
     /// # Errors
     ///
@@ -128,6 +138,7 @@ impl ClientFactory {
             wreq,
             settings,
             user_agent,
+            resolver: self.resolver().cloned(),
         })
     }
 }
@@ -255,6 +266,12 @@ impl PlainClient {
         &self.user_agent
     }
 
+    /// The resolver each hop is checked with before it is asked for, when
+    /// the factory was given one.
+    pub const fn resolver(&self) -> Option<&Arc<dyn HopResolver>> {
+        self.resolver.as_ref()
+    }
+
     /// Fetches a URL as a plain client: the caller's method, headers and
     /// body as given, redirects followed one hop at a time.
     ///
@@ -285,6 +302,9 @@ impl PlainClient {
         let mut hops = Vec::new();
         let (mut connect, mut tls) = (None, None);
         let (response, first_byte) = loop {
+            // The address check of the guard, with a resolver: a hop whose
+            // name points into a denied range is never asked for.
+            check_addresses(self.resolver.as_deref(), &trail).await?;
             let url = trail.current().clone();
             let incoming = self
                 .send(

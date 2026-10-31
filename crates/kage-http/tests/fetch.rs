@@ -924,6 +924,25 @@ async fn with_a_resolver_every_hop_is_checked_by_address_too() {
     );
     assert_eq!(world.proxy.seen().len(), before + 1);
 
+    // A hop whose name has no address, or that the host cannot look up,
+    // is refused the same way: only the first hop was asked for.
+    for answer in [Ok(Vec::new()), Err("SERVFAIL")] {
+        match answer {
+            Ok(addresses) => resolver.answer("other.kage.test", &addresses),
+            Err(reason) => resolver.fail("other.kage.test", reason),
+        }
+        let error = client
+            .fetch(&get("http://site.kage.test/go"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&error, HttpError::RedirectDenied(denied) if denied.hop == 1
+                && denied.reason == SsrfDenial::Unresolved("other.kage.test".to_owned())),
+            "{error:?}"
+        );
+    }
+    assert_eq!(world.proxy.seen().len(), before + 3);
+
     // The first name itself points at this machine: nothing is sent.
     resolver.answer("site.kage.test", &["127.0.0.1"]);
     let before = world.proxy.seen().len();
@@ -940,19 +959,19 @@ async fn with_a_resolver_every_hop_is_checked_by_address_too() {
     ));
     assert_eq!(world.proxy.seen().len(), before);
 
-    // A name that does not resolve, and a resolver that fails.
+    // A name that does not resolve, and a resolver that fails: both are a
+    // name with no address, which is not fetched.
     resolver.answer("site.kage.test", &[]);
     assert!(matches!(
         client.fetch(&get("http://site.kage.test/go")).await,
         Err(HttpError::Denied(SsrfDenial::Unresolved(_)))
     ));
     resolver.fail("site.kage.test", "SERVFAIL");
-    let error = client
-        .fetch(&get("http://site.kage.test/go"))
-        .await
-        .unwrap_err();
-    assert!(matches!(&error, HttpError::Resolve { host, .. } if host == "site.kage.test"));
-    assert!(error.to_string().contains("SERVFAIL"));
+    assert!(matches!(
+        client.fetch(&get("http://site.kage.test/go")).await,
+        Err(HttpError::Denied(SsrfDenial::Unresolved(_)))
+    ));
+    assert_eq!(world.proxy.seen().len(), before);
 
     // An operator's endpoint is not a target: the resolver is not asked.
     let asked = resolver.asked().len();

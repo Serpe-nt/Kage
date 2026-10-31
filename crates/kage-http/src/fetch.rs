@@ -4,9 +4,11 @@
 //! [`HttpClient::fetch`] sends a request the way the client's browser would
 //! and follows redirects one hop at a time. Every hop
 //!
-//! - passes the SSRF guard again ([`kage_core::ssrf::RedirectChain`]): a
-//!   refused hop ends the fetch with [`HttpError::RedirectDenied`] and
-//!   nothing fetched before it is returned;
+//! - passes the SSRF guard again ([`kage_core::ssrf::RedirectChain`]) and,
+//!   when the factory was given a resolver, has its name resolved and
+//!   judged before it is asked for (`check_addresses`): a refused hop
+//!   ends the fetch with [`HttpError::RedirectDenied`] and nothing fetched
+//!   before it is returned;
 //! - gets its own headers: the fetch metadata follow the whole chain, the
 //!   `Referer` is cut down for the hop's origin, and the cookies are the
 //!   ones a browser would send to that hop;
@@ -49,7 +51,7 @@ use kage_core::ssrf::{RedirectChain, SsrfDenial, SsrfPolicy, check_resolved};
 use tokio::time::Instant;
 use url::Url;
 
-use crate::client::HttpClient;
+use crate::client::{HopResolver, HttpClient};
 use crate::cookies::{CookieContext, HopCookies};
 use crate::error::{HttpError, Stage, from_wreq};
 use crate::headers::{self, CallerHeaders, FetchSite, HeaderPlan, RequestKind};
@@ -402,6 +404,51 @@ pub fn check_preflight(
     Ok(())
 }
 
+/// The address check of the SSRF guard (spec §19) for the hop a trail
+/// points at: the hop's name is resolved with `resolver`, and the hop is
+/// refused when any of its addresses lies in a denied range or when it has
+/// none. A name the resolver cannot look up counts as one with no address:
+/// a hop nobody can resolve is not asked for. Nothing is looked up without
+/// a resolver (the proxy resolves then; see [`HopResolver`]), for a literal
+/// address (judged by the URL already) or for an operator's endpoint.
+///
+/// Both clients of the http path run it before every request they send,
+/// the persona's and the plain one of level 0, so that a redirect hop is
+/// judged before it is asked for, as the first URL is. A refused hop ends
+/// the fetch; nothing of the hop is requested, read, returned or kept.
+pub(crate) async fn check_addresses(
+    resolver: Option<&dyn HopResolver>,
+    trail: &Trail,
+) -> Result<(), HttpError> {
+    let (Some(resolver), Trail::Guarded(chain)) = (resolver, trail) else {
+        return Ok(());
+    };
+    let Some(name) = chain.target().name() else {
+        return Ok(());
+    };
+    let addresses = match resolver.resolve(name).await {
+        Ok(addresses) => addresses,
+        Err(reason) => {
+            tracing::debug!(host = name, reason, "a hop's name could not be looked up");
+            Vec::new()
+        }
+    };
+    check_resolved(chain.target(), &addresses).map_err(|reason| {
+        let hop = chain.redirects();
+        tracing::info!(
+            host = name,
+            hop,
+            %reason,
+            "the SSRF guard refused a hop of the http path by its addresses"
+        );
+        if hop == 0 {
+            HttpError::Denied(reason)
+        } else {
+            HttpError::RedirectDenied(chain.denied(reason))
+        }
+    })
+}
+
 pub(crate) fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
@@ -616,7 +663,7 @@ impl HttpClient {
         // not its page's for yet another one.
         let mut opaque_origin = false;
         loop {
-            self.check_addresses(trail).await?;
+            check_addresses(self.resolver.as_deref(), trail).await?;
             let url = trail.current().clone();
             let incoming = self
                 .send(Outgoing {
@@ -689,32 +736,6 @@ impl HttpClient {
                 caller = caller.without(&CONTENT_TYPE);
             }
         }
-    }
-
-    /// The address check of the SSRF guard for the current hop. It runs
-    /// only when the factory was given a resolver; see
-    /// [`crate::client::HopResolver`].
-    async fn check_addresses(&self, trail: &Trail) -> Result<(), HttpError> {
-        let (Some(resolver), Trail::Guarded(chain)) = (&self.resolver, trail) else {
-            return Ok(());
-        };
-        let Some(name) = chain.target().name() else {
-            return Ok(());
-        };
-        let addresses = resolver
-            .resolve(name)
-            .await
-            .map_err(|reason| HttpError::Resolve {
-                host: name.to_owned(),
-                reason,
-            })?;
-        check_resolved(chain.target(), &addresses).map_err(|reason| {
-            if chain.redirects() == 0 {
-                HttpError::Denied(reason)
-            } else {
-                HttpError::RedirectDenied(chain.denied(reason))
-            }
-        })
     }
 
     /// Sends one request with the headers and cookies the client's browser

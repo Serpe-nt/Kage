@@ -1149,10 +1149,7 @@ impl PathExecutor {
                 Courtesy::NotTheSite,
             )
             .finally(),
-            HttpError::Profile(_)
-            | HttpError::Build(_)
-            | HttpError::Cookies(_)
-            | HttpError::Resolve { .. } => {
+            HttpError::Profile(_) | HttpError::Build(_) | HttpError::Cookies(_) => {
                 AttemptOutput::failed(Outcome::ProviderError, "http_client", Courtesy::NotTheSite)
             }
         };

@@ -41,6 +41,20 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A redirect hop of the http path at level 0 is resolved on the host
+  under `security.resolve_on_host`, as the documents said it was.** The
+  plain client of level 0 was built without the factory's resolver, so
+  with the setting on a public page's 302 to a name that resolves into a
+  private network was followed through the proxy and the hop's body
+  returned to the caller, while the same name asked for directly was `422
+  ssrf_denied` (QA round one, ssrf-01). Both clients of the http path now
+  run one address check before every request they send: a hop with any
+  address in a denied range, or with none, ends the fetch as `ssrf_denied`
+  with nothing of the hop requested, returned or kept, and a name the host
+  cannot look up counts as one with no address, as it does at acceptance
+  (the persona's client gave such a hop an `http_client` failure before).
+  The persona's client under `kage serve` already checked its hops. With
+  the setting off nothing changes: the proxies resolve (F98).
 - **The browser self-test loads a detection page once more when its
   navigation failed.** The first nightly live run (2026-10-30) lost its
   verdict on one page: the Firefox self-test through the second of its two
