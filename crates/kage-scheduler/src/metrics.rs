@@ -33,6 +33,59 @@ use kage_core::schedule::queue::Priority;
 /// The label of an attempt or a request without a vendor.
 const NO_VENDOR: &str = "none";
 
+/// The values of `kage_cache_requests_total{result}` (see [`cache`]).
+pub const CACHE_RESULTS: [&str; 5] = ["hit", "miss", "stored", "bypass", "joined"];
+
+/// The values of `kage_robots_requests_total{result}` (see [`robots`]).
+pub const ROBOTS_RESULTS: [&str; 5] = ["file", "missing", "unreachable", "not_asked", "no_scout"];
+
+/// The values of `kage_robots_denied_total{reason}` (see [`robots_denied`]).
+pub const ROBOTS_DENIED_REASONS: [&str; 5] = [
+    "rule",
+    "robots_unavailable",
+    "robots_no_scout",
+    "robots_enforced",
+    "robots_ignored",
+];
+
+/// Registers at zero every counter of this module whose label values are
+/// known before any event: the refusals by reason, the bytes by direction
+/// and exit, the cache, the `robots.txt` asked for and the robots denials
+/// by result. A Prometheus series is born with its first sample, and
+/// `increase()` never counts that one; a counter that exists from zero
+/// shows its first event as a change (F110). `kage_requests_total` and
+/// `kage_attempts_total` carry a domain, which arrives with the event, so
+/// they cannot be registered here: the alert and the panels that count
+/// them read the counter against its value an hour earlier instead.
+///
+/// Once per process, after the exporter is installed; without a recorder
+/// it does nothing.
+pub fn register() {
+    for reason in Refusal::ALL.iter().copied() {
+        metrics::counter!("kage_scheduler_refusals_total", "reason" => reason.as_str())
+            .increment(0);
+    }
+    for egress in Exit::ALL.iter().copied() {
+        for direction in ["up", "down"] {
+            metrics::counter!(
+                "kage_bandwidth_bytes_total",
+                "direction" => direction,
+                "egress" => egress.as_str(),
+            )
+            .increment(0);
+        }
+    }
+    for result in CACHE_RESULTS {
+        metrics::counter!("kage_cache_requests_total", "result" => result).increment(0);
+    }
+    for result in ROBOTS_RESULTS {
+        metrics::counter!("kage_robots_requests_total", "result" => result).increment(0);
+    }
+    for reason in ROBOTS_DENIED_REASONS {
+        metrics::counter!("kage_robots_denied_total", "reason" => reason).increment(0);
+    }
+}
+
 fn vendor_label(vendor: &str) -> String {
     if vendor.is_empty() {
         NO_VENDOR.to_owned()
@@ -183,6 +236,7 @@ mod tests {
     fn recording_without_a_recorder_is_harmless() {
         // No exporter is installed in a test: every call must still be
         // safe to make.
+        super::register();
         super::request("example.org", Level::Human, Outcome::Ok, "");
         super::attempt(
             "example.org",

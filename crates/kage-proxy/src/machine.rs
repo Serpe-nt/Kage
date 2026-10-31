@@ -546,6 +546,20 @@ fn push_state_change(effects: &mut Vec<Effect>, from: ProxyState, to: ProxyState
     }
 }
 
+/// The state a proxy counts under in `kage_proxy_state` (spec §20): the
+/// one its last probe left it in. A proxy on probation, whose backoff ran
+/// out and that no probe has passed since (`degraded` with a backoff cycle
+/// on its count), counts as `backoff`: one failed probe sends it back
+/// there, and until a probe says otherwise nothing can be counted on to
+/// leave through it. Every other proxy counts as what it is (F111).
+pub fn reported_state(proxy: &Proxy) -> ProxyState {
+    if proxy.state == ProxyState::Degraded && proxy.backoff_count > 0 {
+        ProxyState::Backoff
+    } else {
+        proxy.state
+    }
+}
+
 /// Ends a backoff that has run out: the proxy becomes `degraded` and is
 /// probed once. With `force`, the backoff ends even if it has time left
 /// (an operator asked for a check now).

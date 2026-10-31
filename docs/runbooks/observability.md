@@ -100,12 +100,20 @@ them sent somewhere, point an Alertmanager of your own at Prometheus.
 | Alert | When | What to do |
 |---|---|---|
 | KageDown (critical) | Prometheus has not scraped Kage for 2 minutes | `docker compose ps`, `docker compose logs kage` |
-| KagePoolUnavailable (critical) | no proxy healthy or degraded for 10 minutes; under `egress.mode: direct` the pool is idle and publishes nothing, so it stays quiet | [proxies.md](proxies.md) |
+| KagePoolUnavailable (critical) | no proxy healthy or degraded for 10 minutes; a proxy whose backoff ran out counts as `backoff` until a probe passes, so an outage holds the alert through every expiry; under `egress.mode: direct` the pool is idle and publishes nothing, so it stays quiet | [proxies.md](proxies.md) |
 | KageBandwidthBudget (warning) | 80 % of the month's cap used | [fetching.md](fetching.md#the-bandwidth-budget) |
 | KageBreakerOpen (warning) | a domain is paused | [block-report.md](block-report.md) |
-| KageBlockRateAboveThreshold (warning) | a domain was blocked, at levels 1 to 3, as often in the last hour as its `breaker_threshold` allows | [block-report.md](block-report.md) |
+| KageBlockRateAboveThreshold (warning) | a domain was blocked, at levels 1 to 3, as often in the last hour as its `breaker_threshold` allows; the first block counts (see Metrics) | [block-report.md](block-report.md) |
 | KagePersonaRetired (info) | a persona was retired in the last 30 minutes | [personas.md](personas.md) |
-| KageWebhookFailing (warning) | a webhook delivery failed for good in the last 30 minutes | [api.md](api.md) |
+| KageWebhookFailing (warning) | a webhook delivery failed for good in the last 30 minutes; the first failure counts | [api.md](api.md) |
+
+A Prometheus counter is born with its first sample, and `increase()` never
+counts that one: before F110 the first failed delivery and the first block
+of a domain were lost to the two alerts and to every panel that counts
+events, so each fired one event late. The rule tests
+(`deploy/prometheus/alerts.test.yml`) start their input series where the
+exposition starts: at zero for a counter that exists from the start, at the
+first event for one born with it.
 
 ## Metrics
 
@@ -113,6 +121,32 @@ The families and their labels are listed in spec §20. Kage's `/metrics`
 is one exposition: the process's own series, what is read from the store
 at the scrape, and each sidecar's series merged in, every one of them
 under its `engine`. No label is a secret, a token or a proxy's address.
+
+Every counter whose label values are known before any event exists at
+zero from the start of the process: the webhook deliveries by event and
+result, the jobs accepted and finished and the items finished by kind,
+state and level, the crawl's pages, skips and duplicates, the API's
+refusals by code, the scheduler's refusals by reason, the bytes by
+direction and exit, the cache, the `robots.txt` asked for and the robots
+denials by result, the replacements by reason. So the first event of each
+is a change from zero, which `increase()` sees (F110). A counter with a
+label that arrives with the event is still born with it: `kage_requests_total`
+and `kage_attempts_total` carry a domain, `kage_api_requests_total` a
+status. The block-rate alert and the block panels therefore read the
+counter against its value an hour earlier,
+`clamp_min(counter - (counter offset 1h or counter * 0), 0)`, which counts
+the first block too and counts a restart's reset as zero; a query of your
+own over those three families should do the same where one event matters.
+A counter that exists from zero is reset by a restart like any other.
+
+`kage_proxy_state{state}` counts a proxy under the state its last probe
+left it in. A proxy whose backoff ran out is `degraded` in the store and in
+`kage proxy list` while it waits for the probe that decides it, a few
+seconds at most; the gauge counts it as `backoff` until a probe passes, so
+that an outage of the whole pool reads as a flat zero of `healthy` and
+`degraded` through every expiry and `KagePoolUnavailable` holds its ten
+minutes (F111). The gauge is set at every change of a proxy's state and at
+every maintenance pass of the pool.
 
 Since 2.0 `kage_requests_total`, `kage_attempts_total` and
 `kage_attempt_duration_seconds` carry `level` (`"0"` to `"3"`) where 1.x

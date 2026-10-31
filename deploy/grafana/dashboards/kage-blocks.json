@@ -42,7 +42,7 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "sum by (domain) (increase(kage_attempts_total{outcome=~\"rate_limited|forbidden|captcha|challenge_failed|soft_block\"}[1h]))",
+          "expr": "sum by (domain) (clamp_min(kage_attempts_total{outcome=~\"rate_limited|forbidden|captcha|challenge_failed|soft_block\"} - (kage_attempts_total{outcome=~\"rate_limited|forbidden|captcha|challenge_failed|soft_block\"} offset 1h or kage_attempts_total{outcome=~\"rate_limited|forbidden|captcha|challenge_failed|soft_block\"} * 0), 0))",
           "legendFormat": "blocks {{domain}}"
         },
         {
@@ -195,7 +195,7 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "sum by (vendor) (increase(kage_attempts_total{outcome=~\"rate_limited|forbidden|captcha|challenge_failed|soft_block\"}[1h]))",
+          "expr": "sum by (vendor) (clamp_min(kage_attempts_total{outcome=~\"rate_limited|forbidden|captcha|challenge_failed|soft_block\"} - (kage_attempts_total{outcome=~\"rate_limited|forbidden|captcha|challenge_failed|soft_block\"} offset 1h or kage_attempts_total{outcome=~\"rate_limited|forbidden|captcha|challenge_failed|soft_block\"} * 0), 0))",
           "legendFormat": "{{vendor}}"
         }
       ],
@@ -243,7 +243,7 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "sum by (outcome) (increase(kage_attempts_total{outcome=~\"rate_limited|forbidden|captcha|challenge_failed|soft_block\"}[1h]))",
+          "expr": "sum by (outcome) (clamp_min(kage_attempts_total{outcome=~\"rate_limited|forbidden|captcha|challenge_failed|soft_block\"} - (kage_attempts_total{outcome=~\"rate_limited|forbidden|captcha|challenge_failed|soft_block\"} offset 1h or kage_attempts_total{outcome=~\"rate_limited|forbidden|captcha|challenge_failed|soft_block\"} * 0), 0))",
           "legendFormat": "{{outcome}}"
         }
       ],
