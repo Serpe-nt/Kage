@@ -1383,7 +1383,10 @@ least of all (§16.5). One exception, Kage's own: a crawl's pages name their
 job as their tab (contract 1.7.0, `tab`) and share it, so that the next page
 is reached by a click on the page before (§13); a navigation of another
 name, or of none, replaces the tab first. A fresh tab is a new tab of the
-same window, which a site can see as timing only.
+same window: the page it loads reads the same window as before, and a
+site sees timing only. The page that is left sees its tab close, as when a
+person opens a new tab (in Chrome its window loses focus first), not a
+navigation away; in Firefox a page left this way sends no farewell beacon.
 
 **A flow in Kage** is one browser attempt of one persona under one grant
 of the scheduler (`POST /v1/jobs` with `type: flow`, §16.6). It starts
