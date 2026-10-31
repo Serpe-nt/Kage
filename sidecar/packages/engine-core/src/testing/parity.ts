@@ -507,10 +507,12 @@ export function defineParitySuite(subject: ParitySubject): void {
         expect(loaded.autoplay_policy).toEqual(subject.autoplayPolicy);
 
         // The reads of a flow, then a mouse that only moves, then a click.
+        // The flow starts in a fresh tab (F96) and loads the page itself.
         const run = await flow(context, {
           behavior: { seed: SEEDS.first },
           timeout_ms: 90_000,
           actions: [
+            { action: 'goto', url: named('/activation/') },
             { action: 'wait_for', selector: '#press' },
             { action: 'assert', text_contains: 'Nobody has to touch it' },
             { action: 'assert', selector: '#kage-activation-report[data-done]' },
@@ -1142,7 +1144,7 @@ export function defineParitySuite(subject: ParitySubject): void {
         };
         /** Leaves the page, so that it says what it saw. */
         const left = async (run: string) => {
-          await go(context, secure('/landing?from=elsewhere'));
+          await go(context, secure('/landing?from=elsewhere'), { tab: 'crawl' });
           return leaveReport(run);
         };
 
@@ -1226,8 +1228,11 @@ export function defineParitySuite(subject: ParitySubject): void {
     it('clicks a link of the page that is open, as its reader would, and loads nothing to start from', async () => {
       await withContext('open-click', async (context) => {
         // An ordinary visit: the page loads, and its reader stays a moment.
+        // The pages of one crawl, which names its tab (F96): the next page
+        // is clicked on the page the crawl left open in it.
         const visit = (url: string) =>
           go(context, url, {
+            tab: 'crawl',
             wait: { until: 'load', selector: 'body[data-ready]' },
             dwell_ms: 1200,
             behavior: { seed: SEEDS.first, wander: true },
@@ -1238,6 +1243,7 @@ export function defineParitySuite(subject: ParitySubject): void {
         await site.reset();
         expect((await visit(secure('/leave/?run=typed'))).error).toBeNull();
         const typed = await go(context, secure('/landing?from=typed'), {
+          tab: 'crawl',
           behavior: { seed: SEEDS.other },
         });
         expect(typed.behavior).toMatchObject({ clicks: 0, entry: null });
@@ -1264,6 +1270,7 @@ export function defineParitySuite(subject: ParitySubject): void {
           expect((await visit(leave)).error, run).toBeNull();
           const began = Date.now();
           const next = await go(context, target, {
+            tab: 'crawl',
             capture: DOM,
             behavior: {
               seed: SEEDS.other,
@@ -1349,6 +1356,7 @@ export function defineParitySuite(subject: ParitySubject): void {
         await site.reset();
         const leave = secure('/leave/?run=next');
         const read = await go(context, leave, {
+          tab: 'crawl',
           wait: { until: 'load', selector: 'body[data-ready]' },
           dwell_ms: 600,
           behavior: { seed: SEEDS.first, scroll_depth: 1, patience_ms: 20_000, wander: true },
@@ -1357,6 +1365,7 @@ export function defineParitySuite(subject: ParitySubject): void {
         expect(read.behavior?.notches).toBeGreaterThan(0);
         const target = secure('/landing?from=leave');
         const next = await go(context, target, {
+          tab: 'crawl',
           capture: DOM,
           behavior: {
             seed: SEEDS.other,
@@ -1400,10 +1409,14 @@ export function defineParitySuite(subject: ParitySubject): void {
       });
       await withContext('back-click', async (context) => {
         await site.reset();
+        // The pages of one crawl share the tab the crawl names (F96).
+        const tab = 'crawl';
         expect(
-          (await go(context, articles, { dwell_ms: 600, behavior: { seed: SEEDS.first } })).error,
+          (await go(context, articles, { tab, dwell_ms: 600, behavior: { seed: SEEDS.first } }))
+            .error,
         ).toBeNull();
         const first = await go(context, secure('/site/a'), {
+          tab,
           behavior: { seed: SEEDS.first, entry: from(articles) },
         });
         expect(first.behavior?.entry).toMatchObject({
@@ -1415,6 +1428,7 @@ export function defineParitySuite(subject: ParitySubject): void {
         // The next article is linked from the page before: one entry back.
         const began = Date.now();
         const second = await go(context, secure('/site/b'), {
+          tab,
           capture: DOM,
           behavior: { seed: SEEDS.other, entry: from(articles, 3) },
         });
@@ -1453,11 +1467,13 @@ export function defineParitySuite(subject: ParitySubject): void {
         // Two entries back: on to the home page by the navigation, and
         // from there the third article is linked two pages ago.
         const home = await go(context, secure('/site/'), {
+          tab,
           behavior: { seed: SEEDS.first, entry: from(secure('/site/b')) },
         });
         expect(home.behavior?.entry).toMatchObject({ outcome: 'arrived', backs: 0 });
         const startedTwo = Date.now();
         const third = await go(context, secure('/site/c'), {
+          tab,
           behavior: { seed: SEEDS.other, entry: from(articles, 3) },
         });
         expect(third).toMatchObject({ status: 200, title: 'The third article', error: null });
@@ -1484,11 +1500,13 @@ export function defineParitySuite(subject: ParitySubject): void {
         // again, and one is allowed. The browser says so beforehand, so
         // nothing moves, no key is pressed, and nothing is asked for.
         const about = await go(context, secure('/site/about'), {
+          tab,
           behavior: { seed: SEEDS.first, entry: from(secure('/site/c')) },
         });
         expect(about.behavior?.entry).toMatchObject({ outcome: 'arrived', backs: 0 });
         const before = await askedFor('/site/');
         const tooFar = await go(context, secure('/site/dup-1'), {
+          tab,
           behavior: { seed: SEEDS.other, entry: from(articles, 1) },
         });
         expect(tooFar.error).toMatchObject({ code: 'aborted' });
@@ -1501,6 +1519,7 @@ export function defineParitySuite(subject: ParitySubject): void {
         expect(await askedFor('/site/')).toEqual(before);
         // The tab is where it was: a link of the page that was open is still a link of the open page.
         const still = await go(context, secure('/site/private'), {
+          tab,
           behavior: { seed: SEEDS.first, entry: from(secure('/site/about')) },
         });
         expect(still.behavior?.entry).toMatchObject({
@@ -1516,9 +1535,11 @@ export function defineParitySuite(subject: ParitySubject): void {
       await withContext('back-click-origins', async (context) => {
         await site.reset();
         const elsewhere = `http://other.localhost:${site.port}/site/a`;
-        expect((await go(context, articles)).error).toBeNull();
-        expect((await go(context, elsewhere)).error).toBeNull();
+        const tab = 'crawl';
+        expect((await go(context, articles, { tab })).error).toBeNull();
+        expect((await go(context, elsewhere, { tab })).error).toBeNull();
         const back = await go(context, secure('/site/b'), {
+          tab,
           behavior: { seed: SEEDS.other, entry: from(articles, 2) },
         });
         expect(back).toMatchObject({ status: 200, title: 'The second article', error: null });
@@ -1543,11 +1564,14 @@ export function defineParitySuite(subject: ParitySubject): void {
       });
       await withContext('open-missing', async (context) => {
         await site.reset();
-        expect((await go(context, a)).error).toBeNull();
+        // The pages of one crawl share the tab the crawl names (F96).
+        const tab = 'crawl';
+        expect((await go(context, a, { tab })).error).toBeNull();
 
         // The tab never showed the listing. Nothing is loaded, nothing
         // moves, and the result is of no page.
         const stopped = await go(context, b, {
+          tab,
           capture: { ...DOM, links: true },
           behavior: { seed: SEEDS.first, entry: from(secure('/site/articles'), { max_backs: 3 }) },
         });
@@ -1574,6 +1598,7 @@ export function defineParitySuite(subject: ParitySubject): void {
 
         // Told to, it types the address: on the wire a typed navigation like any other.
         const typed = await go(context, b, {
+          tab,
           behavior: {
             seed: SEEDS.first,
             entry: from(secure('/site/articles'), { max_backs: 3, fallback: 'none' }),
@@ -1594,6 +1619,7 @@ export function defineParitySuite(subject: ParitySubject): void {
         // said the persona may go back: it does not.
         const before = await askedFor('/site/');
         const stayed = await go(context, notes, {
+          tab,
           behavior: { seed: SEEDS.first, entry: from(a) },
         });
         expect(stayed.error).toMatchObject({ code: 'aborted' });
@@ -1605,6 +1631,7 @@ export function defineParitySuite(subject: ParitySubject): void {
         expect(await askedFor('/site/')).toEqual(before);
         // Allowed one entry, it goes: the page was there all along.
         const went = await go(context, notes, {
+          tab,
           behavior: { seed: SEEDS.first, entry: from(a, { max_backs: 1 }) },
         });
         expect(went.behavior).toMatchObject({
@@ -1616,6 +1643,7 @@ export function defineParitySuite(subject: ParitySubject): void {
         // The open page is the page named, and holds no link to the target.
         const tall = secure('/site/tall');
         const linkless = await go(context, tall, {
+          tab,
           behavior: { seed: SEEDS.first, entry: from(notes) },
         });
         expect(linkless.error).toMatchObject({ code: 'aborted' });
@@ -1626,6 +1654,7 @@ export function defineParitySuite(subject: ParitySubject): void {
         });
         expect(await askedFor('/site/tall')).toEqual([]);
         const typedOn = await go(context, tall, {
+          tab,
           behavior: { seed: SEEDS.first, entry: from(notes, { fallback: 'none' }) },
         });
         expect(typedOn).toMatchObject({ status: 200, error: null });
@@ -1637,6 +1666,7 @@ export function defineParitySuite(subject: ParitySubject): void {
         // the persona goes back to it, finds none, and types.
         const third = secure('/site/c');
         const afterBack = await go(context, third, {
+          tab,
           behavior: { seed: SEEDS.first, entry: from(a, { max_backs: 3, fallback: 'none' }) },
         });
         expect(afterBack).toMatchObject({ status: 200, error: null, title: 'The third article' });
@@ -1667,10 +1697,12 @@ export function defineParitySuite(subject: ParitySubject): void {
           fallback: 'stop' | 'none' = 'stop',
         ) => {
           await site.reset();
-          // A bare load: until the entry, the page sees no hand at all.
-          expect((await go(context, odd(run))).error, run).toBeNull();
+          // A bare load: until the entry, the page sees no hand at all. The
+          // two are a crawl's, in the tab it names (F96).
+          expect((await go(context, odd(run), { tab: 'crawl' })).error, run).toBeNull();
           const began = Date.now();
           const result = await go(context, secure(landing), {
+            tab: 'crawl',
             behavior: {
               seed: SEEDS.first,
               entry: { strategy: 'link', from_url: odd(run), from_open_page: true, fallback },
@@ -1680,7 +1712,7 @@ export function defineParitySuite(subject: ParitySubject): void {
         };
         /** Leaves the page, so that it says what it saw. */
         const left = async (run: string) => {
-          await go(context, secure('/landing?from=elsewhere'));
+          await go(context, secure('/landing?from=elsewhere'), { tab: 'crawl' });
           return leaveReport(run);
         };
 
@@ -2015,20 +2047,17 @@ export function defineParitySuite(subject: ParitySubject): void {
 
     it('scrolls, dwells and wanders like a person when a navigation asks for it', async () => {
       const result = await withContext('behavior', async (context) => {
+        // The recorder publishes every quarter of a second; the capture at
+        // the end of the dwell reads what it published. (A flow after the
+        // navigation would read a fresh tab, F96.)
         const page = await go(context, named('/input/'), {
           wait: { until: 'load', selector: 'body[data-ready]' },
+          capture: DOM,
           dwell_ms: 5200,
           timeout_ms: 120_000,
           behavior: { seed: SEEDS.first, scroll_depth: 0.35, wander: true },
         });
-        // The recorder publishes every quarter of a second; read it afterwards.
-        const read = await flow(context, {
-          actions: [
-            { action: 'wait_for', ms: 400 },
-            { action: 'extract', capture: DOM },
-          ],
-        });
-        return { page, report: inputReportOf(read.steps[1]?.capture?.dom_html ?? null) };
+        return { page, report: inputReportOf(page.dom_html) };
       });
       const { behavior } = result.page;
       expect(behavior).toMatchObject({ seed: SEEDS.first, entry: null, clicks: 0, keys: 0 });
@@ -2472,7 +2501,7 @@ export function defineParitySuite(subject: ParitySubject): void {
       }
     });
 
-    it('goes back to a page with a status of its own, to one from before the flow, and nowhere when there is none', async () => {
+    it('goes back to a page with a status of its own, never to one from before the flow, and nowhere when there is none', async () => {
       await withContext('back-more', async (context) => {
         // A page that answered 404, left for one that answered 200.
         const missing = await flow(context, {
@@ -2491,8 +2520,9 @@ export function defineParitySuite(subject: ParitySubject): void {
           title: 'Not found',
         });
 
-        // A page a navigation loaded before the flow began is remembered
-        // from the moment the flow leaves it.
+        // A page a navigation loaded before the flow is not the flow's
+        // (F96): the flow starts in a fresh tab, and its way back from its
+        // first page has nowhere to go. The tab stays on that page.
         await go(context, named('/listing?page=2'));
         const earlier = await flow(context, {
           timeout_ms: 60_000,
@@ -2502,42 +2532,47 @@ export function defineParitySuite(subject: ParitySubject): void {
             { action: 'extract', capture: DOM },
           ],
         });
-        expect(earlier.steps.filter((step) => !step.ok)).toEqual([]);
-        expect(earlier.steps.at(-1)?.capture).toMatchObject({
-          final_url: named('/listing?page=2'),
+        expect(earlier.steps.map((step) => [step.action, step.ok])).toEqual([
+          ['goto', true],
+          ['back', false],
+        ]);
+        expect(earlier.steps[1]?.error).toMatch(/^there is no page to go back to/);
+        expect(earlier.final.ok).toBe(false);
+        expect(earlier.final.result).toMatchObject({
+          final_url: named('/landing'),
           status: 200,
-          title: 'Listing, page 2',
-          redirects: [],
+          title: 'Landing',
         });
 
-        // A page the flow never saw arrive: its document is captured all
-        // the same. What it was answered with is known only where the
-        // browser asked again; never is it the answer of the page left.
+        // A flow that reads before it loads anything reads the fresh tab:
+        // no document, no address of anyone's, and nothing to go back to.
         await go(context, named('/landing'));
         const unseen = await flow(context, {
           timeout_ms: 60_000,
           actions: [
-            { action: 'back', human: false, timeout_ms: 10_000 },
             { action: 'extract', capture: DOM },
+            { action: 'back', human: false, timeout_ms: 10_000 },
           ],
         });
-        expect(unseen.steps.filter((step) => !step.ok)).toEqual([]);
-        const capture = unseen.steps.at(-1)?.capture;
-        expect(capture).toMatchObject({
-          final_url: named('/listing?page=2'),
-          title: 'Listing, page 2',
-          redirects: [],
+        expect(unseen.steps.map((step) => [step.action, step.ok])).toEqual([
+          ['extract', true],
+          ['back', false],
+        ]);
+        expect(unseen.steps[0]?.capture).toMatchObject({
+          final_url: 'about:blank',
+          status: null,
+          title: null,
+          dom_html: null,
           error: null,
         });
-        expect(capture?.dom_html).toContain('<h1>Listing</h1>');
-        expect([200, null]).toContain(capture?.status);
-        expect(capture?.headers.find((header) => header.name === 'x-fixture')).toBeUndefined();
+        expect(unseen.final.result).toMatchObject({ final_url: 'about:blank', dom_html: null });
       });
 
       // No entry to go back to: the step says so, soon, and the flow ends,
       // by the keyboard as by the driver (F38: the keys used to report
-      // success after watching five seconds of nothing).
-      // (The first of the two may still find the blank page the tab began with.)
+      // success after watching five seconds of nothing). The blank page the
+      // tab began with is no page to go back to either, and the tab stays
+      // where it is (F96).
       for (const human of [false, true]) {
         const how = human ? 'by the keyboard' : 'by the driver';
         const nowhere = await withContext(
@@ -2548,18 +2583,84 @@ export function defineParitySuite(subject: ParitySubject): void {
               actions: [
                 { action: 'goto', url: named('/landing') },
                 { action: 'back', human, timeout_ms: 10_000 },
-                { action: 'back', human, timeout_ms: 10_000 },
                 { action: 'extract', capture: DOM },
               ],
             }),
         );
-        const failed = nowhere.steps.find((step) => !step.ok);
+        expect(
+          nowhere.steps.map((step) => [step.action, step.ok]),
+          how,
+        ).toEqual([
+          ['goto', true],
+          ['back', false],
+        ]);
+        const failed = nowhere.steps[1];
         expect(failed, how).toMatchObject({ action: 'back', capture: null });
         expect(failed?.error, how).toMatch(/^there is no page to go back to/);
         expect(failed?.duration_ms, how).toBeLessThan(4000);
-        expect(nowhere.steps.at(-1), how).toBe(failed);
         expect(nowhere.final.ok, how).toBe(false);
+        expect(nowhere.final.result, how).toMatchObject({
+          final_url: named('/landing'),
+          status: 200,
+        });
       }
+    });
+
+    it('starts every request in a fresh tab of the same window, and a crawl goes on in the tab it names (F96)', async () => {
+      await withContext('fresh-tab', async (context) => {
+        await site.reset();
+        // The window is the same window: what a page reads of it does not
+        // change with the tab, so a fresh tab shows a site timing only.
+        const first = await probe(context);
+        await flow(context, { actions: [{ action: 'goto', url: named('/landing') }] });
+        const began = Date.now();
+        const page = await go(context, named('/landing'));
+        const took = Date.now() - began;
+        expect(page).toMatchObject({ status: 200, error: null, final_url: named('/landing') });
+        measured('a fresh tab', {
+          overhead_ms: took - page.timing.total_ms,
+          total_ms: page.timing.total_ms,
+        });
+        const again = await probe(context);
+        expect(again.scopes).toEqual(first.scopes);
+        expect(again.environment).toEqual(first.environment);
+
+        // A crawl's pages share the tab the crawl names: its next page is a
+        // click on the page it left open. A request that names no tab comes
+        // between, and the crawl finds its pages gone: nothing of them is
+        // in the tab any more, and nothing moves.
+        const articles = secure('/site/articles');
+        const from = {
+          strategy: 'link' as const,
+          from_url: articles,
+          from_open_page: true,
+          max_backs: 3,
+        };
+        expect((await go(context, articles, { tab: 'crawl' })).error).toBeNull();
+        const clicked = await go(context, secure('/site/a'), {
+          tab: 'crawl',
+          behavior: { seed: SEEDS.first, entry: from },
+        });
+        expect(clicked.error).toBeNull();
+        expect(clicked.behavior).toMatchObject({
+          clicks: 1,
+          entry: { outcome: 'arrived', referer: articles, backs: 0 },
+        });
+        expect((await go(context, articles, { tab: 'crawl' })).error).toBeNull();
+        expect((await go(context, secure('/site/about'))).error).toBeNull();
+        const lost = await go(context, secure('/site/b'), {
+          tab: 'crawl',
+          behavior: { seed: SEEDS.first, entry: from },
+        });
+        expect(lost.error).toMatchObject({ code: 'aborted' });
+        expect(lost.behavior).toMatchObject({
+          clicks: 0,
+          keys: 0,
+          moves: 0,
+          entry: { outcome: 'link_not_found', referer: null, backs: null },
+        });
+        expect(await askedFor('/site/b')).toEqual([]);
+      });
     });
 
     it('goes back to an entry with the address of the page it leaves, and knows that it left', async () => {

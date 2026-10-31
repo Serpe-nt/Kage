@@ -23,9 +23,9 @@ import {
   type EngineStatus,
   type VirtualDisplay,
 } from '@kage/engine-core';
-import { chromium, type BrowserContext } from 'patchright';
+import { chromium, type BrowserContext, type Page } from 'patchright';
 
-import { ChromiumContext } from './context.js';
+import { ChromiumContext, type ChromiumTab } from './context.js';
 import {
   buildInjection,
   chromeUserAgentOf,
@@ -42,6 +42,32 @@ export const CHROME_WRAPPER = fileURLToPath(new URL('../bin/chrome-affinity.sh',
 
 /** How long Chrome may take to start. */
 const LAUNCH_TIMEOUT_MS = 60_000;
+
+/**
+ * Makes a tab the persona's, before its first navigation so that every
+ * document of it gets all of this: the engine's own debugger session on it
+ * (log entries and the protocol of responses are read from the browser
+ * process and are invisible to pages), the reader's world, and the
+ * fingerprint's `User-Agent` and script where the plan injects them. The
+ * tab a browser begins with and the fresh tab of a later request (F96) are
+ * made alike.
+ */
+async function prepareTab(
+  browser: BrowserContext,
+  page: Page,
+  injection: Injection | null,
+): Promise<ChromiumTab> {
+  const session = await browser.newCDPSession(page);
+  await session.send('Log.enable');
+  await session.send('Network.enable');
+  const reader = await PageReader.attach(session);
+  if (injection !== null) {
+    await session.send('Emulation.setUserAgentOverride', injection.userAgentOverride);
+    await session.send('Page.enable');
+    await session.send('Page.addScriptToEvaluateOnNewDocument', { source: injection.script });
+  }
+  return { page, session, reader };
+}
 
 /**
  * The Chromium engine: patchright driving the real, installed Chrome, one
@@ -170,25 +196,18 @@ export class ChromiumEngine implements Engine {
           ...plan.env,
         },
       });
-      const page = browser.pages()[0] ?? (await browser.newPage());
-      const session = await browser.newCDPSession(page);
       const owner = browser.browser();
       if (owner === null) {
         throw new Error('the driver gave no browser for the persistent context');
       }
       const browserSession = await owner.newBrowserCDPSession();
       const version = await browserSession.send('Browser.getVersion');
-      // Log entries and the protocol of responses: both are read from the
-      // browser process and invisible to pages.
-      await session.send('Log.enable');
-      await session.send('Network.enable');
-      // Before the first navigation: every document gets the reader's world.
-      const reader = await PageReader.attach(session);
-      if (injection !== null) {
-        await session.send('Emulation.setUserAgentOverride', injection.userAgentOverride);
-        await session.send('Page.enable');
-        await session.send('Page.addScriptToEvaluateOnNewDocument', { source: injection.script });
-      }
+      // The tab the browser began with, made the persona's before its first
+      // navigation; the fresh tab of a later request is made the same way
+      // (F96).
+      const persistent = browser;
+      const makeTab = (page: Page) => prepareTab(persistent, page, injection);
+      const tab = await makeTab(browser.pages()[0] ?? (await browser.newPage()));
       const applied: AppliedIdentity = {
         claimed_os: document.claimed_os,
         user_agent: injection === null ? version.userAgent : injection.userAgentOverride.userAgent,
@@ -202,9 +221,8 @@ export class ChromiumEngine implements Engine {
       };
       const context: EngineContext = new ChromiumContext({
         context: browser,
-        page,
-        session,
-        reader,
+        tab,
+        openTab: async () => makeTab(await persistent.newPage()),
         browserSession,
         browserVersion: version.product.replace(/^[^/]*\//, ''),
         applied,

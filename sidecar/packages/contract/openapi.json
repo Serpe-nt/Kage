@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Kage browser sidecar",
-    "version": "1.6.0",
+    "version": "1.7.0",
     "description": "Internal contract between Kage and its browser sidecars (spec §10.2). Generated from the zod schemas in sidecar/packages/contract; do not edit by hand. Regenerate with `just openapi`.",
     "license": {
       "name": "MIT OR Apache-2.0",
@@ -3285,6 +3285,12 @@
           "behavior": {
             "description": "What the persona does on the page; absent for a bare page load.",
             "$ref": "#/components/schemas/BehaviorOptions"
+          },
+          "tab": {
+            "description": "The tab the navigation runs in, named by whoever knows which pages belong together: Kage names a crawl's job, so that the crawl reaches its next page by a click on the page it left open, or on one it goes back to (`behavior.entry.from_open_page`). A navigation that names the tab the context's open tab was last used under continues in it, with its pages and history. One that names another tab, or none, first replaces the open tab by a fresh one: no page before the one it loads, no history, an empty session storage; cookies and local storage are the profile's and stay. Every flow and every self-test starts in a fresh tab and leaves it nobody's. Default: none, a fresh tab.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
           }
         },
         "required": [
@@ -3376,6 +3382,32 @@
                 "strategy": "direct"
               }
             }
+          },
+          {
+            "url": "https://example.org/listing?page=3",
+            "wait": {
+              "until": "load"
+            },
+            "capture": {
+              "dom": true,
+              "raw": false,
+              "xhr": null,
+              "console": false,
+              "screenshot": null,
+              "pdf": null
+            },
+            "timeout_ms": 60000,
+            "behavior": {
+              "seed": "5f1c0e9a7b3d2468ace013579bdf02468ace13579bdf0246813579bdf02468ac",
+              "entry": {
+                "strategy": "link",
+                "from_url": "https://example.org/listing?page=2",
+                "fallback": "none",
+                "from_open_page": true,
+                "max_backs": 3
+              }
+            },
+            "tab": "0199c1f4-bbbb-7c3e-9d41-2f8a5b6c7d8e"
           }
         ]
       },

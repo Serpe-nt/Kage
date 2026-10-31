@@ -187,6 +187,7 @@ fn an_optional_field_is_left_out_and_a_nullable_one_is_written_as_null() {
         max_body_bytes: None,
         artifact_prefix: None,
         behavior: None,
+        tab: None,
     };
     let bare = json!({
         "url": "https://example.org/",

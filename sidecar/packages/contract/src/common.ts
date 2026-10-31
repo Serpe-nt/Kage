@@ -21,7 +21,7 @@ export const CONTRACT_VERSION = 'v1';
  * Semantic version of the contract document. A breaking change needs a new
  * major here and a new path prefix; `breaking.ts` checks it.
  */
-export const CONTRACT_SEMVER = '1.6.0';
+export const CONTRACT_SEMVER = '1.7.0';
 
 /** Header that carries the shared secret (spec §10.1). */
 export const TOKEN_HEADER = 'x-kage-sidecar-token';

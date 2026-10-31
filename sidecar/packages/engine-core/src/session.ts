@@ -148,6 +148,14 @@ export interface DriverPage {
    * `load`, and a wait for one never ends (follow-up F21).
    */
   goBack(options: { waitUntil: LoadState; timeout: number }): Promise<DriverResponse | null>;
+  /**
+   * The address of the history entry before the open one: `null` when the
+   * tab holds none, `undefined` when the browser cannot say without moving.
+   * Asked before any way back (F96): a tab whose only entry before is the
+   * blank page it began with goes nowhere. An engine whose browser cannot
+   * be asked leaves it out.
+   */
+  entryBefore?(): Promise<string | null | undefined>;
   waitForSelector(
     selector: string,
     options: { state: 'attached'; timeout: number },
@@ -196,6 +204,13 @@ export interface SessionDriver {
   windowOrigin(): Point;
   /** Opens the mouse and keyboard of the context's display. */
   openInput(): Promise<InputDevice>;
+  /**
+   * Replaces the open tab by a fresh one (F96): a new tab of the same
+   * window, with no history and nothing of what the tab showed, the old
+   * one closed once the new one is there. `page` is the new tab afterwards;
+   * the session listens to it anew.
+   */
+  freshPage(): Promise<void>;
 }
 
 /** What a session is made of. */
@@ -799,10 +814,33 @@ export class PageSession {
    * hold at all. Kept short; a page from long ago is out of reach anyway.
    */
   private readonly shown = new Set<string>();
+  /**
+   * The name the open tab was last used under (F96): a crawl's, which its
+   * navigations share; `null` for nobody's, after a request that named none.
+   */
+  private tab: string | null = null;
+  /** Whether a request has run in the open tab. The tab a context began with is fresh. */
+  private tabUsed = false;
 
   constructor(private readonly parts: SessionParts) {
-    const { page } = parts.driver;
+    this.listen(parts.driver.page);
+  }
+
+  private get page(): DriverPage {
+    return this.parts.driver.page;
+  }
+
+  /**
+   * Listens to the page that is open: what loads in it fills the state of
+   * the document. Done again for every fresh tab; a listener of a tab that
+   * was replaced ignores what may still come from it.
+   */
+  private listen(page: DriverPage): void {
+    const live = () => this.parts.driver.page === page;
     page.on('request', (asked) => {
+      if (!live()) {
+        return;
+      }
       if (asked.resourceType() === 'script') {
         this.document.scriptUrls.add(asked.url());
       }
@@ -815,18 +853,43 @@ export class PageSession {
       }
     });
     page.on('response', (response) => {
-      this.onResponse(response);
+      if (live()) {
+        this.onResponse(response);
+      }
     });
     page.on('domcontentloaded', () => {
-      this.document.domContentLoaded ??= Date.now() - this.document.started;
+      if (live()) {
+        this.document.domContentLoaded ??= Date.now() - this.document.started;
+      }
     });
     page.on('load', () => {
-      this.document.load ??= Date.now() - this.document.started;
+      if (live()) {
+        this.document.load ??= Date.now() - this.document.started;
+      }
     });
   }
 
-  private get page(): DriverPage {
-    return this.parts.driver.page;
+  /**
+   * Gives a request the tab it runs in (F96; spec §10.5, §16.5): the open
+   * tab when the request names the tab it was last used under (a crawl's
+   * next page, which clicks on the page the crawl left there), a fresh one
+   * otherwise, which holds nothing of what came before: no page, no
+   * history, no session storage. Cookies and local storage are the
+   * profile's and stay (D6). The tab a context began with is fresh until
+   * its first request.
+   *
+   * @param name the tab the request names; `null` for one that names none, as every flow and self-test.
+   */
+  private async tabFor(name: string | null): Promise<void> {
+    if (this.tabUsed && (name === null || name !== this.tab)) {
+      await this.parts.driver.freshPage();
+      this.listen(this.page);
+      this.shown.clear();
+      this.documentsAsked = 0;
+      this.document = newDocument();
+    }
+    this.tab = name;
+    this.tabUsed = true;
   }
 
   private onResponse(response: DriverResponse): void {
@@ -1026,6 +1089,16 @@ export class PageSession {
    * @param by what asks the browser to go back in place of the driver.
    */
   private async goBack(timeout: number, by?: () => Promise<void>): Promise<WentBack> {
+    const entry =
+      this.page.entryBefore === undefined
+        ? undefined
+        : await this.page.entryBefore().catch(() => undefined);
+    if (entry === null || (entry !== undefined && !/^https?:\/\//i.test(entry))) {
+      // The tab holds no web page before the open one: the blank page a tab
+      // begins with, or the browser's own error page, is none (F96).
+      // Nothing moves, by the driver or by the keys.
+      return 'nowhere';
+    }
     const deadline = Date.now() + timeout;
     const since = this.mark();
     const before = await this.read<{ born: number }>(READ_SHOWN).catch(() => null);
@@ -1642,6 +1715,7 @@ export class PageSession {
   /** Loads a page, lets the persona behave on it when asked, and captures it. */
   async navigate(request: NavigateRequest, env: OperationEnv): Promise<PageResult> {
     const { driver } = this.parts;
+    await this.tabFor(request.tab ?? null);
     const page = this.page;
     const started = Date.now();
     const timeout = request.timeout_ms ?? DEFAULT_NAVIGATE_TIMEOUT_MS;
@@ -1822,6 +1896,10 @@ export class PageSession {
     emit: (event: FlowEvent) => void,
   ): Promise<void> {
     const { driver } = this.parts;
+    // A flow starts in a fresh tab, whatever came before it (F96): its
+    // first `back` has nowhere to go, and nothing it reads before its own
+    // first navigation is of another request.
+    await this.tabFor(null);
     const page = this.page;
     const started = Date.now();
     const consoleStart = driver.console.mark();
@@ -2091,7 +2169,9 @@ export class PageSession {
     return { httpStatus: response?.status() ?? null, text, rows, published, screenshot: shot };
   }
 
-  selftest(request: SelftestRequest, env: OperationEnv): Promise<SelftestResponse> {
+  async selftest(request: SelftestRequest, env: OperationEnv): Promise<SelftestResponse> {
+    // A self-test is a request in the persona's tab like any other: a fresh one (F96).
+    await this.tabFor(null);
     return runSelftest({ load: (page, options) => this.loadForSelftest(page, options) }, request, {
       artifacts: env.artifacts,
       artifactPrefix: request.artifact_prefix ?? `${env.defaultArtifactPrefix}/selftest`,
