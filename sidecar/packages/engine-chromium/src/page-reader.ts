@@ -274,8 +274,16 @@ export class PageReader {
  * engine-core gets this instead of the driver's page, so that no read can
  * reach the driver. Navigation, load states, network events and the input
  * of `human: false` steps stay the driver's.
+ *
+ * @param history what the tab holds before the open page (the address, or
+ *   `null` for nothing), read from the browser process by the context
+ *   (F96); without it the page cannot say.
  */
-export function pageWithReader(page: Page, reader: PageReader): DriverPage {
+export function pageWithReader(
+  page: Page,
+  reader: PageReader,
+  history?: () => Promise<string | null>,
+): DriverPage {
   // The driver's page offers everything the session asks for and more.
   const driver: DriverPage = page;
   return {
@@ -288,6 +296,7 @@ export function pageWithReader(page: Page, reader: PageReader): DriverPage {
     frames: () => driver.frames(),
     goto: (url, options) => driver.goto(url, options),
     goBack: (options) => driver.goBack(options),
+    entryBefore: () => (history === undefined ? Promise.resolve(undefined) : history()),
     waitForLoadState: (state, options) => driver.waitForLoadState(state, options),
     click: (selector, options) => driver.click(selector, options),
     hover: (selector, options) => driver.hover(selector, options),

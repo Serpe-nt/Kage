@@ -366,6 +366,14 @@ export const NavigateRequestSchema = z
     behavior: BehaviorOptionsSchema.optional().describe(
       'What the persona does on the page; absent for a bare page load.',
     ),
+    tab: z
+      .string()
+      .min(1)
+      .max(128)
+      .optional()
+      .describe(
+        "The tab the navigation runs in, named by whoever knows which pages belong together: Kage names a crawl's job, so that the crawl reaches its next page by a click on the page it left open, or on one it goes back to (`behavior.entry.from_open_page`). A navigation that names the tab the context's open tab was last used under continues in it, with its pages and history. One that names another tab, or none, first replaces the open tab by a fresh one: no page before the one it loads, no history, an empty session storage; cookies and local storage are the profile's and stay. Every flow and every self-test starts in a fresh tab and leaves it nobody's. Default: none, a fresh tab.",
+      ),
   })
   .meta({ id: 'NavigateRequest', description: 'One page load in a persona context.' });
 export type NavigateRequest = z.infer<typeof NavigateRequestSchema>;

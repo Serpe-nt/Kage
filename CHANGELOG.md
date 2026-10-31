@@ -76,6 +76,21 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Firefox at level 2, as the finding did (F97). Chromium's sidecar does not
   answer the navigation of such a page in time, even at 2000 elements, and
   the fetch ends `sidecar_error`: a finding of its own, not fixed here.
+- **A persona's tab holds no page of another request (F96, QA finding
+  jobs-01).** A flow's `back` walked into the page the request before had
+  left in the persona's tab, another key's as much as the same key's, and
+  both engines reported the step `ok: true`; on a persona's first flow
+  Chromium went back to `about:blank` with `ok: true`. Every navigation,
+  flow and self-test now starts in a fresh tab of the persona's window,
+  which holds no page, no history and no session storage of what came
+  before (cookies and local storage are the profile's and stay, D6), and
+  a way back never lands on the blank page a tab begins with or on the
+  browser's error page: `back` at a flow's start fails as §10.5 says, on
+  both engines, on the first request and on every later one, and a step
+  that reads the tab before the flow's own first navigation reads a blank
+  one. Only a crawl's pages share a tab, which Kage names with the crawl's
+  job (contract 1.7.0, `NavigateRequest.tab`): its next page is still a
+  click on the page before (§13, F28). No API consumer can name a tab.
 - **The browser self-test loads a detection page once more when its
   navigation failed.** The first nightly live run (2026-10-30) lost its
   verdict on one page: the Firefox self-test through the second of its two

@@ -129,6 +129,8 @@ fn visit_request(
         challenge_wait_ms: None,
         dwell_ms: None,
         max_body_bytes: None,
+        // A warm-up visit names no tab: each starts in a fresh one (F96).
+        tab: None,
         timeout_ms,
         url: visit.url.to_string(),
         wait: Wait {
