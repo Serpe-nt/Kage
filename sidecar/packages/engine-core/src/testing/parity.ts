@@ -515,7 +515,12 @@ export function defineParitySuite(subject: ParitySubject): void {
             { action: 'goto', url: named('/activation/') },
             { action: 'wait_for', selector: '#press' },
             { action: 'assert', text_contains: 'Nobody has to touch it' },
-            { action: 'assert', selector: '#kage-activation-report[data-done]' },
+            // The recorder is done four seconds after its load.
+            {
+              action: 'wait_for',
+              selector: '#kage-activation-report[data-done]',
+              timeout_ms: 15_000,
+            },
             { action: 'wait_for', ms: 600 },
             { action: 'extract', capture: DOM },
             { action: 'hover', selector: '#far' },
@@ -563,8 +568,13 @@ export function defineParitySuite(subject: ParitySubject): void {
         ).rejects.toMatchObject({ code: 'invalid_request' });
         expect(await askedFor('/leave/')).toEqual([]);
 
+        // The visit and the typed address that leaves it share a tab, so
+        // that the page is left by a navigation and says what it saw: a
+        // page whose tab closes (a fresh tab, F96) sends no farewell in
+        // Firefox.
         const began = Date.now();
         const visit = await go(context, leave, {
+          tab: 'visit',
           wait: { until: 'load', selector: 'body[data-ready]' },
           dwell_ms: 1500,
           behavior: { seed: SEEDS.first, mode: 'still', entry: { strategy: 'direct' } },
@@ -602,7 +612,7 @@ export function defineParitySuite(subject: ParitySubject): void {
         expect(headerOf(arrived, 'sec-fetch-site')).toBe('none');
 
         // Left by a typed address too; then the page says what it saw of its visitor.
-        const next = await go(context, secure('/landing?from=still'));
+        const next = await go(context, secure('/landing?from=still'), { tab: 'visit' });
         expect(next.error).toBeNull();
         const left = await leaveReport(run);
         const saw = left.events.map((event) => event.type);
@@ -1137,7 +1147,9 @@ export function defineParitySuite(subject: ParitySubject): void {
         ) => {
           await site.reset();
           const began = Date.now();
+          // In the reader's tab, which `left` leaves by a navigation (F96).
           const result = await go(context, secure(landing), {
+            tab: 'crawl',
             behavior: { seed, entry: { strategy: 'link', from_url: odd(run), fallback } },
           });
           return { result, took: Date.now() - began };
@@ -1934,7 +1946,10 @@ export function defineParitySuite(subject: ParitySubject): void {
           change: Partial<NavigateRequest> = {},
         ) => {
           const began = Date.now();
+          // One reader's visits, in one tab: each page is left by the next
+          // navigation and says how far it was read (F96).
           const result = await go(context, url, {
+            tab: 'reader',
             dwell_ms: 2000,
             timeout_ms: 6000,
             ...change,
