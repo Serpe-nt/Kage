@@ -55,6 +55,25 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (the persona's client gave such a hop an `http_client` failure before).
   The persona's client under `kage serve` already checked its hops. With
   the setting off nothing changes: the proxies resolve (F98).
+- **A page nested thousands of elements deep no longer ends the process.**
+  QA round one (finding extract-01) fetched a page of 5000 nested `<div>`
+  with `include: ["extract"]`, and the kage process died of a stack
+  overflow: every fetch, job claim and webhook delivery in flight with it,
+  `/readyz` down until the container restarted, and the request without a
+  result. A crawl at level 0 whose seed linked to such a page restarted the
+  server three times and then said `succeeded`; a batch item said `ok` with
+  `extract: null`. The walk that reads a page's links and its text for a
+  crawl and for `links` of an extraction called itself once per level of
+  nesting, so a page chose how deep the worker's 2 MiB stack was used. It
+  is a loop over the tree now, with a stack of its own, like the parser
+  and every other walk, measurement and rendering of the extractor
+  already were; nothing on a page's path calls itself per level, and the
+  worker's stack is unchanged. The result is whole at any depth: the
+  finding's page gives its title, its hundred words and its links. Tests at
+  each layer read pages of 5000 and 20 000 nested elements on a thread
+  with a worker's stack, and the fixture site serves a page whose script
+  nests ten thousand elements, which the end-to-end test reads in both
+  engines (F97).
 - **The browser self-test loads a detection page once more when its
   navigation failed.** The first nightly live run (2026-10-30) lost its
   verdict on one page: the Firefox self-test through the second of its two

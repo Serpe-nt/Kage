@@ -305,4 +305,46 @@ mod tests {
         assert_eq!(extract["thin_content"], true);
         assert!(extract["markdown"].is_null() && extract["links"].is_null());
     }
+
+    /// The finding's page (F97): five thousand nested `div` and a
+    /// paragraph, and a page four times as deep, read for a crawl and for a
+    /// request on the blocking pool of a runtime whose threads have the
+    /// 2 MiB stack the server's have. A walk that called itself once per
+    /// level overflowed it, and the process with it; the result is whole.
+    #[test]
+    fn a_page_nested_deeper_than_a_workers_stack_is_read_whole() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_stack_size(2 * 1024 * 1024)
+            .enable_all()
+            .build()
+            .unwrap();
+        let words = (0..100)
+            .map(|index| format!("word{index}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let base = Url::parse("http://deep.kage.test/page").unwrap();
+        for depth in [5_000_usize, 20_000] {
+            let html = format!(
+                "<!doctype html><title>Deep</title>{}<p>{words} <a href=\"next\">on</a></p>",
+                "<div>".repeat(depth)
+            );
+            let read = runtime.block_on(read_document(
+                html,
+                base.clone(),
+                true,
+                Some(Options::default()),
+            ));
+            let page = read.page.unwrap();
+            assert_eq!(page.title, "Deep", "{depth}");
+            let links: Vec<&str> = page.links.iter().map(|link| link.url.as_str()).collect();
+            assert_eq!(links, ["http://deep.kage.test/next"], "{depth}");
+            assert!(page.main_text.starts_with("word0 word1 "), "{depth}");
+            let extract = read.extract.unwrap();
+            assert_eq!(extract["title"], "Deep", "{depth}");
+            assert_eq!(extract["word_count"], 101, "{depth}");
+            assert_eq!(extract["links"].as_array().unwrap().len(), 1, "{depth}");
+            assert!(!read.thin, "{depth}");
+        }
+    }
 }

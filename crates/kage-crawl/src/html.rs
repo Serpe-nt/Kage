@@ -19,7 +19,15 @@
 //! links and its text from it ([`Document::page`]), and extraction
 //! (`kage-extract`, spec §14) reads everything else from the same tree
 //! with the same rules for what is hidden and what is furniture.
+//!
+//! A page is hostile input, and how deep it nests is the site's choice.
+//! Nothing here calls itself once per level: the parser keeps its open
+//! elements on a stack of its own, and the walk that reads the links and
+//! the text is a loop over the tree with a stack of what each open element
+//! hands down. A page nested five thousand or fifty thousand elements deep
+//! is read on the 2 MiB stack of a worker thread like any other (F97).
 
+use ego_tree::iter::Edge;
 use scraper::node::Node;
 use scraper::{ElementRef, Html};
 use url::Url;
@@ -142,39 +150,68 @@ struct Inherited {
     furniture: bool,
 }
 
+impl Inherited {
+    /// Outside everything: the document's own element inherits nothing.
+    const NOTHING: Self = Self {
+        silent: false,
+        hidden: false,
+        furniture: false,
+    };
+}
+
 struct Reader<'a> {
     base: &'a Url,
     page: Page,
 }
 
 impl Reader<'_> {
-    fn element(&mut self, element: ElementRef<'_>, inherited: Inherited) {
-        let value = element.value();
-        let name = value.name();
-        let here = Inherited {
-            silent: inherited.silent || NOT_TEXT.contains(&name),
-            hidden: inherited.hidden || hides(value),
-            furniture: inherited.furniture || is_furniture(value),
-        };
-        if (name == "a" || name == "area")
-            && let Some(href) = value.attr("href")
-        {
-            self.link(element, href, here);
-        }
-        for child in element.children() {
-            match child.value() {
-                Node::Text(text) if !here.silent && !here.hidden => {
-                    push_text(&mut self.page.text, text);
-                    if !here.furniture {
-                        push_text(&mut self.page.main_text, text);
+    /// Reads every element under `root`, `root` included, in document
+    /// order: its links, and its text where a reader sees it.
+    ///
+    /// One loop over the tree, with a stack that holds what every open
+    /// element hands down to what is inside it; never a call per level of
+    /// nesting, so that a page nested as deep as a site likes is read on a
+    /// worker's stack (F97).
+    fn read(&mut self, root: ElementRef<'_>) {
+        let mut open: Vec<Inherited> = Vec::new();
+        for edge in root.traverse() {
+            match edge {
+                Edge::Open(node) => match node.value() {
+                    Node::Element(value) => {
+                        let inherited = open.last().copied().unwrap_or(Inherited::NOTHING);
+                        let name = value.name();
+                        let here = Inherited {
+                            silent: inherited.silent || NOT_TEXT.contains(&name),
+                            hidden: inherited.hidden || hides(value),
+                            furniture: inherited.furniture || is_furniture(value),
+                        };
+                        if (name == "a" || name == "area")
+                            && let Some(href) = value.attr("href")
+                            && let Some(element) = ElementRef::wrap(node)
+                        {
+                            self.link(element, href, here);
+                        }
+                        open.push(here);
+                    }
+                    Node::Text(text) => {
+                        // Text stands in the element that is open around it.
+                        let Some(here) = open.last() else {
+                            continue;
+                        };
+                        if !here.silent && !here.hidden {
+                            push_text(&mut self.page.text, text);
+                            if !here.furniture {
+                                push_text(&mut self.page.main_text, text);
+                            }
+                        }
+                    }
+                    _ => {}
+                },
+                Edge::Close(node) => {
+                    if matches!(node.value(), Node::Element(_)) {
+                        open.pop();
                     }
                 }
-                Node::Element(_) => {
-                    if let Some(child) = ElementRef::wrap(child) {
-                        self.element(child, here);
-                    }
-                }
-                _ => {}
             }
         }
     }
@@ -281,14 +318,7 @@ impl Document {
             .find(|element| element.value().name() == "title")
             .map(text_of)
             .unwrap_or_default();
-        reader.element(
-            root,
-            Inherited {
-                silent: false,
-                hidden: false,
-                furniture: false,
-            },
-        );
+        reader.read(root);
         let mut page = reader.page;
         if page.main_text.split(' ').count() < MIN_MAIN_WORDS {
             page.main_text.clone_from(&page.text);
