@@ -919,8 +919,12 @@ either way (F35).
   (§19), which names the hop it refuses and records an `https` to `http`
   downgrade. 301 and 302 turn a POST into a GET, 303 turns everything but a
   HEAD into a GET, 307 and 308 repeat the request. Host names are resolved
-  by the proxy, never by Kage; resolved addresses are checked on every hop
-  only when a resolver is injected (`HopResolver`), and none is by default.
+  by the proxy; under `security.resolve_on_host` (§19) Kage also resolves
+  every hop on the host before it is asked for, with the persona's client
+  and the plain client of level 0 alike, and refuses a hop with any address
+  in a denied range or with none, a name the host cannot look up counting
+  as one with none. Without the setting no resolver is injected
+  (`HopResolver`) and nothing is looked up from the host.
 - **Cookies.** One jar per persona (§6.4; per proxy for a client without a persona), with
   the rules browsers apply (RFC 6265bis): `SameSite` with `Lax` as the
   default, `Secure`, the `__Secure-` and `__Host-` prefixes, no cookie for a

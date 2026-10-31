@@ -116,14 +116,6 @@ pub enum HttpError {
     /// The cookie jar could not be loaded.
     #[error(transparent)]
     Cookies(#[from] CookieBackendError),
-    /// A host name could not be resolved for the address check.
-    #[error("cannot resolve {host:?} for the address check: {reason}")]
-    Resolve {
-        /// The host name.
-        host: String,
-        /// Why.
-        reason: String,
-    },
 }
 
 impl HttpError {

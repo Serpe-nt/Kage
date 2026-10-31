@@ -20,9 +20,9 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use bytes::Bytes;
-use common::{TestEcho, TestProxy, factory};
+use common::{ScriptedResolver, TestEcho, TestProxy, factory};
 use http::Method;
-use kage_core::ssrf::{SsrfDenial, SsrfPolicy};
+use kage_core::ssrf::{DeniedRange, SsrfDenial, SsrfPolicy};
 use kage_http::headers::HeaderError;
 use kage_http::selftest::Observed;
 use kage_http::{
@@ -417,6 +417,128 @@ async fn redirects_are_followed_through_the_guard_and_a_303_drops_the_body() {
         ),
         "{refused}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[allow(clippy::too_many_lines)] // One client, every way a hop is refused by its addresses.
+async fn with_a_resolver_the_plain_client_resolves_every_hop_before_asking_for_it() {
+    let world = World::start().await;
+    page(
+        &world.site,
+        "/go",
+        redirect(302, "http://other.kage.test/in"),
+    )
+    .await;
+    page(
+        &world.other,
+        "/in",
+        ResponseTemplate::new(200).set_body_string("INTERNAL"),
+    )
+    .await;
+    let resolver = ScriptedResolver::new();
+    let client = world
+        .factory()
+        .with_resolver(resolver.clone())
+        .plain(&world.proxy.endpoint(), AGENT)
+        .unwrap();
+    let asked_for = |host: &str| {
+        world
+            .proxy
+            .plain()
+            .iter()
+            .filter(|seen| seen.target.contains(host))
+            .count()
+    };
+
+    // Public addresses on both hops: the fetch goes through, and both
+    // names were looked up, each before its request.
+    let fetched = client
+        .fetch(&get("http://site.kage.test/go"))
+        .await
+        .unwrap();
+    assert_eq!(fetched.status, 200);
+    assert_eq!(fetched.text(), "INTERNAL");
+    assert_eq!(resolver.asked(), ["site.kage.test", "other.kage.test"]);
+    assert_eq!(asked_for("other.kage.test"), 1);
+
+    // The hop's name points into a private network, alone or among public
+    // addresses: the fetch ends as a refused hop, with the hop named, and
+    // the hop is never asked for.
+    for addresses in [vec!["10.0.0.7"], vec!["93.184.216.34", "10.0.0.7"]] {
+        resolver.answer("other.kage.test", &addresses);
+        let error = client
+            .fetch(&get("http://site.kage.test/go"))
+            .await
+            .unwrap_err();
+        let HttpError::RedirectDenied(denied) = &error else {
+            panic!("expected a denied redirect, got {error:?}");
+        };
+        assert!(error.is_ssrf_denied());
+        assert_eq!(denied.hop, 1);
+        assert_eq!(denied.location, "http://other.kage.test/in");
+        assert_eq!(
+            denied.reason,
+            SsrfDenial::Address {
+                address: "10.0.0.7".parse().unwrap(),
+                range: DeniedRange::Private
+            }
+        );
+        assert_eq!(asked_for("other.kage.test"), 1);
+    }
+
+    // A hop whose name has no address, or that the host cannot look up,
+    // is refused the same way.
+    resolver.answer("other.kage.test", &[]);
+    let error = client
+        .fetch(&get("http://site.kage.test/go"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&error, HttpError::RedirectDenied(denied) if denied.hop == 1
+            && denied.reason == SsrfDenial::Unresolved("other.kage.test".to_owned())),
+        "{error:?}"
+    );
+    resolver.fail("other.kage.test", "SERVFAIL");
+    let error = client
+        .fetch(&get("http://site.kage.test/go"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&error, HttpError::RedirectDenied(denied) if denied.hop == 1
+            && denied.reason == SsrfDenial::Unresolved("other.kage.test".to_owned())),
+        "{error:?}"
+    );
+    assert_eq!(asked_for("other.kage.test"), 1);
+    assert_eq!(received(&world.other).await.len(), 1);
+
+    // The first URL itself points at this machine: nothing is sent at all.
+    resolver.answer("site.kage.test", &["127.0.0.1"]);
+    let before = world.proxy.plain().len();
+    let error = client
+        .fetch(&get("http://site.kage.test/go"))
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        HttpError::Denied(SsrfDenial::Address {
+            range: DeniedRange::Loopback,
+            ..
+        })
+    ));
+    assert_eq!(world.proxy.plain().len(), before);
+
+    // Without a resolver (the default) the proxy resolves: the same
+    // redirect is followed, as before, and nobody is asked here.
+    let asked = resolver.asked().len();
+    let fetched = world
+        .client()
+        .fetch(&get("http://site.kage.test/go"))
+        .await
+        .unwrap();
+    assert_eq!(fetched.status, 200);
+    assert_eq!(fetched.text(), "INTERNAL");
+    assert_eq!(asked_for("other.kage.test"), 2);
+    assert_eq!(resolver.asked().len(), asked);
 }
 
 /// What the plain client looks like on the wire, as recorded.
