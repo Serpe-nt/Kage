@@ -1702,7 +1702,14 @@ the http path when it is HTML) at the end of the attempt that got the
 page, never by a second request. `extract` is null for a fetch that did
 not get its page and for a response that is no HTML document. One tree is
 parsed per page: a crawl reads its links and its text from the tree
-extraction works on (`kage_crawl::html::Document`).
+extraction works on (`kage_crawl::html::Document`). How deep a page nests
+is the site's choice, and a page is hostile input: the parse and every
+walk over the tree (the links and the text a crawl reads, the main
+content, the rendering as text and as markdown) are loops with a stack of
+their own, never a call per level of nesting, so a page nested five
+thousand or fifty thousand elements deep is read whole on a worker's
+2 MiB stack and the result says what the page says (F97). No depth is
+capped and no result is cut for depth.
 
 The object: `title` (the document's `<title>`), `description`,
 `canonical` (absolute), `lang`, `published_at` and `modified_at` (from

@@ -14,6 +14,9 @@ workspace = true
 
 [dependencies]
 chrono = { workspace = true }
+# The tree scraper keeps a page in: its own walk over the nodes, which is a
+# loop and not a call per level of nesting (F97).
+ego-tree = { workspace = true }
 kage-core = { workspace = true }
 # Gzipped sitemaps.
 flate2 = { workspace = true }

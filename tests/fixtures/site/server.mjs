@@ -347,6 +347,42 @@ const linksPage = (url) => {
   );
 };
 
+// A page whose script nests its text ten thousand elements deep, as a
+// browser builds it (F97): deeper than a static page gets through
+// Chromium's parser, and deeper than a walk that called itself once per
+// level could read on a worker's stack. The page measures how deep its
+// text stands and writes the depth into its title, so that whoever reads
+// the document the browser handed back can see it arrived deep. `?depth=N`
+// chooses another depth. Firefox hands the page back in a second or two at
+// any of these depths; Chromium's sidecar does not answer the navigation
+// in time even at 2000 (measured 2026-10-31, a finding of its own).
+const deepPage = (url) => {
+  const depth = Math.min(50_000, Math.max(1, Number(url.searchParams.get('depth') ?? '10000') || 1));
+  const words = Array.from({ length: 100 }, (_unused, index) => `word${index}`).join(' ');
+  return page(
+    'Deep',
+    `<main id="main"></main>
+<script>
+(() => {
+  let holder = document.getElementById('main');
+  for (let level = 0; level < ${depth}; level += 1) {
+    const inner = document.createElement('div');
+    holder.appendChild(inner);
+    holder = inner;
+  }
+  const text = document.createElement('p');
+  text.textContent = ${JSON.stringify(words)};
+  holder.appendChild(text);
+  let measured = 0;
+  for (let node = text; node !== null && node !== document.body; node = node.parentElement) {
+    measured += 1;
+  }
+  document.title = 'Deep ' + measured;
+})();
+</script>`,
+  );
+};
+
 // The 1x1 transparent PNG.
 const PIXEL = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
@@ -492,6 +528,9 @@ const routes = {
 
   // What a list of links has to tell apart (spec §13).
   '/links': (_req, res, url) => html(res, linksPage(url)),
+
+  // A page nested ten thousand elements deep by its script (spec §14, F97).
+  '/deep': (_req, res, url) => html(res, deepPage(url)),
 
   // The activation recorder (spec §10.2): what a page is told of user
   // activation while an engine loads and reads it.
