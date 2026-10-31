@@ -15,7 +15,9 @@ groups:
           runbook: docs/runbooks/observability.md
 
       # A proxy is usable while it is healthy or degraded; without one,
-      # nothing is fetched.
+      # nothing is fetched. A proxy whose backoff ran out counts as backoff
+      # until a probe passes (F111), so an outage reads as a flat zero here
+      # through every expiry and the ten minutes are never started again.
       - alert: KagePoolUnavailable
         expr: sum(kage_proxy_state{state=~"healthy|degraded"}) == 0
         for: 10m
@@ -47,9 +49,24 @@ groups:
       # its policy allows before it pauses the domain (breaker_threshold).
       # A block at level 0 (a plain client, no persona) is never counted by
       # the breaker (spec §8.3), so it is not counted here either.
+      #
+      # A domain's series is born with its first block, and increase()
+      # never counts a series' first sample, so the blocks of the hour are
+      # the counter now less the counter an hour ago, or less nothing for a
+      # series that did not exist then: the first block counts (F110). A
+      # restart resets the counters; a difference below zero counts as zero.
       - alert: KageBlockRateAboveThreshold
         expr: >-
-          sum by (domain) (increase(kage_attempts_total{level!="0",outcome=~"rate_limited|forbidden|captcha|challenge_failed|soft_block"}[1h]))
+          sum by (domain) (
+            clamp_min(
+              kage_attempts_total{level!="0",outcome=~"rate_limited|forbidden|captcha|challenge_failed|soft_block"}
+              - (
+                kage_attempts_total{level!="0",outcome=~"rate_limited|forbidden|captcha|challenge_failed|soft_block"} offset 1h
+                or kage_attempts_total{level!="0",outcome=~"rate_limited|forbidden|captcha|challenge_failed|soft_block"} * 0
+              ),
+              0
+            )
+          )
           >= on (domain) max by (domain) (kage_policy_breaker_threshold)
         labels:
           severity: warning
@@ -65,6 +82,9 @@ groups:
           summary: A persona was retired in the last 30 minutes
           runbook: docs/runbooks/personas.md
 
+      # The counter exists at zero for every event and result from the
+      # start of the process (F110), so the first failure is a change
+      # increase() sees, not the birth of a series.
       - alert: KageWebhookFailing
         expr: sum(increase(kage_webhook_deliveries_total{result="failed"}[30m])) > 0
         labels:

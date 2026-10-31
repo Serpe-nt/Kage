@@ -27,6 +27,10 @@ tests:
   - name: no proxy can be used
     interval: 1m
     input_series:
+      # Every proxy of three stopped answering. The gauge counts a proxy
+      # whose backoff ran out as backoff until a probe passes (F111), so
+      # degraded stays at zero through every expiry, as the exposition
+      # shows an outage, and the ten minutes run once.
       - series: 'kage_proxy_state{state="healthy"}'
         values: '3 3 0x20'
       - series: 'kage_proxy_state{state="degraded"}'
@@ -93,26 +97,79 @@ tests:
   - name: blocks reach a domain's threshold
     interval: 1m
     input_series:
-      # Six blocks in the first half hour on shop.example, whose policy
-      # allows five per hour; two on news.example, which allows five too,
-      # and thirty there at level 0, which the breaker never counts.
+      # A domain's series is born with its first block, as the exposition
+      # shows it: no sample before, and the first sample is the first
+      # block. Six blocks in the first half hour on shop.example, whose
+      # policy allows five per hour; two on news.example, which allows
+      # five too, and thirty there at level 0, which the breaker never
+      # counts.
       - series: 'kage_attempts_total{domain="shop.example",level="3",outcome="forbidden",vendor="cloudflare"}'
-        values: '0+0.2x30'
-      - series: 'kage_attempts_total{domain="shop.example",level="3",outcome="ok",vendor=""}'
-        values: '0+10x30'
-      - series: 'kage_attempts_total{domain="news.example",level="1",outcome="captcha",vendor=""}'
-        values: '0 0 0 1 1 1 2x24'
+        values: '_ _ 1 1 2 2 3 3 4 4 5 5 6x19'
+      - series: 'kage_attempts_total{domain="shop.example",level="3",outcome="ok",vendor="none"}'
+        values: '1+10x30'
+      - series: 'kage_attempts_total{domain="news.example",level="1",outcome="captcha",vendor="none"}'
+        values: '_ _ _ 1 1 1 2x24'
       - series: 'kage_attempts_total{domain="news.example",level="0",outcome="forbidden",vendor="generic"}'
-        values: '0+1x30'
+        values: '1+1x30'
       - series: 'kage_policy_breaker_threshold{domain="shop.example"}'
         values: '5x30'
       - series: 'kage_policy_breaker_threshold{domain="news.example"}'
         values: '5x30'
     alert_rule_test:
-      - eval_time: 10m
+      # Four blocks so far: one short of the threshold.
+      - eval_time: 9m
         alertname: KageBlockRateAboveThreshold
         exp_alerts: []
       - eval_time: 30m
+        alertname: KageBlockRateAboveThreshold
+        exp_alerts:
+          - exp_labels: { severity: warning, domain: shop.example }
+            exp_annotations:
+              summary: "shop.example was blocked as often in the last hour as its policy allows before it pauses the domain"
+              runbook: docs/runbooks/block-report.md
+
+  - name: the first block counts toward a threshold of two
+    interval: 1m
+    input_series:
+      # QA round one, secrecy-01: a site whose policy allows two blocks per
+      # hour, blocked twice at level 2. The series is born at 1; increase()
+      # read the two blocks as 1.03 to 1.29, and the alert never fired.
+      - series: 'kage_attempts_total{domain="shop.example",level="2",outcome="forbidden",vendor="generic"}'
+        values: '_ _ 1 1 2x10'
+      - series: 'kage_policy_breaker_threshold{domain="shop.example"}'
+        values: '2x14'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: KageBlockRateAboveThreshold
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: KageBlockRateAboveThreshold
+        exp_alerts:
+          - exp_labels: { severity: warning, domain: shop.example }
+            exp_annotations:
+              summary: "shop.example was blocked as often in the last hour as its policy allows before it pauses the domain"
+              runbook: docs/runbooks/block-report.md
+
+  - name: a restart inside the hour does not cancel another series' blocks
+    interval: 1m
+    input_series:
+      # shop.example allows three per hour. Three blocks at level 3 early in
+      # the hour; then the process restarts, that series is reborn with one
+      # block, and three fresh blocks at level 2 follow. Against its value
+      # an hour ago the reborn series reads below zero, which counts as
+      # zero, so the three fresh blocks reach the threshold on their own.
+      - series: 'kage_attempts_total{domain="shop.example",level="3",outcome="forbidden",vendor="generic"}'
+        values: '_ _ 1 2 3 3x56 _ _ _ 1 1x5'
+      - series: 'kage_attempts_total{domain="shop.example",level="2",outcome="captcha",vendor="generic"}'
+        values: '_x64 1 2 3 3x3'
+      - series: 'kage_policy_breaker_threshold{domain="shop.example"}'
+        values: '3x71'
+    alert_rule_test:
+      # The process is down: no series, nothing to compare.
+      - eval_time: 64m
+        alertname: KageBlockRateAboveThreshold
+        exp_alerts: []
+      - eval_time: 70m
         alertname: KageBlockRateAboveThreshold
         exp_alerts:
           - exp_labels: { severity: warning, domain: shop.example }
@@ -140,10 +197,15 @@ tests:
   - name: a webhook fails for good
     interval: 1m
     input_series:
-      - series: 'kage_webhook_deliveries_total{event="job.finished",result="failed"}'
+      # The counter exists at zero for every event and result from the
+      # start of the process (F110), as the exposition shows it: the first
+      # failure for good is the first change, and the one the alert is for.
+      - series: 'kage_webhook_deliveries_total{event="job.completed",result="failed"}'
         values: '0x5 1x10'
-      - series: 'kage_webhook_deliveries_total{event="job.finished",result="retry"}'
+      - series: 'kage_webhook_deliveries_total{event="job.completed",result="retry"}'
         values: '0+1x15'
+      - series: 'kage_webhook_deliveries_total{event="job.failed",result="failed"}'
+        values: '0x15'
     alert_rule_test:
       - eval_time: 4m
         alertname: KageWebhookFailing

@@ -803,9 +803,11 @@ impl Pool {
     // One arm per effect; splitting it would only scatter the list.
     #[allow(clippy::too_many_lines)]
     async fn handle(&self, proxy: &Proxy, effects: Vec<Effect>, cause: &str) {
+        let mut state_changed = false;
         for effect in effects {
             match effect {
                 Effect::StateChanged { from, to } => {
+                    state_changed = true;
                     tracing::info!(
                         proxy = %proxy.id,
                         from = from.as_str(),
@@ -902,6 +904,9 @@ impl Pool {
                     );
                 }
             }
+        }
+        if state_changed {
+            self.republish_states().await;
         }
     }
 
@@ -2110,18 +2115,22 @@ impl Pool {
         }
     }
 
+    /// Publishes the pool's state as metrics now, so that `kage_proxy_state`
+    /// follows a change of state at once and not only at the next
+    /// maintenance pass (F111).
+    async fn republish_states(&self) {
+        match self.pooled_live().await {
+            Ok(live) => publish_states(&live),
+            Err(error) => {
+                tracing::debug!(%error, "cannot read the pool to publish its state");
+            }
+        }
+    }
+
     /// Alerts when a quarter or more of the pool cannot be used (spec risk
     /// R4), and publishes the pool's state as metrics.
     fn check_capacity(&self, live: &[Proxy]) {
-        for state in ProxyState::ALL {
-            if *state == ProxyState::Retired {
-                continue;
-            }
-            let count = live.iter().filter(|proxy| proxy.state == *state).count();
-            // A pool is far smaller than 2^52 proxies.
-            #[allow(clippy::cast_precision_loss)]
-            metrics::gauge!("kage_proxy_state", "state" => state.as_str()).set(count as f64);
-        }
+        publish_states(live);
         // A proxy that was never checked is not counted as lost: at first
         // start every proxy is new for a moment.
         let out = live
@@ -2138,6 +2147,45 @@ impl Pool {
         } else {
             self.settle(AlertKind::PoolCapacityLow, None);
         }
+    }
+}
+
+/// Registers at zero the counters of the pool whose label values are known
+/// before any event: `kage_replacements_total` by reason, so that the first
+/// replacement shows as a change and not as a series born with it (F110).
+/// `kage_proxy_state` is set at the first maintenance pass and at every
+/// change of a proxy's state. Once per process, after the exporter is
+/// installed; without a recorder it does nothing.
+pub fn register_metrics() {
+    for reason in ReplaceReason::ALL.iter().copied() {
+        metrics::counter!("kage_replacements_total", "reason" => reason.as_str()).increment(0);
+    }
+}
+
+/// The live proxies by the state each counts under in `kage_proxy_state`
+/// ([`machine::reported_state`]): every state but `retired`, at zero when
+/// none is in it.
+fn states_of(live: &[Proxy]) -> BTreeMap<ProxyState, usize> {
+    let mut counts: BTreeMap<ProxyState, usize> = ProxyState::ALL
+        .iter()
+        .copied()
+        .filter(|state| *state != ProxyState::Retired)
+        .map(|state| (state, 0))
+        .collect();
+    for proxy in live {
+        if let Some(count) = counts.get_mut(&machine::reported_state(proxy)) {
+            *count += 1;
+        }
+    }
+    counts
+}
+
+/// Sets `kage_proxy_state{state}` from the live proxies.
+fn publish_states(live: &[Proxy]) {
+    for (state, count) in states_of(live) {
+        // A pool is far smaller than 2^52 proxies.
+        #[allow(clippy::cast_precision_loss)]
+        metrics::gauge!("kage_proxy_state", "state" => state.as_str()).set(count as f64);
     }
 }
 
@@ -2184,4 +2232,100 @@ fn replaced_this(entry: &ReplacedProxy, proxy: &Proxy) -> bool {
     entry.old_host == proxy.host
         && entry.old_port.is_none_or(|port| port == proxy.port)
         && entry.at >= proxy.created_at
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Duration;
+    use kage_core::domain::ProxyState;
+
+    use super::{register_metrics, states_of};
+    use crate::machine::{self, ExitObservation, PoolRules, ProbeReport};
+    use crate::test_support::{noon, proxy};
+
+    fn failed(at: chrono::DateTime<chrono::Utc>) -> ProbeReport {
+        ProbeReport {
+            at,
+            exit: Err(kage_core::domain::HealthFailure::Unreachable),
+            leak: None,
+            geo: None,
+        }
+    }
+
+    fn passed(at: chrono::DateTime<chrono::Utc>) -> ProbeReport {
+        ProbeReport {
+            at,
+            exit: Ok(ExitObservation {
+                ip: "203.0.113.20".parse().unwrap_or([203, 0, 113, 20].into()),
+                latency_ms: 80,
+                connect_ms: None,
+                tls_ms: None,
+            }),
+            leak: Some(false),
+            geo: None,
+        }
+    }
+
+    #[test]
+    fn the_published_states_count_a_proxy_on_probation_as_backoff() {
+        // F111: an outage of the whole pool reads as a flat zero of healthy
+        // and degraded through every expiry of a backoff.
+        let rules = PoolRules::default();
+        let mut pool: Vec<_> = (1..=3).map(|n| proxy(&format!("d-{n}"))).collect();
+        for member in &mut pool {
+            machine::apply_probe(member, &passed(noon()), false, 0.5, &rules);
+        }
+        let counts = states_of(&pool);
+        assert_eq!(counts[&ProxyState::Healthy], 3);
+        assert_eq!(counts[&ProxyState::Backoff], 0);
+        assert_eq!(
+            counts.len(),
+            ProxyState::ALL.len() - 1,
+            "every state but retired"
+        );
+        assert!(!counts.contains_key(&ProxyState::Retired));
+
+        // Every proxy fails three probes: all in backoff.
+        let mut now = noon();
+        for _ in 0..3 {
+            now += Duration::minutes(5);
+            for member in &mut pool {
+                machine::apply_probe(member, &failed(now), false, 0.5, &rules);
+            }
+        }
+        let counts = states_of(&pool);
+        assert_eq!(counts[&ProxyState::Backoff], 3);
+        assert_eq!(
+            counts[&ProxyState::Healthy] + counts[&ProxyState::Degraded],
+            0
+        );
+
+        // One backoff runs out: degraded in the store, backoff to the metric.
+        let until = pool[0].backoff_until.unwrap_or(now);
+        machine::expire_backoff(&mut pool[0], until, false);
+        assert_eq!(pool[0].state, ProxyState::Degraded);
+        let counts = states_of(&pool);
+        assert_eq!(counts[&ProxyState::Backoff], 3);
+        assert_eq!(counts[&ProxyState::Degraded], 0);
+
+        // Its probe fails: nothing moves. Its probe passes: it is usable.
+        machine::apply_probe(&mut pool[0], &failed(until), false, 0.5, &rules);
+        assert_eq!(states_of(&pool)[&ProxyState::Backoff], 3);
+        let until = pool[0].backoff_until.unwrap_or(until);
+        machine::expire_backoff(&mut pool[0], until, false);
+        machine::apply_probe(&mut pool[0], &passed(until), false, 0.5, &rules);
+        let counts = states_of(&pool);
+        assert_eq!(counts[&ProxyState::Healthy], 1);
+        assert_eq!(counts[&ProxyState::Backoff], 2);
+
+        // A retired proxy is counted nowhere.
+        pool[1].state = ProxyState::Retired;
+        let counts = states_of(&pool);
+        assert_eq!(counts.values().sum::<usize>(), 2);
+    }
+
+    #[test]
+    fn registering_the_counters_without_a_recorder_is_harmless() {
+        register_metrics();
+    }
 }

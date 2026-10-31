@@ -20,14 +20,22 @@
 //!   `sidecar_navigation_duration_seconds` and the rest), fetched from
 //!   each sidecar that answers and merged in, so that Prometheus needs one
 //!   target and never holds the sidecar token.
+//!
+//! Every counter whose label values are known before any event exists at
+//! zero from the start of the process ([`register`]), so that its first
+//! event is a change Prometheus sees and not the birth of a series (F110).
 
 use std::collections::BTreeMap;
 use std::fmt;
 use std::time::Duration;
 
+use kage_core::domain::{JobItemState, JobKind, JobState, Level, WebhookEvent};
 use metrics_exporter_prometheus::{
     BuildError, Matcher, PrometheusBuilder, PrometheusHandle, PrometheusRecorder,
 };
+
+use crate::error::ErrorCode;
+use crate::jobs::crawl::ReachedField;
 
 /// The media type of the Prometheus text format.
 pub const PROMETHEUS_TEXT: &str = "text/plain; version=0.0.4; charset=utf-8";
@@ -81,7 +89,125 @@ fn builder() -> Result<PrometheusBuilder, BuildError> {
 pub fn install() -> Result<MetricsHandle, BuildError> {
     let handle = builder()?.install_recorder()?;
     describe();
+    register();
     Ok(MetricsHandle(handle))
+}
+
+/// The values of `kage_webhook_deliveries_total{result}`.
+const WEBHOOK_RESULTS: [&str; 3] = ["delivered", "retry", "failed"];
+
+/// The states a job ends in: `kage_jobs_finished_total{state}`.
+const JOB_END_STATES: [JobState; 4] = [
+    JobState::Succeeded,
+    JobState::Partial,
+    JobState::Failed,
+    JobState::Cancelled,
+];
+
+/// The states an item ends in: `kage_job_items_total{state}`.
+const ITEM_END_STATES: [JobItemState; 3] = [
+    JobItemState::Succeeded,
+    JobItemState::Failed,
+    JobItemState::Cancelled,
+];
+
+/// The level label of a job whose items name different levels
+/// (`kage_jobs_accepted_total{level}`, see `jobs::shared_level`).
+const MIXED_LEVELS: &str = "mixed";
+
+/// The reasons of `kage_crawl_skipped_total{reason}` that are not the
+/// scope's ([`kage_crawl::scope::Skip`]): the frontier's own
+/// ([`kage_crawl::frontier::Left`]).
+const CRAWL_FRONTIER_REASONS: [&str; 3] = ["already_read", "ssrf_denied", "robots_denied"];
+
+/// The values of `kage_crawl_duplicates_total{kind}`.
+const CRAWL_DUPLICATE_KINDS: [&str; 2] = ["exact", "near"];
+
+/// The codes a request is refused with before its handler runs
+/// (`kage_api_refusals_total{code}`): the key, its scope, its limits, and
+/// the length of the request target.
+const REFUSAL_CODES: [ErrorCode; 8] = [
+    ErrorCode::MissingKey,
+    ErrorCode::InvalidKey,
+    ErrorCode::KeyDisabled,
+    ErrorCode::ScopeMissing,
+    ErrorCode::UriTooLong,
+    ErrorCode::RateLimited,
+    ErrorCode::ConcurrencyLimited,
+    ErrorCode::BudgetExhausted,
+];
+
+/// Registers at zero every counter whose label values are known before any
+/// event, the scheduler's and the pool's included. A Prometheus series is
+/// born with its first sample, and `increase()` never counts that one: a
+/// webhook that failed for good once was a series born at 1, which
+/// `KageWebhookFailing` could not see (F110). A counter with a label that
+/// arrives with the event (a domain, a route's status) is still born with
+/// it; the rule and the panels that count blocks read the counter against
+/// its value an hour earlier instead. Called by [`install`]; without a
+/// recorder it does nothing.
+pub fn register() {
+    kage_scheduler::metrics::register();
+    kage_proxy::pool::register_metrics();
+    for event in WebhookEvent::ALL.iter().copied() {
+        for result in WEBHOOK_RESULTS {
+            metrics::counter!(
+                "kage_webhook_deliveries_total",
+                "event" => event.as_str(),
+                "result" => result,
+            )
+            .increment(0);
+        }
+    }
+    for kind in JobKind::ALL.iter().copied() {
+        for level in Level::ALL
+            .into_iter()
+            .map(Level::label)
+            .chain([MIXED_LEVELS])
+        {
+            metrics::counter!(
+                "kage_jobs_accepted_total",
+                "job_type" => kind.as_str(),
+                "level" => level,
+            )
+            .increment(0);
+        }
+        for state in JOB_END_STATES {
+            metrics::counter!(
+                "kage_jobs_finished_total",
+                "job_type" => kind.as_str(),
+                "state" => state.as_str(),
+            )
+            .increment(0);
+        }
+        for state in ITEM_END_STATES {
+            for level in Level::ALL {
+                metrics::counter!(
+                    "kage_job_items_total",
+                    "job_type" => kind.as_str(),
+                    "state" => state.as_str(),
+                    "level" => level.label(),
+                )
+                .increment(0);
+            }
+        }
+    }
+    for reached in ReachedField::ALL {
+        metrics::counter!("kage_crawl_pages_total", "reached" => reached.as_str()).increment(0);
+    }
+    for reason in kage_crawl::scope::Skip::ALL
+        .into_iter()
+        .map(kage_crawl::scope::Skip::as_str)
+        .chain(CRAWL_FRONTIER_REASONS)
+    {
+        metrics::counter!("kage_crawl_skipped_total", "reason" => reason).increment(0);
+    }
+    for kind in CRAWL_DUPLICATE_KINDS {
+        metrics::counter!("kage_crawl_duplicates_total", "kind" => kind).increment(0);
+    }
+    for code in REFUSAL_CODES {
+        metrics::counter!("kage_api_refusals_total", "code" => code.as_str()).increment(0);
+    }
 }
 
 /// A recorder that is not installed, and its handle: for a test, which
@@ -300,7 +426,78 @@ pub(crate) fn merge(expositions: &[String]) -> String {
 mod tests {
     use std::time::Duration;
 
-    use super::{gauge_family, local, merge, refusal, request};
+    use super::{gauge_family, local, merge, refusal, register, request};
+
+    #[test]
+    fn every_counter_whose_labels_are_known_exists_from_zero() {
+        let (recorder, handle) = local().unwrap();
+        metrics::with_local_recorder(&recorder, register);
+        let text = handle.render();
+        let zeros = |family: &str| {
+            let head = format!("{family}{{");
+            text.lines()
+                .filter(|line| line.starts_with(&head) && line.ends_with(" 0"))
+                .count()
+        };
+        for (family, expected) in [
+            // Three events, three results.
+            ("kage_webhook_deliveries_total", 3 * 3),
+            // Three kinds; four levels and `mixed`.
+            ("kage_jobs_accepted_total", 3 * 5),
+            // Three kinds, four states a job ends in.
+            ("kage_jobs_finished_total", 3 * 4),
+            // Three kinds, three states an item ends in, four levels.
+            ("kage_job_items_total", 3 * 3 * 4),
+            ("kage_crawl_pages_total", 4),
+            // Six reasons of the scope, three of the frontier.
+            ("kage_crawl_skipped_total", 9),
+            ("kage_crawl_duplicates_total", 2),
+            ("kage_api_refusals_total", 8),
+            ("kage_scheduler_refusals_total", 7),
+            // Up and down, through the pool and the host.
+            ("kage_bandwidth_bytes_total", 4),
+            ("kage_cache_requests_total", 5),
+            ("kage_robots_requests_total", 5),
+            ("kage_robots_denied_total", 5),
+            ("kage_replacements_total", 3),
+        ] {
+            assert_eq!(zeros(family), expected, "{family}\n{text}");
+        }
+        // The series the alert rules and the dashboards read.
+        for line in [
+            "kage_webhook_deliveries_total{event=\"job.completed\",result=\"failed\"} 0",
+            "kage_scheduler_refusals_total{reason=\"domain_paused\"} 0",
+            "kage_bandwidth_bytes_total{direction=\"down\",egress=\"pool\"} 0",
+            "kage_api_refusals_total{code=\"rate_limited\"} 0",
+            "kage_replacements_total{reason=\"unreachable\"} 0",
+            "kage_jobs_accepted_total{job_type=\"batch\",level=\"mixed\"} 0",
+            "kage_job_items_total{job_type=\"crawl\",state=\"failed\",level=\"3\"} 0",
+            "kage_crawl_skipped_total{reason=\"robots_denied\"} 0",
+            "kage_crawl_pages_total{reached=\"back_click\"} 0",
+        ] {
+            assert!(text.contains(line), "{line}\n{text}");
+        }
+        // A label that arrives with the event cannot be registered.
+        for family in [
+            "kage_attempts_total",
+            "kage_requests_total",
+            "kage_api_requests_total",
+        ] {
+            assert!(!text.contains(family), "{family}\n{text}");
+        }
+        // The first event is a change from zero, not the birth of a series.
+        metrics::with_local_recorder(&recorder, || {
+            metrics::counter!(
+                "kage_webhook_deliveries_total",
+                "event" => "job.completed",
+                "result" => "failed",
+            )
+            .increment(1);
+        });
+        assert!(handle.render().contains(
+            "kage_webhook_deliveries_total{event=\"job.completed\",result=\"failed\"} 1"
+        ));
+    }
 
     #[test]
     fn what_the_facade_records_is_rendered_as_prometheus_text() {

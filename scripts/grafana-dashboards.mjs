@@ -23,6 +23,16 @@ const out = join(root, 'deploy/grafana/dashboards');
 
 const PROMETHEUS = { type: 'prometheus', uid: 'prometheus' };
 const BLOCKS = 'rate_limited|forbidden|captcha|challenge_failed|soft_block';
+/**
+ * The events of the last hour on a counter whose series are born with
+ * their first event (a domain's blocks): the counter now less the counter
+ * an hour ago, or less nothing for a series that did not exist then, so
+ * that the first event counts, which increase() never does; a restart's
+ * reset counts as zero (F110). A counter that exists from zero (every one
+ * without a domain) is counted with increase() as before.
+ */
+const lastHour = (selector) => `clamp_min(${selector} - (${selector} offset 1h or ${selector} * 0), 0)`;
+const blocks = lastHour(`kage_attempts_total{outcome=~"${BLOCKS}"}`);
 
 /** A time series panel: one query per line drawn. */
 const series = (title, unit, ...targets) => ({ kind: 'timeseries', title, unit, targets });
@@ -75,11 +85,11 @@ const DASHBOARDS = [
     title: 'Kage · blocks and breakers',
     description: 'How often each site turns a persona away, against what its policy allows before it pauses the site.',
     panels: [
-      series('Blocks per hour by domain, against its breaker threshold', 'short', [`sum by (domain) (increase(kage_attempts_total{outcome=~"${BLOCKS}"}[1h]))`, 'blocks {{domain}}'], ['max by (domain) (kage_policy_breaker_threshold)', 'threshold {{domain}}']),
+      series('Blocks per hour by domain, against its breaker threshold', 'short', [`sum by (domain) (${blocks})`, 'blocks {{domain}}'], ['max by (domain) (kage_policy_breaker_threshold)', 'threshold {{domain}}']),
       series('Block rate by domain', 'percentunit', [`sum by (domain) (rate(kage_attempts_total{outcome=~"${BLOCKS}"}[1h])) / sum by (domain) (rate(kage_attempts_total[1h]))`, '{{domain}}']),
       series('Breakers open', 'short', ['max by (domain) (kage_breaker_open)', '{{domain}}']),
-      series('Blocks by vendor, per hour', 'short', [`sum by (vendor) (increase(kage_attempts_total{outcome=~"${BLOCKS}"}[1h]))`, '{{vendor}}']),
-      series('Blocks by outcome, per hour', 'short', [`sum by (outcome) (increase(kage_attempts_total{outcome=~"${BLOCKS}"}[1h]))`, '{{outcome}}']),
+      series('Blocks by vendor, per hour', 'short', [`sum by (vendor) (${blocks})`, '{{vendor}}']),
+      series('Blocks by outcome, per hour', 'short', [`sum by (outcome) (${blocks})`, '{{outcome}}']),
       stat('Domains paused now', 'short', 'sum(kage_breaker_open) or vector(0)', [[1, 'orange']]),
     ],
   },

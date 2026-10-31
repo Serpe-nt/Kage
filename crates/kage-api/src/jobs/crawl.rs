@@ -496,6 +496,9 @@ pub(crate) enum ReachedField {
 }
 
 impl ReachedField {
+    /// Every way, in declaration order.
+    pub(crate) const ALL: [Self; 4] = [Self::Typed, Self::Click, Self::BackClick, Self::Referer];
+
     /// The name a metric and a counter know it by.
     pub(crate) const fn as_str(self) -> &'static str {
         match self {

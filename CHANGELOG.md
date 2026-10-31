@@ -41,6 +41,29 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`KageWebhookFailing`, `KageBlockRateAboveThreshold` and
+  `KagePoolUnavailable` fire on what they are for.** QA round one found the
+  first two one event late and the third never: a Prometheus counter is
+  born with its first sample, which `increase()` never counts, so the
+  first webhook failure and the first block of a domain were lost to the
+  alerts and to every panel that counts events (secrecy-01); and every
+  expiry of a proxy's backoff showed that proxy `degraded` for a scrape,
+  which broke the pool alert's condition and started its ten minutes
+  again, so that it never fired in eighteen minutes with every proxy down
+  (secrecy-02). Every counter whose label values are known before any
+  event now exists at zero from the start of the process (webhook
+  deliveries, jobs and items, the crawl's pages, skips and duplicates, the
+  API's and the scheduler's refusals, bandwidth, cache, `robots.txt`,
+  replacements), so its first event is a change; the block-rate alert and
+  the block panels read `kage_attempts_total`, whose domain arrives with
+  the event, against its value an hour earlier, so the first block counts
+  and a restart counts as zero. `kage_proxy_state` counts a proxy whose
+  backoff ran out as `backoff` until a probe passes, and is set at every
+  change of state, not only at the pool's maintenance pass. The rule tests
+  start their series where the exposition starts, with the two findings
+  as cases; the observability end-to-end test shows a first webhook failure
+  firing its alert and the pool reading unavailable across a backoff's
+  expiry (F110, F111).
 - **A redirect hop of the http path at level 0 is resolved on the host
   under `security.resolve_on_host`, as the documents said it was.** The
   plain client of level 0 was built without the factory's resolver, so
