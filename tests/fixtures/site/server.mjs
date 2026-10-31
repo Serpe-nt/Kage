@@ -353,7 +353,9 @@ const linksPage = (url) => {
 // level could read on a worker's stack. The page measures how deep its
 // text stands and writes the depth into its title, so that whoever reads
 // the document the browser handed back can see it arrived deep. `?depth=N`
-// chooses another depth.
+// chooses another depth. Firefox hands the page back in a second or two at
+// any of these depths; Chromium's sidecar does not answer the navigation
+// in time even at 2000 (measured 2026-10-31, a finding of its own).
 const deepPage = (url) => {
   const depth = Math.min(50_000, Math.max(1, Number(url.searchParams.get('depth') ?? '10000') || 1));
   const words = Array.from({ length: 100 }, (_unused, index) => `word${index}`).join(' ');
