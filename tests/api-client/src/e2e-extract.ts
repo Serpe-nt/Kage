@@ -8,6 +8,9 @@
  *   markdown;
  * - the same request again, answered from the response cache, and another
  *   include set, which is a visit;
+ * - a page whose script nests its text ten thousand elements deep, read by
+ *   a persona of each engine: the result is whole, and the server stands
+ *   (F97);
  * - the site under the name whose policy enforces its `robots.txt`: a page
  *   the file allows, a page it disallows, and a request that asks for less
  *   than the policy enforces;
@@ -197,6 +200,31 @@ async function essay(client: KageClient, site: string, engine: EngineName) {
   };
 }
 
+/**
+ * A page whose script nests its text ten thousand elements deep (F97): the
+ * engine hands the document back as deep as the script built it, and the
+ * server reads it whole on a worker's stack. The page writes the depth it
+ * measured into its title.
+ */
+async function deep(client: KageClient, site: string, engine: EngineName) {
+  const fetched = await finished(client, {
+    url: `${site}/deep?reader=${engine}`,
+    include: ['extract'],
+    persona: { engines: [engine] },
+    ...QUICK,
+  });
+  assert.equal(fetched.outcome, 'ok', `${engine}: ${fetched.reason ?? fetched.outcome}`);
+  assert.equal(fetched.persona?.engine, engine);
+  const said = extractOf(fetched);
+  const depth = Number(/^Deep (\d+)$/.exec(said.title ?? '')?.[1] ?? Number.NaN);
+  assert.ok(depth >= 10_000, `${engine}: the page says "${said.title ?? ''}"`);
+  assert.equal(said.word_count, 100, `${engine}: ${said.text.slice(0, 200)}`);
+  assert.ok(said.text.startsWith('word0 word1 '), said.text.slice(0, 200));
+  assert.ok(said.text.endsWith(' word99'), said.text.slice(-200));
+  assert.equal(said.thin_content, false);
+  return { engine, reader: fetched.persona.id, depth, words: said.word_count, id: fetched.id };
+}
+
 /** Another include set is another request: a visit, though the cache holds the page. */
 async function otherInclude(client: KageClient, site: string, engine: EngineName) {
   const third = await finished(client, { ...essayRequest(site, engine), include: ['extract'] });
@@ -345,6 +373,11 @@ async function main(): Promise<unknown> {
   for (const engine of ENGINES) {
     essays.push(await essay(client, site, engine));
   }
+  // The page nested ten thousand elements deep, by the same readers.
+  const deeps = [];
+  for (const engine of ENGINES) {
+    deeps.push(await deep(client, site, engine));
+  }
 
   // What a request may not ask of a site: a robots.txt enforced that the
   // policy never asks for, less than the policy enforces, and a longer
@@ -375,11 +408,12 @@ async function main(): Promise<unknown> {
   // The reader of an engine is one persona throughout: the scout took
   // none of them.
   for (const [index, engine] of ENGINES.entries()) {
+    assert.equal(deeps[index]?.reader, essays[index]?.reader, `${engine}: another reader`);
     assert.equal(pages[index]?.reader, essays[index]?.reader, `${engine}: another reader`);
     assert.equal(crawls[index]?.reader, essays[index]?.reader, `${engine}: another reader`);
   }
 
-  return { essays, refusals, enforced: pages, crawls, visits };
+  return { essays, deep: deeps, refusals, enforced: pages, crawls, visits };
 }
 
 try {
