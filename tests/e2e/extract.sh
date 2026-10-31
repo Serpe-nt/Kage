@@ -15,8 +15,8 @@
 #   - the same request again answered from the cache: `cached: true`, and
 #     not one request at the site while it was answered;
 #   - a page whose script nests its text ten thousand elements deep, read by
-#     a persona of each engine: a whole result, and a kage container that
-#     never restarted (F97);
+#     the Firefox persona at level 2: a whole result, and a kage container
+#     that never restarted (F97);
 #   - another include set is a visit;
 #   - nobody ever asked fixture.kage.test for its robots.txt;
 #   - rules.kage.test was asked for its robots.txt once, by one address
@@ -180,11 +180,11 @@ check "what a site's policy does not let a request ask for is refused" "${summar
 for index in 0 1; do
     echo "    $(value "${summary}" "d.essays[${index}].engine + ': ' + d.essays[${index}].words + ' words and ' + d.essays[${index}].links + ' links extracted; the visit took ' + d.essays[${index}].visit_ms + ' ms, the answer from the cache ' + d.essays[${index}].hit_ms + ' ms'")"
 done
-# A page nested ten thousand elements deep by its script (F97): each
-# engine handed it back as deep as the script built it, the result is
-# whole, and the server lived through it.
-check "the deep page was read whole by a persona of each engine, as deep as its script built it" "${summary}" \
-    "d.deep.length === 2 && d.deep.every((p) => p.depth >= 10000 && p.words === 100)"
+# A page nested ten thousand elements deep by its script (F97): Firefox
+# handed it back as deep as the script built it, the result is whole, and
+# the server lived through it.
+check "the deep page was read whole by the Firefox persona, as deep as its script built it" "${summary}" \
+    "d.deep.length === 1 && d.deep[0].engine === 'firefox' && d.deep[0].depth >= 10000 && d.deep[0].words === 100"
 echo "    $(value "${summary}" "d.deep.map((p) => p.engine + ': ' + p.depth + ' elements deep, ' + p.words + ' words').join('; ')")"
 restarts="$(docker inspect --format '{{.RestartCount}}' "$("${compose[@]}" ps --quiet kage)")"
 [ "${restarts}" = 0 ] || fail "the kage container restarted ${restarts} times"

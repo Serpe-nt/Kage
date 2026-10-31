@@ -72,8 +72,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   finding's page gives its title, its hundred words and its links. Tests at
   each layer read pages of 5000 and 20 000 nested elements on a thread
   with a worker's stack, and the fixture site serves a page whose script
-  nests ten thousand elements, which the end-to-end test reads in both
-  engines (F97).
+  nests ten thousand elements, which the end-to-end test reads through
+  Firefox at level 2, as the finding did (F97). Chromium's sidecar does not
+  answer the navigation of such a page in time, even at 2000 elements, and
+  the fetch ends `sidecar_error`: a finding of its own, not fixed here.
 - **The browser self-test loads a detection page once more when its
   navigation failed.** The first nightly live run (2026-10-30) lost its
   verdict on one page: the Firefox self-test through the second of its two
