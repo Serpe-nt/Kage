@@ -1579,15 +1579,15 @@ site's data in it; the way out was closed at once.
 The findings as plan items, several of one root under one number, in the
 order of severity (the report's "Proposed plan items" names the rows):
 
-- **F96 (critical):** a persona's tab keeps no history across flows or
+- **F96 (critical, fixed by [Serpe-nt/Kage#37](https://github.com/Serpe-nt/Kage/pull/37)):** a persona's tab keeps no history across flows or
   keys, and `back` at a flow's start fails; today a flow's `back` walks
   into the page another key's flow left in the persona's tab, on both
   engines (jobs-01; §10.5, §16.5, the security review).
-- **F97 (critical):** a page cannot overflow the stack: the parse and the
+- **F97 (critical, fixed by [Serpe-nt/Kage#36](https://github.com/Serpe-nt/Kage/pull/36)):** a page cannot overflow the stack: the parse and the
   walk of the extractor are bounded and the result says what they could
   read; today 5000 nested elements kill the kage process, and everything
   in flight with it (extract-01).
-- **F98 (critical):** `resolve_on_host` resolves the redirect hops of the
+- **F98 (critical, fixed by [Serpe-nt/Kage#35](https://github.com/Serpe-nt/Kage/pull/35)):** `resolve_on_host` resolves the redirect hops of the
   http path at level 0 too, each before it is asked for; today a hop to a
   name with a private address is followed and its body returned
   (ssrf-01; §19).
@@ -1739,6 +1739,26 @@ order of severity (the report's "Proposed plan items" names the rows):
   the changelog's dates, `docker compose` commands with their file, the
   pacing "that never fetches", D2, D4, D17 and D38 marked as replaced,
   the first-start sizes (docs-01, policy-05, docs-03 to docs-09).
+- **F146 (high):** a scripted page a few thousand elements deep cannot
+  tie up a Chromium persona: the sidecar hands the document back, or the
+  fetch ends with a typed outcome, within a bound; today Chromium's
+  sidecar does not answer the navigation of a page whose script nests
+  2000 elements, Kage reports `sidecar_error` after about 113 s, and a
+  synchronous fetch meets the 180 s wall first, while Firefox returns the
+  same page in two seconds (found by the F97 session, 2026-10-31; F103 is
+  the same page stopping the sidecar for good, and one bound may serve
+  both).
+- **F147 (medium):** the parse of a page is bounded in time as it is in
+  bytes: html5ever's parse grows with the square of the nesting depth
+  (5000 elements 31 ms, 20 000 479 ms, 200 000 77 s), so a page under
+  `http.max_body_bytes` can hold hours of one blocking thread; a depth or
+  a time budget with a typed outcome, and the result saying so (found by
+  the F97 session).
+- **F148 (medium):** under `resolve_on_host` the subresource emulation of
+  level 1 resolves an asset's name before asking for it, as the redirect
+  hops are since F98; today an asset's URL is judged by `check_url`
+  alone, like a browser's own requests (found by the F98 session; the
+  ground of F57/G1).
 
 The round did not reach level 1 (F30), `https` targets, a replacement
 that replaces, real-length timers, two servers on one database, DNS
@@ -1762,10 +1782,14 @@ its own on the PR workflow, with the owner's word for every merge:
    the CI badge, by
    [Serpe-nt/Kage#25](https://github.com/Serpe-nt/Kage/pull/25)).
 2. **What QA round one found, the critical and the high first:** F96,
-   F97 and F98 each a pull request of its own, then F99 to F111, grouped
-   by crate where one session can carry a few; every fix keeps the
+   F97 and F98 are fixed by [Serpe-nt/Kage#37](https://github.com/Serpe-nt/Kage/pull/37), [Serpe-nt/Kage#36](https://github.com/Serpe-nt/Kage/pull/36) and [Serpe-nt/Kage#35](https://github.com/Serpe-nt/Kage/pull/35)
+   (2026-10-31); then F99 to F111 in four sessions by area, each a pull
+   request of its own: the scheduler (F106 to F109), the http path at
+   level 0 (F99, F100 and F104), the browsers and the sidecar (F101 to
+   F103 and F105), observability (F110 and F111); every fix keeps the
    report's reproduction as its regression test, and the OpenAPI document
-   and the runbooks move with it.
+   and the runbooks move with it. F146 to F148, what the fix sessions
+   found, go with the area they belong to.
 3. **What the field campaign found, the stealth items first:** F89 (the
    behaviour engine answers a consent dialog by hand before its first
    scroll, reject non-essential by default or accept where a site's policy
