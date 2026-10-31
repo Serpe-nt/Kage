@@ -621,6 +621,9 @@ impl Work {
             visitors,
             patience: Some(PATIENCE),
             arrival: tune.arrival,
+            // A crawl's pages run in the crawl's own tab (F96); an item of a
+            // batch starts in a fresh one.
+            tab: tune.page.then(|| self.job.to_string()),
             exclude: tune.exclude,
             read_page: tune.page,
             ..planned.order

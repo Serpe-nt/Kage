@@ -316,6 +316,25 @@ export const EXAMPLES: Readonly<Record<string, readonly unknown[]>> = {
       dwell_ms: 2400,
       behavior: { seed: SEED, mode: 'still', entry: { strategy: 'direct' } },
     },
+    {
+      // A crawl's next page (1.7.0): the crawl names its tab, so that the
+      // link is clicked on the page the crawl left open in it.
+      url: 'https://example.org/listing?page=3',
+      wait: { until: 'load' },
+      capture: { dom: true, raw: false, xhr: null, console: false, screenshot: null, pdf: null },
+      timeout_ms: 60_000,
+      behavior: {
+        seed: SEED,
+        entry: {
+          strategy: 'link',
+          from_url: 'https://example.org/listing?page=2',
+          fallback: 'none',
+          from_open_page: true,
+          max_backs: 3,
+        },
+      },
+      tab: '0199c1f4-bbbb-7c3e-9d41-2f8a5b6c7d8e',
+    },
   ],
   PageResult: [pageResult, failedPageResult],
   FlowRequest: [

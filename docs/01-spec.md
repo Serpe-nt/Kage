@@ -1097,7 +1097,7 @@ with NDJSON: one `step` line per finished step as it finishes, then one
 before its first step is an ordinary error answer; a flow that breaks
 after lines were sent ends without its final line.
 
-The contract is at 1.6.0: everything M5 added (1.1.0) is optional in
+The contract is at 1.7.0: everything M5 added (1.1.0) is optional in
 requests and additional in responses, and so is what M9 added (1.2.0: a
 flow's `behavior.pace` and the `paced_ms` of a step, §10.5) and what M10
 added: `behavior.patience_ms` and what the scrolling came to
@@ -1118,7 +1118,11 @@ dwells the fixed `dwell_ms` and is refused beside `scroll_depth`,
 dwells. F95 added how many times a self-test page was loaded (1.6.0:
 `attempts` of a page report, 2 when the first navigation failed and the
 page was loaded once more after a pause; absent from an older sidecar,
-which loaded every page once).
+which loaded every page once). F96 added the tab a navigation runs in
+(1.7.0: `tab`, an opaque name only Kage gives, to a crawl's pages: a
+navigation that names the tab the context's open tab was last used under
+goes on in it; one that names another, or none, and every flow and
+self-test, starts in a fresh tab, §10.5).
 
 A breaking change of the contract needs a new major of the contract
 version; `just contract-check` compares the committed document with the
@@ -1364,6 +1368,25 @@ anything but a `/`; the fragment only when the pattern names one) and
 then waits for the document to be complete. A capture after `back`
 reports the document that came back, with the status and headers it was
 first loaded with when the flow saw it arrive.
+
+**The tab of a request (F96).** Every request in a persona's context, a
+navigation at level 2 or 3 as much as a flow or a self-test, starts in a
+fresh tab of the persona's window: no page before the one it loads, no
+history, an empty session storage. Cookies and local storage are the
+profile's and stay (D6). So a flow's `back` at its start has nowhere to go,
+on both engines and on every request alike (a way back never lands on the
+blank page a tab begins with, nor on the browser's error page: the step
+fails at once where the browser can say so beforehand), and a step that
+reads the tab before the flow's own first navigation reads a blank one;
+nothing a request left in the tab reaches another request, another key's
+least of all (§16.5). One exception, Kage's own: a crawl's pages name their
+job as their tab (contract 1.7.0, `tab`) and share it, so that the next page
+is reached by a click on the page before (§13); a navigation of another
+name, or of none, replaces the tab first. A fresh tab is a new tab of the
+same window: the page it loads reads the same window as before, and a
+site sees timing only. The page that is left sees its tab close, as when a
+person opens a new tab (in Chrome its window loses focus first), not a
+navigation away; in Firefox a page left this way sends no farewell beacon.
 
 **A flow in Kage** is one browser attempt of one persona under one grant
 of the scheduler (`POST /v1/jobs` with `type: flow`, §16.6). It starts

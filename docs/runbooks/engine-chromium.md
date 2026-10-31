@@ -97,6 +97,7 @@ review.
 | Cast discovery off (`MediaRouter`, `DialMediaRouteProvider`) | nobody measured: `PresentationRequest.getAvailability()` and Remote Playback answer the same | no page can start multicast discovery on the sidecar's network |
 | after the driver's first typed navigation the address bar keeps the keyboard focus (a person who typed the address and pressed Enter has the page focused); `document.hasFocus()` says true either way | a page that waits for keys without a click first | follow-up F64: a typed navigation by the hand |
 | `history.length` counts the driver's `about:blank` start page | nobody: the same as for a person who opened a new tab and typed | — |
+| every request starts in a fresh tab (F96): the page that was open sees `blur`, `visibilitychange` and `pagehide` as its tab closes, and the next page a window with the same values | the page that is left, which could record it; a person who opens a new tab does the same to the page they leave | a persona's tab must hold nothing of another request (spec §10.5, §16.5); only a crawl's pages share a tab |
 
 ## Settings
 

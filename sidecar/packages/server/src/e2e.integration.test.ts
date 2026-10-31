@@ -260,12 +260,14 @@ describe('the sidecar through its HTTP contract', () => {
     );
     expect(third.dom_html).toContain('visits: 2');
 
-    // A flow answers line by line: one per step, then the page as it was left.
+    // A flow answers line by line: one per step, then the page as it was
+    // left. It starts in a fresh tab (F96), so it loads its page itself.
     const flow = await fetch(`${origin}/v1/contexts/${id}/flow`, {
       method: 'POST',
       headers: { [TOKEN_HEADER]: TOKEN, 'content-type': 'application/json' },
       body: JSON.stringify({
         actions: [
+          { action: 'goto', url: navigate.url },
           { action: 'click', selector: '#next' },
           { action: 'wait_for', selector: '#referer' },
           { action: 'assert', text_contains: 'Listing' },
@@ -281,7 +283,7 @@ describe('the sidecar through its HTTP contract', () => {
       .map((line) => FlowEventSchema.parse(JSON.parse(line)));
     expect(
       events.map((event) => (event.type === 'step' ? [event.action, event.ok] : event.ok)),
-    ).toEqual([['click', true], ['wait_for', true], ['assert', true], true]);
+    ).toEqual([['goto', true], ['click', true], ['wait_for', true], ['assert', true], true]);
     const final = events.at(-1);
     expect(final?.type === 'final' && final.result.final_url).toMatch(/\/listing\?page=2$/);
     expect(final?.type === 'final' && final.behavior?.clicks).toBe(1);

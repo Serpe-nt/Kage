@@ -191,6 +191,10 @@ pub struct SidecarState {
     /// The tab of each open context: the pages it went to, the open one
     /// last. A click on a page it went back to drops what came after it.
     pub tabs: HashMap<String, Vec<String>>,
+    /// The name each open context's tab was last used under (contract
+    /// 1.7.0, F96): a navigation under that name goes on in the tab, any
+    /// other name or none starts a fresh one, and a flow leaves it nobody's.
+    pub tab_names: HashMap<String, Option<String>>,
     /// Pages whose scrolling ends elsewhere than at the depth asked for:
     /// by URL, how far down it came and why it ended there.
     pub scrolls: HashMap<String, (f64, String)>,
@@ -338,6 +342,14 @@ impl SidecarResponder {
     fn behave(state: &mut SidecarState, context: &str, asked: &Value, page: &mut Value) {
         let behavior = &asked["behavior"];
         let url = asked["url"].as_str().unwrap_or_default().to_owned();
+        // The tab the navigation names (contract 1.7.0, F96): the open tab
+        // goes on only under the name it was last used under; any other
+        // name, or none, starts a fresh tab that holds nothing.
+        let named = asked["tab"].as_str().map(str::to_owned);
+        let last = state.tab_names.insert(context.to_owned(), named.clone());
+        if named.is_none() || named != last.flatten() {
+            state.tabs.remove(context);
+        }
         let tab = state.tabs.entry(context.to_owned()).or_default();
         if !behavior.is_object() {
             tab.push(url);
@@ -414,6 +426,9 @@ impl SidecarResponder {
     /// capture the page the flow is on. One line per step, then the final
     /// one.
     fn flow(state: &mut SidecarState, context: &str, body: Value) -> ResponseTemplate {
+        // A flow starts in a fresh tab and leaves it nobody's (F96).
+        state.tabs.remove(context);
+        state.tab_names.insert(context.to_owned(), None);
         let script = state.next_flows.pop_front().unwrap_or(Value::Null);
         let fail_at = script["fail"]["index"].as_u64();
         let paced = !body["behavior"]["pace"].is_null();
@@ -542,6 +557,7 @@ impl Respond for SidecarResponder {
             ("DELETE", "") => {
                 state.contexts.retain(|_, (open, _)| open != context);
                 state.tabs.remove(context);
+                state.tab_names.remove(context);
                 state.closed.push(context.to_owned());
                 ResponseTemplate::new(204)
             }
@@ -604,6 +620,7 @@ impl MockSidecar {
             pages: HashMap::new(),
             cookies: HashMap::new(),
             tabs: HashMap::new(),
+            tab_names: HashMap::new(),
             scrolls: HashMap::new(),
             generated: Vec::new(),
             opened: Vec::new(),

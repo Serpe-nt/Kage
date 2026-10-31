@@ -115,19 +115,38 @@ export interface FirefoxContextParts {
 export class FirefoxContext implements EngineContext, SessionDriver {
   readonly browserVersion: string;
   readonly applied: AppliedIdentity;
-  readonly page: DriverPage;
   readonly console = new ConsoleLog();
   private readonly pageSession: PageSession;
+  /** The open tab; replaced by {@link FirefoxContext.freshPage}. */
+  private current: Page;
   private input: Promise<X11Input> | null = null;
   private closed = false;
 
   constructor(private readonly parts: FirefoxContextParts) {
     this.browserVersion = parts.browserVersion;
     this.applied = parts.applied;
-    this.page = parts.page;
-    // Firefox reports console calls and uncaught errors to its driver from
-    // the browser side; a page cannot tell that somebody listens.
-    parts.page.on('console', (message) => {
+    this.current = parts.page;
+    this.listen(parts.page);
+    this.pageSession = new PageSession({
+      driver: this,
+      personaSeed: parts.personaSeed,
+      selftestPages: parts.selftestPages,
+      log: parts.log,
+    });
+  }
+
+  /** The open tab as the session drives it: the driver's page, whose reads grant no activation in Firefox. */
+  get page(): DriverPage {
+    return this.current;
+  }
+
+  /**
+   * Listens to a tab's console. Firefox reports console calls and uncaught
+   * errors to its driver from the browser side; a page cannot tell that
+   * somebody listens.
+   */
+  private listen(page: Page): void {
+    page.on('console', (message) => {
       this.console.add({
         level: CONSOLE_LEVELS[message.type()] ?? 'info',
         source: 'console-api',
@@ -135,15 +154,22 @@ export class FirefoxContext implements EngineContext, SessionDriver {
         url: message.location().url || null,
       });
     });
-    parts.page.on('pageerror', (error) => {
+    page.on('pageerror', (error) => {
       this.console.add({ level: 'error', source: 'javascript', text: error.message, url: null });
     });
-    this.pageSession = new PageSession({
-      driver: this,
-      personaSeed: parts.personaSeed,
-      selftestPages: parts.selftestPages,
-      log: parts.log,
-    });
+  }
+
+  /**
+   * Replaces the open tab by a fresh one of the same window (F96). The new
+   * tab is there before the old one goes: a window whose last tab closes
+   * closes itself.
+   */
+  async freshPage(): Promise<void> {
+    const next = await this.parts.context.newPage();
+    this.listen(next);
+    const previous = this.current;
+    this.current = next;
+    await previous.close().catch(() => undefined);
   }
 
   classifyError(thrown: unknown): NavigationError {
@@ -168,7 +194,7 @@ export class FirefoxContext implements EngineContext, SessionDriver {
     // resizes nor scrolls, for the viewport and for the whole document
     // alike. Firefox encodes PNG and JPEG; a WebP request gets a PNG.
     const format = options.format === 'jpeg' ? 'jpeg' : 'png';
-    const data = await this.parts.page.screenshot({
+    const data = await this.current.screenshot({
       type: format,
       fullPage: options.full_page,
       ...(format === 'jpeg' ? { quality: options.quality ?? 80 } : {}),
