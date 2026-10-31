@@ -12,6 +12,11 @@
 #     trace's id;
 #   - every scrape target up, the alert rules loaded, and Grafana answering
 #     with both data sources and the seven dashboards;
+#   - the counters exist from zero: a first webhook failure for good is a
+#     change the alert sees, and KageWebhookFailing fires on it (F110);
+#   - with every proxy stopped the pool reads unavailable and stays so
+#     across the expiries of the backoffs, so KagePoolUnavailable keeps its
+#     ten minutes (F111);
 #   - the log redaction audit: no secret of the stack, no proxy credential
 #     header and no API token in any line any service wrote, nor in any
 #     span exported, after a page, a batch job with a webhook and a refused
@@ -53,9 +58,22 @@ EOF
 chmod --recursive a+rX "${policies}"
 scratch="$(mktemp -d)"
 evidence="${KAGE_E2E_EVIDENCE:-${scratch}}"
+# What this test needs of Kage beyond the fetch test's world: a webhook
+# fails for good at its first refusal, a proxy is parked after two failed
+# probes ten seconds apart and its backoff runs ten to twenty seconds, so
+# that an outage of the pool shows its expiries within the test's minutes.
+cat > "${scratch}/overlay.yaml" << 'EOF'
+services:
+  kage:
+    environment:
+      KAGE__WEBHOOKS__MAX_RETRIES: "0"
+      KAGE__PROXIES__FAILURE_THRESHOLD: "2"
+      KAGE__PROXIES__BACKOFF_BASE: 20s
+      KAGE__PROXIES__HEALTH__INTERVAL: 10s
+EOF
 
 compose=(docker compose --file deploy/compose.yaml --file deploy/compose.e2e.yaml
-    --file deploy/compose.observability.yaml --profile observability
+    --file deploy/compose.observability.yaml --file "${scratch}/overlay.yaml" --profile observability
     --project-name "${KAGE_E2E_OBSERVABILITY_PROJECT:-kage-e2e-observability}")
 base="http://127.0.0.1:${KAGE_PUBLISH_PORT}"
 grafana="http://127.0.0.1:${KAGE_GRAFANA_PORT}"
@@ -228,6 +246,54 @@ memory="$(got 'http://prometheus:9090/api/v1/query?query=process_resident_memory
 check "each sidecar's memory is a series of its own" "${memory}" \
     "['chromium','firefox'].every((engine) => d.data.result.filter((r) => r.metric.engine === engine).length === 1)"
 
+# rule_state <alert>: the state of a rule, and where it has one, when its
+# alert became active, as "<state> <activeAt>".
+rule_state() {
+    value "$(got 'http://prometheus:9090/api/v1/rules')" \
+        "(() => { const r = d.data.groups[0].rules.find((r) => r.name === '$1'); return r.state + ' ' + ((r.alerts[0] || {}).activeAt || ''); })()"
+}
+
+echo "==> the counters exist from zero, and a first webhook failure for good fires its alert"
+exposition="$(got 'http://kage:9464/metrics')"
+for sample in 'kage_webhook_deliveries_total{event="job.completed",result="failed"} 0' \
+    'kage_scheduler_refusals_total{reason="domain_paused"} 0' \
+    'kage_replacements_total{reason="unreachable"} 0' \
+    'kage_jobs_finished_total{job_type="batch",state="failed"} 0'; do
+    grep -qF "${sample}" <<< "${exposition}" || fail "/metrics lacks a series at zero: ${sample}"
+done
+[ "$(rule_state KageWebhookFailing)" = 'inactive ' ] || fail "KageWebhookFailing is not quiet before a failure: $(rule_state KageWebhookFailing)"
+# A secret the receiver does not know: it refuses the signature, and with
+# no retry the delivery fails for good at once.
+call POST /v1/jobs "${token}" '{"type":"batch","urls":["http://fixture.kage.test:8088/listing?page=903"],"defaults":{"level":3},"webhook":{"url":"http://hooks.kage.test:8090/kage","secret":"e2e-only-a-secret-the-receiver-refuses"}}'
+expect 201 "POST /v1/jobs with a webhook the receiver refuses"
+refused="$(value "${body}" "d.id")"
+failed_once='kage_webhook_deliveries_total{event="job.completed",result="failed"} 1'
+for _ in $(seq 1 90); do
+    exposition="$(got 'http://kage:9464/metrics')"
+    if grep -qF "${failed_once}" <<< "${exposition}"; then
+        break
+    fi
+    sleep 2
+done
+grep -qF "${failed_once}" <<< "${exposition}" \
+    || fail "the refused webhook of job ${refused} did not fail for good: $(grep kage_webhook_deliveries_total <<< "${exposition}" | tr '\n' ' ')"
+# Scraped and evaluated every 15 s: the alert, which has no `for`, fires
+# within a minute of the failure.
+state=''
+for _ in $(seq 1 45); do
+    state="$(rule_state KageWebhookFailing)"
+    case "${state}" in
+        firing*) break ;;
+    esac
+    sleep 2
+done
+case "${state}" in
+    firing*) ;;
+    *) fail "KageWebhookFailing is '${state}' after the first delivery failed for good" ;;
+esac
+increase="$(value "$(got 'http://prometheus:9090/api/v1/query?query=sum(increase(kage_webhook_deliveries_total%7Bresult%3D%22failed%22%7D%5B30m%5D))')" "d.data.result[0].value[1]")"
+echo "    job ${refused}: one delivery failed for good, the alert's expression reads ${increase}, KageWebhookFailing is firing"
+
 echo "==> Grafana answers with both data sources and the seven dashboards"
 auth="admin:${KAGE_GRAFANA_ADMIN_PASSWORD}"
 for uid in prometheus jaeger; do
@@ -240,6 +306,62 @@ check "seven dashboards in the folder Kage" "${dashboards}" \
 [ "$(curl --silent --output /dev/null --write-out '%{http_code}' "${grafana}/api/search")" = 401 ] \
     || fail "Grafana answers without a login"
 echo "    $(value "${dashboards}" "d.map((x) => x.title).join(', ')")"
+
+echo "==> every proxy stops: the pool reads unavailable and stays so across the backoffs' expiries"
+# states <exposition>: the pool's gauge as "backoff=N degraded=N healthy=N".
+states() {
+    printf '%s\n' "$1" | sed -n 's/^kage_proxy_state{state="\(backoff\|degraded\|healthy\)"} \([0-9]*\)$/\1=\2/p' | sort | tr '\n' ' '
+}
+down='backoff=3 degraded=0 healthy=0 '
+stopped_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+"${compose[@]}" stop proxy-a proxy-b proxy-c > /dev/null 2>&1
+# Two failed probes ten seconds apart park a proxy: within a minute or two
+# every proxy is in backoff and the gauge says so.
+for _ in $(seq 1 75); do
+    exposition="$(got 'http://kage:9464/metrics')"
+    if [ "$(states "${exposition}")" = "${down}" ]; then
+        break
+    fi
+    sleep 2
+done
+[ "$(states "${exposition}")" = "${down}" ] || fail "the pool does not read unavailable with every proxy stopped: $(states "${exposition}")"
+# Evaluated every 15 s: the alert is pending within a moment.
+active=''
+for _ in $(seq 1 20); do
+    active="$(rule_state KagePoolUnavailable)"
+    case "${active}" in
+        pending*) break ;;
+    esac
+    sleep 2
+done
+case "${active}" in
+    pending*) ;;
+    *) fail "KagePoolUnavailable is '${active}' with every proxy down" ;;
+esac
+# Backoffs of ten to twenty seconds, then twenty to forty: in the next
+# seventy-five seconds every proxy's backoff runs out at least once, its
+# probe fails and it is parked again. The gauge must read unavailable in
+# every sample, and the alert must keep the moment it became active.
+since="$(date -u +%s)"
+samples=0
+usable=0
+while [ $(( $(date -u +%s) - since )) -lt 75 ]; do
+    exposition="$(got 'http://kage:9464/metrics')"
+    samples=$((samples + 1))
+    if [ "$(states "${exposition}")" != "${down}" ]; then
+        usable=$((usable + 1))
+        echo "    a sample read $(states "${exposition}")"
+    fi
+    sleep 1
+done
+"${compose[@]}" logs --no-color --since "${stopped_at}" kage > "${scratch}/outage.log" 2> /dev/null || true
+expiries="$(grep -c '"cause":"backoff_expired"' "${scratch}/outage.log" || true)"
+[ "${expiries:-0}" -ge 1 ] || fail "no backoff ran out while the proxies were down; nothing was shown"
+[ "${usable}" -eq 0 ] || fail "${usable} of ${samples} samples read a usable proxy while every proxy was down"
+[ "$(rule_state KagePoolUnavailable)" = "${active}" ] \
+    || fail "KagePoolUnavailable began its ten minutes again: was '${active}', is '$(rule_state KagePoolUnavailable)'"
+echo "    ${expiries} backoffs ran out, ${samples} samples all read ${down}the alert is ${active}"
+cp "${scratch}/outage.log" "${evidence}/outage.log" 2> /dev/null || true
 
 echo "==> the redaction audit: no secret in any line or span"
 "${compose[@]}" logs --no-color > "${scratch}/all.log"

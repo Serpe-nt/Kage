@@ -15,7 +15,7 @@ use super::{
     ALLOWED_TRANSITIONS, Effect, ExitObservation, PoolRules, ProbeReport, ReplacementDecision,
     ReputationReport, apply_probe, apply_reputation, backoff_delay, budget_window_start,
     clear_leak, expire_backoff, fail_replacement, finish_replacement, is_allowed, is_hosting,
-    mark_shared_exit, month_start, replacement_due, retire, start_replacement,
+    mark_shared_exit, month_start, replacement_due, reported_state, retire, start_replacement,
 };
 use crate::test_support::{noon, proxy};
 
@@ -278,6 +278,69 @@ fn a_backoff_that_ran_out_gives_one_probe_and_one_failure_doubles_the_wait() {
     );
     assert_eq!(proxy.backoff_count, 0);
     assert_eq!(proxy.failing_since, None);
+}
+
+#[test]
+fn a_proxy_on_probation_counts_as_backoff_until_a_probe_passes() {
+    // F111: the metric follows the probes' verdicts, not the moment between
+    // a backoff's end and the probe that decides it.
+    let mut proxy = healthy(noon());
+    let rules = rules();
+    assert_eq!(reported_state(&proxy), ProxyState::Healthy);
+    let mut now = noon();
+    for _ in 0..3 {
+        now += Duration::minutes(5);
+        apply_probe(&mut proxy, &failed(now), false, MID, &rules);
+    }
+    assert_eq!(proxy.state, ProxyState::Backoff);
+    assert_eq!(reported_state(&proxy), ProxyState::Backoff);
+
+    // The backoff ran out: degraded in the store, still backoff to the
+    // metric, until the probe it is owed says otherwise.
+    let until = proxy.backoff_until.unwrap();
+    expire_backoff(&mut proxy, until, false);
+    assert_eq!(proxy.state, ProxyState::Degraded);
+    assert_eq!(reported_state(&proxy), ProxyState::Backoff);
+
+    // The probe fails: back in backoff by both accounts.
+    apply_probe(&mut proxy, &failed(until), false, MID, &rules);
+    assert_eq!(proxy.state, ProxyState::Backoff);
+    assert_eq!(reported_state(&proxy), ProxyState::Backoff);
+
+    // The next expiry and a passing probe: healthy by both accounts.
+    let until = proxy.backoff_until.unwrap();
+    expire_backoff(&mut proxy, until, false);
+    assert_eq!(reported_state(&proxy), ProxyState::Backoff);
+    apply_probe(&mut proxy, &ok(until), false, MID, &rules);
+    assert_eq!(proxy.state, ProxyState::Healthy);
+    assert_eq!(reported_state(&proxy), ProxyState::Healthy);
+
+    // A healthy proxy that failed one probe is degraded and still usable
+    // (spec §7.3), and counts as degraded: no backoff cycle is on it.
+    let mut shaky = healthy(noon());
+    apply_probe(
+        &mut shaky,
+        &failed(noon() + Duration::minutes(5)),
+        false,
+        MID,
+        &rules,
+    );
+    assert_eq!(shaky.state, ProxyState::Degraded);
+    assert_eq!(shaky.backoff_count, 0);
+    assert_eq!(reported_state(&shaky), ProxyState::Degraded);
+
+    // Every other state counts as itself.
+    for state in [ProxyState::New, ProxyState::Replacing, ProxyState::Retired] {
+        let mut other = proxy_in(state);
+        other.backoff_count = 2;
+        assert_eq!(reported_state(&other), state);
+    }
+}
+
+fn proxy_in(state: ProxyState) -> Proxy {
+    let mut proxy = proxy("d-9");
+    proxy.state = state;
+    proxy
 }
 
 #[test]

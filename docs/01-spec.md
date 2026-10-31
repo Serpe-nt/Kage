@@ -2775,7 +2775,17 @@ are gzip-compressed on disk.
   `kage_selftest_score` read from the store at the scrape, and each
   sidecar's own `/v1/metrics` merged in by family; a sidecar that does not
   answer is missing from the scrape. No label is a secret, a token or a
-  proxy's address.
+  proxy's address. Every counter whose label values are known before any
+  event exists at zero from the start of the process, so that its first
+  event is a change and not the birth of a series, which `increase()`
+  never counts (F110); a counter with a label that arrives with the event
+  (a domain, a route's status) is born with it, and the rule and the
+  panels that count a domain's blocks read the counter against its value
+  an hour earlier instead. `kage_proxy_state{state}` counts a proxy under
+  the state its last probe left it in: one whose backoff ran out and that
+  waits for the probe that decides it counts as `backoff` until a probe
+  passes, so an outage of the pool reads as no usable proxy through every
+  expiry (F111).
 - Traces: OTLP over HTTP with protobuf from both processes, to the
   collector `telemetry.otlp_endpoint` names (Kage, through wreq, never
   through a proxy) and `SIDECAR_OTLP_ENDPOINT` (a sidecar); without one
