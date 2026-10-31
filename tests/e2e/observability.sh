@@ -58,15 +58,18 @@ EOF
 chmod --recursive a+rX "${policies}"
 scratch="$(mktemp -d)"
 evidence="${KAGE_E2E_EVIDENCE:-${scratch}}"
-# What this test needs of Kage beyond the fetch test's world: a webhook
-# fails for good at its first refusal, a proxy is parked after two failed
+# What this test needs of Kage beyond the fetch test's world: a webhook is
+# retried once, two seconds later (the receiver fails every first delivery,
+# so the batch's webhook is delivered on its retry, and one the receiver
+# refuses fails for good within seconds); a proxy is parked after two failed
 # probes ten seconds apart and its backoff runs ten to twenty seconds, so
 # that an outage of the pool shows its expiries within the test's minutes.
 cat > "${scratch}/overlay.yaml" << 'EOF'
 services:
   kage:
     environment:
-      KAGE__WEBHOOKS__MAX_RETRIES: "0"
+      KAGE__WEBHOOKS__MAX_RETRIES: "1"
+      KAGE__WEBHOOKS__FIRST_RETRY: 2s
       KAGE__PROXIES__FAILURE_THRESHOLD: "2"
       KAGE__PROXIES__BACKOFF_BASE: 20s
       KAGE__PROXIES__HEALTH__INTERVAL: 10s
@@ -259,11 +262,12 @@ for sample in 'kage_webhook_deliveries_total{event="job.completed",result="faile
     'kage_scheduler_refusals_total{reason="domain_paused"} 0' \
     'kage_replacements_total{reason="unreachable"} 0' \
     'kage_jobs_finished_total{job_type="batch",state="failed"} 0'; do
-    grep -qF "${sample}" <<< "${exposition}" || fail "/metrics lacks a series at zero: ${sample}"
+    grep -qF "${sample}" <<< "${exposition}" \
+        || fail "/metrics (${#exposition} bytes) lacks a series at zero: ${sample}; it has: $(grep -E '^kage_(webhook_deliveries|scheduler_refusals|replacements|jobs_finished)_total' <<< "${exposition}" | tr '\n' ' ')"
 done
 [ "$(rule_state KageWebhookFailing)" = 'inactive ' ] || fail "KageWebhookFailing is not quiet before a failure: $(rule_state KageWebhookFailing)"
-# A secret the receiver does not know: it refuses the signature, and with
-# no retry the delivery fails for good at once.
+# A secret the receiver does not know: it refuses the signature twice, and
+# after the one retry the delivery fails for good.
 call POST /v1/jobs "${token}" '{"type":"batch","urls":["http://fixture.kage.test:8088/listing?page=903"],"defaults":{"level":3},"webhook":{"url":"http://hooks.kage.test:8090/kage","secret":"e2e-only-a-secret-the-receiver-refuses"}}'
 expect 201 "POST /v1/jobs with a webhook the receiver refuses"
 refused="$(value "${body}" "d.id")"
