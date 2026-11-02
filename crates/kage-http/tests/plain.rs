@@ -594,3 +594,71 @@ async fn the_wire_fingerprint_is_the_recorded_one() {
         "the plain client's wire fingerprint moved; record it again if that was meant"
     );
 }
+
+/// QA round one's extract-03 and crawl-04 (F100): the plain client's body is
+/// read as text in the encoding a browser takes for it, by the header or by
+/// the document's `<meta>`, and a redirect hop with two trailing dots in its
+/// host is refused before it is asked for (F104).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_body_is_read_in_the_encoding_it_declares_and_a_hop_without_a_host_is_refused() {
+    let world = World::start().await;
+    let latin1 = b"<!doctype html><title>Caf\xe9</title><p>Stra\xdfe M\xfcnchen</p>".to_vec();
+    page(
+        &world.site,
+        "/latin1",
+        ResponseTemplate::new(200).set_body_raw(latin1.clone(), "text/html; charset=iso-8859-1"),
+    )
+    .await;
+    let mut sjis = b"<!doctype html><meta charset=\"shift_jis\"><title>".to_vec();
+    sjis.extend_from_slice(&[0x93, 0xfa, 0x96, 0x7b, 0x8c, 0xea]);
+    sjis.extend_from_slice(b"</title>");
+    page(
+        &world.site,
+        "/sjis",
+        ResponseTemplate::new(200).set_body_raw(sjis.clone(), "text/html"),
+    )
+    .await;
+    page(&world.site, "/away", redirect(302, "http://127.0.0.1../")).await;
+    let client = world.client();
+
+    let read = client
+        .fetch(&get("http://site.kage.test/latin1"))
+        .await
+        .unwrap();
+    // The bytes are as the site sent them; the text is what they say.
+    assert_eq!(read.body.as_ref(), latin1.as_slice());
+    assert_eq!(
+        read.text(),
+        "<!doctype html><title>Café</title><p>Straße München</p>"
+    );
+    let read = client
+        .fetch(&get("http://site.kage.test/sjis"))
+        .await
+        .unwrap();
+    assert_eq!(read.body.as_ref(), sjis.as_slice());
+    assert!(
+        read.text().ends_with("<title>日本語</title>"),
+        "{}",
+        read.text()
+    );
+
+    let error = client
+        .fetch(&get("http://site.kage.test/away"))
+        .await
+        .unwrap_err();
+    let HttpError::RedirectDenied(denied) = &error else {
+        panic!("{error}");
+    };
+    assert_eq!(denied.hop, 1);
+    assert!(
+        matches!(&denied.reason, SsrfDenial::Name { host, .. } if host == "127.0.0.1.."),
+        "{denied}"
+    );
+    assert!(
+        !world
+            .proxy
+            .plain()
+            .iter()
+            .any(|seen| seen.target.contains("127.0.0.1"))
+    );
+}

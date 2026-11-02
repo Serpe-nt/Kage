@@ -856,10 +856,18 @@ impl Pipeline {
     async fn begin(
         &self,
         id: RequestId,
-        order: FetchOrder,
+        mut order: FetchOrder,
         give_up_at: Option<DateTime<Utc>>,
         earlier: Option<Vec<Attempt>>,
     ) -> Result<Course, SchedulerError> {
+        // One normal form of a host (F104): `example.org.` is the site
+        // `example.org` to the breaker, the cooldowns, the pace, the plain
+        // exit and the cache, and is asked for as `example.org`. A host with
+        // an empty label keeps it, and the guard refuses it before anything
+        // is sent.
+        if let Ok(normal) = kage_core::urlnorm::normal_url(&order.url) {
+            order.url = normal;
+        }
         let domain = order
             .url
             .host_str()

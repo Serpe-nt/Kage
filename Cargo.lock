@@ -2316,6 +2316,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
+ "encoding_rs",
  "flate2",
  "futures-util",
  "http",

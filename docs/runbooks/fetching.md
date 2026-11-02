@@ -140,8 +140,16 @@ policy enforces its `robots.txt` (`docs/runbooks/api.md`, "robots.txt").
 
 What follows is a persona's pace, at levels 1 to 3. A request at level 0
 has no persona and waits only for the site's own limits: its concurrency
-and requests per minute, the breaker's pause and the pause after server
-errors.
+and requests per minute, the breaker's pause, the pause after server
+errors and, where the site's `robots.txt` is enforced, its `Crawl-delay`
+between two pages of the plain client.
+
+A site is one site however its host is spelled: `Example.org.`, with the
+dot of the DNS root at its end, is `example.org` to the pace, the breaker,
+the cooldowns, the daily cap, the plain exit and the cache, and is asked
+for as `example.org`. A host with two dots at its end (or one at its
+start) names no host and is refused `ssrf_denied` before anything is sent
+(F104).
 
 A persona that fetched a page from a domain keeps that domain's work for
 its visit: bursts of pages with the gaps of the pacing profile at the

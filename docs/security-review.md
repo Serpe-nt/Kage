@@ -32,7 +32,10 @@ taken over can do.
 
 The guard is `kage_core::ssrf`: scheme `http`/`https`, no credentials in
 the URL, not port 0, no name that never names a public site
-(`localhost`, `*.local`, `*.internal`, one label, …), no literal address
+(`localhost`, `*.local`, `*.internal`, one label, a name with an empty
+label such as `localhost..`, `127.0.0.1..` or `.example.org`, …; until
+F104 the guard dropped one trailing dot and let a second one through on
+every road, QA round one's ssrf-04), no literal address
 in a denied range (loopback, link-local, RFC 1918, CGNAT, multicast, ULA,
 cloud metadata, the reserved and documentation networks, and an IPv4
 address embedded in an IPv6 one), and no literal address at all unless

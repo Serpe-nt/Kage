@@ -679,6 +679,43 @@ async fn a_request_that_cannot_be_made_as_asked_is_refused_and_nothing_is_fetche
             StatusCode::UNPROCESSABLE_ENTITY,
             "ssrf_denied",
         ),
+        // A host with an empty label names no host (ssrf-04, F104): two
+        // trailing dots or more, a leading dot, at every level.
+        (
+            json!({ "url": "http://localhost../", "level": 0 }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "ssrf_denied",
+        ),
+        (
+            json!({ "url": "http://127.0.0.1../", "level": 1 }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "ssrf_denied",
+        ),
+        (
+            json!({ "url": "http://169.254.169.254../latest", "level": 2 }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "ssrf_denied",
+        ),
+        (
+            json!({ "url": "http://postgres.../", "level": 3 }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "ssrf_denied",
+        ),
+        (
+            json!({ "url": "http://metadata.google.internal../", "level": 0 }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "ssrf_denied",
+        ),
+        (
+            json!({ "url": "http://.shop.kage.test/", "level": 0 }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "ssrf_denied",
+        ),
+        (
+            json!({ "url": "http://../", "level": 3 }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "ssrf_denied",
+        ),
         // A public address by number, while `security.allow_ip_targets` is off.
         (
             json!({ "url": "http://93.184.216.34/", "level": 3 }),

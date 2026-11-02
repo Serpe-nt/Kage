@@ -416,7 +416,36 @@ const json = (res, value, headers = {}) =>
 const withHeaders = (template, req) =>
   template.replace('/*KAGE_REQUEST_HEADERS*/null', JSON.stringify(headerPairs(req)));
 
+/**
+ * Pages written in a legacy encoding (F100): what a browser reads of them
+ * is what the http path must read. A page in ISO-8859-1 that says so in its
+ * header or in its <meta> only, with a link to a page whose name is not
+ * ASCII (its bytes are Latin-1, a browser asks for /legacy/f%C3%BCr), and
+ * a page in Shift_JIS that says so in its <meta>.
+ */
+const LEGACY_WORDS = Array.from({ length: 120 }, (_, n) => `wort${n}`).join(' ');
+const latin1Page = (head) =>
+  Buffer.from(
+    `<!doctype html><html lang="de"><head>${head}<title>Café</title></head><body><main><article>` +
+      `<h1>Café Müller</h1><p>Straße München ${LEGACY_WORDS}</p>` +
+      `<p><a href="/legacy/für">für</a></p></article></main></body></html>`,
+    'latin1',
+  );
+const SHIFT_JIS_TITLE = Buffer.from([0x93, 0xfa, 0x96, 0x7b, 0x8c, 0xea]);
+const shiftJisPage = () =>
+  Buffer.concat([
+    Buffer.from('<!doctype html><html lang="ja"><head><meta charset="shift_jis"><title>'),
+    SHIFT_JIS_TITLE,
+    Buffer.from('</title></head><body><main><article><h1>'),
+    SHIFT_JIS_TITLE,
+    Buffer.from(`</h1><p>${LEGACY_WORDS}</p></article></main></body></html>`),
+  ]);
+
 const routes = {
+  '/legacy/latin1': (_req, res) => send(res, 200, 'text/html; charset=iso-8859-1', latin1Page('')),
+  '/legacy/latin1-meta': (_req, res) => send(res, 200, 'text/html', latin1Page('<meta charset="iso-8859-1">')),
+  '/legacy/f%C3%BCr': (_req, res) => html(res, page('Für', `<main><article><h1>Für</h1><p>${LEGACY_WORDS}</p></article></main>`)),
+  '/legacy/sjis': (_req, res) => send(res, 200, 'text/html', shiftJisPage()),
   '/': (req, res) => {
     const visits = Number(cookieOf(req, 'visits') ?? '0') + 1;
     html(res, HOME, { 'set-cookie': `visits=${visits}; Path=/; Max-Age=86400; SameSite=Lax` });

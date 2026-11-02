@@ -381,7 +381,16 @@ pub fn check_url(url: &Url, policy: SsrfPolicy) -> Result<Target, SsrfDenial> {
 
     let address = match url.host().ok_or(SsrfDenial::NoHost)? {
         Host::Domain(name) => {
-            let name = name.strip_suffix('.').unwrap_or(name).to_ascii_lowercase();
+            // The host's normal form (F104): one trailing dot is the DNS
+            // root's and no part of the name; a name with an empty label
+            // (`localhost..`, `127.0.0.1..`, `.example.org`) names no host,
+            // and the URL parser does not see an address in it either.
+            let name = crate::urlnorm::normal_host(name)
+                .map_err(|_| SsrfDenial::Name {
+                    host: name.to_ascii_lowercase(),
+                    reason: "a host name has no empty label",
+                })?
+                .to_ascii_lowercase();
             check_name(&name)?;
             return Ok(Target {
                 host: TargetHost::Name(name),
@@ -843,6 +852,58 @@ mod tests {
                 .name(),
             Some("example.org")
         );
+    }
+
+    /// The finding's names (ssrf-04, F104): with two or more trailing dots,
+    /// one leading or two in a row, a name or an address is refused like
+    /// the name it spells, and a hop to one ends the chain.
+    #[test]
+    fn a_host_with_an_empty_label_is_refused() {
+        let empty = |host: &str| SsrfDenial::Name {
+            host: host.to_owned(),
+            reason: "a host name has no empty label",
+        };
+        for (text, host) in [
+            ("http://localhost../", "localhost.."),
+            ("http://127.0.0.1../", "127.0.0.1.."),
+            ("http://10.0.0.1../", "10.0.0.1.."),
+            ("http://169.254.169.254../", "169.254.169.254.."),
+            ("http://2130706433../", "2130706433.."),
+            ("http://postgres../", "postgres.."),
+            ("http://postgres.../", "postgres..."),
+            ("http://kage../", "kage.."),
+            ("http://printer.local../", "printer.local.."),
+            (
+                "http://metadata.google.internal../",
+                "metadata.google.internal..",
+            ),
+            ("http://../", ".."),
+            ("http://.fixture.kage.test/", ".fixture.kage.test"),
+            ("http://fixture..kage.test/", "fixture..kage.test"),
+            ("https://Example.ORG../", "example.org.."),
+        ] {
+            assert_eq!(check_url(&url(text), STRICT), Err(empty(host)), "{text}");
+            let open = SsrfPolicy {
+                allow_ip_targets: true,
+            };
+            assert_eq!(check_url(&url(text), open), Err(empty(host)), "{text}");
+        }
+        // One dot is the name's own: refused as the name is, or passed.
+        assert!(matches!(
+            check_url(&url("http://localhost./"), STRICT),
+            Err(SsrfDenial::Name { .. })
+        ));
+        assert!(matches!(
+            check_url(&url("http://127.0.0.1./"), STRICT),
+            Err(SsrfDenial::Address { .. })
+        ));
+        assert!(check_url(&url("http://fixture.kage.test./"), STRICT).is_ok());
+
+        let mut chain = RedirectChain::start(&url("https://example.org/"), STRICT, 10).unwrap();
+        let refused = chain.follow("http://127.0.0.1../").unwrap_err();
+        assert_eq!(refused.hop, 1);
+        assert_eq!(refused.reason, empty("127.0.0.1.."));
+        assert_eq!(chain.redirects(), 0);
     }
 
     #[test]

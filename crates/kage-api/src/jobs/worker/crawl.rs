@@ -34,9 +34,8 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
-use base64::Engine as _;
 use chrono::{DateTime, Utc};
-use kage_browser::contract::{BodyEncoding, NavigationErrorCode, PageResult};
+use kage_browser::contract::{NavigationErrorCode, PageResult};
 use kage_core::domain::{
     Exit, FrontierEntry, FrontierSource, FrontierState, JobItem, JobItemState, JobState, Level,
 };
@@ -50,8 +49,8 @@ use kage_crawl::frontier::{
 };
 use kage_crawl::{site, sitemap};
 use kage_scheduler::{
-    Arrival, CrawlReading, FetchOrder, FetchReport, Peek, Reached, RobotsRead, RobotsWish,
-    SchedulerError, ScoutNeed, robots,
+    Arrival, AttemptOutput, CrawlReading, FetchOrder, FetchReport, Peek, Reached, RobotsRead,
+    RobotsWish, SchedulerError, ScoutNeed, robots,
 };
 use kage_store::StoreError;
 use serde_json::{Map, Value, json};
@@ -255,17 +254,6 @@ fn page_read(reading: Option<&CrawlReading>, asked: &Url) -> PageRead {
 /// A page as the crawl takes it from a fetch that got it.
 fn page_of(report: &FetchReport, asked: &Url) -> PageRead {
     page_read(report.reading.as_ref(), asked)
-}
-
-/// The body of the main response of a page a browser loaded, as bytes.
-fn body_of(page: &PageResult) -> Option<Vec<u8>> {
-    let body = page.raw_body.as_ref()?;
-    match body.encoding {
-        BodyEncoding::Utf8 => Some(body.data.clone().into_bytes()),
-        BodyEncoding::Base64 => base64::engine::general_purpose::STANDARD
-            .decode(body.data.as_bytes())
-            .ok(),
-    }
 }
 
 /// One crawl in the hands of its runner.
@@ -1132,12 +1120,15 @@ impl Crawl {
             max_entries: usize::try_from(config.max_sitemap_urls).unwrap_or(usize::MAX),
             ..sitemap::Limits::default()
         };
-        let read = page
-            .and_then(body_of)
+        // The file as the site sent it: the body of the browser's page, or
+        // the body the plain client of level 0 read (F99: that one was not
+        // looked at, and every sitemap at level 0 was unreadable).
+        let read = last
+            .and_then(AttemptOutput::sent_body)
             .and_then(|body| sitemap::parse(&body, limits).ok());
         let Some(read) = read else {
-            // The browser showed nothing a sitemap can be read from: a
-            // gzipped file in Chrome, or what is there is no sitemap.
+            // Nothing a sitemap can be read from: a gzipped file a Chrome
+            // scout showed nothing of, or what is there is no sitemap.
             self.note_sitemap(file, "sitemap_unreadable", 0);
             return;
         };
@@ -1821,7 +1812,7 @@ mod tests {
     use kage_crawl::scope::Skip;
     use serde_json::{Value, json};
 
-    use super::{body_of, entry_at, entry_of, position, scroll_of};
+    use super::{entry_at, entry_of, position, scroll_of};
 
     fn row() -> FrontierEntry {
         let at = Utc.with_ymd_and_hms(2026, 10, 12, 9, 0, 0).unwrap();
@@ -1954,27 +1945,6 @@ mod tests {
             assert!(error.contains(column), "{error}");
         }
         assert_eq!(entry_at(position(7)), 7);
-    }
-
-    #[test]
-    fn the_body_of_a_page_is_read_whatever_it_is_written_in() {
-        let none = page(|page| page["raw_body"] = Value::Null);
-        assert_eq!(body_of(&none), None);
-        let text = page(|page| {
-            page["raw_body"] =
-                json!({ "data": "<urlset/>", "encoding": "utf8", "bytes": 9, "truncated": false });
-        });
-        assert_eq!(body_of(&text).as_deref(), Some(b"<urlset/>".as_slice()));
-        // A gzipped file comes as base64: its first bytes are gzip's.
-        let packed = page(|page| {
-            page["raw_body"] =
-                json!({ "data": "H4sIAAAA", "encoding": "base64", "bytes": 6, "truncated": false });
-        });
-        assert_eq!(body_of(&packed).unwrap()[..2], [0x1f, 0x8b]);
-        let broken = page(|page| {
-            page["raw_body"] = json!({ "data": "not base64!", "encoding": "base64", "bytes": 6, "truncated": false });
-        });
-        assert_eq!(body_of(&broken), None);
     }
 
     #[test]

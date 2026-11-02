@@ -9,10 +9,19 @@
 //! crawl frontier and the response cache.
 //!
 //! A key is not a URL to request. The request always goes out with the URL
-//! as it was discovered, minus the fragment ([`request_url`]): a sorted
-//! query string or a missing click id is a URL shape the site's own links
-//! never produce, and that is a cheap tell. [`UrlKey`] therefore cannot be
-//! turned back into a `Url`.
+//! as it was discovered, minus the fragment and with its host in its normal
+//! form ([`request_url`]): a sorted query string or a missing click id is a
+//! URL shape the site's own links never produce, and that is a cheap tell.
+//! [`UrlKey`] therefore cannot be turned back into a `Url`.
+//!
+//! **The normal form of a host** ([`normal_host`], [`normal_url`]; spec §7,
+//! §19, F104): the name of the DNS root that ends a fully qualified name is
+//! no part of it, so `example.org.` is `example.org` to everything that is
+//! keyed by a host or a site (the breaker, the cooldowns, the pace, the
+//! plain exit, the cache, a crawl's frontier), and a request for it goes to
+//! `example.org`. A name with an empty label (two or more dots at its end,
+//! one at its start, two in a row) names no host at all; the SSRF guard
+//! refuses it on every road (`crate::ssrf::check_url`).
 
 use std::fmt;
 
@@ -150,13 +159,69 @@ impl fmt::Debug for UrlKey {
     }
 }
 
+/// A host name that has no normal form: one of its labels is empty.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("host {0:?} has an empty label, and names no host")]
+pub struct EmptyLabel(pub String);
+
+/// The normal form of a host as the `url` crate spells it (lower case, an
+/// internationalized name in its ASCII form): without the one trailing dot
+/// of a fully qualified name. An address and a name without that dot are
+/// their own normal form.
+///
+/// # Errors
+///
+/// [`EmptyLabel`] for a name with an empty label: two or more dots at its
+/// end, one at its start, two in a row, or nothing but dots.
+pub fn normal_host(host: &str) -> Result<&str, EmptyLabel> {
+    // An IPv6 address in brackets has no labels.
+    if host.starts_with('[') {
+        return Ok(host);
+    }
+    let name = host.strip_suffix('.').unwrap_or(host);
+    if name.is_empty() || name.split('.').any(str::is_empty) {
+        return Err(EmptyLabel(host.to_owned()));
+    }
+    Ok(name)
+}
+
+/// The URL with its host in its normal form ([`normal_host`]); a URL
+/// without a host as it is.
+///
+/// # Errors
+///
+/// [`EmptyLabel`] for a host with an empty label.
+pub fn normal_url(url: &Url) -> Result<Url, EmptyLabel> {
+    let Some(host) = url.host_str() else {
+        return Ok(url.clone());
+    };
+    let normal = normal_host(host)?;
+    if normal.len() == host.len() {
+        return Ok(url.clone());
+    }
+    let mut out = url.clone();
+    // The shorter name is a name the URL already held: it parses.
+    if out.set_host(Some(normal)).is_err() {
+        return Err(EmptyLabel(host.to_owned()));
+    }
+    Ok(out)
+}
+
+/// The URL with the one trailing dot of its host dropped where it has one,
+/// and as it is otherwise: a host with an empty label keeps it, for the
+/// guard to refuse.
+fn without_root_dot(url: &Url) -> Url {
+    normal_url(url).unwrap_or_else(|_| url.clone())
+}
+
 /// Normalizes a URL into its key.
 ///
 /// The `url` crate already lower-cases the scheme and the host, converts an
 /// internationalized host to punycode, drops default ports and resolves `.`
-/// and `..` segments when it parses.
+/// and `..` segments when it parses. The host is keyed in its normal form
+/// ([`normal_host`]).
 pub fn normalize(url: &Url, options: &NormalizeOptions) -> UrlKey {
-    let mut key = url.clone();
+    let mut key = without_root_dot(url);
     key.set_fragment(None);
 
     let path = normalize_percent_encoding(key.path());
@@ -241,9 +306,10 @@ fn apply_trailing_slash(path: &str, policy: TrailingSlash) -> Option<String> {
 }
 
 /// The URL to request for a discovered link: exactly as discovered, without
-/// the fragment, which browsers never send.
+/// the fragment, which browsers never send, and with its host in its normal
+/// form ([`normal_host`]).
 pub fn request_url(discovered: &Url) -> Url {
-    let mut url = discovered.clone();
+    let mut url = without_root_dot(discovered);
     url.set_fragment(None);
     url
 }
@@ -507,6 +573,86 @@ mod tests {
         assert_eq!(
             key("https://bücher.example/a"),
             key("https://xn--bcher-kva.example/a")
+        );
+    }
+
+    #[test]
+    fn one_trailing_dot_of_a_host_is_no_part_of_it() {
+        use super::{normal_host, normal_url};
+
+        assert_eq!(normal_host("example.org."), Ok("example.org"));
+        assert_eq!(normal_host("example.org"), Ok("example.org"));
+        assert_eq!(normal_host("localhost."), Ok("localhost"));
+        assert_eq!(normal_host("[2001:db8::7]"), Ok("[2001:db8::7]"));
+        assert_eq!(
+            normal_url(&Url::parse("http://Other.QA.test.:8091/yes?x=1#f").unwrap())
+                .unwrap()
+                .as_str(),
+            "http://other.qa.test:8091/yes?x=1#f"
+        );
+        // Nothing else of the URL moves, and a host without the dot is
+        // left as it is.
+        let plain = Url::parse("https://example.org/a/?b=2&a=1").unwrap();
+        assert_eq!(normal_url(&plain).unwrap(), plain);
+        // An address has no labels: the parser drops the dot of `1.2.3.4.`.
+        assert_eq!(
+            normal_url(&Url::parse("http://203.0.113.9./").unwrap())
+                .unwrap()
+                .as_str(),
+            "http://203.0.113.9/"
+        );
+        // A URL without a host has no host to normalize.
+        let mail = Url::parse("mailto:someone@example.org").unwrap();
+        assert_eq!(normal_url(&mail).unwrap(), mail);
+
+        // The key and the URL to request are those of the name.
+        assert_eq!(key("https://example.org./a"), key("https://example.org/a"));
+        assert_eq!(key("https://Example.ORG./a"), "https://example.org/a");
+        assert_eq!(
+            request_url(&Url::parse("https://example.org.:8443/a#top").unwrap()).as_str(),
+            "https://example.org:8443/a"
+        );
+    }
+
+    #[test]
+    fn a_host_with_an_empty_label_has_no_normal_form() {
+        use super::{EmptyLabel, normal_host, normal_url};
+
+        for host in [
+            "localhost..",
+            "127.0.0.1..",
+            "169.254.169.254..",
+            "postgres...",
+            "example.org..",
+            ".example.org",
+            "a..b.example",
+            "..",
+            ".",
+            "",
+        ] {
+            assert_eq!(
+                normal_host(host),
+                Err(EmptyLabel(host.to_owned())),
+                "{host}"
+            );
+        }
+        for text in [
+            "http://localhost../",
+            "http://127.0.0.1../",
+            "http://169.254.169.254../",
+            "http://postgres../",
+            "http://.fixture.kage.test/",
+            "http://../",
+        ] {
+            let url = Url::parse(text).unwrap();
+            assert!(normal_url(&url).is_err(), "{text}");
+            // The key and the URL to request keep such a host as it is, for
+            // the guard to refuse.
+            assert_eq!(request_url(&url).host_str(), url.host_str(), "{text}");
+        }
+        assert_eq!(
+            EmptyLabel("a..".to_owned()).to_string(),
+            "host \"a..\" has an empty label, and names no host"
         );
     }
 

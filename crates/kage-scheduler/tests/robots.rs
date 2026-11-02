@@ -16,11 +16,12 @@ use std::time::Duration;
 
 use chrono::Duration as Span;
 use common::{DEFAULT_DOMAINS, World, blocked, file, id, server_error};
-use kage_core::domain::{Level, Render, RobotsVerdict};
+use kage_core::domain::{Header, Level, Render, RobotsVerdict, Timing};
 use kage_core::ids::{PersonaId, RequestId};
 use kage_core::outcome::Outcome;
 use kage_core::schedule::planner::Refusal;
 use kage_core::schedule::queue::Priority;
+use kage_http::Fetched;
 use kage_scheduler::{
     Arrival, AttemptOutput, FetchOrder, FetchReport, JobFetch, Peek, ROBOTS_NO_SCOUT,
     ROBOTS_UNAVAILABLE, RobotsRead, RobotsWish, ScoutNeed, Stop,
@@ -1047,5 +1048,123 @@ async fn a_jobs_scout_is_a_jobs_request_and_waits_out_a_paused_site() {
     // Nobody asked the paused site for anything.
     let (files, pages) = asked(&world);
     assert_eq!((files.len(), pages.len()), (1, 0));
+    world.shut_down().await;
+}
+
+/// What the plain client of level 0 brings back of a file: no page, the
+/// body as the site sent it in what the http path fetched.
+fn plain_file(url: &str, status: u16, body: &str) -> AttemptOutput {
+    let mut output = file(url, status, body);
+    output.page = None;
+    output.fetched = Some(Box::new(Fetched {
+        status,
+        final_url: Url::parse(url).unwrap(),
+        http_version: "http/1.1",
+        headers: vec![Header {
+            name: "content-type".to_owned(),
+            value: "text/plain".to_owned(),
+        }],
+        body: body.as_bytes().to_vec().into(),
+        truncated: false,
+        hops: Vec::new(),
+        downgraded: false,
+        timing: Timing::default(),
+        subresources: None,
+    }));
+    output
+}
+
+/// QA round one's api-01 and crawl-02 (F99): the file a level 0 request
+/// asked for first was kept empty for a day, and `enforce` enforced
+/// nothing at any level. It is kept as the site sent it: the plain client
+/// asks for it once, a page it disallows is not asked for at level 0 or in
+/// a browser, its `Crawl-delay` is kept, and a crawl reads its sitemaps.
+#[tokio::test(start_paused = true)]
+async fn a_robots_txt_a_plain_client_brought_is_kept_as_sent_and_enforced_at_every_level() {
+    let mut world = World::new(4, SITES);
+    world.script.when_plain(|job| {
+        (job.url.path() == "/robots.txt").then(|| plain_file(job.url.as_str(), 200, RULES))
+    });
+    // A browser would bring back a file that allows everything: it is
+    // never asked.
+    robots_txt(&world, |url| file(url, 200, "User-agent: *\nAllow: /\n"));
+    let plain = |path: &str| FetchOrder {
+        level: Level::Plain,
+        ..get(&format!("https://enforced.example{path}"))
+    };
+
+    let first = world.pipeline.fetch(plain("/private/a")).await.unwrap();
+    assert_eq!(first.outcome, Outcome::RobotsDenied);
+    assert_eq!(first.attempts, []);
+    assert_eq!(
+        first.robots,
+        Some(RobotsVerdict {
+            fetched: true,
+            allowed: false,
+            matched_rule: Some("Disallow: /private".to_owned()),
+            crawl_delay: Some(30.0),
+        })
+    );
+    let entry = world
+        .backend
+        .robots_entry("https://enforced.example")
+        .unwrap();
+    assert_eq!(entry.body.as_deref(), Some(RULES));
+    assert_eq!(entry.status, Some(200));
+    assert!(!entry.unreachable);
+
+    // In a browser too, what the file disallows is not asked for, and no
+    // browser asked for the file.
+    let browser = world
+        .pipeline
+        .fetch(get("https://enforced.example/private/b"))
+        .await
+        .unwrap();
+    assert_eq!(browser.outcome, Outcome::RobotsDenied);
+    assert!(world.script.seen().is_empty());
+
+    // What it allows is read, with its verdict, at the pace it asks for.
+    let open = world.pipeline.fetch(plain("/a")).await.unwrap();
+    assert_eq!(open.outcome, Outcome::Ok);
+    assert_eq!(open.robots, Some(allowed(Some(30.0))));
+    let next = world.pipeline.fetch(plain("/b")).await.unwrap();
+    assert_eq!(next.outcome, Outcome::Ok);
+    let paths: Vec<String> = world
+        .script
+        .plain_seen()
+        .iter()
+        .map(|seen| seen.job.url.path().to_owned())
+        .collect();
+    assert_eq!(paths, ["/robots.txt", "/a", "/b"]);
+    let seen = world.script.plain_seen();
+    let gap = seen[2].at - seen[1].at;
+    assert!(gap >= Span::seconds(30), "{gap}");
+
+    // A crawl at level 0 reads the sitemaps it names, from what is kept.
+    let (_keep, stop) = never();
+    let read = world
+        .pipeline
+        .robots_read(
+            &Url::parse("https://enforced.example/").unwrap(),
+            RobotsWish::Policy,
+            ScoutNeed {
+                readers: Vec::new(),
+                readers_needed: 1,
+                priority: Priority::Job,
+                patience: None,
+                level: Level::Plain,
+            },
+            stop,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        read,
+        RobotsRead::Read {
+            found: true,
+            sitemaps: vec!["https://enforced.example/map.xml".to_owned()],
+        }
+    );
+    assert_eq!(world.script.plain_seen().len(), 3);
     world.shut_down().await;
 }

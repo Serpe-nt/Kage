@@ -19,8 +19,7 @@ use url::Url;
 
 use super::{Course, Deferred, FetchOrder, FetchReport, Pipeline, Ran, Stop, stopped};
 use crate::SchedulerError;
-use crate::archive::bytes_of;
-use crate::executor::Arrival;
+use crate::executor::{Arrival, AttemptOutput};
 use crate::metrics;
 use crate::robots::{self, Answer, Known, RobotsWish, Standing};
 use crate::scheduler::Refused;
@@ -470,10 +469,10 @@ impl Pipeline {
             return Ok(Asked::NoAnswer);
         }
         let status = last.and_then(|last| last.status);
-        let body = last
-            .and_then(|last| last.page.as_deref())
-            .and_then(|page| page.raw_body.as_ref())
-            .and_then(bytes_of);
+        // The file as the site sent it: the body a browser's page carries,
+        // else the body the plain client of level 0 read (F99: that one was
+        // dropped, and the file was kept empty for a day).
+        let body = last.and_then(AttemptOutput::sent_body);
         let answer = Answer::of(
             report.outcome,
             status,

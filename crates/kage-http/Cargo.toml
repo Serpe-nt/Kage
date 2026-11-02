@@ -19,6 +19,8 @@ kage-store = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
+# Decodes a body by its declared or sniffed character encoding (F100).
+encoding_rs = { workspace = true }
 futures-util = { workspace = true }
 http = { workspace = true }
 # Reads a response body frame by frame, so the size cap can stop it.

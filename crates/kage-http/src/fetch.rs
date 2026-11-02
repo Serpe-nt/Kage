@@ -214,9 +214,15 @@ impl Fetched {
         &self.hops[..self.hops.len().saturating_sub(1)]
     }
 
-    /// The body as text; bytes that are not UTF-8 are replaced.
+    /// The body as text, read in the encoding a browser would take for it
+    /// ([`crate::charset::decode`]: its byte order mark, the `charset` of
+    /// its `Content-Type`, its `<meta>`, the fallback). Bytes that are not
+    /// valid in that encoding are replaced. Until F100 every body was read
+    /// as UTF-8.
     pub fn text(&self) -> String {
-        String::from_utf8_lossy(&self.body).into_owned()
+        crate::charset::decode(self.header("content-type"), &self.body)
+            .text
+            .into_owned()
     }
 }
 

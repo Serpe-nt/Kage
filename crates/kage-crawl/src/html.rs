@@ -351,6 +351,34 @@ mod tests {
         page.links.iter().map(|link| link.url.as_str()).collect()
     }
 
+    /// The reader takes text that is already decoded (F100: the http path
+    /// decodes a body by its declaration before anything reads it). What the
+    /// document's own `<meta charset>` says is no part of the reading, and a
+    /// link whose path is not ASCII is the address a browser asks for: its
+    /// path in UTF-8, percent-encoded, whatever the page was written in.
+    #[test]
+    fn a_decoded_document_is_read_as_it_says_and_its_links_as_a_browser_asks() {
+        let read = page(
+            "<html><head><meta charset=\"iso-8859-1\"><title>Café</title></head><body>\
+             <p>Straße München <a href=\"/für\">für</a> <a href=\"日本語?q=1\">日本語</a></p>\
+             </body></html>",
+        );
+        assert_eq!(read.title, "Café");
+        assert!(
+            read.main_text.contains("Straße München"),
+            "{}",
+            read.main_text
+        );
+        assert_eq!(
+            hrefs(&read),
+            [
+                "https://shop.example/f%C3%BCr",
+                "https://shop.example/catalogue/%E6%97%A5%E6%9C%AC%E8%AA%9E?q=1",
+            ]
+        );
+        assert_eq!(read.links[0].text, "für");
+    }
+
     #[test]
     fn links_resolve_against_the_address_of_the_page() {
         let read = page(

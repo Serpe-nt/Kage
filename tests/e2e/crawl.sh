@@ -15,6 +15,8 @@
 #     the depth the page itself reports;
 #   - what a page that is left that way sees, in the page's own words: the
 #     pointer arriving, a trusted click, user activation;
+#   - a crawl at level 0 of a page in ISO-8859-1 follows its link to the
+#     address a browser asks for (F100);
 #   - a crawl with sitemaps: a scout reads them, from another address than
 #     the site's reader, which never asks for one; the pages only a
 #     sitemap names are read;
@@ -306,6 +308,28 @@ keep metrics-crawl.txt "$(grep --extended-regexp '^kage_(crawl_|jobs\{|jobs_fini
 echo "    $(grep '^kage_crawl_pages_total' "${metrics}" | tr '\n' ' ')"
 echo "    $(grep '^kage_crawl_skipped_total' "${metrics}" | tr '\n' ' ')"
 echo "    $(grep '^kage_crawl_duplicates_total' "${metrics}" | tr '\n' ' ')"
+
+echo "==> a crawl at level 0 reads a page in ISO-8859-1 and follows its link as a browser asks for it (F100)"
+got "http://fixture:8088/__kage/reset" > /dev/null
+call POST /v1/jobs "${client}" "{\"type\":\"crawl\",\"seeds\":[\"${site}/legacy/latin1\"],\"max_depth\":1,\"defaults\":{\"level\":0}}"
+expect 201 "POST /v1/jobs, a crawl at level 0"
+legacy="$(value "${body}" "d.id")"
+for _ in $(seq 1 120); do
+    call GET "/v1/jobs/${legacy}" "${client}"
+    case "$(value "${body}" "d.state")" in
+        succeeded | partial | failed | cancelled) break ;;
+    esac
+    sleep 1
+done
+check "the crawl at level 0 succeeded" "${body}" "d.state === 'succeeded'"
+call GET "/v1/jobs/${legacy}/items" "${client}"
+expect 200 "GET /v1/jobs/{id}/items"
+check "it read the page the link names, under the address a browser asks for" "${body}" \
+    "d.items.map((i) => i.url).sort().join(' ') === '${site}/legacy/f%C3%BCr ${site}/legacy/latin1' && d.items.every((i) => i.state === 'succeeded')"
+seen="$(got "http://fixture:8088/__kage/requests")"
+check "the site was asked for no address its page does not name" "${seen}" \
+    "!d.some((r) => r.path.includes('%EF%BF%BD')) && d.some((r) => r.path === '/legacy/f%C3%BCr' && r.headers.some(([n, v]) => n.toLowerCase() === 'user-agent' && v.startsWith('kage/')))"
+echo "    $(value "${seen}" "d.map((r) => r.path).join(' ')")"
 
 echo "==> nothing of who read is shown to the key, and the frontier is stored"
 call GET "/v1/jobs/$(value "${summary}" "d.rooms[0].id")" "${client}"

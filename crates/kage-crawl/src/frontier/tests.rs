@@ -1355,3 +1355,35 @@ fn a_reader_goes_back_to_the_listing_before_it_takes_the_menu() {
     let listing = read.entry("/list");
     assert_eq!((listing.links.len(), listing.text_links), (5, 4));
 }
+
+/// QA round one's policy-01 (F104): a link whose host ends in the DNS
+/// root's dot is the page without it. One entry holds both spellings, and
+/// it is asked for without the dot, as a seed with the dot is.
+#[test]
+fn a_host_with_a_trailing_dot_is_the_same_page_and_is_asked_for_without_it() {
+    let site = Site::of(&[
+        (
+            "/",
+            &["https://shop.example./a", "/a", "https://SHOP.example./b"],
+        ),
+        ("/a", &["/b"]),
+        ("/b", &[]),
+    ]);
+    let read = Reader::new(frontier_with(
+        &request(5),
+        limits(),
+        &["https://shop.example./"],
+    ))
+    .run(&site);
+    assert_eq!(read.order(), ["/", "/a", "/b"]);
+    for path in ["/", "/a", "/b"] {
+        let entry = read.entry(path);
+        assert_eq!(entry.url.host_str(), Some(SITE), "{path}");
+        assert_eq!(
+            read.frontier
+                .find(&url(&format!("https://shop.example.{path}"))),
+            read.frontier.find(&url(path))
+        );
+    }
+    assert_eq!(read.frontier.counts().discovered, 3);
+}
