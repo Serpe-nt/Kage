@@ -24,7 +24,11 @@
 #     carried on and cancelled: the site never gets it, and its result
 #     says it was cancelled (F106, F109);
 #   - the series of `/metrics` for jobs, and the admin purge of everything
-#     the key fetched, on the audit log.
+#     the key fetched, on the audit log;
+#   - a flow whose later goto meets the policy of its own site (F101): the
+#     site's floor refuses it at acceptance, the site's enforced robots.txt
+#     ends it before anything is asked, and a wall the site shows is booked
+#     to that site, not to the flow's first one.
 #
 # The batch, the flows and the cancel are run by a TypeScript client that
 # was generated from the API's OpenAPI document (tests/api-client).
@@ -65,6 +69,21 @@ cat >> "${policies}/domains.yaml" << 'EOF'
   # A site nobody else in this test reads: the cancel of a fetch that
   # waits for its one visitor.
   lenient.kage.test:
+    min_dwell: 500ms
+    active_hours: ignore
+  # A flow meets the policy of each site it goes to (F101): this one
+  # wants level 3 at least,
+  rules.kage.test:
+    min_level: 3
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  # and this one, a site of its own (field.test) that nobody has read when
+  # the flows come, so that it has a scout to ask for its file, enforces
+  # its robots.txt.
+  wall.field.test:
+    robots: enforce
+    pacing: fast
     min_dwell: 500ms
     active_hours: ignore
 EOF
@@ -396,5 +415,64 @@ expect 200 "GET /v1/admin/audit"
 check "the purge is on the audit log with what went" "${body}" \
     "d.events.some((e) => e.action === 'admin.data.purge' && e.outcome === 'success' && e.target === '${client_id}' && e.details.result.jobs === ${jobs_of_key}) && d.events.some((e) => e.action === 'admin.data.purge' && e.outcome === 'denied')"
 echo "    ${purged}"
+
+echo "==> every goto of a flow meets its own site's policy, and a wall is booked to the site that showed it (F101)"
+rules='http://rules.kage.test:8088'
+wall='http://wall.field.test:8088'
+# wait_flow <job id>: waits until the job ends; its state is left in ${state}.
+wait_flow() {
+    state=''
+    for _ in $(seq 1 90); do
+        call GET "/v1/jobs/$1" "${client}"
+        state="$(value "${body}" "d.state")"
+        case "${state}" in succeeded | partial | failed | cancelled) return 0 ;; esac
+        sleep 2
+    done
+    fail "the flow $1 did not end: ${state}"
+}
+# A later goto to a site whose floor is above the flow's level is refused at
+# acceptance, naming the step, as a fetch of that address would be.
+call POST /v1/jobs "${client}" "{\"type\":\"flow\",\"level\":2,\"actions\":[{\"action\":\"goto\",\"url\":\"${site}/landing\"},{\"action\":\"goto\",\"url\":\"${rules}/landing?f101\"}]}"
+problem 422 level_below_policy "a flow's second goto under its site's floor"
+check "the refusal names the step and the floor" "${body}" "d.step === 1 && d.min_level === 3"
+# A later goto to what the site's enforced robots.txt disallows: the flow
+# ends robots_denied before anything is asked, with that address's rule.
+got "http://fixture:8088/__kage/reset" > /dev/null
+call POST /v1/jobs "${client}" "{\"type\":\"flow\",\"level\":3,\"behavior\":{\"dwell_ms\":500},\"timeout_ms\":120000,\"actions\":[{\"action\":\"goto\",\"url\":\"${site}/landing?f101\"},{\"action\":\"goto\",\"url\":\"${wall}/site/private/later\"}]}"
+expect 201 "a flow whose second goto robots.txt disallows"
+denied="$(value "${body}" "d.id")"
+wait_flow "${denied}"
+[ "${state}" = failed ] || fail "the flow to a disallowed address ended ${state}"
+call GET "/v1/jobs/${denied}/items" "${client}"
+check "it ended robots_denied with the rule of its second address" "${body}" \
+    "d.items.at(-1).outcome === 'robots_denied' && d.items.at(-1).result.robots.allowed === false && d.items.at(-1).result.robots.matched_rule === 'Disallow: /site/private'"
+seen="$(got "http://fixture:8088/__kage/requests")"
+check "the site saw its robots.txt and none of the flow's pages" "${seen}" \
+    "d.every((r) => !r.path.includes('f101') && !r.path.includes('/site/private'))"
+# A wall at the flow's second site cools the persona there and counts on
+# that site's breaker; the first site, which showed no wall, is left as it
+# was.
+fixture_cooling() {
+    psql "SELECT count(*) FROM persona_domain_state WHERE domain = 'fixture.kage.test' AND cooldown_until > now()"
+}
+fixture_blocks() {
+    psql "SELECT coalesce(max(block_count_1h), 0) FROM domain_breakers WHERE domain = 'fixture.kage.test'"
+}
+before="$(fixture_cooling)"
+blocks_before="$(fixture_blocks)"
+call POST /v1/jobs "${client}" "{\"type\":\"flow\",\"level\":3,\"behavior\":{\"dwell_ms\":500},\"timeout_ms\":120000,\"max_retries\":0,\"actions\":[{\"action\":\"goto\",\"url\":\"${site}/landing?f101-wall\"},{\"action\":\"goto\",\"url\":\"${wall}/challenge/stuck?f101\"}]}"
+expect 201 "a flow whose second site shows a wall"
+walled="$(value "${body}" "d.id")"
+wait_flow "${walled}"
+call GET "/v1/jobs/${walled}/items" "${client}"
+check "the flow met the wall at its second site" "${body}" \
+    "['challenge_failed', 'forbidden', 'captcha'].includes(d.items.at(-1).outcome) && d.items.at(-1).result.final_url.startsWith('${wall}/')"
+walled_state="$(psql "SELECT count(*) || ' ' || coalesce(max(block_count_24h), 0) FROM persona_domain_state WHERE domain = 'wall.field.test' AND cooldown_until > now()")"
+[ "${walled_state}" = '1 1' ] || fail "the wall's site does not hold the block: ${walled_state}"
+[ "$(fixture_cooling)" = "${before}" ] || fail "the first site of the flow was booked the wall"
+breakers="$(psql "SELECT coalesce(max(block_count_1h), 0) FROM domain_breakers WHERE domain = 'wall.field.test'")"
+[ "${breakers}" = 1 ] || fail "the wall's breaker did not count it: ${breakers}"
+[ "$(fixture_blocks)" = "${blocks_before}" ] || fail "the first site's breaker counted a wall it did not show"
+echo "    floor: 422 at step 1; robots: denied at the second address, nothing asked; wall: booked to wall.field.test (its breaker at ${breakers}), the fixture's left at ${blocks_before}"
 
 echo "jobs test passed"

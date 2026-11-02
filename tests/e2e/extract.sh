@@ -25,7 +25,11 @@
 #     never asked for, by a fetch or by a crawl;
 #   - a crawl there reads the sitemap the file names, not the guess
 #     /sitemap.xml, by the same scout, and counts what it left out;
-#   - the series of /metrics.
+#   - the series of /metrics;
+#   - a page cannot stop a sidecar (F103): a page that stops answering ends
+#     as a timeout of its own in Chromium, and a page whose depth crashes
+#     Chrome's renderer leaves the Chromium sidecar serving again without
+#     an operator.
 #
 # The requests are made by a TypeScript client that was generated from the
 # API's OpenAPI document (tests/api-client).
@@ -273,5 +277,49 @@ grep --quiet '^kage_crawl_skipped_total{.*reason="robots_denied"' "${metrics}" \
     || fail "nothing counted as skipped for robots_denied: $(grep '^kage_crawl_skipped_total' "${metrics}")"
 keep metrics-extract.txt "$(grep --extended-regexp '^kage_(cache_|robots_|extract_|crawl_skipped)' "${metrics}")"
 echo "    $(grep --extended-regexp '^kage_(cache_requests|robots_requests|robots_denied)_total' "${metrics}" | tr '\n' ' ')"
+
+echo "==> a page cannot stop a sidecar (F103)"
+chromium="$("${compose[@]}" ps --quiet browser-chromium)"
+sidecar_restarts() {
+    docker inspect --format '{{.RestartCount}}' "${chromium}"
+}
+sidecar_health() {
+    docker inspect --format '{{.State.Health.Status}}' "${chromium}"
+}
+# chromium_serves <what>: a Chromium persona reads a page of the site.
+chromium_serves() {
+    call POST /v1/fetch "${client}" "{\"url\":\"${site}/landing?f103=$1\",\"level\":2,\"timeout_ms\":30000,\"persona\":{\"engines\":[\"chromium\"]}}"
+    expect 200 "a Chromium fetch $1"
+    check "a Chromium persona read a page $1" "${body}" "d.outcome === 'ok' && d.persona !== null"
+}
+restarts_before="$(sidecar_restarts)"
+# A page whose script stops answering once it has loaded: no read of it is
+# ever answered. The fetch ends as a timeout of its own, nothing of the
+# page kept, and the sidecar goes on serving.
+began="$(date +%s)"
+call POST /v1/fetch "${client}" "{\"url\":\"${site}/spin?after=0\",\"level\":2,\"max_retries\":0,\"timeout_ms\":20000,\"persona\":{\"engines\":[\"chromium\"]}}"
+expect 200 "a page that stops answering"
+check "it ended as a timeout, with nothing of the page" "${body}" "d.outcome === 'timeout' && !d.dom_html"
+spun="$(( $(date +%s) - began )) s"
+chromium_serves "after a page that stopped answering"
+[ "$(sidecar_restarts)" = "${restarts_before}" ] || fail "the sidecar restarted for a page that only stopped answering"
+# A page whose script nests 3000 elements: Chrome's renderer runs out of
+# stack and crashes, and the driver (patchright 1.63.0) can spin on the
+# crash without end (QA round one, extract-02). The fetch ends, the
+# sidecar's watchdog ends a process that stopped answering so that compose
+# starts it again, and Chromium serves again: no operator is needed.
+began="$(date +%s)"
+call POST /v1/fetch "${client}" "{\"url\":\"${site}/deep?depth=3000\",\"level\":2,\"max_retries\":0,\"timeout_ms\":20000,\"persona\":{\"engines\":[\"chromium\"]}}"
+case "${status}" in 200 | 202) ;; *) fail "the deep page: status ${status}: ${body}" ;; esac
+deep="$(value "${body}" "d.outcome || d.state")"
+for _ in $(seq 1 60); do
+    [ "$(sidecar_health)" = healthy ] && break
+    sleep 3
+done
+[ "$(sidecar_health)" = healthy ] || fail "the Chromium sidecar did not answer again: $(sidecar_health)"
+chromium_serves "after a page that crashed its renderer"
+restarts_kage="$(docker inspect --format '{{.RestartCount}}' "$("${compose[@]}" ps --quiet kage)")"
+[ "${restarts_kage}" = 0 ] || fail "the kage container restarted ${restarts_kage} times"
+echo "    a page that stopped answering: timeout after ${spun}; a page 3000 deep: ${deep} after $(( $(date +%s) - began )) s, the sidecar restarted $(( $(sidecar_restarts) - restarts_before )) time(s) and serves again"
 
 echo "extract test passed"
