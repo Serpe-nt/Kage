@@ -955,6 +955,8 @@ impl Runner {
     async fn fail_all(&mut self, reason: &str) -> Result<(), WorkError> {
         self.end_queued(JobItemState::Failed, reason).await?;
         for item in self.store().job_items().open(self.job.id).await? {
+            // Begun by a worker that is gone: its request ends with it.
+            self.work.abandon(&item, reason).await;
             self.finish_item(item, JobItemState::Failed, None, Some(reason.to_owned()))
                 .await?;
         }
@@ -1005,7 +1007,17 @@ impl Runner {
         let mut visitors: HashMap<String, Vec<PersonaId>> =
             serde_json::from_value(self.store().jobs().visitors(job).await?).unwrap_or_default();
         let mut queues: BTreeMap<String, VecDeque<JobItem>> = BTreeMap::new();
-        for item in self.store().job_items().open(job).await? {
+        for mut item in self.store().job_items().open(job).await? {
+            if item.state == JobItemState::Running {
+                // Begun by a worker that is gone (this runner has just
+                // claimed the job): it waits again under its request, and
+                // a cancel or a deadline ends it with the others (F109).
+                self.store()
+                    .job_items()
+                    .defer(item.id, item.not_before)
+                    .await?;
+                item.state = JobItemState::Queued;
+            }
             queues
                 .entry(item.site.clone().unwrap_or_default())
                 .or_default()

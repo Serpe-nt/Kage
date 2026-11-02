@@ -3459,10 +3459,27 @@ fn a_persona_whose_proxy_failed_leaves_and_is_taken_only_when_no_other_could_be(
     assert_eq!(planner.server_error_pause("example.org", at), None);
     assert_eq!(planner.visitors("example.org", at), 0);
 
-    planner.submit(work("example.org"), at);
-    let (left, next) = first_dispatch(&mut planner, &facts, at);
+    // By the score the failed persona would come first: the others read
+    // the site within the hour.
+    let mut facts = facts;
+    for number in 0..3 {
+        let persona = id(number);
+        if persona != failed {
+            let mut state = PersonaDomainState::new(persona, "example.org");
+            state.last_request_at = Some(noon());
+            facts
+                .get_mut("example.org")
+                .unwrap()
+                .states
+                .insert(persona, state);
+        }
+    }
+    // Ten seconds on, its own gap is long over.
+    let later = at + secs(10);
+    planner.submit(work("example.org"), later);
+    let (left, next) = first_dispatch(&mut planner, &facts, later);
     assert_ne!(next.persona, failed);
-    assert!(left - at < secs(5), "{left}");
+    assert!(left - later < secs(5), "{left}");
     planner.complete(next.grant, left, Completion::of(Courtesy::Answered));
 
     // When nobody else may take the work, the persona is taken after all;
