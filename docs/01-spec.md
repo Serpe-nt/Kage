@@ -805,6 +805,17 @@ policy.engines, country ∈ policy.countries (if set), for http:
 `wreq_profile` non-null. A persona already visiting the domain keeps its
 work while its visit lasts (§11); the score chooses a new visitor only
 when work waits and fewer than `domain_concurrency` personas are visiting.
+A synchronous request goes past that only for a visitor's break: when
+every visitor that could take it is on a break that does not end within
+`scheduler.visitor_wait`. A visitor in its gap or on a page is waited
+for, however many synchronous requests wait for it (F106). Work that
+nobody could take because no persona that may take it is ready now (every
+proxy in backoff, a persona cooling or not warmed up) is refused
+`no_persona` with `retry_at` a minute on, and a job waits it out (F107);
+work no persona could ever take is refused without one. A persona whose
+attempt failed at its proxy leaves its visit and, for 5 minutes or until
+an attempt of it is answered, is taken only when no other persona could
+take the work (F108).
 Score = country preference match (+3) + no visit to this domain in the last
 hour (+2) + low load (+1) + previous `ok` on this domain (+1); an awake
 persona is always taken before a sleeping one (`active_hours: prefer`);
@@ -825,7 +836,16 @@ Cooldown = `Cooldowns::resolve(outcome, class)` × confidence, at least
 5 min, ±10 % seeded per persona. Non-retryable: `ssrf_denied`,
 `robots_denied`, 4xx other than 403/429 (returned as `ok` with the
 status). Three 5xx or timeouts in a row from one domain pause it for 30 s,
-doubling to 10 min, with no cooldown and no breaker count. Circuit breaker
+doubling to 10 min, with no cooldown and no breaker count. An attempt that
+failed before the site had a say counts nothing toward that row and ends
+none: a proxy that could not be reached, refused the tunnel or may not be
+used is `provider_error` with the reason `proxy_failed`, retried on another
+persona. A browser's plain `http://` request that the forwarder had to
+close for want of the persona's proxy fails in the browser as if the site
+did not answer (`navigation_failed`, a timeout); the forwarder notes every
+connection it could not relay for its route, and an attempt that got no
+answer while that happened is the proxy's (F108). The pool is told, and
+the proxy is probed at the health checker's next turn. Circuit breaker
 per domain: if `block_count_1h` over all personas ≥
 `policy.breaker_threshold` (default 5), the domain is `paused` for
 `policy.breaker_pause` (default 30 min); requests return `provider_error`
@@ -855,7 +875,10 @@ bandwidth term) instead of ending with an error, and a server that stops
 gives the job back: after a restart the job worker takes the request up
 again under the same id, with the attempts that were made in its record
 and counted against its retries. The result is at `GET /v1/results/{id}`
-either way (F35).
+either way (F35). The job's cancel reaches the fetch at once: what waits
+for a persona is taken out of the scheduler's queue and the request ends
+`provider_error` with the reason `cancelled`; an attempt under way is
+finished (F109).
 
 ---
 
@@ -1489,7 +1512,11 @@ domain's work for `visit_bursts` bursts (default 2 to 5), then leaves for
 last burst break). Other personas join only while fewer than
 `domain_concurrency` are visiting, so a site sees a few households
 reading, not twenty addresses taking turns. A sync request never waits for
-a visitor's break; a session-pinned request waits for its persona. On the
+a visitor's break: when every visitor is on a break that does not end
+within `scheduler.visitor_wait`, another persona starts a visit, past
+`domain_concurrency`; a visitor in its gap or on a page is waited for,
+however many requests wait (F106). A session-pinned request waits for its
+persona. On the
 browser path the gap counts from the start of the previous page and is a
 floor under the behaviour engine's own time on the page; a page is dwelt on
 once. A persona's browser stays open for its whole visit, breaks included,
@@ -1994,8 +2021,8 @@ scope included), and every change at the command line is written to
 | `POST /v1/jobs` | jobs / crawl | Create a `batch` or a `flow` job (`crawl` with M10): `201` with the job, `200` with `Idempotency-Replayed: true` for the job an `Idempotency-Key` made before, `409 idempotency_key_reused` for another request under that key. A job is accepted whole or refused whole (§16.6) |
 | `GET /v1/jobs/{id}` | jobs | State, counters, why and until when it is paused, its deadline, and the delivery log of its webhook. A key reads the jobs it made; another key's is `404 job_not_found` |
 | `GET /v1/jobs/{id}/items?cursor=&limit=&results=` | jobs | The items in the job's order, 50 a page unless said and at most 200, each with its stored result as `GET /v1/results/{id}` shows it without the document and the body (which are artifacts); `results=false` leaves the results out |
-| `POST /v1/jobs/{id}/cancel` | jobs | Cooperative cancel: what waits is cancelled at once, a page that is being fetched is finished, so at most one more item per visitor ends. A job that has ended is answered as it ended |
-| `GET /v1/results/{id}` | fetch | The result of a fetch by the request's id (the `id` of the result, `X-Request-Id` of the fetch): `200` once it ended, `202` while it runs. A key reads what it fetched; another key's is `404` |
+| `POST /v1/jobs/{id}/cancel` | jobs | Cooperative cancel: what waits is cancelled at once (a job queued behind `jobs.max_running`, a paused one, a fetch carried on as a job), a page that is being fetched is finished, so at most one more item per visitor ends. A job that has ended is answered as it ended |
+| `GET /v1/results/{id}` | fetch | The result of a fetch by the request's id (the `id` of the result, `X-Request-Id` of the fetch): `200` once it ended, `202` while it runs. A request whose job ended without it (cancelled, expired, interrupted) has ended: `200`, `provider_error` with the item's reason (F109). A key reads what it fetched; another key's is `404` |
 | `GET /v1/artifacts/{id}` | fetch | What was kept of a page (document, raw body, screenshot, PDF, the body of a captured XHR response), streamed; served with `nosniff` and a sandboxing CSP, gzip passed through to a client that takes it |
 | `POST /v1/sessions` | sessions | Open a session pinned to a persona matching the hints and a `domain`'s policy: `201` new, `200` when the id is open already, `409 no_matching_persona` |
 | `GET /v1/sessions/{id}` / `DELETE` | sessions | Inspect (not a use: the idle time does not start again) or end |
@@ -2279,7 +2306,9 @@ never wakes a sleeper and has the priority of a job.
 
 **An item that cannot be attempted now is not failed.** A paused site, a
 visitor that sleeps or is on a break, the bandwidth term, the key's daily
-page budget: the item goes back into the queue with the time to come back,
+page budget, a pool with no persona ready (every proxy in backoff:
+`no_persona`, asked again a minute later, F107): the item goes back into
+the queue with the time to come back,
 its site is left alone until then, and a job whose every remaining item
 waits is `paused` in the store (`paused.reason`, `paused.until`) and in
 nobody's hands until that time. An item waits in the scheduler for its
@@ -2315,7 +2344,12 @@ it out before that request is written, so a request is never begun twice.
 A cancel is read with every renewal of the lease and at once on the server
 that works the job: what waits is cancelled, an item that waits for its
 persona is taken out of the scheduler's queue, and an attempt that is
-under way is finished, never cut.
+under way is finished, never cut. A job that nobody works when it is
+cancelled (queued behind `jobs.max_running`, paused, or its worker gone)
+is claimed at once for its cancel, past `jobs.max_running`: nothing of it
+is fetched any more. An item that ends without its page (cancelled,
+expired, failed before an attempt) ends its request with it, so that
+`GET /v1/results/{id}` answers `200` with what ended it (F109).
 
 **A server that stops (F39).** A page that is being read when the server
 is told to stop is a request the site has seen. Cut without a word, the

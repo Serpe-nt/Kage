@@ -23,6 +23,7 @@ use kage_scheduler::{Meter, SchedulerGate};
 const ANSWERED: Completion = Completion {
     courtesy: Courtesy::Answered,
     blocked: false,
+    proxy_failed: false,
 };
 
 /// Lets the scheduler's loop run until it has nothing to do.

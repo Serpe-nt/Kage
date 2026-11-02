@@ -318,6 +318,8 @@ struct Memory {
     standing: HashSet<(AlertKind, Option<ProxyId>)>,
     /// When real traffic last went through each proxy.
     traffic: HashMap<ProxyId, DateTime<Utc>>,
+    /// When real traffic last failed at each proxy.
+    traffic_failed: HashMap<ProxyId, DateTime<Utc>>,
     /// When each replacement in flight was last asked about.
     polled: HashMap<ProxyId, DateTime<Utc>>,
     /// The budget window the budget alert was last raised for.
@@ -657,6 +659,22 @@ impl Pool {
     pub fn report_traffic_ok(&self, proxy: ProxyId) {
         let now = self.clock.now();
         self.memory().traffic.insert(proxy, now);
+    }
+
+    /// Tells the pool that a real request just failed at a proxy, before
+    /// the site had a say: the proxy could not be reached or refused the
+    /// tunnel. The health checker probes that proxy at its next turn
+    /// instead of when it is due (F108); the probe, not the request, says
+    /// what the proxy is.
+    pub fn report_traffic_failed(&self, proxy: ProxyId) {
+        let now = self.clock.now();
+        self.memory().traffic_failed.insert(proxy, now);
+    }
+
+    /// When real traffic last failed at a proxy, as reported with
+    /// [`Pool::report_traffic_failed`].
+    pub fn last_traffic_failure(&self, proxy: ProxyId) -> Option<DateTime<Utc>> {
+        self.memory().traffic_failed.get(&proxy).copied()
     }
 
     /// When real traffic last succeeded through a proxy, as reported with

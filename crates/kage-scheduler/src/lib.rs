@@ -60,8 +60,8 @@ pub use forwarder::{
 };
 pub use memory::MemoryBackend;
 pub use pipeline::{
-    CachePlan, Capture, CrawlReading, Deferred, FetchOrder, FetchReport, INTERRUPTED, JobFetch,
-    Kept, NewScout, PacingReport, Peek, Pipeline, PipelineSettings, ROBOTS_NO_SCOUT,
+    CachePlan, Canceller, Capture, CrawlReading, Deferred, FetchOrder, FetchReport, INTERRUPTED,
+    JobFetch, Kept, NewScout, PacingReport, Peek, Pipeline, PipelineSettings, ROBOTS_NO_SCOUT,
     ROBOTS_UNAVAILABLE, ReadLink, RobotsRead, Running, ScoutNeed, Stop, Synchronous, WoundDown,
 };
 pub use robots::{Conflict, RobotsSettings, RobotsWish};

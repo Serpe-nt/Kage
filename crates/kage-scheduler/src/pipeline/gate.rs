@@ -401,14 +401,38 @@ impl Pipeline {
             .begin(RequestId::new(), order, call.give_up_at, None)
             .await?;
         scouting.overflowed.clone_from(&call.overflowed);
-        match Box::pin(self.run(scouting, stop.cloned())).await? {
-            Ran::Stopped => Ok(Asked::Stopped),
-            Ran::Deferred(deferred) => Ok(Asked::Refused(Refused {
+        let asked = match Box::pin(self.run(scouting, stop.cloned())).await? {
+            Ran::Stopped => Asked::Stopped,
+            Ran::Deferred(deferred) => Asked::Refused(Refused {
                 reason: deferred.reason,
                 retry_at: deferred.retry_at,
-            })),
-            Ran::Finished(report) => self.keep_answer(call, scout, &report).await,
+            }),
+            Ran::Finished(report) => self.keep_answer(call, scout, &report).await?,
+        };
+        // A scout that is not ready (its proxy in backoff) is told
+        // `no_persona` with a moment to ask again (F107); for the file it
+        // is a scout nobody knows the return of, as it was before: the
+        // site's file cannot be had now.
+        if let (
+            Asked::Refused(Refused {
+                reason: Refusal::NoPersona,
+                ..
+            }),
+            Some(scout),
+        ) = (&asked, scout)
+            && !self
+                .backend()
+                .personas()
+                .await?
+                .iter()
+                .any(|view| view.id == scout && view.ready)
+        {
+            return Ok(Asked::Refused(Refused {
+                reason: Refusal::NoPersona,
+                retry_at: None,
+            }));
         }
+        Ok(asked)
     }
 
     /// Keeps what the scout's request for an origin's file came to, when

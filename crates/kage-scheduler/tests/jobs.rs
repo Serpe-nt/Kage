@@ -548,3 +548,130 @@ async fn a_synchronous_fetch_that_outlasted_its_wall_time_waits_like_a_job() {
     );
     holder.abort();
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_job_waits_out_an_outage_of_the_pool_instead_of_failing_its_page() {
+    // F107 (sched-04): every proxy is in backoff, every persona cools for
+    // it. That says nothing about the page: a job's fetch is deferred with
+    // the moment to ask again, never failed.
+    let mut world = World::with(3, false, DEFAULT_DOMAINS, &[]);
+    for number in 0..3 {
+        world.backend.put_persona(
+            common::persona(number, false),
+            false,
+            common::network(number),
+        );
+    }
+    let (_keep, stop) = never();
+    let request = RequestId::new();
+    let asked = world.now();
+    let waiting = deferred(
+        world
+            .pipeline
+            .fetch_for_job(request, page("https://shop.example/1"), None, stop.clone())
+            .await
+            .unwrap(),
+    );
+    assert_eq!(waiting.reason, Refusal::NoPersona);
+    let again = waiting.retry_at.unwrap();
+    assert!(
+        again - asked <= Span::minutes(1) && again > asked,
+        "{again}"
+    );
+    assert_eq!(world.backend.records().len(), 0);
+
+    // A caller who waits for the page is answered, and told when to ask
+    // again.
+    let answered = world
+        .pipeline
+        .fetch(FetchOrder {
+            level: Level::Human,
+            ..FetchOrder::get(
+                Url::parse("https://shop.example/2").unwrap(),
+                Priority::Sync,
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(answered.outcome, Outcome::ProviderError);
+    assert_eq!(answered.reason.as_deref(), Some("no_persona"));
+    assert!(answered.retry_at.is_some());
+
+    // The proxies are back: the job's page is fetched under its request.
+    for number in 0..3 {
+        world.backend.put_persona(
+            common::persona(number, false),
+            true,
+            common::network(number),
+        );
+    }
+    tokio::time::sleep(Duration::from_mins(1)).await;
+    let report = finished(
+        world
+            .pipeline
+            .fetch_for_job(
+                request,
+                page("https://shop.example/1"),
+                Some(Vec::new()),
+                stop,
+            )
+            .await
+            .unwrap(),
+    );
+    assert_eq!(report.request, request);
+    assert_eq!(report.outcome, Outcome::Ok);
+    world.shut_down().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_cancel_reaches_a_fetch_carried_on_as_a_job_while_it_waits() {
+    // F109 (sched-07): one persona, busy with a long page; the second
+    // fetch waits for it past the wall time and is carried on. The job's
+    // cancel takes it out of the queue at once: the site is asked for
+    // nothing more.
+    let mut world = World::with(1, false, DEFAULT_DOMAINS, &[]);
+    world.script.takes(Duration::from_secs(400));
+    let holder = {
+        let pipeline = world.pipeline.clone();
+        tokio::spawn(async move {
+            pipeline
+                .fetch(FetchOrder {
+                    level: Level::Human,
+                    ..FetchOrder::get(
+                        Url::parse("https://slow.example/a").unwrap(),
+                        Priority::Sync,
+                    )
+                })
+                .await
+        })
+    };
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let behind = FetchOrder {
+        level: Level::Human,
+        ..FetchOrder::get(
+            Url::parse("https://slow.example/b").unwrap(),
+            Priority::Sync,
+        )
+    };
+    let Synchronous::Overflowed(running) = world.pipeline.fetch_sync(behind).await.unwrap() else {
+        panic!("it waits for the persona past the wall time");
+    };
+    assert_eq!(world.scheduler.depth(Priority::Sync), 1);
+    let request = running.request;
+
+    running.canceller().cancel();
+    let stopped = running.wait().await.unwrap();
+    assert!(matches!(stopped, JobFetch::Stopped), "{stopped:?}");
+    assert_eq!(world.scheduler.depth(Priority::Sync), 0);
+    assert_eq!(world.script.urls(), ["https://slow.example/a"]);
+    // Nothing is concluded: the job ends the request with its item.
+    assert!(
+        world
+            .backend
+            .records()
+            .iter()
+            .all(|record| record.request_id != request)
+    );
+    holder.abort();
+    world.shut_down().await;
+}

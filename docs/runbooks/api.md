@@ -383,7 +383,11 @@ with the request's id and a `job_id`: from then on a job of one item
 carries it on (`origin: sync_overflow`). Poll `GET /v1/results/{id}`; that
 needs no more than the `fetch` scope. With the `jobs` scope the job itself
 can be read (`GET /v1/jobs/{job_id}` says when it is `paused` and for
-what) and cancelled. Such a fetch no longer ends with an error because its
+what) and cancelled: the cancel takes the fetch out of the queue at once,
+the site is asked for nothing more, and `GET /v1/results/{id}` answers
+`200` with `provider_error` and the reason `cancelled` (F109). A page
+that was being read when the cancel came is finished and kept. Such a
+fetch no longer ends with an error because its
 site was paused or its persona asleep: it waits, as a job waits, for up to
 `jobs.max_age`. If the server is stopped while it runs, the job worker of
 the next start takes it up again under the same request id.
@@ -498,7 +502,9 @@ as use of the session while it has items left.
 
 An item that cannot be attempted now is not failed. When the site is
 paused by its breaker, the visitor sleeps, the bandwidth term is used up,
-the key's daily page budget is spent, or at level 0 the site's plain exit
+the key's daily page budget is spent, no persona is ready because every
+proxy is in backoff (`no_persona`, asked again every minute until the
+proxies return, F107), or at level 0 the site's plain exit
 cannot carry traffic (`plain_exit_unavailable`), the item goes back into
 the queue, and a job whose every remaining item waits is `paused`:
 
@@ -512,7 +518,12 @@ It is taken up again by itself at that time. A job waits at most
 items left fail with `expired: <reason>` and the job ends `partial`.
 `POST /v1/jobs/{id}/cancel` ends it earlier: what waits is cancelled at
 once, the page that is being fetched is finished, and nothing more is
-begun.
+begun. That holds for a job that is queued behind `jobs.max_running` or
+paused too: it is ended within a moment, whatever the running jobs do.
+An item that waited with a request (its site paused, its visitor away)
+ends that request with it: `GET /v1/results/{id}` answers `200` with
+`provider_error` and the item's reason (`cancelled`, `expired: …`,
+`interrupted`), never `202` for a request nothing runs for (F109).
 
 ### Flows
 

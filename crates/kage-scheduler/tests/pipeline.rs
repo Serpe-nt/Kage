@@ -17,10 +17,14 @@ use kage_core::alert::AlertKind;
 use kage_core::domain::{BreakerState, Exit, Level, Render, RenderMode};
 use kage_core::ids::ProxyId;
 use kage_core::outcome::Outcome;
+use kage_core::pacing::{Distribution, PacingProfile, Uniform};
 use kage_core::policy::PacingRequest;
+use kage_core::schedule::politeness::Courtesy;
 use kage_core::schedule::queue::Priority;
 use kage_scheduler::pipeline::attempt_seed;
-use kage_scheduler::{FetchOrder, JobFetch, PlainRoute, SchedulerError, Synchronous};
+use kage_scheduler::{
+    AttemptOutput, FetchOrder, JobFetch, PlainRoute, SchedulerError, Synchronous,
+};
 use url::Url;
 
 /// A host without a pool: a plain client leaves from its own connection.
@@ -1013,4 +1017,136 @@ async fn shutting_down_answers_what_waits_and_what_comes_after() {
     // The attempt that was under way is not cut off.
     let first = first.await.unwrap().unwrap();
     assert_eq!(first.outcome, Outcome::Ok);
+}
+
+/// The shipped `fast` profile with one seat on the domain and a gap of
+/// `gap_ms`, as a request asks for it.
+fn one_seat(world: &World, gap_ms: f64) -> PacingRequest {
+    let fast = *world.policies.current().pacing.require("fast").unwrap();
+    PacingRequest::Custom(PacingProfile {
+        gap_ms: Distribution::Uniform(Uniform {
+            min: gap_ms,
+            max: gap_ms,
+        }),
+        domain_concurrency: 1,
+        ..fast
+    })
+}
+
+fn sync_page(url: &str) -> FetchOrder {
+    FetchOrder {
+        level: Level::Human,
+        ..FetchOrder::get(Url::parse(url).unwrap(), Priority::Sync)
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn synchronous_fetches_that_wait_together_keep_to_the_domains_concurrency() {
+    // F106 (sched-01): eight synchronous fetches of one site, 50 ms apart,
+    // one seat on the domain, a gap of 2 s and no break. One address reads
+    // them all at its gap; before, every persona took a turn within a
+    // second.
+    let mut world = World::with(3, false, DEFAULT_DOMAINS, &[]);
+    world.script.takes(Duration::from_millis(500));
+    let pacing = one_seat(&world, 2000.0);
+    let mut fetches = Vec::new();
+    for number in 0..8 {
+        let order = FetchOrder {
+            pacing: Some(pacing.clone()),
+            ..sync_page(&format!("https://one.example/{number}"))
+        };
+        let pipeline = world.pipeline.clone();
+        fetches.push(tokio::spawn(async move { pipeline.fetch(order).await }));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    for fetch in fetches {
+        let report = fetch.await.unwrap().unwrap();
+        assert_eq!(report.outcome, Outcome::Ok, "{:?}", report.reason);
+    }
+    let readers: BTreeSet<_> = world.script.personas().into_iter().collect();
+    assert_eq!(readers.len(), 1, "{readers:?}");
+    let seen = world.script.seen();
+    assert_eq!(seen.len(), 8);
+    for pair in seen.windows(2) {
+        // The gap at the reader's own pace: 0.8 to 1.25 of 2 s.
+        assert!(
+            pair[1].at - pair[0].at >= Span::milliseconds(1600),
+            "{} then {}",
+            pair[0].at,
+            pair[1].at
+        );
+    }
+    world.shut_down().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_proxy_that_fails_is_the_proxys_failure_and_never_the_sites() {
+    // F108 (sched-05): a session's persona whose proxy is down. Its
+    // attempts fail before the site has a say; the site is not paused,
+    // and the next page goes at once to a persona whose proxy works.
+    let mut world = World::with(3, false, DEFAULT_DOMAINS, &[]);
+    world.script.takes(Duration::from_millis(50));
+    let dead = id(0);
+    world.script.when(move |job| {
+        (job.persona.id == dead).then(|| {
+            AttemptOutput::failed(Outcome::ProviderError, "proxy_failed", Courtesy::NotTheSite)
+        })
+    });
+    let pinned = FetchOrder {
+        pin: Some(dead),
+        ..sync_page("https://one.example/dead")
+    };
+    let report = world.pipeline.fetch(pinned).await.unwrap();
+    assert_eq!(report.outcome, Outcome::ProviderError);
+    assert_eq!(report.reason.as_deref(), Some("proxy_failed"));
+    assert_eq!(report.attempts.len(), 3);
+    assert!(
+        report
+            .attempts
+            .iter()
+            .all(|attempt| attempt.reason.as_deref() == Some("proxy_failed"))
+    );
+
+    let asked = world.now();
+    let next = world
+        .pipeline
+        .fetch(sync_page("https://one.example/next"))
+        .await
+        .unwrap();
+    assert_eq!(next.outcome, Outcome::Ok);
+    let reader = world.script.seen().last().unwrap().job.persona.id;
+    assert_ne!(reader, dead);
+    assert!(
+        world.now() - asked < Span::seconds(5),
+        "waited {}",
+        world.now() - asked
+    );
+    world.shut_down().await;
+
+    // The control: the same three failures as the site's own (no answer
+    // from it) pause the site for 30 s, for everybody.
+    let mut world = World::with(3, false, DEFAULT_DOMAINS, &[]);
+    world.script.takes(Duration::from_millis(50));
+    world.script.when(move |job| {
+        (job.persona.id == dead).then(|| {
+            AttemptOutput::failed(
+                Outcome::ProviderError,
+                "navigation_failed",
+                Courtesy::ServerError,
+            )
+        })
+    });
+    let pinned = FetchOrder {
+        pin: Some(dead),
+        ..sync_page("https://one.example/dead")
+    };
+    world.pipeline.fetch(pinned).await.unwrap();
+    let asked = world.now();
+    world
+        .pipeline
+        .fetch(sync_page("https://one.example/next"))
+        .await
+        .unwrap();
+    assert!(world.now() - asked >= Span::seconds(25));
+    world.shut_down().await;
 }

@@ -24,9 +24,11 @@ use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
 use chrono::Duration as Span;
 use kage_core::domain::{
-    Artifact, ArtifactEncoding, ArtifactKind, FetchRecord, RequestRecord, Scope, SessionId,
+    Artifact, ArtifactEncoding, ArtifactKind, FetchRecord, JobItem, RequestRecord, Scope,
+    SessionId, Visit,
 };
-use kage_core::ids::{ArtifactId, RequestId};
+use kage_core::ids::{ArtifactId, RequestId, ResultId};
+use kage_core::outcome::Outcome;
 use kage_store::ArtifactError;
 use tokio::io::AsyncReadExt;
 
@@ -116,9 +118,42 @@ pub(crate) async fn bodies(
     Ok(bodies)
 }
 
+/// What a request whose job item ended without a stored result came to:
+/// the item's end, with nothing of a page. The worker ends such a request
+/// with the item; this answers one it could not (a server that was killed
+/// between the two, or a request of a release before F109).
+fn ended_with(item: &JobItem, request: RequestId) -> FetchRecord {
+    FetchRecord {
+        id: ResultId::new(),
+        request_id: request,
+        outcome: item.outcome.unwrap_or(Outcome::ProviderError),
+        status: None,
+        headers: Vec::new(),
+        final_url: None,
+        redirects: Vec::new(),
+        extract: None,
+        reading: None,
+        xhr: None,
+        artifacts: Vec::new(),
+        persona: None,
+        block: None,
+        robots: None,
+        cached: false,
+        cached_at: None,
+        reason: item.error.clone(),
+        visit: Visit::default(),
+        created_at: item
+            .finished_at
+            .or(item.started_at)
+            .unwrap_or(item.created_at),
+    }
+}
+
 /// The result of a fetch, by the request's id.
 ///
 /// `200` with the result once the fetch has ended; `202` while it runs.
+/// A request whose job ended without it (cancelled, expired, interrupted)
+/// has ended too: `200` with what ended it.
 /// What only the synchronous answer has (`pacing`, `behavior`, `console`,
 /// `side_effects`) is null here.
 #[utoipa::path(
@@ -128,7 +163,7 @@ pub(crate) async fn bodies(
     operation_id = "get_result",
     params(("id" = String, Path, format = Uuid, description = "The request's id, as in `X-Request-Id`.")),
     responses(
-        (status = 200, description = "The result.", body = FetchResult),
+        (status = 200, description = "The result; for a request whose job ended without it (cancelled, expired, interrupted), `provider_error` with the item's reason.", body = FetchResult),
         (status = 202, description = "The fetch is still under way.", body = FetchAccepted,
             headers(("Retry-After" = u64, description = "Seconds to wait before asking again."))),
         (status = 404, description = "`result_not_found`: no such request of this key, or it expired.", body = Problem, content_type = "application/problem+json"),
@@ -151,6 +186,22 @@ pub(crate) async fn result(
         .get_by_request(id)
         .await
         .map_err(|error| ApiError::internal(&error))?;
+    let record = match record {
+        Some(record) => Some(record),
+        // A request whose item ended without a result has ended with it
+        // (F109): it is not running.
+        None => match request.job_id {
+            Some(_) => state
+                .store()
+                .job_items()
+                .find_by_request(id)
+                .await
+                .map_err(|error| ApiError::internal(&error))?
+                .filter(|item| item.state.is_terminal())
+                .map(|item| ended_with(&item, id)),
+            None => None,
+        },
+    };
     let Some(record) = record else {
         // A request a job has still to finish is running however long it
         // takes: the job waits for a paused site, for its visitor, for a

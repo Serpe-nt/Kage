@@ -133,7 +133,7 @@ impl PlainRoute {
 }
 
 /// Who presented a credential to the forwarder.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Caller {
     /// A persona's browser or http client.
     Persona(PersonaId),
@@ -415,6 +415,9 @@ type MeterKey = (Option<PersonaId>, Exit, String);
 struct MeterState {
     labels: HashMap<PersonaId, String>,
     bytes: HashMap<MeterKey, (u64, u64)>,
+    /// When each caller's connection was last not relayed for a reason of
+    /// its route.
+    unrelayed: HashMap<Caller, Instant>,
 }
 
 /// Counts what passes, per persona and per domain being fetched.
@@ -510,6 +513,24 @@ impl Meter {
             (a.persona, a.egress, &a.domain).cmp(&(b.persona, b.egress, &b.domain))
         });
         counted
+    }
+
+    /// Notes that a caller's connection was not relayed for a reason of
+    /// its route: its proxy could not be reached or refused the tunnel,
+    /// the proxy or the persona is not usable, or a stop holds. A page
+    /// that fails meanwhile without an answer failed at the proxy, not at
+    /// the site (F108).
+    pub fn note_unrelayed(&self, caller: Caller) {
+        self.state().unrelayed.insert(caller, Instant::now());
+    }
+
+    /// Whether a connection of `caller` was not relayed for a reason of
+    /// its route at `since` or later.
+    pub fn unrelayed_since(&self, caller: Caller, since: Instant) -> bool {
+        self.state()
+            .unrelayed
+            .get(&caller)
+            .is_some_and(|at| *at >= since)
     }
 
     /// Everything counted since the forwarder started: up, down.
@@ -985,7 +1006,10 @@ impl Forwarder {
         };
         let upstream = match route {
             Ok(upstream) => upstream,
-            Err(refusal) => return refuse(client, tunnel, Refused::Route(refusal)).await,
+            Err(refusal) => {
+                self.meter.note_unrelayed(caller);
+                return refuse(client, tunnel, Refused::Route(refusal)).await;
+            }
         };
         let payer = Payer {
             persona: caller.persona(),
@@ -1002,6 +1026,7 @@ impl Forwarder {
             }
         };
         if let Some(reason) = self.stopped() {
+            self.meter.note_unrelayed(caller);
             return refuse(client, tunnel, Refused::Stopped(reason)).await;
         }
         let connecting = TcpStream::connect((upstream.host.as_str(), upstream.port));
@@ -1009,9 +1034,11 @@ impl Forwarder {
         {
             Ok(Ok(server)) => server,
             Ok(Err(error)) => {
+                self.meter.note_unrelayed(caller);
                 return refuse(client, tunnel, Refused::Upstream(error.to_string())).await;
             }
             Err(_) => {
+                self.meter.note_unrelayed(caller);
                 let reason = Refused::Upstream("the proxy did not answer".to_owned());
                 return refuse(client, tunnel, reason).await;
             }
@@ -1020,8 +1047,13 @@ impl Forwarder {
         tracing::trace!(?caller, %host, port, tunnel = head.is_connect(), "relaying");
 
         if head.is_connect() {
-            self.tunnel(client, &mut server, &head, buffer, &payer, &upstream)
-                .await
+            let tunnelled = self
+                .tunnel(client, &mut server, &head, buffer, &payer, &upstream)
+                .await;
+            if matches!(tunnelled, Err(Refused::Upstream(_))) {
+                self.meter.note_unrelayed(caller);
+            }
+            tunnelled
         } else {
             self.plain(
                 client,
@@ -1780,6 +1812,28 @@ mod tests {
         ] {
             assert_eq!(target(refused), None, "{refused}");
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_meter_says_whose_connection_was_not_relayed_and_since_when() {
+        let meter = Meter::default();
+        let (one, other) = (PersonaId::new(), PersonaId::new());
+        let before = tokio::time::Instant::now();
+        tokio::time::advance(std::time::Duration::from_secs(1)).await;
+        assert!(!meter.unrelayed_since(Caller::Persona(one), before));
+
+        meter.note_unrelayed(Caller::Persona(one));
+        assert!(meter.unrelayed_since(Caller::Persona(one), before));
+        // Another caller's route is its own.
+        assert!(!meter.unrelayed_since(Caller::Persona(other), before));
+        let exit = Caller::Plain(PlainRoute::Pool(ProxyId::new()));
+        assert!(!meter.unrelayed_since(exit, before));
+        meter.note_unrelayed(exit);
+        assert!(meter.unrelayed_since(exit, before));
+        // An attempt that began after it saw nothing of it.
+        tokio::time::advance(std::time::Duration::from_secs(1)).await;
+        let later = tokio::time::Instant::now();
+        assert!(!meter.unrelayed_since(Caller::Persona(one), later));
     }
 
     #[test]

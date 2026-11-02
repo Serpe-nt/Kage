@@ -24,9 +24,27 @@
 //!
 //! A new visitor is chosen, by the score of spec §8.2, only when work
 //! waits and fewer personas than the profile's `domain_concurrency` are
-//! visiting. A synchronous request does not wait for a visitor's break:
-//! when no visitor's slot opens within `visitor_wait`, another persona
-//! starts a visit of its own.
+//! visiting (D37). A synchronous request does not wait for a visitor's
+//! break: when every visitor that could take it is on a break that does
+//! not end within `visitor_wait`, another persona starts a visit of its
+//! own, past `domain_concurrency`. A visitor in a gap, or in the middle of
+//! a page, is waited for however many synchronous requests wait for it:
+//! the site sees one address reading at its gap, not every persona of the
+//! pool taking turns (F106).
+//!
+//! # Nobody ready, and a proxy that failed
+//!
+//! Work that no persona could take because none that may take it is ready
+//! now (their proxies are in backoff or being replaced, they cool down
+//! for their proxy, they are not warmed up yet) is refused as
+//! `no_persona` with a moment to ask again: an outage of the pool says
+//! something about now, not about the request, and a job waits it out
+//! (F107). Work that no persona could ever take is refused without one.
+//!
+//! An attempt that failed at the persona's proxy (the site had no say)
+//! ends the persona's visit, and for [`PROXY_SUSPICION`] the persona is
+//! taken only when no other could take the work, until an attempt of it
+//! is answered again (F108).
 //!
 //! # Never in lockstep
 //!
@@ -71,6 +89,16 @@ const FRESH_WINDOW: Duration = Duration::hours(1);
 /// timed by that slot, not by whatever arrived.
 const PACED_TOLERANCE: Duration = Duration::milliseconds(250);
 
+/// When work that nobody ready could take is worth asking about again:
+/// the first backoff of a proxy (spec §7.3).
+pub const UNREADY_RECHECK: Duration = Duration::minutes(1);
+
+/// How long a persona whose attempt failed at its proxy is taken only
+/// when no other persona could take the work: the interval of the pool's
+/// health probes (spec §7.4), by which time a probe has said whether the
+/// proxy answers.
+pub const PROXY_SUSPICION: Duration = Duration::minutes(5);
+
 string_enum! {
     /// Why a request is answered without an attempt. The names are the
     /// `reason` of the `provider_error` the caller gets.
@@ -82,6 +110,8 @@ string_enum! {
         /// The domain's circuit breaker is open.
         DomainPaused => "domain_paused",
         /// No persona can serve the request, now or before it gives up.
+        /// With a moment to ask again when one may then: nobody that may
+        /// serve it is ready now, or the one it waits for comes too late.
         NoPersona => "no_persona",
         /// The scheduler is shutting down.
         ShuttingDown => "shutting_down",
@@ -338,6 +368,22 @@ pub struct Completion {
     pub courtesy: Courtesy,
     /// Whether the persona was blocked: its visit is over.
     pub blocked: bool,
+    /// Whether the attempt failed at the persona's proxy, before the site
+    /// had a say: its visit is over, and for [`PROXY_SUSPICION`] it is
+    /// taken only when no other persona could take the work (F108).
+    pub proxy_failed: bool,
+}
+
+impl Completion {
+    /// An attempt that ended as `courtesy` says, nobody blocked, no proxy
+    /// at fault.
+    pub const fn of(courtesy: Courtesy) -> Self {
+        Self {
+            courtesy,
+            blocked: false,
+            proxy_failed: false,
+        }
+    }
 }
 
 /// Why the manager's own work cannot have a persona now.
@@ -359,6 +405,9 @@ struct PersonaRun {
     busy: Option<GrantId>,
     /// Dispatch times within [`LOAD_WINDOW`].
     recent: VecDeque<DateTime<Utc>>,
+    /// When an attempt of the persona last failed at its proxy, until an
+    /// attempt of it is answered again.
+    proxy_failed_at: Option<DateTime<Utc>>,
 }
 
 /// How one persona paces itself on one domain.
@@ -449,6 +498,9 @@ struct Possible<'a> {
     /// or reached its daily cap. A job's visitor that is barred is no
     /// longer one the job waits for.
     barred: bool,
+    /// Whether an attempt of it failed at its proxy a moment ago: it is
+    /// taken only when nobody else could be.
+    suspect: bool,
 }
 
 /// See the module documentation.
@@ -808,7 +860,13 @@ impl Planner {
 
         let possible = self.possible(now, queued, facts);
         if possible.is_empty() {
-            return Looked::Refuse(Refusal::NoPersona, None);
+            // Nobody ready now: an outage of the pool says nothing about
+            // the request, and it is worth asking again (F107). Nobody at
+            // all: it never will be.
+            let again = self
+                .could_serve_once_ready(work)
+                .then(|| now + UNREADY_RECHECK);
+            return Looked::Refuse(Refusal::NoPersona, again);
         }
         let ready = |one: &Possible<'_>| one.at.is_some_and(|at| at <= now);
 
@@ -825,6 +883,14 @@ impl Planner {
             }
             return self.wait_or_give_up(work, only.at);
         }
+
+        // A persona whose proxy failed a moment ago is taken only when no
+        // other could be (F108).
+        let possible: Vec<Possible<'_>> = if possible.iter().any(|one| !one.suspect) {
+            possible.into_iter().filter(|one| !one.suspect).collect()
+        } else {
+            possible
+        };
 
         // A job that has the visitors it may have on the domain stays with
         // them; another persona comes only for one that cannot go on.
@@ -870,11 +936,21 @@ impl Planner {
             return self.wait_or_give_up(work, Some(at));
         }
 
-        // Otherwise a new visitor, when there is room for one. A
-        // synchronous request does not wait for anybody's break.
+        // Otherwise a new visitor, when there is room for one (D37). A
+        // synchronous request goes past the room for a visitor's break
+        // only: when every visitor that could take it is on a break that
+        // does not end within `visitor_wait`. A visitor in a gap or in
+        // the middle of a page is waited for, however many synchronous
+        // requests wait for it (F106).
         let visiting = self.visitors(&work.domain, now);
         let room = visiting < usize::try_from(work.pacing.domain_concurrency).unwrap_or(usize::MAX);
-        if room || work.priority == Priority::Sync {
+        let past_room = !room
+            && work.priority == Priority::Sync
+            && possible
+                .iter()
+                .filter(|one| one.visiting)
+                .all(|one| one.on_break && one.after > now + patience);
+        if room || past_room {
             let fresh: Vec<&Possible<'_>> = possible
                 .iter()
                 .filter(|one| !one.visiting && ready(one))
@@ -915,7 +991,7 @@ impl Planner {
         // still for that break (follow-up F54).
         let waiting_for = possible
             .iter()
-            .filter(|one| room || one.visiting || work.priority == Priority::Sync);
+            .filter(|one| room || one.visiting || past_room);
         let first = waiting_for
             .clone()
             .filter(|one| !claimed.contains(&one.view.id))
@@ -941,6 +1017,23 @@ impl Planner {
             return None;
         }
         self.next_free_start.filter(|at| *at > now)
+    }
+
+    /// Whether a persona that may take the work exists, though none is
+    /// ready now: what keeps it is a state of the moment (its proxy in
+    /// backoff, a cooling, a warm-up), not the request.
+    fn could_serve_once_ready(&self, work: &Work) -> bool {
+        self.personas.values().any(|view| {
+            !view.ready
+                && work.pin.is_none_or(|pin| pin == view.id)
+                && !work.exclude.contains(&view.id)
+                && work.engines.contains(&view.engine)
+                && (work.render == Render::Browser || view.http)
+                && work.countries.as_ref().is_none_or(|countries| {
+                    view.country
+                        .is_some_and(|country| countries.contains(&country))
+                })
+        })
     }
 
     /// Waits until `until`, unless the request would rather be refused
@@ -1046,6 +1139,11 @@ impl Planner {
                     open_for >= Duration::zero() && open_for < PACED_TOLERANCE
                 }),
                 barred,
+                suspect: self
+                    .runs
+                    .get(&view.id)
+                    .and_then(|run| run.proxy_failed_at)
+                    .is_some_and(|at| now.signed_duration_since(at) < PROXY_SUSPICION),
             });
         }
         possible
@@ -1334,6 +1432,12 @@ impl Planner {
             .and_then(|persona| self.runs.get_mut(&persona))
         {
             run.busy = None;
+            if completion.proxy_failed {
+                run.proxy_failed_at = Some(now);
+            } else if completion.courtesy == Courtesy::Answered {
+                // Its proxy carried an answer: it is trusted again.
+                run.proxy_failed_at = None;
+            }
         }
         match grant.render {
             Render::Browser => {
@@ -1357,8 +1461,9 @@ impl Planner {
             return true;
         };
         if let Some(cadence) = self.cadences.get_mut(&(persona, name)) {
-            if completion.blocked {
-                // It leaves: no more pages of this visit.
+            if completion.blocked || completion.proxy_failed {
+                // It leaves: no more pages of this visit. One whose proxy
+                // failed cannot reach the site.
                 cadence.visiting = false;
             } else {
                 // The page is over; the next one is not asked for in the

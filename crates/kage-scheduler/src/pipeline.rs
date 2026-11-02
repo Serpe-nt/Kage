@@ -37,7 +37,9 @@
 //!
 //! A synchronous fetch that takes longer than its wall time is not
 //! cancelled: [`Pipeline::fetch_sync`] hands back a [`Running`] fetch,
-//! which the API carries on as a job (spec §8.4).
+//! which the API carries on as a job (spec §8.4). The job's cancel reaches
+//! it through its [`Canceller`]: what waits for a persona is taken out of
+//! the queue, as for any job's fetch (F109).
 //!
 //! # Work for a job
 //!
@@ -331,9 +333,29 @@ pub struct Running {
     /// The request, by which the result will be found.
     pub request: RequestId,
     task: tokio::task::JoinHandle<Result<Ran, SchedulerError>>,
+    stop: Arc<tokio::sync::watch::Sender<bool>>,
+}
+
+/// Stops a fetch that is carried on as a job from waiting any longer (its
+/// job was cancelled): what waits for a persona is taken out of the
+/// scheduler's queue, and an attempt that is under way is finished.
+#[derive(Debug, Clone)]
+pub struct Canceller(Arc<tokio::sync::watch::Sender<bool>>);
+
+impl Canceller {
+    /// Tells the fetch to stop waiting; [`Running::wait`] then says
+    /// [`JobFetch::Stopped`], unless an attempt was under way.
+    pub fn cancel(&self) {
+        self.0.send_replace(true);
+    }
 }
 
 impl Running {
+    /// What cancels the fetch while it is waited for.
+    pub fn canceller(&self) -> Canceller {
+        Canceller(Arc::clone(&self.stop))
+    }
+
     /// Waits for the fetch to end, or to be deferred.
     ///
     /// # Errors
@@ -466,8 +488,18 @@ async fn stopped(stop: &mut Stop) {
     }
 }
 
+/// Whether an attempt that ended with `reason` failed at the persona's
+/// proxy, before the site had a say: the sidecar's or the forwarder's
+/// `proxy_failed`, or a proxy the persona manager would not use.
+fn at_the_proxy(reason: Option<&str>) -> bool {
+    matches!(reason, Some("proxy_failed" | "proxy_not_usable"))
+}
+
 /// Whether a refusal is one a job waits out instead of failing its item:
-/// it says nothing about the request, only about now.
+/// it says nothing about the request, only about now. `no_persona` with a
+/// moment to ask again is such a one: nobody that may serve the request is
+/// ready now (a pool in an outage, F107), or the one it waits for comes
+/// later than it waits.
 const fn waits(refused: &crate::scheduler::Refused) -> bool {
     match refused.reason {
         Refusal::DomainPaused
@@ -604,6 +636,9 @@ struct Course {
     /// The pause before the next attempt, when it is another persona's.
     retry: Option<RetryPause>,
     give_up_at: Option<DateTime<Utc>>,
+    /// Whether the fetch was made for a job: what only says "not now"
+    /// defers it, and the stop signal gives it back.
+    job: bool,
     /// Set once a synchronous fetch outlasted its wall time: it is carried
     /// on as a job and waits where a job waits.
     overflowed: Option<Arc<AtomicBool>>,
@@ -630,8 +665,8 @@ impl Course {
     /// one did.
     /// Whether the fetch is a job's by now: made for one, or a
     /// synchronous fetch that outlasted its wall time.
-    fn waits_like_a_job(&self, has_stop: bool) -> bool {
-        has_stop
+    fn waits_like_a_job(&self) -> bool {
+        self.job
             || self
                 .overflowed
                 .as_ref()
@@ -768,12 +803,16 @@ impl Pipeline {
         let pipeline = self.clone();
         let overflowed = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&overflowed);
+        // Said only once the fetch is carried on as a job and the job is
+        // cancelled (F109): within the wall time nobody holds a canceller.
+        let (stop, stopping) = tokio::sync::watch::channel(false);
+        let stop = Arc::new(stop);
         let span = fetch_span(request, &order);
         let mut task = tokio::spawn(
             async move {
                 let mut course = pipeline.begin(request, order, None, None).await?;
                 course.overflowed = Some(flag);
-                let ran = Box::pin(pipeline.run(course, None)).await;
+                let ran = Box::pin(pipeline.run(course, Some(stopping))).await;
                 note_ending(&ran);
                 ran
             }
@@ -782,7 +821,11 @@ impl Pipeline {
         let Ok(finished) = tokio::time::timeout(wall, &mut task).await else {
             // From here on the fetch is a job's.
             overflowed.store(true, Ordering::Relaxed);
-            return Ok(Synchronous::Overflowed(Running { request, task }));
+            return Ok(Synchronous::Overflowed(Running {
+                request,
+                task,
+                stop,
+            }));
         };
         match finished.unwrap_or(Err(SchedulerError::ShuttingDown))? {
             Ran::Finished(report) => Ok(Synchronous::Finished(report)),
@@ -888,6 +931,7 @@ impl Pipeline {
             avoid,
             retry: None,
             give_up_at,
+            job: false,
             overflowed: None,
             site,
             site_scout,
@@ -937,7 +981,8 @@ impl Pipeline {
     ) -> Result<JobFetch, SchedulerError> {
         let span = fetch_span(id, &order);
         let ran = async {
-            let course = self.begin(id, order, None, earlier).await?;
+            let mut course = self.begin(id, order, None, earlier).await?;
+            course.job = true;
             let ran = Box::pin(self.run(course, Some(stop))).await;
             note_ending(&ran);
             ran
@@ -1114,14 +1159,14 @@ impl Pipeline {
             };
             let grant = match granted {
                 Ok(grant) => grant,
-                Err(refused) => return self.refused(course, &refused, stop.is_some()).await,
+                Err(refused) => return self.refused(course, &refused).await,
             };
             let ruling = self.attempt(&mut course, grant).await?;
             // The server stopped waiting for the page: this process asks
             // for nothing more. A job's fetch is given back with the cut
             // attempt in its record; any other ends with it.
             if course.was_cut() {
-                return self.after_cut(course, stop.is_some()).await;
+                return self.after_cut(course).await;
             }
             // A session's persona that was turned away cannot be replaced:
             // the request ends with what it got.
@@ -1146,9 +1191,8 @@ impl Pipeline {
         &self,
         course: Course,
         refused: &crate::scheduler::Refused,
-        for_job: bool,
     ) -> Result<Ran, SchedulerError> {
-        if course.waits_like_a_job(for_job) && waits(refused) {
+        if course.waits_like_a_job() && waits(refused) {
             return Ok(Ran::Deferred(Deferred {
                 reason: refused.reason,
                 retry_at: refused.retry_at,
@@ -1181,7 +1225,7 @@ impl Pipeline {
                     reason: Refusal::PlainExitUnavailable,
                     retry_at: self.later_by(PLAIN_EXIT_WAIT),
                 };
-                return self.refused(course, &refused, stop.is_some()).await;
+                return self.refused(course, &refused).await;
             };
             let mut work = self.work(&course);
             // A retry waits its pause, drawn as for a persona at the
@@ -1209,11 +1253,11 @@ impl Pipeline {
             };
             let grant = match granted {
                 Ok(grant) => grant,
-                Err(refused) => return self.refused(course, &refused, stop.is_some()).await,
+                Err(refused) => return self.refused(course, &refused).await,
             };
             let ruling = self.attempt_plain(&mut course, grant, route).await?;
             if course.was_cut() {
-                return self.after_cut(course, stop.is_some()).await;
+                return self.after_cut(course).await;
             }
             match ruling.step {
                 Step::Retry => course.retry = Some(self.retry_pause(&course)),
@@ -1285,13 +1329,13 @@ impl Pipeline {
     }
 
     /// How a run ends whose last attempt was cut: a fetch for a job
-    /// (`for_job`) is stopped and one that outlasted its wall time is given
+    /// is stopped and one that outlasted its wall time is given
     /// back, both with the request open; any other ends with what was cut.
-    async fn after_cut(&self, course: Course, for_job: bool) -> Result<Ran, SchedulerError> {
-        if for_job {
+    async fn after_cut(&self, course: Course) -> Result<Ran, SchedulerError> {
+        if course.job {
             return Ok(Ran::Stopped);
         }
-        if course.waits_like_a_job(false) {
+        if course.waits_like_a_job() {
             return Ok(Ran::Deferred(Deferred {
                 reason: Refusal::ShuttingDown,
                 retry_at: None,
@@ -1330,7 +1374,7 @@ impl Pipeline {
             Gate::Unavailable { reason, retry_at } => {
                 // A job waits until the file can be had; a caller that
                 // waits for its page is told that it is not fetched.
-                if course.waits_like_a_job(stop.is_some()) {
+                if course.waits_like_a_job() {
                     return Ok(Err(Ran::Deferred(Deferred {
                         reason: Refusal::RobotsUnavailable,
                         retry_at,
@@ -1341,7 +1385,7 @@ impl Pipeline {
             }
             // The scout was told what the page would have been told.
             Gate::Refused(refused) => {
-                if course.waits_like_a_job(stop.is_some()) && waits(&refused) {
+                if course.waits_like_a_job() && waits(&refused) {
                     return Ok(Err(Ran::Deferred(Deferred {
                         reason: refused.reason,
                         retry_at: refused.retry_at,
@@ -1455,6 +1499,7 @@ impl Pipeline {
             grant.complete(Completion {
                 courtesy: Courtesy::NotTheSite,
                 blocked: false,
+                proxy_failed: false,
             });
             let verdict = AttemptVerdict::plain(Outcome::ProviderError);
             return Ok(course.progress.record(Some(dispatch.persona), verdict));
@@ -1516,6 +1561,8 @@ impl Pipeline {
             courtesy: output.courtesy,
             // Its visit is over when it was turned away for good.
             blocked: ruling.penalty.is_some(),
+            // Or when its proxy failed: the site had no say (F108).
+            proxy_failed: at_the_proxy(output.reason.as_deref()),
         });
 
         let attempt = Attempt {

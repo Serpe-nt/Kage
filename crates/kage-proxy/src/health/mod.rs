@@ -291,7 +291,14 @@ impl HealthChecker {
     }
 
     /// When a scheduled proxy is due, with real traffic taken into account.
+    /// Real traffic that failed at the proxy since its last probe makes it
+    /// due at once (F108).
     fn due_at(&self, proxy: &Proxy, slot: &Slot) -> DateTime<Utc> {
+        if let Some(failed) = self.pool.last_traffic_failure(proxy.id)
+            && slot.last_probe.is_none_or(|last| failed > last)
+        {
+            return slot.next_probe.min(failed);
+        }
         let (Some(traffic), Some(last)) = (self.pool.last_traffic(proxy.id), slot.last_probe)
         else {
             return slot.next_probe;

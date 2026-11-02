@@ -76,12 +76,19 @@ The outcome is `provider_error` and the reason says why:
 | `egress_unsafe` | A proxy showed the host's own address. Nothing is fetched and the forwarder relays nothing. | `docs/runbooks/proxies.md`, "A leak". |
 | `bandwidth_exhausted` | The bandwidth budget of the term is used up and `bandwidth.hard_stop` is on. | Below. |
 | `domain_paused` | The domain's circuit breaker is open; the answer names when to ask again. | Below. |
-| `no_persona` | No persona can serve the request: none is ready, none matches the engines and countries of the policy and the request, or none has an http path for level 1. | `kage persona list`. |
+| `no_persona` | No persona can serve the request: none is ready, none matches the engines and countries of the policy and the request, or none has an http path for level 1. When one would match but none is ready (every proxy in backoff, the personas cooling), `retry_at` is a minute on and a job's page waits instead of failing (F107). | `kage persona list`, `kage proxy list`. |
 | `plain_exit_unavailable` | Level 0 under the pool: the site's one plain exit (one of the pool's own plain exits, else its scout's proxy) cannot carry traffic now, or nobody may scout the site. Nothing is sent from another address; `retry_at` says when to ask again, and a job's page waits. | [levels-and-egress.md](levels-and-egress.md#under-the-pool-egressmode-proxies). |
 | `shutting_down` | The server is stopping: the request waited for a persona when the signal came, and nothing was asked of the site. | Ask again when it is back. |
 
 An attempt can end with a reason too, when it was not the site that
-ended it: `proxy_failed`, `timeout`, and `interrupted`.
+ended it: `proxy_failed`, `timeout`, and `interrupted`. `proxy_failed`
+counts nothing against the site: no pause after server errors, no
+breaker. A browser reports a plain `http://` page whose proxy is down as
+if the site did not answer (`navigation_failed`); the forwarder knows
+better, and such an attempt is `proxy_failed` too (F108). The persona
+leaves its visit and, for five minutes or until an attempt of it is
+answered, is taken only when no other persona could be; its proxy is
+probed at the health checker's next turn.
 
 ## Stopping the server
 

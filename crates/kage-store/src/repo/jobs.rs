@@ -467,6 +467,55 @@ impl JobRepo<'_> {
         })
     }
 
+    /// Claims up to `limit` jobs that were cancelled and that nobody works:
+    /// queued ones (behind `jobs.max_running`), paused ones, and running
+    /// ones whose worker's lease ran out, oldest first, each under a lease
+    /// until `lease_until`. A worker claims them whatever its limit says:
+    /// nothing of them is fetched any more, and their cancel is answered at
+    /// once (F109). A queued job becomes `running`.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the query fails or a row does not parse.
+    pub async fn claim_cancelled(
+        &self,
+        worker: Uuid,
+        now: DateTime<Utc>,
+        lease_until: DateTime<Utc>,
+        limit: u32,
+    ) -> Result<Vec<Job>, StoreError> {
+        sqlx::query_as!(
+            JobRow,
+            "UPDATE jobs
+             SET lease_until = $3, worker = $1, started_at = COALESCE(started_at, $2),
+                 state = CASE WHEN state = 'queued' THEN 'running' ELSE state END
+             WHERE id IN (
+                 SELECT id FROM jobs
+                 WHERE cancel_requested AND state IN ('queued', 'running', 'paused')
+                   AND (lease_until IS NULL OR lease_until <= $2)
+                 ORDER BY created_at, id
+                 LIMIT $4
+                 FOR UPDATE SKIP LOCKED)
+             RETURNING id, api_key_id, kind, state, spec, idempotency_key, idempotency_hash,
+                       idempotency_until, origin, webhook_url, webhook_secret, items_total,
+                       items_succeeded, items_failed, items_cancelled, cancel_requested, error,
+                       deadline, paused_until, paused_reason, created_at, started_at, finished_at",
+            worker,
+            now,
+            lease_until,
+            page_limit(limit),
+        )
+        .fetch_all(self.pool)
+        .await?
+        .into_iter()
+        .map(Job::try_from)
+        .collect::<Result<Vec<Job>, StoreError>>()
+        .map(|mut jobs| {
+            jobs.sort_by_key(|job| (job.created_at, job.id));
+            jobs
+        })
+    }
+
     /// Renews a worker's lease on a job. `None` when the job is no longer
     /// this worker's (its lease ran out and another took it, or it is
     /// gone); otherwise the job as it stands, so that the worker sees a

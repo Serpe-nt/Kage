@@ -214,8 +214,10 @@ pub struct SchedulerConfig {
     /// a job (spec §8.4).
     #[serde(default = "default_sync_wall_time")]
     pub sync_wall_time: HumanDuration,
-    /// How long a synchronous request waits for a persona that is already
-    /// visiting the domain before another persona starts a visit.
+    /// How long a synchronous request waits for a visitor's break to end
+    /// before another persona starts a visit of its own, past the
+    /// pacing's `domain_concurrency`. A visitor in its gap or on a page
+    /// is waited for however long (F106).
     #[serde(default = "default_visitor_wait")]
     pub visitor_wait: HumanDuration,
     /// A visit in which no page was asked for this long is over: the
