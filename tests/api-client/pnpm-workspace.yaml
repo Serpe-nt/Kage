@@ -12,6 +12,11 @@ strictPeerDependencies: true
 # ajv asks for ^3.0.1, which admits the fixed version but does not require it,
 # so the override is what keeps a lockfile from holding an older one. Drop it
 # when ajv's range starts at a fixed version.
+#
+# minimatch 5.1.9 under @redocly/openapi-core carries GHSA-g3hv-75wg-m249 and
+# takes no override: the core pins 5.1.9 and requires the module as a
+# function, a shape minimatch 9 and later do not export (docs/versions.md,
+# the client's table).
 overrides:
   fast-uri@3: 3.1.9
 

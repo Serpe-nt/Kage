@@ -24,10 +24,20 @@ strictPeerDependencies: true
 # admit the fixed versions but neither requires them, so the override is what
 # keeps a lockfile from holding an older one. Each selector moves one line and
 # only that line. Drop them when the parents' ranges start at a fixed version.
+#
+# minimatch below 11.0.1 carries GHSA-g3hv-75wg-m249 and glob 9.0.0 to 14.0.1
+# GHSA-3g3m-2fjr-6pw4 (both moderate). eslint, @eslint/config-array and
+# @typescript-eslint/typescript-estree ask for minimatch ^10.2.x and
+# camoufox-js for glob ^13.0.0: ranges that end before the fixed majors, so
+# the overrides are what moves them. glob 14 asks for minimatch ^11 itself,
+# which is why the minimatch override is unscoped: one version for every
+# requester. Drop them when the parents' ranges start at a fixed version.
 overrides:
   ua-parser-js: 1.0.41
   fast-uri@3: 3.1.9
   fast-uri@4: 4.2.3
+  minimatch: 11.0.1
+  glob: 14.0.2
 
 # Refuse to resolve a version published less than a day ago.
 minimumReleaseAge: 1440
