@@ -174,9 +174,22 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   URI resolver of the schema compilers under fastify: it resolves the
   `$id` and `$ref` of the sidecar's own schemas, never a URL a caller
   sends or a page holds. The API client is test tooling and is in no image.
-
-### Security
-
+- `minimatch` 11.0.1 and `glob` 14.0.2 in the sidecar, by overrides, for
+  GHSA-g3hv-75wg-m249 (moderate: a pattern an attacker supplies makes the
+  matcher's preprocessing grow and its second pass quadratic, at
+  optimization level 2) and GHSA-3g3m-2fjr-6pw4 (moderate: a walk of glob
+  that was aborted kept reading directories after it had rejected). 2.0.0
+  and 2.0.1 ship 10.2.6 and 13.0.6. Neither is on a request's path:
+  minimatch is the file matcher of eslint and typescript-eslint, in no
+  image, and glob is a dependency camoufox-js declares and its shipped
+  code never imports, so the Firefox image carries the package and
+  nothing loads it. The API test client
+  keeps `minimatch` 5.1.9 under `@redocly/openapi-core` 1.34.20, which
+  pins it and requires the module as a function, a shape minimatch 9 and
+  later do not export, so its alert stays open: the one call is Redocly's
+  header matching for a `$ref` fetched over HTTP, which the client never
+  does, at the default optimization level, where the advisory's path is
+  not reached.
 - `utoipa-swagger-ui` 10.0.2 and `zip` 9.1.3, for five advisories against
   `zip` 8.6.0: GHSA-m665-v7pm-7grj (critical), GHSA-9hj8-73fh-9963,
   GHSA-hjqx-j4rw-g7xv and GHSA-q7v9-x93c-xqv3 (high), GHSA-8hxf-qr8p-62x4
