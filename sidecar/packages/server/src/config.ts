@@ -42,6 +42,15 @@ const EnvironmentSchema = z.object({
   SIDECAR_MAX_CONTEXTS: z.coerce.number().int().min(1).max(32).default(3),
   SIDECAR_CONTEXT_IDLE_MS: z.coerce.number().int().min(1000).max(86_400_000).default(120_000),
   SIDECAR_MAX_PAGES_PER_BROWSER: z.coerce.number().int().min(1).max(1_000_000).default(500),
+  // How long the server may stop answering before it ends itself, so that
+  // the container's restart policy starts it again (F103); 0 never.
+  SIDECAR_STALL_MS: z.coerce
+    .number()
+    .int()
+    .refine((value) => value === 0 || (value >= 2000 && value <= 3_600_000), {
+      message: '0, or 2000 to 3600000',
+    })
+    .default(30_000),
   SIDECAR_PERSONAS_DIR: z.string().min(1).default('/var/lib/kage/personas'),
   SIDECAR_ARTIFACTS_DIR: z.string().min(1).default('/var/lib/kage/artifacts'),
   SIDECAR_ALLOW_CROSS_OS_CLAIMS: flag,
@@ -87,6 +96,12 @@ export interface ServerConfig {
   readonly contextIdleMs: number;
   /** A context's browser is restarted after this many navigations (spec §10.6). */
   readonly maxPagesPerBrowser: number;
+  /**
+   * How long the server may stop answering (its event loop, or an operation
+   * that outlasted its bound and does not end) before it ends itself, so
+   * that the container is restarted (F103); 0 never.
+   */
+  readonly stallMs: number;
   /** Where the personas volume is mounted. */
   readonly personasDir: string;
   /** Where the artifacts volume shared with Kage is mounted. */
@@ -186,6 +201,7 @@ export function loadConfig(
     maxContexts: data.SIDECAR_MAX_CONTEXTS,
     contextIdleMs: data.SIDECAR_CONTEXT_IDLE_MS,
     maxPagesPerBrowser: data.SIDECAR_MAX_PAGES_PER_BROWSER,
+    stallMs: data.SIDECAR_STALL_MS,
     personasDir: data.SIDECAR_PERSONAS_DIR,
     artifactsDir: data.SIDECAR_ARTIFACTS_DIR,
     allowCrossOsClaims: data.SIDECAR_ALLOW_CROSS_OS_CLAIMS,

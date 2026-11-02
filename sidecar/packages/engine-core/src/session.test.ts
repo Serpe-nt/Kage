@@ -160,6 +160,13 @@ interface Tabs {
  * A browser that answers every navigation with one small page, at once:
  * enough of a driver for the session to load, wait, dwell and capture. A
  * navigation to an address with `fail` in it fails as the network would.
+ * One with `redirect=<address>` is answered with a redirect there, which
+ * the browser cannot load; one with `moves=<address>` loads, and its
+ * script then sends the tab there, which the browser cannot load either:
+ * both end on the browser's own error page, as Chrome does (F102). One
+ * with `stuck` in it loads, and then answers no read again (its script
+ * never yields); one with `crash` loads, and then its renderer crashes
+ * (F103).
  * Each tab keeps a history as Chrome keeps it: the blank page it began
  * with stays an entry, every navigation adds one, and the browser's own way
  * back moves to the entry before without asking anyone for it.
@@ -181,8 +188,12 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
     };
     let address = 'about:blank';
     const history = ['about:blank'];
+    // A page whose script never yields answers no read again.
+    let stuck = false;
+    const never = new Promise<never>(() => undefined);
+    const reading = <T>(value: T): Promise<T> => (stuck ? never : Promise.resolve(value));
     const mainFrame = { url: () => address };
-    const answer = (url: string): DriverResponse => {
+    const answer = (url: string, status = 200, location?: string): DriverResponse => {
       const request: DriverRequest = {
         url: () => url,
         method: () => 'GET',
@@ -195,8 +206,11 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
       };
       const response: DriverResponse = {
         url: () => url,
-        status: () => 200,
-        headers: () => ({ 'content-type': 'text/html' }),
+        status: () => status,
+        headers: () => ({
+          'content-type': 'text/html',
+          ...(location === undefined ? {} : { location }),
+        }),
         headersArray: () => Promise.resolve([{ name: 'content-type', value: 'text/html' }]),
         body: () => Promise.resolve(Buffer.from('<p>A page</p>')),
         request: () => request,
@@ -205,8 +219,8 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
     };
     const page: DriverPage = {
       url: () => address,
-      title: () => Promise.resolve('A page'),
-      content: () => Promise.resolve('<html><body><p>A page</p></body></html>'),
+      title: () => reading('A page'),
+      content: () => reading('<html><body><p>A page</p></body></html>'),
       mainFrame: () => mainFrame,
       frames: () => [mainFrame],
       goto: (url) => {
@@ -214,6 +228,19 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
         if (url.includes('fail')) {
           return Promise.reject(new Error('net::ERR_NAME_NOT_RESOLVED'));
         }
+        const sent = (key: string) => new URL(url).searchParams.get(key);
+        const redirect = sent('redirect');
+        if (redirect !== null) {
+          const moved = answer(url, 302, redirect);
+          emit('request', moved.request());
+          emit('response', moved);
+          if (/^https?:/.test(redirect)) {
+            emit('request', answer(redirect).request());
+          }
+          address = 'chrome-error://chromewebdata/';
+          return Promise.reject(new Error('net::ERR_TUNNEL_CONNECTION_FAILED'));
+        }
+        const moves = sent('moves');
         const response = answer(url);
         emit('request', response.request());
         address = url;
@@ -221,6 +248,17 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
         emit('response', response);
         emit('domcontentloaded');
         emit('load');
+        if (moves !== null) {
+          // The page's own script sends the tab on; nothing answers.
+          emit('request', answer(moves).request());
+          address = 'chrome-error://chromewebdata/';
+        }
+        stuck = url.includes('stuck') || url.includes('crash');
+        if (url.includes('crash')) {
+          setTimeout(() => {
+            emit('crash');
+          }, 20);
+        }
         return Promise.resolve(response);
       },
       goBack: () => {
@@ -236,7 +274,7 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
       waitForLoadState: () => Promise.resolve(),
       // A page that has loaded and holds no text: every other read finds nothing.
       evaluate: (expression: string) =>
-        Promise.resolve((expression === 'document.readyState' ? 'complete' : '') as never),
+        reading((expression === 'document.readyState' ? 'complete' : '') as never),
       click: refuse('driver click'),
       hover: refuse('driver hover'),
       fill: refuse('driver fill'),
@@ -564,5 +602,169 @@ describe('a still visit (contract 1.5.0)', () => {
     const { result } = await navigate(bare, { dwell_ms: 50 });
     expect(result.behavior).toBeNull();
     expect(untouched).toEqual({ loaded: [target], input: [], opened: 0 });
+  });
+});
+
+describe('a page the browser could not load (F102)', () => {
+  const env: OperationEnv = {
+    artifacts: new ArtifactWriter(path.join(tmpdir(), 'kage-unloaded-unused')),
+    defaultArtifactPrefix: 'sidecar/test',
+  };
+  const capture = { dom: true, raw: true, xhr: null, console: false, screenshot: null, pdf: null };
+  const session = () => {
+    const { driver } = scriptedDriver();
+    const parts = { driver, personaSeed: PERSONA_SEED, selftestPages: [], log: silentLog };
+    return new PageSession(parts);
+  };
+  const navigate = (on: PageSession, url: string) =>
+    on.navigate({ url, wait: { until: 'load' }, capture }, env);
+  const sending = (path: string, key: string, to: string) =>
+    site(`${path}?${key}=${encodeURIComponent(to)}`);
+
+  it('is reported where the tab was sent, and the browser’s error page is no page of the site', async () => {
+    const on = session();
+    // A page whose script sends the tab to an address nothing answers.
+    const moved = await navigate(on, sending('/p', 'moves', 'http://10.0.0.1:8091/x'));
+    expect(PageResultSchema.parse(moved)).toEqual(moved);
+    expect(moved).toMatchObject({
+      final_url: 'http://10.0.0.1:8091/x',
+      status: null,
+      http_version: null,
+      headers: [],
+      title: null,
+      dom_html: null,
+      raw_body: null,
+    });
+    expect(moved.error).toMatchObject({ code: 'navigation_failed' });
+    expect(moved.error?.message).toContain('http://10.0.0.1:8091/x');
+
+    // A redirect the browser could not follow is a hop of the chain, and
+    // the page is where it pointed.
+    const start = sending('/r', 'redirect', 'http://169.254.169.254/latest/');
+    const redirected = await navigate(on, start);
+    expect(redirected.final_url).toBe('http://169.254.169.254/latest/');
+    expect(redirected.redirects).toEqual([
+      { url: start, status: 302, location: 'http://169.254.169.254/latest/' },
+    ]);
+    expect(redirected).toMatchObject({ status: null, dom_html: null });
+    expect(redirected.error?.code).toBe('navigation_failed');
+
+    // To an address the browser never asks for: where the redirect pointed.
+    const scheme = await navigate(on, sending('/s', 'redirect', 'file:///etc/passwd'));
+    expect(scheme.final_url).toBe('file:///etc/passwd');
+    expect(scheme.redirects[0]?.location).toBe('file:///etc/passwd');
+  });
+
+  it('is where a flow ended when its page moved on to an address that did not load', async () => {
+    const on = session();
+    const events: FlowEvent[] = [];
+    await on.flow(
+      {
+        actions: [
+          { action: 'goto', url: sending('/start', 'moves', 'http://192.168.1.1/admin') },
+          { action: 'extract', capture },
+        ],
+        capture,
+      },
+      env,
+      (event) => events.push(event),
+    );
+    const step = events.find((event) => event.type === 'step' && event.action === 'extract');
+    const final = events.find((event) => event.type === 'final');
+    expect(step?.type === 'step' ? step.capture : null).toMatchObject({
+      final_url: 'http://192.168.1.1/admin',
+      dom_html: null,
+      status: null,
+    });
+    expect(final?.type === 'final' ? final.result.final_url : null).toBe(
+      'http://192.168.1.1/admin',
+    );
+  });
+});
+
+describe('a page that stops answering (F103)', () => {
+  const env: OperationEnv = {
+    artifacts: new ArtifactWriter(path.join(tmpdir(), 'kage-stuck-unused')),
+    defaultArtifactPrefix: 'sidecar/test',
+  };
+  const capture = { dom: true, raw: true, xhr: null, console: false, screenshot: null, pdf: null };
+  const session = (readLimitMs: number) => {
+    const { driver, tabs } = scriptedDriver();
+    const parts = {
+      driver,
+      personaSeed: PERSONA_SEED,
+      selftestPages: [],
+      log: silentLog,
+      readLimitMs,
+    };
+    return { session: new PageSession(parts), tabs };
+  };
+  const navigate = (on: PageSession, url: string, change: Partial<NavigateRequest> = {}) =>
+    on.navigate({ url, wait: { until: 'load' }, capture, ...change }, env);
+
+  it('ends a navigation whose page never answers a read with a typed error within the bound, and serves the next in a fresh tab', async () => {
+    const { session: on, tabs } = session(300);
+    const began = Date.now();
+    const stuck = await navigate(on, site('/stuck'), {
+      behavior: { seed: REQUEST_SEED, mode: 'still' },
+      dwell_ms: 200,
+    });
+    const took = Date.now() - began;
+    // One read waits out the limit; every later read of the page fails at
+    // once: the request is answered well within its own bound.
+    expect(took).toBeLessThan(3000);
+    expect(PageResultSchema.parse(stuck)).toEqual(stuck);
+    expect(stuck.error).toMatchObject({ code: 'timeout' });
+    expect(stuck.error?.message).toContain('did not answer a read within 300 ms');
+    expect(stuck).toMatchObject({ dom_html: null, title: null, raw_body: null });
+
+    // The page that does not answer is given up: the next request, even one
+    // that names the tab, gets a fresh one and is served.
+    const next = await navigate(on, site('/after'), { tab: 'job-1' });
+    expect(tabs.fresh).toBe(1);
+    expect(next.error).toBeNull();
+    expect(next.dom_html).toContain('A page');
+  });
+
+  it('ends at once what waits for a renderer that crashed', async () => {
+    const { session: on, tabs } = session(60_000);
+    const began = Date.now();
+    const crashed = await navigate(on, site('/crash'), {
+      behavior: { seed: REQUEST_SEED, mode: 'still' },
+      dwell_ms: 200,
+    });
+    // Not the read limit of a minute: the crash cut the reads.
+    expect(Date.now() - began).toBeLessThan(5000);
+    expect(crashed.error).toMatchObject({ code: 'navigation_failed' });
+    expect(crashed.error?.message).toContain('crashed');
+    expect(crashed.dom_html).toBeNull();
+    const next = await navigate(on, site('/after'));
+    expect(tabs.fresh).toBe(1);
+    expect(next.error).toBeNull();
+  });
+
+  it('ends a flow on a page that stopped answering with the step that met it', async () => {
+    const { session: on } = session(200);
+    const events: FlowEvent[] = [];
+    await on.flow(
+      {
+        actions: [
+          { action: 'goto', url: site('/stuck') },
+          { action: 'assert', selector: 'p' },
+          { action: 'extract', capture },
+        ],
+        capture,
+      },
+      env,
+      (event) => events.push(event),
+    );
+    const steps = events.filter((event) => event.type === 'step');
+    expect(steps.map((step) => [step.action, step.ok])).toEqual([
+      ['goto', true],
+      ['assert', false],
+    ]);
+    const final = events.find((event) => event.type === 'final');
+    expect(final?.type === 'final' ? final.ok : null).toBe(false);
+    expect(final?.type === 'final' ? final.result.error?.code : null).toBe('timeout');
   });
 });

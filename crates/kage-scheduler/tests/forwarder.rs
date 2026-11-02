@@ -21,7 +21,7 @@ use kage_core::ids::{PersonaId, ProxyId};
 use kage_http::HopResolver;
 use kage_persona::{Egress, Via};
 use kage_scheduler::forwarder::RouteRefusal;
-use kage_scheduler::{Forwarder, ForwarderSettings, PlainRoute, Routes, Tokens, Upstream};
+use kage_scheduler::{Caller, Forwarder, ForwarderSettings, PlainRoute, Routes, Tokens, Upstream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
@@ -437,6 +437,7 @@ async fn a_client_without_a_personas_credential_is_asked_for_one() {
 #[tokio::test]
 async fn what_the_guard_refuses_is_not_relayed() {
     let mut rig = Rig::start(settings()).await;
+    let mark = rig.forwarder.denials().mark();
     let denied = [
         "localhost:8080",
         "127.0.0.1:9222",
@@ -481,6 +482,39 @@ async fn what_the_guard_refuses_is_not_relayed() {
     }
     assert_eq!(rig.provider.seen().len(), 0);
     assert_eq!(rig.forwarder.counts(), (0, denied.len() as u64 + 4));
+    // Every refusal is kept for the caller it refused (F102): the executor
+    // tells a target the guard refused from a network that failed.
+    let denials = rig.forwarder.denials();
+    for authority in denied {
+        let host = authority
+            .rsplit_once(':')
+            .map_or(authority, |(host, _)| host)
+            // As a URL names it, an IPv6 address in brackets.
+            .to_owned();
+        let denial = denials.since(Caller::Persona(id(0)), mark, std::slice::from_ref(&host));
+        assert!(
+            denial.is_some_and(|denial| !denial.reason.is_empty()),
+            "{authority}"
+        );
+        // Never for another caller, and never before the mark.
+        assert_eq!(
+            denials.since(Caller::Persona(id(1)), mark, std::slice::from_ref(&host)),
+            None
+        );
+        assert_eq!(
+            denials.since(Caller::Persona(id(0)), denials.mark(), &[host]),
+            None
+        );
+    }
+    assert!(
+        denials
+            .since(
+                Caller::Persona(id(0)),
+                mark,
+                &["sidecar-firefox".to_owned()]
+            )
+            .is_some()
+    );
 
     // A public address by number is a target like any other: a page may
     // load from one.
@@ -1069,6 +1103,7 @@ async fn a_route_with_no_upstream_connects_only_to_addresses_it_checked() {
     // nothing here reaches the internet (the public address of
     // `mixed.kage.test` once was, and on a network that answers any
     // connection the tunnel was opened).
+    let mark = rig.forwarder.denials().mark();
     for refused in [
         format!("other.kage.test:{port}"),
         "metadata.kage.test:80".to_owned(),
@@ -1079,6 +1114,15 @@ async fn a_route_with_no_upstream_connects_only_to_addresses_it_checked() {
         assert!(head.starts_with("HTTP/1.1 403 "), "{refused}: {head}");
         assert_eq!(client.rest().await, "", "{refused}");
     }
+    // A name refused for its address is the guard's refusal and is kept
+    // for the caller (F102); a name with no address is a failed network.
+    let denials = rig.forwarder.denials();
+    let of = |name: &str| denials.since(Caller::Plain(PlainRoute::Host), mark, &[name.to_owned()]);
+    for name in ["other.kage.test", "metadata.kage.test", "mixed.kage.test"] {
+        let denial = of(name).unwrap_or_else(|| panic!("{name} is kept"));
+        assert!(denial.reason.contains("resolves to"), "{denial:?}");
+    }
+    assert_eq!(of("unknown.kage.test"), None);
 
     // The bytes are counted by their exit: the plain client's toward the
     // host it went to, the host persona's as its own.

@@ -606,16 +606,14 @@ async fn the_browser_self_test_opens_a_context_through_the_proxy_and_closes_it_a
         "--language",
         "de",
     ];
-    // The proxy with its credentials, the proxy's own profile directory on
-    // this engine and the identity that was asked for.
+    // The way to the proxy, the proxy's own profile directory on this
+    // engine and the identity that was asked for.
     let context = json!({
         "persona_id": id,
         "profile_dir": format!("selftest/chromium/{id}"),
-        "proxy": {
-            "server": format!("http://{}:{}", proxy.addr.ip(), proxy.addr.port()),
-            "username": PROXY_USER,
-            "password": PROXY_PASS,
-        },
+        // The command's own forwarder under the stand-in's credential, as a
+        // persona's browser is handed the server's (F105).
+        "proxy": { "username": id },
         "locale": "de-DE",
         "languages": ["de-DE", "de"],
         "timezone": "Europe/Berlin",
@@ -656,6 +654,22 @@ async fn the_browser_self_test_opens_a_context_through_the_proxy_and_closes_it_a
     // The stand-in persona of a proxy: its seed is the proxy's id, twice.
     let seed = id.replace('-', "");
     assert_eq!(report["seed"], format!("{seed}{seed}"));
+    // The browser is handed kage's own forwarder, never the provider's
+    // proxy or its credentials: a sidecar on the network `browsers` could
+    // not reach the proxy anyway (F105).
+    let opened = passing
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|request| request.url.path() == "/v1/contexts")
+        .unwrap();
+    let opened: Value = serde_json::from_slice(&opened.body).unwrap();
+    let server = opened["proxy"]["server"].as_str().unwrap();
+    assert!(server.starts_with("http://kage:"), "{server}");
+    assert!(!server.ends_with(&format!(":{}", proxy.addr.port())), "{server}");
+    assert_ne!(opened["proxy"]["username"], PROXY_USER);
+    assert_ne!(opened["proxy"]["password"], PROXY_PASS);
     passing.verify().await;
     drop(passing);
 
@@ -729,11 +743,9 @@ async fn the_browser_self_test_of_firefox_asks_its_own_sidecar_for_a_windows_per
     let context = json!({
         "persona_id": id,
         "profile_dir": format!("selftest/firefox/{id}"),
-        "proxy": {
-            "server": format!("http://{}:{}", proxy.addr.ip(), proxy.addr.port()),
-            "username": PROXY_USER,
-            "password": PROXY_PASS,
-        },
+        // The command's own forwarder under the stand-in's credential, as a
+        // persona's browser is handed the server's (F105).
+        "proxy": { "username": id },
         "locale": "de-DE",
         "languages": ["de-DE", "de"],
         "timezone": "Europe/Berlin",

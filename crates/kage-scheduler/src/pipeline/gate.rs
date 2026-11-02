@@ -546,18 +546,64 @@ impl Pipeline {
 
     /// What `robots.txt` means for the fetch (spec §14). Sets the verdict
     /// its result reports and, where the file is enforced, the gap its
-    /// `Crawl-delay` asks for.
+    /// `Crawl-delay` asks for. A flow meets the file of every address its
+    /// `goto` steps go to, each under its own site's policy, as a fetch of
+    /// that address would (F101): the first that is disallowed ends the
+    /// flow `robots_denied` with that address's verdict, before anything is
+    /// asked of any site.
     pub(super) async fn robots_gate(
         &self,
         course: &mut Course,
+        stop: Option<&Stop>,
+    ) -> Result<Gate, SchedulerError> {
+        let gate = self.robots_gate_at(course, None, stop).await?;
+        if !matches!(gate, Gate::Open) {
+            return Ok(gate);
+        }
+        for url in super::flow_gotos(&course.order).into_iter().skip(1) {
+            let gate = self.robots_gate_at(course, Some(&url), stop).await?;
+            if !matches!(gate, Gate::Open) {
+                return Ok(gate);
+            }
+        }
+        Ok(Gate::Open)
+    }
+
+    /// The gate of one address: the request's own (`later` is `None`), or
+    /// a later `goto` of a flow, judged under its own site's policy. Only
+    /// the request's own address sets what the result reports, unless a
+    /// later one is disallowed: then its verdict is the result's.
+    #[allow(clippy::too_many_lines)] // One address against its site's file, every way it can be had.
+    async fn robots_gate_at(
+        &self,
+        course: &mut Course,
+        later: Option<&Url>,
         stop: Option<&Stop>,
     ) -> Result<Gate, SchedulerError> {
         // The scout's own request is for what the file cannot speak of.
         if course.order.scout {
             return Ok(Gate::Open);
         }
-        course.robots = Some(robots::unasked());
-        let mode = match robots::mode(course.policy.robots, course.order.robots) {
+        let url = later.unwrap_or(&course.order.url).clone();
+        let robots_policy = match later {
+            None => {
+                course.robots = Some(robots::unasked());
+                course.policy.robots
+            }
+            Some(url) => {
+                let host = url
+                    .host_str()
+                    .map(str::to_ascii_lowercase)
+                    .unwrap_or_default();
+                self.verdicts
+                    .policies()
+                    .current()
+                    .domains
+                    .resolve(&host)
+                    .robots
+            }
+        };
+        let mode = match robots::mode(robots_policy, course.order.robots) {
             Ok(mode) => mode,
             Err(conflict) => return Ok(Gate::Denied(Some(conflict.as_str()))),
         };
@@ -578,16 +624,20 @@ impl Pipeline {
             patience: order.patience,
             level: order.level,
         };
-        let Some(mut call) = Self::call(&order.url, need) else {
+        let Some(mut call) = Self::call(&url, need) else {
             return Ok(Gate::Open);
         };
         let known = self.robots_fresh(&call.origin).await?;
 
         if mode == RobotsMode::Report {
             // Nothing waits: the verdict is what is known, and the scout
-            // follows after this fetch for the next one.
+            // follows after this fetch for the next one. A later address of
+            // a flow reports nothing of its own.
+            if later.is_some() {
+                return Ok(Gate::Open);
+            }
             if let Some(known) = known {
-                if let Some(verdict) = known.verdict(&self.robots.agents, &order.url) {
+                if let Some(verdict) = known.verdict(&self.robots.agents, &url) {
                     course.robots = Some(verdict);
                 }
             } else {
@@ -629,7 +679,7 @@ impl Pipeline {
                 Asked::Stopped => return Ok(Gate::Stopped),
             }
         };
-        let Some(verdict) = known.verdict(&self.robots.agents, &course.order.url) else {
+        let Some(verdict) = known.verdict(&self.robots.agents, &url) else {
             // Unreachable means disallowed (RFC 9309 §2.3.1.4) until the
             // file is asked for again.
             return Ok(Gate::Unavailable {
@@ -638,8 +688,29 @@ impl Pipeline {
             });
         };
         let allowed = verdict.allowed;
-        course.gap_floor = robots::gap_floor(&verdict);
-        course.robots = Some(verdict);
+        let floor = robots::gap_floor(&verdict);
+        match later {
+            None => {
+                course.gap_floor = floor;
+                course.robots = Some(verdict);
+            }
+            Some(url) => {
+                // The `Crawl-delay` of a later site paces the flow's persona
+                // there; a disallowed address is what the result reports.
+                let host = url
+                    .host_str()
+                    .map(str::to_ascii_lowercase)
+                    .unwrap_or_default();
+                if let Some(leg) = course.legs.iter_mut().find(|leg| leg.domain == host) {
+                    leg.gap_floor = leg.gap_floor.max(floor);
+                } else if host == course.domain {
+                    course.gap_floor = course.gap_floor.max(floor);
+                }
+                if !allowed {
+                    course.robots = Some(verdict);
+                }
+            }
+        }
         Ok(if allowed {
             Gate::Open
         } else {

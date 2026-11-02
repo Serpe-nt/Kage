@@ -1006,3 +1006,39 @@ async fn what_the_forwarder_counted_is_kept_by_the_hour_and_judged_against_the_c
     assert_eq!(lab.alerts.alerts().len(), before);
     lab.shut_down().await;
 }
+
+#[tokio::test]
+async fn a_page_that_stopped_answering_is_its_failure_and_no_empty_page() {
+    let mut lab = Lab::start(2, 149, FAST).await;
+    // The sidecar's answer for a page whose renderer stopped answering its
+    // reads (F103): the response came (200), nothing of the page was read.
+    lab.chromium.with(|sidecar| {
+        sidecar.next_pages.push_back(json!({
+            "status": 200,
+            "title": null,
+            "dom_html": null,
+            "raw_body": null,
+            "error": {
+                "code": "timeout",
+                "message": "the page did not answer a read within 10000 ms: its renderer is stuck",
+                "net_error": null,
+            },
+        }));
+    });
+
+    let report = lab.pipeline.fetch(get("/spin")).await.unwrap();
+
+    // Not an empty page the site served (a soft block that would cool the
+    // persona): the attempt is what failed, and another one is made.
+    let first = &report.attempts[0];
+    assert_eq!(first.outcome, Outcome::Timeout, "{report:?}");
+    assert_eq!(first.block, None);
+    assert_eq!(report.outcome, Outcome::Ok, "{:?}", report.reason);
+    let facts = lab.backend.facts(SITE).await.unwrap();
+    assert_eq!(
+        facts.states[&first.persona_id.unwrap()].cooldown_until,
+        None
+    );
+    assert_eq!(facts.breaker, None);
+    lab.shut_down().await;
+}

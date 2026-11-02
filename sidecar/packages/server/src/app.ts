@@ -3,6 +3,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import {
   CONTRACT_SEMVER,
   ContextParamsSchema,
+  DEFAULT_NAVIGATE_TIMEOUT_MS,
   ENDPOINTS,
   ERROR_STATUS,
   ExportStateResponseSchema,
@@ -20,11 +21,14 @@ import {
   type ErrorCode,
   type ErrorResponse,
   type FlowEvent,
+  type FlowRequest,
   type HealthResponse,
+  type NavigateRequest,
   type OpenContextResponse,
 } from '@kage/contract';
 import {
   ArtifactWriter,
+  DEFAULT_FLOW_TIMEOUT_MS,
   EngineError,
   type Engine,
   type EngineLog,
@@ -69,7 +73,22 @@ export interface AppOptions {
   readonly tracer?: Tracer;
   /** Where the log goes; default stdout. */
   readonly logStream?: DestinationStream;
+  /**
+   * How long the engine may not answer (an operation that outlasted its
+   * bound and does not end) before `onStalled` is called (F103); 0 or
+   * absent never.
+   */
+  readonly stallMs?: number;
+  /** How long an abandoned operation may go on before the engine counts as stalled; 60 s unless said. */
+  readonly abandonedGraceMs?: number;
+  /** What is done with an engine that stopped answering; the entry point ends the process. */
+  readonly onStalled?: (reason: string) => void;
+  /** One bound for every navigation and flow in place of the ones their requests make; for tests. */
+  readonly operationBoundMs?: number;
 }
+
+/** How often the server looks whether its engine still answers. */
+const STALL_LOOK_MS = 5000;
 
 /**
  * Runs the work of a request of Kage's in a span of its own, the child of
@@ -94,6 +113,37 @@ async function traced<T>(
     span.end(true);
     throw error;
   }
+}
+
+/** The longest a persona dwells on a page with a human dwell, as Kage bounds it. */
+const HUMAN_DWELL_CAP_MS = 45_000;
+/**
+ * What the server's bound of an operation leaves beyond the operation's own
+ * times: less than the margin Kage waits beyond them, so that Kage hears
+ * the typed answer before it gives up itself (F103).
+ */
+const OPERATION_SLACK_MS = 25_000;
+
+/**
+ * The longest the server waits for a navigation (F103): reaching the page,
+ * the patience and the dwell, as Kage's own bound counts them, and a slack.
+ * The session's reads are bounded on their own; this is the backstop for
+ * whatever else hangs.
+ */
+export function navigateBoundMs(request: NavigateRequest): number {
+  const reach = request.timeout_ms ?? DEFAULT_NAVIGATE_TIMEOUT_MS;
+  const fixed = request.dwell_ms ?? 0;
+  const behavior = request.behavior;
+  const onPage =
+    behavior === undefined
+      ? fixed
+      : (behavior.patience_ms ?? 0) + (behavior.dwell === 'human' ? HUMAN_DWELL_CAP_MS : fixed);
+  return reach + onPage + OPERATION_SLACK_MS;
+}
+
+/** The longest the server waits for a flow (F103): its budget and a slack. */
+export function flowBoundMs(request: FlowRequest): number {
+  return (request.timeout_ms ?? DEFAULT_FLOW_TIMEOUT_MS) + OPERATION_SLACK_MS;
 }
 
 /** The server and the parts tests and the entry point reach into. */
@@ -192,6 +242,9 @@ export function buildApp(options: AppOptions): App {
       maxContexts: options.maxContexts,
       idleMs: options.contextIdleMs,
       maxPagesPerBrowser: options.maxPagesPerBrowser,
+      ...(options.abandonedGraceMs === undefined
+        ? {}
+        : { abandonedGraceMs: options.abandonedGraceMs }),
     },
     metrics,
     log,
@@ -199,6 +252,32 @@ export function buildApp(options: AppOptions): App {
   );
   const manager = contexts;
   manager.start();
+  // An engine that stopped answering for long is ended, so that it is
+  // started again (F103): the health check fails meanwhile.
+  let stalledSince: number | null = null;
+  const stallMs = options.stallMs ?? 0;
+  const stallTimer =
+    stallMs > 0 && options.onStalled !== undefined
+      ? setInterval(
+          () => {
+            const stalled = manager.stalled();
+            if (stalled === null) {
+              stalledSince = null;
+              return;
+            }
+            stalledSince ??= now();
+            if (now() - stalledSince >= stallMs) {
+              log.error(
+                { stalled_ms: now() - stalledSince },
+                `the engine does not answer: ${stalled}`,
+              );
+              options.onStalled?.(stalled);
+            }
+          },
+          Math.min(STALL_LOOK_MS, stallMs),
+        )
+      : null;
+  stallTimer?.unref();
 
   server.addHook('onRequest', async (request, reply) => {
     const given = request.headers[TOKEN_HEADER];
@@ -285,18 +364,28 @@ export function buildApp(options: AppOptions): App {
     });
   }
 
+  /** What the health check answers while the engine answers. */
+  const healthy = (): HealthResponse => ({
+    status: 'ok',
+    engine: engine.name,
+    browser_version: engine.status().browserVersion,
+    contexts_in_use: manager.count,
+    max_contexts: options.maxContexts,
+    uptime_seconds: Math.max(0, now() - startedAt) / 1000,
+    contract_version: CONTRACT_SEMVER,
+  });
+
   json<null, typeof HealthResponseSchema>(
     ENDPOINTS.health,
     HealthResponseSchema,
-    (): HealthResponse => ({
-      status: 'ok',
-      engine: engine.name,
-      browser_version: engine.status().browserVersion,
-      contexts_in_use: manager.count,
-      max_contexts: options.maxContexts,
-      uptime_seconds: Math.max(0, now() - startedAt) / 1000,
-      contract_version: CONTRACT_SEMVER,
-    }),
+    (): HealthResponse => {
+      // An engine that does not answer fails the health check (F103).
+      const stalled = manager.stalled();
+      if (stalled !== null) {
+        throw new EngineError('internal', `the engine does not answer: ${stalled}`);
+      }
+      return healthy();
+    },
   );
 
   server.get(routePath(ENDPOINTS.metrics), async (_request, reply) => {
@@ -348,7 +437,13 @@ export function buildApp(options: AppOptions): App {
           'sidecar.navigate',
           request,
           { engine: engine.name, context: id },
-          () => manager.run(id, true, (context) => context.navigate(body, operationEnv(id))),
+          () =>
+            manager.run(
+              id,
+              true,
+              (context) => context.navigate(body, operationEnv(id)),
+              options.operationBoundMs ?? navigateBoundMs(body),
+            ),
           (page, span) => {
             span.set({
               outcome: page.error?.code ?? 'ok',
@@ -375,6 +470,7 @@ export function buildApp(options: AppOptions): App {
     const body = parse(ENDPOINTS.flow.request, request.body);
     const id = contextId(request);
     const stream = { started: false, ok: false };
+    const abandoned = { flow: false };
     const emit = (event: FlowEvent) => {
       const checked = FlowEventSchema.safeParse(event);
       if (!checked.success) {
@@ -401,7 +497,19 @@ export function buildApp(options: AppOptions): App {
         'sidecar.flow',
         request,
         { engine: engine.name, context: id },
-        () => manager.run(id, true, (context) => context.flow(body, operationEnv(id), emit)),
+        () =>
+          manager.run(
+            id,
+            true,
+            (context) =>
+              context.flow(body, operationEnv(id), (event) => {
+                // A flow that outlasted its bound sends nothing more.
+                if (!abandoned.flow) {
+                  emit(event);
+                }
+              }),
+            options.operationBoundMs ?? flowBoundMs(body),
+          ),
         (_done, span) => {
           span.set({ outcome: stream.ok ? 'ok' : 'failed' });
           return !stream.ok;
@@ -409,6 +517,7 @@ export function buildApp(options: AppOptions): App {
       );
       metrics.flowed(stream.ok ? 'ok' : 'failed');
     } catch (error) {
+      abandoned.flow = true;
       metrics.flowed('error');
       if (!stream.started) {
         throw error;
@@ -449,6 +558,9 @@ export function buildApp(options: AppOptions): App {
   );
 
   server.addHook('onClose', async () => {
+    if (stallTimer !== null) {
+      clearInterval(stallTimer);
+    }
     await manager.closeAll();
     await engine.close();
     // What is still queued is sent once the last navigation has ended.

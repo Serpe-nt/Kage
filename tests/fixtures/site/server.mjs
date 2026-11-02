@@ -561,6 +561,24 @@ const routes = {
   // A page nested ten thousand elements deep by its script (spec §14, F97).
   '/deep': (_req, res, url) => html(res, deepPage(url)),
 
+  // A page whose script stops yielding a moment after it loaded, and never
+  // answers anything again (F103): `?after=N` milliseconds, 300 by default.
+  '/spin': (_req, res, url) =>
+    html(
+      res,
+      page(
+        'Spin',
+        `<p id="spin">This page stops answering.</p>
+<script>
+addEventListener('load', () => {
+  setTimeout(() => {
+    for (;;) {}
+  }, ${Math.min(60_000, Math.max(0, Number(url.searchParams.get('after') ?? '300') || 0))});
+});
+</script>`,
+      ),
+    ),
+
   // The activation recorder (spec §10.2): what a page is told of user
   // activation while an engine loads and reads it.
   '/activation/': (_req, res) => html(res, ACTIVATION_PAGE),

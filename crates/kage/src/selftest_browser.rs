@@ -37,12 +37,90 @@ use kage_browser::contract::{
 use kage_browser::{BrowserError, SidecarClient, SidecarSettings};
 use kage_core::config::{Config, SelftestPageConfig};
 use kage_core::domain::{AuditOutcome, ClaimedOs as DomainOs, Engine, Proxy, ProxyEndpoint};
-use kage_core::ids::ProxyId;
+use kage_core::ids::{PersonaId, ProxyId};
 use kage_core::persona::locale;
 use kage_core::seed::Seed;
+use kage_persona::Via;
+use kage_scheduler::forwarder::RouteRefusal;
+use kage_scheduler::{Routes, Upstream};
 use serde_json::json;
 
+use crate::persona_cmd::OwnForwarder;
 use crate::proxy_cmd::{Session, table};
+
+/// What a run of the self-test came to (F105).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunVerdict {
+    /// Every page that was read passed its checks.
+    Passed,
+    /// A page that was read failed a check.
+    Failed,
+    /// No page could be read: nothing was tested, whatever the score says.
+    Inconclusive,
+}
+
+impl RunVerdict {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Passed => "passed",
+            Self::Failed => "failed",
+            Self::Inconclusive => "inconclusive",
+        }
+    }
+}
+
+/// What a report comes to: a run that read none of its pages tested
+/// nothing, and passes nothing (F105). Its score is a hundred for want of a
+/// check, and the sidecar calls it passed, as a scheduled run of a persona
+/// is not failed for an outage of the test site (spec §7.4); this command
+/// answers the operator who asked whether the identity is coherent.
+fn verdict_of(report: &SelftestResponse) -> RunVerdict {
+    let read = if report.pages.is_empty() {
+        // A sidecar that names no pages: a finding that was judged is a
+        // page that was read.
+        report
+            .findings
+            .iter()
+            .any(|finding| finding.status != FindingStatus::Unknown)
+    } else {
+        report
+            .pages
+            .iter()
+            .any(|page| page.status == SelftestPageStatus::Ok)
+    };
+    if !read {
+        RunVerdict::Inconclusive
+    } else if report.passed {
+        RunVerdict::Passed
+    } else {
+        RunVerdict::Failed
+    }
+}
+
+/// The one route of the command's forwarder: the stand-in of the proxy, to
+/// that proxy and nowhere else (F105). The browser is handed the forwarder,
+/// as a persona's is, so the sidecar needs no way to the provider and never
+/// holds its credentials.
+#[derive(Debug)]
+struct StandInRoute {
+    persona: PersonaId,
+    upstream: ProxyEndpoint,
+}
+
+#[async_trait::async_trait]
+impl Routes for StandInRoute {
+    async fn upstream(&self, persona: PersonaId) -> Result<Upstream, RouteRefusal> {
+        if persona == self.persona {
+            Ok(Upstream::Proxy(self.upstream.clone()))
+        } else {
+            Err(RouteRefusal::UnknownPersona)
+        }
+    }
+
+    async fn plain(&self, _route: kage_scheduler::PlainRoute) -> Result<Upstream, RouteRefusal> {
+        Err(RouteRefusal::NotConfigured)
+    }
+}
 
 /// What `kage selftest browser` was asked to do.
 #[derive(Debug, Clone)]
@@ -308,8 +386,25 @@ async fn browser_in(
 
     let seed = seed_of(proxy.id);
     let identity = stand_in(&proxy, options)?;
-    let (summary, outcome) =
-        converse(&client, config, options, &identity, &endpoint, &seed, pages).await?;
+    // The browser leaves through a forwarder of this command's own, under
+    // the stand-in's credential, as a persona's does through the server's:
+    // a sidecar on the compose network `browsers` reaches kage and nothing
+    // else, so it could never reach the provider's proxy itself (F105).
+    let persona = PersonaId::from_uuid(endpoint.id.as_uuid());
+    let own = OwnForwarder::with_routes(
+        config,
+        std::sync::Arc::new(StandInRoute {
+            persona,
+            upstream: endpoint.clone(),
+        }),
+    )
+    .await?;
+    let handed = own
+        .handout()
+        .endpoint_for(persona, endpoint.id, Via::Browser);
+    let conversed = converse(&client, config, options, &identity, &handed, &seed, pages).await;
+    own.stop().await;
+    let (summary, outcome) = conversed?;
 
     let details = |passed: Option<bool>, score: Option<f64>| {
         json!({
@@ -337,24 +432,30 @@ async fn browser_in(
             return Err(error).context("the self-test could not be run");
         }
     };
+    let verdict = verdict_of(&report);
+    let passed = verdict == RunVerdict::Passed;
     session
         .audit(
             "selftest.browser",
             Some(proxy.id.to_string()),
-            if report.passed {
+            if passed {
                 AuditOutcome::Success
             } else {
                 AuditOutcome::Failure
             },
-            details(Some(report.passed), Some(report.score)),
+            details(Some(passed), Some(report.score)),
         )
         .await;
 
     write_report(out, options, &seed, &summary, &report).context("cannot write the result")?;
-    if !report.passed {
-        bail!("the browser self-test failed");
+    match verdict {
+        RunVerdict::Passed => Ok(()),
+        RunVerdict::Failed => bail!("the browser self-test failed"),
+        RunVerdict::Inconclusive => bail!(
+            "the browser self-test read none of its pages, so nothing was tested: see the \
+             pages above for why each could not be read"
+        ),
     }
-    Ok(())
 }
 
 /// One line for every page that is worth a word: a page that could not be
@@ -388,9 +489,13 @@ fn write_report(
     summary: &PersonaSummary,
     report: &SelftestResponse,
 ) -> anyhow::Result<()> {
+    let verdict = verdict_of(report);
     if options.json {
         let mut document = serde_json::to_value(report)?;
         if let Some(object) = document.as_object_mut() {
+            // What the run came to; a run that read no page passed nothing.
+            object.insert("verdict".to_owned(), json!(verdict.as_str()));
+            object.insert("passed".to_owned(), json!(verdict == RunVerdict::Passed));
             object.insert("proxy".to_owned(), json!(options.proxy));
             object.insert("engine".to_owned(), json!(options.engine.as_str()));
             object.insert("seed".to_owned(), json!(seed));
@@ -445,10 +550,11 @@ fn write_report(
     writeln!(
         out,
         "{}",
-        if report.passed {
-            "passed: no automation flag, the identity is coherent"
-        } else {
-            "FAILED: see the findings above"
+        match verdict {
+            RunVerdict::Passed => "passed: no automation flag, the identity is coherent",
+            RunVerdict::Failed => "FAILED: see the findings above",
+            RunVerdict::Inconclusive =>
+                "INCONCLUSIVE: no page could be read, so nothing was tested; see the pages above",
         }
     )?;
     Ok(())
@@ -467,9 +573,15 @@ mod tests {
     use kage_core::ids::ProxyId;
     use kage_core::secret::SealedSecret;
 
+    use kage_browser::contract::{FindingStatus, SelftestPageStatus};
+    use kage_core::domain::ProxyEndpoint;
+    use kage_core::ids::PersonaId;
+    use kage_scheduler::forwarder::RouteRefusal;
+    use kage_scheduler::{Routes, Upstream};
+
     use super::{
-        BrowserSelftestOptions, claim_of, echo_expectation, page_notes, pages_of, profile_dir_of,
-        seed_of, stand_in_os, write_report,
+        BrowserSelftestOptions, RunVerdict, StandInRoute, claim_of, echo_expectation, page_notes,
+        pages_of, profile_dir_of, seed_of, stand_in_os, verdict_of, write_report,
     };
 
     fn config() -> Config {
@@ -773,6 +885,91 @@ mod tests {
     }
 
     #[test]
+    fn a_run_that_read_none_of_its_pages_passes_nothing() {
+        let (summary, mut report) = examples();
+        // The finding's run (cli-02): the proxy could not be reached, so not
+        // one page arrived and not one check ran; the score is a hundred and
+        // the sidecar calls the run passed.
+        for page in &mut report.pages {
+            page.status = SelftestPageStatus::Unreachable;
+            page.attempts = Some(2);
+        }
+        for finding in &mut report.findings {
+            finding.status = FindingStatus::Unknown;
+        }
+        report.passed = true;
+        report.complete = false;
+        report.score = 100.0;
+        assert_eq!(verdict_of(&report), RunVerdict::Inconclusive);
+
+        let mut table = Vec::new();
+        write_report(&mut table, &options(false), "seed", &summary, &report).expect("a table");
+        let table = String::from_utf8(table).expect("text");
+        assert!(
+            table.ends_with(
+                "INCONCLUSIVE: no page could be read, so nothing was tested; see the pages above\n"
+            ),
+            "{table}"
+        );
+        assert!(!table.contains("passed:"), "{table}");
+        let mut json = Vec::new();
+        write_report(&mut json, &options(true), "seed", &summary, &report).expect("json");
+        let document: serde_json::Value = serde_json::from_slice(&json).expect("json");
+        assert_eq!(document["passed"], false);
+        assert_eq!(document["verdict"], "inconclusive");
+        assert_eq!(document["complete"], false);
+
+        // One page that was read decides: its checks pass or fail the run.
+        report.pages[0].status = SelftestPageStatus::Ok;
+        report.findings[0].status = FindingStatus::Pass;
+        assert_eq!(verdict_of(&report), RunVerdict::Passed);
+        report.passed = false;
+        assert_eq!(verdict_of(&report), RunVerdict::Failed);
+        // A sidecar that lists no pages: a judged finding is a page read.
+        report.pages.clear();
+        assert_eq!(verdict_of(&report), RunVerdict::Failed);
+        for finding in &mut report.findings {
+            finding.status = FindingStatus::Unknown;
+        }
+        assert_eq!(verdict_of(&report), RunVerdict::Inconclusive);
+    }
+
+    #[tokio::test]
+    async fn the_stand_in_leaves_through_its_proxy_and_nothing_else_does() {
+        let proxy = proxy("DE", None);
+        let upstream = ProxyEndpoint {
+            id: proxy.id,
+            host: "proxy.example".to_owned(),
+            port: 3128,
+            username: kage_core::secret::Secret::new("provider-user".to_owned()),
+            password: kage_core::secret::Secret::new("provider-pass".to_owned()),
+            scheme: ProxyScheme::Http,
+        };
+        let persona = PersonaId::from_uuid(proxy.id.as_uuid());
+        let route = StandInRoute {
+            persona,
+            upstream: upstream.clone(),
+        };
+        match route.upstream(persona).await {
+            Ok(Upstream::Proxy(endpoint)) => {
+                assert_eq!((endpoint.id, endpoint.url()), (upstream.id, upstream.url()));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(
+            route.upstream(PersonaId::new()).await.err(),
+            Some(RouteRefusal::UnknownPersona)
+        );
+        assert_eq!(
+            route.plain(kage_scheduler::PlainRoute::Host).await.err(),
+            Some(RouteRefusal::NotConfigured)
+        );
+        // What the route holds is never written out with the credentials.
+        let shown = format!("{route:?}");
+        assert!(!shown.contains("provider-pass"), "{shown}");
+    }
+
+    #[test]
     fn the_report_is_a_table_or_one_json_document() {
         let (summary, report) = examples();
 
@@ -811,7 +1008,7 @@ mod tests {
         // page that arrived at once is not, and a sidecar of before 1.6.0
         // says nothing of its loads.
         let mut pages = report.pages.clone();
-        pages[1].status = kage_browser::contract::SelftestPageStatus::Ok;
+        pages[1].status = SelftestPageStatus::Ok;
         pages[0].attempts = None;
         assert_eq!(
             page_notes(&pages),

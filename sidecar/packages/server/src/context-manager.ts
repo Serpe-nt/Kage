@@ -21,6 +21,18 @@ export interface ContextLimits {
   readonly idleMs: number;
   /** A context's browser is restarted after this many navigations. */
   readonly maxPagesPerBrowser: number;
+  /**
+   * How long an operation that outlasted its bound may go on after its
+   * context was closed before the engine counts as one that does not
+   * answer (F103); 60 s unless said.
+   */
+  readonly abandonedGraceMs?: number;
+}
+
+/** An operation that outlasted its bound and has not ended since. */
+interface Abandoned {
+  readonly since: number;
+  readonly contextId: string;
 }
 
 /** One open context as the manager keeps it. */
@@ -78,6 +90,7 @@ export class ContextManager {
   private readonly entries = new Map<string, Entry>();
   private readonly byPersona = new Map<string, string>();
   private readonly opening = new Map<string, Promise<Entry>>();
+  private readonly abandoned = new Set<Abandoned>();
   private timer: NodeJS.Timeout | null = null;
 
   constructor(
@@ -184,13 +197,20 @@ export class ContextManager {
    * A failure that is not an answer of the contract means the browser is in
    * an unknown state: the context is closed, and Kage opens it again.
    *
+   * With a `boundMs` the operation is waited for that long at most (F103):
+   * one that has not ended by then is left behind, its context is closed
+   * (which ends the browser it hangs on), and the request is answered
+   * `internal`. Kage opens the context again for its next request.
+   *
    * @param navigation whether the operation loads pages and counts toward the recycle limit.
-   * @throws {EngineError} `context_not_found`, `context_busy`, or what the operation throws.
+   * @param boundMs longest the operation is waited for; none when absent.
+   * @throws {EngineError} `context_not_found`, `context_busy`, `internal` past the bound, or what the operation throws.
    */
   async run<T>(
     id: string,
     navigation: boolean,
     operation: (context: EngineContext) => Promise<T>,
+    boundMs?: number,
   ): Promise<T> {
     const entry = this.entry(id);
     if (entry.busy) {
@@ -209,7 +229,8 @@ export class ContextManager {
       if (navigation) {
         entry.navigations += 1;
       }
-      return await operation(entry.context);
+      const work = operation(entry.context);
+      return boundMs === undefined ? await work : await this.within(entry, work, boundMs);
     } catch (error) {
       if (!(error instanceof EngineError)) {
         this.log.error(
@@ -223,6 +244,61 @@ export class ContextManager {
       entry.busy = false;
       entry.lastUsed = this.now();
     }
+  }
+
+  /**
+   * Waits for an operation for `boundMs` at most. Past it the operation is
+   * left behind and its context closed; until it ends it counts toward
+   * {@link ContextManager.stalled}.
+   */
+  private within<T>(entry: Entry, work: Promise<T>, boundMs: number): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const left: Abandoned = { since: this.now(), contextId: entry.id };
+        this.abandoned.add(left);
+        const settled = () => {
+          this.abandoned.delete(left);
+        };
+        work.then(settled, settled);
+        this.log.error(
+          { context_id: entry.id, persona_id: entry.personaId, bound_ms: boundMs },
+          'an operation outlasted its bound; closing its context',
+        );
+        void this.remove(entry, 'failed');
+        reject(
+          new EngineError(
+            'internal',
+            `the operation did not end within its bound of ${boundMs} ms; its context was closed`,
+          ),
+        );
+      }, boundMs);
+      work.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error: unknown) => {
+          clearTimeout(timer);
+          reject(error instanceof Error ? error : new Error(String(error)));
+        },
+      );
+    });
+  }
+
+  /**
+   * Why the engine counts as one that does not answer: an operation that
+   * outlasted its bound has not ended for the grace after its context was
+   * closed (F103). `null` while every operation ends.
+   */
+  stalled(): string | null {
+    const grace = this.limits.abandonedGraceMs ?? 60_000;
+    const now = this.now();
+    for (const left of this.abandoned) {
+      if (now - left.since >= grace) {
+        return `an operation on context ${left.contextId} has not ended ${Math.round((now - left.since) / 1000)} s after its bound, though its context was closed`;
+      }
+    }
+    return null;
   }
 
   private async remove(entry: Entry, reason: CloseReason): Promise<void> {

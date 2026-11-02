@@ -437,10 +437,25 @@ impl Scheduler {
         // Counted before the next pass plans: the daily cap and the trial
         // of a half-open breaker hold for whatever is decided next.
         let trial = dispatch.trial.then_some(dispatch.breaker);
-        let counted = self
+        let mut counted = self
             .backend
             .dispatched(dispatch.persona, &dispatch.domain, trial, now)
             .await;
+        // A flow's later sites count it as a request of their own (F101).
+        for leg in &dispatch.legs {
+            if counted.is_err() {
+                break;
+            }
+            counted = self
+                .backend
+                .dispatched(
+                    dispatch.persona,
+                    &leg.domain,
+                    leg.trial.then_some(leg.breaker),
+                    now,
+                )
+                .await;
+        }
         let sender = self.inner().waiting.remove(&ticket);
         match (counted, sender) {
             (Ok(()), Some(sender)) => {

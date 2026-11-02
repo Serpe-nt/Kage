@@ -12,8 +12,8 @@ use chrono::{DateTime, Duration, NaiveTime, TimeZone, Utc};
 use uuid::Uuid;
 
 use super::{
-    Completion, Decision, Dispatch, DomainFacts, Held, PROXY_SUSPICION, PersonaView, PlainDispatch,
-    Planner, PlannerRules, Refusal, RetryPause, Visitors, Work, floored,
+    Completion, Decision, Dispatch, DomainFacts, Held, Leg, PROXY_SUSPICION, PersonaView,
+    PlainDispatch, Planner, PlannerRules, Refusal, RetryPause, Visitors, Work, floored,
 };
 use crate::domain::{BreakerState, CountryCode, DomainBreaker, Engine, PersonaDomainState, Render};
 use crate::ids::PersonaId;
@@ -170,6 +170,7 @@ fn work(domain: &str) -> Work {
         give_up_at: None,
         gap_floor: None,
         plain: false,
+        legs: Vec::new(),
     }
 }
 
@@ -3780,4 +3781,200 @@ fn a_plain_client_that_would_wait_past_its_patience_for_the_delay_is_refused_wit
         matches!(decisions.as_slice(), [Decision::Plain(left)] if left.work == patient),
         "{decisions:?}"
     );
+}
+
+// --- a flow that reaches more than one site (F101) ---------------------
+
+fn leg(domain: &str) -> Leg {
+    Leg {
+        domain: domain.to_owned(),
+        pacing: brisk(),
+        active_hours: ActiveHoursMode::Ignore,
+        breaker_threshold: 5,
+        breaker_pause: StdDuration::from_mins(30),
+        gap_floor: None,
+    }
+}
+
+/// A flow that starts on `first` and goes on to `later`.
+fn flow_to(first: &str, later: &str) -> Work {
+    Work {
+        legs: vec![leg(later)],
+        ..sync(first)
+    }
+}
+
+fn opened(domain: &str, until: DateTime<Utc>) -> DomainBreaker {
+    let mut breaker = DomainBreaker::closed(domain, noon());
+    breaker.state = BreakerState::Open;
+    breaker.paused_until = Some(until);
+    breaker.trips = 1;
+    breaker
+}
+
+#[test]
+fn a_flows_later_site_that_is_paused_refuses_the_flow_and_a_half_open_one_takes_it_as_its_trial() {
+    let mut sim = Sim::new(personas(2));
+    let until = noon() + Duration::minutes(30);
+    sim.facts
+        .entry("pay.example".to_owned())
+        .or_default()
+        .breaker = Some(opened("pay.example", until));
+
+    let paused = sim.submit(flow_to("shop.example", "pay.example"));
+    sim.settle();
+
+    // As a fetch of the later site would be: refused at once, with the end
+    // of the pause; the first site's own breaker is closed.
+    assert_eq!(
+        sim.refused,
+        [(noon(), paused, Refusal::DomainPaused, Some(until))]
+    );
+    assert_eq!(sim.log.len(), 0);
+
+    // After the pause the flow is the later site's one trial.
+    sim.now = until + secs(1);
+    sim.submit(flow_to("shop.example", "pay.example"));
+    sim.settle();
+    let [(_, dispatch)] = sim.log.as_slice() else {
+        panic!("one flow, not {:?}", sim.log);
+    };
+    assert!(!dispatch.trial);
+    assert_eq!(dispatch.legs.len(), 1);
+    assert_eq!(dispatch.legs[0].domain, "pay.example");
+    assert!(dispatch.legs[0].trial);
+    assert_eq!(dispatch.legs[0].breaker.threshold, 5);
+    assert!(dispatch.legs[0].starts_visit);
+}
+
+#[test]
+fn a_flow_waits_for_the_facts_of_every_site_it_reaches() {
+    let mut planner = Planner::new(rules(), Seed::from_u64(7));
+    planner.set_personas(personas(1));
+    let ticket = planner.submit(flow_to("shop.example", "pay.example"), noon());
+
+    assert_eq!(
+        planner.domains_waiting(),
+        ["pay.example".to_owned(), "shop.example".to_owned()]
+    );
+    // Without what is stored about the later site nothing is decided.
+    assert_eq!(planner.plan(noon(), &facts_for(&["shop.example"])), []);
+    let decisions = planner.plan(noon(), &facts_for(&["shop.example", "pay.example"]));
+    let [dispatch] = dispatched(&decisions)[..] else {
+        panic!("one dispatch, not {decisions:?}");
+    };
+    assert_eq!(dispatch.work, ticket);
+}
+
+#[test]
+fn a_persona_that_cools_on_a_flows_later_site_is_not_sent_there() {
+    let mut sim = Sim::new(personas(2));
+    let (cooling, other) = (id(0), id(1));
+    sim.state(cooling, "pay.example").cooldown_until = Some(noon() + Duration::hours(20));
+    // Nothing keeps it from the first site: alone, it would be chosen as
+    // readily as the other.
+    sim.state(cooling, "shop.example");
+
+    for _ in 0..4 {
+        sim.submit(flow_to("shop.example", "pay.example"));
+        sim.run_until(sim.now + secs(30));
+    }
+
+    assert_eq!(sim.log.len(), 4);
+    assert!(
+        sim.log
+            .iter()
+            .all(|(_, dispatch)| dispatch.persona == other),
+        "{:?}",
+        sim.log
+    );
+    // With the cooling persona alone the flow waits for the end of its
+    // cooldown there, and a job that waits that long is given up.
+    let mut alone = Sim::new(vec![persona(0)]);
+    alone.state(cooling, "pay.example").cooldown_until = Some(noon() + Duration::hours(20));
+    let refused = alone.submit(Work {
+        give_up_at: Some(noon() + Duration::hours(1)),
+        ..flow_to("shop.example", "pay.example")
+    });
+    alone.settle();
+    assert_eq!(
+        alone.refused,
+        [(
+            noon(),
+            refused,
+            Refusal::NoPersona,
+            Some(noon() + Duration::hours(20))
+        )]
+    );
+}
+
+#[test]
+fn a_flow_keeps_the_personas_gap_and_the_limits_of_its_later_site() {
+    // One persona read a page of the later site a moment ago: the flow
+    // that goes there waits for the persona's gap there to run out, though
+    // the persona never read the first site.
+    let mut sim = Sim::new(vec![persona(0)]);
+    sim.submit(sync("pay.example"));
+    sim.settle();
+    let first = sim.log[0].1.clone();
+    sim.run_until(noon() + secs(1));
+    sim.submit(flow_to("shop.example", "pay.example"));
+    sim.run_until(noon() + secs(60));
+    let starts = sim.starts_of(id(0));
+    assert_eq!(starts.len(), 2, "{starts:?}");
+    let (at, flow) = starts[1];
+    assert_eq!(flow.domain, "shop.example");
+    assert!(*at >= first.next_slot, "{at} before {}", first.next_slot);
+    // The flow's page there is booked on the site's pacing: the next page
+    // of the persona there waits for a gap after it.
+    assert!(!flow.legs[0].starts_visit);
+
+    // The later site's concurrency holds the flow while another persona's
+    // page of it is under way, and lets it go when that page is over.
+    let single = PacingProfile {
+        domain_concurrency: 1,
+        ..brisk()
+    };
+    let mut busy = Sim::new(personas(2));
+    busy.takes = Box::new(|dispatch| {
+        if dispatch.domain == "pay.example" {
+            secs(20)
+        } else {
+            secs(10)
+        }
+    });
+    busy.submit(Work {
+        pacing: single,
+        ..sync("pay.example")
+    });
+    busy.settle();
+    busy.submit(Work {
+        legs: vec![Leg {
+            pacing: single,
+            ..leg("pay.example")
+        }],
+        ..sync("shop.example")
+    });
+    busy.run_until(noon() + secs(25));
+    let flow_start = busy
+        .log
+        .iter()
+        .find(|(_, dispatch)| dispatch.domain == "shop.example")
+        .map(|(at, _)| *at)
+        .expect("the flow left");
+    assert!(flow_start >= noon() + secs(20), "{flow_start}");
+    // While the flow is under way it counts on the later site: a page of
+    // that site waits for its end.
+    let after = busy.submit(Work {
+        pacing: single,
+        ..sync("pay.example")
+    });
+    busy.run_until(noon() + secs(80));
+    let page = busy
+        .log
+        .iter()
+        .find(|(_, dispatch)| dispatch.work == after)
+        .map(|(at, _)| *at)
+        .expect("the page left");
+    assert!(page >= flow_start + secs(10), "{page} {flow_start}");
 }

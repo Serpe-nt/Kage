@@ -282,6 +282,22 @@ impl PlainClient {
     /// breaks. A response with an error status is not an error: it is
     /// returned.
     pub async fn fetch(&self, spec: &PlainSpec) -> Result<Fetched, HttpError> {
+        self.fetch_traced(spec, &mut Vec::new()).await
+    }
+
+    /// [`Self::fetch`], with every address a request was sent to pushed onto
+    /// `asked`, in order, the one that failed included: the first URL and
+    /// each redirect hop. A failure does not say where it happened; this
+    /// does (F102: a hop the forwarder refused under `egress.mode: direct`).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::fetch`].
+    pub async fn fetch_traced(
+        &self,
+        spec: &PlainSpec,
+        asked: &mut Vec<Url>,
+    ) -> Result<Fetched, HttpError> {
         if !matches!(spec.method, Method::GET | Method::HEAD | Method::POST) {
             return Err(HttpError::Method(spec.method.to_string()));
         }
@@ -306,6 +322,7 @@ impl PlainClient {
             // name points into a denied range is never asked for.
             check_addresses(self.resolver.as_deref(), &trail).await?;
             let url = trail.current().clone();
+            asked.push(url.clone());
             let incoming = self
                 .send(
                     &method,

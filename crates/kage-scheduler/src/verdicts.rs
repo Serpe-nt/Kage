@@ -168,6 +168,16 @@ pub fn page_failure(page: &PageResult) -> Option<Failure> {
     })
 }
 
+/// Whether nothing of a page whose navigation failed was read: no document
+/// and no body. The browser saved what came instead of showing it (a
+/// download), or the page stopped answering the engine's reads or its
+/// renderer crashed (F103), or nothing came. A soft block is judged by what
+/// a page says, and such a page said nothing: an empty body read from it is
+/// no empty page, and its failure is what the attempt came to.
+pub fn read_nothing(page: &PageResult) -> bool {
+    page.error.is_some() && page.dom_html.is_none() && page.raw_body.is_none()
+}
+
 /// Whether a navigation ended because the browser saved what came instead
 /// of showing it (a gzipped sitemap, any download) and nothing of it was
 /// kept: there is no page to judge, and what would be judged in its place
@@ -361,12 +371,13 @@ impl Verdicts {
         match (page_failure(page), seen) {
             // A page that hung after it answered may be a wall that never
             // finishes: what was seen decides when it is a block. A soft
-            // block is judged by what a page says, so a file the browser
-            // saved and showed nothing of is none: the persona that asked
-            // for it was not turned away.
+            // block is judged by what a page says, so a page of which
+            // nothing was read (a file the browser saved, a page that
+            // stopped answering, F103) is none: the persona that asked for
+            // it was not turned away.
             (Some(_), Some(seen))
                 if seen.outcome.is_block()
-                    && !(seen.outcome == Outcome::SoftBlock && saved_not_shown(page)) =>
+                    && !(seen.outcome == Outcome::SoftBlock && read_nothing(page)) =>
             {
                 seen
             }
@@ -385,7 +396,8 @@ mod tests {
     use kage_core::schedule::politeness::Courtesy;
 
     use super::{
-        cookies_set, courtesy_of, observe_page, page_failure, saved_not_shown, unanswered,
+        cookies_set, courtesy_of, observe_page, page_failure, read_nothing, saved_not_shown,
+        unanswered,
     };
 
     fn page() -> PageResult {
@@ -550,6 +562,21 @@ mod tests {
         let mut loaded = saved;
         loaded.error = None;
         assert!(!saved_not_shown(&loaded));
+
+        // Read nothing: every failure of which no document and no body came
+        // (F103: a page that stopped answering keeps its status 200), and
+        // never a page that loaded or one with something to look at.
+        for code in [
+            NavigationErrorCode::Aborted,
+            NavigationErrorCode::Timeout,
+            NavigationErrorCode::NavigationFailed,
+            NavigationErrorCode::ProxyFailed,
+        ] {
+            assert!(read_nothing(&aborted(code)), "{code:?}");
+        }
+        assert!(!read_nothing(&loaded));
+        assert!(!read_nothing(&handed));
+        assert!(!read_nothing(&shown));
     }
 
     #[test]

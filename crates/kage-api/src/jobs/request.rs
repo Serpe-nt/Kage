@@ -8,9 +8,11 @@
 //!
 //! A **flow** is a script of steps one persona performs in its browser
 //! (spec §10.5). It starts with a `goto`; every page it is sent to passes
-//! the SSRF guard before the job is accepted; a step done by the browser's
-//! driver instead of the persona's hands (`human: false`) is refused unless
-//! the policy of the flow's site allows it.
+//! the SSRF guard before the job is accepted, and meets the policy of its
+//! own site as a fetch of that address would (F101): a site's `min_level`
+//! refuses the flow at acceptance; a step done by the browser's driver
+//! instead of the persona's hands (`human: false`) is refused unless the
+//! policy of the site whose page it acts on allows it.
 //!
 //! A **crawl** is a site read from its seeds along its links; what it
 //! takes and what it is checked for is in [`super::crawl`].
@@ -41,7 +43,7 @@ use crate::fetch::request::{
     ExtractField, FetchRequest, Include, PacingField, PdfField, PersonaHints, Planned,
     ScreenshotField, XhrField, is_credential, level_of, plan, url_refused,
 };
-use crate::fetch::terms::{CacheUse, settle};
+use crate::fetch::terms::{CacheUse, check_level, settle};
 use crate::resolve::{HostResolver, guard};
 use crate::schema::FreeForm;
 
@@ -197,7 +199,8 @@ pub(crate) struct TargetStep {
     pub(crate) selector: String,
     /// False: done by the browser's driver instead of the persona's mouse
     /// and keyboard, which a page can tell apart. Refused
-    /// (`driver_input_denied`) unless the policy of the flow's site has
+    /// (`driver_input_denied`) unless the policy of the site whose page it
+    /// acts on, the site of the last `goto` before it, has
     /// `driver_input: true`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) human: Option<bool>,
@@ -479,12 +482,15 @@ pub(crate) struct FlowBehaviorField {
 /// The persona arrives by a typed navigation, stays on every page it comes
 /// to for a while with its pointer moving, and pauses between its actions
 /// as a person does, so a flow takes longer than its steps: plan about ten
-/// seconds for every page it visits. A flow whose page turns out to be a
-/// wall is a blocked attempt: the persona leaves, and another one runs the
-/// flow again from its first step, inside the policy's retry budget (never
-/// in a session). A step that fails on a page that is no wall is the
-/// script's failure and is not retried. The job's items are the steps, in
-/// order, and one last item for the page the flow ended on.
+/// seconds for every page it visits. Every `goto` meets the policy of its
+/// own site as a fetch of that address would: its floor (`min_level`, at
+/// acceptance), its enforced `robots.txt`, its breaker, its pacing and its
+/// hours. A flow whose page turns out to be a wall is a blocked attempt,
+/// booked to the site that showed the wall: the persona leaves, and another
+/// one runs the flow again from its first step, inside the policy's retry
+/// budget (never in a session). A step that fails on a page that is no wall
+/// is the script's failure and is not retried. The job's items are the
+/// steps, in order, and one last item for the page the flow ended on.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 #[schema(example = json!({
@@ -1220,7 +1226,7 @@ pub(crate) async fn plan_flow(flow: &FlowJob, checks: Checks<'_>) -> ApiResult<P
         .unwrap_or_default();
 
     let (actions, keeps) = steps_of(flow, (&first.url, level), checks).await?;
-    driver_allowed(flow, &site, checks)?;
+    sites_allow(flow, level, &site, checks)?;
     planned.order = FetchOrder {
         flow: Some(FlowPlan {
             actions,
@@ -1261,29 +1267,50 @@ fn flow_level(flow: &FlowJob) -> ApiResult<Level> {
     Ok(level)
 }
 
-/// Driver input is the operator's to allow, per site: refuses a flow with
-/// a step done by the browser's driver on a site whose policy does not say
-/// so.
-fn driver_allowed(flow: &FlowJob, site: &str, checks: Checks<'_>) -> ApiResult<()> {
-    if checks.domains().resolve(site).driver_input {
-        return Ok(());
+/// Every page of a flow meets its own site's policy (F101): a `goto` is
+/// refused (`level_below_policy`) when the flow's level is under the floor
+/// of the site it goes to, and a step done by the browser's driver
+/// (`driver_input_denied`) unless the policy of the site whose page it acts
+/// on allows it: the site of the last `goto` before it.
+fn sites_allow(flow: &FlowJob, level: Level, site: &str, checks: Checks<'_>) -> ApiResult<()> {
+    let mut here = site.to_owned();
+    for (index, step) in flow.actions.iter().enumerate() {
+        if let FlowStepField::Goto(goto) = step {
+            if let Some(host) = Url::parse(&goto.url)
+                .ok()
+                .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+            {
+                here = host;
+            }
+            check_level(
+                level,
+                &checks.domains().resolve(&here),
+                checks.config,
+                &here,
+            )
+            .map_err(|error| {
+                at_step(error.with("field", format!("actions[{index}].url")), index)
+            })?;
+            continue;
+        }
+        if step.by_driver() && !checks.domains().resolve(&here).driver_input {
+            return Err(at_step(
+                ApiError::new(
+                    ErrorCode::DriverInputDenied,
+                    format!(
+                        "step {index} asks to be done by the browser's driver (human: false), \
+                         which a page can tell from a person's input; the policy for {here} \
+                         does not allow it. Leave human out, or have the operator set \
+                         driver_input for the site"
+                    ),
+                )
+                .with("field", format!("actions[{index}].human"))
+                .with("site", here.as_str()),
+                index,
+            ));
+        }
     }
-    let Some(index) = flow.actions.iter().position(FlowStepField::by_driver) else {
-        return Ok(());
-    };
-    Err(at_step(
-        ApiError::new(
-            ErrorCode::DriverInputDenied,
-            format!(
-                "step {index} asks to be done by the browser's driver (human: false), which a \
-                 page can tell from a person's input; the policy for {site} does not allow it. \
-                 Leave human out, or have the operator set driver_input for the site"
-            ),
-        )
-        .with("field", format!("actions[{index}].human"))
-        .with("site", site),
-        index,
-    ))
+    Ok(())
 }
 
 /// A webhook that passed every check.
@@ -2057,6 +2084,66 @@ mod tests {
             "actions": [{ "action": "goto", "url": "https://shop.example/", "human": false }],
         }));
         assert!(unknown.is_err());
+    }
+
+    #[tokio::test]
+    async fn every_goto_of_a_flow_meets_the_floor_of_its_own_site() {
+        let floors = policies(
+            "domains:\n  rules.example:\n    min_level: 3\n  open.example:\n    driver_input: true\n",
+        );
+        // The second goto goes to a site whose floor is above the flow's
+        // level (jobs-05): refused at acceptance, with the step named.
+        let below = json!({
+            "type": "flow",
+            "level": 2,
+            "actions": [
+                { "action": "goto", "url": "https://shop.example/landing" },
+                { "action": "goto", "url": "https://rules.example/landing" },
+            ],
+        });
+        let refused = flow(below, &floors).await.unwrap_err();
+        assert_eq!(refused.code(), ErrorCode::LevelBelowPolicy);
+        let problem = refused.problem();
+        assert_eq!(problem.extensions["step"], 1);
+        assert_eq!(problem.extensions["field"], "actions[1].url");
+        assert_eq!(problem.extensions["min_level"], 3);
+        // At the site's floor it is taken.
+        let at_floor = json!({
+            "type": "flow",
+            "level": 3,
+            "actions": [
+                { "action": "goto", "url": "https://shop.example/landing" },
+                { "action": "goto", "url": "https://rules.example/landing" },
+            ],
+        });
+        assert!(flow(at_floor, &floors).await.is_ok());
+
+        // A step done by the driver is judged by the site whose page it
+        // acts on: allowed after a goto to the site that allows it,
+        // refused after a goto to one that does not, whatever the first
+        // site says.
+        let on_open = json!({
+            "type": "flow",
+            "actions": [
+                { "action": "goto", "url": "https://shop.example/" },
+                { "action": "goto", "url": "https://open.example/" },
+                { "action": "click", "selector": "#a", "human": false },
+            ],
+        });
+        assert!(flow(on_open, &floors).await.is_ok());
+        let off_open = json!({
+            "type": "flow",
+            "actions": [
+                { "action": "goto", "url": "https://open.example/" },
+                { "action": "goto", "url": "https://shop.example/" },
+                { "action": "click", "selector": "#a", "human": false },
+            ],
+        });
+        let denied = flow(off_open, &floors).await.unwrap_err();
+        assert_eq!(denied.code(), ErrorCode::DriverInputDenied);
+        let problem = denied.problem();
+        assert_eq!(problem.extensions["step"], 2);
+        assert_eq!(problem.extensions["site"], "shop.example");
     }
 
     #[tokio::test]

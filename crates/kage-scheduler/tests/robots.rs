@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use chrono::Duration as Span;
 use common::{DEFAULT_DOMAINS, World, blocked, file, id, server_error};
+use kage_browser::contract::FlowAction;
 use kage_core::domain::{Header, Level, Render, RobotsVerdict, Timing};
 use kage_core::ids::{PersonaId, RequestId};
 use kage_core::outcome::Outcome;
@@ -23,7 +24,7 @@ use kage_core::schedule::planner::Refusal;
 use kage_core::schedule::queue::Priority;
 use kage_http::Fetched;
 use kage_scheduler::{
-    Arrival, AttemptOutput, FetchOrder, FetchReport, JobFetch, Peek, ROBOTS_NO_SCOUT,
+    Arrival, AttemptOutput, FetchOrder, FetchReport, FlowPlan, JobFetch, Peek, ROBOTS_NO_SCOUT,
     ROBOTS_UNAVAILABLE, RobotsRead, RobotsWish, ScoutNeed, Stop,
 };
 use tokio::sync::watch;
@@ -1166,5 +1167,108 @@ async fn a_robots_txt_a_plain_client_brought_is_kept_as_sent_and_enforced_at_eve
         }
     );
     assert_eq!(world.script.plain_seen().len(), 3);
+    world.shut_down().await;
+}
+
+/// A flow at level 3 through the given addresses, one `goto` each.
+fn flow_through(urls: &[&str]) -> FetchOrder {
+    let actions: Vec<FlowAction> = urls
+        .iter()
+        .map(|url| FlowAction::Goto {
+            human: None,
+            timeout_ms: None,
+            url: (*url).to_owned(),
+        })
+        .collect();
+    FetchOrder {
+        level: Level::Human,
+        flow: Some(FlowPlan {
+            actions,
+            typos: false,
+        }),
+        ..FetchOrder::get(Url::parse(urls[0]).unwrap(), Priority::Sync)
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn every_goto_of_a_flow_meets_the_file_of_its_own_address() {
+    let mut world = World::new(4, SITES);
+    robots_txt(&world, |url| file(url, 200, RULES));
+    let disallowed = RobotsVerdict {
+        fetched: true,
+        allowed: false,
+        matched_rule: Some("Disallow: /private".to_owned()),
+        crawl_delay: Some(30.0),
+    };
+
+    // A later goto to what the enforced file disallows, on the flow's own
+    // site: nothing of the flow is asked for, and the result names the
+    // rule of that address (jobs-05).
+    let same_site = world
+        .pipeline
+        .fetch(flow_through(&[
+            "https://enforced.example/landing",
+            "https://enforced.example/private/later",
+        ]))
+        .await
+        .unwrap();
+    assert_eq!(same_site.outcome, Outcome::RobotsDenied);
+    assert!(same_site.attempts.is_empty() && same_site.persona.is_none());
+    assert_eq!(same_site.robots, Some(disallowed.clone()));
+    let (_, pages) = asked(&world);
+    assert_eq!(pages, []);
+
+    // The same from a site whose file nobody asks for: the later site's
+    // own policy enforces its file.
+    let other_site = world
+        .pipeline
+        .fetch(flow_through(&[
+            "https://free.example/start",
+            "https://enforced.example/private/second",
+        ]))
+        .await
+        .unwrap();
+    assert_eq!(other_site.outcome, Outcome::RobotsDenied);
+    assert_eq!(other_site.attempts.len(), 0);
+    assert_eq!(other_site.robots, Some(disallowed));
+    let (files, pages) = asked(&world);
+    assert_eq!(
+        files
+            .iter()
+            .map(|(url, _)| url.as_str())
+            .collect::<Vec<_>>(),
+        ["https://enforced.example/robots.txt"]
+    );
+    assert_eq!(pages, []);
+
+    // A flow whose every address the files allow runs, in one attempt, by
+    // a persona that is the scout of none of its sites.
+    let allowed_flow = world
+        .pipeline
+        .fetch(flow_through(&[
+            "https://free.example/start",
+            "https://enforced.example/open",
+        ]))
+        .await
+        .unwrap();
+    assert_eq!(
+        allowed_flow.outcome,
+        Outcome::Ok,
+        "{:?}",
+        allowed_flow.reason
+    );
+    let [attempt] = allowed_flow.attempts.as_slice() else {
+        panic!("one attempt, not {:?}", allowed_flow.attempts);
+    };
+    assert_ne!(
+        attempt.persona_id,
+        world.backend.scout_of("enforced.example")
+    );
+    // The flow's own page reports what its own address is told; the later
+    // site's file was asked for once.
+    assert_eq!(allowed_flow.robots, Some(UNASKED));
+    let (files, pages) = asked(&world);
+    assert_eq!(files.len(), 1);
+    assert_eq!(pages.len(), 1);
     world.shut_down().await;
 }
