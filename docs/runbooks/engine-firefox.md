@@ -407,6 +407,7 @@ the request's `format` and `landscape` are not honored on this engine.
 | `KAGE_SIDECAR_MAX_CONTEXTS` | `SIDECAR_MAX_CONTEXTS` | 3 | Contexts, and browsers, at once. |
 | `KAGE_SIDECAR_CONTEXT_IDLE_MS` | `SIDECAR_CONTEXT_IDLE_MS` | 120000 | An unused context is closed after this. |
 | `KAGE_SIDECAR_MAX_PAGES_PER_BROWSER` | `SIDECAR_MAX_PAGES_PER_BROWSER` | 500 | A browser is restarted after this many navigations. |
+| `KAGE_SIDECAR_STALL_MS` | `SIDECAR_STALL_MS` | 30000 | How long the sidecar may stop answering before it ends itself, so that compose starts it again (F103; `engine-chromium.md`, "A page that stops the engine"). 0 never. |
 | `KAGE_SIDECAR_AUDIO` | `SIDECAR_AUDIO` | `pulse` in the images, `none` elsewhere | The sidecar runs a PulseAudio with one output and one input that go nowhere, so that browsers find devices. Both engines. |
 | | `SIDECAR_CAMOUFOX_DIR` | `/opt/camoufox` | Where the pinned build is unpacked. |
 | `KAGE_SIDECAR_SELFTEST_PROBE_URL`, `…_ECHO_URL` | the same with `SIDECAR_` | unset | The self-test's own pages. |

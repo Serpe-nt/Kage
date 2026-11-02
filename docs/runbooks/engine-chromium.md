@@ -109,6 +109,7 @@ Set in `deploy/.env` (`deploy/.env.example` lists them) or on the container.
 | `KAGE_SIDECAR_MAX_CONTEXTS` | `SIDECAR_MAX_CONTEXTS` | 3 | Contexts at once. One more answers `context_limit`. |
 | `KAGE_SIDECAR_CONTEXT_IDLE_MS` | `SIDECAR_CONTEXT_IDLE_MS` | 120000 | An unused context is closed after this; the profile stays. |
 | `KAGE_SIDECAR_MAX_PAGES_PER_BROWSER` | `SIDECAR_MAX_PAGES_PER_BROWSER` | 500 | A browser is restarted after this many navigations. |
+| `KAGE_SIDECAR_STALL_MS` | `SIDECAR_STALL_MS` | 30000 | How long the sidecar may stop answering (its event loop, or an operation that outlasted its bound and does not end) before it ends itself, so that compose starts it again (F103; see "A page that stops the engine"). 0 never; else 2000 to 3600000. |
 | `KAGE_SIDECAR_GL` | `SIDECAR_GL` | `llvmpipe` | `llvmpipe`, `swiftshader`, `none` or `host`. |
 | `KAGE_SIDECAR_AUDIO` | `SIDECAR_AUDIO` | `pulse` in the images, `none` elsewhere | The sidecar runs a sound server for its browsers; without one a browser lists no media device. |
 | `KAGE_SIDECAR_ALLOW_CROSS_OS_CLAIMS` | `SIDECAR_ALLOW_CROSS_OS_CLAIMS` | false | See "Claiming another system". |
@@ -226,7 +227,7 @@ kage selftest browser --persona <persona id> --third-party
 
 | Flag | Meaning |
 |---|---|
-| `--proxy` | The proxy to leave through, with a stand-in persona. A retired proxy is refused. |
+| `--proxy` | The proxy to leave through, with a stand-in persona. A retired proxy is refused. The stand-in's browser leaves through a forwarder of the command's own, as a persona's does through the server's, so the sidecar reaches its pages on the shipped compose and never holds the provider's credentials (F105). |
 | `--persona` | Run the test as this persona instead, in its own context: its fingerprint, its profile, its proxy. The run is recorded for the persona (`docs/runbooks/personas.md`). Not with `--engine`, `--timezone` or `--language`. |
 | `--engine` | `chromium` (default) or `firefox`. A Firefox stand-in persona claims Windows; see `engine-firefox.md`. |
 | `--claimed-os` | The system the stand-in persona claims, in place of its engine's own: `macos` (or `windows`) on Firefox. A Chromium sidecar refuses anything but `linux` (ADR 0009). A stand-in of another claim keeps a profile of its own, `selftest/<engine>-<os>/<proxy id>`. Not with `--persona`. |
@@ -241,7 +242,21 @@ directory is `selftest/<engine>/<proxy id>` (`selftest/chromium/...`), so a
 proxy shows the same browser on every run and the two engines never share a
 profile. The command needs to reach the sidecar (`sidecar.chromium_url`);
 with `just dev` that is `KAGE__SIDECAR__CHROMIUM_URL=http://127.0.0.1:8091`.
-Every run is an audit event (`selftest.browser`).
+The sidecar must reach the command's forwarder back: `forwarder.advertise`
+names the host it is told (`kage` on the compose network; the bound port
+replaces the advertised one), and a sidecar run outside compose needs a
+name for the machine the command runs on (the live suite starts its
+sidecar with `--add-host host.docker.internal:host-gateway` and sets
+`KAGE__FORWARDER__ADVERTISE=http://host.docker.internal:8899`). Every run
+is an audit event (`selftest.browser`).
+
+A run that read none of its pages tested nothing: the table ends
+`INCONCLUSIVE: no page could be read, so nothing was tested`, the JSON
+document says `verdict: inconclusive` and `passed: false`, and the command
+exits non-zero (F105). The pages above the score say why each could not be
+read. Before 2.0.2 the stand-in handed the sidecar the provider's proxy,
+which a sidecar on the network `browsers` cannot reach: on the shipped
+compose the command read no page and said `passed`, score 100.
 
 The gated live suite (`just test-live`, `tests/live/browser-selftest.sh`)
 runs it with `--third-party` through two proxies per run for each engine of
@@ -286,6 +301,40 @@ measurements behind that, the motor profile of a persona and the entry
 strategies are described in `engine-firefox.md` and hold for both engines.
 On chromium a wheel notch scrolls 120 px, and two notches within one frame
 reach a page as one wheel event of twice the size.
+
+## A page that stops the engine
+
+A page can stop answering the reads of the engine: its script never yields,
+or its renderer crashed. Every read is bounded (F103, spec §10.6): a crash
+cuts the reads at once and the request ends `navigation_failed` ("the
+renderer of the page crashed"), a read that takes longer than 10 s ends it
+`timeout` ("the page did not answer a read within 10000 ms"); nothing of
+the page is kept, and the persona's next request gets a fresh tab. Kage
+retries such an attempt as it retries a timeout.
+
+One page does more on Chromium: a script that nests a few thousand
+elements (about 1750 and more, measured 2026-11-02 on Chrome 155) overflows
+the renderer's native stack, 8 MB as the container's `ulimit -s` leaves it,
+and the renderer crashes. A stock desktop Chrome shows "Aw, Snap!" for
+the same page. patchright 1.63.0 then retries its isolated world on the
+crashed frame without end, on the sidecar's main thread, and nothing of the
+server runs again: 100 % CPU, no answer, not even to the health check (QA
+round one, extract-02). The sidecar's watchdog ends the process after
+`SIDECAR_STALL_MS` (30 s) without a heartbeat, the log says `the event loop
+stopped answering`, and compose's `restart: unless-stopped` starts the
+container again. It counts only time in which it ran itself: a host that
+froze for minutes (seen once under the load of several test stacks) adds
+two of its looks at most, and ends nothing; Kage reopens the contexts it needs from their profiles.
+The page fails alone, but costs one restart of the Chromium sidecar per
+attempt, every context of it included. Firefox reads the same page whole in
+a second or two. Curing the crash itself (a larger renderer stack, which a
+page could tell from a stock Chrome's crash, or a driver that does not spin
+on a crash, which is a change of a pinned package) is F146's, and the
+owner's to decide.
+
+What to look at: `docker inspect --format '{{.RestartCount}}'` of the
+sidecar's container, and the line of level 60 just before each restart in
+its log.
 
 ## Captures and what they cost
 

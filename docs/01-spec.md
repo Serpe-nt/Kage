@@ -707,6 +707,12 @@ row without it; never when the list is empty or shorter than half the pool.
 | IP reputation | 24 h, one proxy at a time spread over the day, asked from the host directly | Provider trait with AbuseIPDB first; disabled without a key. Bad = `abuseConfidenceScore` ≥ `reputation.bad_score` (default 75) on two consecutive lookups → `replacing` when the budget allows, else `degraded` + alert. `usageType` recorded; Data Center or Hosting on a residential IP raises `reputation_usage_type_suspicious`, never an automatic replacement. A 429 pauses lookups for as long as it says, or 24 h. |
 | Account sync | 10 min, for a provider that offers its account | Subscription, plan, counts, replacement quota, the four `auto_replace_*` flags (alert while any is on, never changed by Kage), available countries. |
 
+A run of `kage selftest browser` that read none of its pages tested
+nothing: it says so (`verdict: inconclusive`, `passed: false` in its JSON
+document, a line in its table) and exits non-zero, whatever the score of
+no check at all is (F105). For a persona's scheduled run the same report
+is inconclusive and changes nothing, as above.
+
 All health traffic obeys pacing and never targets real target sites.
 `kage proxy health` ends with how many proxies answered and how many did
 not (`N checked: L live, D dead`), so a declared list without a provider
@@ -758,10 +764,15 @@ page ever reads a response Kage wrote. A missing or wrong credential gets
 present the provider's credentials themselves. A CLI command that opens a
 context in its own process (`kage fetch`, `kage persona selftest`, `kage
 selftest http|browser --persona`) binds a forwarder of its own on a free
-port. The stand-in self-tests of a proxy (`kage selftest http|browser
---proxy`) have no persona the forwarder could name and hand the sidecar
-the provider's proxy: an operator's command, on demand, against the pages
-it names (the one exception; `docs/security-review.md`).
+port. So does the stand-in self-test of a proxy's browser (`kage selftest
+browser --proxy`, F105): its forwarder has one route, the stand-in, named
+by the proxy's id, to that proxy, and the sidecar reaches its pages
+through it on the shipped network layout, as a persona's browser does;
+the http self-test of a proxy (`kage selftest http --proxy`) sends its
+client from the command's own process. The provider's credentials never
+leave the kage process. Before 2.0.2 the stand-in handed the sidecar the
+provider's proxy, which a sidecar on `browsers` cannot reach: the test
+read no page and said it passed (QA round one, cli-02).
 
 **Bandwidth budget (decision D5).** The counts are written to
 `bandwidth_usage` by the hour (`bandwidth.flush_interval`, default 30 s).
@@ -1464,11 +1475,23 @@ of the scheduler (`POST /v1/jobs` with `type: flow`, §16.6). It starts
 with a `goto`; every `goto` passes the SSRF guard when the job is
 accepted, and every page a step captured and the page the flow ended on
 pass the redirect-chain check of §19 afterwards: one refused hop and
-nothing of the flow is kept. A `human: false` step is refused
-(`driver_input_denied`) unless the site's policy has `driver_input: true`.
-A wall met inside a flow is judged as a wall: the persona cools down, its
-window is closed, and another persona runs the script again from its first
-step inside the retry budget. A step that failed on a page that is no wall
+nothing of the flow is kept. Every `goto` meets the policy of its own site
+as a fetch of that address would (F101): its floor at acceptance
+(`level_below_policy`, with the step), its enforced `robots.txt` before the
+flow begins (`robots_denied` with that address's verdict, and nothing of
+the flow is asked for), and in the scheduler its breaker (an open one
+refuses the flow, a half-open one takes it as its one trial), its pause
+after server errors, its `domain_concurrency` and `domain_rpm`, its hours
+and the persona's cooldown, daily cap and gap there; the flow's persona is
+one every site's engines and countries allow and the scout of none of
+them, and the flow counts as a page of the persona on every site it goes
+to. A `human: false` step is refused (`driver_input_denied`) unless the
+policy of the site whose page it acts on, the site of the last `goto`
+before it, has `driver_input: true`. A wall met inside a flow is judged as
+a wall and booked to the site that showed it: the persona cools down there,
+that site's breaker counts it, its window is closed, and another persona
+runs the script again from its first step inside the retry budget; the
+flow's first site is booked the page it served. A step that failed on a page that is no wall
 is the script's failure (`flow_step_failed`) and is not tried again,
 unless the page did not arrive at all (a timeout, a failed connection). A
 flow in a session is never moved to another persona.
@@ -1498,6 +1521,37 @@ a context only when they opened it. A browser process is recycled after
 reopened from the same request before the next operation, which the
 metrics count. A context whose browser died is closed and reported, never
 left in the table.
+
+**A page cannot stop a sidecar (F103).** Every read of a page (its title,
+text, document, links, a measurement of the behavior engine, a
+screenshot) is bounded: a renderer that crashed cuts the reads under way
+at once, and a read that takes longer than 10 s (`READ_LIMIT_MS`) marks the
+page as one that does not answer. Every later read of it fails at once, the
+request ends with a typed error (`navigation_failed` for a crash,
+`timeout` otherwise), nothing of the page is kept, and the next request
+takes a fresh tab whatever it names. Kage judges no soft block on a page of
+which nothing was read, though its response said 200: the failure is what
+the attempt came to, and another persona is not kept from the site for it. The server bounds a navigation by its
+own times (reaching the page, its patience, its dwell, as Kage's bound
+counts them) and a flow by its budget, each with a slack of 25 s that
+Kage's own wait outlasts: past it the request is answered `internal`, and
+the context is closed, which ends the browser the operation hangs on. An
+operation that has not ended a minute after that makes the health check
+fail, and after `SIDECAR_STALL_MS` (default 30 s; 0 never) more the
+server ends itself. A watchdog thread ends the process too when its event
+loop stops answering for `SIDECAR_STALL_MS`, counted in looks of its own
+(a pause of the whole process or machine counts as two looks at most, so
+a host that froze under load is not taken for a stuck loop): a page can make the driver
+spin on the main thread without end (a renderer that crashed sends
+patchright 1.63.0 into an endless chain of microtasks, measured with a
+script that nests 3000 elements, which overflows the renderer's 8 MB
+native stack). Docker restarts a container whose process ended (`restart:
+unless-stopped`), not one that is only unhealthy; Kage opens the contexts
+it needs again from their profiles, and the page that stopped the engine
+fails alone. Such a page still costs one restart of the engine's sidecar,
+every context of it included, per attempt: the cure of the crash itself (a
+larger renderer stack, or a driver that does not spin on a crash) is an
+open question of F146.
 
 ---
 
@@ -2775,10 +2829,25 @@ are gzip-compressed on disk.
   path; a denied hop is `ssrf_denied` and nothing read from it is returned.
   The request to such a hop has left through the proxy by then; that is the
   limit of a check that does not intercept requests. WebRTC sends no UDP
-  outside the proxy.
+  outside the proxy. A page the browser could not load is reported where
+  the tab was sent (the main frame's last request, or the `Location` of a
+  redirect it did not get beyond), never as Chrome's
+  `chrome-error://chromewebdata/` or another page of the browser's own, and
+  nothing of such a page is kept: so a page that moves itself to a denied
+  address (a meta refresh, a script, a form) and a redirect to a denied
+  address or scheme are `ssrf_denied` in both engines (F102).
+- **One outcome for a refusal (F102).** The forwarder keeps what the guard
+  refused, per caller: a target refused by name or range, and under
+  `egress.mode: direct` a name refused for one of its addresses. An
+  attempt that failed because the forwarder refused the address it went to
+  (its target or a hop: the addresses the plain client asked for, the
+  hosts of a navigation's chain) ends `ssrf_denied`, never retried, nothing
+  of it kept, whatever its client made of the refusal (a browser shows a
+  failed connection, a plain client fails to connect). A name that does
+  not resolve is a failed network, not a refusal.
 - **Forwarder.** The provider's proxy credentials never leave the kage
-  process (but for the stand-in self-tests of a proxy, §7.5): browsers and
-  sidecars hold a per-persona credential that opens
+  process (the stand-in self-test of a proxy too since 2.0.2, §7.5):
+  browsers and sidecars hold a per-persona credential that opens
   only that persona's own proxy, through the forwarder, which refuses what
   the SSRF guard refuses (§7.5). It is the one place where a browser's own
   background traffic and a page's redirect to the compose network would

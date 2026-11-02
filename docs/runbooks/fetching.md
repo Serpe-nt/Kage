@@ -234,8 +234,10 @@ up. In the log (`RUST_LOG=kage_scheduler=debug`) each refusal is one line,
 `the forwarder refused a connection`, with its reason.
 
 `kage persona selftest`, `kage selftest browser` and `kage selftest http`
-run in their own process and hand the sidecar the provider's proxy
-directly, as before M7. A persona whose browser the server holds open
+run in their own process with a forwarder of their own, which hands a
+persona's browser, or the stand-in of `kage selftest browser --proxy`
+(F105), the persona's credential as the server's does; the provider's
+credentials stay in kage. A persona whose browser the server holds open
 (for up to `scheduler.context_idle`, 5 min, after its last page) cannot be
 self-tested from the command line at that moment: the sidecar answers
 `context_conflict`. Try again a few minutes later.

@@ -554,6 +554,13 @@ A flow is a script of steps in one browser, by one persona:
 - It starts with a `goto`. Every `goto` is checked by the SSRF guard when
   the job is accepted, and every page the flow visited is checked again
   afterwards; one refused address and nothing of the flow is kept.
+- Every `goto` meets the policy of its own site, as a fetch of that
+  address would: a site's `min_level` above the flow's level refuses the
+  job (`level_below_policy`, naming the `step`), a site that enforces its
+  `robots.txt` ends the flow `robots_denied` before anything is asked when
+  the file disallows the address, and the site's breaker, pacing and hours
+  hold the flow as they hold a fetch there. The persona is one every site
+  of the flow may have (F101).
 - It is always paced: the persona stays on every page it arrives on
   (around `behavior.dwell_ms` when given, its own dwell of about 6 s
   otherwise, never below the policy's `min_dwell`) and pauses before every
@@ -563,10 +570,12 @@ A flow is a script of steps in one browser, by one persona:
   dwells alone.
 - Steps are done by the persona's own mouse and keyboard. `human: false`
   (the browser's driver, which a page can tell apart) is refused with
-  `driver_input_denied` unless the site's policy says
+  `driver_input_denied` unless the policy of the site whose page the step
+  acts on (the site of the last `goto` before it) says
   `driver_input: true`. Say so only for a site that does not look.
-- A wall met on the way is retried by another persona from the first
-  step; a step that fails otherwise (a selector that is not there, an
+- A wall met on the way is booked to the site that showed it (the persona
+  cools down there, that site's breaker counts it) and retried by another
+  persona from the first step; a step that fails otherwise (a selector that is not there, an
   assertion) ends the flow and is not tried again.
 - The items of the job are the steps, each with `step.ok`,
   `step.duration_ms` and `step.paced_ms`; an `extract`, `screenshot` or
