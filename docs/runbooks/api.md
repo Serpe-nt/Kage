@@ -124,7 +124,10 @@ it runs on, and `GET /v1/results/{id}` returns `202` until it ended and the
 result afterwards. The id of every fetch is also in `X-Request-Id`.
 
 `include` chooses what comes back and what is kept: `dom` (the document as
-the browser had it), `raw` (the main response's body), `headers`,
+the browser had it), `raw` (the main response's body as text, read in the
+encoding a browser takes for it: its byte order mark, the `charset` of its
+`Content-Type`, its `<meta charset>`, else UTF-8 or windows-1252; the
+artifact keeps the bytes as they came), `headers`,
 `extract` (what the page says, below), `xhr` (the responses the page's
 scripts fetched), `screenshot`, `pdf`, `console`.
 Without it a fetch returns `dom` and `headers` at level 2 and 3, `raw`
@@ -326,7 +329,8 @@ domains:
   `robots.matched_rule`, no attempts, and nothing asked of the site. The
   first fetch of an origin waits for the file (about 8 s at the median, a
   visit like any other). The file's `Crawl-delay` is kept to: each
-  persona leaves at least that long between two pages of the host, and a
+  persona, and the plain client of level 0, leaves at least that long
+  between two pages of the host, and a
   site that asks for an hour gets an hour. If that is too slow, `report`
   is the way out; Kage does not half-obey.
 - **Who asks** is the site's scout: one persona per site that asks for
@@ -342,7 +346,12 @@ domains:
   by the plain client from the site's plain exit, which under the pool is
   the scout's proxy; under `egress.mode: direct` from the host, where a
   lone host persona is its own scout
-  ([levels-and-egress.md](levels-and-egress.md)).
+  ([levels-and-egress.md](levels-and-egress.md)). What is kept is the file
+  as the site sent it, whoever asked: until F99 a file the plain client
+  asked for first was kept empty for a day, and `enforce` let every page
+  of the origin through, at every level. A deployment that ran 2.0.1 with
+  `enforce` and level 0 should clear `robots_cache` once after the
+  upgrade (`DELETE FROM robots_cache WHERE body = ''`) or wait a day.
 - The file is kept for about a day (`robots.ttl`) and asked for again
   only when a request needs it. A `404` is "no file": everything is
   allowed. A server error, a timeout or a block is "unreachable" for an
@@ -667,6 +676,9 @@ linked from nowhere, not as a habit.
   rely on gzipped sitemaps.
 - With a single usable persona nothing is asked (`no_scout`): the reader
   never fetches a sitemap.
+- At level 0 the plain client asks for the sitemaps from the site's plain
+  exit, and they are read from what it got, gzipped ones too (until F99
+  every one was `sitemap_unreadable`).
 - What a sitemap names are places to start from, inside `allow`, `deny`,
   `same_site_only` and `max_pages`; `lastmod` is shown and orders nothing.
   At most `crawl.max_sitemaps` (10) files per site.
@@ -914,9 +926,15 @@ A target is refused before anything is fetched when its URL shows that it
 is not a public site: a scheme other than http and https, credentials, a
 literal address (unless `security.allow_ip_targets`, and never one in a
 private, loopback, link-local, CGNAT or metadata range), `localhost`,
-`*.local`, `*.internal` and their kin, a name of a single label. Every
+`*.local`, `*.internal` and their kin, a name of a single label, a name
+with an empty label (`localhost..`, `127.0.0.1..`, `.example.org`). Every
 redirect hop is checked the same way; a denied hop ends the fetch as
-`ssrf_denied` and nothing read from it is returned.
+`ssrf_denied` and nothing read from it is returned. So are a batch's
+items, a crawl's seeds, a flow's pages and a webhook's URL.
+
+One dot at the end of a host is the name itself, the root of the DNS:
+`example.org.` is the site `example.org`, paced, paused, cooled and cached
+as one, and it is asked for and stored as `example.org` (F104).
 
 Kage looks no name up by default: the proxy resolves, and a lookup from
 this host would tell the name servers of every target who is asking.

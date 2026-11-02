@@ -22,6 +22,8 @@ use kage_core::config::Config;
 use kage_core::domain::{KeyLimits, Scope};
 use kage_core::duration::HumanDuration;
 use serde_json::{Value, json};
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, ResponseTemplate};
 
 /// A persona may leave a page after half a second, and nobody asks for a
 /// `robots.txt`. Every request here is level 3: a person's browser.
@@ -934,6 +936,231 @@ async fn a_crawl_waits_for_an_enforced_robots_txt_and_reads_on_where_it_is_only_
         assert_eq!(result["robots"]["fetched"], true, "{result}");
         assert_eq!(result["robots"]["allowed"], true);
     }
+    work.stop().await;
+    api.shut_down().await;
+}
+
+/// Serves a file to the http path: the bytes as the site sends them, with
+/// `content_type`.
+async fn serve(api: &Api, at: &str, content_type: &str, body: impl Into<Vec<u8>>) {
+    Mock::given(method("GET"))
+        .and(path(at))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(body.into(), content_type))
+        .mount(&api.lab.site)
+        .await;
+}
+
+/// A text in ISO-8859-1: every character is one byte.
+fn latin1(text: &str) -> Vec<u8> {
+    text.chars()
+        .map(|c| u8::try_from(u32::from(c)).unwrap())
+        .collect()
+}
+
+/// The paths the site was asked for over the http path, in order.
+async fn asked_over_http(api: &Api) -> Vec<String> {
+    api.lab
+        .site
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|request| request.url.path().to_owned())
+        .collect()
+}
+
+/// QA round one's api-01, crawl-02, crawl-03, ssrf-05 (F99) and
+/// extract-03, crawl-04 (F100), through the plain client of level 0 against
+/// a site that sends real bytes: the `robots.txt` a level 0 crawl asks for
+/// first is kept as the site sent it and enforced at every level, the
+/// sitemap it names is read, and a page is read in the encoding it
+/// declares, by its header or by its `<meta>`, so that its title, its text
+/// and its links are what it says.
+#[tokio::test]
+async fn at_level_zero_the_plain_clients_files_are_read_and_its_pages_decoded() {
+    let mut api = Api::start_with(3, 155, ENFORCED, quick).await;
+    let token = api.key(&[Scope::Jobs, Scope::Crawl, Scope::Fetch]).await;
+    let file = format!(
+        "User-agent: *\nDisallow: /private\nCrawl-delay: 1\nSitemap: {}\n",
+        Api::url("/maps/pages.xml")
+    );
+    serve(&api, "/robots.txt", "text/plain", file.clone()).await;
+    serve(
+        &api,
+        "/maps/pages.xml",
+        "application/xml",
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+             <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\
+             <url><loc>{}</loc></url><url><loc>{}</loc></url></urlset>",
+            Api::url("/only"),
+            Api::url("/private/listed"),
+        ),
+    )
+    .await;
+    let words = (0..120)
+        .map(|n| format!("wort{n}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    // The home page in ISO-8859-1, declared by its header: a link to a page
+    // whose name is not ASCII, and one to a page the file disallows.
+    serve(
+        &api,
+        "/",
+        "text/html; charset=iso-8859-1",
+        latin1(&format!(
+            "<!doctype html><html><head><title>Café</title></head><body><article>\
+             <h1>Café Müller</h1><p>Straße München {words}</p>\
+             <p><a href=\"/für\">für</a> <a href=\"/private/ledger\">ledger</a></p>\
+             </article></body></html>"
+        )),
+    )
+    .await;
+    // A page in Shift_JIS that says so in its <meta> only.
+    let mut sjis = b"<!doctype html><html><head><meta charset=\"shift_jis\"><title>".to_vec();
+    sjis.extend_from_slice(&[0x93, 0xfa, 0x96, 0x7b, 0x8c, 0xea]);
+    sjis.extend_from_slice(
+        format!("</title></head><body><article><p>{words}</p></article></body></html>").as_bytes(),
+    );
+    serve(&api, "/f%C3%BCr", "text/html", sjis).await;
+    serve(
+        &api,
+        "/only",
+        "text/html; charset=utf-8",
+        article("Only", &[]),
+    )
+    .await;
+    for private in ["/private/ledger", "/private/listed"] {
+        serve(
+            &api,
+            private,
+            "text/html; charset=utf-8",
+            article("Private", &[]),
+        )
+        .await;
+    }
+
+    let body = json!({
+        "type": "crawl",
+        "seeds": [Api::url("/")],
+        "use_sitemaps": true,
+        "max_depth": 1,
+        "defaults": { "level": 0, "include": ["extract", "raw"] },
+    });
+    let reply = api.post(&token, "/v1/jobs", &body).await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.json());
+    let id = reply.json()["id"].as_str().unwrap().to_owned();
+    let work = api.work();
+    let done = api.job_until(&token, &id, ended).await;
+    assert_eq!(done["state"], "succeeded", "{done}");
+
+    // The file first, then the sitemap it names, then the pages it allows;
+    // nobody's browser was asked for anything.
+    let asked = asked_over_http(&api).await;
+    assert_eq!(asked[..2], ["/robots.txt", "/maps/pages.xml"], "{asked:?}");
+    let mut pages: Vec<&str> = asked[2..].iter().map(String::as_str).collect();
+    pages.sort_unstable();
+    assert_eq!(pages, ["/", "/f%C3%BCr", "/only"]);
+    assert_eq!(paths(&api), Vec::<String>::new());
+    assert_eq!(
+        done["crawl"]["sitemaps"],
+        json!([
+            { "site": "kage.test", "url": Api::url("/robots.txt"), "state": "read", "urls": 1 },
+            { "site": "kage.test", "url": Api::url("/maps/pages.xml"), "state": "read", "urls": 2 },
+        ])
+    );
+    assert_eq!(done["crawl"]["skipped"]["robots_denied"], 2, "{done}");
+    // What is kept of the file is what the site sent (F99: it was empty).
+    let kept: Vec<Option<String>> = sqlx::query_scalar("SELECT body FROM robots_cache")
+        .fetch_all(api.lab.store().pool())
+        .await
+        .unwrap();
+    assert_eq!(kept, [Some(file)]);
+
+    // Each page says what it says, in the encoding it declared (F100).
+    let items = api.job_items(&token, &id).await;
+    let mut read = BTreeSet::new();
+    for item in &items {
+        let result = api
+            .get(
+                &token,
+                &format!("/v1/results/{}", item["request_id"].as_str().unwrap()),
+            )
+            .await
+            .json();
+        let at = item["url"]
+            .as_str()
+            .unwrap()
+            .trim_start_matches(&Api::url(""));
+        assert_eq!(result["robots"]["allowed"], true, "{at}");
+        assert_eq!(result["robots"]["crawl_delay"], 1.0, "{at}");
+        let title = result["extract"]["title"].as_str().unwrap().to_owned();
+        read.insert((at.to_owned(), title));
+        if at == "/" {
+            let text = result["extract"]["text"].as_str().unwrap();
+            assert!(text.starts_with("Café Müller"), "{text}");
+            assert!(text.contains("Straße München"), "{text}");
+            assert!(!text.contains('\u{fffd}'), "{text}");
+            let links: Vec<&str> = result["extract"]["links"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|link| link["url"].as_str().unwrap())
+                .collect();
+            assert_eq!(links, [Api::url("/f%C3%BCr"), Api::url("/private/ledger")]);
+            // The body as text is the decoded text too, and the stored
+            // result says the same.
+            let raw = result["raw_body"].as_str().unwrap();
+            assert!(raw.contains("<title>Café</title>"), "{raw}");
+        }
+    }
+    assert_eq!(
+        read,
+        BTreeSet::from([
+            ("/".to_owned(), "Café".to_owned()),
+            ("/f%C3%BCr".to_owned(), "日本語".to_owned()),
+            ("/only".to_owned(), "Only".to_owned()),
+        ])
+    );
+
+    // The file a level 0 crawl read first is enforced at every level: a
+    // page it disallows is not asked for, of the site or of a browser.
+    for level in [0, 3] {
+        let denied = api
+            .post(
+                &token,
+                "/v1/fetch",
+                &json!({ "url": Api::url("/private/elsewhere"), "level": level }),
+            )
+            .await
+            .json();
+        assert_eq!(denied["outcome"], "robots_denied", "{denied}");
+        assert_eq!(denied["robots"]["matched_rule"], "Disallow: /private");
+    }
+    assert_eq!(asked_over_http(&api).await.len(), asked.len());
+    assert_eq!(paths(&api), Vec::<String>::new());
+
+    // The host with the DNS root's dot is the same site (F104): the page is
+    // asked for without it, under the file that is kept, which is not asked
+    // for again.
+    let dotted = Api::url("/only").replacen("shop.kage.test", "shop.kage.test.", 1);
+    let read = api
+        .post(&token, "/v1/fetch", &json!({ "url": dotted, "level": 0 }))
+        .await
+        .json();
+    assert_eq!(read["outcome"], "ok", "{read}");
+    assert_eq!(read["final_url"], Api::url("/only"));
+    assert_eq!(read["robots"]["fetched"], true);
+    let asked_now = asked_over_http(&api).await;
+    assert_eq!(asked_now.len(), asked.len() + 1);
+    assert_eq!(asked_now.last().map(String::as_str), Some("/only"));
+    assert_eq!(
+        asked_now
+            .iter()
+            .filter(|path| *path == "/robots.txt")
+            .count(),
+        1
+    );
     work.stop().await;
     api.shut_down().await;
 }

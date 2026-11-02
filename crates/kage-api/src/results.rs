@@ -87,6 +87,15 @@ fn included(request: &RequestRecord) -> Included {
         .unwrap_or_else(Included::everything)
 }
 
+/// The `Content-Type` of a stored result's main response.
+fn content_type_of(record: &FetchRecord) -> Option<&str> {
+    record
+        .headers
+        .iter()
+        .find(|header| header.name.eq_ignore_ascii_case("content-type"))
+        .map(|header| header.value.as_str())
+}
+
 /// The stored document and body of a result, as text.
 pub(crate) async fn bodies(
     state: &ApiState,
@@ -105,7 +114,10 @@ pub(crate) async fn bodies(
             continue;
         };
         let text = match state.artifacts().read(id).await {
-            Ok(Some((_, bytes))) => String::from_utf8(bytes).ok(),
+            // The document a browser serialized is UTF-8; the body is read
+            // in the encoding a browser would take for it (F100).
+            Ok(Some((_, bytes))) if kind == ArtifactKind::DomHtml => String::from_utf8(bytes).ok(),
+            Ok(Some((_, bytes))) => kage_http::charset::text_of(content_type_of(record), &bytes),
             // Expired, or its blob is gone: the result is still a result.
             Ok(None) | Err(ArtifactError::Missing { .. }) => None,
             Err(error) => return Err(ApiError::internal(&error)),

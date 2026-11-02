@@ -980,6 +980,25 @@ finished (F109).
   is always null because the proxy resolves, and a request on a reused
   connection has neither `connect_ms` nor `tls_ms`. The health probe (§7.4)
   uses the same client and records both per proxy.
+- **A body as text** (`kage_http::charset`, F100). The http path reads a
+  body in the encoding a browser takes for it, as the Encoding Standard and
+  the HTML standard decide it, so that levels 0 and 1 read what levels 2
+  and 3 read: a byte order mark first, which wins over any declaration;
+  then the `charset` of `Content-Type`, read as an Encoding Standard label
+  (`latin1` and `us-ascii` are windows-1252, `sjis` is Shift_JIS); then,
+  for HTML or a body that does not say what it is, the `<meta charset>` or
+  `<meta http-equiv="content-type">` the standard's prescan finds in the
+  first 1024 bytes (outside comments; a UTF-16 label there means UTF-8),
+  and for XML the `encoding` of its declaration; then UTF-8 when the bytes
+  are UTF-8, else windows-1252, the standard's fallback for the locales of
+  every persona country. JSON is UTF-8. A header that says otherwise than
+  the bytes is believed, as a browser believes it; bytes that are not
+  valid in the chosen encoding are replaced. The classifier, the
+  extraction, the links and text a crawl reads and `raw_body` all read
+  that text; the bytes are stored as they came (`artifacts.raw_body`).
+  A link's path is always UTF-8, percent-encoded, as a browser asks for
+  it; a query written in a legacy encoding is encoded as UTF-8 too, where
+  a browser would use the document's encoding (a known difference).
 - **Subresource emulation** (`http.fetch_subresources`, default off): after
   a `200` HTML document fetched with GET, up to `http.subresources.max`
   (default 12) stylesheets, scripts and preloads of the document's own site,
@@ -1675,10 +1694,22 @@ a page. The crawl keeps at most `crawl.max_frontier` (50 000) addresses;
 what it finds beyond is counted (`dropped`) and forgotten.
 
 **URL normalization** (`kage_core::urlnorm`, pure, property-tested):
-scheme and host lower-cased, default ports removed, the fragment removed,
+scheme and host lower-cased, the host in its normal form (below), default
+ports removed, the fragment removed,
 tracking parameters removed by a configurable list (36 by default), the
 query sorted, the trailing slash kept as written. `www.` is not folded and
 `http` and `https` are two keys: they are two addresses to a site.
+
+**The normal form of a host** (`urlnorm::normal_host`, F104). The dot of
+the DNS root that may end a fully qualified name is no part of it:
+`example.org.` is `example.org` to everything keyed by a host or a site
+(the policy, the breaker, the cooldowns, the pace, the daily cap, the
+visits, the scout, the plain exit, the cache, `robots_cache`, a crawl's
+frontier). The API's parsers and the pipeline put a request's URL in that
+form as it arrives, so it is stored and asked for without the dot, and a
+crawl asks for a link that has it without it. A name with an empty label
+(two or more dots at its end, one at its start, two in a row) names no
+host: the SSRF guard refuses it on every road (§19).
 
 **Duplicates.** A crawl holds one entry per normalized URL and never asks
 for one twice; the end of a redirect counts, so a page that another
@@ -1708,7 +1739,10 @@ Each file is a typed navigation through the scheduler in the scout's
 browser, `/sitemap.xml` and what an index names of the same site, at most
 `crawl.max_sitemaps` (10) files per site and `crawl.max_sitemap_urls`
 (50 000) addresses per file, in the scout's own window (the sidecar
-returns the file as the server sent it, `capture.raw`). What they name are places to start from at
+returns the file as the server sent it, `capture.raw`). At level 0 the
+plain client asks for each file from the site's plain exit (§25), and the
+file is read from the body it got, as a browser's is (F99: it was not
+read, and every sitemap at level 0 was `sitemap_unreadable`). What they name are places to start from at
 depth 0, inside the scope and `max_pages`; `lastmod` is kept and shown
 and orders nothing. Where no persona but the reader could ask (`no_scout`)
 nobody asks, and a scout the site turned away is not waited for through
@@ -1847,7 +1881,11 @@ never fetch what the file disallows, keep to its `Crawl-delay`).
   favicon), the file is there in under 100 ms, and the visit lasts 3 to
   16 s, 8 s at the median. A scout that is blocked cools down for the
   site and counts on its breaker like any persona.
-- **What is kept.** One answer per origin (`robots_cache`), for
+- **What is kept.** One answer per origin (`robots_cache`): the file as
+  the site sent it, from the raw body of the scout's page or, at level 0,
+  the body the plain client got (F99: that one was dropped, and a file
+  first asked for at level 0 was kept empty, so `enforce` enforced
+  nothing at any level until it expired), for
   `robots.ttl` (24 h, moved by up to a tenth either way so that files are
   not asked for on a grid), and asked for again only when a request needs
   it. A `4xx` that is no block is "no file": everything is allowed. A
@@ -1878,7 +1916,8 @@ never fetch what the file disallows, keep to its `Crawl-delay`).
   `jobs.max_age`; `robots_no_scout` when nobody can ask. A scout the
   scheduler refuses (the site is paused, the scout sleeps) is the page's
   own refusal. `Crawl-delay` is a floor under the gap from the start of
-  one page to the start of the next for each persona on the host, with up
+  one page to the start of the next for each persona on the host, and
+  for the plain client of level 0, whose one exit reads the site, with up
   to a fifth added so that no two gaps are alike, and no cap but 366
   days: a site that asks for an hour gets an hour, and `report` is the
   way out. Under `report` it is reported only.
@@ -2652,7 +2691,9 @@ are gzip-compressed on disk.
 - **SSRF guard.** Every target, every redirect hop, every page a flow
   visited and every webhook URL is checked: non-http(s) schemes, credentials in the URL, port 0, names
   that never name a public site (`localhost`, `*.local`, `*.internal`, a
-  name of one label, …) and literal addresses in loopback, link-local, RFC
+  name of one label, a name with an empty label such as `localhost..` or
+  `127.0.0.1..`, …; one trailing dot is the name's own, §13) and literal
+  addresses in loopback, link-local, RFC
   1918, CGNAT, multicast, IPv6 ULA and the cloud metadata ranges are
   denied, as is any literal address unless `security.allow_ip_targets`. A
   denied target is `422 ssrf_denied` (or `invalid_url`) before anything is

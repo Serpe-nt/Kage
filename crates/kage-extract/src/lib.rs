@@ -247,6 +247,41 @@ mod tests {
         assert_eq!(CRATE_NAME, "kage-extract");
     }
 
+    /// What is extracted is read from text the http path decoded by its
+    /// declaration (F100): the title, the text, the markdown and the links
+    /// of a page written in another encoding say what it says, and the
+    /// `<meta charset>` it carries changes nothing of it.
+    #[test]
+    fn a_decoded_document_is_extracted_as_it_says() {
+        let words = (0..100)
+            .map(|n| format!("wort{n}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let html = format!(
+            "<html><head><meta charset=\"shift_jis\"><title>日本語 Café</title></head><body>\
+             <article><h1>Straße München</h1><p>{words} <a href=\"/für\">für</a></p></article></body></html>"
+        );
+        let extracted = extract(&document(&html), &Options::default());
+        assert_eq!(extracted.title.as_deref(), Some("日本語 Café"));
+        assert!(
+            extracted.text.starts_with("Straße München"),
+            "{}",
+            extracted.text
+        );
+        assert!(
+            extracted
+                .markdown
+                .as_deref()
+                .unwrap()
+                .starts_with("# Straße München"),
+        );
+        assert_eq!(
+            extracted.links.as_ref().unwrap()[0].url,
+            "https://www.shop.example/f%C3%BCr"
+        );
+        assert!(!extracted.text.contains('\u{fffd}'));
+    }
+
     #[test]
     fn a_page_is_extracted_whole() {
         let extracted = extract(&document(&article(6)), &Options::default());

@@ -831,16 +831,17 @@ fn inherited<T>(
         .or_else(|| field(defaults))
 }
 
-/// Lower-cases a host, drops a trailing dot and converts an
-/// internationalized name to its ASCII form. `None` when it is not a host.
+/// Lower-cases a host, converts an internationalized name to its ASCII form
+/// and puts it in its normal form ([`crate::urlnorm::normal_host`]: one
+/// trailing dot dropped). `None` when it is not a host, a name with an
+/// empty label among them.
 pub fn normalize_host(host: &str) -> Option<String> {
     let host = host.trim();
-    let host = host.strip_suffix('.').unwrap_or(host);
     if host.is_empty() {
         return None;
     }
     match url::Host::parse(host).ok()? {
-        url::Host::Domain(domain) => Some(domain),
+        url::Host::Domain(domain) => crate::urlnorm::normal_host(&domain).ok().map(str::to_owned),
         url::Host::Ipv4(address) => Some(address.to_string()),
         url::Host::Ipv6(address) => Some(format!("[{address}]")),
     }

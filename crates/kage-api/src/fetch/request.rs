@@ -39,6 +39,7 @@ use kage_core::pacing::{PacingProfile, PacingProfiles};
 use kage_core::policy::{MAX_RETRIES, PacingRequest, RefererStrategy};
 use kage_core::schedule::queue::Priority;
 use kage_core::ssrf::SsrfDenial;
+use kage_core::urlnorm::normal_url;
 use kage_http::headers::{
     CallerHeaders, HeaderError, denied_reason, placed_in_scripted, plain_denied_reason,
 };
@@ -776,13 +777,16 @@ fn parse_url(text: &str) -> ApiResult<Url> {
         )
         .with("field", "url"));
     }
-    Url::parse(text).map_err(|error| {
+    let url = Url::parse(text).map_err(|error| {
         ApiError::new(
             ErrorCode::InvalidUrl,
             format!("the URL does not parse: {error}"),
         )
         .with("field", "url")
-    })
+    })?;
+    // The host in its normal form (F104): one trailing dot dropped. A host
+    // with an empty label is kept as it is, and the guard refuses it.
+    Ok(normal_url(&url).unwrap_or(url))
 }
 
 fn parse_method(text: &str) -> ApiResult<http::Method> {

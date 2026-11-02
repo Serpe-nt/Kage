@@ -21,7 +21,7 @@ use chrono::{DateTime, Utc};
 use kage_core::config::{MAX_CRAWL_DEPTH, MAX_CRAWL_SEEDS};
 use kage_core::domain::Level;
 use kage_core::ids::PersonaId;
-use kage_core::urlnorm::{NormalizeOptions, normalize};
+use kage_core::urlnorm::{NormalizeOptions, normal_url, normalize};
 use kage_crawl::frontier::{Counts, Limits};
 use kage_crawl::scope::{Scope, ScopeError, ScopeRequest};
 use kage_crawl::site;
@@ -255,7 +255,9 @@ pub(crate) fn rules(crawl: &CrawlJob, checks: Checks<'_>) -> ApiResult<CrawlRule
                 .with("field", "seeds")
                 .with("item", u64::try_from(index).unwrap_or(u64::MAX))
         })?;
-        seeds.push(url);
+        // The host in its normal form (F104), as the seed's page is asked
+        // for; a host with an empty label is the guard's to refuse.
+        seeds.push(normal_url(&url).unwrap_or(url));
     }
     let scope = Scope::new(
         &ScopeRequest {

@@ -4,7 +4,7 @@
 use proptest::prelude::*;
 use url::Url;
 
-use super::{NormalizeOptions, TrailingSlash, normalize, request_url};
+use super::{NormalizeOptions, TrailingSlash, normal_url, normalize, request_url};
 
 /// A query parameter that selects content: its name is on no tracking list.
 fn content_param() -> impl Strategy<Value = (String, String)> {
@@ -367,5 +367,49 @@ proptest! {
         without.set_fragment(None);
         prop_assert_eq!(asked.as_str(), without.as_str());
         prop_assert_eq!(normalize(&asked, &options), normalize(&found, &options));
+    }
+
+    /// The dot of the DNS root that ends a fully qualified name is no part
+    /// of the host (F104): the name with it has the key, the URL to request
+    /// and the normal form of the name without it.
+    #[test]
+    fn one_trailing_dot_of_the_host_is_no_part_of_a_key(
+        parts in parts(),
+        options in options(),
+    ) {
+        let dotted = Parts { host: format!("{}.", parts.host), ..parts.clone() };
+        prop_assert_eq!(key(&dotted, &options), key(&parts, &options));
+        prop_assert_eq!(request_url(&dotted.url()), request_url(&parts.url()));
+        let normal = normal_url(&dotted.url()).expect("one dot is a name");
+        prop_assert_eq!(normal, parts.url());
+        // The name without the dot is its own normal form.
+        prop_assert_eq!(normal_url(&parts.url()).expect("a name"), parts.url());
+    }
+
+    /// A host with an empty label names no host: two or more dots at its
+    /// end, one at its start or two in a row have no normal form, and the
+    /// guard refuses each (`ssrf::check_url`).
+    #[test]
+    fn a_host_with_an_empty_label_has_no_normal_form(
+        parts in parts(),
+        dots in 2_usize..5,
+        place in 0_usize..3,
+    ) {
+        let host = match place {
+            0 => format!("{}{}", parts.host, ".".repeat(dots)),
+            1 => format!("{}{}", ".".repeat(dots - 1), parts.host),
+            _ => parts.host.replacen('.', &".".repeat(dots), 1),
+        };
+        let broken = Parts { host, ..parts.clone() };
+        // A name the URL parser refuses is no URL at all: `invalid_url`.
+        let Ok(url) = Url::parse(&broken.write()) else {
+            return Ok(());
+        };
+        prop_assert!(normal_url(&url).is_err(), "{}", url);
+        let refused = crate::ssrf::check_url(&url, crate::ssrf::SsrfPolicy { allow_ip_targets: true });
+        prop_assert!(refused.is_err(), "{}", url);
+        // The same URL with its host whole passes the guard.
+        let whole = crate::ssrf::check_url(&parts.url(), crate::ssrf::SsrfPolicy { allow_ip_targets: true });
+        prop_assert!(whole.is_ok(), "{}", parts.url());
     }
 }

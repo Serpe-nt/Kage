@@ -19,6 +19,7 @@
 
 use std::collections::BTreeMap;
 
+use base64::Engine as _;
 use chrono::{DateTime, Utc};
 use kage_browser::contract::{BodyEncoding, PageResult, ScrollEnd};
 use kage_core::domain::{
@@ -459,9 +460,12 @@ pub(crate) struct FetchResult {
     /// `include: ["dom"]`. Null on the http path, which has no DOM: the
     /// document is `raw_body` there.
     pub(crate) dom_html: Option<String>,
-    /// The body of the main response as text; with `include: ["raw"]`,
-    /// and on the http path with `include: ["dom"]` too. Null when the
-    /// body is not text: `artifacts.raw_body` has it then.
+    /// The body of the main response as text, read in the encoding a
+    /// browser takes for it (its byte order mark, the `charset` of its
+    /// `Content-Type`, its `<meta>`, else UTF-8 or windows-1252); with
+    /// `include: ["raw"]`, and on the http path with `include: ["dom"]`
+    /// too. Null when the body is not text: `artifacts.raw_body` has its
+    /// bytes, always.
     pub(crate) raw_body: Option<String>,
     /// What the page says; with `include: ["extract"]`. Null for a fetch
     /// that did not get its page and for a response that is no HTML
@@ -773,13 +777,25 @@ fn xhr_of(stored: Option<&Value>) -> Option<XhrView> {
 
 /// The bodies a page holds in memory.
 fn bodies_of_page(page: &PageResult) -> Bodies {
+    let raw_body = page.raw_body.as_ref().and_then(|body| match body.encoding {
+        BodyEncoding::Utf8 => Some(body.data.clone()),
+        // Bytes that are not UTF-8: read in the encoding a browser took for
+        // them, as on the http path (F100).
+        BodyEncoding::Base64 => {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(body.data.as_bytes())
+                .ok()?;
+            let content_type = page
+                .headers
+                .iter()
+                .find(|header| header.name.eq_ignore_ascii_case("content-type"))
+                .map(|header| header.value.as_str());
+            kage_http::charset::text_of(content_type, &bytes)
+        }
+    });
     Bodies {
         dom_html: page.dom_html.clone(),
-        raw_body: page
-            .raw_body
-            .as_ref()
-            .filter(|body| body.encoding == BodyEncoding::Utf8)
-            .map(|body| body.data.clone()),
+        raw_body,
     }
 }
 
@@ -880,7 +896,9 @@ pub(crate) fn from_report(
         .map(bodies_of_page)
         .unwrap_or_default();
     if let Some(fetched) = fetched.filter(|_| readable) {
-        bodies.raw_body = String::from_utf8(fetched.body.to_vec()).ok();
+        // Read in the encoding a browser would take for it (F100).
+        bodies.raw_body =
+            kage_http::charset::text_of(fetched.header("content-type"), &fetched.body);
     }
     let wants_raw = include.has(Include::Raw) || (include.has(Include::Dom) && fetched.is_some());
     let visit = visit_of(&report.visit, &report.attempts, include, viewer);

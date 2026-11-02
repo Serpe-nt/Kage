@@ -160,7 +160,9 @@ a person.** A persona that read a site from an address that also said
    per site is marked, not two.
 
 `robots.txt` and sitemaps of a level-0 request are asked for by the plain
-client from the same exit. A proxy that leaves by an older proxy's address
+client from the same exit, and read from what it got, as a scout's browser's
+are (F99); the file's `Crawl-delay`, where it is enforced, holds the plain
+client between two pages of the host. A proxy that leaves by an older proxy's address
 (`proxy_exit_shared`) carries no level 0.
 
 When that exit cannot carry traffic, level 0 waits or is refused and is

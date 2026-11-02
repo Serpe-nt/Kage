@@ -3652,3 +3652,64 @@ fn a_synchronous_request_no_visitor_could_take_starts_a_visit_of_its_own() {
     assert_ne!(sim.log[1].1.persona, visitor);
     assert!(sim.log[1].0 < noon() + secs(10), "{:?}", sim.log[1].0);
 }
+
+/// A site's `Crawl-delay` under `enforce` holds the plain client of level 0
+/// as it holds a persona (F99): from the start of one of its pages on the
+/// domain to the start of the next, the floor and up to a fifth of it more,
+/// no two gaps alike; without a floor nothing holds it.
+#[test]
+fn a_site_that_asks_for_a_delay_gets_it_between_two_pages_of_the_plain_client() {
+    let floor = StdDuration::from_secs(20);
+    let run = |gap_floor: Option<StdDuration>| {
+        let mut planner = Planner::new(rules(), Seed::from_u64(9));
+        planner.set_personas(Vec::new());
+        for _ in 0..8 {
+            planner.submit(
+                Work {
+                    gap_floor,
+                    ..plain("slow.example")
+                },
+                noon(),
+            );
+        }
+        let mut starts = Vec::new();
+        let mut now = noon();
+        while starts.len() < 8 && now < noon() + Duration::hours(1) {
+            for decision in planner.plan(now, &facts_for(&["slow.example"])) {
+                if let Decision::Plain(left) = decision {
+                    starts.push(now);
+                    planner.complete(
+                        left.grant,
+                        now,
+                        Completion {
+                            courtesy: Courtesy::Answered,
+                            blocked: false,
+                            proxy_failed: false,
+                        },
+                    );
+                }
+            }
+            now = planner
+                .wake_at()
+                .filter(|at| *at > now)
+                .unwrap_or(now + secs(1));
+        }
+        assert_eq!(starts.len(), 8);
+        starts
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).to_std().unwrap())
+            .collect::<Vec<_>>()
+    };
+    let free = run(None);
+    assert!(free.iter().all(|gap| *gap < floor), "{free:?}");
+    let held = run(Some(floor));
+    assert!(
+        held.iter()
+            .all(|gap| *gap >= floor && *gap <= floor.mul_f64(1.2) + StdDuration::from_secs(1)),
+        "{held:?}"
+    );
+    let mut different = held.clone();
+    different.sort_unstable();
+    different.dedup();
+    assert!(different.len() > 4, "{held:?}");
+}

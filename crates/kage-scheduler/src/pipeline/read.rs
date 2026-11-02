@@ -216,7 +216,13 @@ mod tests {
     use kage_extract::Options;
     use url::Url;
 
-    use super::{is_html, read_document};
+    use kage_core::domain::Timing;
+    use kage_core::outcome::Outcome;
+    use kage_core::schedule::politeness::Courtesy;
+    use kage_http::Fetched;
+
+    use super::{document_of, is_html, read_document};
+    use crate::executor::AttemptOutput;
 
     fn typed(value: &str) -> Vec<Header> {
         vec![
@@ -346,5 +352,76 @@ mod tests {
             assert_eq!(extract["links"].as_array().unwrap().len(), 1, "{depth}");
             assert!(!read.thin, "{depth}");
         }
+    }
+
+    /// What the http path fetched, for a test: `body` with `content_type`.
+    fn fetched(content_type: &str, body: &[u8]) -> AttemptOutput {
+        let mut output = AttemptOutput::failed(Outcome::Ok, "test", Courtesy::Answered);
+        output.status = Some(200);
+        output.fetched = Some(Box::new(Fetched {
+            status: 200,
+            final_url: Url::parse("http://latin.kage.test/page").unwrap(),
+            http_version: "http/1.1",
+            headers: vec![Header {
+                name: "Content-Type".to_owned(),
+                value: content_type.to_owned(),
+            }],
+            body: body.to_vec().into(),
+            truncated: false,
+            hops: Vec::new(),
+            downgraded: false,
+            timing: Timing::default(),
+            subresources: None,
+        }));
+        output
+    }
+
+    /// QA round one's extract-03 and crawl-04 (F100): the document of a page
+    /// the http path fetched is read in the encoding it declares, so the
+    /// title, the text and the links of a Latin-1 page are what it says,
+    /// and a link whose name is not ASCII is the address a browser asks.
+    #[tokio::test]
+    async fn the_document_of_the_http_path_is_read_in_its_declared_encoding() {
+        let words = "wort ".repeat(100);
+        let mut body =
+            b"<!doctype html><html><head><meta charset=\"iso-8859-1\"><title>Caf\xe9</title></head>\
+              <body><article><p>Stra\xdfe M\xfcnchen "
+                .to_vec();
+        body.extend_from_slice(words.as_bytes());
+        body.extend_from_slice(b"<a href=\"/f\xfcr\">f\xfcr</a></p></article></body></html>");
+        let output = fetched("text/html", &body);
+        let document = document_of(&output).unwrap();
+        assert!(document.contains("<title>Café</title>"), "{document}");
+        let base = Url::parse("http://latin.kage.test/page").unwrap();
+        let read = read_document(document, base, true, Some(Options::default())).await;
+        let page = read.page.unwrap();
+        assert_eq!(page.title, "Café");
+        assert_eq!(
+            page.links[0].url.as_str(),
+            "http://latin.kage.test/f%C3%BCr"
+        );
+        let extract = read.extract.unwrap();
+        assert_eq!(extract["title"], "Café");
+        assert!(
+            extract["text"]
+                .as_str()
+                .unwrap()
+                .starts_with("Straße München")
+        );
+        // What the site sent is what `sent_body` gives, byte for byte.
+        assert_eq!(output.sent_body().unwrap(), body);
+    }
+
+    /// QA round one's api-01 and crawl-03 (F99): the body of a file a level
+    /// 0 attempt fetched is read like a browser's page's raw body.
+    #[test]
+    fn the_body_the_site_sent_is_the_pages_or_the_http_paths() {
+        let file = fetched("text/plain", b"User-agent: *\nDisallow: /private\n");
+        assert_eq!(
+            file.sent_body().as_deref(),
+            Some(b"User-agent: *\nDisallow: /private\n".as_slice())
+        );
+        let nothing = AttemptOutput::failed(Outcome::Timeout, "timeout", Courtesy::NotTheSite);
+        assert_eq!(nothing.sent_body(), None);
     }
 }

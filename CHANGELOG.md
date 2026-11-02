@@ -71,6 +71,35 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   item that ends without its page ends its request, and
   `GET /v1/results/{id}` answers `200` with what ended a request whose
   job ended without it.
+
+- **Level 0 reads robots.txt and sitemaps, decodes a page as a browser
+  does, and a host has one name** (F99, F100, F104; QA round one's api-01,
+  crawl-02, crawl-03, ssrf-05, extract-03, crawl-04, policy-01, ssrf-04).
+  A `robots.txt` first asked for at level 0 was kept empty for a day, so
+  `robots: enforce` let every page of the origin through at every level,
+  and a level 0 crawl read no sitemap (`sitemap_unreadable`): the scout's
+  answer and the crawl's sitemap reader looked only at a browser's page,
+  and the plain client's body was dropped. Both now read the body the site
+  sent at every level (`AttemptOutput::sent_body`), and the plain client
+  keeps an enforced file's `Crawl-delay` between two pages of the host as
+  a persona does. The http path read every body as UTF-8, so a page in
+  ISO-8859-1 or Shift_JIS came back as replacement characters with
+  `outcome: ok`, and a crawl asked for addresses no page names: it now
+  reads a body in the encoding a browser takes for it, by the Encoding
+  Standard (its byte order mark, the `charset` of `Content-Type`, its
+  `<meta>` by the HTML standard's prescan, then UTF-8 or windows-1252;
+  `kage_http::charset`, with `encoding_rs` 0.8.42, already in the
+  lockfile, as a direct dependency), for the classifier, the extraction,
+  a crawl's links and text, and `raw_body`, which is now that text where
+  it was null. A host with one trailing dot was another site to the
+  breaker, the cooldowns, the pace and the plain exit, and one with two
+  (`http://localhost../`, `http://127.0.0.1../`) passed the SSRF guard on
+  every road: `kage_core::urlnorm::normal_host` is the host's one normal
+  form, one dot dropped where a request arrives and in every key, and the
+  guard refuses a name with an empty label. A deployment that ran 2.0.1
+  with `enforce` and level 0 should clear its empty `robots_cache` rows
+  once, or wait a day.
+
 - **`KageWebhookFailing`, `KageBlockRateAboveThreshold` and
   `KagePoolUnavailable` fire on what they are for.** QA round one found the
   first two one event late and the third never: a Prometheus counter is

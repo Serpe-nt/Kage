@@ -452,6 +452,18 @@ impl AttemptOutput {
         }
     }
 
+    /// The body of the main response as the site sent it: the raw body of
+    /// the page a browser loaded, else the body the http path fetched
+    /// (levels 0 and 1). `None` when the attempt brought neither. What
+    /// reads a file the site sent (a `robots.txt`, a sitemap) reads it from
+    /// here, at every level (F99).
+    pub fn sent_body(&self) -> Option<Vec<u8>> {
+        match self.page.as_deref() {
+            Some(page) => page.raw_body.as_ref().and_then(crate::archive::bytes_of),
+            None => self.fetched.as_deref().map(|fetched| fetched.body.to_vec()),
+        }
+    }
+
     /// The same failure, but one no other persona would change.
     #[must_use]
     pub fn finally(mut self) -> Self {

@@ -17,6 +17,10 @@
 #   - a challenge that resolves by itself waited for; one that does not is
 #     a block: the persona cools, another one tries, and the domain's
 #     breaker opens and answers the next request at once;
+#   - a page in ISO-8859-1 (by its header, by its <meta>) and one in
+#     Shift_JIS read at level 0 as a browser reads them; a host with the
+#     DNS root's dot asked for without it, and one with two dots refused
+#     before anything is sent (F100, F104);
 #   - every byte counted: what Kage wrote to the store is what the proxies
 #     carried for it.
 # It also measures what the forwarder adds to a connection.
@@ -185,6 +189,38 @@ scout="$(psql "SELECT persona_id FROM site_scouts WHERE site LIKE '%kage.test' L
 readers="$(psql "SELECT count(*) FROM attempts WHERE persona_id = '${scout}'")"
 [ "${readers}" -eq 0 ] || fail "the site's plain exit is the address of a persona that read it"
 echo "    the plain exit is the scout's proxy; the scout read none of the site's pages"
+
+echo "==> level 0 reads a page in a legacy encoding as a browser does, and one site has one name (F100, F104)"
+# By its header and by its <meta> only: the title, the text and the link
+# are what the page says (until F100 they were replacement characters).
+for legacy in latin1 latin1-meta; do
+    fetch_json "http://fixture.kage.test:8088/legacy/${legacy}" --level 0 --extract
+    [ "${fetch_status}" -eq 0 ] || fail "kage fetch --level 0 of /legacy/${legacy} failed: ${report}"
+    check "level 0: a page in ISO-8859-1 (${legacy}) says what it says" "${report}" \
+        "d.outcome === 'ok' && d.extract.title === 'Café' && d.extract.text.startsWith('Café Müller') && d.extract.text.includes('Straße München') && !JSON.stringify(d.extract).includes(String.fromCharCode(0xfffd)) && d.extract.links[0].url === 'http://fixture.kage.test:8088/legacy/f%C3%BCr'"
+done
+fetch_json "http://fixture.kage.test:8088/legacy/sjis" --level 0 --extract
+[ "${fetch_status}" -eq 0 ] || fail "kage fetch --level 0 of /legacy/sjis failed: ${report}"
+check "level 0: a page in Shift_JIS by its <meta> says what it says" "${report}" \
+    "d.outcome === 'ok' && d.extract.title === '日本語' && !JSON.stringify(d.extract).includes(String.fromCharCode(0xfffd))"
+echo "    level 0: $(value "${report}" "'title ' + d.extract.title + ', ' + d.extract.word_count + ' words'")"
+# The host with the dot of the DNS root is the site's own name: asked for
+# without the dot, from the site's one exit.
+got "http://fixture:8088/__kage/reset" > /dev/null
+fetch_json "http://fixture.kage.test.:8088/legacy/sjis" --level 0
+[ "${fetch_status}" -eq 0 ] || fail "kage fetch --level 0 of a dotted host failed: ${report}"
+check "level 0: a host with a trailing dot is the site, asked for without the dot" "${report}" \
+    "d.outcome === 'ok' && d.final_url === 'http://fixture.kage.test:8088/legacy/sjis' && d.attempts.length === 1 && d.attempts[0].exit === 'pool'"
+# Two dots name no host: refused before anything is sent.
+for refused in "http://localhost../" "http://127.0.0.1../" "http://fixture.kage.test..:8088/"; do
+    fetch_json "${refused}" --level 0
+    check "level 0: ${refused} is refused before anything is sent" "${report}" \
+        "d.outcome === 'ssrf_denied' && d.attempts.length === 0"
+done
+seen="$(got "http://fixture:8088/__kage/requests")"
+check "the site saw its own name once, and nothing of the refused ones" "${seen}" \
+    "d.length === 1 && d[0].host === 'fixture.kage.test:8088' && d[0].path === '/legacy/sjis'"
+echo "    the dotted name was asked for as fixture.kage.test; three names with two dots were refused"
 # 3: a person, in a browser, as above.
 got "http://fixture:8088/__kage/reset" > /dev/null
 fetch_json "http://fixture.kage.test:8088/" --level 3 --timeout 30s

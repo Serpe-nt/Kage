@@ -435,6 +435,12 @@ struct DomainRun {
     /// Dispatch times within [`RPM_WINDOW`].
     starts: VecDeque<DateTime<Utc>>,
     errors: ServerErrors,
+    /// When the plain client may start its next page on the domain, where
+    /// the site's `Crawl-delay` is kept (`Work::gap_floor`).
+    plain_next: Option<DateTime<Utc>>,
+    /// The plain client's pages on the domain that kept a floor: what
+    /// draws each gap's share above it.
+    plain_pages: u32,
 }
 
 #[derive(Debug)]
@@ -879,7 +885,19 @@ impl Planner {
             return Looked::Wait(None);
         }
         // A plain client needs nothing more: no persona makes its attempt.
+        // Where the site's file is enforced it keeps to its `Crawl-delay`
+        // as a persona does, from the start of one of its pages on the
+        // domain to the start of the next (F99: level 0 kept none).
         if work.plain {
+            if work.gap_floor.is_some()
+                && let Some(at) = self
+                    .domains
+                    .get(&work.domain)
+                    .and_then(|domain| domain.plain_next)
+                    .filter(|at| *at > now)
+            {
+                return Looked::Wait(Some(at));
+            }
             return Looked::GoPlain;
         }
 
@@ -1377,10 +1395,17 @@ impl Planner {
         let grant = GrantId(self.next_grant);
         self.next_grant += 1;
         self.http_in_flight += 1;
+        let seed = self.seed;
         let domain = self.domains.entry(work.domain.clone()).or_default();
         prune(&mut domain.starts, now, RPM_WINDOW);
         domain.starts.push_back(now);
         domain.in_flight += 1;
+        if let Some(floor) = work.gap_floor {
+            let seed = Seed::derive("plain-gap", &[seed.as_bytes(), work.domain.as_bytes()]);
+            let wait = floored(StdDuration::ZERO, Some(floor), &seed, domain.plain_pages);
+            domain.plain_next = Some(now + chrono_of(wait));
+            domain.plain_pages = domain.plain_pages.saturating_add(1);
+        }
         self.grants.insert(
             grant,
             Grant {

@@ -1,6 +1,9 @@
 //! The http path (spec §9): fetching pages with wreq so that the request is
 //! a browser's at every layer a server can see without running JavaScript.
 //!
+//! - [`charset`]: how a body is read as text, by the encoding a browser
+//!   would take for it (its byte order mark, its `Content-Type`, its
+//!   `<meta>`, the fallback).
 //! - [`profile`]: the emulation profiles wreq-util ships, and the mapping
 //!   from a persona's engine, browser major and operating system to one of
 //!   them (spec §6.1 step 4).
@@ -29,6 +32,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod charset;
 pub mod client;
 pub mod cookies;
 pub mod echo;

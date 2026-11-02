@@ -866,6 +866,16 @@ async fn a_crawl_is_accepted_whole_or_not_at_all_and_needs_its_scope() {
         .await
         .problem(StatusCode::UNPROCESSABLE_ENTITY, "ssrf_denied");
     assert_eq!(denied["item"], 1);
+    // A host with an empty label names no host (ssrf-04, F104).
+    let denied = api
+        .post(
+            &token,
+            "/v1/jobs",
+            &json!({ "type": "crawl", "seeds": [Api::url("/"), "http://127.0.0.1../"], "defaults": level }),
+        )
+        .await
+        .problem(StatusCode::UNPROCESSABLE_ENTITY, "ssrf_denied");
+    assert_eq!(denied["item"], 1);
     api.post(
         &token,
         "/v1/jobs",

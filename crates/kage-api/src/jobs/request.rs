@@ -1322,6 +1322,11 @@ pub(crate) async fn plan_webhook(
     let origin = kage_core::config::origin_of(&url)
         .filter(|_| url.port() != Some(0))
         .ok_or_else(|| invalid("the webhook URL has no host, or no port Kage could post to"))?;
+    // A host with an empty label names no host (F104): refused before the
+    // operator's lists are read, a private receiver's too.
+    if let Err(empty) = kage_core::urlnorm::normal_url(&url) {
+        return Err(ApiError::new(ErrorCode::SsrfDenied, empty.to_string()).with("field", FIELD));
+    }
     let webhooks = &checks.config.webhooks;
     if !webhooks.allows(&url) {
         return Err(ApiError::new(

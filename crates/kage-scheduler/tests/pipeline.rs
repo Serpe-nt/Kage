@@ -1150,3 +1150,87 @@ async fn a_proxy_that_fails_is_the_proxys_failure_and_never_the_sites() {
     assert!(world.now() - asked >= Span::seconds(25));
     world.shut_down().await;
 }
+
+/// QA round one's policy-01 (F104): a host with one trailing dot was
+/// another site to the breaker, the cooldowns, the pace and the plain exit.
+/// It is the same site: blocks under one spelling pause the other, the
+/// personas that were turned away cool for the site, level 0 leaves by the
+/// site's one exit, and the request is stored and asked for without the
+/// dot. A host with two dots is refused before anything is sent.
+#[tokio::test(start_paused = true)]
+async fn a_host_with_a_trailing_dot_is_the_same_site_and_one_with_two_is_refused() {
+    let rules = "defaults: { breaker_threshold: 2, breaker_pause: 30m, retries: 1 }\ndomains: {}\n";
+    let mut world = World::new(8, rules);
+    world
+        .script
+        .then(blocked(Outcome::Forbidden, 1.0))
+        .then(blocked(Outcome::Forbidden, 1.0));
+
+    let report = world
+        .pipeline
+        .fetch(browser("https://wall.example./a"))
+        .await
+        .unwrap();
+    assert_eq!(report.attempts.len(), 2);
+    let breaker = world.backend.breaker("wall.example").unwrap();
+    assert_eq!(breaker.state, BreakerState::Open);
+    assert_eq!(world.backend.breaker("wall.example."), None);
+    // The two personas that were turned away cool for the site.
+    for attempt in &report.attempts {
+        let persona = attempt.persona_id.unwrap();
+        let state = world.backend.domain_state(persona, "wall.example").unwrap();
+        assert!(state.cooldown_until.is_some());
+        assert_eq!(world.backend.domain_state(persona, "wall.example."), None);
+    }
+    // What was asked for and stored has no dot.
+    let urls = world.script.urls();
+    assert!(
+        urls.iter().all(|url| url == "https://wall.example/a"),
+        "{urls:?}"
+    );
+    let requests = world.backend.requests();
+    assert_eq!(requests[0].domain, "wall.example");
+    assert_eq!(requests[0].url, "https://wall.example/a");
+
+    // Either spelling, at any level, is paused.
+    for (level, url) in [
+        (Level::Human, "https://wall.example/b"),
+        (Level::Human, "https://wall.example./c"),
+        (Level::Plain, "https://WALL.example./d"),
+    ] {
+        let refused = world.pipeline.fetch(at(level, url)).await.unwrap();
+        assert_eq!(refused.reason.as_deref(), Some("domain_paused"), "{url}");
+        assert_eq!(refused.attempts, [], "{url}");
+    }
+    assert_eq!(world.script.seen().len(), 2);
+    assert!(world.script.plain_seen().is_empty());
+
+    // Level 0 of another site leaves by that site's one exit, however the
+    // host is spelled.
+    for url in ["https://shop.example/a", "https://shop.example./b"] {
+        let read = world.pipeline.fetch(at(Level::Plain, url)).await.unwrap();
+        assert_eq!(read.outcome, Outcome::Ok, "{url}");
+    }
+    let seen = world.script.plain_seen();
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[0].job.route, seen[1].job.route);
+    assert_eq!(seen[1].job.url.as_str(), "https://shop.example/b");
+
+    // Two dots, a leading dot, two in a row: no host; nothing is sent.
+    for url in [
+        "http://localhost../",
+        "http://127.0.0.1../",
+        "https://shop.example../a",
+        "https://.shop.example/a",
+        "https://shop..example/a",
+    ] {
+        for level in [Level::Plain, Level::Human] {
+            let refused = world.pipeline.fetch(at(level, url)).await.unwrap();
+            assert_eq!(refused.outcome, Outcome::SsrfDenied, "{url}");
+            assert_eq!(refused.attempts, [], "{url}");
+        }
+    }
+    assert_eq!(world.script.seen().len(), 2);
+    assert_eq!(world.script.plain_seen().len(), 2);
+    world.shut_down().await;
+}

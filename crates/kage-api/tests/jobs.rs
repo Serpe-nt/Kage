@@ -411,6 +411,11 @@ async fn a_job_is_accepted_whole_or_not_at_all() {
             Some(("item", json!(1))),
         ),
         (
+            batch(json!({ "urls": [Api::url("/a"), "http://localhost../"] })),
+            "ssrf_denied",
+            Some(("item", json!(1))),
+        ),
+        (
             batch(json!({ "items": [{ "url": Api::url("/b"), "render": "paper" }] })),
             "validation_failed",
             Some(("item", json!(1))),
@@ -493,6 +498,18 @@ async fn a_job_is_accepted_whole_or_not_at_all() {
             ])),
             "ssrf_denied",
             Some(("step", json!(1))),
+        ),
+        (
+            flow(json!([{ "action": "goto", "url": "http://localhost../" }])),
+            "ssrf_denied",
+            Some(("step", json!(0))),
+        ),
+        (
+            batch(
+                json!({ "webhook": { "url": "https://hooks.example.org../kage", "secret": "a secret of sixteen bytes or more" } }),
+            ),
+            "ssrf_denied",
+            Some(("field", json!("webhook.url"))),
         ),
         (
             flow(json!([

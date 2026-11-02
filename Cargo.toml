@@ -119,6 +119,10 @@ ipnet = { version = "=2.12.2" }
 # `Sec-Fetch-Site` value of a request and which `Domain` a cookie may name.
 # A newer list is a deliberate bump like any other pin.
 psl = { version = "=2.1.239" }
+# The Encoding Standard (WHATWG): the http path decodes a document as a browser
+# does, by its BOM, its Content-Type, its <meta> and the fallback (F100). It
+# was in the lockfile already, behind serde-saphyr.
+encoding_rs = { version = "=0.8.42" }
 
 # The fingerprint echo (kage-http) terminates TLS with rustls on ring, the
 # stack sqlx already links. Never the aws-lc-rs provider: that is one more C
