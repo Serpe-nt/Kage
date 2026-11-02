@@ -3674,10 +3674,17 @@ fn a_site_that_asks_for_a_delay_gets_it_between_two_pages_of_the_plain_client() 
         }
         let mut starts = Vec::new();
         let mut now = noon();
+        // When the planner names the moment the floor ends, the plain
+        // client leaves at that moment and not a tick later.
+        let mut named = None;
         while starts.len() < 8 && now < noon() + Duration::hours(1) {
             for decision in planner.plan(now, &facts_for(&["slow.example"])) {
                 if let Decision::Plain(left) = decision {
+                    if let Some(at) = named.filter(|_| gap_floor.is_some() && !starts.is_empty()) {
+                        assert_eq!(now, at, "the plain client left later than its floor ended");
+                    }
                     starts.push(now);
+                    named = None;
                     planner.complete(
                         left.grant,
                         now,
@@ -3689,10 +3696,13 @@ fn a_site_that_asks_for_a_delay_gets_it_between_two_pages_of_the_plain_client() 
                     );
                 }
             }
-            now = planner
-                .wake_at()
-                .filter(|at| *at > now)
-                .unwrap_or(now + secs(1));
+            // The moment is kept until the client leaves: a client that
+            // was still held at it leaves a tick later, which is too late.
+            let wake = planner.wake_at().filter(|at| *at > now);
+            if wake.is_some() {
+                named = wake;
+            }
+            now = wake.unwrap_or(now + secs(1));
         }
         assert_eq!(starts.len(), 8);
         starts
