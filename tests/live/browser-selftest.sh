@@ -155,6 +155,12 @@ export KAGE__PROXIES__PROVIDER=webshare
 # This check must never spend a replacement. Nothing it runs requests one;
 # a budget of zero makes that impossible as well.
 export KAGE__PROXIES__REPLACEMENTS_PER_MONTH=0
+# The stand-in's browser leaves through a forwarder of the command's own,
+# on a free port of this machine (F105): the sidecar reaches it at the
+# address of its host on Docker's bridge, and never holds the provider's
+# credentials.
+export KAGE__FORWARDER__BIND=0.0.0.0:8899
+export KAGE__FORWARDER__ADVERTISE=http://host.docker.internal:8899
 # The configuration is the defaults plus the environment, whatever file the
 # caller's shell points at.
 unset KAGE_CONFIG
@@ -190,6 +196,7 @@ start_sidecar() {
     sidecar="kage-live-browser-${engine}-$$"
     docker run --detach --name "${sidecar}" "${hardening[@]}" \
         --shm-size 1g --tmpfs /tmp --pids-limit 4096 --memory 4g \
+        --add-host host.docker.internal:host-gateway \
         --volume /var/lib/kage/personas --volume /var/lib/kage/artifacts \
         --env "ENGINE=${engine}" --env "SIDECAR_TOKEN=${token}" --env SIDECAR_MAX_CONTEXTS=1 \
         --env "SIDECAR_CONTEXT_IDLE_MS=$(((idle + 300) * 1000))" \

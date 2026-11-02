@@ -26,7 +26,10 @@
 #     that runs in the server in the persona's own browser, a key revoked;
 #   - a request no persona can serve under the reloaded policy, answered
 #     as a result without an attempt;
-#   - an audit row for every admin call, and the series of `/metrics`.
+#   - an audit row for every admin call, and the series of `/metrics`;
+#   - `kage selftest browser --proxy` reading its pages through kage on the
+#     shipped network layout, and a run that could read none of them
+#     ending as inconclusive with a failing exit (F105).
 #
 # Level 1 cannot run here: no persona of this release has an http profile
 # for its browser's major (follow-up F30), and it is refused with
@@ -464,5 +467,26 @@ families="$(grep --count '^# TYPE ' "${metrics}")"
 call GET /metrics
 problem 401 missing_key "/metrics without a key"
 echo "    ${families} families, among them every one of spec §20 that this run could move"
+
+echo "==> kage selftest browser --proxy reads its pages through kage, and a run that read none is no pass (F105)"
+# The stand-in of a proxy has no persona row: the command hands its browser
+# a forwarder of its own, as the server hands a persona's, so a sidecar on
+# the network `browsers` reaches its pages through kage.
+proxies="$(kage proxy list --json)"
+stand_proxy="$(value "${proxies}" "d.proxies.find((p) => p.host === 'proxy-c').id")"
+stood="$(kage selftest browser --proxy "${stand_proxy}" --engine chromium --json 2> /dev/null)" \
+    || fail "the stand-in's self-test failed: $(printf '%s' "${stood}" | head -c 2000)"
+check "the stand-in read the probe through the forwarder and passed" "${stood}" \
+    "d.verdict === 'passed' && d.passed === true && d.pages.some((p) => p.status === 'ok') && d.findings.some((f) => f.status === 'pass')"
+# A proxy that answers nothing: not one page can be read, and the command
+# says so and fails, whatever the score of no check at all would be.
+"${compose[@]}" stop proxy-c > /dev/null 2>&1
+unread_status=0
+unread="$(kage selftest browser --proxy "${stand_proxy}" --engine chromium --json 2> /dev/null)" || unread_status=$?
+"${compose[@]}" start proxy-c > /dev/null 2>&1
+[ "${unread_status}" -ne 0 ] || fail "a self-test that read no page exited 0: $(printf '%s' "${unread}" | head -c 2000)"
+check "it says that nothing was tested" "${unread}" \
+    "d.verdict === 'inconclusive' && d.passed === false && d.complete === false && d.pages.every((p) => p.status !== 'ok')"
+echo "    through proxy-c: $(value "${stood}" "d.verdict + ', score ' + d.score"); with proxy-c stopped: $(value "${unread}" "d.verdict"), exit ${unread_status}"
 
 echo "API test passed"

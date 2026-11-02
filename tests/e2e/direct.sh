@@ -160,14 +160,23 @@ check "the probe page saw the persona's browser, from the host's address" "${see
     "d.some((r) => r.path.startsWith('/probe/') && r.from === '${address}')"
 echo "    $(value "${tested}" "'verdict ' + d.browser.verdict")"
 
-echo "==> a name the operator did not list as private is never reached"
+echo "==> a name the operator did not list as private is never reached, and the answer says the guard refused it"
 got "http://fixture:8088/__kage/reset" > /dev/null
-fetch_json "http://rules.kage.test:8088/" --level 0 --retries 0
+# The forwarder refuses the name for its private address; the answer is the
+# guard's, ssrf_denied, never tried again (F102), at level 0 and in the
+# host persona's browser alike.
+fetch_json "http://rules.kage.test:8088/" --level 0
 [ "${fetch_status}" -ne 0 ] || fail "an unlisted private name was fetched: ${report}"
-check "no page came back" "${report}" "d.outcome !== 'ok' && d.status === null"
+check "level 0: ssrf_denied at the first attempt, nothing came back" "${report}" \
+    "d.outcome === 'ssrf_denied' && d.status === null && d.attempts.length === 1"
+plain_denied="$(value "${report}" "d.outcome + ' after ' + d.attempts.length + ' attempt'")"
+fetch_json "http://rules.kage.test:8088/browser" --level 3 --timeout 30s
+[ "${fetch_status}" -ne 0 ] || fail "an unlisted private name was fetched in a browser: ${report}"
+check "level 3: ssrf_denied at the first attempt, nothing kept" "${report}" \
+    "d.outcome === 'ssrf_denied' && d.attempts.length === 1 && !d.dom_html"
 seen="$(got "http://fixture:8088/__kage/requests")"
 check "the site saw nothing" "${seen}" "d.length === 0"
-echo "    $(value "${report}" "d.outcome + (d.reason ? ': ' + d.reason : '')")"
+echo "    level 0: ${plain_denied}; level 3: $(value "${report}" "d.outcome + ' after ' + d.attempts.length + ' attempt'")"
 
 echo "==> nothing went through the pool, and every byte is the host's"
 for proxy in proxy-a proxy-b proxy-c; do
