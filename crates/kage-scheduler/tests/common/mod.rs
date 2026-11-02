@@ -589,6 +589,7 @@ impl World {
             give_up_at: None,
             gap_floor: None,
             plain: false,
+            legs: Vec::new(),
         }
     }
 

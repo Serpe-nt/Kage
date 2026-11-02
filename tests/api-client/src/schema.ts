@@ -1788,12 +1788,15 @@ export interface components {
          *     The persona arrives by a typed navigation, stays on every page it comes
          *     to for a while with its pointer moving, and pauses between its actions
          *     as a person does, so a flow takes longer than its steps: plan about ten
-         *     seconds for every page it visits. A flow whose page turns out to be a
-         *     wall is a blocked attempt: the persona leaves, and another one runs the
-         *     flow again from its first step, inside the policy's retry budget (never
-         *     in a session). A step that fails on a page that is no wall is the
-         *     script's failure and is not retried. The job's items are the steps, in
-         *     order, and one last item for the page the flow ended on.
+         *     seconds for every page it visits. Every `goto` meets the policy of its
+         *     own site as a fetch of that address would: its floor (`min_level`, at
+         *     acceptance), its enforced `robots.txt`, its breaker, its pacing and its
+         *     hours. A flow whose page turns out to be a wall is a blocked attempt,
+         *     booked to the site that showed the wall: the persona leaves, and another
+         *     one runs the flow again from its first step, inside the policy's retry
+         *     budget (never in a session). A step that fails on a page that is no wall
+         *     is the script's failure and is not retried. The job's items are the
+         *     steps, in order, and one last item for the page the flow ended on.
          * @example {
          *       "actions": [
          *         {
@@ -2970,7 +2973,8 @@ export interface components {
             /**
              * @description False: done by the browser's driver instead of the persona's mouse
              *     and keyboard, which a page can tell apart. Refused
-             *     (`driver_input_denied`) unless the policy of the flow's site has
+             *     (`driver_input_denied`) unless the policy of the site whose page it
+             *     acts on, the site of the last `goto` before it, has
              *     `driver_input: true`.
              */
             human?: boolean | null;

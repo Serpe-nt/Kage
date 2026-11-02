@@ -256,7 +256,10 @@ impl Engine {
                 config,
                 Some(Arc::clone(&meter)),
             )
-            .with_plain(forwarder.egress()),
+            .with_plain(forwarder.egress())
+            // What the forwarder refuses by the SSRF guard is the guard's
+            // outcome, not a failed network (F102).
+            .with_denials(Arc::clone(forwarder.denials())),
         );
         // Bodies, screenshots and PDFs a request asks to keep go into the
         // artifact store, next to where the sidecars write their files.

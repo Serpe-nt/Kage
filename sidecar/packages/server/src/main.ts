@@ -11,9 +11,13 @@ import { buildApp } from './app.js';
 import { loadConfig } from './config.js';
 import { loadEngine } from './engine-loader.js';
 import { createTracer } from './tracing.js';
+import { startWatchdog } from './watchdog.js';
 
 try {
   const config = loadConfig(process.env);
+  // A main thread that stops answering ends the process, so that the
+  // container is restarted (F103).
+  startWatchdog(config.stallMs);
   // The engine logs through the server's logger once that exists; until
   // then its start-up lines go to stderr as JSON, like pino's.
   let sink: ((level: string, fields: Record<string, unknown>, message: string) => void) | null =
@@ -53,6 +57,12 @@ try {
     maxPagesPerBrowser: config.maxPagesPerBrowser,
     bodyLimitBytes: config.bodyLimitBytes,
     logLevel: config.logLevel,
+    stallMs: config.stallMs,
+    // An engine that stopped answering is not repaired here: the process
+    // ends, and the container's restart policy starts it again (F103).
+    onStalled: () => {
+      process.exit(70);
+    },
   });
   sink = (level, fields, message) => {
     if (level === 'error') {

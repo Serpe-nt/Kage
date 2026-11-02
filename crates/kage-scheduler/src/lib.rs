@@ -56,7 +56,8 @@ pub use executor::{
     FlowRun, FlowStep, PathExecutor, PlainJob, Reached,
 };
 pub use forwarder::{
-    Forwarder, ForwarderEgress, ForwarderSettings, Meter, PlainRoute, Routes, Tokens, Upstream,
+    Caller, Denial, Denials, Forwarder, ForwarderEgress, ForwarderSettings, Meter, PlainRoute,
+    Routes, Tokens, Upstream,
 };
 pub use memory::MemoryBackend;
 pub use pipeline::{

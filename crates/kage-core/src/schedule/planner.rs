@@ -267,6 +267,47 @@ pub struct Work {
     /// http path. It is never a half-open breaker's trial: a site that
     /// answers a plain client says nothing about the personas.
     pub plain: bool,
+    /// The other sites the attempt reaches: the later sites of a flow
+    /// (spec §10.5, F101). Each holds the attempt as a request of its own
+    /// would be held, for the same persona: its breaker, its pause after
+    /// server errors, its `domain_concurrency` and `domain_rpm`, and the
+    /// persona's cooldown, daily cap, nights and gap there. Empty for
+    /// every attempt that reads one site.
+    pub legs: Vec<Leg>,
+}
+
+/// A later site an attempt reaches besides its own domain: one of a flow's
+/// (spec §10.5, F101). Its gates are its own policy's.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Leg {
+    /// The site's host: the key of its pacing and its breaker.
+    pub domain: String,
+    /// The pacing in force there, before a persona's own pace.
+    pub pacing: PacingProfile,
+    /// What the personas' days mean there.
+    pub active_hours: ActiveHoursMode,
+    /// Its breaker threshold, from its policy.
+    pub breaker_threshold: u32,
+    /// Its breaker's first pause, from its policy.
+    pub breaker_pause: StdDuration,
+    /// The least gap between two pages of a persona there, as
+    /// [`Work::gap_floor`] for the attempt's own domain.
+    pub gap_floor: Option<StdDuration>,
+}
+
+/// What the planner booked on a later site of an attempt ([`Leg`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LegDispatch {
+    /// The site.
+    pub domain: String,
+    /// Whether the attempt is the one trial of the site's half-open
+    /// breaker.
+    pub trial: bool,
+    /// The rules of the site's breaker, for whoever reports the attempt's
+    /// end to it.
+    pub breaker: BreakerRules,
+    /// Whether the attempt starts a visit of the persona to the site.
+    pub starts_visit: bool,
 }
 
 /// A gap with a floor under it: the gap as drawn when it is at least the
@@ -325,6 +366,8 @@ pub struct Dispatch {
     /// The rules of the domain's breaker, for whoever reports the
     /// attempt's end to it.
     pub breaker: BreakerRules,
+    /// What was booked on each of the work's [`Leg`]s, in their order.
+    pub legs: Vec<LegDispatch>,
 }
 
 /// A plain client's attempt (level 0) that may leave now: no persona, no
@@ -447,6 +490,8 @@ struct Grant {
     engine: Engine,
     render: Render,
     domain: Option<String>,
+    /// The other sites the attempt counts on ([`Leg`]).
+    legs: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -463,6 +508,8 @@ enum Looked {
         woken: bool,
         /// Whether the persona's own slot timed the start.
         paced: bool,
+        /// Which of the work's legs the attempt is the breaker's trial of.
+        leg_trials: Vec<bool>,
     },
     /// A plain client's attempt leaves.
     GoPlain,
@@ -472,11 +519,33 @@ enum Looked {
 }
 
 /// What is known about an attempt at the moment it leaves.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Flags {
     trial: bool,
     woken: bool,
     paced: bool,
+    leg_trials: Vec<bool>,
+}
+
+/// What holds a site's work by the site's own limits.
+enum SiteHold {
+    /// The pause after server errors in a row, until then.
+    ErrorPause(DateTime<Utc>),
+    /// As many attempts in flight as `domain_concurrency` allows.
+    Full,
+    /// As many starts in the last minute as `domain_rpm` allows: until the
+    /// oldest of them is a minute old.
+    Rpm(Option<DateTime<Utc>>),
+}
+
+/// What booking a page on a site's pacing came to.
+struct Booked {
+    starts_visit: bool,
+    page_of_visit: u32,
+    next_slot: DateTime<Utc>,
+    pacing_seed: Seed,
+    ends_burst: bool,
+    ends_visit: bool,
 }
 
 /// A persona that could serve a request, and when.
@@ -570,6 +639,25 @@ fn set_suspects_aside(possible: Vec<Possible<'_>>) -> (Vec<Possible<'_>>, Option
     (rest, Some(cleared))
 }
 
+/// What is stored about every later site of `work`, in the order of its
+/// legs (F101). `None` while one of them has its own work held, which holds
+/// this work too, or nothing of it is known yet: it waits for the next
+/// plan.
+fn leg_facts<'f>(
+    work: &Work,
+    facts: &'f HashMap<String, DomainFacts>,
+    held: &HashSet<String>,
+) -> Option<Vec<&'f DomainFacts>> {
+    work.legs
+        .iter()
+        .map(|leg| {
+            (!held.contains(&leg.domain))
+                .then(|| facts.get(&leg.domain))
+                .flatten()
+        })
+        .collect()
+}
+
 fn prune(times: &mut VecDeque<DateTime<Utc>>, now: DateTime<Utc>, window: Duration) {
     while times
         .front()
@@ -658,7 +746,10 @@ impl Planner {
         let mut domains: Vec<String> = self
             .queue
             .iter()
-            .map(|(_, queued)| queued.work.domain.clone())
+            .flat_map(|(_, queued)| {
+                std::iter::once(queued.work.domain.clone())
+                    .chain(queued.work.legs.iter().map(|leg| leg.domain.clone()))
+            })
             .collect();
         domains.sort_unstable();
         domains.dedup();
@@ -724,6 +815,43 @@ impl Planner {
         }
     }
 
+    fn leg_breaker_rules(&self, leg: &Leg) -> BreakerRules {
+        BreakerRules {
+            threshold: leg.breaker_threshold,
+            pause: leg.breaker_pause,
+            max_pause: self.rules.breaker_max_pause,
+            trial_timeout: self.rules.breaker_trial_timeout,
+        }
+    }
+
+    /// What holds work of a site by the site's own limits now: the pause
+    /// after server errors, its concurrency and its requests per minute.
+    fn site_hold(
+        &self,
+        now: DateTime<Utc>,
+        domain: &str,
+        pacing: &PacingProfile,
+    ) -> Option<SiteHold> {
+        let run = self.domains.get(domain);
+        if let Some(until) = run.and_then(|run| run.errors.paused_until(now)) {
+            return Some(SiteHold::ErrorPause(until));
+        }
+        if run.is_some_and(|run| run.in_flight >= pacing.domain_concurrency) {
+            return Some(SiteHold::Full);
+        }
+        let recent: Vec<DateTime<Utc>> = run.map_or_else(Vec::new, |run| {
+            run.starts
+                .iter()
+                .filter(|at| now.signed_duration_since(**at) < RPM_WINDOW)
+                .copied()
+                .collect()
+        });
+        if recent.len() >= usize::try_from(pacing.domain_rpm).unwrap_or(usize::MAX) {
+            return Some(SiteHold::Rpm(recent.first().map(|at| *at + RPM_WINDOW)));
+        }
+        None
+    }
+
     /// Looks at everything that waits, in order, and says what leaves and
     /// what is refused. `facts` holds what is stored about every domain
     /// with waiting work; work of a domain that is missing waits for the
@@ -743,10 +871,14 @@ impl Planner {
         // Domains whose half-open breaker let its trial go in this pass.
         let mut trials: HashSet<String> = HashSet::new();
         self.awake.clear();
-        let hours_matter = self
-            .queue
-            .iter()
-            .any(|(_, queued)| queued.work.active_hours != ActiveHoursMode::Ignore);
+        let hours_matter = self.queue.iter().any(|(_, queued)| {
+            queued.work.active_hours != ActiveHoursMode::Ignore
+                || queued
+                    .work
+                    .legs
+                    .iter()
+                    .any(|leg| leg.active_hours != ActiveHoursMode::Ignore)
+        });
         if hours_matter {
             for view in self.personas.values() {
                 let awake = self.days.awake(&view.seed, now, &view.timezone);
@@ -766,19 +898,35 @@ impl Planner {
             let Some(known) = facts.get(&domain) else {
                 continue;
             };
-            let looked = self.look(now, queued, known, &mut claimed, &mut held, &trials);
+            let Some(legs) = leg_facts(&queued.work, facts, &held) else {
+                continue;
+            };
+            let looked = self.look(
+                now,
+                queued,
+                (known, &legs),
+                &mut claimed,
+                &mut held,
+                &trials,
+            );
             match looked {
                 Looked::Go {
                     persona,
                     trial,
                     woken,
                     paced,
+                    leg_trials,
                 } => {
                     let Some(queued) = self.queue.remove(ticket) else {
                         continue;
                     };
                     if trial {
                         trials.insert(domain);
+                    }
+                    for (leg, tried) in queued.work.legs.iter().zip(&leg_trials) {
+                        if *tried {
+                            trials.insert(leg.domain.clone());
+                        }
                     }
                     decisions.push(Decision::Dispatch(self.dispatch(
                         now,
@@ -789,6 +937,7 @@ impl Planner {
                             trial,
                             woken,
                             paced,
+                            leg_trials,
                         },
                     )));
                 }
@@ -819,7 +968,7 @@ impl Planner {
         &self,
         now: DateTime<Utc>,
         queued: &Queued,
-        facts: &DomainFacts,
+        (facts, legs): (&DomainFacts, &[&DomainFacts]),
         claimed: &mut HashSet<PersonaId>,
         held: &mut HashSet<String>,
         trials: &HashSet<String>,
@@ -827,6 +976,24 @@ impl Planner {
         let work = &queued.work;
         if let Some(reason) = self.stop {
             return Looked::Refuse(reason, None);
+        }
+        // Every later site of the attempt admits it as it would admit a
+        // request of its own (F101): a paused site refuses it, and a
+        // half-open one lets it go as its one trial.
+        let mut leg_trials = Vec::with_capacity(work.legs.len());
+        for (leg, known) in work.legs.iter().zip(legs) {
+            let mut tried = false;
+            if let Some(breaker) = &known.breaker {
+                match breaker.admission(now, &self.leg_breaker_rules(leg)) {
+                    Admission::Flow => {}
+                    Admission::Trial if !trials.contains(&leg.domain) => tried = true,
+                    Admission::Trial => return Looked::Refuse(Refusal::DomainPaused, None),
+                    Admission::Paused { until } => {
+                        return Looked::Refuse(Refusal::DomainPaused, until);
+                    }
+                }
+            }
+            leg_trials.push(tried);
         }
         let mut trial = false;
         if let Some(breaker) = &facts.breaker {
@@ -872,6 +1039,18 @@ impl Planner {
             });
             return Looked::Wait(oldest.map(|at| *at + RPM_WINDOW));
         }
+        // The later sites' own limits hold the attempt too; they hold no
+        // other work of this domain.
+        for leg in &work.legs {
+            match self.site_hold(now, &leg.domain, &leg.pacing) {
+                None => {}
+                Some(SiteHold::ErrorPause(until)) => {
+                    return self.wait_or_give_up(work, Some(until));
+                }
+                Some(SiteHold::Full) => return Looked::Wait(None),
+                Some(SiteHold::Rpm(until)) => return Looked::Wait(until),
+            }
+        }
 
         // The global limits.
         let full = match work.render {
@@ -901,7 +1080,7 @@ impl Planner {
             return Looked::GoPlain;
         }
 
-        let possible = self.possible(now, queued, facts);
+        let possible = self.possible(now, queued, (facts, legs));
         if possible.is_empty() {
             // Nobody ready now: an outage of the pool says nothing about
             // the request, and it is worth asking again (F107). Nobody at
@@ -922,7 +1101,7 @@ impl Planner {
                 if let Some(at) = self.spaced(now, only) {
                     return Looked::Wait(Some(at));
                 }
-                return self.go(now, only, trial, work);
+                return self.go(now, only, (trial, &leg_trials), work);
             }
             return self.wait_or_give_up(work, only.at);
         }
@@ -931,7 +1110,7 @@ impl Planner {
         // that could start before the suspicion ends (F108); the work looks
         // again when it ends, when the one set aside may be the first.
         let (possible, recheck) = set_suspects_aside(possible);
-        let looked = self.choose(now, work, &possible, claimed, facts, trial);
+        let looked = self.choose(now, work, &possible, claimed, facts, (trial, &leg_trials));
         match (looked, recheck) {
             (Looked::Wait(at), Some(recheck)) => Looked::Wait(earlier(at, Some(recheck))),
             (Looked::Refuse(Refusal::NoPersona, Some(at)), Some(recheck)) if at > recheck => {
@@ -943,6 +1122,8 @@ impl Planner {
 
     /// Decides one waiting request among the personas that may take it:
     /// a visitor, a new visitor when there is room, or the first who can.
+    /// `trials` says whether the attempt is the half-open trial of its
+    /// domain and of each later site of a flow (F101).
     #[allow(clippy::too_many_lines)] // Every way a persona may take it, in order.
     fn choose(
         &self,
@@ -951,7 +1132,7 @@ impl Planner {
         possible: &[Possible<'_>],
         claimed: &mut HashSet<PersonaId>,
         facts: &DomainFacts,
-        trial: bool,
+        trials: (bool, &[bool]),
     ) -> Looked {
         let ready = |one: &Possible<'_>| one.at.is_some_and(|at| at <= now);
 
@@ -979,7 +1160,7 @@ impl Planner {
             if let Some(at) = self.spaced(now, visitor) {
                 return Looked::Wait(Some(at));
             }
-            return self.go(now, visitor, trial, work);
+            return self.go(now, visitor, trials, work);
         }
         // One whose slot opens soon is waited for: the work is its.
         let patience = chrono_of(self.rules.visitor_wait);
@@ -1040,7 +1221,7 @@ impl Planner {
                     if let Some(at) = self.spaced(now, chosen) {
                         return Looked::Wait(Some(at));
                     }
-                    return self.go(now, chosen, trial, work);
+                    return self.go(now, chosen, trials, work);
                 }
             }
         }
@@ -1114,22 +1295,33 @@ impl Planner {
     }
 
     #[allow(clippy::unused_self)]
-    fn go(&self, _now: DateTime<Utc>, one: &Possible<'_>, trial: bool, work: &Work) -> Looked {
+    fn go(
+        &self,
+        _now: DateTime<Utc>,
+        one: &Possible<'_>,
+        (trial, leg_trials): (bool, &[bool]),
+        work: &Work,
+    ) -> Looked {
         Looked::Go {
             persona: one.view.id,
             trial,
             // Asleep, and the hour matters: it reads the one page.
             woken: !one.awake && work.active_hours != ActiveHoursMode::Ignore,
             paced: one.paced,
+            leg_trials: leg_trials.to_vec(),
         }
     }
 
-    /// Every persona that could serve the work, and when.
+    /// Every persona that could serve the work, and when. A persona that
+    /// may not read one of the work's later sites now (it cools there, has
+    /// reached its daily cap there, sleeps by that site's hours, or its gap
+    /// there has not run out) is held as it would be on the domain itself.
+    #[allow(clippy::too_many_lines)] // One persona against every rule of every site.
     fn possible<'a>(
         &'a self,
         now: DateTime<Utc>,
         queued: &Queued,
-        facts: &DomainFacts,
+        (facts, legs): (&DomainFacts, &[&DomainFacts]),
     ) -> Vec<Possible<'a>> {
         let work = &queued.work;
         let mut possible = Vec::new();
@@ -1162,19 +1354,47 @@ impl Planner {
                     barred = true;
                 }
             }
+            for (leg, known) in work.legs.iter().zip(legs) {
+                let Some(state) = known.states.get(&view.id) else {
+                    continue;
+                };
+                if let Some(until) = state.cooldown_until.filter(|until| *until > now) {
+                    at = at.max(until);
+                    barred = true;
+                }
+                let today = place::local_day(now, &view.timezone);
+                if state.cap_reached(today, leg.pacing.daily_cap_per_persona_per_domain) {
+                    at = at.max(place::next_local_midnight(now, &view.timezone));
+                    barred = true;
+                }
+            }
             // Where the hour is not looked at, everyone counts as awake.
-            let (awake, up) = match work.active_hours {
-                ActiveHoursMode::Ignore => (true, now),
-                _ => self.awake.get(&view.id).copied().unwrap_or((true, now)),
+            let hours_matter = work.active_hours != ActiveHoursMode::Ignore
+                || work
+                    .legs
+                    .iter()
+                    .any(|leg| leg.active_hours != ActiveHoursMode::Ignore);
+            let (awake, up) = if hours_matter {
+                self.awake.get(&view.id).copied().unwrap_or((true, now))
+            } else {
+                (true, now)
             };
-            let sleeps_through = match work.active_hours {
+            let sleeps = |mode: ActiveHoursMode| match mode {
                 ActiveHoursMode::Ignore => false,
                 ActiveHoursMode::Enforce => !awake,
                 // A job never wakes a sleeper; a synchronous request may.
                 ActiveHoursMode::Prefer => !awake && work.priority != Priority::Sync,
             };
+            let sleeps_through =
+                sleeps(work.active_hours) || work.legs.iter().any(|leg| sleeps(leg.active_hours));
             if sleeps_through {
                 at = at.max(up);
+            }
+            // Its gap on a later site is no gap of its own on the domain.
+            for leg in &work.legs {
+                if let Some(cadence) = self.cadences.get(&(view.id, leg.domain.clone())) {
+                    at = at.max(cadence.next_at);
+                }
             }
             if let Some(retry) = &work.retry_pause {
                 // A retry leaves a pause after the block, at the pace of
@@ -1268,6 +1488,7 @@ impl Planner {
             trial,
             woken,
             paced,
+            leg_trials,
         } = flags;
         let work = &queued.work;
         let (engine, persona_seed) = self
@@ -1278,51 +1499,45 @@ impl Planner {
             });
         let factor = pacing_factor(&persona_seed);
 
-        let key = (persona, work.domain.clone());
-        let fresh = || {
-            let seed = Seed::derive(
-                "cadence",
-                &[
-                    persona_seed.as_bytes(),
-                    work.domain.as_bytes(),
-                    &now.timestamp_millis().to_le_bytes(),
-                ],
+        let Booked {
+            starts_visit,
+            page_of_visit,
+            next_slot,
+            pacing_seed,
+            ends_burst,
+            ends_visit,
+        } = self.book(
+            now,
+            (persona, &persona_seed, factor),
+            (&work.domain, work.pacing, work.gap_floor),
+            woken,
+        );
+        // The later sites are visited by the same persona in the same
+        // attempt: each is a page of its own on that site's pacing, and
+        // counts toward that site's limits until the attempt ends.
+        let mut legs = Vec::with_capacity(work.legs.len());
+        for (leg, tried) in work
+            .legs
+            .iter()
+            .zip(leg_trials.iter().copied().chain(std::iter::repeat(false)))
+        {
+            let booked = self.book(
+                now,
+                (persona, &persona_seed, factor),
+                (&leg.domain, leg.pacing, leg.gap_floor),
+                woken,
             );
-            Cadence {
-                sampler: PacingSampler::new(work.pacing.for_persona(factor), seed),
-                seed,
-                profile: work.pacing,
-                next_at: now,
-                on_break: false,
-                visiting: false,
-                last_start: now,
-                pages: 0,
-            }
-        };
-        let visiting = self
-            .cadences
-            .get(&key)
-            .is_some_and(|cadence| self.is_visiting(persona, cadence, now));
-        let cadence = self.cadences.entry(key).or_insert_with(fresh);
-        if cadence.profile != work.pacing {
-            // The pacing in force changed: the persona paces anew.
-            *cadence = fresh();
+            let site = self.domains.entry(leg.domain.clone()).or_default();
+            prune(&mut site.starts, now, RPM_WINDOW);
+            site.starts.push_back(now);
+            site.in_flight += 1;
+            legs.push(LegDispatch {
+                domain: leg.domain.clone(),
+                trial: tried,
+                breaker: self.leg_breaker_rules(leg),
+                starts_visit: booked.starts_visit,
+            });
         }
-        let starts_visit = !visiting;
-        if starts_visit {
-            cadence.pages = 0;
-        }
-        let gap = cadence.sampler.next_gap();
-        let wait = floored(gap.wait, work.gap_floor, &cadence.seed, cadence.pages);
-        cadence.next_at = now + chrono_of(wait);
-        cadence.on_break = gap.after_burst;
-        cadence.visiting = !(gap.after_visit || woken);
-        cadence.pages = cadence.pages.saturating_add(1);
-        cadence.last_start = now;
-        let (page_of_visit, next_slot, pacing_seed) =
-            (cadence.pages, cadence.next_at, cadence.seed);
-        let ends_visit = !cadence.visiting;
-        let ends_burst = cadence.on_break;
 
         if !paced {
             let spacing = self
@@ -1361,6 +1576,7 @@ impl Planner {
                 engine,
                 render: work.render,
                 domain: Some(work.domain.clone()),
+                legs: work.legs.iter().map(|leg| leg.domain.clone()).collect(),
             },
         );
 
@@ -1380,6 +1596,67 @@ impl Planner {
             woken,
             pacing_seed,
             breaker: self.breaker_rules(work),
+            legs,
+        }
+    }
+
+    /// Books a page of a persona on a site's pacing: the gap to its next
+    /// page there is drawn, and whether the page starts, or ends, its visit.
+    fn book(
+        &mut self,
+        now: DateTime<Utc>,
+        (persona, persona_seed, factor): (PersonaId, &Seed, f64),
+        (domain, pacing, gap_floor): (&str, PacingProfile, Option<StdDuration>),
+        woken: bool,
+    ) -> Booked {
+        let key = (persona, domain.to_owned());
+        let fresh = || {
+            let seed = Seed::derive(
+                "cadence",
+                &[
+                    persona_seed.as_bytes(),
+                    domain.as_bytes(),
+                    &now.timestamp_millis().to_le_bytes(),
+                ],
+            );
+            Cadence {
+                sampler: PacingSampler::new(pacing.for_persona(factor), seed),
+                seed,
+                profile: pacing,
+                next_at: now,
+                on_break: false,
+                visiting: false,
+                last_start: now,
+                pages: 0,
+            }
+        };
+        let visiting = self
+            .cadences
+            .get(&key)
+            .is_some_and(|cadence| self.is_visiting(persona, cadence, now));
+        let cadence = self.cadences.entry(key).or_insert_with(fresh);
+        if cadence.profile != pacing {
+            // The pacing in force changed: the persona paces anew.
+            *cadence = fresh();
+        }
+        let starts_visit = !visiting;
+        if starts_visit {
+            cadence.pages = 0;
+        }
+        let gap = cadence.sampler.next_gap();
+        let wait = floored(gap.wait, gap_floor, &cadence.seed, cadence.pages);
+        cadence.next_at = now + chrono_of(wait);
+        cadence.on_break = gap.after_burst;
+        cadence.visiting = !(gap.after_visit || woken);
+        cadence.pages = cadence.pages.saturating_add(1);
+        cadence.last_start = now;
+        Booked {
+            starts_visit,
+            page_of_visit: cadence.pages,
+            next_slot: cadence.next_at,
+            pacing_seed: cadence.seed,
+            ends_burst: cadence.on_break,
+            ends_visit: !cadence.visiting,
         }
     }
 
@@ -1423,6 +1700,7 @@ impl Planner {
                 engine: Engine::Chromium,
                 render: Render::Http,
                 domain: Some(work.domain.clone()),
+                legs: Vec::new(),
             },
         );
         PlainDispatch {
@@ -1498,6 +1776,7 @@ impl Planner {
                 engine,
                 render: Render::Browser,
                 domain: None,
+                legs: Vec::new(),
             },
         );
         Ok(grant)
@@ -1529,6 +1808,22 @@ impl Planner {
                 }
             }
             Render::Http => self.http_in_flight = self.http_in_flight.saturating_sub(1),
+        }
+        // The later sites of the attempt are free of it again. What the
+        // attempt said about a site's health and whether it was turned away
+        // there is the domain's: a block on a later site is stored as that
+        // site's cooldown of the persona, which holds the persona there.
+        for leg in &grant.legs {
+            if let Some(site) = self.domains.get_mut(leg) {
+                site.in_flight = site.in_flight.saturating_sub(1);
+            }
+            if let Some(cadence) = grant
+                .persona
+                .and_then(|persona| self.cadences.get_mut(&(persona, leg.clone())))
+            {
+                let rest = cadence.sampler.next_rest();
+                cadence.next_at = cadence.next_at.max(now + chrono_of(rest));
+            }
         }
         let Some(name) = grant.domain else {
             return true;

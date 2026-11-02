@@ -713,3 +713,76 @@ describe('traces', () => {
     expect(shut).toBe(1);
   });
 });
+
+describe('an engine that does not answer (F103)', () => {
+  const health = (app: App) =>
+    app.server.inject({ method: 'GET', url: '/v1/health', headers: AUTH });
+
+  it('answers a navigation that never ends within its bound and closes its context', async () => {
+    const { app, engine, clock } = await start({ operationBoundMs: 100, abandonedGraceMs: 30_000 });
+    const id = await open(app);
+    engine.onNavigate = () => new Promise<PageResult>(() => undefined);
+    const began = Date.now();
+    const answer = await post(app, `/v1/contexts/${id}/navigate`, exampleOf('NavigateRequest'));
+    expect(Date.now() - began).toBeLessThan(2000);
+    expectError(answer, 500, 'internal');
+    expect(ErrorResponseSchema.parse(answer.json()).message).toContain(
+      'did not end within its bound of 100 ms',
+    );
+    // Its context was closed, which ends the browser the operation hangs on.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(engine.contexts[0]?.closes).toBe(1);
+    expectError(
+      await post(app, `/v1/contexts/${id}/navigate`, exampleOf('NavigateRequest')),
+      404,
+      'context_not_found',
+    );
+
+    // Within the grace the engine still counts as one that answers.
+    expect((await health(app)).statusCode).toBe(200);
+    // Past it, with the operation still not ended, the health check fails.
+    clock.now += 30_000;
+    const failing = await health(app);
+    expectError(failing, 500, 'internal');
+    expect(ErrorResponseSchema.parse(failing.json()).message).toContain(
+      'the engine does not answer',
+    );
+
+    // The next request of the persona is served by a context opened again.
+    engine.onNavigate = (url) => Promise.resolve({ ...exampleOf<PageResult>('PageResult'), url });
+    const again = await open(app);
+    expect(again).not.toBe(id);
+    const served = await post(app, `/v1/contexts/${again}/navigate`, exampleOf('NavigateRequest'));
+    expect(served.statusCode).toBe(200);
+  });
+
+  it('ends an engine that stays stalled, so that the container is restarted', async () => {
+    const stalled: string[] = [];
+    const { app, engine, clock } = await start({
+      operationBoundMs: 50,
+      abandonedGraceMs: 0,
+      stallMs: 40,
+      onStalled: (reason) => stalled.push(reason),
+    });
+    const id = await open(app);
+    engine.onNavigate = () => new Promise<PageResult>(() => undefined);
+    expectError(
+      await post(app, `/v1/contexts/${id}/navigate`, exampleOf('NavigateRequest')),
+      500,
+      'internal',
+    );
+    for (let look = 0; look < 50 && stalled.length === 0; look += 1) {
+      clock.now += 20;
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+    expect(stalled[0]).toContain(`an operation on context ${id} has not ended`);
+  });
+
+  it('never bounds a navigation that ends in time', async () => {
+    const { app } = await start({ operationBoundMs: 5_000 });
+    const id = await open(app);
+    const served = await post(app, `/v1/contexts/${id}/navigate`, exampleOf('NavigateRequest'));
+    expect(served.statusCode).toBe(200);
+    expect((await health(app)).statusCode).toBe(200);
+  });
+});

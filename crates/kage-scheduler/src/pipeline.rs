@@ -75,7 +75,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use kage_browser::contract::{CaptureOptions, PageResult, Wait};
+use kage_browser::contract::{CaptureOptions, FlowAction, PageResult, Wait};
 use kage_core::config::{Config, MAX_ATTEMPT_TIMEOUT};
 use kage_core::domain::{
     ArtifactRef, Attempt, CountryCode, Engine, Exit, FetchRecord, Header, Level, Persona,
@@ -87,7 +87,7 @@ use kage_core::outcome::{Block, Outcome};
 use kage_core::pacing::Lognormal;
 use kage_core::policy::{EffectivePolicy, PacingDecision, PacingRequest};
 use kage_core::schedule::planner::{
-    Completion, Dispatch, PersonaView, Refusal, RetryPause, Visitors, Work,
+    Completion, Dispatch, Leg, PersonaView, Refusal, RetryPause, Visitors, Work,
 };
 use kage_core::schedule::politeness::Courtesy;
 use kage_core::schedule::queue::Priority;
@@ -619,12 +619,88 @@ pub fn attempt_seed(persona: &Seed, request: RequestId, n: u32) -> Seed {
     )
 }
 
+/// The site that showed what a flow's attempt came to, when it is not the
+/// request's own domain: the host of the page the flow ended on, once a
+/// page arrived there (F101). A wall met there is that site's, and so is
+/// the page the persona read. `None` for a fetch, for a flow that ended on
+/// its own domain, and for an attempt that brought no site's page back
+/// (a refused hop, a failed connection).
+fn shown_by(course: &Course, output: &AttemptOutput) -> Option<String> {
+    if course.order.flow.is_none()
+        || output.status.is_none()
+        || output.outcome() == Outcome::SsrfDenied
+    {
+        return None;
+    }
+    let host = Url::parse(output.final_url.as_deref()?)
+        .ok()?
+        .host_str()?
+        .to_ascii_lowercase();
+    (host != course.domain).then_some(host)
+}
+
+/// The countries a request's persona may be of: those every site it
+/// reaches allows (F101); `None` for any.
+fn countries_of(course: &Course) -> Option<Vec<CountryCode>> {
+    course
+        .legs
+        .iter()
+        .fold(course.policy.countries.clone(), |countries, leg| {
+            match (countries, &leg.policy.countries) {
+                (None, theirs) => theirs.clone(),
+                (ours, None) => ours,
+                (Some(ours), Some(theirs)) => Some(
+                    ours.into_iter()
+                        .filter(|country| theirs.contains(country))
+                        .collect(),
+                ),
+            }
+        })
+}
+
+/// Every address a flow's `goto` steps go to, in their order; none for a
+/// fetch. The first is the address the flow starts at, the order's own.
+pub(crate) fn flow_gotos(order: &FetchOrder) -> Vec<Url> {
+    order
+        .flow
+        .iter()
+        .flat_map(|plan| plan.actions.iter())
+        .filter_map(|action| match action {
+            FlowAction::Goto { url, .. } => Url::parse(url).ok(),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A later site of a flow (spec §10.5, F101): another host one of its
+/// `goto` steps goes to. The flow meets its policy as a fetch of that
+/// address would: its `robots.txt`, its breaker, its pacing and its
+/// hours, its engines and countries, and its scout reads none of it. A
+/// wall the flow meets there is booked to it.
+#[derive(Debug, Clone)]
+struct FlowLeg {
+    /// The host.
+    domain: String,
+    /// Its policy.
+    policy: EffectivePolicy,
+    /// Its pacing.
+    pacing: PacingDecision,
+    /// Its registrable domain.
+    site: String,
+    /// The site's scout when the flow began.
+    scout: Option<PersonaId>,
+    /// The gap its enforced `Crawl-delay` asks for.
+    gap_floor: Option<Duration>,
+}
+
 /// How a request that is still under way stands.
 struct Course {
     order: FetchOrder,
     request: RequestRecord,
     domain: String,
     policy: EffectivePolicy,
+    /// The later sites of a flow; empty for a fetch.
+    legs: Vec<FlowLeg>,
     pacing: PacingDecision,
     progress: RequestProgress,
     attempts: Vec<Attempt>,
@@ -851,6 +927,42 @@ impl Pipeline {
         self.fetch_as(RequestId::new(), order, give_up_at).await
     }
 
+    /// Every later site a flow's `goto` steps reach besides `domain`, in
+    /// the order of their first step, each under its own policy (F101).
+    async fn flow_legs(
+        &self,
+        order: &FetchOrder,
+        domain: &str,
+    ) -> Result<Vec<FlowLeg>, SchedulerError> {
+        let policies = self.verdicts.policies().current();
+        let mut legs: Vec<FlowLeg> = Vec::new();
+        for url in flow_gotos(order) {
+            let Some(host) = url.host_str().map(str::to_ascii_lowercase) else {
+                continue;
+            };
+            if host == domain || legs.iter().any(|leg| leg.domain == host) {
+                continue;
+            }
+            let policy = policies.domains.resolve(&host);
+            let pacing = policy.pacing_for(order.pacing.as_ref(), &policies.pacing)?;
+            let site = kage_crawl::site::of_host(&host);
+            let scout = if order.pin.is_some() || self.robots.own_scout {
+                None
+            } else {
+                self.site_scout(&site).await?
+            };
+            legs.push(FlowLeg {
+                domain: host,
+                policy,
+                pacing,
+                site,
+                scout,
+                gap_floor: None,
+            });
+        }
+        Ok(legs)
+    }
+
     /// Resolves what a request is under the policies in force, and stores
     /// it.
     async fn begin(
@@ -885,6 +997,7 @@ impl Pipeline {
         } else {
             self.site_scout(&site).await?
         };
+        let legs = self.flow_legs(&order, &domain).await?;
         let request = RequestRecord {
             id,
             api_key_id: order.api_key,
@@ -931,6 +1044,7 @@ impl Pipeline {
             request,
             domain,
             policy,
+            legs,
             pacing,
             attempts: earlier,
             last: None,
@@ -1140,7 +1254,7 @@ impl Pipeline {
             let (outcome, reason) = course.standing();
             return finished(self.conclude(course, outcome, reason, None).await?);
         }
-        let mut course = match self.before(course, stop.as_ref()).await? {
+        let mut course = match Box::pin(self.before(course, stop.as_ref())).await? {
             Ok(course) => course,
             Err(ran) => return Ok(ran),
         };
@@ -1167,14 +1281,16 @@ impl Pipeline {
             };
             let grant = match granted {
                 Ok(grant) => grant,
-                Err(refused) => return self.refused(course, &refused).await,
+                Err(refused) => {
+                    return Box::pin(self.refused(course, &refused)).await;
+                }
             };
             let ruling = self.attempt(&mut course, grant).await?;
             // The server stopped waiting for the page: this process asks
             // for nothing more. A job's fetch is given back with the cut
             // attempt in its record; any other ends with it.
             if course.was_cut() {
-                return self.after_cut(course).await;
+                return Box::pin(self.after_cut(course)).await;
             }
             // A session's persona that was turned away cannot be replaced:
             // the request ends with what it got.
@@ -1233,7 +1349,7 @@ impl Pipeline {
                     reason: Refusal::PlainExitUnavailable,
                     retry_at: self.later_by(PLAIN_EXIT_WAIT),
                 };
-                return self.refused(course, &refused).await;
+                return Box::pin(self.refused(course, &refused)).await;
             };
             let mut work = self.work(&course);
             // A retry waits its pause, drawn as for a persona at the
@@ -1261,11 +1377,13 @@ impl Pipeline {
             };
             let grant = match granted {
                 Ok(grant) => grant,
-                Err(refused) => return self.refused(course, &refused).await,
+                Err(refused) => {
+                    return Box::pin(self.refused(course, &refused)).await;
+                }
             };
             let ruling = self.attempt_plain(&mut course, grant, route).await?;
             if course.was_cut() {
-                return self.after_cut(course).await;
+                return Box::pin(self.after_cut(course)).await;
             }
             match ruling.step {
                 Step::Retry => course.retry = Some(self.retry_pause(&course)),
@@ -1424,7 +1542,23 @@ impl Pipeline {
         }
     }
 
-    /// The next attempt of a request, as work for the scheduler.
+    /// The scouts of every site a request reaches, which read none of its
+    /// pages: the one known when the request began, or one chosen since.
+    fn scouts_of(&self, course: &Course) -> Vec<PersonaId> {
+        std::iter::once((&course.site, course.site_scout))
+            .chain(course.legs.iter().map(|leg| (&leg.site, leg.scout)))
+            .filter_map(|(site, known)| {
+                self.desk
+                    .scout(site)
+                    .and_then(|scouted| scouted.0)
+                    .or(known)
+            })
+            .collect()
+    }
+
+    /// The next attempt of a request, as work for the scheduler. A flow's
+    /// persona is one every site of the flow admits (F101): an engine and
+    /// a country each site's policy allows, and the scout of none of them.
     fn work(&self, course: &Course) -> Work {
         let order = &course.order;
         // A scout may be a persona the policy keeps from reading the site.
@@ -1437,8 +1571,34 @@ impl Pipeline {
             .iter()
             .copied()
             .filter(|engine| order.engines.is_empty() || order.engines.contains(engine))
+            .filter(|engine| {
+                course
+                    .legs
+                    .iter()
+                    .all(|leg| leg.policy.engines.contains(engine))
+            })
             .collect();
+        let countries = if order.scout {
+            None
+        } else {
+            countries_of(course)
+        };
         let rules = self.verdicts.breaker_rules(&course.domain);
+        let legs = course
+            .legs
+            .iter()
+            .map(|leg| {
+                let rules = self.verdicts.breaker_rules(&leg.domain);
+                Leg {
+                    domain: leg.domain.clone(),
+                    pacing: leg.pacing.profile,
+                    active_hours: leg.policy.active_hours,
+                    breaker_threshold: rules.threshold,
+                    breaker_pause: rules.pause,
+                    gap_floor: leg.gap_floor,
+                }
+            })
+            .collect();
         Work {
             domain: course.domain.clone(),
             priority: order.priority,
@@ -1450,17 +1610,15 @@ impl Pipeline {
             } else {
                 // Those that tried already, those the caller keeps out,
                 // and the site's scout, which reads none of its pages: the
-                // one known when the request began, or one chosen since.
-                let scout = if order.scout || self.robots.own_scout {
-                    None
+                // one known when the request began, or one chosen since;
+                // and the scout of every later site of a flow.
+                let scouts: Vec<PersonaId> = if order.scout || self.robots.own_scout {
+                    Vec::new()
                 } else {
-                    self.desk
-                        .scout(&course.site)
-                        .and_then(|scouted| scouted.0)
-                        .or(course.site_scout)
+                    self.scouts_of(course)
                 };
                 let mut exclude = course.progress.used().to_vec();
-                for persona in order.exclude.iter().chain(&scout) {
+                for persona in order.exclude.iter().chain(&scouts) {
                     if !exclude.contains(persona) {
                         exclude.push(*persona);
                     }
@@ -1469,11 +1627,7 @@ impl Pipeline {
             },
             avoid: course.avoid.clone(),
             engines,
-            countries: if order.scout {
-                None
-            } else {
-                course.policy.countries.clone()
-            },
+            countries,
             prefer_countries: order.prefer_countries.clone(),
             // A session's persona is not a matter of visitors.
             visitors: if order.pin.is_some() {
@@ -1493,11 +1647,66 @@ impl Pipeline {
                 self.now().checked_add_signed(patience)
             }),
             plain: order.level == Level::Plain,
+            legs,
         }
+    }
+
+    /// Books what an attempt meant to the persona and the breakers: to the
+    /// request's own domain, or, when a flow ended on another site, to the
+    /// site that showed it, and the domain gets the page it served (F101).
+    async fn settle_sites(
+        &self,
+        course: &Course,
+        dispatch: &Dispatch,
+        persona: &Persona,
+        (outcome, ruling): (Outcome, &Ruling),
+        shown_by: Option<&str>,
+    ) -> Result<(), SchedulerError> {
+        let Some(other) = shown_by else {
+            self.verdicts
+                .settle(
+                    (persona.id, &persona.seed),
+                    &course.domain,
+                    outcome,
+                    ruling.penalty.as_ref(),
+                    dispatch.trial,
+                    &dispatch.breaker,
+                )
+                .await?;
+            return Ok(());
+        };
+        let leg = dispatch.legs.iter().find(|leg| leg.domain == other);
+        let (trial, rules) = leg.map_or_else(
+            || (false, self.verdicts.breaker_rules(other)),
+            |leg| (leg.trial, leg.breaker),
+        );
+        metrics::breaker_threshold(other, rules.threshold);
+        self.verdicts
+            .settle(
+                (persona.id, &persona.seed),
+                other,
+                outcome,
+                ruling.penalty.as_ref(),
+                trial,
+                &rules,
+            )
+            .await?;
+        self.verdicts
+            .settle(
+                (persona.id, &persona.seed),
+                &course.domain,
+                Outcome::Ok,
+                None,
+                dispatch.trial,
+                &dispatch.breaker,
+            )
+            .await?;
+        Ok(())
     }
 
     /// Makes the attempt a grant allows, settles what it means, stores it,
     /// and says what follows.
+    #[allow(clippy::too_many_lines)] // One attempt from its grant to its record.
     async fn attempt(&self, course: &mut Course, grant: Grant) -> Result<Ruling, SchedulerError> {
         let dispatch = grant.dispatch().clone();
         course.waited += dispatch.waited.to_std().unwrap_or(Duration::ZERO);
@@ -1544,17 +1753,19 @@ impl Pipeline {
         let verdict = AttemptVerdict::of(&output.classification);
         let ruling = course.progress.record(Some(persona.id), verdict);
 
-        // What the persona answers for.
-        self.verdicts
-            .settle(
-                (persona.id, &persona.seed),
-                &course.domain,
-                outcome,
-                ruling.penalty.as_ref(),
-                dispatch.trial,
-                &dispatch.breaker,
-            )
-            .await?;
+        // What the persona answers for, on the site that showed it: a flow
+        // that ended on another site than its first met that site's wall,
+        // or read that site's page (F101). The first site served what the
+        // flow asked of it there.
+        let shown_by = shown_by(course, &output);
+        self.settle_sites(
+            course,
+            &dispatch,
+            &persona,
+            (outcome, &ruling),
+            shown_by.as_deref(),
+        )
+        .await?;
         if ruling.penalty.is_some() {
             let network = self
                 .backend()
@@ -1565,10 +1776,17 @@ impl Pipeline {
                 .map(|view| view.network);
             course.avoid.extend(network);
         }
+        // What another site answered says nothing of the domain's health,
+        // and the persona's visit of the domain was not turned away.
+        let elsewhere = shown_by.is_some();
         grant.complete(Completion {
-            courtesy: output.courtesy,
+            courtesy: if elsewhere {
+                Courtesy::NotTheSite
+            } else {
+                output.courtesy
+            },
             // Its visit is over when it was turned away for good.
-            blocked: ruling.penalty.is_some(),
+            blocked: ruling.penalty.is_some() && !elsewhere,
             // Or when its proxy failed: the site had no say (F108).
             proxy_failed: at_the_proxy(output.reason.as_deref()),
         });

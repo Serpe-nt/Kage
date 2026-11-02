@@ -49,7 +49,7 @@
 //!   absolute-form request on in origin form. The stops of the pool (a
 //!   leak, the provider's budget) do not hold it: it uses neither.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::future::Future;
 use std::net::{IpAddr, SocketAddr};
@@ -281,20 +281,30 @@ impl ForwarderEgress {
     }
 }
 
-impl Egress for ForwarderEgress {
-    fn endpoint(&self, persona: &Persona, upstream: &ProxyEndpoint, via: Via) -> ProxyEndpoint {
+impl ForwarderEgress {
+    /// The forwarder as a client that leaves `via` reaches it, under the
+    /// credential of `persona`, for the proxy `upstream`: what a persona's
+    /// browser or http client is handed, and what the stand-in of a proxy's
+    /// self-test is handed (F105), which has an id and no persona row.
+    pub fn endpoint_for(&self, persona: PersonaId, upstream: ProxyId, via: Via) -> ProxyEndpoint {
         let (host, port) = match via {
             Via::Browser => self.advertised.clone(),
             Via::Http => (self.local.ip().to_string(), self.local.port()),
         };
         ProxyEndpoint {
-            id: upstream.id,
+            id: upstream,
             host,
             port,
-            username: Secret::new(persona.id.to_string()),
-            password: Secret::new(self.tokens.token(persona.id)),
+            username: Secret::new(persona.to_string()),
+            password: Secret::new(self.tokens.token(persona)),
             scheme: ProxyScheme::Http,
         }
+    }
+}
+
+impl Egress for ForwarderEgress {
+    fn endpoint(&self, persona: &Persona, upstream: &ProxyEndpoint, via: Via) -> ProxyEndpoint {
+        self.endpoint_for(persona.id, upstream.id, via)
     }
 }
 
@@ -831,6 +841,16 @@ impl ForwarderSettings {
     }
 }
 
+/// Why a route with no upstream found no address of a target to connect
+/// to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AddressRefusal {
+    /// An address of the name lies in a range the guard refuses.
+    Denied(String),
+    /// The name has no address, or could not be looked up.
+    Unresolved(String),
+}
+
 /// Why a connection ended without being relayed, for the log.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Refused {
@@ -855,6 +875,76 @@ enum Refused {
     Unreached(String),
 }
 
+// --- What the guard refused ------------------------------------------------
+
+/// How many refusals are kept per caller: the latest of them.
+const DENIALS_KEPT: usize = 32;
+
+/// One target the forwarder refused by the SSRF guard (F102).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Denial {
+    /// Its place in the order of every refusal the forwarder recorded.
+    pub seq: u64,
+    /// The host the caller asked for, lower case, as it was asked for.
+    pub host: String,
+    /// Why the guard refused it.
+    pub reason: String,
+}
+
+/// The targets the forwarder refused by the SSRF guard, per caller (F102).
+///
+/// A refusal looks like a network that does not answer to whoever asked
+/// (a page must not read a response Kage wrote), so a browser or an http
+/// client cannot say that the guard stopped it. The attempt executor can:
+/// it takes a mark before an attempt and asks afterwards whether the
+/// forwarder refused one of the hosts the attempt was going to. Only the
+/// guard's refusals are kept: a target refused by name or range, and under
+/// `egress.mode: direct` a name refused for one of its addresses. A name
+/// that does not resolve, a stop or a route that is not usable are not the
+/// guard's.
+#[derive(Debug, Default)]
+pub struct Denials {
+    next: AtomicU64,
+    kept: Mutex<HashMap<Caller, VecDeque<Denial>>>,
+}
+
+impl Denials {
+    /// The mark of this moment: what is recorded afterwards comes after it.
+    pub fn mark(&self) -> u64 {
+        self.next.load(Ordering::SeqCst)
+    }
+
+    /// Records a refusal of `host` for `caller`.
+    pub fn record(&self, caller: Caller, host: &str, reason: &str) {
+        let seq = self.next.fetch_add(1, Ordering::SeqCst);
+        let mut kept = self.kept.lock().unwrap_or_else(PoisonError::into_inner);
+        let list = kept.entry(caller).or_default();
+        if list.len() >= DENIALS_KEPT {
+            list.pop_front();
+        }
+        list.push_back(Denial {
+            seq,
+            host: host.trim_end_matches('.').to_ascii_lowercase(),
+            reason: reason.to_owned(),
+        });
+    }
+
+    /// The first refusal for `caller` since `mark` of one of `hosts`.
+    pub fn since(&self, caller: Caller, mark: u64, hosts: &[String]) -> Option<Denial> {
+        let kept = self.kept.lock().unwrap_or_else(PoisonError::into_inner);
+        kept.get(&caller)?
+            .iter()
+            .find(|denial| {
+                denial.seq >= mark
+                    && hosts.iter().any(|host| {
+                        host.trim_end_matches('.')
+                            .eq_ignore_ascii_case(&denial.host)
+                    })
+            })
+            .cloned()
+    }
+}
+
 /// See the module documentation.
 #[derive(Debug)]
 pub struct Forwarder {
@@ -867,6 +957,8 @@ pub struct Forwarder {
     local: SocketAddr,
     refused: AtomicU64,
     relayed: AtomicU64,
+    /// What the guard refused, per caller.
+    denials: Arc<Denials>,
 }
 
 impl Forwarder {
@@ -905,6 +997,7 @@ impl Forwarder {
             local,
             refused: AtomicU64::new(0),
             relayed: AtomicU64::new(0),
+            denials: Arc::new(Denials::default()),
         });
         Ok((forwarder, listener))
     }
@@ -917,6 +1010,12 @@ impl Forwarder {
     /// The counters.
     pub const fn meter(&self) -> &Arc<Meter> {
         &self.meter
+    }
+
+    /// What the SSRF guard refused, per caller (F102): the attempt
+    /// executor reads it to tell a refused target from a failed network.
+    pub const fn denials(&self) -> &Arc<Denials> {
+        &self.denials
     }
 
     /// The egress that hands every persona this forwarder.
@@ -1028,6 +1127,7 @@ impl Forwarder {
         };
         let tunnel = head.is_connect();
         if let Err(reason) = self.check_target(&url, &host, port) {
+            self.denials.record(caller, &host, &reason);
             return refuse(client, tunnel, Refused::Target(reason)).await;
         }
         let route = match caller {
@@ -1114,7 +1214,13 @@ impl Forwarder {
         let tunnel = head.is_connect();
         let addresses = match self.addresses(host, port).await {
             Ok(addresses) => addresses,
-            Err(reason) => return refuse(client, tunnel, Refused::Address(reason)).await,
+            Err(AddressRefusal::Denied(reason)) => {
+                self.denials.record(caller, host, &reason);
+                return refuse(client, tunnel, Refused::Address(reason)).await;
+            }
+            Err(AddressRefusal::Unresolved(reason)) => {
+                return refuse(client, tunnel, Refused::Address(reason)).await;
+            }
         };
         let mut server = None;
         for address in addresses {
@@ -1154,7 +1260,7 @@ impl Forwarder {
     /// to: every address the name has must be one the guard allows, or a
     /// private or loopback one of a name the operator listed; link-local,
     /// metadata and multicast addresses never.
-    async fn addresses(&self, host: &str, port: u16) -> Result<Vec<IpAddr>, String> {
+    async fn addresses(&self, host: &str, port: u16) -> Result<Vec<IpAddr>, AddressRefusal> {
         let operator = self
             .settings
             .operator_hosts
@@ -1166,10 +1272,15 @@ impl Forwarder {
             .ok();
         let addresses = match named {
             Some(address) => vec![address],
-            None => self.settings.resolver.resolve(host).await?,
+            None => self
+                .settings
+                .resolver
+                .resolve(host)
+                .await
+                .map_err(AddressRefusal::Unresolved)?,
         };
         if addresses.is_empty() {
-            return Err(format!("{host} has no address"));
+            return Err(AddressRefusal::Unresolved(format!("{host} has no address")));
         }
         let private = operator || self.settings.private_names.contains(host);
         for address in &addresses {
@@ -1182,7 +1293,9 @@ impl Forwarder {
                     | DeniedRange::UniqueLocal,
                 ) if private => {}
                 Some(range) => {
-                    return Err(format!("{host} resolves to {address}, in {range:?}"));
+                    return Err(AddressRefusal::Denied(format!(
+                        "{host} resolves to {address}, in {range:?}"
+                    )));
                 }
             }
         }
@@ -1363,7 +1476,13 @@ impl Forwarder {
                 let allowed = !next.is_connect()
                     && (upstream.is_none() || self.stopped().is_none())
                     && target_of(&next).is_some_and(|(url, host, port)| {
-                        self.check_target(&url, &host, port).is_ok()
+                        self.check_target(&url, &host, port)
+                            .inspect_err(|reason| {
+                                if same_caller {
+                                    self.denials.record(caller, &host, reason);
+                                }
+                            })
+                            .is_ok()
                             && (upstream.is_some() || opened_for.as_ref() == Some(&(host, port)))
                     });
                 if !(same_caller && allowed) {

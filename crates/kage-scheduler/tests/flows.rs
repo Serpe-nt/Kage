@@ -478,3 +478,95 @@ async fn a_flow_whose_answer_broke_off_is_not_taken_for_a_page() {
     assert_eq!(lab.chromium.with(|sidecar| sidecar.closed.len()), 1);
     lab.shut_down().await;
 }
+
+/// Another site the lab's world serves, which a flow goes on to.
+const PAY: &str = "pay.kage.test";
+
+fn pay(path: &str) -> String {
+    format!("http://{PAY}{path}")
+}
+
+/// A flow that starts on the shop and goes on to the other site.
+fn across() -> Value {
+    json!([
+        { "action": "goto", "url": site("/start") },
+        { "action": "extract", "capture": document() },
+        { "action": "goto", "url": pay("/checkout") },
+    ])
+}
+
+#[tokio::test]
+async fn a_wall_at_a_flows_later_site_is_booked_to_the_site_that_showed_it() {
+    let mut lab = Lab::start(2, 149, BROWSER_FAST).await;
+    lab.chromium.with(|sidecar| {
+        // The shop's page came; the other site answered with its wall.
+        sidecar
+            .next_flows
+            .push_back(json!({ "final": waf_block() }));
+    });
+
+    let report = lab.pipeline.fetch(flow(&across())).await.unwrap();
+
+    // Another persona ran the whole flow again and got through.
+    assert_eq!(report.outcome, Outcome::Ok, "{:?}", report.reason);
+    let [blocked, served] = report.attempts.as_slice() else {
+        panic!("two attempts, not {:?}", report.attempts);
+    };
+    assert_eq!(blocked.outcome, Outcome::Forbidden);
+    assert_eq!(
+        blocked.final_url.as_deref(),
+        Some(pay("/checkout").as_str())
+    );
+    let (blocked, served) = (blocked.persona_id.unwrap(), served.persona_id.unwrap());
+    assert_ne!(blocked, served);
+
+    // The wall is the other site's: the blocked persona cools there, and
+    // its breaker counts the block (jobs-06).
+    let there = lab.backend.facts(PAY).await.unwrap();
+    let cooled = &there.states[&blocked];
+    assert!(cooled.cooldown_until.is_some());
+    assert_eq!(cooled.last_outcome, Some(Outcome::Forbidden));
+    assert_eq!(cooled.block_count_24h, 1);
+    assert_eq!(
+        there.breaker.as_ref().map(|breaker| breaker.block_count_1h),
+        Some(1)
+    );
+    // The shop showed no wall: nobody cools there, its breaker counted
+    // nothing, and the blocked persona's last word from it is a page.
+    let shop = lab.backend.facts(SITE).await.unwrap();
+    assert_eq!(shop.breaker, None);
+    assert_eq!(shop.states[&blocked].cooldown_until, None);
+    assert_eq!(shop.states[&blocked].block_count_24h, 0);
+    assert_eq!(shop.states[&blocked].last_outcome, Some(Outcome::Ok));
+    // The persona that got through read both sites.
+    assert_eq!(there.states[&served].last_outcome, Some(Outcome::Ok));
+    assert_eq!(shop.states[&served].last_outcome, Some(Outcome::Ok));
+    lab.shut_down().await;
+}
+
+#[tokio::test]
+async fn a_persona_that_cools_at_a_flows_later_site_does_not_run_the_flow() {
+    let mut lab = Lab::start(2, 149, BROWSER_FAST).await;
+    let (cooling, other) = (lab.personas[0].id, lab.personas[1].id);
+    let now = chrono::Utc::now();
+    lab.backend
+        .record_outcome(
+            cooling,
+            PAY,
+            Outcome::Forbidden,
+            Some(std::time::Duration::from_hours(20)),
+            now,
+        )
+        .await
+        .unwrap();
+
+    for _ in 0..3 {
+        let report = lab.pipeline.fetch(flow(&across())).await.unwrap();
+        assert_eq!(report.outcome, Outcome::Ok, "{:?}", report.reason);
+        assert_eq!(report.attempts[0].persona_id, Some(other));
+    }
+    // The flow's first site alone may still go to the cooling persona.
+    let flows = lab.chromium.with(|sidecar| sidecar.flows.len());
+    assert_eq!(flows, 3);
+    lab.shut_down().await;
+}

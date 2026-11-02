@@ -3894,7 +3894,7 @@
       },
       "FlowJob": {
         "type": "object",
-        "description": "A flow: a script of steps one persona performs in its browser, as one\nvisit, at level 2 or 3.\n\nThe persona arrives by a typed navigation, stays on every page it comes\nto for a while with its pointer moving, and pauses between its actions\nas a person does, so a flow takes longer than its steps: plan about ten\nseconds for every page it visits. A flow whose page turns out to be a\nwall is a blocked attempt: the persona leaves, and another one runs the\nflow again from its first step, inside the policy's retry budget (never\nin a session). A step that fails on a page that is no wall is the\nscript's failure and is not retried. The job's items are the steps, in\norder, and one last item for the page the flow ended on.",
+        "description": "A flow: a script of steps one persona performs in its browser, as one\nvisit, at level 2 or 3.\n\nThe persona arrives by a typed navigation, stays on every page it comes\nto for a while with its pointer moving, and pauses between its actions\nas a person does, so a flow takes longer than its steps: plan about ten\nseconds for every page it visits. Every `goto` meets the policy of its\nown site as a fetch of that address would: its floor (`min_level`, at\nacceptance), its enforced `robots.txt`, its breaker, its pacing and its\nhours. A flow whose page turns out to be a wall is a blocked attempt,\nbooked to the site that showed the wall: the persona leaves, and another\none runs the flow again from its first step, inside the policy's retry\nbudget (never in a session). A step that fails on a page that is no wall\nis the script's failure and is not retried. The job's items are the\nsteps, in order, and one last item for the page the flow ended on.",
         "required": [
           "level",
           "actions"
@@ -6481,7 +6481,7 @@
               "boolean",
               "null"
             ],
-            "description": "False: done by the browser's driver instead of the persona's mouse\nand keyboard, which a page can tell apart. Refused\n(`driver_input_denied`) unless the policy of the flow's site has\n`driver_input: true`."
+            "description": "False: done by the browser's driver instead of the persona's mouse\nand keyboard, which a page can tell apart. Refused\n(`driver_input_denied`) unless the policy of the site whose page it\nacts on, the site of the last `goto` before it, has\n`driver_input: true`."
           },
           "selector": {
             "type": "string",

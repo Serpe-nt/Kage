@@ -80,7 +80,7 @@ use kage_persona::identity::http_spec;
 use kage_persona::{PersonaError, PersonaManager, Via};
 use url::Url;
 
-use crate::forwarder::{Caller, ForwarderEgress, Meter, PlainRoute};
+use crate::forwarder::{Caller, Denial, Denials, ForwarderEgress, Meter, PlainRoute};
 use crate::verdicts::{Verdicts, cookies_set, courtesy_of, page_failure, unanswered};
 
 /// A scripted flow a browser attempt runs in place of loading one page
@@ -857,6 +857,46 @@ fn timing_of(page: &PageResult) -> Timing {
     }
 }
 
+/// The host of a URL, lower case.
+fn host_of(url: &Url) -> Option<String> {
+    url.host_str().map(str::to_ascii_lowercase)
+}
+
+/// The hosts of every address a page result names: the URL asked for, the
+/// redirect hops with where each pointed, and where the page ended.
+fn hosts_of(page: &PageResult) -> Vec<String> {
+    let mut urls: Vec<Url> = Vec::new();
+    urls.extend(Url::parse(&page.url).ok());
+    for hop in &page.redirects {
+        let Ok(from) = Url::parse(&hop.url) else {
+            continue;
+        };
+        urls.extend(hop.location.as_deref().and_then(|to| from.join(to).ok()));
+        urls.push(from);
+    }
+    urls.extend(Url::parse(&page.final_url).ok());
+    urls.iter().filter_map(host_of).collect()
+}
+
+/// What an attempt comes to whose address the forwarder refused by the
+/// SSRF guard (F102): the guard's outcome, `ssrf_denied`, never retried,
+/// and nothing of it kept, whatever the client made of the refusal (a
+/// browser shows a failed connection; a plain client fails to connect).
+fn denied_by_forwarder(denial: &Denial) -> AttemptOutput {
+    tracing::info!(
+        host = %denial.host,
+        reason = %denial.reason,
+        "the forwarder refused the address of an attempt by the SSRF guard"
+    );
+    let mut output =
+        AttemptOutput::failed(Outcome::SsrfDenied, "ssrf_denied", Courtesy::NotTheSite);
+    output
+        .classification
+        .evidence
+        .push(format!("refused:{} ({})", denial.host, denial.reason));
+    output
+}
+
 /// The attempt executor over the real paths.
 pub struct PathExecutor {
     manager: Arc<PersonaManager>,
@@ -873,6 +913,8 @@ pub struct PathExecutor {
     plain: Option<ForwarderEgress>,
     /// What a plain client says unless its caller names another.
     plain_user_agent: String,
+    /// What the forwarder refused by the SSRF guard, per caller (F102).
+    denials: Option<Arc<Denials>>,
 }
 
 /// The last page of each persona on each domain, and when it was fetched.
@@ -987,7 +1029,29 @@ impl PathExecutor {
             last_pages: Mutex::new(HashMap::new()),
             plain: None,
             plain_user_agent: config.egress.plain_user_agent().to_owned(),
+            denials: None,
         }
+    }
+
+    /// The same executor reading what the forwarder refused (F102): an
+    /// attempt that failed because the forwarder refused the address it
+    /// went to by the SSRF guard ends `ssrf_denied`, not as a failed
+    /// network.
+    #[must_use]
+    pub fn with_denials(mut self, denials: Arc<Denials>) -> Self {
+        self.denials = Some(denials);
+        self
+    }
+
+    /// The mark an attempt takes before it leaves.
+    fn denials_mark(&self) -> Option<u64> {
+        self.denials.as_ref().map(|denials| denials.mark())
+    }
+
+    /// The forwarder's refusal, since `mark`, of one of the hosts an
+    /// attempt of `caller` went to.
+    fn refused(&self, caller: Caller, mark: Option<u64>, hosts: &[String]) -> Option<Denial> {
+        self.denials.as_ref()?.since(caller, mark?, hosts)
     }
 
     /// The same executor making plain attempts (level 0) through the
@@ -1026,9 +1090,23 @@ impl PathExecutor {
                 .and_then(|bytes| usize::try_from(bytes).ok()),
             max_redirects: None,
         };
-        let fetched = match client.fetch(&spec).await {
+        let mark = self.denials_mark();
+        let mut asked = Vec::new();
+        let fetched = match client.fetch_traced(&spec, &mut asked).await {
             Ok(fetched) => fetched,
-            Err(error) => return Self::http_failure(&error),
+            Err(error) => {
+                let hosts: Vec<String> = asked.iter().filter_map(host_of).collect();
+                if let Some(denial) = self.refused(Caller::Plain(job.route), mark, &hosts) {
+                    let mut output = denied_by_forwarder(&denial);
+                    output.final_url = asked
+                        .iter()
+                        .rev()
+                        .find(|url| host_of(url).as_deref() == Some(denial.host.as_str()))
+                        .map(Url::to_string);
+                    return output;
+                }
+                return Self::http_failure(&error);
+            }
         };
         let classification = self.verdicts.classify(&Observation {
             render: Render::Http,
@@ -1173,9 +1251,20 @@ impl PathExecutor {
             fetch_subresources: None,
             seed: Some(job.seed),
         };
+        let mark = self.denials_mark();
         let fetched = match client.fetch(&fetch).await {
             Ok(fetched) => fetched,
-            Err(error) => return Self::http_failure(&error),
+            Err(error) => {
+                // A failure does not say which hop it was: the address asked
+                // for is the one judged here.
+                let hosts: Vec<String> = host_of(&job.url).into_iter().collect();
+                if let Some(denial) = self.refused(Caller::Persona(persona.id), mark, &hosts) {
+                    let mut output = denied_by_forwarder(&denial);
+                    output.final_url = Some(job.url.to_string());
+                    return output;
+                }
+                return Self::http_failure(&error);
+            }
         };
 
         let classification = self.verdicts.classify(&Observation {
@@ -1273,6 +1362,7 @@ impl PathExecutor {
     ) -> Result<(Box<PageResult>, BehaviorApplied, FlowRun), Failed> {
         let (request, behavior) = flow_for(job, plan, &self.browser);
         let sidecar = self.manager.sidecars().of(job.persona.engine);
+        let mark = self.denials_mark();
         let running = sidecar.flow(context, &request);
         let events = match tokio::time::timeout(job.timeout + BROWSER_GRACE, running).await {
             Ok(Ok(events)) => events,
@@ -1328,6 +1418,32 @@ impl PathExecutor {
             .filter_map(|step| step.capture.as_deref())
             .chain(std::iter::once(page.as_ref()))
             .find_map(|seen| ssrf::check_capture(seen, self.security, self.max_redirects).err());
+        // A step or the end that did not arrive because the forwarder
+        // refused its address is the guard's refusal too (F102).
+        let arrived = ok && page.error.is_none() && page.status.is_some();
+        let refused = if arrived {
+            None
+        } else {
+            let mut hosts = hosts_of(&page);
+            for seen in steps.iter().filter_map(|step| step.capture.as_deref()) {
+                hosts.extend(hosts_of(seen));
+            }
+            for action in &plan.actions {
+                if let FlowAction::Goto { url, .. } = action {
+                    hosts.extend(Url::parse(url).ok().as_ref().and_then(host_of));
+                }
+            }
+            self.refused(Caller::Persona(job.persona.id), mark, &hosts)
+        };
+        if let Some(denial) = refused {
+            ssrf::drop_captures(&mut page);
+            let mut output = denied_by_forwarder(&denial);
+            output.final_url = Some(page.final_url.clone());
+            output.timing = timing_of(&page);
+            output.page = Some(page);
+            output.behavior = Some(behavior);
+            return Err(Box::new(output));
+        }
         if let Some(denied) = denied {
             tracing::warn!(
                 context = %context,
@@ -1482,6 +1598,7 @@ impl PathExecutor {
     ) -> Result<(Box<PageResult>, BehaviorApplied), Failed> {
         let (request, behavior) = navigation_for(job, &self.browser);
         let sidecar = self.manager.sidecars().of(job.persona.engine);
+        let mark = self.denials_mark();
         let navigating =
             sidecar.navigate_checked(context, &request, self.security, self.max_redirects);
         // The attempt is waited for as long as this page may take: the time
@@ -1502,7 +1619,24 @@ impl PathExecutor {
             }
         };
         match navigation {
-            Navigation::Page(page) => Ok((page, behavior)),
+            Navigation::Page(mut page) => {
+                // A page that did not arrive because the forwarder refused
+                // its address is the guard's refusal, not a failed network.
+                let arrived = page.error.is_none() && page.status.is_some();
+                if !arrived
+                    && let Some(denial) =
+                        self.refused(Caller::Persona(job.persona.id), mark, &hosts_of(&page))
+                {
+                    ssrf::drop_captures(&mut page);
+                    let mut output = denied_by_forwarder(&denial);
+                    output.final_url = Some(page.final_url.clone());
+                    output.timing = timing_of(&page);
+                    output.page = Some(page);
+                    output.behavior = Some(behavior);
+                    return Err(Box::new(output));
+                }
+                Ok((page, behavior))
+            }
             Navigation::SsrfDenied { denied, result } => {
                 let mut output =
                     AttemptOutput::failed(Outcome::SsrfDenied, "ssrf_denied", Courtesy::NotTheSite);
@@ -1568,8 +1702,10 @@ mod tests {
 
     use super::{
         AttemptOutput, BehaviorWish, PathExecutor, Reached, behavior_for, blame_the_proxy,
-        draw_dwell, entry_from, origin_of, reached_of, whose_failure,
+        denied_by_forwarder, draw_dwell, entry_from, hosts_of, origin_of, reached_of,
+        whose_failure,
     };
+    use crate::forwarder::{Caller, Denials, PlainRoute};
 
     /// The real path of F108: a forwarder on loopback in front of one
     /// proxy per persona, its meter, and `whose_failure`.
@@ -2204,6 +2340,63 @@ mod tests {
                 "failure:connection_failed",
                 "error:the TLS handshake with the target failed"
             ]
+        );
+    }
+
+    #[test]
+    fn a_refusal_of_the_forwarder_is_the_guards_outcome_for_the_hosts_the_attempt_went_to() {
+        let examples: serde_json::Value = serde_json::from_str(EXAMPLES_JSON).unwrap();
+        let mut page: PageResult =
+            serde_json::from_value(examples["PageResult"][0].clone()).unwrap();
+        page.url = "https://shop.example/start".to_owned();
+        page.redirects = vec![kage_browser::contract::RedirectHop {
+            url: "https://shop.example/start".to_owned(),
+            status: 302,
+            location: Some("//Hidden.Example/x".to_owned()),
+        }];
+        page.final_url = "http://10.0.0.1:8091/x".to_owned();
+        let hosts = hosts_of(&page);
+        for host in ["shop.example", "hidden.example", "10.0.0.1"] {
+            assert!(hosts.iter().any(|seen| seen == host), "{host} in {hosts:?}");
+        }
+
+        let denials = Denials::default();
+        let persona = Caller::Persona(kage_core::ids::PersonaId::new());
+        let plain = Caller::Plain(PlainRoute::Host);
+        let mark = denials.mark();
+        denials.record(
+            plain,
+            "other.qa.test",
+            "other.qa.test resolves to 10.0.0.9, in Private",
+        );
+        denials.record(
+            persona,
+            "Hidden.Example.",
+            "hidden.example resolves to 10.0.0.5",
+        );
+        // Only the caller's own, of a host the attempt went to, after its mark.
+        let found = denials.since(persona, mark, &hosts).unwrap();
+        assert_eq!(found.host, "hidden.example");
+        assert_eq!(denials.since(plain, mark, &hosts), None);
+        assert_eq!(denials.since(persona, denials.mark(), &hosts), None);
+        for _ in 0..40 {
+            denials.record(persona, "filler.example", "refused");
+        }
+        // Only the latest are kept.
+        assert_eq!(denials.since(persona, mark, &hosts), None);
+
+        let output = denied_by_forwarder(&found);
+        assert_eq!(output.outcome(), Outcome::SsrfDenied);
+        assert!(!output.classification.retryable);
+        assert_eq!(output.courtesy, Courtesy::NotTheSite);
+        assert!(
+            output
+                .classification
+                .evidence
+                .iter()
+                .any(|evidence| evidence.starts_with("refused:hidden.example (")),
+            "{:?}",
+            output.classification.evidence
         );
     }
 

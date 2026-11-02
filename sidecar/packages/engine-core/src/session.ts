@@ -174,7 +174,7 @@ export interface DriverPage {
   readonly mouse: { wheel(deltaX: number, deltaY: number): Promise<void> };
   on(event: 'request', listener: (request: DriverRequest) => void): unknown;
   on(event: 'response', listener: (response: DriverResponse) => void): unknown;
-  on(event: 'domcontentloaded' | 'load', listener: () => void): unknown;
+  on(event: 'domcontentloaded' | 'load' | 'crash', listener: () => void): unknown;
 }
 
 /** What only an engine knows how to do with its browser. */
@@ -220,6 +220,32 @@ export interface SessionParts {
   readonly personaSeed: string;
   readonly selftestPages: readonly SelftestPage[];
   readonly log: EngineLog;
+  /**
+   * Longest a read of a page may take before the page counts as one that
+   * does not answer (F103); {@link READ_LIMIT_MS} unless a test says.
+   */
+  readonly readLimitMs?: number;
+}
+
+/**
+ * Longest one read of a page may take (its title, text, document, a
+ * measurement of the behavior engine) before the page counts as one that
+ * does not answer: a renderer that crashed, or one whose script never
+ * yields. A healthy page answers in milliseconds, its whole document of a
+ * few megabytes in under a second (F103).
+ */
+export const READ_LIMIT_MS = 10_000;
+
+/** Why the open page answers no read any more (F103). */
+interface Unanswering {
+  /** How the request reports it. */
+  readonly code: 'timeout' | 'navigation_failed';
+  readonly message: string;
+}
+
+/** A read that was cut because the page does not answer (F103). */
+export class PageUnanswering extends Error {
+  override readonly name = 'PageUnanswering';
 }
 
 /** Longest page text read for interstitial detection and evidence. */
@@ -646,6 +672,14 @@ interface DocumentState {
   readonly bodies: Promise<void>[];
   /** Whether the proxy asked for credentials on the way to this document. */
   proxyChallenged: boolean;
+  /**
+   * Where the tab was last sent while this document was open: the address
+   * of a request for a new document of the main frame, or the `Location`
+   * of a redirect it was answered with (F102). When the browser could not
+   * load it, the tab shows the browser's own error page and this is where
+   * the page went.
+   */
+  sentTo: string | null;
 }
 
 const newDocument = (restored: string | null = null): DocumentState => ({
@@ -659,9 +693,34 @@ const newDocument = (restored: string | null = null): DocumentState => ({
   xhr: [],
   bodies: [],
   proxyChallenged: false,
+  sentTo: null,
 });
 
 const withoutFragment = (url: string) => url.split('#')[0] ?? '';
+
+/**
+ * Whether an address is a page the browser shows in place of a document it
+ * could not load: Chrome's `chrome-error://chromewebdata/`, Firefox's
+ * `about:neterror` and its kin. Such a page is the browser's, never the
+ * site's (F102).
+ */
+export function isBrowserErrorPage(url: string): boolean {
+  return /^(chrome-error:|about:(neterror|certerror|blocked|tabcrashed))/i.test(url);
+}
+
+/** The status of a response that sends the browser on: a redirect with an address. */
+const redirectTarget = (response: DriverResponse): string | null => {
+  const status = response.status();
+  const location = response.headers()['location'];
+  if (status < 300 || status > 399 || location === undefined) {
+    return null;
+  }
+  try {
+    return new URL(location, response.url()).href;
+  } catch {
+    return location;
+  }
+};
 
 /** The address a state's document was loaded from, without its fragment; `null` for a state without a document. */
 const loadedFrom = (state: DocumentState): string | null =>
@@ -821,6 +880,14 @@ export class PageSession {
   private tab: string | null = null;
   /** Whether a request has run in the open tab. The tab a context began with is fresh. */
   private tabUsed = false;
+  /**
+   * Why the open page answers no read, once it stopped answering: its
+   * renderer crashed, or a read outlasted the limit (F103). Every later
+   * read of it fails at once, and the next request takes a fresh tab.
+   */
+  private unanswering: Unanswering | null = null;
+  /** The reads under way, each with what cuts it short. */
+  private readonly reading = new Set<(error: Error) => void>();
 
   constructor(private readonly parts: SessionParts) {
     this.listen(parts.driver.page);
@@ -847,6 +914,7 @@ export class PageSession {
       try {
         if (asked.isNavigationRequest() && asked.frame() === this.page.mainFrame()) {
           this.documentsAsked += 1;
+          this.document.sentTo = asked.url();
         }
       } catch {
         // A request without a frame (a service worker's) is no navigation of the page.
@@ -867,6 +935,65 @@ export class PageSession {
         this.document.load ??= Date.now() - this.document.started;
       }
     });
+    // A renderer that crashed answers nothing again: what waits for it is
+    // cut now (F103).
+    page.on('crash', () => {
+      if (live()) {
+        this.stopAnswering({
+          code: 'navigation_failed',
+          message: 'the renderer of the page crashed: the page could not be read',
+        });
+      }
+    });
+  }
+
+  /** Marks the open page as one that answers no read, and cuts every read under way. */
+  private stopAnswering(why: Unanswering): void {
+    this.unanswering ??= why;
+    for (const cut of [...this.reading]) {
+      cut(new PageUnanswering(this.unanswering.message));
+    }
+  }
+
+  /**
+   * A read of the open page, bounded (F103): it fails at once when the page
+   * answers no read any more, and when it takes longer than the read limit
+   * the page counts as one that does not answer. What the page never
+   * answers is left behind; it settles, or not, when the tab is closed.
+   */
+  private answer<T>(work: Promise<T>): Promise<T> {
+    work.catch(() => undefined);
+    if (this.unanswering !== null) {
+      return Promise.reject(new PageUnanswering(this.unanswering.message));
+    }
+    const limit = this.parts.readLimitMs ?? READ_LIMIT_MS;
+    return new Promise<T>((resolve, reject) => {
+      const done = () => {
+        clearTimeout(timer);
+        this.reading.delete(cut);
+      };
+      const cut = (error: Error) => {
+        done();
+        reject(error);
+      };
+      const timer = setTimeout(() => {
+        this.stopAnswering({
+          code: 'timeout',
+          message: `the page did not answer a read within ${limit} ms: its renderer is stuck`,
+        });
+      }, limit);
+      this.reading.add(cut);
+      work.then(
+        (value) => {
+          done();
+          resolve(value);
+        },
+        (error: unknown) => {
+          done();
+          reject(error instanceof Error ? error : new Error(String(error)));
+        },
+      );
+    });
   }
 
   /**
@@ -881,8 +1008,15 @@ export class PageSession {
    * @param name the tab the request names; `null` for one that names none, as every flow and self-test.
    */
   private async tabFor(name: string | null): Promise<void> {
-    if (this.tabUsed && (name === null || name !== this.tab)) {
+    // A page that answers no read is given up, whoever named its tab (F103).
+    if (this.tabUsed && (name === null || name !== this.tab || this.unanswering !== null)) {
       await this.parts.driver.freshPage();
+      // A read of the tab that was replaced ends now: its limit must not
+      // mark the fresh one as a page that does not answer (F103).
+      for (const cut of [...this.reading]) {
+        cut(new PageUnanswering('the tab was replaced'));
+      }
+      this.unanswering = null;
       this.listen(this.page);
       this.shown.clear();
       this.documentsAsked = 0;
@@ -934,6 +1068,9 @@ export class PageSession {
       // document behind it is the result.
       this.document.response = response;
       this.document.ttfb ??= Date.now() - this.document.started;
+      // A redirect sends the tab on, though no request may follow it: one
+      // to an address the browser refuses to ask for (a `file:` URL).
+      this.document.sentTo = redirectTarget(response) ?? this.document.sentTo;
       return;
     }
     const kind = asked.resourceType();
@@ -969,7 +1106,7 @@ export class PageSession {
   }
 
   private read<T>(expression: string): Promise<T> {
-    return this.page.evaluate<T>(expression);
+    return this.answer(this.page.evaluate<T>(expression));
   }
 
   // --- the document a flow is on (follow-up F21) --------------------------
@@ -1138,7 +1275,7 @@ export class PageSession {
   private async observe(): Promise<PageObservation> {
     const main = this.page.mainFrame();
     const [title, text] = await Promise.all([
-      this.page.title().catch(() => null),
+      this.answer(this.page.title()).catch(() => null),
       this.read<string>(READ_TEXT).catch(() => null),
     ]);
     return {
@@ -1155,9 +1292,18 @@ export class PageSession {
 
   private async redirects(response: DriverResponse | null): Promise<RedirectHop[]> {
     const hops: RedirectHop[] = [];
+    // A redirect the browser was answered with last and did not get beyond
+    // (its target could not be loaded) is a hop of the chain too (F102).
+    if (response !== null && redirectTarget(response) !== null) {
+      hops.push({
+        url: response.url(),
+        status: response.status(),
+        location: response.headers()['location'] ?? null,
+      });
+    }
     let request: DriverRequest | null = response?.request().redirectedFrom() ?? null;
     while (request !== null && hops.length < 50) {
-      const answered = await request.response().catch(() => null);
+      const answered = await this.answer(request.response()).catch(() => null);
       hops.unshift({
         url: request.url(),
         status: answered?.status() ?? 0,
@@ -1624,14 +1770,24 @@ export class PageSession {
     const { driver } = this.parts;
     const page = this.page;
     const state = this.document;
-    const response = state.response;
+    // The browser's own error page in place of a document it could not
+    // load is no page of the site's: nothing of it is read, and the page is
+    // reported where the tab was sent (F102). What the tab showed before is
+    // gone, and so is what came with it.
+    const shown = page.url();
+    const failedThere = isBrowserErrorPage(shown);
+    const response = failedThere ? null : state.response;
+    // A page that answers no read is read no further: what it showed is
+    // unknown, and the result says why (F103).
+    const unanswering = this.unanswering;
     // A page the browser brought back from before the flow is a document
     // too, though nothing is known of the response it once came with.
-    const loaded = response !== null || state.restored !== null;
+    const loaded =
+      !failedThere && unanswering === null && (response !== null || state.restored !== null);
     let domHtml: string | null = null;
     let domTruncated = false;
     if (options.dom && loaded) {
-      const cut = truncateText(await page.content().catch(() => ''), maxBody);
+      const cut = truncateText(await this.answer(page.content()).catch(() => ''), maxBody);
       domHtml = cut.text;
       domTruncated = cut.truncated;
     }
@@ -1643,16 +1799,18 @@ export class PageSession {
         : null;
     const rawBody =
       options.raw && response !== null
-        ? await response.body().then(
+        ? await this.answer(response.body()).then(
             (body) => captureBody(body, maxBody),
             () => null,
           )
         : null;
     const headers =
-      response === null ? [] : toHeaders(await response.headersArray().catch(() => []));
-    const redirects = await this.redirects(response);
+      response === null
+        ? []
+        : toHeaders(await this.answer(response.headersArray()).catch(() => []));
+    const redirects = await this.redirects(failedThere ? state.response : response);
     const xhr = new XhrCollector(options.xhr);
-    for (const record of state.xhr) {
+    for (const record of failedThere ? [] : state.xhr) {
       if (xhr.wants(record.contentType)) {
         xhr.add(record);
       }
@@ -1661,8 +1819,8 @@ export class PageSession {
     const sideEffects: SideEffect[] = [];
     let screenshot: ArtifactRef | null = null;
     let pdf: ArtifactRef | null = null;
-    if (loaded && options.screenshot !== null) {
-      const shot = await driver.screenshot(options.screenshot);
+    if (loaded && this.unanswering === null && options.screenshot !== null) {
+      const shot = await this.answer(driver.screenshot(options.screenshot));
       sideEffects.push(...shot.sideEffects);
       const extension = shot.format === 'jpeg' ? 'jpg' : shot.format;
       screenshot = await env.artifacts.write(
@@ -1671,8 +1829,8 @@ export class PageSession {
         `image/${shot.format}`,
       );
     }
-    if (loaded && options.pdf !== null) {
-      const printed = await driver.pdf(options.pdf);
+    if (loaded && this.unanswering === null && options.pdf !== null) {
+      const printed = await this.answer(driver.pdf(options.pdf));
       sideEffects.push(...printed.sideEffects);
       pdf = await env.artifacts.write(
         `${names.prefix}/${names.stamp}-page.pdf`,
@@ -1682,14 +1840,19 @@ export class PageSession {
     }
     return {
       url,
-      final_url: loaded ? page.url() : url,
+      final_url: failedThere ? (state.sentTo ?? url) : loaded ? shown : url,
       status: response?.status() ?? null,
-      http_version: response === null ? null : await driver.protocolOf(response),
+      http_version:
+        response === null || unanswering !== null
+          ? null
+          : await this.answer(driver.protocolOf(response)).catch(() => null),
       headers,
       redirects,
-      title: loaded ? extra.observation.title : null,
-      dom_html: domHtml,
-      dom_truncated: domTruncated,
+      // A page that stopped answering while it was read is reported as
+      // unread: what came of it is a fragment, or nothing (F103).
+      title: loaded && this.unanswering === null ? extra.observation.title : null,
+      dom_html: this.unanswering === null ? domHtml : null,
+      dom_truncated: this.unanswering === null && domTruncated,
       raw_body: rawBody,
       xhr: xhr.responses(),
       xhr_dropped: xhr.dropped,
@@ -1705,10 +1868,21 @@ export class PageSession {
       screenshot,
       pdf,
       side_effects: sideEffects,
-      error: extra.error,
+      error:
+        extra.error ??
+        (this.unanswering === null
+          ? null
+          : { code: this.unanswering.code, message: this.unanswering.message, net_error: null }) ??
+        (failedThere
+          ? {
+              code: 'navigation_failed',
+              message: `the browser could not load ${state.sentTo ?? 'the page the tab was sent to'}: it shows its own error page`,
+              net_error: null,
+            }
+          : null),
       behavior: extra.behavior,
-      links: links?.links ?? null,
-      links_truncated: links?.truncated ?? false,
+      links: this.unanswering === null ? (links?.links ?? null) : null,
+      links_truncated: this.unanswering === null && (links?.truncated ?? false),
     };
   }
 
@@ -1823,42 +1997,50 @@ export class PageSession {
     }
 
     if (error === null || this.document.response !== null) {
-      const challenge = await waitForChallenge(
-        () => this.observe(),
-        error === null
-          ? Math.min(request.challenge_wait_ms ?? DEFAULT_CHALLENGE_WAIT_MS, remaining())
-          : 0,
-        sleep,
-      );
-      observation = challenge.observation;
-      wait = challenge.wait;
-      if (error === null) {
-        const budget = () => Math.max(0, remaining() - CAPTURE_RESERVE_MS);
-        if (acting !== null && behavior !== null) {
-          const wanted =
-            behavior.dwell === 'human' ? acting.human.drawDwell() : (request.dwell_ms ?? 0);
-          if (behavior.scroll_depth !== undefined && behavior.scroll_depth > 0) {
-            // With a patience the page is here, and what `timeout_ms` had
-            // to bound is over: the scrolling ends at its depth or when the
-            // patience is used up (follow-up F44). Without one it leaves
-            // the dwell its time: at most what the budget has beyond it,
-            // which ends every page too long for that at the same moment.
-            const ended = await acting.human.scrollTo(
-              behavior.scroll_depth,
-              performance.now() + (patience ?? Math.max(0, budget() - wanted)),
-            );
-            scroll = {
-              endedBy: ended === 'deadline' ? (patience === null ? 'budget' : 'patience') : ended,
-              reached: await this.scrolled(ended === 'deadline'),
-            };
+      try {
+        const challenge = await waitForChallenge(
+          () => this.observe(),
+          error === null
+            ? Math.min(request.challenge_wait_ms ?? DEFAULT_CHALLENGE_WAIT_MS, remaining())
+            : 0,
+          sleep,
+        );
+        observation = challenge.observation;
+        wait = challenge.wait;
+        if (error === null) {
+          const budget = () => Math.max(0, remaining() - CAPTURE_RESERVE_MS);
+          if (acting !== null && behavior !== null) {
+            const wanted =
+              behavior.dwell === 'human' ? acting.human.drawDwell() : (request.dwell_ms ?? 0);
+            if (behavior.scroll_depth !== undefined && behavior.scroll_depth > 0) {
+              // With a patience the page is here, and what `timeout_ms` had
+              // to bound is over: the scrolling ends at its depth or when the
+              // patience is used up (follow-up F44). Without one it leaves
+              // the dwell its time: at most what the budget has beyond it,
+              // which ends every page too long for that at the same moment.
+              const ended = await acting.human.scrollTo(
+                behavior.scroll_depth,
+                performance.now() + (patience ?? Math.max(0, budget() - wanted)),
+              );
+              scroll = {
+                endedBy: ended === 'deadline' ? (patience === null ? 'budget' : 'patience') : ended,
+                reached: await this.scrolled(ended === 'deadline'),
+              };
+            }
+            // The dwell follows in full where the scrolling had a time of its own.
+            dwelled = patience === null ? Math.min(wanted, budget()) : wanted;
+            await acting.human.dwell(dwelled, { wander: behavior.wander ?? true });
+          } else if ((request.dwell_ms ?? 0) > 0) {
+            // A bare load and a still visit rest alike: a plain wait, no hand.
+            dwelled = Math.min(request.dwell_ms ?? 0, remaining());
+            await sleep(dwelled);
           }
-          // The dwell follows in full where the scrolling had a time of its own.
-          dwelled = patience === null ? Math.min(wanted, budget()) : wanted;
-          await acting.human.dwell(dwelled, { wander: behavior.wander ?? true });
-        } else if ((request.dwell_ms ?? 0) > 0) {
-          // A bare load and a still visit rest alike: a plain wait, no hand.
-          dwelled = Math.min(request.dwell_ms ?? 0, remaining());
-          await sleep(dwelled);
+        }
+      } catch (thrown) {
+        // A page that stopped answering ends its visit here: what was sent
+        // is reported, and the capture says why the page is unread (F103).
+        if (!(thrown instanceof PageUnanswering)) {
+          throw thrown;
         }
       }
       await Promise.race([Promise.allSettled(this.document.bodies), sleep(BODY_WAIT_MS)]);
@@ -1918,6 +2100,7 @@ export class PageSession {
     const snapshot = async (options: CaptureOptions, error: NavigationError | null) => {
       if (
         loadedFrom(this.document) !== null &&
+        !isBrowserErrorPage(page.url()) &&
         withoutFragment(page.url()) !== loadedFrom(this.document)
       ) {
         // The address is not the one this document was loaded from: a

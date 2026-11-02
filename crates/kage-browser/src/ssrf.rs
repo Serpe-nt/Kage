@@ -262,6 +262,35 @@ mod tests {
     }
 
     #[test]
+    fn a_page_the_browser_could_not_load_is_judged_where_it_was_sent() {
+        // What a sidecar reports since F102 when the browser could not load
+        // where a page went: the address the tab was sent to, never the
+        // browser's own error page; a redirect it did not get beyond as a
+        // hop of the chain.
+        let start = "https://example.org/p";
+        for target in [
+            "http://10.0.0.1:8091/x",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://[::ffff:127.0.0.1]/",
+        ] {
+            // A page whose script moved it (meta refresh, location, a form).
+            let moved = check(start, &[], target).unwrap_err();
+            assert_eq!(moved.hop, 1, "{target}");
+            // A redirect the browser was answered with.
+            let redirected = check(start, &[(start, target)], target).unwrap_err();
+            assert_eq!(redirected.hop, 1, "{target}");
+        }
+        // A redirect to a scheme the browser never asks the network for.
+        for target in ["file:///etc/passwd", "ftp://example.org/x"] {
+            let denied = check(start, &[(start, target)], target).unwrap_err();
+            assert!(matches!(denied.reason, SsrfDenial::Scheme(_)), "{target}");
+        }
+        // A protocol-relative hop takes the scheme of the page before.
+        let relative = check(start, &[(start, "//10.0.0.1/x")], "https://10.0.0.1/x").unwrap_err();
+        assert_eq!(relative.url, "https://10.0.0.1/x");
+    }
+
+    #[test]
     fn a_public_chain_passes() {
         assert_eq!(
             check("https://example.org/", &[], "https://example.org/"),

@@ -41,6 +41,7 @@ import {
 } from '../engine.js';
 import type { FingerprintDocument } from '../fingerprint.js';
 import { judgeProbe, parseProbeReport, type ProbeReport } from '../selftest/probe.js';
+import { READ_LIMIT_MS } from '../session.js';
 
 import { startFixtureSite, type FixtureRequest, type FixtureSite } from './fixture-site.js';
 import {
@@ -2675,6 +2676,31 @@ export function defineParitySuite(subject: ParitySubject): void {
           entry: { outcome: 'link_not_found', referer: null, backs: null },
         });
         expect(await askedFor('/site/b')).toEqual([]);
+      });
+    });
+
+    it('answers a navigation whose page stops answering within its bound, and serves the next request in a fresh tab (F103)', async () => {
+      await withContext('stuck-page', async (context) => {
+        const began = Date.now();
+        // The page loads, and its script then never yields again: no read
+        // of it is ever answered.
+        const stuck = await go(context, named('/spin?after=200'), {
+          timeout_ms: 15_000,
+          // The persona stays on the page past the moment it stops answering.
+          behavior: { seed: SEEDS.first, mode: 'still' },
+          dwell_ms: 1500,
+          capture: { ...NO_CAPTURE, dom: true },
+        });
+        const took = Date.now() - began;
+        expect(stuck.error, JSON.stringify(stuck.error)).toMatchObject({ code: 'timeout' });
+        expect(stuck.error?.message).toContain('did not answer a read');
+        expect(stuck).toMatchObject({ dom_html: null, title: null });
+        // One read waits out the limit; nothing after it waits at all.
+        expect(took).toBeLessThan(READ_LIMIT_MS + 15_000);
+        measured('a page that stopped answering', { took_ms: took });
+        // The tab is given up: the next request is served in a fresh one.
+        const next = await go(context, named('/landing'));
+        expect(next).toMatchObject({ status: 200, error: null, final_url: named('/landing') });
       });
     });
 

@@ -158,7 +158,7 @@ where
 /// too. A persona's browser and http client are handed it under the
 /// persona's credential, as the server hands them its own: the provider's
 /// credentials stay in this process (spec §7.5, security review G4).
-struct OwnForwarder {
+pub(crate) struct OwnForwarder {
     forwarder: Arc<Forwarder>,
     stop: oneshot::Sender<()>,
     task: JoinHandle<()>,
@@ -166,14 +166,23 @@ struct OwnForwarder {
 
 impl OwnForwarder {
     async fn start(config: &Config, session: &Session) -> anyhow::Result<Self> {
-        let key = config
-            .secrets
-            .master_key_bytes()
-            .context("secrets.master_key is not 32 bytes of hexadecimal")?;
         // The server's routes: under `egress.mode: direct` a host persona
         // leaves from the host's own connection, and nothing else does.
         let routes: Arc<dyn Routes> =
             Arc::new(crate::engine::routes(config, &session.store, &session.pool));
+        Self::with_routes(config, routes).await
+    }
+
+    /// A forwarder of the command's own over the given routes: for the
+    /// stand-in of a proxy's self-test (F105), which no stored persona is.
+    pub(crate) async fn with_routes(
+        config: &Config,
+        routes: Arc<dyn Routes>,
+    ) -> anyhow::Result<Self> {
+        let key = config
+            .secrets
+            .master_key_bytes()
+            .context("secrets.master_key is not 32 bytes of hexadecimal")?;
         let bind = SocketAddr::new(config.forwarder.bind.ip(), 0);
         let (forwarder, listener) = Forwarder::bind(
             bind,
@@ -198,7 +207,12 @@ impl OwnForwarder {
         Arc::new(self.forwarder.egress())
     }
 
-    async fn stop(self) {
+    /// What the forwarder hands out, as its own type.
+    pub(crate) fn handout(&self) -> kage_scheduler::ForwarderEgress {
+        self.forwarder.egress()
+    }
+
+    pub(crate) async fn stop(self) {
         let _ = self.stop.send(());
         if let Err(error) = self.task.await {
             tracing::warn!(%error, "the command's forwarder ended badly");
