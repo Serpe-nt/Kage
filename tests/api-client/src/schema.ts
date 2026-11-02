@@ -561,6 +561,8 @@ export interface paths {
         /**
          * The result of a fetch, by the request's id.
          * @description `200` with the result once the fetch has ended; `202` while it runs.
+         *     A request whose job ended without it (cancelled, expired, interrupted)
+         *     has ended too: `200` with what ended it.
          *     What only the synchronous answer has (`pacing`, `behavior`, `console`,
          *     `side_effects`) is null here.
          */
@@ -4226,7 +4228,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The result. */
+            /** @description The result; for a request whose job ended without it (cancelled, expired, interrupted), `provider_error` with the item's reason. */
             200: {
                 headers: {
                     [name: string]: unknown;

@@ -20,6 +20,9 @@
 #   - a synchronous fetch that outlasts the wall time, carried on as a
 #     job, with the server stopped and started while it runs: its result
 #     is there afterwards, under the request's id;
+#   - a fetch that waits for its site's one visitor past the wall time,
+#     carried on and cancelled: the site never gets it, and its result
+#     says it was cancelled (F106, F109);
 #   - the series of `/metrics` for jobs, and the admin purge of everything
 #     the key fetched, on the audit log.
 #
@@ -57,6 +60,11 @@ cat >> "${policies}/domains.yaml" << 'EOF'
   # Added by tests/e2e/jobs.sh.
   fixture.kage.test:
     pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  # A site nobody else in this test reads: the cancel of a fetch that
+  # waits for its one visitor.
+  lenient.kage.test:
     min_dwell: 500ms
     active_hours: ignore
 EOF
@@ -321,13 +329,57 @@ call GET "/v1/jobs/${carried}/items" "${client}"
 check "the item is the request of the fetch" "${body}" "d.items.length === 1 && d.items[0].request_id === '${request}' && d.items[0].state === 'succeeded'"
 echo "    request ${request}: 202 with job ${carried}, the server restarted (its stop took ${restarted_after} s: it waited for the page), finished after ${attempts} attempt(s), the site asked once"
 
+echo "==> a fetch that waits for its site's one visitor is carried on, and cancelled: the site never gets it"
+# One seat on the site and a gap of a minute: the second page waits for the
+# visitor of the first (F106, never another persona), past the wall time,
+# and is carried on as a job. The job's cancel takes it out of the queue at
+# once (F109), and its result says so.
+seat='{"custom":{"gap_ms":{"dist":"uniform","min":60000,"max":60000},"burst_pages":{"min":50,"max":50},"burst_break_ms":{"dist":"uniform","min":0,"max":0},"daily_cap_per_persona_per_domain":100000,"domain_concurrency":1,"domain_rpm":1000}}'
+lenient='http://lenient.kage.test:8088'
+call POST /v1/fetch "${client}" "{\"url\":\"${lenient}/slow?ms=10&n=seat-1\",\"level\":2,\"pacing\":${seat}}"
+# A browser that opens for the first time may take longer than the wall
+# time: then the page is read as a job, and its result is waited for.
+if [ "${status}" = 202 ]; then
+    first_request="$(value "${body}" "d.id")"
+    for _ in $(seq 1 60); do
+        call GET "/v1/results/${first_request}" "${client}"
+        [ "${status}" = 200 ] && break
+        sleep 2
+    done
+fi
+expect 200 "the visitor's first page"
+check "the visitor read the first page" "${body}" "d.outcome === 'ok'"
+call POST /v1/fetch "${client}" "{\"url\":\"${lenient}/slow?ms=10&n=seat-2\",\"level\":2,\"pacing\":${seat}}"
+expect 202 "the second page, waiting for the visitor's gap of a minute"
+waiting_request="$(value "${body}" "d.id")"
+waiting_job="$(value "${body}" "d.job_id")"
+cancelling="$(date +%s)"
+call POST "/v1/jobs/${waiting_job}/cancel" "${client}"
+expect 200 "POST /v1/jobs/{id}/cancel of the carried fetch"
+for _ in $(seq 1 20); do
+    call GET "/v1/jobs/${waiting_job}" "${client}"
+    [ "$(value "${body}" "d.state")" = cancelled ] && break
+    sleep 1
+done
+check "the carried fetch's job is cancelled at once" "${body}" "d.state === 'cancelled' && d.items.cancelled === 1 && d.items.pending === 0"
+cancelled_after="$(($(date +%s) - cancelling))"
+call GET "/v1/results/${waiting_request}" "${client}"
+expect 200 "the result of the cancelled fetch"
+check "the request ended with its job: provider_error, cancelled, nothing attempted" "${body}" \
+    "d.id === '${waiting_request}' && d.state === 'finished' && d.outcome === 'provider_error' && d.reason === 'cancelled' && d.attempts.length === 0"
+seen="$(got "${site}/__kage/requests")"
+check "the site got the first page once and never the cancelled one" "${seen}" \
+    "d.filter((r) => r.path === '/slow?ms=10&n=seat-1').length === 1 && d.filter((r) => r.path === '/slow?ms=10&n=seat-2').length === 0"
+echo "    request ${waiting_request}: 202 with job ${waiting_job}, cancelled in ${cancelled_after} s, 200 provider_error/cancelled, never asked of the site"
+
 echo "==> an admin purges everything the key fetched; it is on the audit log"
 before="$(psql "SELECT count(*) FROM requests WHERE api_key_id = '${client_id}'")"
+jobs_before="$(psql "SELECT count(*) FROM jobs WHERE api_key_id = '${client_id}'")"
 call POST /v1/admin/purge "${client}" "{\"key_id\":\"${client_id}\"}"
 problem 403 scope_missing "a purge by a key that is no admin's"
 call POST /v1/admin/purge "${admin}" "{\"key_id\":\"${client_id}\"}"
 expect 200 "POST /v1/admin/purge"
-check "the key's jobs and results went" "${body}" "d.jobs === 5 && d.requests === ${before} && d.artifacts >= 50"
+check "the key's jobs and results went" "${body}" "d.jobs === ${jobs_before} && d.requests === ${before} && d.artifacts >= 50"
 purged="${body}"
 left="$(psql "SELECT (SELECT count(*) FROM requests WHERE api_key_id = '${client_id}') + (SELECT count(*) FROM jobs WHERE api_key_id = '${client_id}') + (SELECT count(*) FROM artifacts a JOIN requests r ON r.id = a.request_id WHERE r.api_key_id = '${client_id}')")"
 [ "${left}" -eq 0 ] || fail "${left} rows of the key are left after the purge"
@@ -338,7 +390,7 @@ problem 404 result_not_found "a purged result"
 call GET '/v1/admin/audit?limit=50' "${admin}"
 expect 200 "GET /v1/admin/audit"
 check "the purge is on the audit log with what went" "${body}" \
-    "d.events.some((e) => e.action === 'admin.data.purge' && e.outcome === 'success' && e.target === '${client_id}' && e.details.result.jobs === 5) && d.events.some((e) => e.action === 'admin.data.purge' && e.outcome === 'denied')"
+    "d.events.some((e) => e.action === 'admin.data.purge' && e.outcome === 'success' && e.target === '${client_id}' && e.details.result.jobs === ${jobs_before}) && d.events.some((e) => e.action === 'admin.data.purge' && e.outcome === 'denied')"
 echo "    ${purged}"
 
 echo "jobs test passed"

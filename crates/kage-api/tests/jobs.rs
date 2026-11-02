@@ -24,9 +24,12 @@ use hmac::{Hmac, KeyInit, Mac};
 use kage_api::jobs::webhook::retry_wait;
 use kage_api::{DirectTransport, WebhookSender};
 use kage_core::config::Config;
-use kage_core::domain::{KeyLimits, Scope};
+use kage_core::domain::{
+    Job, JobItem, JobItemState, JobKind, JobOrigin, JobState, KeyLimits, Level, RenderMode,
+    RequestRecord, Scope,
+};
 use kage_core::duration::HumanDuration;
-use kage_core::ids::{JobId, RequestId, WebhookDeliveryId};
+use kage_core::ids::{JobId, JobItemId, RequestId, WebhookDeliveryId};
 use kage_proxy::{Clock, CredentialCipher, ManualClock};
 use serde_json::{Value, json};
 use sha2::Sha256;
@@ -1386,7 +1389,7 @@ async fn a_carried_fetch_that_is_being_read_when_the_server_stops_is_finished_an
         Some(kage_core::outcome::Outcome::Ok)
     );
     let ended = store.jobs().get(job).await.unwrap().unwrap();
-    assert_eq!(ended.state, kage_core::domain::JobState::Succeeded);
+    assert_eq!(ended.state, JobState::Succeeded);
     assert_eq!(asked(&api, "/slow").await.len(), 1);
 
     // Another server over the same store has nothing to take up, also
@@ -1899,6 +1902,119 @@ async fn a_request_whose_job_ended_without_it_is_answered_with_what_ended_it() {
     assert_eq!(result.json()["outcome"], "provider_error");
     assert_eq!(result.json()["reason"], "cancelled");
     assert_eq!(result.json()["id"], request);
+    work.stop().await;
+    api.shut_down().await;
+}
+
+#[tokio::test]
+async fn a_carried_fetch_that_held_a_credential_and_lost_its_server_ends_interrupted() {
+    // F109 (auth-03): a fetch at level 0 with the caller's cookie, carried
+    // on as a job; its server was killed while the page was being read.
+    // What is left is what such a server leaves: the request, the job in
+    // the hands of a worker that is gone, its item `running`, and the
+    // cookie never kept. The next worker cannot make the request again as
+    // it was asked; the item ends `interrupted`, and so does the request:
+    // `GET /v1/results` answers 200, never 202 for an hour.
+    let mut api = Api::start_with(2, 149, FAST, quick).await;
+    let (key, token) = api
+        .key_with(&[Scope::Fetch, Scope::Jobs], common::ROOMY)
+        .await;
+    let store = api.lab.store();
+    let now = Utc::now();
+    let url = Api::url("/kept");
+    let spec = json!({ "url": url, "level": 0, "headers": { "Cookie": "[redacted]" } });
+    let request = RequestId::new();
+    let job = JobId::new();
+    store
+        .requests()
+        .insert(&RequestRecord {
+            id: request,
+            api_key_id: Some(key),
+            job_id: None,
+            session_id: None,
+            url: url.clone(),
+            method: "GET".to_owned(),
+            domain: SITE.to_owned(),
+            render: RenderMode::Http,
+            level: Some(Level::Plain),
+            spec: spec.clone(),
+            created_at: now,
+            finished_at: None,
+            outcome: None,
+        })
+        .await
+        .unwrap();
+    let carried = Job {
+        id: job,
+        api_key_id: key,
+        kind: JobKind::Batch,
+        state: JobState::Running,
+        spec: json!({ "type": "batch", "item_count": 1 }),
+        idempotency_key: None,
+        idempotency_hash: None,
+        idempotency_until: None,
+        origin: JobOrigin::SyncOverflow,
+        webhook_url: None,
+        webhook_secret: None,
+        items_total: 1,
+        items_succeeded: 0,
+        items_failed: 0,
+        items_cancelled: 0,
+        cancel_requested: false,
+        error: None,
+        deadline: Some(now + chrono::Duration::days(7)),
+        paused_until: None,
+        paused_reason: None,
+        created_at: now,
+        started_at: Some(now),
+        finished_at: None,
+    };
+    let item = JobItem {
+        id: JobItemId::new(),
+        job_id: job,
+        seq: 0,
+        state: JobItemState::Running,
+        input: spec,
+        site: Some(SITE.to_owned()),
+        request_id: Some(request),
+        outcome: None,
+        output: None,
+        error: None,
+        not_before: None,
+        claims: 1,
+        created_at: now,
+        started_at: Some(now),
+        finished_at: None,
+    };
+    // The lease of the killed server has run out.
+    store
+        .jobs()
+        .create_leased(
+            &carried,
+            &[item],
+            now,
+            uuid::Uuid::now_v7(),
+            now - chrono::Duration::seconds(1),
+        )
+        .await
+        .unwrap();
+    store.requests().adopt(request, job).await.unwrap();
+    let waiting = api.get(&token, &format!("/v1/results/{request}")).await;
+    assert_eq!(waiting.status, StatusCode::ACCEPTED);
+
+    let work = api.work();
+    let done = api.job_until(&token, &job.to_string(), ended).await;
+    assert_eq!(done["state"], "failed", "{done}");
+    let items = api.job_items(&token, &job.to_string()).await;
+    assert_eq!(items[0]["state"], "failed");
+    assert_eq!(items[0]["error"], "interrupted");
+    let result = api.get(&token, &format!("/v1/results/{request}")).await;
+    assert_eq!(result.status, StatusCode::OK, "{:?}", result.json());
+    assert_eq!(result.json()["state"], "finished");
+    assert_eq!(result.json()["outcome"], "provider_error");
+    assert_eq!(result.json()["reason"], "interrupted");
+    // Nothing was asked of the site without the cookie.
+    assert_eq!(asked(&api, "/kept").await.len(), 0);
     work.stop().await;
     api.shut_down().await;
 }

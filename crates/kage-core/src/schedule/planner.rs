@@ -1460,6 +1460,15 @@ impl Planner {
         let Some(persona) = grant.persona else {
             return true;
         };
+        if completion.proxy_failed {
+            // A proxy that failed reaches no site: every visit of the
+            // persona is over, so that it holds no seat anywhere (F108).
+            for ((visitor, _), cadence) in &mut self.cadences {
+                if *visitor == persona {
+                    cadence.visiting = false;
+                }
+            }
+        }
         if let Some(cadence) = self.cadences.get_mut(&(persona, name)) {
             if completion.blocked || completion.proxy_failed {
                 // It leaves: no more pages of this visit. One whose proxy
