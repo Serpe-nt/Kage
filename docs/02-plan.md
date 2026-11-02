@@ -1632,12 +1632,12 @@ order of severity (the report's "Proposed plan items" names the rows):
   behind `jobs.max_running` at once, and a request whose job ended
   without it answers `200` with what ended it, not `202` (sched-07,
   jobs-07, jobs-03, auth-03).
-- **F110 (high):** counters exist from 0 at start, or the alerts and
+- **F110 (high, fixed by [Serpe-nt/Kage#39](https://github.com/Serpe-nt/Kage/pull/39)):** counters exist from 0 at start, or the alerts and
   panels see a first event; today `increase()` misses every series'
   first value, so `KageWebhookFailing` and `KageBlockRateAboveThreshold`
   fire one event late, and `alerts.test.yml` starts its series where the
   real exposition never does (secrecy-01).
-- **F111 (high):** `KagePoolUnavailable` holds through backoff's
+- **F111 (high, fixed by [Serpe-nt/Kage#39](https://github.com/Serpe-nt/Kage/pull/39)):** `KagePoolUnavailable` holds through backoff's
   expiries; today each expiry shows a proxy `degraded` for one scrape and
   the rule's `for: 10m` starts again, so it never fired in 18 minutes
   with every proxy down (secrecy-02).
@@ -1759,6 +1759,46 @@ order of severity (the report's "Proposed plan items" names the rows):
   hops are since F98; today an asset's URL is judged by `check_url`
   alone, like a browser's own requests (found by the F98 session; the
   ground of F57/G1).
+- **F149 (medium, fixed by [Serpe-nt/Kage#40](https://github.com/Serpe-nt/Kage/pull/40)):**
+  `minimatch` 11.0.1 and `glob` 14.0.2 under the sidecar, by overrides,
+  for GHSA-g3hv-75wg-m249 and GHSA-3g3m-2fjr-6pw4 (Dependabot alerts 18
+  and 19 of 2026-10-31, both moderate; 2.0.0 and 2.0.1 ship 10.2.6 and
+  13.0.6, neither on a request's path). Alert 20, `minimatch` 5.1.9
+  under `@redocly/openapi-core` in the API test client, stays: the core
+  pins it and calls the module as a function, a shape minimatch 9 and
+  later do not export, and its one call is off the advisory's path
+  (`docs/versions.md`, the client's table); move it when a release of
+  the core without minimatch 5 is within the generator's range.
+- **F150 (medium):** the sidecars' own counters (`sidecar_flows_total`,
+  `sidecar_context_opens_total`, `sidecar_browser_recycles_total`, read
+  by panels only) exist from zero for the label values known at start,
+  as Kage's do since F110; today each is born with its first event, which
+  `increase()` never counts (found by the F110 session).
+- **F151 (high):** `KagePoolUnavailable` fires when a pool of four or
+  more dies whole: the outage guard of §7.3 freezes every proxy's state
+  while more than half fail their latest probe, so such a pool stays
+  `healthy` by state and the alert cannot fire, a mechanism apart from
+  F111's; the guard tells a pool-wide outage from a scrape of failures,
+  or the gauge reads the probes' verdicts under the freeze as it does
+  through a backoff (found by the F111 session).
+- **F152 (medium):** the live http self-test (`tests/live/http-selftest.sh`)
+  tries another proxy when one does not open the tunnel, and its report
+  says which; today one proxy fails the night: the nightly of 2026-11-02
+  ended on "the proxy did not open the tunnel" through one proxy for both
+  profiles, a minute after proxy-health read every proxy ok.
+- **F153 (medium):** the nightly's log on GitHub prints the pool's proxy
+  hosts and ports at INFO: redact them as the credentials are, since the
+  log is public and the proxies are the operator's (seen in the nightly of
+  2026-11-02).
+- **F154 (high):** the end-to-end suite ends on a run that spans 00:00
+  UTC: today a gate whose field suite (`tests/field/field.sh`) is under
+  way at midnight UTC never ends, on the owner's machine and on GitHub's
+  runners (the rerun of [Serpe-nt/Kage#39](https://github.com/Serpe-nt/Kage/pull/39) reached the stage at 00:08 UTC on
+  2026-11-01 and was cancelled at 01:11; QA round one saw the same
+  locally); find what the day's turn stalls, a window or a budget keyed
+  on the UTC day, bound the suite, and say so in the CI runbook; until
+  then no gate, rerun or merge whose end-to-end stage runs between 22:00
+  and 00:30 UTC.
 
 The round did not reach level 1 (F30), `https` targets, a replacement
 that replaces, real-length timers, two servers on one database, DNS
@@ -1780,15 +1820,17 @@ its own on the PR workflow, with the owner's word for every merge:
    [Serpe-nt/Kage#31](https://github.com/Serpe-nt/Kage/pull/31) and
    [Serpe-nt/Kage#32](https://github.com/Serpe-nt/Kage/pull/32); F92,
    the CI badge, by
-   [Serpe-nt/Kage#25](https://github.com/Serpe-nt/Kage/pull/25)).
+   [Serpe-nt/Kage#25](https://github.com/Serpe-nt/Kage/pull/25); F149, the
+   minimatch and glob alerts, by [Serpe-nt/Kage#40](https://github.com/Serpe-nt/Kage/pull/40)).
 2. **What QA round one found, the critical and the high first:** F96,
    F97 and F98 are fixed by [Serpe-nt/Kage#37](https://github.com/Serpe-nt/Kage/pull/37), [Serpe-nt/Kage#36](https://github.com/Serpe-nt/Kage/pull/36) and [Serpe-nt/Kage#35](https://github.com/Serpe-nt/Kage/pull/35)
-   (2026-10-31); then F99 to F111 in four sessions by area, each a pull
-   request of its own: the scheduler (F106 to F109), the http path at
+   (2026-10-31), F110 and F111 by [Serpe-nt/Kage#39](https://github.com/Serpe-nt/Kage/pull/39) (2026-11-02); then F99
+   to F109 in three sessions by area, each a pull request of its own,
+   started 2026-11-02: the scheduler (F106 to F109), the http path at
    level 0 (F99, F100 and F104), the browsers and the sidecar (F101 to
-   F103 and F105), observability (F110 and F111); every fix keeps the
-   report's reproduction as its regression test, and the OpenAPI document
-   and the runbooks move with it. F146 to F148, what the fix sessions
+   F103 and F105); every fix keeps the report's reproduction as its
+   regression test, and the OpenAPI document and the runbooks move with
+   it. F146 to F154, what the fix sessions, the nightly and the merges
    found, go with the area they belong to.
 3. **What the field campaign found, the stealth items first:** F89 (the
    behaviour engine answers a consent dialog by hand before its first
