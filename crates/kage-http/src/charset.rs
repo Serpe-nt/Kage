@@ -592,6 +592,102 @@ mod tests {
         assert_eq!(prescan(b""), None);
     }
 
+    /// What a careless reading of the markup would take for a declaration
+    /// is none: a comment that ends where it starts, a declaration inside
+    /// another tag, in `<!…>`, `<?…>` and a `</` with no name; white space
+    /// around an `=` is allowed; the first of `charset` and `content` counts;
+    /// and a document cut anywhere declares nothing.
+    #[test]
+    fn the_prescan_reads_past_what_only_looks_like_a_declaration() {
+        assert_eq!(
+            prescan(b"<p>x</p><!--><meta charset=euc-jp><!-- --><meta charset=shift_jis>"),
+            Some(EUC_JP)
+        );
+        assert_eq!(
+            prescan(b"<p>hello <x charset=euc-jp><meta charset=shift_jis>"),
+            Some(SHIFT_JIS)
+        );
+        assert_eq!(
+            prescan(b"<p>x</p title=\">x <meta charset=euc-jp>\"><meta charset=shift_jis>"),
+            Some(SHIFT_JIS)
+        );
+        for skipped in [
+            "<!x <meta charset=euc-jp>",
+            "<?x <meta charset=euc-jp>",
+            "</ <meta charset=euc-jp>",
+        ] {
+            let page = format!("<p>x</p>{skipped}<meta charset=shift_jis>");
+            assert_eq!(prescan(page.as_bytes()), Some(SHIFT_JIS), "{skipped}");
+        }
+        for meta in [
+            "<meta charset = shift_jis>",
+            "<meta charset= shift_jis>",
+            "<meta charset =shift_jis>",
+            "<meta http-equiv=content-type content=\"text/html; charset = shift_jis\">",
+            "<meta http-equiv=content-type content='text/html; charset=\"shift_jis\"'>",
+        ] {
+            assert_eq!(prescan(meta.as_bytes()), Some(SHIFT_JIS), "{meta}");
+        }
+        assert_eq!(
+            prescan(
+                b"<meta charset=euc-jp content=\"text/html; charset=shift_jis\" http-equiv=content-type>"
+            ),
+            Some(EUC_JP)
+        );
+        // A `/` ends a name: `charset/x` is two attributes, and the first,
+        // an empty `charset`, is the one that counts.
+        assert_eq!(prescan(b"<meta charset/x=euc-jp charset=shift_jis>"), None);
+        for cut in [
+            "<meta ",
+            "<meta charset=",
+            "<meta charset",
+            "<meta charset= ",
+            "<meta charset = ",
+            "<p ",
+            "<p",
+            "<!--",
+            "<meta http-equiv=content-type content=\"charset=",
+            "<meta http-equiv=content-type content=\"charset =",
+        ] {
+            assert_eq!(prescan(cut.as_bytes()), None, "{cut}");
+        }
+    }
+
+    /// The edges of a `content` value and of the XML declaration: a value
+    /// ends at `;` or white space, the declaration counts only within the
+    /// first 1024 bytes, and its `encoding` is quoted or not there at all.
+    #[test]
+    fn a_declarations_value_ends_where_the_standard_ends_it() {
+        for content in [
+            "text/html; charset=shift_jis; level=1",
+            "text/html; charset=shift_jis level=1",
+        ] {
+            let meta = format!("<meta http-equiv=content-type content=\"{content}\">");
+            assert_eq!(prescan(meta.as_bytes()), Some(SHIFT_JIS), "{content}");
+        }
+        // A name of a `<meta>` attribute cut by the end of the bytes.
+        assert_eq!(prescan(b"<meta charset "), None);
+        // The declaration's end at byte 1024 is past the prescan's bytes.
+        let mut late = b"<?xml version=\"1.0\" encoding=\"iso-8859-1\"".to_vec();
+        late.resize(1024, b' ');
+        late.extend_from_slice(b"?><a>\xfc</a>");
+        let read = decode(Some("application/xml"), &late);
+        assert_eq!((read.encoding, read.by), (UTF_8, DecidedBy::Utf8));
+        let mut early = late.clone();
+        early.remove(1000);
+        let read = decode(Some("application/xml"), &early);
+        assert_eq!(
+            (read.encoding, read.by),
+            (WINDOWS_1252, DecidedBy::XmlDeclaration)
+        );
+        // An unquoted `encoding` is no declaration.
+        let read = decode(
+            Some("text/xml"),
+            b"<?xml version=\"1.0\" encoding=Xlatin1X?><a>\xfc</a>",
+        );
+        assert_eq!((read.encoding, read.by), (UTF_8, DecidedBy::Utf8));
+    }
+
     #[test]
     fn xml_reads_its_declaration_and_json_is_utf8() {
         let mut xml =
