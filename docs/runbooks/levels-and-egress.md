@@ -224,7 +224,11 @@ seen by the sites it reads. Under `direct`:
   address in a private, loopback, CGNAT or ULA range (unless its name is
   in `private_names`, below), connects only to an address it checked, and
   counts every byte. Link-local, metadata and multicast addresses are
-  refused for every name.
+  refused for every name. A request whose target or redirect hop is
+  refused so ends `ssrf_denied`, at its first attempt, at every level and
+  in both engines (F102): the outcome of the guard, not a failed
+  connection, so a name you forgot to list shows as what it is. A name
+  that does not resolve at all is a failed connection (`provider_error`).
 - **`egress.direct.private_names`** lists exact host names (no scheme, no
   port, no path; at most 64) that may resolve to a private or loopback
   address: the operator's own network. `kage config check` warns while

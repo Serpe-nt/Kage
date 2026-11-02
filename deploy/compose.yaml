@@ -183,6 +183,9 @@ services:
       SIDECAR_MAX_CONTEXTS: ${KAGE_SIDECAR_MAX_CONTEXTS:-3}
       SIDECAR_CONTEXT_IDLE_MS: ${KAGE_SIDECAR_CONTEXT_IDLE_MS:-360000}
       SIDECAR_MAX_PAGES_PER_BROWSER: ${KAGE_SIDECAR_MAX_PAGES_PER_BROWSER:-500}
+      # A sidecar that stops answering this long ends itself, so that
+      # `restart: unless-stopped` starts it again (F103).
+      SIDECAR_STALL_MS: ${KAGE_SIDECAR_STALL_MS:-30000}
       # A chromium persona claims the system it runs on, Linux (docs/adr/0009).
       SIDECAR_ALLOW_CROSS_OS_CLAIMS: ${KAGE_SIDECAR_ALLOW_CROSS_OS_CLAIMS:-false}
       # Where WebGL comes from: llvmpipe (Mesa's software renderer), or host
@@ -225,6 +228,9 @@ services:
       SIDECAR_MAX_CONTEXTS: ${KAGE_SIDECAR_MAX_CONTEXTS:-3}
       SIDECAR_CONTEXT_IDLE_MS: ${KAGE_SIDECAR_CONTEXT_IDLE_MS:-360000}
       SIDECAR_MAX_PAGES_PER_BROWSER: ${KAGE_SIDECAR_MAX_PAGES_PER_BROWSER:-500}
+      # A sidecar that stops answering this long ends itself, so that
+      # `restart: unless-stopped` starts it again (F103).
+      SIDECAR_STALL_MS: ${KAGE_SIDECAR_STALL_MS:-30000}
       SIDECAR_AUDIO: ${KAGE_SIDECAR_AUDIO:-pulse}
       SIDECAR_SELFTEST_PROBE_URL: ${KAGE_SIDECAR_SELFTEST_PROBE_URL:-}
       SIDECAR_SELFTEST_ECHO_URL: ${KAGE_SIDECAR_SELFTEST_ECHO_URL:-}
