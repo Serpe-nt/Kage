@@ -587,6 +587,7 @@ async fn sidecar(stand_in: &StandIn, persona: Value, context: Value, report: Val
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[allow(clippy::too_many_lines)] // A passing and a failing run, and what each handed the sidecar.
 async fn the_browser_self_test_opens_a_context_through_the_proxy_and_closes_it_again() {
     let db = TestDb::migrated().await;
     let proxy = TestProxy::start().await;
@@ -667,7 +668,10 @@ async fn the_browser_self_test_opens_a_context_through_the_proxy_and_closes_it_a
     let opened: Value = serde_json::from_slice(&opened.body).unwrap();
     let server = opened["proxy"]["server"].as_str().unwrap();
     assert!(server.starts_with("http://kage:"), "{server}");
-    assert!(!server.ends_with(&format!(":{}", proxy.addr.port())), "{server}");
+    assert!(
+        !server.ends_with(&format!(":{}", proxy.addr.port())),
+        "{server}"
+    );
     assert_ne!(opened["proxy"]["username"], PROXY_USER);
     assert_ne!(opened["proxy"]["password"], PROXY_PASS);
     passing.verify().await;
