@@ -41,6 +41,33 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The scheduler keeps a site to its seats, waits out an outage of the
+  pool, blames a dead proxy on the proxy, and a cancel reaches what waits
+  (F106 to F109).** QA round one found four ways the scheduler and the
+  job worker broke their own rules. Synchronous fetches that waited
+  together recruited every persona of the pool in turn, past
+  `domain_concurrency` and long before `visitor_wait` (sched-01): a
+  synchronous request now goes past the seats only for a visitor's break
+  that does not end within `visitor_wait`, and waits for a visitor in its
+  gap however many wait. A batch sent while every proxy was in backoff
+  failed its items with `no_persona` within two seconds (sched-04): work
+  that a persona could take once one is ready is refused `no_persona`
+  with `retry_at` a minute on, so a job is `paused` and resumes when the
+  proxies return. A dead proxy was the site's server error: a browser
+  reports a plain `http://` page whose proxy is down as
+  `navigation_failed`, and the site was paused 30 s doubling for everyone
+  (sched-05); the forwarder now notes every connection it could not relay
+  for its route, such an attempt is `proxy_failed` and counts nothing
+  against the site, the persona leaves its visit and is taken only when no
+  other could be for five minutes, and its proxy is probed at once. A
+  cancel did not reach a fetch carried on as a job, nor a job queued
+  behind `jobs.max_running`, and the request of an item that ended
+  without its page answered `202 running` for ever (sched-07, jobs-07,
+  jobs-03, auth-03): the carried fetch is taken out of the queue at once,
+  a cancelled job nobody works is claimed past the limit and ended, every
+  item that ends without its page ends its request, and
+  `GET /v1/results/{id}` answers `200` with what ended a request whose
+  job ended without it.
 - **`KageWebhookFailing`, `KageBlockRateAboveThreshold` and
   `KagePoolUnavailable` fire on what they are for.** QA round one found the
   first two one event late and the third never: a Prometheus counter is

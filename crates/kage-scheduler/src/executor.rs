@@ -67,7 +67,7 @@ use kage_browser::{Navigation, navigation_bound, ssrf};
 use kage_core::classifier::{Classification, Observation};
 use kage_core::config::{BrowserConfig, Config};
 use kage_core::domain::{Exit, Header, Level, Persona, Render, Timing};
-use kage_core::ids::{PersonaId, RequestId};
+use kage_core::ids::{PersonaId, ProxyId, RequestId};
 use kage_core::outcome::Outcome;
 use kage_core::pacing::Lognormal;
 use kage_core::persona::pacing_factor;
@@ -80,7 +80,7 @@ use kage_persona::identity::http_spec;
 use kage_persona::{PersonaError, PersonaManager, Via};
 use url::Url;
 
-use crate::forwarder::{ForwarderEgress, Meter, PlainRoute};
+use crate::forwarder::{Caller, ForwarderEgress, Meter, PlainRoute};
 use crate::verdicts::{Verdicts, cookies_set, courtesy_of, page_failure, unanswered};
 
 /// A scripted flow a browser attempt runs in place of loading one page
@@ -875,6 +875,29 @@ impl fmt::Debug for PathExecutor {
     }
 }
 
+/// The reason of an attempt that failed at its proxy.
+const PROXY_FAILED: &str = "proxy_failed";
+
+/// An attempt that got no answer from the site and counts as the site's
+/// failure (a server error, a timeout) while the forwarder could not relay
+/// its connection (`unrelayed`) is the proxy's failure: `provider_error`,
+/// `proxy_failed`, nothing against the site (F108). Anything else is as it
+/// was.
+fn blame_the_proxy(mut output: AttemptOutput, unrelayed: bool) -> AttemptOutput {
+    if !unrelayed || output.status.is_some() || output.courtesy != Courtesy::ServerError {
+        return output;
+    }
+    let mut evidence = std::mem::take(&mut output.classification.evidence);
+    if let Some(reason) = &output.reason {
+        evidence.push(format!("site_saw_nothing:{reason}"));
+    }
+    output.classification = unanswered(Outcome::ProviderError, PROXY_FAILED);
+    output.classification.evidence.extend(evidence);
+    output.courtesy = Courtesy::NotTheSite;
+    output.reason = Some(PROXY_FAILED.to_owned());
+    output
+}
+
 /// How a failure of the persona's own plumbing is named.
 fn plumbing(error: &PersonaError) -> (&'static str, bool) {
     match error {
@@ -993,6 +1016,32 @@ impl PathExecutor {
             flow: None,
             reached: Some(Reached::Typed),
         }
+    }
+
+    /// Whose failure an attempt that got no answer from the site was: the
+    /// proxy's, when the forwarder could not relay the caller's connection
+    /// for a reason of its route while the attempt ran (F108). A browser
+    /// told a plain `http://` request that the forwarder had to close
+    /// without an answer reports `navigation_failed`, as for a site that
+    /// does not answer. The pool is told, so that the proxy is probed now.
+    fn whose(
+        &self,
+        output: AttemptOutput,
+        caller: Caller,
+        proxy: Option<ProxyId>,
+        started: tokio::time::Instant,
+    ) -> AttemptOutput {
+        let unrelayed = self
+            .meter
+            .as_ref()
+            .is_some_and(|meter| meter.unrelayed_since(caller, started));
+        let output = blame_the_proxy(output, unrelayed);
+        if output.reason.as_deref() == Some(PROXY_FAILED)
+            && let Some(proxy) = proxy
+        {
+            self.manager.pool().report_traffic_failed(proxy);
+        }
+        output
     }
 
     fn unavailable(error: &PersonaError) -> AttemptOutput {
@@ -1430,16 +1479,29 @@ impl AttemptExecutor for PathExecutor {
             .meter
             .as_ref()
             .map(|meter| meter.label(job.persona.id, &job.domain));
-        match job.render {
+        let started = tokio::time::Instant::now();
+        let output = match job.render {
             Render::Http => self.http(job).await,
             Render::Browser => self.browser(job).await,
-        }
+        };
+        self.whose(
+            output,
+            Caller::Persona(job.persona.id),
+            Some(job.persona.proxy_id),
+            started,
+        )
     }
 
     async fn plain(&self, job: &PlainJob) -> AttemptOutput {
         // A plain client's bytes count toward the host they went to, at
         // the forwarder.
-        self.plain_attempt(job).await
+        let started = tokio::time::Instant::now();
+        let output = self.plain_attempt(job).await;
+        let proxy = match job.route {
+            PlainRoute::Pool(proxy) => Some(proxy),
+            PlainRoute::Host => None,
+        };
+        self.whose(output, Caller::Plain(job.route), proxy, started)
     }
 }
 
@@ -1459,8 +1521,8 @@ mod tests {
     use url::Url;
 
     use super::{
-        AttemptOutput, BehaviorWish, PathExecutor, Reached, behavior_for, draw_dwell, entry_from,
-        origin_of, reached_of,
+        AttemptOutput, BehaviorWish, PathExecutor, Reached, behavior_for, blame_the_proxy,
+        draw_dwell, entry_from, origin_of, reached_of,
     };
 
     fn policy(yaml: &str) -> EffectivePolicy {
@@ -1896,5 +1958,57 @@ mod tests {
         assert_eq!(output.outcome(), Outcome::ProviderError);
         assert_eq!(output.status, None);
         assert!(output.page.is_none() && output.fetched.is_none());
+    }
+
+    #[test]
+    fn a_page_that_failed_while_its_proxy_was_not_reached_is_the_proxys_failure() {
+        // F108 (sched-05): a browser told a plain http:// request that the
+        // forwarder closed for want of its proxy reports navigation_failed,
+        // as for a site that does not answer.
+        let site_silent = || {
+            AttemptOutput::failed(
+                Outcome::ProviderError,
+                "navigation_failed",
+                Courtesy::ServerError,
+            )
+        };
+        let blamed = blame_the_proxy(site_silent(), true);
+        assert_eq!(blamed.outcome(), Outcome::ProviderError);
+        assert_eq!(blamed.reason.as_deref(), Some("proxy_failed"));
+        assert_eq!(blamed.courtesy, Courtesy::NotTheSite);
+        assert!(blamed.classification.retryable);
+        assert!(
+            blamed
+                .classification
+                .evidence
+                .contains(&"site_saw_nothing:navigation_failed".to_owned()),
+            "{:?}",
+            blamed.classification.evidence
+        );
+        // A timeout with no answer, likewise.
+        let timed_out = AttemptOutput::failed(Outcome::Timeout, "timeout", Courtesy::ServerError);
+        assert_eq!(
+            blame_the_proxy(timed_out, true).courtesy,
+            Courtesy::NotTheSite
+        );
+
+        // With the proxy relaying, the site's silence is the site's.
+        let kept = blame_the_proxy(site_silent(), false);
+        assert_eq!(kept.reason.as_deref(), Some("navigation_failed"));
+        assert_eq!(kept.courtesy, Courtesy::ServerError);
+        // An answer of the site is its own, whatever the proxy did besides.
+        let mut answered = site_silent();
+        answered.status = Some(503);
+        assert_eq!(
+            blame_the_proxy(answered, true).courtesy,
+            Courtesy::ServerError
+        );
+        // So is anything that is no server error.
+        let blocked =
+            AttemptOutput::failed(Outcome::ProviderError, "aborted", Courtesy::NotTheSite);
+        assert_eq!(
+            blame_the_proxy(blocked, true).reason.as_deref(),
+            Some("aborted")
+        );
     }
 }

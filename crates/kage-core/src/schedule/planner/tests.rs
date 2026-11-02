@@ -279,6 +279,7 @@ impl Sim {
             Completion {
                 courtesy,
                 blocked: outcome.is_block(),
+                proxy_failed: false,
             },
         ));
         self.ended.push((now, dispatch.clone(), outcome));
@@ -477,7 +478,8 @@ fn a_request_leaves_at_once_on_a_persona_that_is_free() {
         noon() + secs(1),
         Completion {
             courtesy: Courtesy::Answered,
-            blocked: false
+            blocked: false,
+            proxy_failed: false,
         }
     ));
     assert_eq!(planner.in_flight(Render::Browser), 0);
@@ -487,7 +489,8 @@ fn a_request_leaves_at_once_on_a_persona_that_is_free() {
         noon() + secs(1),
         Completion {
             courtesy: Courtesy::Answered,
-            blocked: false
+            blocked: false,
+            proxy_failed: false,
         }
     ));
 }
@@ -541,6 +544,7 @@ fn a_stop_refuses_everything_until_it_is_lifted() {
         Completion {
             courtesy: Courtesy::NotTheSite,
             blocked: false,
+            proxy_failed: false,
         },
     );
 
@@ -583,6 +587,8 @@ fn only_a_persona_that_fits_the_request_serves_it() {
         }
     };
     let nobody = Err((Refusal::NoPersona, None));
+    // One that fits is not ready now: worth asking again (F107).
+    let later = Err((Refusal::NoPersona, Some(noon() + Duration::minutes(1))));
 
     // The only firefox, the only one in France, the only one with an http
     // path that is ready.
@@ -595,12 +601,18 @@ fn only_a_persona_that_fits_the_request_serves_it() {
         Ok(id(2))
     );
     assert_eq!(served_by(|work| work.render = Render::Http), Ok(id(2)));
-    // A persona of unknown country serves only where any country may.
+    // A persona of unknown country serves only where any country may; the
+    // one in Germany that would is not ready.
     assert_eq!(
         served_by(|work| {
             work.countries = Some(vec!["DE".parse().unwrap()]);
             work.engines = vec![Engine::Chromium];
         }),
+        later
+    );
+    // Nobody at all is in Italy.
+    assert_eq!(
+        served_by(|work| work.countries = Some(vec!["IT".parse().unwrap()])),
         nobody
     );
     assert_eq!(
@@ -609,7 +621,7 @@ fn only_a_persona_that_fits_the_request_serves_it() {
     );
     // Pinned to one persona: that one or nobody.
     assert_eq!(served_by(|work| work.pin = Some(id(4))), Ok(id(4)));
-    assert_eq!(served_by(|work| work.pin = Some(id(0))), nobody);
+    assert_eq!(served_by(|work| work.pin = Some(id(0))), later);
     assert_eq!(served_by(|work| work.pin = Some(id(77))), nobody);
     assert_eq!(
         served_by(|work| {
@@ -622,6 +634,13 @@ fn only_a_persona_that_fits_the_request_serves_it() {
         served_by(|work| {
             work.render = Render::Http;
             work.exclude = vec![id(2)];
+        }),
+        later
+    );
+    assert_eq!(
+        served_by(|work| {
+            work.render = Render::Http;
+            work.exclude = vec![id(0), id(2)];
         }),
         nobody
     );
@@ -1574,6 +1593,7 @@ fn the_managers_own_work_takes_a_free_session_and_comes_last() {
     let done = Completion {
         courtesy: Courtesy::NotTheSite,
         blocked: false,
+        proxy_failed: false,
     };
 
     assert_eq!(planner.reserve(id(99), true), Err(Held::UnknownPersona));
@@ -2249,6 +2269,7 @@ fn the_managers_own_work_leaves_the_last_session_to_work_that_waits() {
     let done = Completion {
         courtesy: Courtesy::NotTheSite,
         blocked: false,
+        proxy_failed: false,
     };
     let waiting_for = |persona: u128| Work {
         pin: Some(id(persona)),
@@ -3155,6 +3176,7 @@ fn a_plain_client_leaves_with_no_persona_and_is_held_by_the_sites_gates() {
         Completion {
             courtesy: Courtesy::Answered,
             blocked: false,
+            proxy_failed: false,
         },
     ));
     assert_eq!(planner.in_flight(Render::Http), 0);
@@ -3168,6 +3190,7 @@ fn a_plain_client_leaves_with_no_persona_and_is_held_by_the_sites_gates() {
         Completion {
             courtesy: Courtesy::Answered,
             blocked: false,
+            proxy_failed: false,
         },
     ));
 }
@@ -3259,6 +3282,7 @@ fn a_plain_client_is_refused_by_a_stop_and_a_paused_site_and_is_never_a_trial() 
             Completion {
                 courtesy: Courtesy::ServerError,
                 blocked: false,
+                proxy_failed: false,
             },
         );
     }
@@ -3272,4 +3296,208 @@ fn a_plain_client_is_refused_by_a_stop_and_a_paused_site_and_is_never_a_trial() 
             .server_error_pause("example.org", noon() + secs(3))
             .is_some()
     );
+}
+
+/// The first dispatch the planner makes for what waits, looking every
+/// 100 ms from `from` for a minute: starts of other personas are spaced.
+fn first_dispatch(
+    planner: &mut Planner,
+    facts: &HashMap<String, DomainFacts>,
+    from: DateTime<Utc>,
+) -> (DateTime<Utc>, Dispatch) {
+    let mut at = from;
+    while at < from + secs(60) {
+        if let Some(dispatch) = dispatched(&planner.plan(at, facts)).first() {
+            return (at, (*dispatch).clone());
+        }
+        at += millis(100);
+    }
+    panic!("nothing left within a minute of {from}");
+}
+
+#[test]
+fn synchronous_requests_that_wait_together_keep_to_the_domains_concurrency() {
+    // F106 (sched-01): eight synchronous fetches of one site at once, a
+    // gap of seconds, no break anywhere. With one seat on the domain, one
+    // address reads all eight at its gap; before, every persona of the pool
+    // took a turn, long before `visitor_wait`.
+    for seats in [1_u32, 2] {
+        let profile = PacingProfile {
+            domain_concurrency: seats,
+            ..brisk()
+        };
+        let mut sim = Sim::new(personas(4));
+        sim.takes = Box::new(|_| millis(800));
+        for _ in 0..8 {
+            sim.submit(Work {
+                pacing: profile,
+                ..sync("example.org")
+            });
+        }
+        sim.run_until(noon() + secs(120));
+
+        assert_eq!(sim.log.len(), 8, "{seats} seats");
+        assert!(sim.refused.is_empty(), "{:?}", sim.refused);
+        let readers: BTreeSet<PersonaId> = sim.log.iter().map(|(_, d)| d.persona).collect();
+        assert_eq!(readers.len(), seats as usize, "{seats} seats: {readers:?}");
+        // Each reader keeps its own gap: a floor of 2 s at its pace.
+        for reader in &readers {
+            let starts: Vec<DateTime<Utc>> =
+                sim.starts_of(*reader).iter().map(|(at, _)| *at).collect();
+            for pair in starts.windows(2) {
+                assert!(pair[1] - pair[0] >= millis(1600), "{starts:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_synchronous_request_goes_past_the_seats_only_for_a_break_it_would_wait_out() {
+    // F106: the one exception to `domain_concurrency` is a visitor's break
+    // that does not end within `visitor_wait`. A visitor in its gap is
+    // waited for, however long the gap: here twenty seconds.
+    let slow = PacingProfile {
+        gap_ms: Distribution::Uniform(Uniform {
+            min: 20_000.0,
+            max: 20_000.0,
+        }),
+        domain_concurrency: 1,
+        ..brisk()
+    };
+    let mut sim = Sim::new(personas(3));
+    sim.takes = Box::new(|_| millis(400));
+    sim.submit(Work {
+        pacing: slow,
+        ..sync("example.org")
+    });
+    sim.settle();
+    let visitor = sim.log[0].1.persona;
+    assert!(!sim.log[0].1.ends_burst);
+    sim.now += secs(1);
+    sim.settle();
+    sim.submit(Work {
+        pacing: slow,
+        ..sync("example.org")
+    });
+    sim.settle();
+    // Nobody else starts a visit: the request waits for the visitor's slot.
+    assert_eq!(sim.log.len(), 1);
+    sim.run_until(noon() + secs(40));
+    assert_eq!(sim.log.len(), 2);
+    assert_eq!(sim.log[1].1.persona, visitor);
+    assert!(
+        sim.log[1].0 - sim.log[0].0 >= secs(15),
+        "{:?}",
+        sim.log[1].0
+    );
+}
+
+#[test]
+fn with_nobody_ready_work_is_refused_with_a_moment_to_ask_again() {
+    // F107 (sched-04): every persona cools for its proxy's backoff. That
+    // is a state of now: the refusal names when to ask again, and a job
+    // waits instead of failing.
+    let mut unready = personas(3);
+    for view in &mut unready {
+        view.ready = false;
+    }
+    let mut sim = Sim::new(unready);
+    let job = sim.submit(work("example.org"));
+    let caller = sim.submit(sync("example.org"));
+    let pinned = sim.submit(Work {
+        pin: Some(id(1)),
+        ..work("example.org")
+    });
+    // Nobody could ever serve a request for a country none has.
+    let nowhere = sim.submit(Work {
+        countries: Some(vec!["FR".parse().unwrap()]),
+        ..work("example.org")
+    });
+    sim.settle();
+
+    let again = Some(noon() + Duration::minutes(1));
+    let refused: HashMap<Ticket, (Refusal, Option<DateTime<Utc>>)> = sim
+        .refused
+        .iter()
+        .map(|(_, ticket, reason, retry_at)| (*ticket, (*reason, *retry_at)))
+        .collect();
+    assert_eq!(refused[&job], (Refusal::NoPersona, again));
+    assert_eq!(refused[&caller], (Refusal::NoPersona, again));
+    assert_eq!(refused[&pinned], (Refusal::NoPersona, again));
+    assert_eq!(refused[&nowhere], (Refusal::NoPersona, None));
+    assert_eq!(sim.log.len(), 0);
+
+    // The proxies are back: the same work leaves.
+    sim.planner.set_personas(personas(3));
+    sim.now += Duration::minutes(1);
+    sim.submit(work("example.org"));
+    sim.settle();
+    assert_eq!(sim.log.len(), 1);
+}
+
+#[test]
+fn a_persona_whose_proxy_failed_leaves_and_is_taken_only_when_no_other_could_be() {
+    // F108 (sched-05): an attempt that failed at the persona's proxy is
+    // nothing of the site's. It pauses nothing, ends the persona's visit,
+    // and the next work goes to a persona whose proxy carries traffic.
+    let facts = facts_for(&["example.org"]);
+    let mut planner = Planner::new(rules(), Seed::from_u64(5));
+    planner.set_personas(personas(3));
+    planner.submit(work("example.org"), noon());
+    let (_, first) = first_dispatch(&mut planner, &facts, noon());
+    let failed = first.persona;
+    let at = noon() + secs(1);
+    assert!(planner.complete(
+        first.grant,
+        at,
+        Completion {
+            courtesy: Courtesy::NotTheSite,
+            blocked: false,
+            proxy_failed: true,
+        },
+    ));
+    assert_eq!(planner.server_error_pause("example.org", at), None);
+    assert_eq!(planner.visitors("example.org", at), 0);
+
+    planner.submit(work("example.org"), at);
+    let (left, next) = first_dispatch(&mut planner, &facts, at);
+    assert_ne!(next.persona, failed);
+    assert!(left - at < secs(5), "{left}");
+    planner.complete(next.grant, left, Completion::of(Courtesy::Answered));
+
+    // When nobody else may take the work, the persona is taken after all;
+    // an answer through its proxy makes it trusted again.
+    let others: Vec<PersonaId> = (0..3)
+        .map(id)
+        .filter(|persona| *persona != failed)
+        .collect();
+    planner.submit(
+        Work {
+            exclude: others,
+            ..work("other.example")
+        },
+        left,
+    );
+    let facts = facts_for(&["example.org", "other.example"]);
+    let (back, only) = first_dispatch(&mut planner, &facts, left);
+    assert_eq!(only.persona, failed);
+    planner.complete(only.grant, back, Completion::of(Courtesy::Answered));
+    // Visiting again, it is the site's visitor as before.
+    planner.submit(work("other.example"), back);
+    let (_, again) = first_dispatch(&mut planner, &facts, back + secs(5));
+    assert_eq!(again.persona, failed);
+
+    // Without the proxy at fault, the same failure is the site's server
+    // error: the row counts.
+    let mut planner = Planner::new(rules(), Seed::from_u64(5));
+    planner.set_personas(personas(3));
+    let facts = facts_for(&["example.org"]);
+    let mut at = noon();
+    for _ in 0..3 {
+        planner.submit(work("example.org"), at);
+        let (left, dispatch) = first_dispatch(&mut planner, &facts, at);
+        planner.complete(dispatch.grant, left, Completion::of(Courtesy::ServerError));
+        at = left + secs(5);
+    }
+    assert!(planner.server_error_pause("example.org", at).is_some());
 }

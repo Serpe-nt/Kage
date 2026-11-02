@@ -1594,7 +1594,7 @@
           "fetch"
         ],
         "summary": "The result of a fetch, by the request's id.",
-        "description": "`200` with the result once the fetch has ended; `202` while it runs.\nWhat only the synchronous answer has (`pacing`, `behavior`, `console`,\n`side_effects`) is null here.",
+        "description": "`200` with the result once the fetch has ended; `202` while it runs.\nA request whose job ended without it (cancelled, expired, interrupted)\nhas ended too: `200` with what ended it.\nWhat only the synchronous answer has (`pacing`, `behavior`, `console`,\n`side_effects`) is null here.",
         "operationId": "get_result",
         "parameters": [
           {
@@ -1610,7 +1610,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The result.",
+            "description": "The result; for a request whose job ended without it (cancelled, expired, interrupted), `provider_error` with the item's reason.",
             "content": {
               "application/json": {
                 "schema": {

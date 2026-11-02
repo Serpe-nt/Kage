@@ -433,8 +433,9 @@ scheduler:
   # Total time a synchronous fetch may take before it is handed over as a
   # job (spec §8.4).
   sync_wall_time: 3m
-  # How long a synchronous request waits for a persona that is already
-  # visiting the domain before another persona starts a visit of its own.
+  # How long a synchronous request waits for a visitor's break to end
+  # before another persona starts a visit of its own, past the pacing's
+  # domain_concurrency. A visitor in its gap or on a page is waited for.
   visitor_wait: 5s
   # A visit in which no page was asked for this long is over.
   visit_idle: 10m

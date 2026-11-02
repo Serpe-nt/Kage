@@ -1709,3 +1709,196 @@ async fn an_admin_purges_a_keys_data_and_retention_deletes_what_is_old() {
     work.stop().await;
     api.shut_down().await;
 }
+
+/// A pacing a request brings: one seat on the domain, a gap of `gap_ms`,
+/// no break.
+fn one_seat(gap_ms: u64) -> Value {
+    json!({ "custom": {
+        "gap_ms": { "dist": "uniform", "min": gap_ms, "max": gap_ms },
+        "burst_pages": { "min": 50, "max": 50 },
+        "burst_break_ms": { "dist": "uniform", "min": 0, "max": 0 },
+        "daily_cap_per_persona_per_domain": 100_000,
+        "domain_concurrency": 1,
+        "domain_rpm": 1000,
+    } })
+}
+
+#[tokio::test]
+async fn a_cancel_reaches_a_carried_fetch_and_a_job_queued_behind_the_limit_at_once() {
+    // F109 (sched-07): a fetch that waits for the visitor's gap past its
+    // wall time is carried on as a job. With one seat on the domain it
+    // waits for the one visitor (F106), not for another persona.
+    let mut api = Api::start_with(2, 149, FAST, |config| {
+        quick(config);
+        config.scheduler.sync_wall_time = HumanDuration::new(Duration::from_millis(300));
+        config.jobs.max_running = 1;
+    })
+    .await;
+    pages(&api, "/carry", page("Carried")).await;
+    let token = api.key(&[Scope::Fetch, Scope::Jobs]).await;
+    let fetch = |number: u32| json!({ "url": Api::url(&format!("/carry/{number}")), "level": 1, "pacing": one_seat(60_000) });
+    let first = api.post(&token, "/v1/fetch", &fetch(1)).await;
+    assert_eq!(first.status, StatusCode::OK, "{:?}", first.json());
+    let carried = api.post(&token, "/v1/fetch", &fetch(2)).await;
+    assert_eq!(carried.status, StatusCode::ACCEPTED, "{:?}", carried.json());
+    let request = carried.json()["id"].as_str().unwrap().to_owned();
+    let job = carried.json()["job_id"].as_str().unwrap().to_owned();
+
+    // The cancel ends it at once: no worker slot is asked for, nothing
+    // waits for the visitor's gap of a minute.
+    let asked_at = std::time::Instant::now();
+    let answer = api
+        .call(
+            Method::POST,
+            &format!("/v1/jobs/{job}/cancel"),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(answer.status, StatusCode::OK);
+    let done = api.job_until(&token, &job, ended).await;
+    assert!(asked_at.elapsed() < Duration::from_secs(10));
+    assert_eq!(done["state"], "cancelled", "{done}");
+    assert_eq!(done["items"]["cancelled"], 1);
+    // Its request ended with it: 200 and what ended it, never 202.
+    let result = api.get(&token, &format!("/v1/results/{request}")).await;
+    assert_eq!(result.status, StatusCode::OK, "{:?}", result.json());
+    assert_eq!(result.json()["state"], "finished");
+    assert_eq!(result.json()["outcome"], "provider_error");
+    assert_eq!(result.json()["reason"], "cancelled");
+    assert_eq!(result.json()["attempts"], json!([]));
+    assert_eq!(asked(&api, "/carry/").await, ["/carry/1"]);
+
+    // jobs-07: one job runs (the limit is one); a second is queued behind
+    // it. Its cancel does not wait for the first to end.
+    pages(
+        &api,
+        "/long",
+        page("Long").set_delay(Duration::from_millis(800)),
+    )
+    .await;
+    pages(&api, "/queued", page("Queued")).await;
+    let work = api.work();
+    let long = api
+        .post(
+            &token,
+            "/v1/jobs",
+            &json!({ "type": "batch", "urls": urls("/long", 8), "defaults": { "level": 1 } }),
+        )
+        .await
+        .json()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    api.job_until(&token, &long, |job| job["state"] == "running")
+        .await;
+    let queued = api
+        .post(
+            &token,
+            "/v1/jobs",
+            &json!({ "type": "batch", "urls": urls("/queued", 2), "defaults": { "level": 1 } }),
+        )
+        .await
+        .json()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let waiting = api.get(&token, &format!("/v1/jobs/{queued}")).await.json();
+    assert_eq!(waiting["state"], "queued", "{waiting}");
+    api.call(
+        Method::POST,
+        &format!("/v1/jobs/{queued}/cancel"),
+        Some(&token),
+        None,
+    )
+    .await;
+    let done = api.job_until(&token, &queued, ended).await;
+    assert_eq!(done["state"], "cancelled", "{done}");
+    assert_eq!(done["items"]["cancelled"], 2);
+    let running = api.get(&token, &format!("/v1/jobs/{long}")).await.json();
+    assert!(!ended(&running), "the first job ended first: {running}");
+    assert_eq!(asked(&api, "/queued/").await.len(), 0);
+    work.stop().await;
+    api.shut_down().await;
+}
+
+#[tokio::test]
+async fn a_request_whose_job_ended_without_it_is_answered_with_what_ended_it() {
+    // F109 (jobs-03): an item that waits with a request (its site paused
+    // after a block) when its job is cancelled. The request ends with the
+    // item; `GET /v1/results` says so with a 200, not 202 for ever.
+    let rules = "defaults: { pacing: fast, active_hours: ignore, \
+                 breaker_threshold: 1, breaker_pause: 1h, retries: 2 }\ndomains: {}\n";
+    let mut api = Api::start_with(2, 149, rules, quick).await;
+    Mock::given(method("GET"))
+        .and(path("/wall/1"))
+        .respond_with(ResponseTemplate::new(403).set_body_raw(
+            "<html><head><title>Attention Required! | Cloudflare</title></head>\
+             <body><h1>Sorry, you have been blocked</h1>\
+             <p>You are unable to access this site. Cloudflare Ray ID: 8f1</p></body></html>",
+            "text/html; charset=utf-8",
+        ))
+        .mount(&api.lab.site)
+        .await;
+    pages(&api, "/wall", page("Behind")).await;
+    let token = api.key(&[Scope::Fetch, Scope::Jobs]).await;
+    let work = api.work();
+    let id = api
+        .post(
+            &token,
+            "/v1/jobs",
+            &json!({ "type": "batch", "urls": urls("/wall", 2), "defaults": { "level": 1 } }),
+        )
+        .await
+        .json()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let paused = api
+        .job_until(&token, &id, |job| job["state"] == "paused")
+        .await;
+    assert_eq!(paused["paused"]["reason"], "domain_paused", "{paused}");
+    let items = api.job_items(&token, &id).await;
+    assert_eq!(items[0]["state"], "queued");
+    let request = items[0]["request_id"].as_str().unwrap().to_owned();
+    assert_eq!(
+        api.get(&token, &format!("/v1/results/{request}"))
+            .await
+            .status,
+        StatusCode::ACCEPTED
+    );
+
+    api.call(
+        Method::POST,
+        &format!("/v1/jobs/{id}/cancel"),
+        Some(&token),
+        None,
+    )
+    .await;
+    let done = api.job_until(&token, &id, ended).await;
+    assert_eq!(done["state"], "cancelled", "{done}");
+    let result = api.get(&token, &format!("/v1/results/{request}")).await;
+    assert_eq!(result.status, StatusCode::OK, "{:?}", result.json());
+    assert_eq!(result.json()["outcome"], "provider_error");
+    assert_eq!(result.json()["reason"], "cancelled");
+    // The blocked attempt is the request's, as it was made.
+    assert_eq!(result.json()["attempts"].as_array().unwrap().len(), 1);
+
+    // A request whose item ended and that has no result (a server killed
+    // between the two, or a request of a release before the fix) is
+    // answered from its item all the same.
+    sqlx::query("DELETE FROM results WHERE request_id = $1::uuid")
+        .bind(&request)
+        .execute(api.lab.store().pool())
+        .await
+        .unwrap();
+    let result = api.get(&token, &format!("/v1/results/{request}")).await;
+    assert_eq!(result.status, StatusCode::OK, "{:?}", result.json());
+    assert_eq!(result.json()["state"], "finished");
+    assert_eq!(result.json()["outcome"], "provider_error");
+    assert_eq!(result.json()["reason"], "cancelled");
+    assert_eq!(result.json()["id"], request);
+    work.stop().await;
+    api.shut_down().await;
+}

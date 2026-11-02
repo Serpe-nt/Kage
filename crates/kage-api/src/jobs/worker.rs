@@ -100,6 +100,10 @@ const STARVED: Duration = Duration::from_millis(250);
 /// to and give their jobs back when the server stops.
 const WRITE_BACK: Duration = Duration::from_secs(20);
 
+/// How many cancelled jobs nobody works one turn of the worker takes up to
+/// end, past `jobs.max_running`.
+const CANCELLED_AT_ONCE: u32 = 16;
+
 /// What a runner is told from outside. A later variant outranks an
 /// earlier one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -385,12 +389,18 @@ impl Work {
         if lost_credential(&request) {
             return Err(INTERRUPTED.to_owned());
         }
+        self.plan_request(&request, cache)
+    }
+
+    /// A request as the pipeline takes it, under the policies in force
+    /// now, whatever it lost on the way.
+    fn plan_request(&self, request: &FetchRequest, cache: CacheUse) -> Result<Planned, String> {
         let policies = self.state.policies().current();
         let code = |error: ApiError| error.code().as_str().to_owned();
-        let mut planned = plan(&request, &policies.pacing).map_err(code)?;
+        let mut planned = plan(request, &policies.pacing).map_err(code)?;
         settle(
             &mut planned,
-            &request,
+            request,
             self.state.config(),
             &policies,
             self.key.id,
@@ -635,20 +645,37 @@ impl Work {
     }
 
     /// Ends the request of an item nobody will attempt any more, so that
-    /// whoever asks for its result is told why there is none.
+    /// whoever asks for its result is told why there is none: a request
+    /// that is answered `202` while nothing runs for it is never over for
+    /// its caller (F109). A request that cannot be planned any more (a
+    /// credential that was never kept, a policy that refuses it now) is
+    /// ended under its address and level, which is all an ending needs.
     async fn abandon(&self, item: &JobItem, reason: &str) {
         let Some(request) = item.request_id else {
             return;
         };
-        let Ok(planned) = self.planned(&item.input, CacheUse::Nothing) else {
+        let store = self.state.store();
+        let Ok(Some(record)) = store.requests().get(request).await else {
             return;
         };
-        let store = self.state.store();
-        let open = matches!(store.requests().get(request).await, Ok(Some(_)))
-            && matches!(store.results().get_by_request(request).await, Ok(None));
-        if !open {
+        if !matches!(store.results().get_by_request(request).await, Ok(None)) {
             return;
         }
+        let planned = serde_json::from_value::<FetchRequest>(item.input.clone())
+            .ok()
+            .and_then(|input| self.plan_request(&input, CacheUse::Nothing).ok())
+            .map(|planned| planned.order);
+        let order = if let Some(order) = planned {
+            order
+        } else {
+            let Ok(url) = url::Url::parse(&record.url) else {
+                return;
+            };
+            FetchOrder {
+                level: record.level.unwrap_or(Level::Human),
+                ..FetchOrder::get(url, Priority::Job)
+            }
+        };
         let earlier = store
             .attempts()
             .list_for_request(request)
@@ -659,7 +686,7 @@ impl Work {
             api_key: Some(self.key.id),
             job: Some(self.job),
             spec: item.input.clone(),
-            ..planned.order
+            ..order
         };
         if let Err(error) = self
             .engine
@@ -907,12 +934,26 @@ impl Runner {
         }
     }
 
-    /// Fails everything that is left of a job for one reason.
-    async fn fail_all(&mut self, reason: &str) -> Result<(), WorkError> {
+    /// Ends every item that waits in the queue, its request first: an item
+    /// that waited for a persona or its site was given a request, and that
+    /// request ends with it, so that its result says what ended it instead
+    /// of `202 running` for ever (F109).
+    async fn end_queued(&self, state: JobItemState, reason: &str) -> Result<(), StoreError> {
+        for item in self.store().job_items().open(self.job.id).await? {
+            if item.state == JobItemState::Queued && item.request_id.is_some() {
+                self.work.abandon(&item, reason).await;
+            }
+        }
         self.store()
             .job_items()
-            .end_queued(self.job.id, JobItemState::Failed, Some(reason), self.now())
+            .end_queued(self.job.id, state, Some(reason), self.now())
             .await?;
+        Ok(())
+    }
+
+    /// Fails everything that is left of a job for one reason.
+    async fn fail_all(&mut self, reason: &str) -> Result<(), WorkError> {
+        self.end_queued(JobItemState::Failed, reason).await?;
         for item in self.store().job_items().open(self.job.id).await? {
             self.finish_item(item, JobItemState::Failed, None, Some(reason.to_owned()))
                 .await?;
@@ -1122,6 +1163,8 @@ impl Runner {
                 self.finish_item(item, state, Some(outcome), error).await?;
             }
             ItemEnd::Failed { error, outcome } => {
+                // Its request, when it has one, ends with it (F109).
+                self.work.abandon(&item, &error).await;
                 self.finish_item(item, JobItemState::Failed, outcome, Some(error))
                     .await?;
             }
@@ -1163,10 +1206,7 @@ impl Runner {
             Ending::Shutdown | Ending::Lost => (JobItemState::Queued, ""),
         };
         if matches!(ending, Ending::Cancelled | Ending::Expired) {
-            self.store()
-                .job_items()
-                .end_queued(job, state, Some(reason), self.now())
-                .await?;
+            self.end_queued(state, reason).await?;
         }
         while let Some(joined) = set.join_next().await {
             let Ended { item, site, end } = joined?;
@@ -1205,6 +1245,7 @@ impl Runner {
                     self.finish_item(item, done, Some(outcome), error).await?;
                 }
                 (_, ItemEnd::Failed { error, outcome }) => {
+                    self.work.abandon(&item, &error).await;
                     self.finish_item(item, JobItemState::Failed, outcome, Some(error))
                         .await?;
                 }
@@ -1686,6 +1727,35 @@ pub async fn run_worker(state: ApiState, shutdown: impl Future<Output = ()> + Se
                 Err(error) => tracing::warn!(%error, "jobs could not be claimed"),
             }
         }
+        // A job that was cancelled while nobody worked it (queued behind
+        // the limit, or paused) is ended now, whatever the limit says: it
+        // fetches nothing more, and its cancel is not to wait for a slot
+        // that a job of hours holds (F109).
+        let now = state.clock().now();
+        match state
+            .store()
+            .jobs()
+            .claim_cancelled(
+                state.jobs().worker,
+                crate::stored(now),
+                later(now, config.lease.get()),
+                CANCELLED_AT_ONCE,
+            )
+            .await
+        {
+            Ok(jobs) => {
+                for job in jobs {
+                    tracing::debug!(job = %job.id, kind = job.kind.as_str(), "a cancelled job is taken up to end it");
+                    runners.spawn(run_job(
+                        state.clone(),
+                        engine.clone(),
+                        job,
+                        stopping.clone(),
+                    ));
+                }
+            }
+            Err(error) => tracing::warn!(%error, "cancelled jobs could not be claimed"),
+        }
         tokio::select! {
             () = &mut shutdown => break,
             () = state.jobs().work.notified() => {}
@@ -1806,9 +1876,35 @@ pub(crate) async fn carry_on(
     Ok(id)
 }
 
+/// Waits for a fetch that is carried on as a job, and cancels it when the
+/// job's signal says so (F109).
+async fn wait_or_cancel(
+    running: Running,
+    mut told: watch::Receiver<Signal>,
+) -> Result<JobFetch, SchedulerError> {
+    let canceller = running.canceller();
+    let waiting = running.wait();
+    tokio::pin!(waiting);
+    loop {
+        tokio::select! {
+            fetched = &mut waiting => return fetched,
+            changed = told.changed() => {
+                if changed.is_err() {
+                    return waiting.await;
+                }
+                if *told.borrow() == Signal::Cancel {
+                    canceller.cancel();
+                }
+            }
+        }
+    }
+}
+
 /// Waits for a fetch that is carried on as a job and writes what it came
 /// to into the job: its end, or that the job worker is to take it up
-/// again.
+/// again. A cancel of the job reaches the fetch at once: what waits for a
+/// persona is taken out of the scheduler's queue and the request ends
+/// `cancelled`; an attempt that is under way is finished (F109).
 async fn carried(state: ApiState, key: Arc<ApiKey>, job: Job, item: JobItem, running: Running) {
     let id = job.id;
     let Some(engine) = state.engine().cloned() else {
@@ -1830,13 +1926,16 @@ async fn carried(state: ApiState, key: Arc<ApiKey>, job: Job, item: JobItem, run
         stopping,
     ));
     let (stop, _) = watch::channel(false);
+    let told = signal.clone();
     let runner = Runner {
         work,
         job,
         signal,
         stop,
     };
-    let written = match running.wait().await {
+    let fetched = wait_or_cancel(running, told).await;
+    let cancel = *runner.signal.borrow() == Signal::Cancel;
+    let written = match fetched {
         Ok(JobFetch::Finished(report)) => {
             let state = if report.outcome.is_success() {
                 JobItemState::Succeeded
@@ -1846,6 +1945,22 @@ async fn carried(state: ApiState, key: Arc<ApiKey>, job: Job, item: JobItem, run
             let error = error_of(report.outcome, report.reason.as_deref());
             match runner
                 .finish_item(item, state, Some(report.outcome), error)
+                .await
+            {
+                Ok(()) => runner.finalize(None).await,
+                Err(error) => Err(error),
+            }
+        }
+        // It waited when the job was cancelled: it ends so.
+        Ok(JobFetch::Deferred(_) | JobFetch::Stopped) if cancel => {
+            runner.work.abandon(&item, "cancelled").await;
+            match runner
+                .finish_item(
+                    item,
+                    JobItemState::Cancelled,
+                    None,
+                    Some("cancelled".to_owned()),
+                )
                 .await
             {
                 Ok(()) => runner.finalize(None).await,

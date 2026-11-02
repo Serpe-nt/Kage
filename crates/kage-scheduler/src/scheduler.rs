@@ -129,6 +129,7 @@ impl Drop for Grant {
                 Completion {
                     courtesy: Courtesy::NotTheSite,
                     blocked: false,
+                    proxy_failed: false,
                 },
             );
         }
@@ -167,6 +168,7 @@ impl PlainGrant {
             Completion {
                 courtesy,
                 blocked: false,
+                proxy_failed: false,
             },
         );
     }
@@ -180,6 +182,7 @@ impl Drop for PlainGrant {
                 Completion {
                     courtesy: Courtesy::NotTheSite,
                     blocked: false,
+                    proxy_failed: false,
                 },
             );
         }
@@ -521,6 +524,7 @@ impl Drop for Reserved {
             Completion {
                 courtesy: Courtesy::NotTheSite,
                 blocked: false,
+                proxy_failed: false,
             },
         );
     }
