@@ -849,7 +849,8 @@ impl Lab {
                 &config,
                 Some(Arc::clone(forwarder.meter())),
             )
-            .with_plain(forwarder.egress()),
+            .with_plain(forwarder.egress())
+            .with_denials(Arc::clone(forwarder.denials())),
         );
         let pipeline = Pipeline::new(
             Arc::clone(&scheduler),

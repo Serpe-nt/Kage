@@ -570,3 +570,80 @@ async fn a_persona_that_cools_at_a_flows_later_site_does_not_run_the_flow() {
     assert_eq!(flows, 3);
     lab.shut_down().await;
 }
+
+#[tokio::test]
+async fn a_flow_whose_address_the_forwarder_refused_is_ssrf_denied_at_once() {
+    let mut lab = Lab::start(2, 149, BROWSER_FAST).await;
+    // Under `egress.mode: direct` the forwarder refuses a name for its
+    // private address; the browser sees a connection that failed, and so
+    // does the flow's goto (F102).
+    let hidden = "http://hidden.kage.test/admin";
+    let refused_flow = || {
+        flow(&json!([
+            { "action": "goto", "url": site("/start") },
+            { "action": "goto", "url": hidden },
+        ]))
+    };
+    let failed_goto = json!({
+        "fail": { "index": 1, "error": "proxy_failed: net::ERR_TUNNEL_CONNECTION_FAILED" },
+        "final": {
+            "url": hidden,
+            "final_url": hidden,
+            "status": null,
+            "dom_html": "<html><body>the browser's own error page</body></html>",
+            "error": {
+                "code": "proxy_failed",
+                "message": "net::ERR_TUNNEL_CONNECTION_FAILED",
+                "net_error": "ERR_TUNNEL_CONNECTION_FAILED",
+            },
+        },
+    });
+    lab.chromium.with(|sidecar| {
+        sidecar.next_flows.push_back(failed_goto.clone());
+        sidecar.flow_delay = Some(std::time::Duration::from_millis(600));
+    });
+    // The forwarder refuses the name while the flow runs, for whichever
+    // persona runs it.
+    let denials = std::sync::Arc::clone(lab.forwarder.denials());
+    let personas: Vec<_> = lab.personas.iter().map(|persona| persona.id).collect();
+    let refusing = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        for persona in personas {
+            denials.record(
+                kage_scheduler::Caller::Persona(persona),
+                "hidden.kage.test",
+                "hidden.kage.test resolves to 10.0.0.9, in Private",
+            );
+        }
+    });
+
+    let report = lab.pipeline.fetch(refused_flow()).await.unwrap();
+    refusing.await.unwrap();
+
+    // The guard's outcome, at the first attempt, nothing of it kept.
+    assert_eq!(report.outcome, Outcome::SsrfDenied, "{:?}", report.reason);
+    assert_eq!(report.reason.as_deref(), Some("ssrf_denied"));
+    assert_eq!(report.attempts.len(), 1);
+    let last = report.last.as_ref().unwrap();
+    assert_eq!(last.flow, None);
+    assert_eq!(last.page.as_ref().unwrap().dom_html, None);
+    assert!(
+        last.classification
+            .evidence
+            .iter()
+            .any(|evidence| evidence.starts_with("refused:hidden.kage.test (")),
+        "{:?}",
+        last.classification.evidence
+    );
+
+    // The same failure without a refusal is a failed connection, tried
+    // again by another persona.
+    lab.chromium.with(|sidecar| {
+        sidecar.next_flows.push_back(failed_goto.clone());
+        sidecar.flow_delay = None;
+    });
+    let failed = lab.pipeline.fetch(refused_flow()).await.unwrap();
+    assert_eq!(failed.attempts[0].outcome, Outcome::ProviderError);
+    assert_eq!(failed.attempts.len(), 2);
+    lab.shut_down().await;
+}
