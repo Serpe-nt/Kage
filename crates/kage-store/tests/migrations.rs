@@ -5,8 +5,10 @@
 
 mod common;
 
-use common::TestDb;
+use chrono::Duration;
+use common::{TestDb, now};
 use kage_core::config::Config;
+use kage_store::repo::RobotsCacheEntry;
 use kage_store::{Store, StoreError};
 
 /// Every table spec §18 names. Milestone M6 added columns, no table; M7
@@ -268,4 +270,124 @@ async fn the_store_connects_from_configuration() {
     assert!(matches!(error, StoreError::Database(_)));
     // The error never repeats the password from the URL.
     assert!(!error.to_string().contains(":pw@"));
+}
+
+/// The version of the migration that clears the empty `robots.txt` rows
+/// 2.0.1 kept (F99).
+const EMPTY_ROBOTS_FILES: i64 = 19;
+
+/// A `robots_cache` row of `origin` as a scout's answer kept it.
+fn robots_row(
+    origin: &str,
+    status: Option<u16>,
+    body: Option<&str>,
+    unreachable: bool,
+) -> RobotsCacheEntry {
+    let fetched_at = now() - Duration::hours(2);
+    RobotsCacheEntry {
+        origin: origin.to_owned(),
+        site: "example.org".to_owned(),
+        fetched_at,
+        expires_at: fetched_at + Duration::hours(24),
+        status,
+        body: body.map(str::to_owned),
+        unreachable,
+    }
+}
+
+async fn robots_origins(store: &Store) -> Vec<String> {
+    sqlx::query_scalar("SELECT origin FROM robots_cache ORDER BY origin")
+        .fetch_all(store.pool())
+        .await
+        .unwrap()
+}
+
+/// Makes the database look as 2.0.1 left it: every migration but the one
+/// of 2.0.2 applied, so the next `migrate` is the upgrade.
+async fn forget_the_empty_files_migration(store: &Store) {
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version = $1")
+        .bind(EMPTY_ROBOTS_FILES)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    let status = store.migration_status().await.unwrap();
+    assert_eq!(status.pending(), [EMPTY_ROBOTS_FILES]);
+}
+
+/// F99: until 2.0.2 a `robots.txt` the plain client of level 0 asked for
+/// first was kept as a file with nothing in it (a `2xx`, an empty body),
+/// so `enforce` enforced nothing for a day. The upgrade's migration
+/// deletes exactly those rows, so the scout asks again, and keeps every
+/// honest one: a real file, "no file" (a `404`), "could not be had".
+#[tokio::test]
+async fn the_upgrade_clears_the_empty_robots_files_2_0_1_kept_and_nothing_else() {
+    let db = TestDb::migrated().await;
+    let store = &db.store;
+    forget_the_empty_files_migration(store).await;
+
+    let rows = [
+        // What the bug wrote: a fetched file with nothing in it.
+        robots_row("https://empty.example.org", Some(200), Some(""), false),
+        robots_row("https://empty-due.example.org", Some(204), Some(""), false),
+        // A real file, however short.
+        robots_row(
+            "https://file.example.org",
+            Some(200),
+            Some("User-agent: *\nDisallow: /private\n"),
+            false,
+        ),
+        robots_row("https://newline.example.org", Some(200), Some("\n"), false),
+        // No file: everything is allowed.
+        robots_row("https://missing.example.org", Some(404), None, false),
+        // It could not be had: a server error, a timeout.
+        robots_row("https://down.example.org", Some(503), None, true),
+        robots_row("https://silent.example.org", None, None, true),
+    ];
+    for row in &rows {
+        store.robots_cache().put(row).await.unwrap();
+    }
+
+    store.migrate().await.unwrap();
+
+    assert!(store.migration_status().await.unwrap().is_clean());
+    assert_eq!(
+        robots_origins(store).await,
+        [
+            "https://down.example.org",
+            "https://file.example.org",
+            "https://missing.example.org",
+            "https://newline.example.org",
+            "https://silent.example.org",
+        ]
+    );
+    // What is kept is kept as it was.
+    for row in rows.iter().skip(2) {
+        assert_eq!(
+            store
+                .robots_cache()
+                .get(&row.origin)
+                .await
+                .unwrap()
+                .as_ref(),
+            Some(row)
+        );
+    }
+
+    // Once: an empty file kept after the upgrade (2.0.2 keeps what the
+    // site sent, and a site may send nothing) stays when the migrations
+    // run again.
+    let honest = robots_row("https://empty.example.org", Some(200), Some(""), false);
+    store.robots_cache().put(&honest).await.unwrap();
+    store.migrate().await.unwrap();
+    assert_eq!(
+        store.robots_cache().get(&honest.origin).await.unwrap(),
+        Some(honest)
+    );
+
+    // Idempotent: run once more as if it had not been, it deletes what has
+    // the bug's shape and nothing else.
+    forget_the_empty_files_migration(store).await;
+    store.migrate().await.unwrap();
+    assert_eq!(robots_origins(store).await.len(), 5);
+    assert!(store.migration_status().await.unwrap().is_clean());
 }
