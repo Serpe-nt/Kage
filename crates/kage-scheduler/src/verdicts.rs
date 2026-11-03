@@ -329,6 +329,28 @@ impl Verdicts {
         })
     }
 
+    /// Ends the trial a flow took of a later site's half-open breaker when
+    /// the attempt was not settled on that site (F101): the flow came to
+    /// what it asked for, so the site answered every page it was asked
+    /// for and its breaker closes; otherwise nothing is known of the site
+    /// and the trial is given back, so that the next request is the trial
+    /// at once rather than after the trial's timeout.
+    ///
+    /// # Errors
+    ///
+    /// When the backend cannot be written.
+    pub async fn end_trial(&self, domain: &str, answered: bool) -> Result<(), SchedulerError> {
+        let at = self.clock.now();
+        if !answered {
+            return self.backend.breaker_release(domain, at).await;
+        }
+        if self.backend.breaker_success(domain, at).await? == BreakerChange::Closed {
+            tracing::info!(%domain, "the domain answers again: its breaker closed");
+            metrics::breaker(domain, false);
+        }
+        Ok(())
+    }
+
     /// Judges what a warm-up visit found and applies it like any attempt.
     ///
     /// # Errors

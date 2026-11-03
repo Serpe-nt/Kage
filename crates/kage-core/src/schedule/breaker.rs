@@ -167,6 +167,17 @@ impl DomainBreaker {
         // nothing; a closed breaker has nothing to reset.
         BreakerChange::Unchanged
     }
+
+    /// Gives back the trial under way at `now` without a verdict: the
+    /// request that took it said nothing of the domain (a flow that took a
+    /// later site's trial and ended before that site answered, F101). The
+    /// next request is the trial at once instead of after the trial's
+    /// timeout; the pause and the counts stay as they are.
+    pub fn release_trial(&mut self, now: DateTime<Utc>) {
+        if self.trial_started_at.take().is_some() {
+            self.updated_at = now;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -316,6 +327,32 @@ mod tests {
             breaker.admission(over + minutes(10), &rules),
             Admission::Trial
         );
+    }
+
+    #[test]
+    fn a_trial_given_back_lets_the_next_request_be_the_trial_and_changes_nothing_else() {
+        let rules = rules();
+        let mut breaker = opened();
+        let over = start() + minutes(30);
+        breaker.begin_trial(over);
+        let held = breaker.clone();
+
+        breaker.release_trial(over + minutes(1));
+
+        assert_eq!(breaker.trial_started_at, None);
+        assert_eq!(breaker.updated_at, over + minutes(1));
+        assert_eq!(
+            breaker.admission(over + minutes(1), &rules),
+            Admission::Trial
+        );
+        assert_eq!(breaker.state, held.state);
+        assert_eq!(breaker.paused_until, held.paused_until);
+        assert_eq!(breaker.trips, held.trips);
+        assert_eq!(breaker.block_count_1h, held.block_count_1h);
+        // No trial under way: nothing to give back, nothing written.
+        let before = breaker.clone();
+        breaker.release_trial(over + minutes(2));
+        assert_eq!(breaker, before);
     }
 
     #[test]

@@ -1054,6 +1054,28 @@ impl PathExecutor {
         self.denials.as_ref()?.since(caller, mark?, hosts)
     }
 
+    /// The guard's outcome for an attempt of the http path that failed,
+    /// when the forwarder refused one of the addresses its client asked for
+    /// since `mark` (F102). A failure does not say which hop it was: every
+    /// address asked for is judged, the redirect's hops included, and the
+    /// result names the last one refused.
+    fn refused_hop(
+        &self,
+        caller: Caller,
+        mark: Option<u64>,
+        asked: &[Url],
+    ) -> Option<AttemptOutput> {
+        let hosts: Vec<String> = asked.iter().filter_map(host_of).collect();
+        let denial = self.refused(caller, mark, &hosts)?;
+        let mut output = denied_by_forwarder(&denial);
+        output.final_url = asked
+            .iter()
+            .rev()
+            .find(|url| host_of(url).as_deref() == Some(denial.host.as_str()))
+            .map(Url::to_string);
+        Some(output)
+    }
+
     /// The same executor making plain attempts (level 0) through the
     /// forwarder of `egress`.
     #[must_use]
@@ -1095,17 +1117,9 @@ impl PathExecutor {
         let fetched = match client.fetch_traced(&spec, &mut asked).await {
             Ok(fetched) => fetched,
             Err(error) => {
-                let hosts: Vec<String> = asked.iter().filter_map(host_of).collect();
-                if let Some(denial) = self.refused(Caller::Plain(job.route), mark, &hosts) {
-                    let mut output = denied_by_forwarder(&denial);
-                    output.final_url = asked
-                        .iter()
-                        .rev()
-                        .find(|url| host_of(url).as_deref() == Some(denial.host.as_str()))
-                        .map(Url::to_string);
-                    return output;
-                }
-                return Self::http_failure(&error);
+                return self
+                    .refused_hop(Caller::Plain(job.route), mark, &asked)
+                    .unwrap_or_else(|| Self::http_failure(&error));
             }
         };
         let classification = self.verdicts.classify(&Observation {
@@ -1252,18 +1266,13 @@ impl PathExecutor {
             seed: Some(job.seed),
         };
         let mark = self.denials_mark();
-        let fetched = match client.fetch(&fetch).await {
+        let mut asked = Vec::new();
+        let fetched = match client.fetch_traced(&fetch, &mut asked).await {
             Ok(fetched) => fetched,
             Err(error) => {
-                // A failure does not say which hop it was: the address asked
-                // for is the one judged here.
-                let hosts: Vec<String> = host_of(&job.url).into_iter().collect();
-                if let Some(denial) = self.refused(Caller::Persona(persona.id), mark, &hosts) {
-                    let mut output = denied_by_forwarder(&denial);
-                    output.final_url = Some(job.url.to_string());
-                    return output;
-                }
-                return Self::http_failure(&error);
+                return self
+                    .refused_hop(Caller::Persona(persona.id), mark, &asked)
+                    .unwrap_or_else(|| Self::http_failure(&error));
             }
         };
 
@@ -1923,6 +1932,30 @@ mod tests {
         DomainPolicies::from_yaml(yaml)
             .unwrap()
             .resolve("example.org")
+    }
+
+    #[test]
+    fn the_sidecar_answers_a_flow_before_kage_stops_waiting_for_it() {
+        // The sidecar's own number, read from its source: how much longer
+        // than a flow's budget its server lets the flow run (F103).
+        let app = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../sidecar/packages/server/src/app.ts");
+        let source = std::fs::read_to_string(app).unwrap();
+        let slack_ms: u64 = source
+            .lines()
+            .find_map(|line| line.strip_prefix("export const FLOW_SLACK_MS = "))
+            .and_then(|rest| rest.strip_suffix(';'))
+            .map(|number| number.replace('_', ""))
+            .and_then(|number| number.parse().ok())
+            .unwrap();
+        // At least 5 s left for the typed answer and the closed context
+        // before the executor gives up and a retry may find it busy.
+        assert!(slack_ms > 0);
+        assert!(
+            Duration::from_millis(slack_ms) + Duration::from_secs(5) <= super::BROWSER_GRACE,
+            "the sidecar bounds a flow {slack_ms} ms past its budget, Kage waits {:?}",
+            super::BROWSER_GRACE
+        );
     }
 
     #[test]

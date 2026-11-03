@@ -1,6 +1,8 @@
+import { readFileSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   ErrorResponseSchema,
@@ -13,7 +15,14 @@ import {
 import { EngineError, createStubEngine } from '@kage/engine-core';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { buildApp, sameSecret, type App, type AppOptions } from './app.js';
+import {
+  FLOW_SLACK_MS,
+  buildApp,
+  flowBoundMs,
+  sameSecret,
+  type App,
+  type AppOptions,
+} from './app.js';
 import { TEST_TOKEN, createFakeEngine, exampleOf, type FakeEngine } from './testing/fake-engine.js';
 import { noTracer, type SpanAttributes, type TraceParent, type Tracer } from './tracing.js';
 
@@ -717,6 +726,26 @@ describe('traces', () => {
 describe('an engine that does not answer (F103)', () => {
   const health = (app: App) =>
     app.server.inject({ method: 'GET', url: '/v1/health', headers: AUTH });
+
+  it("bounds a flow within what Kage waits beyond the flow's budget", () => {
+    // Kage's own number, read from its source: how much longer than a
+    // flow's budget the executor waits for the sidecar's answer.
+    const executor = fileURLToPath(
+      new URL('../../../../crates/kage-scheduler/src/executor.rs', import.meta.url),
+    );
+    const grace = /const BROWSER_GRACE: Duration = Duration::from_secs\((\d+)\);/.exec(
+      readFileSync(executor, 'utf8'),
+    );
+    expect(grace).not.toBeNull();
+    const graceMs = Number(grace?.[1]) * 1000;
+    const budget = 90_000;
+    const bound = flowBoundMs({ ...exampleOf('FlowRequest'), timeout_ms: budget });
+    // Past the flow's own budget, and at least 5 s before Kage gives up:
+    // the typed answer and the closed context come first.
+    expect(bound).toBe(budget + FLOW_SLACK_MS);
+    expect(FLOW_SLACK_MS).toBeGreaterThan(0);
+    expect(bound + 5_000).toBeLessThanOrEqual(budget + graceMs);
+  });
 
   it('answers a navigation that never ends within its bound and closes its context', async () => {
     const { app, engine, clock } = await start({ operationBoundMs: 100, abandonedGraceMs: 30_000 });

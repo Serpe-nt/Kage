@@ -536,12 +536,28 @@ impl HttpClient {
     /// or one too many, the time runs out, or the exchange breaks. A
     /// response with an error status is not an error: it is returned.
     pub async fn fetch(&self, spec: &FetchSpec) -> Result<Fetched, HttpError> {
-        let outcome = self.navigate(spec).await;
+        self.fetch_traced(spec, &mut Vec::new()).await
+    }
+
+    /// [`Self::fetch`], with every address a request was sent to pushed onto
+    /// `asked`, in order, the one that failed included: the first URL and
+    /// each redirect hop. A failure does not say where it happened; this
+    /// does (F102: a hop the forwarder refused under `egress.mode: direct`).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::fetch`].
+    pub async fn fetch_traced(
+        &self,
+        spec: &FetchSpec,
+        asked: &mut Vec<Url>,
+    ) -> Result<Fetched, HttpError> {
+        let outcome = self.navigate(spec, asked).await;
         self.persist().await;
         outcome
     }
 
-    async fn navigate(&self, spec: &FetchSpec) -> Result<Fetched, HttpError> {
+    async fn navigate(&self, spec: &FetchSpec, asked: &mut Vec<Url>) -> Result<Fetched, HttpError> {
         if !matches!(spec.method, Method::GET | Method::HEAD | Method::POST) {
             return Err(HttpError::Method(spec.method.to_string()));
         }
@@ -578,7 +594,7 @@ impl HttpClient {
         let arrived = self
             .follow(
                 spec,
-                &mut trail,
+                (&mut trail, asked),
                 caller,
                 referrer.as_ref(),
                 started,
@@ -652,7 +668,7 @@ impl HttpClient {
     async fn follow(
         &self,
         spec: &FetchSpec,
-        trail: &mut Trail,
+        (trail, asked): (&mut Trail, &mut Vec<Url>),
         mut caller: CallerHeaders,
         referrer: Option<&Url>,
         started: Instant,
@@ -671,6 +687,7 @@ impl HttpClient {
         loop {
             check_addresses(self.resolver.as_deref(), trail).await?;
             let url = trail.current().clone();
+            asked.push(url.clone());
             let incoming = self
                 .send(Outgoing {
                     kind: spec.kind,

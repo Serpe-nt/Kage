@@ -1662,6 +1662,16 @@ impl Pipeline {
         (outcome, ruling): (Outcome, &Ruling),
         shown_by: Option<&str>,
     ) -> Result<(), SchedulerError> {
+        // Every trial a flow took of a later site's breaker ends with the
+        // attempt: on the site that showed what it came to, by its verdict;
+        // on every other one here.
+        for leg in &dispatch.legs {
+            if leg.trial && shown_by != Some(leg.domain.as_str()) {
+                self.verdicts
+                    .end_trial(&leg.domain, outcome.is_success())
+                    .await?;
+            }
+        }
         let Some(other) = shown_by else {
             self.verdicts
                 .settle(
@@ -1712,7 +1722,11 @@ impl Pipeline {
         course.waited += dispatch.waited.to_std().unwrap_or(Duration::ZERO);
         let n = course.progress.attempts() + 1;
         let Some(persona) = self.backend().persona(dispatch.persona).await? else {
-            // Retired between the plan and now: another persona's turn.
+            // Retired between the plan and now: another persona's turn,
+            // and no site was asked anything, so the trials go back.
+            for leg in dispatch.legs.iter().filter(|leg| leg.trial) {
+                self.verdicts.end_trial(&leg.domain, false).await?;
+            }
             grant.complete(Completion {
                 courtesy: Courtesy::NotTheSite,
                 blocked: false,

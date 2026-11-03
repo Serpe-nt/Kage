@@ -13,8 +13,9 @@ mod common;
 
 use common::lab::{Lab, SITE};
 use kage_browser::contract::FlowAction;
-use kage_core::domain::{Level, Render};
+use kage_core::domain::{BreakerState, Level, Render};
 use kage_core::outcome::Outcome;
+use kage_core::schedule::breaker::BreakerRules;
 use kage_core::schedule::queue::Priority;
 use kage_scheduler::pipeline::attempt_seed;
 use kage_scheduler::{Backend, Capture, FetchOrder, FlowPlan, Keep};
@@ -544,6 +545,77 @@ async fn a_wall_at_a_flows_later_site_is_booked_to_the_site_that_showed_it() {
     lab.shut_down().await;
 }
 
+/// Opens the other site's breaker an hour ago with a pause of half an
+/// hour: it is half open now, and the next request for it is its trial.
+async fn half_open_pay(lab: &Lab) {
+    let rules = BreakerRules {
+        threshold: 1,
+        pause: std::time::Duration::from_mins(30),
+        max_pause: std::time::Duration::from_hours(6),
+        trial_timeout: std::time::Duration::from_mins(10),
+    };
+    let opened = chrono::Utc::now() - chrono::Duration::hours(1);
+    lab.backend
+        .breaker_block(PAY, &rules, opened)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_flow_that_passed_a_half_open_site_and_came_back_closes_its_breaker() {
+    let mut lab = Lab::start(2, 149, BROWSER_FAST).await;
+    half_open_pay(&lab).await;
+    // To the other site and back: the flow ends on the shop.
+    let there_and_back = json!([
+        { "action": "goto", "url": site("/start") },
+        { "action": "goto", "url": pay("/checkout") },
+        { "action": "goto", "url": site("/done") },
+    ]);
+
+    let report = lab.pipeline.fetch(flow(&there_and_back)).await.unwrap();
+
+    assert_eq!(report.outcome, Outcome::Ok, "{:?}", report.reason);
+    assert_eq!(report.attempts.len(), 1);
+    // The flow was the other site's trial, and that site answered: its
+    // breaker closed, rather than holding every request for it paused
+    // until the trial's timeout.
+    let breaker = lab.backend.facts(PAY).await.unwrap().breaker.unwrap();
+    assert_eq!(breaker.state, BreakerState::Closed);
+    assert_eq!(breaker.trial_started_at, None);
+    lab.shut_down().await;
+}
+
+#[tokio::test]
+async fn a_flow_that_ended_before_a_half_open_site_answered_gives_its_trial_back() {
+    let mut lab = Lab::start(2, 149, BROWSER_FAST).await;
+    half_open_pay(&lab).await;
+    let steps = json!([
+        { "action": "goto", "url": site("/start") },
+        { "action": "click", "selector": "a.checkout" },
+        { "action": "goto", "url": pay("/checkout") },
+    ]);
+    lab.chromium.with(|sidecar| {
+        sidecar.next_flows.push_back(json!({
+            "fail": { "index": 1, "error": "selector_not_found: a.checkout" },
+        }));
+    });
+
+    let report = lab.pipeline.fetch(flow(&steps)).await.unwrap();
+
+    assert_eq!(report.reason.as_deref(), Some("flow_step_failed"));
+    // The other site was never asked: its pause and counts stay, and the
+    // trial is free again at once.
+    let breaker = lab.backend.facts(PAY).await.unwrap().breaker.unwrap();
+    assert_eq!(breaker.state, BreakerState::Open);
+    assert_eq!(breaker.trial_started_at, None);
+    assert_eq!(breaker.trips, 1);
+    let plain = lab.pipeline.fetch(flow(&across())).await.unwrap();
+    assert_eq!(plain.outcome, Outcome::Ok, "{:?}", plain.reason);
+    let breaker = lab.backend.facts(PAY).await.unwrap().breaker.unwrap();
+    assert_eq!(breaker.state, BreakerState::Closed);
+    lab.shut_down().await;
+}
+
 #[tokio::test]
 async fn a_persona_that_cools_at_a_flows_later_site_does_not_run_the_flow() {
     let mut lab = Lab::start(2, 149, BROWSER_FAST).await;
@@ -645,5 +717,58 @@ async fn a_flow_whose_address_the_forwarder_refused_is_ssrf_denied_at_once() {
     let failed = lab.pipeline.fetch(refused_flow()).await.unwrap();
     assert_eq!(failed.attempts[0].outcome, Outcome::ProviderError);
     assert_eq!(failed.attempts.len(), 2);
+    lab.shut_down().await;
+}
+
+#[tokio::test]
+async fn a_flow_that_a_click_sent_to_a_refused_address_is_ssrf_denied_at_once() {
+    let mut lab = Lab::start(2, 149, BROWSER_FAST).await;
+    // No `goto` names the address: a link of the page does. The sidecar
+    // ends the flow at the click and reports the page where the tab was
+    // sent (F102).
+    let hidden = "http://hidden.kage.test/admin";
+    let clicked = flow(&json!([
+        { "action": "goto", "url": site("/start") },
+        { "action": "click", "selector": "a.admin" },
+    ]));
+    let message = format!(
+        "navigation_failed: the browser could not load {hidden}: it shows its own error page"
+    );
+    lab.chromium.with(|sidecar| {
+        sidecar.next_flows.push_back(json!({
+            "fail": { "index": 1, "error": message },
+            "final": {
+                "url": site("/start"),
+                "final_url": hidden,
+                "status": null,
+                "dom_html": null,
+                "error": {
+                    "code": "navigation_failed",
+                    "message": message,
+                    "net_error": null,
+                },
+            },
+        }));
+        sidecar.flow_delay = Some(std::time::Duration::from_millis(600));
+    });
+    let denials = std::sync::Arc::clone(lab.forwarder.denials());
+    let personas: Vec<_> = lab.personas.iter().map(|persona| persona.id).collect();
+    let refusing = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        for persona in personas {
+            denials.record(
+                kage_scheduler::Caller::Persona(persona),
+                "hidden.kage.test",
+                "hidden.kage.test resolves to 10.0.0.9, in Private",
+            );
+        }
+    });
+
+    let report = lab.pipeline.fetch(clicked).await.unwrap();
+    refusing.await.unwrap();
+
+    assert_eq!(report.outcome, Outcome::SsrfDenied, "{:?}", report.reason);
+    assert_eq!(report.attempts.len(), 1);
+    assert_eq!(report.last.as_ref().unwrap().flow, None);
     lab.shut_down().await;
 }

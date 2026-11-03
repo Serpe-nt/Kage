@@ -740,6 +740,56 @@ async fn redirects_are_followed_hop_by_hop_with_cookies_and_referer_per_hop() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_traced_fetch_names_every_address_it_sent_a_request_to_the_failed_one_included() {
+    let world = World::start().await;
+    page(
+        &world.site,
+        "/moved",
+        redirect(302, "http://other.kage.test/there"),
+    )
+    .await;
+    page(&world.other, "/there", ResponseTemplate::new(200)).await;
+    page(
+        &world.site,
+        "/away",
+        redirect(302, "http://gone.kage.test/nowhere"),
+    )
+    .await;
+    let client = world.chrome();
+
+    // Every hop, in order (F102: the executor matches what the forwarder
+    // refused against these, at level 1 as at level 0).
+    let mut asked = Vec::new();
+    let fetched = client
+        .fetch_traced(&get("http://site.kage.test/moved"), &mut asked)
+        .await
+        .unwrap();
+    assert_eq!(fetched.status, 200);
+    assert_eq!(
+        asked,
+        [
+            url("http://site.kage.test/moved"),
+            url("http://other.kage.test/there")
+        ]
+    );
+
+    // A hop that fails (the proxy cannot reach it) is named all the same,
+    // last.
+    let mut asked = Vec::new();
+    let failed = client
+        .fetch_traced(&get("http://site.kage.test/away"), &mut asked)
+        .await;
+    assert!(failed.is_err() || failed.is_ok_and(|fetched| fetched.status == 502));
+    assert_eq!(
+        asked,
+        [
+            url("http://site.kage.test/away"),
+            url("http://gone.kage.test/nowhere")
+        ]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_redirect_changes_the_method_the_way_a_browser_does() {
     let world = World::start().await;
     page(&world.site, "/form", redirect(303, "/done")).await;
