@@ -11,7 +11,7 @@
 
 mod common;
 
-use common::lab::{Lab, SITE};
+use common::lab::{Lab, OnFlow, SITE};
 use kage_browser::contract::FlowAction;
 use kage_core::domain::{BreakerState, Level, Render};
 use kage_core::outcome::Outcome;
@@ -643,6 +643,24 @@ async fn a_persona_that_cools_at_a_flows_later_site_does_not_run_the_flow() {
     lab.shut_down().await;
 }
 
+/// The forwarder's refusal of `hidden.kage.test` for every persona of the
+/// lab, as the sidecar's hook of the next flow: it is recorded once the
+/// attempt is under way, after the executor took its mark of the
+/// forwarder's denials, and before the flow is answered (F102).
+fn refuse_hidden(lab: &Lab) -> OnFlow {
+    let denials = std::sync::Arc::clone(lab.forwarder.denials());
+    let personas: Vec<_> = lab.personas.iter().map(|persona| persona.id).collect();
+    OnFlow(Box::new(move || {
+        for persona in personas {
+            denials.record(
+                kage_scheduler::Caller::Persona(persona),
+                "hidden.kage.test",
+                "hidden.kage.test resolves to 10.0.0.9, in Private",
+            );
+        }
+    }))
+}
+
 #[tokio::test]
 async fn a_flow_whose_address_the_forwarder_refused_is_ssrf_denied_at_once() {
     let mut lab = Lab::start(2, 149, BROWSER_FAST).await;
@@ -670,27 +688,15 @@ async fn a_flow_whose_address_the_forwarder_refused_is_ssrf_denied_at_once() {
             },
         },
     });
+    // The forwarder refuses the name while the flow runs, for whichever
+    // persona runs it: when the sidecar is asked for the flow.
+    let refusing = refuse_hidden(&lab);
     lab.chromium.with(|sidecar| {
         sidecar.next_flows.push_back(failed_goto.clone());
-        sidecar.flow_delay = Some(std::time::Duration::from_millis(600));
-    });
-    // The forwarder refuses the name while the flow runs, for whichever
-    // persona runs it.
-    let denials = std::sync::Arc::clone(lab.forwarder.denials());
-    let personas: Vec<_> = lab.personas.iter().map(|persona| persona.id).collect();
-    let refusing = tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        for persona in personas {
-            denials.record(
-                kage_scheduler::Caller::Persona(persona),
-                "hidden.kage.test",
-                "hidden.kage.test resolves to 10.0.0.9, in Private",
-            );
-        }
+        sidecar.on_flow = Some(refusing);
     });
 
     let report = lab.pipeline.fetch(refused_flow()).await.unwrap();
-    refusing.await.unwrap();
 
     // The guard's outcome, at the first attempt, nothing of it kept.
     assert_eq!(report.outcome, Outcome::SsrfDenied, "{:?}", report.reason);
@@ -710,10 +716,8 @@ async fn a_flow_whose_address_the_forwarder_refused_is_ssrf_denied_at_once() {
 
     // The same failure without a refusal is a failed connection, tried
     // again by another persona.
-    lab.chromium.with(|sidecar| {
-        sidecar.next_flows.push_back(failed_goto.clone());
-        sidecar.flow_delay = None;
-    });
+    lab.chromium
+        .with(|sidecar| sidecar.next_flows.push_back(failed_goto.clone()));
     let failed = lab.pipeline.fetch(refused_flow()).await.unwrap();
     assert_eq!(failed.attempts[0].outcome, Outcome::ProviderError);
     assert_eq!(failed.attempts.len(), 2);
@@ -749,23 +753,10 @@ async fn a_flow_that_a_click_sent_to_a_refused_address_is_ssrf_denied_at_once() 
                 },
             },
         }));
-        sidecar.flow_delay = Some(std::time::Duration::from_millis(600));
-    });
-    let denials = std::sync::Arc::clone(lab.forwarder.denials());
-    let personas: Vec<_> = lab.personas.iter().map(|persona| persona.id).collect();
-    let refusing = tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        for persona in personas {
-            denials.record(
-                kage_scheduler::Caller::Persona(persona),
-                "hidden.kage.test",
-                "hidden.kage.test resolves to 10.0.0.9, in Private",
-            );
-        }
+        sidecar.on_flow = Some(refuse_hidden(&lab));
     });
 
     let report = lab.pipeline.fetch(clicked).await.unwrap();
-    refusing.await.unwrap();
 
     assert_eq!(report.outcome, Outcome::SsrfDenied, "{:?}", report.reason);
     assert_eq!(report.attempts.len(), 1);
