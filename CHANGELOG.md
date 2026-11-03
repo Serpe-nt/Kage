@@ -56,10 +56,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   proxies return. A dead proxy was the site's server error: a browser
   reports a plain `http://` page whose proxy is down as
   `navigation_failed`, and the site was paused 30 s doubling for everyone
-  (sched-05); the forwarder now notes every connection it could not relay
-  for its route, such an attempt is `proxy_failed` and counts nothing
-  against the site, the persona leaves its visit and is taken only when no
-  other could be for five minutes, and its proxy is probed at once. A
+  (sched-05); the forwarder now notes, by caller and target, each
+  connection whose proxy could not be reached, did not answer or refused
+  its credential, an attempt that got no answer for its own page meanwhile
+  is `proxy_failed` and counts nothing against the site (a proxy's `502`
+  for an unreachable target, and a third party's host, still do), the
+  persona leaves its visit and for five minutes is set aside for one that
+  could start before then, and its proxy is probed at once. A
   cancel did not reach a fetch carried on as a job, nor a job queued
   behind `jobs.max_running`, and the request of an item that ended
   without its page answered `202 running` for ever (sched-07, jobs-07,

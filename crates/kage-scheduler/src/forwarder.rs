@@ -411,13 +411,21 @@ pub struct Payer {
 
 type MeterKey = (Option<PersonaId>, Exit, String);
 
+/// A caller's connection to one target: the caller, the target's host in
+/// lower case, and its port.
+type Unrelayed = (Caller, String, u16);
+
+/// How long a connection the forwarder could not relay is remembered:
+/// longer than any attempt waits for its page.
+const UNRELAYED_KEPT: Duration = Duration::from_mins(30);
+
 #[derive(Debug, Default)]
 struct MeterState {
     labels: HashMap<PersonaId, String>,
     bytes: HashMap<MeterKey, (u64, u64)>,
-    /// When each caller's connection was last not relayed for a reason of
-    /// its route.
-    unrelayed: HashMap<Caller, Instant>,
+    /// When each caller's connection to each target was last not relayed
+    /// because its proxy failed.
+    unrelayed: HashMap<Unrelayed, Instant>,
 }
 
 /// Counts what passes, per persona and per domain being fetched.
@@ -515,22 +523,39 @@ impl Meter {
         counted
     }
 
-    /// Notes that a caller's connection was not relayed for a reason of
-    /// its route: its proxy could not be reached or refused the tunnel,
-    /// the proxy or the persona is not usable, or a stop holds. A page
-    /// that fails meanwhile without an answer failed at the proxy, not at
-    /// the site (F108).
-    pub fn note_unrelayed(&self, caller: Caller) {
-        self.state().unrelayed.insert(caller, Instant::now());
+    /// Notes that a caller's connection to `host`:`port` was not relayed
+    /// because its proxy failed: the proxy could not be reached, did not
+    /// answer, refused the provider's credential, or is not usable. A
+    /// page of that target that fails meanwhile without an answer failed
+    /// at the proxy, not at the site (F108). A proxy that answered a
+    /// tunnel with a refusal of its own (a `502` for a target it could not
+    /// reach) and a client that went away are not the proxy's failure.
+    pub fn note_unrelayed(&self, caller: Caller, host: &str, port: u16) {
+        let now = Instant::now();
+        let mut state = self.state();
+        state
+            .unrelayed
+            .retain(|_, at| now.duration_since(*at) < UNRELAYED_KEPT);
+        state
+            .unrelayed
+            .insert((caller, host.to_ascii_lowercase(), port), now);
     }
 
-    /// Whether a connection of `caller` was not relayed for a reason of
-    /// its route at `since` or later.
-    pub fn unrelayed_since(&self, caller: Caller, since: Instant) -> bool {
-        self.state()
-            .unrelayed
-            .get(&caller)
-            .is_some_and(|at| *at >= since)
+    /// Whether a connection of `caller` to one of `targets` (host and
+    /// port) was not relayed because its proxy failed, at `since` or later.
+    pub fn unrelayed_since<'a>(
+        &self,
+        caller: Caller,
+        targets: impl IntoIterator<Item = (&'a str, u16)>,
+        since: Instant,
+    ) -> bool {
+        let state = self.state();
+        targets.into_iter().any(|(host, port)| {
+            state
+                .unrelayed
+                .get(&(caller, host.to_ascii_lowercase(), port))
+                .is_some_and(|at| *at >= since)
+        })
     }
 
     /// Everything counted since the forwarder started: up, down.
@@ -821,8 +846,13 @@ enum Refused {
     Route(RouteRefusal),
     /// A route with no upstream found no address it may connect to.
     Address(String),
-    /// The persona's proxy could not be reached or did not answer.
+    /// The persona's proxy could not be reached, did not answer, or
+    /// refused the provider's credential: the proxy's own failure.
     Upstream(String),
+    /// The target could not be reached (a proxy's refusal of the tunnel,
+    /// no address that answered), or the client went away: not the
+    /// proxy's own failure.
+    Unreached(String),
 }
 
 /// See the module documentation.
@@ -1007,7 +1037,9 @@ impl Forwarder {
         let upstream = match route {
             Ok(upstream) => upstream,
             Err(refusal) => {
-                self.meter.note_unrelayed(caller);
+                if refusal == RouteRefusal::ProxyNotUsable {
+                    self.meter.note_unrelayed(caller, &host, port);
+                }
                 return refuse(client, tunnel, Refused::Route(refusal)).await;
             }
         };
@@ -1026,7 +1058,6 @@ impl Forwarder {
             }
         };
         if let Some(reason) = self.stopped() {
-            self.meter.note_unrelayed(caller);
             return refuse(client, tunnel, Refused::Stopped(reason)).await;
         }
         let connecting = TcpStream::connect((upstream.host.as_str(), upstream.port));
@@ -1034,11 +1065,11 @@ impl Forwarder {
         {
             Ok(Ok(server)) => server,
             Ok(Err(error)) => {
-                self.meter.note_unrelayed(caller);
+                self.meter.note_unrelayed(caller, &host, port);
                 return refuse(client, tunnel, Refused::Upstream(error.to_string())).await;
             }
             Err(_) => {
-                self.meter.note_unrelayed(caller);
+                self.meter.note_unrelayed(caller, &host, port);
                 let reason = Refused::Upstream("the proxy did not answer".to_owned());
                 return refuse(client, tunnel, reason).await;
             }
@@ -1051,7 +1082,7 @@ impl Forwarder {
                 .tunnel(client, &mut server, &head, buffer, &payer, &upstream)
                 .await;
             if matches!(tunnelled, Err(Refused::Upstream(_))) {
-                self.meter.note_unrelayed(caller);
+                self.meter.note_unrelayed(caller, &host, port);
             }
             tunnelled
         } else {
@@ -1096,7 +1127,7 @@ impl Forwarder {
             }
         }
         let Some(mut server) = server else {
-            let reason = Refused::Upstream(format!("no address of {host} answered"));
+            let reason = Refused::Unreached(format!("no address of {host} answered"));
             return refuse(client, tunnel, reason).await;
         };
         let _ = server.set_nodelay(true);
@@ -1108,7 +1139,7 @@ impl Forwarder {
         }
         // The forwarder is the proxy here: it opens the tunnel itself.
         let answer: &[u8] = b"HTTP/1.1 200 Connection established\r\n\r\n";
-        let failed = |error: std::io::Error| Refused::Upstream(error.to_string());
+        let failed = |error: std::io::Error| Refused::Unreached(error.to_string());
         client.write_all(answer).await.map_err(failed)?;
         self.relayed.fetch_add(1, Ordering::Relaxed);
         if !buffer.is_empty() {
@@ -1206,6 +1237,8 @@ impl Forwarder {
     }
 
     /// A `CONNECT`: asks the proxy for the tunnel and relays both ways.
+    /// `Refused::Upstream` only when the proxy itself failed: it could not
+    /// be written to, did not answer, or refused the credential (`407`).
     async fn tunnel(
         &self,
         client: &mut TcpStream,
@@ -1217,6 +1250,7 @@ impl Forwarder {
     ) -> Result<(), Refused> {
         let request = head.rewritten(upstream);
         let failed = |error: std::io::Error| Refused::Upstream(error.to_string());
+        let gone = |error: std::io::Error| Refused::Unreached(error.to_string());
         server.write_all(&request).await.map_err(failed)?;
         self.meter.add_for(payer, request.len() as u64, 0);
 
@@ -1231,15 +1265,22 @@ impl Forwarder {
         self.meter.add_for(payer, 0, answer.len() as u64);
         // The proxy's own answer goes to the client as it came: a refusal
         // of the proxy is a failed tunnel to the browser.
-        client.write_all(&answer).await.map_err(failed)?;
+        client.write_all(&answer).await.map_err(gone)?;
+        if status == 407 {
+            return Err(Refused::Upstream(
+                "the proxy refused the provider's credential".to_owned(),
+            ));
+        }
         if !(200..300).contains(&status) {
-            return Err(Refused::Upstream(format!(
+            // A proxy that could not reach the target says so (a `502`, a
+            // `504`): the target's failure, not the proxy's.
+            return Err(Refused::Unreached(format!(
                 "the proxy answered the tunnel with {status}"
             )));
         }
         self.relayed.fetch_add(1, Ordering::Relaxed);
         if !early.is_empty() {
-            server.write_all(&early).await.map_err(failed)?;
+            server.write_all(&early).await.map_err(gone)?;
             self.meter.add_for(payer, early.len() as u64, 0);
         }
         self.pump_both(client, server, payer).await;
@@ -1820,20 +1861,32 @@ mod tests {
         let (one, other) = (PersonaId::new(), PersonaId::new());
         let before = tokio::time::Instant::now();
         tokio::time::advance(std::time::Duration::from_secs(1)).await;
-        assert!(!meter.unrelayed_since(Caller::Persona(one), before));
+        let site = [("shop.kage.test", 80)];
+        assert!(!meter.unrelayed_since(Caller::Persona(one), site, before));
 
-        meter.note_unrelayed(Caller::Persona(one));
-        assert!(meter.unrelayed_since(Caller::Persona(one), before));
+        meter.note_unrelayed(Caller::Persona(one), "Shop.Kage.Test", 80);
+        assert!(meter.unrelayed_since(Caller::Persona(one), site, before));
+        // Another target of the same caller is its own: a third party's
+        // host, or the site on another port.
+        let others = [("cdn.kage.test", 443), ("shop.kage.test", 443)];
+        assert!(!meter.unrelayed_since(Caller::Persona(one), others, before));
+        // One of the attempt's targets is enough: a redirect's host.
+        let chain = [("cdn.kage.test", 443), ("shop.kage.test", 80)];
+        assert!(meter.unrelayed_since(Caller::Persona(one), chain, before));
         // Another caller's route is its own.
-        assert!(!meter.unrelayed_since(Caller::Persona(other), before));
+        assert!(!meter.unrelayed_since(Caller::Persona(other), site, before));
         let exit = Caller::Plain(PlainRoute::Pool(ProxyId::new()));
-        assert!(!meter.unrelayed_since(exit, before));
-        meter.note_unrelayed(exit);
-        assert!(meter.unrelayed_since(exit, before));
+        assert!(!meter.unrelayed_since(exit, site, before));
+        meter.note_unrelayed(exit, "shop.kage.test", 80);
+        assert!(meter.unrelayed_since(exit, site, before));
         // An attempt that began after it saw nothing of it.
         tokio::time::advance(std::time::Duration::from_secs(1)).await;
         let later = tokio::time::Instant::now();
-        assert!(!meter.unrelayed_since(Caller::Persona(one), later));
+        assert!(!meter.unrelayed_since(Caller::Persona(one), site, later));
+        // What is older than any attempt is forgotten at the next note.
+        tokio::time::advance(super::UNRELAYED_KEPT).await;
+        meter.note_unrelayed(exit, "other.kage.test", 80);
+        assert_eq!(meter.state().unrelayed.len(), 1);
     }
 
     #[test]

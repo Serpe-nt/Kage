@@ -980,3 +980,72 @@ async fn a_scout_may_be_a_persona_the_policy_keeps_from_reading_the_site() {
     assert_eq!(report.robots, Some(allowed(Some(30.0))));
     world.shut_down().await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_jobs_scout_is_a_jobs_request_and_waits_out_a_paused_site() {
+    // Review of F109: the scout a job's page waits for runs as the job's
+    // fetch does. A site that turned the first scout away is paused for six
+    // hours by its breaker; an hour on, when the file may be asked for
+    // again, the next scout's request is refused `domain_paused`. A job's
+    // scout waits that out with the job: nothing of it is concluded, and the
+    // page waits until the site is open again. Before, the scout's request
+    // ended `provider_error` with a stored result, and the page waited for
+    // a file nobody had asked for.
+    let sites = "defaults: { pacing: fast, active_hours: ignore }\n\
+                 domains:\n  enforced.example: { robots: enforce, breaker_threshold: 1, \
+                 breaker_pause: 6h }\n";
+    let mut world = World::new(4, sites);
+    robots_txt(&world, |_| blocked(Outcome::Forbidden, 1.0));
+    let first = world
+        .pipeline
+        .fetch(get("https://enforced.example/a"))
+        .await
+        .unwrap();
+    assert_eq!(first.reason.as_deref(), Some(ROBOTS_UNAVAILABLE));
+    let breaker = world.backend.breaker("enforced.example").unwrap();
+    let reopens = breaker.paused_until.unwrap();
+    assert!(reopens > world.now() + Span::hours(5), "{reopens}");
+
+    tokio::time::sleep(Duration::from_mins(61)).await;
+    let concluded = |world: &World| {
+        let scouting: Vec<RequestId> = world
+            .backend
+            .requests()
+            .into_iter()
+            .filter(|request| request.url == "https://enforced.example/robots.txt")
+            .map(|request| request.id)
+            .collect();
+        world
+            .backend
+            .records()
+            .iter()
+            .filter(|record| scouting.contains(&record.request_id))
+            .count()
+    };
+    let before = concluded(&world);
+    let (_keep, stop) = never();
+    let waiting = world
+        .pipeline
+        .fetch_for_job(
+            RequestId::new(),
+            get("https://enforced.example/b"),
+            None,
+            stop,
+        )
+        .await
+        .unwrap();
+    let JobFetch::Deferred(deferred) = waiting else {
+        panic!("the page did not wait: {waiting:?}");
+    };
+    assert_eq!(deferred.reason, Refusal::DomainPaused);
+    assert_eq!(deferred.retry_at, Some(reopens));
+    assert_eq!(
+        concluded(&world),
+        before,
+        "the scout's request was concluded"
+    );
+    // Nobody asked the paused site for anything.
+    let (files, pages) = asked(&world);
+    assert_eq!((files.len(), pages.len()), (1, 0));
+    world.shut_down().await;
+}

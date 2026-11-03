@@ -43,8 +43,10 @@
 //!
 //! An attempt that failed at the persona's proxy (the site had no say)
 //! ends the persona's visit, and for [`PROXY_SUSPICION`] the persona is
-//! taken only when no other could take the work, until an attempt of it
-//! is answered again (F108).
+//! set aside for another that could start before that time ends, until an
+//! attempt of it is answered again (F108). One cooling for hours is no
+//! such other: the persona is taken. Work that waits for another looks
+//! again when the time ends.
 //!
 //! # Never in lockstep
 //!
@@ -93,8 +95,8 @@ const PACED_TOLERANCE: Duration = Duration::milliseconds(250);
 /// the first backoff of a proxy (spec §7.3).
 pub const UNREADY_RECHECK: Duration = Duration::minutes(1);
 
-/// How long a persona whose attempt failed at its proxy is taken only
-/// when no other persona could take the work: the interval of the pool's
+/// How long a persona whose attempt failed at its proxy is set aside for
+/// another persona that could start before then: the interval of the pool's
 /// health probes (spec §7.4), by which time a probe has said whether the
 /// proxy answers.
 pub const PROXY_SUSPICION: Duration = Duration::minutes(5);
@@ -369,8 +371,8 @@ pub struct Completion {
     /// Whether the persona was blocked: its visit is over.
     pub blocked: bool,
     /// Whether the attempt failed at the persona's proxy, before the site
-    /// had a say: its visit is over, and for [`PROXY_SUSPICION`] it is
-    /// taken only when no other persona could take the work (F108).
+    /// had a say: its visit is over, and for [`PROXY_SUSPICION`] it is set
+    /// aside for another persona that could start before then (F108).
     pub proxy_failed: bool,
 }
 
@@ -498,9 +500,10 @@ struct Possible<'a> {
     /// or reached its daily cap. A job's visitor that is barred is no
     /// longer one the job waits for.
     barred: bool,
-    /// Whether an attempt of it failed at its proxy a moment ago: it is
-    /// taken only when nobody else could be.
-    suspect: bool,
+    /// While an attempt of it failed at its proxy a moment ago, when that
+    /// suspicion ends: until then it is set aside for another persona that
+    /// could start before (`set_suspects_aside`).
+    suspect_until: Option<DateTime<Utc>>,
 }
 
 /// See the module documentation.
@@ -540,6 +543,28 @@ fn earlier(a: Option<DateTime<Utc>>, b: Option<DateTime<Utc>>) -> Option<DateTim
         (Some(a), Some(b)) => Some(a.min(b)),
         (a, b) => a.or(b),
     }
+}
+
+/// Sets aside every persona whose proxy failed a moment ago (F108) when
+/// another could start before the first suspicion ends: one cooling after
+/// a block or waiting for its hours is no such other, and the suspect
+/// stays. Returns who remains, and when the work should look again: the
+/// end of the suspicion of the ones set aside.
+fn set_suspects_aside(possible: Vec<Possible<'_>>) -> (Vec<Possible<'_>>, Option<DateTime<Utc>>) {
+    let Some(cleared) = possible.iter().filter_map(|one| one.suspect_until).min() else {
+        return (possible, None);
+    };
+    let other_first = possible
+        .iter()
+        .any(|one| one.suspect_until.is_none() && one.after <= cleared);
+    if !other_first {
+        return (possible, None);
+    }
+    let rest = possible
+        .into_iter()
+        .filter(|one| one.suspect_until.is_none())
+        .collect();
+    (rest, Some(cleared))
 }
 
 fn prune(times: &mut VecDeque<DateTime<Utc>>, now: DateTime<Utc>, window: Duration) {
@@ -884,13 +909,33 @@ impl Planner {
             return self.wait_or_give_up(work, only.at);
         }
 
-        // A persona whose proxy failed a moment ago is taken only when no
-        // other could be (F108).
-        let possible: Vec<Possible<'_>> = if possible.iter().any(|one| !one.suspect) {
-            possible.into_iter().filter(|one| !one.suspect).collect()
-        } else {
-            possible
-        };
+        // A persona whose proxy failed a moment ago is set aside for one
+        // that could start before the suspicion ends (F108); the work looks
+        // again when it ends, when the one set aside may be the first.
+        let (possible, recheck) = set_suspects_aside(possible);
+        let looked = self.choose(now, work, &possible, claimed, facts, trial);
+        match (looked, recheck) {
+            (Looked::Wait(at), Some(recheck)) => Looked::Wait(earlier(at, Some(recheck))),
+            (Looked::Refuse(Refusal::NoPersona, Some(at)), Some(recheck)) if at > recheck => {
+                self.wait_or_give_up(work, Some(recheck))
+            }
+            (looked, _) => looked,
+        }
+    }
+
+    /// Decides one waiting request among the personas that may take it:
+    /// a visitor, a new visitor when there is room, or the first who can.
+    #[allow(clippy::too_many_lines)] // Every way a persona may take it, in order.
+    fn choose(
+        &self,
+        now: DateTime<Utc>,
+        work: &Work,
+        possible: &[Possible<'_>],
+        claimed: &mut HashSet<PersonaId>,
+        facts: &DomainFacts,
+        trial: bool,
+    ) -> Looked {
+        let ready = |one: &Possible<'_>| one.at.is_some_and(|at| at <= now);
 
         // A job that has the visitors it may have on the domain stays with
         // them; another persona comes only for one that cannot go on.
@@ -902,9 +947,9 @@ impl Planner {
                     .copied()
                     .collect();
                 let full = staying.len() >= usize::try_from(visitors.max.max(1)).unwrap_or(1);
-                if full { staying } else { possible }
+                if full { staying } else { possible.to_vec() }
             }
-            _ => possible,
+            _ => possible.to_vec(),
         };
 
         // A persona that is visiting takes the work when its slot is open.
@@ -941,7 +986,9 @@ impl Planner {
         // only: when every visitor that could take it is on a break that
         // does not end within `visitor_wait`. A visitor in a gap or in
         // the middle of a page is waited for, however many synchronous
-        // requests wait for it (F106).
+        // requests wait for it (F106). One that no visitor could take (it
+        // excludes them, or asks for an engine or a country they lack) has
+        // nobody to wait for, and starts a visit as for a break.
         let visiting = self.visitors(&work.domain, now);
         let room = visiting < usize::try_from(work.pacing.domain_concurrency).unwrap_or(usize::MAX);
         let past_room = !room
@@ -1139,11 +1186,12 @@ impl Planner {
                     open_for >= Duration::zero() && open_for < PACED_TOLERANCE
                 }),
                 barred,
-                suspect: self
+                suspect_until: self
                     .runs
                     .get(&view.id)
                     .and_then(|run| run.proxy_failed_at)
-                    .is_some_and(|at| now.signed_duration_since(at) < PROXY_SUSPICION),
+                    .map(|at| at + PROXY_SUSPICION)
+                    .filter(|until| *until > now),
             });
         }
         possible

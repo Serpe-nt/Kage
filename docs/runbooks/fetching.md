@@ -85,10 +85,15 @@ ended it: `proxy_failed`, `timeout`, and `interrupted`. `proxy_failed`
 counts nothing against the site: no pause after server errors, no
 breaker. A browser reports a plain `http://` page whose proxy is down as
 if the site did not answer (`navigation_failed`); the forwarder knows
-better, and such an attempt is `proxy_failed` too (F108). The persona
-leaves its visit and, for five minutes or until an attempt of it is
-answered, is taken only when no other persona could be; its proxy is
-probed at the health checker's next turn.
+better, and such an attempt is `proxy_failed` too (F108). Only a proxy
+that could not be reached, did not answer or refused the provider's
+credential counts, and only for the attempt's own page: a proxy's `502`
+for a target it could not reach, and a third party's host the page loads
+from, remain the site's. The persona leaves its visit and, for five minutes
+or until an attempt of it is answered, is set aside for a persona that
+could start before then (not for one cooling for hours); its proxy is
+probed at the health checker's next turn, and a healthy probe does not
+end the five minutes.
 
 ## Stopping the server
 

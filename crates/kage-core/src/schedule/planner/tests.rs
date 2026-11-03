@@ -12,8 +12,8 @@ use chrono::{DateTime, Duration, NaiveTime, TimeZone, Utc};
 use uuid::Uuid;
 
 use super::{
-    Completion, Decision, Dispatch, DomainFacts, Held, PersonaView, PlainDispatch, Planner,
-    PlannerRules, Refusal, RetryPause, Visitors, Work, floored,
+    Completion, Decision, Dispatch, DomainFacts, Held, PROXY_SUSPICION, PersonaView, PlainDispatch,
+    Planner, PlannerRules, Refusal, RetryPause, Visitors, Work, floored,
 };
 use crate::domain::{BreakerState, CountryCode, DomainBreaker, Engine, PersonaDomainState, Render};
 use crate::ids::PersonaId;
@@ -3517,4 +3517,138 @@ fn a_persona_whose_proxy_failed_leaves_and_is_taken_only_when_no_other_could_be(
         at = left + secs(5);
     }
     assert!(planner.server_error_pause("example.org", at).is_some());
+}
+
+/// A planner of two personas whose first attempt on `example.org` failed
+/// at its proxy at the moment returned: the persona that failed, the
+/// other, and the moment.
+fn one_failed_at_its_proxy() -> (Planner, PersonaId, PersonaId, DateTime<Utc>) {
+    let facts = facts_for(&["example.org"]);
+    let mut planner = Planner::new(rules(), Seed::from_u64(5));
+    planner.set_personas(personas(2));
+    planner.submit(work("example.org"), noon());
+    let (_, first) = first_dispatch(&mut planner, &facts, noon());
+    let at = noon() + secs(1);
+    assert!(planner.complete(
+        first.grant,
+        at,
+        Completion {
+            courtesy: Courtesy::NotTheSite,
+            blocked: false,
+            proxy_failed: true,
+        },
+    ));
+    let other = if first.persona == id(0) { id(1) } else { id(0) };
+    (planner, first.persona, other, at)
+}
+
+#[test]
+fn a_persona_whose_proxy_failed_is_taken_when_the_other_cannot_start_for_hours() {
+    // F108, review: the other persona cools for six hours after a block. A
+    // persona that is only suspect for five minutes is not set aside for
+    // it: a job that would give up after ten minutes leaves at once on the
+    // suspect, and is never refused with the other's time.
+    let (mut planner, failed, other, at) = one_failed_at_its_proxy();
+    let mut facts = facts_for(&["example.org"]);
+    let mut cooling = PersonaDomainState::new(other, "example.org");
+    cooling.cooldown_until = Some(at + Duration::hours(6));
+    facts
+        .get_mut("example.org")
+        .unwrap()
+        .states
+        .insert(other, cooling);
+    let asked = at + secs(10);
+    planner.submit(
+        Work {
+            give_up_at: Some(asked + Duration::minutes(10)),
+            ..work("example.org")
+        },
+        asked,
+    );
+    let mut now = asked;
+    let left = loop {
+        let decisions = planner.plan(now, &facts);
+        assert!(
+            !decisions
+                .iter()
+                .any(|decision| matches!(decision, Decision::Refuse { .. })),
+            "refused at {now}: {decisions:?}"
+        );
+        if let Some(dispatch) = dispatched(&decisions).first() {
+            break ((*dispatch).clone(), now);
+        }
+        assert!(now < asked + secs(60), "nothing left within a minute");
+        now += millis(100);
+    };
+    assert_eq!(left.0.persona, failed);
+    assert!(left.1 - asked < secs(5), "{}", left.1);
+}
+
+#[test]
+fn work_set_aside_from_a_suspect_persona_looks_again_when_the_suspicion_ends() {
+    // F108, review: the other persona is reading another site, so the work
+    // waits for it, and only an attempt's end would plan again. The
+    // planner wakes when the suspicion ends, and the persona that failed
+    // takes the work then if the other is still reading.
+    let (mut planner, failed, other, at) = one_failed_at_its_proxy();
+    let facts = facts_for(&["example.org", "other.example"]);
+    planner.submit(
+        Work {
+            pin: Some(other),
+            ..work("other.example")
+        },
+        at,
+    );
+    let (_, reading) = first_dispatch(&mut planner, &facts, at);
+    assert_eq!(reading.persona, other);
+
+    let asked = at + secs(10);
+    planner.submit(work("example.org"), asked);
+    assert_eq!(dispatched(&planner.plan(asked, &facts)).len(), 0);
+    let cleared = at + PROXY_SUSPICION;
+    assert!(
+        planner.wake_at().is_some_and(|wake| wake <= cleared),
+        "{:?}",
+        planner.wake_at()
+    );
+    let (left, taken) = first_dispatch(&mut planner, &facts, cleared);
+    assert_eq!(taken.persona, failed);
+    assert_eq!(left, cleared);
+}
+
+#[test]
+fn a_synchronous_request_no_visitor_could_take_starts_a_visit_of_its_own() {
+    // F106, review: with one seat on the domain and its visitor in a gap,
+    // a synchronous request that excludes the visitor has nobody to wait
+    // for: it starts a visit of another persona at once, as for a break.
+    // A request the visitor could take waits for it instead.
+    let slow = PacingProfile {
+        gap_ms: Distribution::Uniform(Uniform {
+            min: 20_000.0,
+            max: 20_000.0,
+        }),
+        domain_concurrency: 1,
+        ..brisk()
+    };
+    let mut sim = Sim::new(personas(3));
+    sim.takes = Box::new(|_| millis(400));
+    sim.submit(Work {
+        pacing: slow,
+        ..sync("example.org")
+    });
+    sim.settle();
+    let visitor = sim.log[0].1.persona;
+    sim.now += secs(1);
+    sim.settle();
+    sim.submit(Work {
+        pacing: slow,
+        exclude: vec![visitor],
+        ..sync("example.org")
+    });
+    sim.run_until(noon() + secs(10));
+    // It left on another persona, kept apart from the first start only,
+    // long before the visitor's slot twenty seconds on.
+    assert_eq!(sim.log.len(), 2);
+    assert_ne!(sim.log[1].1.persona, visitor);
+    assert!(sim.log[1].0 < noon() + secs(10), "{:?}", sim.log[1].0);
 }
