@@ -1591,44 +1591,44 @@ order of severity (the report's "Proposed plan items" names the rows):
   http path at level 0 too, each before it is asked for; today a hop to a
   name with a private address is followed and its body returned
   (ssrf-01; §19).
-- **F99 (high):** level 0 reads robots.txt and sitemaps from the plain
+- **F99 (high, fixed by [Serpe-nt/Kage#43](https://github.com/Serpe-nt/Kage/pull/43)):** level 0 reads robots.txt and sitemaps from the plain
   attempt's body; today a robots.txt first asked for at level 0 is stored
   empty for a day, so `enforce` enforces nothing at any level, and a
   level 0 crawl reads no sitemap (api-01, crawl-02, ssrf-05, crawl-03).
-- **F100 (high):** the http path decodes a document as a browser does,
+- **F100 (high, fixed by [Serpe-nt/Kage#43](https://github.com/Serpe-nt/Kage/pull/43)):** the http path decodes a document as a browser does,
   by header, `<meta>` and sniffing; today every page is read as UTF-8,
   and a crawl asks for addresses no page names (extract-03, crawl-04).
-- **F101 (high):** every `goto` of a flow meets its own site's policy as
+- **F101 (high, fixed by [Serpe-nt/Kage#44](https://github.com/Serpe-nt/Kage/pull/44)):** every `goto` of a flow meets its own site's policy as
   a fetch of that address would, and a wall is booked to the site that
   showed it, not to the flow's first site (jobs-05, jobs-06).
-- **F102 (high):** one outcome, `ssrf_denied`, for a denied hop in both
+- **F102 (high, fixed by [Serpe-nt/Kage#44](https://github.com/Serpe-nt/Kage/pull/44)):** one outcome, `ssrf_denied`, for a denied hop in both
   engines and both egress modes, never retried and nothing kept; today
   Chromium ends `ok` on `chrome-error://chromewebdata/` with the error
   page as artifacts, a browser's redirect to a denied target is
   `provider_error`, and `direct` says `connection_failed` three times
   (ssrf-02, api-04, ssrf-03, ssrf-07).
-- **F103 (high):** a page cannot stop a sidecar: a bound on a read, and
+- **F103 (high, fixed by [Serpe-nt/Kage#44](https://github.com/Serpe-nt/Kage/pull/44)):** a page cannot stop a sidecar: a bound on a read, and
   a restart when the sidecar does not answer; today a script that builds
   a DOM 3000 levels deep leaves Chromium at 100 % for good and every
   Chromium fetch `sidecar_error` until an operator restarts it
   (extract-02).
-- **F104 (high):** one normal form of a host: one trailing dot is the
+- **F104 (high, fixed by [Serpe-nt/Kage#43](https://github.com/Serpe-nt/Kage/pull/43)):** one normal form of a host: one trailing dot is the
   same site to the breaker, the cooldowns, the pace and the plain exit,
   and two or more are refused on every road (policy-01, ssrf-04).
-- **F105 (high):** `kage selftest browser --proxy` works on the shipped
+- **F105 (high, fixed by [Serpe-nt/Kage#44](https://github.com/Serpe-nt/Kage/pull/44)):** `kage selftest browser --proxy` works on the shipped
   compose or says it cannot, and a run that read no page is no pass
   (cli-02).
-- **F106 (high):** waiting synchronous fetches keep to
+- **F106 (high, fixed by [Serpe-nt/Kage#42](https://github.com/Serpe-nt/Kage/pull/42)):** waiting synchronous fetches keep to
   `domain_concurrency` and `visitor_wait` as a batch does, instead of
   recruiting every persona in turn (sched-01; D37, §8.2).
-- **F107 (high):** a batch sent during a pool outage is `paused` with
+- **F107 (high, fixed by [Serpe-nt/Kage#42](https://github.com/Serpe-nt/Kage/pull/42)):** a batch sent during a pool outage is `paused` with
   `no_persona` and resumes when the proxies return, not `failed` within
   two seconds (sched-04; §16.6).
-- **F108 (high):** an attempt that failed before the site had a say is
+- **F108 (high, fixed by [Serpe-nt/Kage#42](https://github.com/Serpe-nt/Kage/pull/42)):** an attempt that failed before the site had a say is
   the proxy's failure, not the site's: it counts nothing against the
   domain, the next attempt takes a healthy persona, and the reason says
   so (sched-05).
-- **F109 (high):** a cancel reaches a carried fetch and a job queued
+- **F109 (high, fixed by [Serpe-nt/Kage#42](https://github.com/Serpe-nt/Kage/pull/42)):** a cancel reaches a carried fetch and a job queued
   behind `jobs.max_running` at once, and a request whose job ended
   without it answers `200` with what ended it, not `202` (sched-07,
   jobs-07, jobs-03, auth-03).
@@ -1747,7 +1747,15 @@ order of severity (the report's "Proposed plan items" names the rows):
   synchronous fetch meets the 180 s wall first, while Firefox returns the
   same page in two seconds (found by the F97 session, 2026-10-31; F103 is
   the same page stopping the sidecar for good, and one bound may serve
-  both).
+  both; the bound is [Serpe-nt/Kage#44](https://github.com/Serpe-nt/Kage/pull/44)'s, 2026-11-03: where the renderer's stack
+  does not hold the page (a container with an 8 MB stack; GitHub's
+  runner renders it whole in seconds) the fetch ends typed and the page
+  costs one restart of the Chromium sidecar per attempt, and the cure
+  is the owner's to choose, measured by that session: a renderer
+  stack of 64 MiB in `chrome-affinity.sh`, after which a page can tell
+  the persona from a stock Chrome that shows "Aw, Snap!", or a
+  `pnpm patch` of patchright-core so that a crashed session throws, a
+  change of a fingerprint-critical package in a pull request of its own).
 - **F147 (medium):** the parse of a page is bounded in time as it is in
   bytes: html5ever's parse grows with the square of the nesting depth
   (5000 elements 31 ms, 20 000 479 ms, 200 000 77 s), so a page under
@@ -1795,10 +1803,75 @@ order of severity (the report's "Proposed plan items" names the rows):
   way at midnight UTC never ends, on the owner's machine and on GitHub's
   runners (the rerun of [Serpe-nt/Kage#39](https://github.com/Serpe-nt/Kage/pull/39) reached the stage at 00:08 UTC on
   2026-11-01 and was cancelled at 01:11; QA round one saw the same
-  locally); find what the day's turn stalls, a window or a budget keyed
-  on the UTC day, bound the suite, and say so in the CI runbook; until
-  then no gate, rerun or merge whose end-to-end stage runs between 22:00
-  and 00:30 UTC.
+  locally), and `tests/e2e/field.sh` fails at its second site whenever
+  that site's wall lands between 00:00 and about 01:11 UTC (the round B
+  scheduler session, 2026-11-03); find what the day's turn stalls, give
+  the end-to-end sites a window that ends a day on from the run or have
+  the runner read a pause past the day after a block as a block past the
+  site's day, bound the suite, and say so in the CI runbook; until then
+  no gate, rerun or merge whose end-to-end stage runs between 22:00 and
+  01:15 UTC.
+- **F155 (medium):** `GET /v1/jobs/{id}/items` shows the result of an
+  item that ended without its page, as `GET /v1/results/{id}` answers
+  `200` with what ended it since F109; today the list shows `null`
+  (the review of [Serpe-nt/Kage#42](https://github.com/Serpe-nt/Kage/pull/42)).
+- **F156 (low):** a job paused for the pool's return looks again at the
+  earliest end of a proxy's backoff, not every minute: today
+  `UNREADY_RECHECK` cycles the job through claim and release each
+  minute while a backoff can last an hour (F107, the review of
+  [Serpe-nt/Kage#42](https://github.com/Serpe-nt/Kage/pull/42)).
+- **F157 (medium):** a cancel ends a crawl's items a dead worker left
+  `running`, as it ends a batch's (requeued by the runner) and a flow's
+  (`end_flow`) since F109; a crawl's were not looked at (the F109
+  session).
+- **F158 (low):** the doc comment of `GET /v1/results/{id}` says
+  `pacing`, `behavior`, `console` and `side_effects` are null where
+  spec §16.5 says they are kept with the result (F36): one of the two is
+  out of date (the F109 session).
+- **F159 (medium):** an attempt through a proxy nobody listens on fails
+  within seconds: in the QA world the forwarder's connect to a stopped
+  proxy took 40 s (`proxies.connect_timeout`, or the name lookup of a
+  stopped container), and every attempt through a dead proxy costs that
+  long before it is `proxy_failed` (the F108 session).
+- **F160 (medium):** level 0 reads the two kinds of page it still reads
+  otherwise than levels 2 and 3 (spec §9, F100): a `<meta charset>` past
+  the first 1024 bytes, which a browser's tree builder still honours
+  while its guess is tentative (Chrome scans on in the head, Firefox
+  parses the page again), and an undeclared page in another legacy
+  encoding, which Chrome's detector names (Shift_JIS, GBK and others)
+  and level 0 reads as windows-1252: a scan on through the head and a
+  detector (the review of [Serpe-nt/Kage#43](https://github.com/Serpe-nt/Kage/pull/43)).
+- **F161 (low):** the two known differences of spec §9: a link's query
+  written in a legacy encoding is encoded as UTF-8 where a browser uses
+  the document's encoding, and the subresource emulation of level 1
+  reads an asset's URL from the HTML bytes as UTF-8 (the F100 session).
+- **F162 (medium):** a later site of a flow is booked its own server
+  errors: today `Planner::complete` records a leg's server errors for the
+  first domain only, so a later site's server-error pause never sees
+  them, and a flow that ends with no status at a later site is not
+  `shown_by` it, so its timeout or server-error courtesy goes to the
+  first domain (F101, the review of [Serpe-nt/Kage#44](https://github.com/Serpe-nt/Kage/pull/44)).
+- **F163 (low):** three nits of F101 and F102: `verdicts::saved_not_shown`
+  is used only by tests; `forwarder::Denials` keeps a bounded queue per
+  caller and never drops a caller (bounded by the number of personas);
+  the robots check of a later `goto` reads `policies().current()` at
+  gate time while `course.legs` holds the policy as of `begin` (the
+  review of [Serpe-nt/Kage#44](https://github.com/Serpe-nt/Kage/pull/44)).
+- **F164 (low):** the reading room's hand sometimes does not reach a link
+  already in view: in `tests/e2e/crawl.sh` the link on `/leave/` was
+  typed instead of clicked (`element_not_reachable` after two attempts,
+  `Human.reveal` giving up when a flick no longer moves `scrollY`) in
+  two of three gate runs of the round B browser session on the same
+  images, never on GitHub; find why a reveal flicks for an element in
+  view and what the hand does when the page cannot scroll further (the
+  round B browser session, 2026-11-03).
+- **F165 (low):** the executor's test
+  `only_a_proxy_that_failed_the_attempts_own_page_is_blamed` (F108,
+  [Serpe-nt/Kage#42](https://github.com/Serpe-nt/Kage/pull/42)) failed once in a targeted run of the round B browser session
+  and passed twenty-five times after: `dead_proxy()` frees a port and
+  treats it as one nobody listens on, and a test run beside it may take
+  that port; keep the port held, or listen and close every connection at
+  once (the round B browser session, 2026-11-03).
 
 The round did not reach level 1 (F30), `https` targets, a replacement
 that replaces, real-length timers, two servers on one database, DNS
@@ -1824,14 +1897,15 @@ its own on the PR workflow, with the owner's word for every merge:
    minimatch and glob alerts, by [Serpe-nt/Kage#40](https://github.com/Serpe-nt/Kage/pull/40)).
 2. **What QA round one found, the critical and the high first:** F96,
    F97 and F98 are fixed by [Serpe-nt/Kage#37](https://github.com/Serpe-nt/Kage/pull/37), [Serpe-nt/Kage#36](https://github.com/Serpe-nt/Kage/pull/36) and [Serpe-nt/Kage#35](https://github.com/Serpe-nt/Kage/pull/35)
-   (2026-10-31), F110 and F111 by [Serpe-nt/Kage#39](https://github.com/Serpe-nt/Kage/pull/39) (2026-11-02); then F99
-   to F109 in three sessions by area, each a pull request of its own,
-   started 2026-11-02: the scheduler (F106 to F109), the http path at
-   level 0 (F99, F100 and F104), the browsers and the sidecar (F101 to
-   F103 and F105); every fix keeps the report's reproduction as its
+   (2026-10-31), F110 and F111 by [Serpe-nt/Kage#39](https://github.com/Serpe-nt/Kage/pull/39) (2026-11-02), and F99
+   to F109 by three sessions by area, each a pull request of its own,
+   started 2026-11-02 and merged 2026-11-03 after a review of each: the
+   scheduler (F106 to F109, [Serpe-nt/Kage#42](https://github.com/Serpe-nt/Kage/pull/42)), the http path at level 0 (F99,
+   F100 and F104, [Serpe-nt/Kage#43](https://github.com/Serpe-nt/Kage/pull/43)), the browsers and the sidecar (F101 to F103
+   and F105, [Serpe-nt/Kage#44](https://github.com/Serpe-nt/Kage/pull/44)); every fix keeps the report's reproduction as its
    regression test, and the OpenAPI document and the runbooks move with
-   it. F146 to F154, what the fix sessions, the nightly and the merges
-   found, go with the area they belong to.
+   it. F146 to F165, what the fix sessions, their reviews, the nightly
+   and the merges found, go with the area they belong to.
 3. **What the field campaign found, the stealth items first:** F89 (the
    behaviour engine answers a consent dialog by hand before its first
    scroll, reject non-essential by default or accept where a site's policy
