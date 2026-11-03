@@ -1,0 +1,36 @@
+# The QA round's addition to the end-to-end world: a programmable responder
+# the agents can make any site out of (redirects, odd statuses, robots.txt,
+# sitemaps, headers, delays), reached by names only the proxies relay.
+services:
+  responder:
+    image: ${KAGE_BROWSER_CHROMIUM_IMAGE:-kage-browser-chromium:dev}
+    entrypoint: [node]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: "no"
+    init: true
+    mem_limit: 256m
+    cpus: 1
+    pids_limit: 128
+    volumes:
+      - /scripts/qa:/qa:ro
+    command: [/qa/responder.mjs, --port, "8091"]
+    networks:
+      default:
+        aliases: [qa.kage.test, other.qa.test]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8091/__log').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+  kage:
+    depends_on:
+      responder:
+        condition: service_healthy
+  proxy-a:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-a, --pass, e2e-only-a, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091"]
+  proxy-b:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-b, --pass, e2e-only-b, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091"]
+  proxy-c:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-c, --pass, e2e-only-c, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091"]

@@ -1,0 +1,124 @@
+# The ssrf topic's world of names (QA round two). Adds to a stack:
+#   dns      a programmable DNS server (/scripts/qa/infra/ssrf/dns.mjs) at
+#            ${SSRF_NET}.53 on a network of its own, "pubnet", whose
+#            addresses (${SSRF_NET}.0/24, default 11.66.1) are public to
+#            the guard but live on a bridge of the nested Docker: nothing
+#            sent there leaves the machine. Assigned public space on
+#            purpose: the guard refuses every reserved and documentation
+#            range, and these tests need a target the guard calls public.
+#            Run it only in the QA container with its egress dropped
+#            (tests/qa/README.md); never on a host with a route out.
+#   pubresp  a second responder (/scripts/qa/responder.mjs) at
+#            ${SSRF_NET}.10:8091, the "public" target a name may answer.
+#   udpcatch a UDP catcher (/scripts/qa/infra/ssrf/udpcatch.mjs) on the
+#            internal browsers network, a STUN server's ports, to see any
+#            UDP a browser sends around the proxy.
+# kage and the three proxies join pubnet at fixed addresses (.20, .21-.23)
+# and ask the dns service for every name Docker's own resolver does not
+# know (Docker's embedded resolver forwards those to it).
+# Start with:  stack.sh up NAME --overlay=/scripts/qa/infra/ssrf/overlay-dns.yaml SSRF_NET=11.66.1
+services:
+  dns:
+    image: ${KAGE_BROWSER_CHROMIUM_IMAGE:-kage-browser-chromium:dev}
+    entrypoint: [node]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
+    restart: "no"
+    init: true
+    mem_limit: 128m
+    volumes:
+      - /scripts/qa:/qa:ro
+    command: [/qa/infra/ssrf/dns.mjs, --port, "53", --control, "8053", --forward, "127.0.0.11"]
+    networks:
+      pubnet:
+        ipv4_address: ${SSRF_NET:-11.66.1}.53
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8053/__log').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+  pubresp:
+    image: ${KAGE_BROWSER_CHROMIUM_IMAGE:-kage-browser-chromium:dev}
+    entrypoint: [node]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: "no"
+    init: true
+    mem_limit: 128m
+    volumes:
+      - /scripts/qa:/qa:ro
+    command: [/qa/responder.mjs, --port, "8091"]
+    networks:
+      pubnet:
+        ipv4_address: ${SSRF_NET:-11.66.1}.10
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8091/__log').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+  udpcatch:
+    image: ${KAGE_BROWSER_CHROMIUM_IMAGE:-kage-browser-chromium:dev}
+    entrypoint: [node]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
+    restart: "no"
+    init: true
+    mem_limit: 128m
+    volumes:
+      - /scripts/qa:/qa:ro
+    command: [/qa/infra/ssrf/udpcatch.mjs, --ports, "3478,19302,5353", --control, "8054"]
+    networks: [browsers]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8054/').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+  kage:
+    dns:
+      - "${SSRF_NET:-11.66.1}.53"
+    networks:
+      default: {}
+      browsers: {}
+      pubnet:
+        ipv4_address: ${SSRF_NET:-11.66.1}.20
+    depends_on:
+      dns:
+        condition: service_healthy
+      pubresp:
+        condition: service_healthy
+  proxy-a:
+    dns:
+      - "${SSRF_NET:-11.66.1}.53"
+    networks:
+      default: {}
+      pubnet:
+        ipv4_address: ${SSRF_NET:-11.66.1}.21
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-a, --pass, e2e-only-a, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091,r01.rebind.test:8091,r02.rebind.test:8091,r03.rebind.test:8091,r04.rebind.test:8091,r05.rebind.test:8091,r06.rebind.test:8091,r07.rebind.test:8091,r08.rebind.test:8091,r09.rebind.test:8091,r10.rebind.test:8091,r11.rebind.test:8091,r12.rebind.test:8091,r13.rebind.test:8091,r14.rebind.test:8091,r15.rebind.test:8091,r16.rebind.test:8091,r17.rebind.test:8091,r18.rebind.test:8091,r19.rebind.test:8091,r20.rebind.test:8091,r21.rebind.test:8091,r22.rebind.test:8091,r23.rebind.test:8091,r24.rebind.test:8091,r25.rebind.test:8091,r26.rebind.test:8091,r27.rebind.test:8091,r28.rebind.test:8091,r29.rebind.test:8091,r30.rebind.test:8091,pub.rebind.test:8091,hook.rebind.test:8091,b01.brw.test:8091,b02.brw.test:8091,b03.brw.test:8091,b04.brw.test:8091,b05.brw.test:8091,b06.brw.test:8091,b07.brw.test:8091,b08.brw.test:8091,b09.brw.test:8091,b10.brw.test:8091,b11.brw.test:8091,b12.brw.test:8091,b13.brw.test:8091,b14.brw.test:8091,b15.brw.test:8091,b16.brw.test:8091,b17.brw.test:8091,b18.brw.test:8091,b19.brw.test:8091,b20.brw.test:8091"]
+  proxy-b:
+    dns:
+      - "${SSRF_NET:-11.66.1}.53"
+    networks:
+      default: {}
+      pubnet:
+        ipv4_address: ${SSRF_NET:-11.66.1}.22
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-b, --pass, e2e-only-b, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091,r01.rebind.test:8091,r02.rebind.test:8091,r03.rebind.test:8091,r04.rebind.test:8091,r05.rebind.test:8091,r06.rebind.test:8091,r07.rebind.test:8091,r08.rebind.test:8091,r09.rebind.test:8091,r10.rebind.test:8091,r11.rebind.test:8091,r12.rebind.test:8091,r13.rebind.test:8091,r14.rebind.test:8091,r15.rebind.test:8091,r16.rebind.test:8091,r17.rebind.test:8091,r18.rebind.test:8091,r19.rebind.test:8091,r20.rebind.test:8091,r21.rebind.test:8091,r22.rebind.test:8091,r23.rebind.test:8091,r24.rebind.test:8091,r25.rebind.test:8091,r26.rebind.test:8091,r27.rebind.test:8091,r28.rebind.test:8091,r29.rebind.test:8091,r30.rebind.test:8091,pub.rebind.test:8091,hook.rebind.test:8091,b01.brw.test:8091,b02.brw.test:8091,b03.brw.test:8091,b04.brw.test:8091,b05.brw.test:8091,b06.brw.test:8091,b07.brw.test:8091,b08.brw.test:8091,b09.brw.test:8091,b10.brw.test:8091,b11.brw.test:8091,b12.brw.test:8091,b13.brw.test:8091,b14.brw.test:8091,b15.brw.test:8091,b16.brw.test:8091,b17.brw.test:8091,b18.brw.test:8091,b19.brw.test:8091,b20.brw.test:8091"]
+  proxy-c:
+    dns:
+      - "${SSRF_NET:-11.66.1}.53"
+    networks:
+      default: {}
+      pubnet:
+        ipv4_address: ${SSRF_NET:-11.66.1}.23
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-c, --pass, e2e-only-c, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091,r01.rebind.test:8091,r02.rebind.test:8091,r03.rebind.test:8091,r04.rebind.test:8091,r05.rebind.test:8091,r06.rebind.test:8091,r07.rebind.test:8091,r08.rebind.test:8091,r09.rebind.test:8091,r10.rebind.test:8091,r11.rebind.test:8091,r12.rebind.test:8091,r13.rebind.test:8091,r14.rebind.test:8091,r15.rebind.test:8091,r16.rebind.test:8091,r17.rebind.test:8091,r18.rebind.test:8091,r19.rebind.test:8091,r20.rebind.test:8091,r21.rebind.test:8091,r22.rebind.test:8091,r23.rebind.test:8091,r24.rebind.test:8091,r25.rebind.test:8091,r26.rebind.test:8091,r27.rebind.test:8091,r28.rebind.test:8091,r29.rebind.test:8091,r30.rebind.test:8091,pub.rebind.test:8091,hook.rebind.test:8091,b01.brw.test:8091,b02.brw.test:8091,b03.brw.test:8091,b04.brw.test:8091,b05.brw.test:8091,b06.brw.test:8091,b07.brw.test:8091,b08.brw.test:8091,b09.brw.test:8091,b10.brw.test:8091,b11.brw.test:8091,b12.brw.test:8091,b13.brw.test:8091,b14.brw.test:8091,b15.brw.test:8091,b16.brw.test:8091,b17.brw.test:8091,b18.brw.test:8091,b19.brw.test:8091,b20.brw.test:8091"]
+networks:
+  pubnet:
+    ipam:
+      config:
+        - subnet: ${SSRF_NET:-11.66.1}.0/24

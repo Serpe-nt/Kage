@@ -1,0 +1,21 @@
+  # Added by the QA harness: the world's sites read at the pace of a test.
+  fixture.kage.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  lenient.kage.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  qa.kage.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  other.qa.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  wall.field.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore

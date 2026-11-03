@@ -1,0 +1,15 @@
+# QA round two, topic timers: real-length overlay. hooks fail every delivery (503);
+# the responder answers extra names *.timers.test that the proxies relay.
+services:
+  hooks:
+    command: [/e2e/world.mjs, hooks, --port, "8090", --secret, e2e-only-webhook-secret, --fail-first, "${TIMERS_HOOKS_FAIL:-100000}"]
+  responder:
+    networks:
+      default:
+        aliases: [qa.kage.test, other.qa.test, h1.timers.test, h2.timers.test, h3.timers.test, h4.timers.test, p1.timers.test, p2.timers.test, p3.timers.test, b1.timers.test, b2.timers.test, b3.timers.test, s1.timers.test, s2.timers.test, r1.timers.test, r2.timers.test, r3.timers.test, x1.timers.test, x2.timers.test, x3.timers.test, x4.timers.test, x5.timers.test]
+  proxy-a:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-a, --pass, e2e-only-a, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091,h1.timers.test:8091,h2.timers.test:8091,h3.timers.test:8091,h4.timers.test:8091,p1.timers.test:8091,p2.timers.test:8091,p3.timers.test:8091,b1.timers.test:8091,b2.timers.test:8091,b3.timers.test:8091,s1.timers.test:8091,s2.timers.test:8091,r1.timers.test:8091,r2.timers.test:8091,r3.timers.test:8091,x1.timers.test:8091,x2.timers.test:8091,x3.timers.test:8091,x4.timers.test:8091,x5.timers.test:8091"]
+  proxy-b:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-b, --pass, e2e-only-b, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091,h1.timers.test:8091,h2.timers.test:8091,h3.timers.test:8091,h4.timers.test:8091,p1.timers.test:8091,p2.timers.test:8091,p3.timers.test:8091,b1.timers.test:8091,b2.timers.test:8091,b3.timers.test:8091,s1.timers.test:8091,s2.timers.test:8091,r1.timers.test:8091,r2.timers.test:8091,r3.timers.test:8091,x1.timers.test:8091,x2.timers.test:8091,x3.timers.test:8091,x4.timers.test:8091,x5.timers.test:8091"]
+  proxy-c:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-c, --pass, e2e-only-c, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091,h1.timers.test:8091,h2.timers.test:8091,h3.timers.test:8091,h4.timers.test:8091,p1.timers.test:8091,p2.timers.test:8091,p3.timers.test:8091,b1.timers.test:8091,b2.timers.test:8091,b3.timers.test:8091,s1.timers.test:8091,s2.timers.test:8091,r1.timers.test:8091,r2.timers.test:8091,r3.timers.test:8091,x1.timers.test:8091,x2.timers.test:8091,x3.timers.test:8091,x4.timers.test:8091,x5.timers.test:8091"]

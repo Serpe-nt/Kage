@@ -1,0 +1,65 @@
+# QA round two, pool: a world of five proxies (the pool outage guard of
+# spec §7.3 needs a live pool of 4 or more), each with an exit address and
+# an ASN of its own as the health probe reads them (infra/pool/echo.mjs in
+# place of `world.mjs echo`), and nine more site names of the responder,
+# each a registrable domain of its own (pool1.test ... pool9.test).
+#
+#   exits: proxy-a 203.0.113.10 AS64501   proxy-b 203.0.113.20 AS64501
+#          proxy-c 198.51.100.30 AS64502  proxy-d 192.0.2.40 AS64501
+#          proxy-e 198.51.100.50 AS64503
+#
+# Use with infra/pool/stack.sh (QA_PERSONAS=5):
+#   bash /scripts/qa/infra/pool/stack.sh up NAME --overlay=/scripts/qa/infra/pool/five-proxies.yaml QA_PERSONAS=5
+x-allow: &allow "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091,pool1.test:8091,pool2.test:8091,pool3.test:8091,pool4.test:8091,pool5.test:8091,pool6.test:8091,pool7.test:8091,pool8.test:8091,pool9.test:8091"
+x-proxy: &proxy
+  image: ${KAGE_BROWSER_CHROMIUM_IMAGE:-kage-browser-chromium:dev}
+  entrypoint: [node]
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: "no"
+  init: true
+  mem_limit: 256m
+  cpus: 1
+  pids_limit: 128
+  volumes:
+    - /target/qa/kage/tests/e2e:/e2e:ro
+  healthcheck:
+    test: [CMD, node, -e, "fetch('http://127.0.0.1:3128/__stats').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+    interval: 3s
+    timeout: 3s
+    retries: 10
+services:
+  kage:
+    depends_on:
+      proxy-d:
+        condition: service_healthy
+      proxy-e:
+        condition: service_healthy
+    environment:
+      KAGE__PROXIES__STATIC_LIST: |
+        proxy-a:3128:provider-a:e2e-only-a:DE
+        proxy-b:3128:provider-b:e2e-only-b:DE
+        proxy-c:3128:provider-c:e2e-only-c:DE
+        proxy-d:3128:provider-d:e2e-only-d:DE
+        proxy-e:3128:provider-e:e2e-only-e:DE
+  world:
+    command: [/pool/echo.mjs, --port, "8089", --exits, "proxy-a=203.0.113.10|AS64501;proxy-b=203.0.113.20|AS64501;proxy-c=198.51.100.30|AS64502;proxy-d=192.0.2.40|AS64501;proxy-e=198.51.100.50|AS64503"]
+    volumes:
+      - /scripts/qa/infra/pool:/pool:ro
+  responder:
+    networks:
+      default:
+        aliases: [qa.kage.test, other.qa.test, pool1.test, pool2.test, pool3.test, pool4.test, pool5.test, pool6.test, pool7.test, pool8.test, pool9.test]
+  proxy-a:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-a, --pass, e2e-only-a, --allow, *allow]
+  proxy-b:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-b, --pass, e2e-only-b, --allow, *allow]
+  proxy-c:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-c, --pass, e2e-only-c, --allow, *allow]
+  proxy-d:
+    <<: *proxy
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-d, --pass, e2e-only-d, --allow, *allow]
+  proxy-e:
+    <<: *proxy
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-e, --pass, e2e-only-e, --allow, *allow]

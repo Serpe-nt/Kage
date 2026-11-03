@@ -1,0 +1,69 @@
+  # Added by the tls topic: its https names read at the pace of a test.
+  tls.kage.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  tls2.kage.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  secure.kage.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  expired.kage.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  wrongname.kage.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  unknownca.kage.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  selfsigned.kage.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  echo.tls.kage.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  www.tlsf1.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  www.tlsf2.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  www.tlsf3.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  www.tlsf4.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  www.tlsf5.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  www.tlsf6.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  www.tlsf7.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  www.tlsf8.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  www.tlsf9.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
