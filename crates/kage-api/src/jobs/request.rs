@@ -1276,8 +1276,11 @@ fn sites_allow(flow: &FlowJob, level: Level, site: &str, checks: Checks<'_>) -> 
     let mut here = site.to_owned();
     for (index, step) in flow.actions.iter().enumerate() {
         if let FlowStepField::Goto(goto) = step {
+            // The host in its normal form (F104), as the scheduler keys
+            // the flow's later sites.
             if let Some(host) = Url::parse(&goto.url)
                 .ok()
+                .map(|url| kage_core::urlnorm::normal_url(&url).unwrap_or(url))
                 .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
             {
                 here = host;
@@ -2144,6 +2147,18 @@ mod tests {
         let problem = denied.problem();
         assert_eq!(problem.extensions["step"], 2);
         assert_eq!(problem.extensions["site"], "shop.example");
+        // A site named with its root dot is that site (F104).
+        let dotted = json!({
+            "type": "flow",
+            "actions": [
+                { "action": "goto", "url": "https://open.example/" },
+                { "action": "goto", "url": "https://shop.example./" },
+                { "action": "click", "selector": "#a", "human": false },
+            ],
+        });
+        let denied = flow(dotted, &floors).await.unwrap_err();
+        assert_eq!(denied.code(), ErrorCode::DriverInputDenied);
+        assert_eq!(denied.problem().extensions["site"], "shop.example");
     }
 
     #[tokio::test]

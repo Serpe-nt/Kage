@@ -1780,7 +1780,10 @@ the DNS root that may end a fully qualified name is no part of it:
 (the policy, the breaker, the cooldowns, the pace, the daily cap, the
 visits, the scout, the plain exit, the cache, `robots_cache`, a crawl's
 frontier). The API's parsers and the pipeline put a request's URL in that
-form as it arrives, so it is stored and asked for without the dot, and a
+form as it arrives, so it is stored and asked for without the dot; the
+sites of a flow's `goto` steps and the site its last page showed are read
+in that form too (§10.5), so `pay.example.` is the later site
+`pay.example`, and `shop.example.` in a flow of `shop.example` none. A
 crawl asks for a link that has it without it. A name with an empty label
 (two or more dots at its end, one at its start, two in a row) names no
 host: the SSRF guard refuses it on every road (§19).

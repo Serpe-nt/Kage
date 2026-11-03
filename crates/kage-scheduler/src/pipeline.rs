@@ -624,7 +624,8 @@ pub fn attempt_seed(persona: &Seed, request: RequestId, n: u32) -> Seed {
 /// page arrived there (F101). A wall met there is that site's, and so is
 /// the page the persona read. `None` for a fetch, for a flow that ended on
 /// its own domain, and for an attempt that brought no site's page back
-/// (a refused hop, a failed connection).
+/// (a refused hop, a failed connection). The host is in its normal form
+/// (F104), as the request's domain and the flow's later sites are.
 fn shown_by(course: &Course, output: &AttemptOutput) -> Option<String> {
     if course.order.flow.is_none()
         || output.status.is_none()
@@ -632,8 +633,9 @@ fn shown_by(course: &Course, output: &AttemptOutput) -> Option<String> {
     {
         return None;
     }
-    let host = Url::parse(output.final_url.as_deref()?)
-        .ok()?
+    let ended = Url::parse(output.final_url.as_deref()?).ok()?;
+    let host = kage_core::urlnorm::normal_url(&ended)
+        .unwrap_or(ended)
         .host_str()?
         .to_ascii_lowercase();
     (host != course.domain).then_some(host)
@@ -658,8 +660,10 @@ fn countries_of(course: &Course) -> Option<Vec<CountryCode>> {
         })
 }
 
-/// Every address a flow's `goto` steps go to, in their order; none for a
-/// fetch. The first is the address the flow starts at, the order's own.
+/// Every address a flow's `goto` steps go to, in their order, each with
+/// its host in its normal form (F104: `pay.example.` is the site
+/// `pay.example`, as for the order's own address); none for a fetch. The
+/// first is the address the flow starts at, the order's own.
 pub(crate) fn flow_gotos(order: &FetchOrder) -> Vec<Url> {
     order
         .flow
@@ -669,6 +673,7 @@ pub(crate) fn flow_gotos(order: &FetchOrder) -> Vec<Url> {
             FlowAction::Goto { url, .. } => Url::parse(url).ok(),
             _ => None,
         })
+        .map(|url| kage_core::urlnorm::normal_url(&url).unwrap_or(url))
         .collect()
 }
 

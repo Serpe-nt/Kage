@@ -586,6 +586,52 @@ async fn a_flow_that_passed_a_half_open_site_and_came_back_closes_its_breaker() 
 }
 
 #[tokio::test]
+async fn a_later_site_named_with_its_root_dot_is_the_same_site() {
+    let mut lab = Lab::start(2, 149, BROWSER_FAST).await;
+    half_open_pay(&lab).await;
+    // F104 with F101: `pay.kage.test.` is the site `pay.kage.test`, and
+    // `shop.kage.test.` is the flow's own site, no later one.
+    let pay_dotted = |path: &str| format!("http://{PAY}.{path}");
+    let dotted = json!([
+        { "action": "goto", "url": site("/start") },
+        { "action": "goto", "url": pay_dotted("/checkout") },
+        { "action": "goto", "url": format!("http://{SITE}./done") },
+    ]);
+
+    let report = lab.pipeline.fetch(flow(&dotted)).await.unwrap();
+
+    // The flow was the other site's trial, and closed its breaker.
+    assert_eq!(report.outcome, Outcome::Ok, "{:?}", report.reason);
+    let breaker = lab.backend.facts(PAY).await.unwrap().breaker.unwrap();
+    assert_eq!(breaker.state, BreakerState::Closed);
+
+    // A wall met there, on the page of the dotted name, is that site's.
+    lab.chromium.with(|sidecar| {
+        sidecar
+            .next_flows
+            .push_back(json!({ "final": waf_block() }));
+    });
+    let walled = json!([
+        { "action": "goto", "url": site("/start") },
+        { "action": "goto", "url": pay_dotted("/checkout") },
+    ]);
+    let report = lab.pipeline.fetch(flow(&walled)).await.unwrap();
+    let blocked = report.attempts[0].persona_id.unwrap();
+    assert_eq!(report.attempts[0].outcome, Outcome::Forbidden);
+    let there = lab.backend.facts(PAY).await.unwrap();
+    assert!(there.states[&blocked].cooldown_until.is_some());
+    assert_eq!(lab.backend.facts(SITE).await.unwrap().breaker, None);
+
+    // Nothing is kept under a dotted name.
+    for name in [format!("{PAY}."), format!("{SITE}.")] {
+        let facts = lab.backend.facts(&name).await.unwrap();
+        assert_eq!(facts.breaker, None, "{name}");
+        assert!(facts.states.is_empty(), "{name}: {:?}", facts.states);
+    }
+    lab.shut_down().await;
+}
+
+#[tokio::test]
 async fn a_flow_that_ended_before_a_half_open_site_answered_gives_its_trial_back() {
     let mut lab = Lab::start(2, 149, BROWSER_FAST).await;
     half_open_pay(&lab).await;
