@@ -777,19 +777,21 @@ fn xhr_of(stored: Option<&Value>) -> Option<XhrView> {
 
 /// The bodies a page holds in memory.
 fn bodies_of_page(page: &PageResult) -> Bodies {
+    // The body is read in the encoding a browser takes for it, as the http
+    // path's and a stored result's are (F100): the sidecar sends bytes that
+    // happen to be UTF-8 as text and others as base64, which says nothing
+    // of what the page declared.
+    let content_type = page
+        .headers
+        .iter()
+        .find(|header| header.name.eq_ignore_ascii_case("content-type"))
+        .map(|header| header.value.as_str());
     let raw_body = page.raw_body.as_ref().and_then(|body| match body.encoding {
-        BodyEncoding::Utf8 => Some(body.data.clone()),
-        // Bytes that are not UTF-8: read in the encoding a browser took for
-        // them, as on the http path (F100).
+        BodyEncoding::Utf8 => kage_http::charset::text_of(content_type, body.data.as_bytes()),
         BodyEncoding::Base64 => {
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(body.data.as_bytes())
                 .ok()?;
-            let content_type = page
-                .headers
-                .iter()
-                .find(|header| header.name.eq_ignore_ascii_case("content-type"))
-                .map(|header| header.value.as_str());
             kage_http::charset::text_of(content_type, &bytes)
         }
     });

@@ -983,7 +983,7 @@ finished (F109).
 - **A body as text** (`kage_http::charset`, F100). The http path reads a
   body in the encoding a browser takes for it, as the Encoding Standard and
   the HTML standard decide it, so that levels 0 and 1 read what levels 2
-  and 3 read: a byte order mark first, which wins over any declaration;
+  and 3 read for a page that says what it is written in: a byte order mark first, which wins over any declaration;
   then the `charset` of `Content-Type`, read as an Encoding Standard label
   (`latin1` and `us-ascii` are windows-1252, `sjis` is Shift_JIS); then,
   for HTML or a body that does not say what it is, the `<meta charset>` or
@@ -998,7 +998,17 @@ finished (F109).
   that text; the bytes are stored as they came (`artifacts.raw_body`).
   A link's path is always UTF-8, percent-encoded, as a browser asks for
   it; a query written in a legacy encoding is encoded as UTF-8 too, where
-  a browser would use the document's encoding (a known difference).
+  a browser would use the document's encoding (a known difference). Two
+  more cases read otherwise than in a browser: a `<meta charset>` past
+  the first 1024 bytes (a long script or comment before it in the head),
+  which a browser still honours while its guess is tentative (Chrome
+  scans on, Firefox parses the page again) and level 0 does not see; and
+  a page that declares nothing and is in another legacy encoding, which
+  Chrome's detector names (Shift_JIS, GBK and others) and level 0 reads
+  as windows-1252. A cut `<meta>` declares nothing, as in a browser. A
+  body with no `Content-Type` is text when it begins as markup does, has
+  a byte order mark or is UTF-8 (MIME sniffing); `raw_body` is null for
+  other bytes.
 - **Subresource emulation** (`http.fetch_subresources`, default off): after
   a `200` HTML document fetched with GET, up to `http.subresources.max`
   (default 12) stylesheets, scripts and preloads of the document's own site,

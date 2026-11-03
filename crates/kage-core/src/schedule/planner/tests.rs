@@ -3723,3 +3723,61 @@ fn a_site_that_asks_for_a_delay_gets_it_between_two_pages_of_the_plain_client() 
     different.dedup();
     assert!(different.len() > 4, "{held:?}");
 }
+
+/// A site that asks for an hour between two pages does not hold a plain
+/// client's request in the queue past its patience: it is refused with the
+/// moment the floor ends, as a persona's would be, and one that may wait
+/// that long waits for it.
+#[test]
+fn a_plain_client_that_would_wait_past_its_patience_for_the_delay_is_refused_with_the_moment() {
+    let hour = StdDuration::from_hours(1);
+    let mut planner = Planner::new(rules(), Seed::from_u64(10));
+    planner.set_personas(Vec::new());
+    let floored = |give_up_at| Work {
+        gap_floor: Some(hour),
+        give_up_at,
+        ..plain("slow.example")
+    };
+    planner.submit(floored(None), noon());
+    let decisions = planner.plan(noon(), &facts_for(&["slow.example"]));
+    let [Decision::Plain(first)] = decisions.as_slice() else {
+        panic!("{decisions:?}");
+    };
+    planner.complete(
+        first.grant,
+        noon(),
+        Completion {
+            courtesy: Courtesy::Answered,
+            blocked: false,
+            proxy_failed: false,
+        },
+    );
+
+    let impatient = planner.submit(floored(Some(noon() + Duration::minutes(5))), noon());
+    let decisions = planner.plan(noon() + secs(1), &facts_for(&["slow.example"]));
+    let [
+        Decision::Refuse {
+            work,
+            reason,
+            retry_at: Some(retry_at),
+        },
+    ] = decisions.as_slice()
+    else {
+        panic!("{decisions:?}");
+    };
+    assert_eq!((*work, *reason), (impatient, Refusal::NoPersona));
+    assert!(*retry_at >= noon() + Duration::hours(1), "{retry_at}");
+    assert!(*retry_at <= noon() + Duration::minutes(72), "{retry_at}");
+
+    let patient = planner.submit(floored(Some(noon() + Duration::hours(2))), noon());
+    assert_eq!(
+        planner.plan(noon() + secs(2), &facts_for(&["slow.example"])),
+        []
+    );
+    assert_eq!(planner.wake_at(), Some(*retry_at));
+    let decisions = planner.plan(*retry_at, &facts_for(&["slow.example"]));
+    assert!(
+        matches!(decisions.as_slice(), [Decision::Plain(left)] if left.work == patient),
+        "{decisions:?}"
+    );
+}

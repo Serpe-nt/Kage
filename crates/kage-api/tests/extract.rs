@@ -1164,3 +1164,62 @@ async fn at_level_zero_the_plain_clients_files_are_read_and_its_pages_decoded() 
     work.stop().await;
     api.shut_down().await;
 }
+
+/// A browser's body says the same in the answer, in the stored result and
+/// at level 0 (F100): bytes that are UTF-8 under a header that says Latin-1
+/// (a server's default charset) are read as the header says, as the
+/// browser read them, though the sidecar sends them as text; bytes in
+/// Latin-1, which it sends as base64, are read as Latin-1.
+#[tokio::test]
+async fn a_browsers_body_reads_the_same_in_the_answer_and_in_the_stored_result() {
+    use base64::Engine as _;
+
+    let mut api = Api::start(3, 155, BROWSER_FAST).await;
+    let token = api.key(&[Scope::Fetch]).await;
+    let declared = json!([{ "name": "Content-Type", "value": "text/html; charset=iso-8859-1" }]);
+    let utf8 = "<!doctype html><title>Café</title>";
+    let latin1 =
+        base64::engine::general_purpose::STANDARD.encode(b"<!doctype html><title>Caf\xe9</title>");
+    api.lab.chromium.with(|sidecar| {
+        sidecar.pages.insert(
+            Api::url("/mislabelled"),
+            json!({
+                "title": "CafÃ©", "headers": declared, "dom_html": article("Cafe", &[]),
+                "raw_body": { "data": utf8, "encoding": "utf8", "bytes": utf8.len(), "truncated": false },
+            }),
+        );
+        sidecar.pages.insert(
+            Api::url("/latin"),
+            json!({
+                "title": "Café", "headers": declared, "dom_html": article("Cafe", &[]),
+                "raw_body": { "data": latin1, "encoding": "base64", "bytes": 34, "truncated": false },
+            }),
+        );
+    });
+    for level in [2, 3] {
+        for (at, expected) in [
+            ("/mislabelled", "<!doctype html><title>CafÃ©</title>"),
+            ("/latin", "<!doctype html><title>Café</title>"),
+        ] {
+            let mut asked = json!({ "url": Api::url(at), "level": level, "include": ["raw"], "max_retries": 0 });
+            if level == 3 {
+                asked["behavior"] = json!({ "scroll_depth": 0, "dwell_ms": 1000 });
+            }
+            let fresh = api.post(&token, "/v1/fetch", &asked).await.json();
+            assert_eq!(fresh["outcome"], "ok", "{fresh}");
+            assert_eq!(fresh["raw_body"], expected, "level {level} {at}: {fresh}");
+            let stored = api
+                .get(
+                    &token,
+                    &format!("/v1/results/{}", fresh["id"].as_str().unwrap()),
+                )
+                .await
+                .json();
+            assert_eq!(
+                stored["raw_body"], expected,
+                "level {level} {at}, stored: {stored}"
+            );
+        }
+    }
+    api.shut_down().await;
+}
