@@ -349,9 +349,14 @@ domains:
   ([levels-and-egress.md](levels-and-egress.md)). What is kept is the file
   as the site sent it, whoever asked: until F99 a file the plain client
   asked for first was kept empty for a day, and `enforce` let every page
-  of the origin through, at every level. A deployment that ran 2.0.1 with
-  `enforce` and level 0 should clear `robots_cache` once after the
-  upgrade (`DELETE FROM robots_cache WHERE body = ''`) or wait a day.
+  of the origin through, at every level. The upgrade to 2.0.2 clears
+  those rows once: its migration (`0019_robots_cache_empty_files`, run by
+  the compose stack's `migrate` service or `kage migrate`) deletes every
+  row that is a `2xx` with an empty body, so the scout asks for those
+  files again when a request needs them. It keeps every other row: a real
+  file, a `404` ("no file") and "unreachable". A site that does serve an
+  empty `robots.txt` is asked once more; nothing is left for the operator
+  to delete by hand.
 - The file is kept for about a day (`robots.ttl`) and asked for again
   only when a request needs it. A `404` is "no file": everything is
   allowed. A server error, a timeout or a block is "unreachable" for an

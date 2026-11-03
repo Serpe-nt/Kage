@@ -96,9 +96,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`http://localhost../`, `http://127.0.0.1../`) passed the SSRF guard on
   every road: `kage_core::urlnorm::normal_host` is the host's one normal
   form, one dot dropped where a request arrives and in every key, and the
-  guard refuses a name with an empty label. A deployment that ran 2.0.1
-  with `enforce` and level 0 should clear its empty `robots_cache` rows
-  once, or wait a day.
+  guard refuses a name with an empty label. The empty `robots_cache` rows
+  a deployment that ran 2.0.1 with `enforce` and level 0 may still hold
+  are cleared by the upgrade (below).
+
+- **The upgrade clears the empty `robots.txt` files 2.0.1 kept (F99).**
+  Migration `0019_robots_cache_empty_files` deletes, once, every
+  `robots_cache` row of the shape the bug wrote (a `2xx` status, an empty
+  body, not unreachable), so the site's scout asks for the file again when
+  a request needs it; a real file, a `404` and an unreachable answer stay.
+  An operator no longer clears the table by hand or waits a day.
 
 - **Flows meet every site's policy, one `ssrf_denied` for a refused
   target, a page cannot stop a sidecar, and the self-test of a proxy reads
