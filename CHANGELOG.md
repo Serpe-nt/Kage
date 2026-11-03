@@ -107,15 +107,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   of its own site as a fetch of that address would: its `min_level` at
   acceptance, its enforced `robots.txt`, its breaker, pacing and hours and
   the persona's state there; a `human: false` step is judged by the site of
-  its page, and a wall a flow meets at a later site is booked to that site
-  (spec §10.5). A page that moves itself or is redirected to a denied
-  address or scheme, in either engine, and a name `egress.mode: direct`
+  its page, a wall a flow meets at a later site is booked to that site, and
+  a later site's breaker trial ends with the flow (spec §10.5). A page that
+  moves itself, is redirected, or is left by a flow's click or way back for
+  a denied address or scheme, in either engine, and a name `egress.mode: direct`
   refuses for its address, at every level, end `ssrf_denied`, never retried
   and nothing kept, instead of `ok` on Chrome's error page or a retried
   `provider_error` (spec §19). Every read of a page is bounded (a page
   that stops answering ends as a `timeout` of its own, never as an empty
-  page that cools the persona), the sidecar's server bounds a navigation
-  and a flow and fails its health check while one does not end, and a watchdog ends a sidecar whose event
+  page that cools the persona, and a screenshot or PDF the page never
+  paints leaves no artifact and the same typed error), the sidecar's
+  server bounds a navigation and a flow within Kage's own wait and fails
+  its health check while one does not end, and a watchdog ends a sidecar whose event
   loop stopped answering (`SIDECAR_STALL_MS`, 30 s) so that compose starts
   it again: a page whose depth crashes Chrome's renderer and wedged the
   Chromium sidecar for good now costs one restart (spec §10.6; the cure of

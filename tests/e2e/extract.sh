@@ -166,10 +166,10 @@ ready
 personas="$(kage persona list --json)"
 check "both engines have a persona" "${personas}" "['chromium', 'firefox'].every((e) => d.personas.some((p) => p.engine === e))"
 
-echo "==> an operator's key, and a client's key that may fetch and crawl"
+echo "==> an operator's key, and a client's key that may fetch, crawl and keep a session"
 created="$(kage key create --name e2e-operator --scope admin --json)"
 admin="$(value "${created}" "d.token")"
-call POST /v1/admin/keys "${admin}" '{"name":"e2e-extract","scopes":["fetch","jobs","crawl"],"requests_per_minute":600,"max_concurrent":16}'
+call POST /v1/admin/keys "${admin}" '{"name":"e2e-extract","scopes":["fetch","jobs","crawl","sessions"],"requests_per_minute":600,"max_concurrent":16}'
 expect 201 "POST /v1/admin/keys"
 client="$(value "${body}" "d.token")"
 
@@ -286,6 +286,9 @@ sidecar_restarts() {
 sidecar_health() {
     docker inspect --format '{{.State.Health.Status}}' "${chromium}"
 }
+sidecar_started() {
+    docker inspect --format '{{.State.StartedAt}}' "${chromium}"
+}
 # chromium_serves <what>: a Chromium persona reads a page of the site.
 chromium_serves() {
     call POST /v1/fetch "${client}" "{\"url\":\"${site}/landing?f103=$1\",\"level\":2,\"timeout_ms\":30000,\"persona\":{\"engines\":[\"chromium\"]}}"
@@ -307,19 +310,56 @@ chromium_serves "after a page that stopped answering"
 # stack and crashes, and the driver (patchright 1.63.0) can spin on the
 # crash without end (QA round one, extract-02). The fetch ends, the
 # sidecar's watchdog ends a process that stopped answering so that compose
-# starts it again, and Chromium serves again: no operator is needed.
+# starts it again, and Chromium serves again: no operator is needed. One
+# persona, pinned by a session, reads a page before and after: its profile
+# opens again on its volume after the kill.
+session="f103-$$"
+call POST /v1/sessions "${client}" "{\"id\":\"${session}\",\"persona\":{\"engines\":[\"chromium\"]},\"domain\":\"fixture.kage.test\"}"
+expect 201 "a session for the deep page"
+pinned="$(value "${body}" "d.persona.id")"
+call POST /v1/fetch "${client}" "{\"url\":\"${site}/landing?f103=before\",\"level\":2,\"session_id\":\"${session}\",\"timeout_ms\":30000}"
+expect 200 "the session's first page"
+check "the session's Chromium persona read its first page" "${body}" "d.outcome === 'ok' && d.persona.id === '${pinned}'"
+restarts_before="$(sidecar_restarts)"
+started_before="$(sidecar_started)"
 began="$(date +%s)"
-call POST /v1/fetch "${client}" "{\"url\":\"${site}/deep?depth=3000\",\"level\":2,\"max_retries\":0,\"timeout_ms\":20000,\"persona\":{\"engines\":[\"chromium\"]}}"
-case "${status}" in 200 | 202) ;; *) fail "the deep page: status ${status}: ${body}" ;; esac
-deep="$(value "${body}" "d.outcome || d.state")"
+call POST /v1/fetch "${client}" "{\"url\":\"${site}/deep?depth=3000\",\"level\":2,\"session_id\":\"${session}\",\"max_retries\":0,\"timeout_ms\":20000}"
+expect 200 "the deep page"
+deep="$(value "${body}" "d.outcome + ' (' + (d.reason || '-') + ')'")"
+deep_took="$(( $(date +%s) - began )) s"
+# Nothing of the page is kept. When the driver spun, the sidecar died under
+# the request (`provider_error`, `sidecar_error`) and was started again
+# once; when the crash only cut the engine's reads, the request ended typed
+# and nothing restarted. Either way within the request's own bound.
+check "the deep page ended as a failure of its own, with nothing of the page" "${body}" \
+    "d.outcome !== 'ok' && !d.dom_html && d.persona !== null && d.persona.id === '${pinned}'"
+if [ "$(value "${body}" "d.reason === 'sidecar_error' ? 'died' : 'lived'")" = died ]; then
+    restarts_wanted=$(( restarts_before + 1 ))
+    # Wait for compose to start the killed sidecar (its start time moves and
+    # its restart count goes up), then for its health check: a stale
+    # `healthy` of the old process is not taken for the new one.
+    for _ in $(seq 1 60); do
+        [ "$(sidecar_restarts)" -ge "${restarts_wanted}" ] && [ "$(sidecar_started)" != "${started_before}" ] && break
+        sleep 2
+    done
+    [ "$(sidecar_started)" != "${started_before}" ] || fail "the Chromium sidecar was not started again"
+else
+    restarts_wanted="${restarts_before}"
+fi
 for _ in $(seq 1 60); do
     [ "$(sidecar_health)" = healthy ] && break
     sleep 3
 done
 [ "$(sidecar_health)" = healthy ] || fail "the Chromium sidecar did not answer again: $(sidecar_health)"
+[ "$(sidecar_restarts)" = "${restarts_wanted}" ] \
+    || fail "the Chromium sidecar restarted $(( $(sidecar_restarts) - restarts_before )) times for one page, not $(( restarts_wanted - restarts_before ))"
+call POST /v1/fetch "${client}" "{\"url\":\"${site}/landing?f103=after\",\"level\":2,\"session_id\":\"${session}\",\"timeout_ms\":30000}"
+expect 200 "the session's page after the deep one"
+check "the same persona read a page again, its profile opened again" "${body}" \
+    "d.outcome === 'ok' && d.persona.id === '${pinned}' && !!d.dom_html"
 chromium_serves "after a page that crashed its renderer"
 restarts_kage="$(docker inspect --format '{{.RestartCount}}' "$("${compose[@]}" ps --quiet kage)")"
 [ "${restarts_kage}" = 0 ] || fail "the kage container restarted ${restarts_kage} times"
-echo "    a page that stopped answering: timeout after ${spun}; a page 3000 deep: ${deep} after $(( $(date +%s) - began )) s, the sidecar restarted $(( $(sidecar_restarts) - restarts_before )) time(s) and serves again"
+echo "    a page that stopped answering: timeout after ${spun}; a page 3000 deep: ${deep} after ${deep_took}, the sidecar restarted $(( $(sidecar_restarts) - restarts_before )) time(s); ${pinned} read a page again"
 
 echo "extract test passed"
