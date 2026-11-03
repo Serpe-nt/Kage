@@ -715,6 +715,14 @@ direct` it, and the admin probe, refuse: the pool is idle (F68).
 `kage config check` prints the endpoints in force
 (`proxies.health_endpoints`).
 
+An attempt that failed at a proxy (`proxy_failed`, §8.3) is reported to
+the pool (`Pool::report_traffic_failed`), and the proxy's next probe comes
+at the health checker's next turn; the probe decides the proxy's state as
+any probe does. The scheduler's own setting aside of the persona for 5
+minutes (§8.2) is not lifted by a healthy probe, only by an answered attempt
+of the persona or by the end of the 5 minutes: a proxy that answers the
+echo may still fail the persona's traffic, and the time is short.
+
 ### 7.5 The forwarder and the bandwidth budget
 
 **Forwarder (follow-up F10).** `kage serve` runs one HTTP proxy of its own
@@ -814,8 +822,11 @@ proxy in backoff, a persona cooling or not warmed up) is refused
 `no_persona` with `retry_at` a minute on, and a job waits it out (F107);
 work no persona could ever take is refused without one. A persona whose
 attempt failed at its proxy leaves its visit and, for 5 minutes or until
-an attempt of it is answered, is taken only when no other persona could
-take the work (F108).
+an attempt of it is answered, is set aside for another persona that could
+start before those 5 minutes end; one cooling after a block, at its daily
+cap or asleep is no such other, and the persona is taken. Work that waits
+for another looks again when the 5 minutes end (F108). A healthy probe of
+the proxy does not end them (§7.4).
 Score = country preference match (+3) + no visit to this domain in the last
 hour (+2) + low load (+1) + previous `ok` on this domain (+1); an awake
 persona is always taken before a sleeping one (`active_hours: prefer`);
@@ -838,13 +849,17 @@ Cooldown = `Cooldowns::resolve(outcome, class)` × confidence, at least
 status). Three 5xx or timeouts in a row from one domain pause it for 30 s,
 doubling to 10 min, with no cooldown and no breaker count. An attempt that
 failed before the site had a say counts nothing toward that row and ends
-none: a proxy that could not be reached, refused the tunnel or may not be
-used is `provider_error` with the reason `proxy_failed`, retried on another
-persona. A browser's plain `http://` request that the forwarder had to
-close for want of the persona's proxy fails in the browser as if the site
-did not answer (`navigation_failed`, a timeout); the forwarder notes every
-connection it could not relay for its route, and an attempt that got no
-answer while that happened is the proxy's (F108). The pool is told, and
+none: a proxy that could not be reached, did not answer, refused the
+provider's credential (`407`) or may not be used is `provider_error` with
+the reason `proxy_failed`, retried on another persona. A browser's plain
+`http://` request that the forwarder had to close for want of the
+persona's proxy fails in the browser as if the site did not answer
+(`navigation_failed`, a timeout); the forwarder notes each connection whose
+proxy failed by caller and by target host and port, and an attempt that got
+no answer while that happened to its own page (its address, a redirect it
+followed, where it ended) is the proxy's (F108). A proxy's own refusal of a
+tunnel (a `502` or `504` for a target it could not reach), a third party's
+host on the page and a client that went away are never the proxy's. The pool is told, and
 the proxy is probed at the health checker's next turn. Circuit breaker
 per domain: if `block_count_1h` over all personas ≥
 `policy.breaker_threshold` (default 5), the domain is `paused` for

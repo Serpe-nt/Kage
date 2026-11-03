@@ -141,6 +141,10 @@ pub(super) struct Call {
     file: Url,
     need: ScoutNeed,
     give_up_at: Option<DateTime<Utc>>,
+    /// Whether a job's fetch waits for the file: the scout's request is
+    /// then a job's too, deferred by what only says "not now" and given
+    /// back at a stop, as the fetch is.
+    job: bool,
     overflowed: Option<Arc<AtomicBool>>,
 }
 
@@ -400,6 +404,7 @@ impl Pipeline {
         let mut scouting = self
             .begin(RequestId::new(), order, call.give_up_at, None)
             .await?;
+        scouting.job = call.job;
         scouting.overflowed.clone_from(&call.overflowed);
         let asked = match Box::pin(self.run(scouting, stop.cloned())).await? {
             Ran::Stopped => Asked::Stopped,
@@ -510,6 +515,7 @@ impl Pipeline {
             file: robots::file_of(url)?,
             need,
             give_up_at: None,
+            job: false,
             overflowed: None,
         })
     }
@@ -598,6 +604,7 @@ impl Pipeline {
             known
         } else {
             call.give_up_at = course.give_up_at;
+            call.job = course.job;
             call.overflowed.clone_from(&course.overflowed);
             match self.ask(&call, stop).await? {
                 Asked::Known(known) => known,

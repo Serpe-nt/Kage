@@ -338,8 +338,11 @@ seat='{"custom":{"gap_ms":{"dist":"uniform","min":60000,"max":60000},"burst_page
 lenient='http://lenient.kage.test:8088'
 call POST /v1/fetch "${client}" "{\"url\":\"${lenient}/slow?ms=10&n=seat-1\",\"level\":2,\"pacing\":${seat}}"
 # A browser that opens for the first time may take longer than the wall
-# time: then the page is read as a job, and its result is waited for.
+# time: then the page is read as a job, and its result is waited for. The
+# step leaves one job of the key, the second page's, or two.
+seat_jobs=1
 if [ "${status}" = 202 ]; then
+    seat_jobs=2
     first_request="$(value "${body}" "d.id")"
     for _ in $(seq 1 60); do
         call GET "/v1/results/${first_request}" "${client}"
@@ -374,12 +377,13 @@ echo "    request ${waiting_request}: 202 with job ${waiting_job}, cancelled in 
 
 echo "==> an admin purges everything the key fetched; it is on the audit log"
 before="$(psql "SELECT count(*) FROM requests WHERE api_key_id = '${client_id}'")"
-jobs_before="$(psql "SELECT count(*) FROM jobs WHERE api_key_id = '${client_id}'")"
+# Five jobs of the steps above, and those of the step of one seat.
+jobs_of_key=$((5 + seat_jobs))
 call POST /v1/admin/purge "${client}" "{\"key_id\":\"${client_id}\"}"
 problem 403 scope_missing "a purge by a key that is no admin's"
 call POST /v1/admin/purge "${admin}" "{\"key_id\":\"${client_id}\"}"
 expect 200 "POST /v1/admin/purge"
-check "the key's jobs and results went" "${body}" "d.jobs === ${jobs_before} && d.requests === ${before} && d.artifacts >= 50"
+check "the key's jobs and results went" "${body}" "d.jobs === ${jobs_of_key} && d.requests === ${before} && d.artifacts >= 50"
 purged="${body}"
 left="$(psql "SELECT (SELECT count(*) FROM requests WHERE api_key_id = '${client_id}') + (SELECT count(*) FROM jobs WHERE api_key_id = '${client_id}') + (SELECT count(*) FROM artifacts a JOIN requests r ON r.id = a.request_id WHERE r.api_key_id = '${client_id}')")"
 [ "${left}" -eq 0 ] || fail "${left} rows of the key are left after the purge"
@@ -390,7 +394,7 @@ problem 404 result_not_found "a purged result"
 call GET '/v1/admin/audit?limit=50' "${admin}"
 expect 200 "GET /v1/admin/audit"
 check "the purge is on the audit log with what went" "${body}" \
-    "d.events.some((e) => e.action === 'admin.data.purge' && e.outcome === 'success' && e.target === '${client_id}' && e.details.result.jobs === ${jobs_before}) && d.events.some((e) => e.action === 'admin.data.purge' && e.outcome === 'denied')"
+    "d.events.some((e) => e.action === 'admin.data.purge' && e.outcome === 'success' && e.target === '${client_id}' && e.details.result.jobs === ${jobs_of_key}) && d.events.some((e) => e.action === 'admin.data.purge' && e.outcome === 'denied')"
 echo "    ${purged}"
 
 echo "jobs test passed"

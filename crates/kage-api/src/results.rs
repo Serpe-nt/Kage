@@ -24,8 +24,8 @@ use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
 use chrono::Duration as Span;
 use kage_core::domain::{
-    Artifact, ArtifactEncoding, ArtifactKind, FetchRecord, JobItem, RequestRecord, Scope,
-    SessionId, Visit,
+    Artifact, ArtifactEncoding, ArtifactKind, FetchRecord, JobItem, JobItemState, RequestRecord,
+    Scope, SessionId, Visit,
 };
 use kage_core::ids::{ArtifactId, RequestId, ResultId};
 use kage_core::outcome::Outcome;
@@ -118,13 +118,19 @@ pub(crate) async fn bodies(
     Ok(bodies)
 }
 
-/// What a request whose job item ended without a stored result came to:
-/// the item's end, with nothing of a page. The worker ends such a request
-/// with the item; this answers one it could not (a server that was killed
-/// between the two, or a request of a release before F109).
-fn ended_with(item: &JobItem, request: RequestId) -> FetchRecord {
-    FetchRecord {
-        id: ResultId::new(),
+/// What a request whose job item ended without a page and without a
+/// stored result came to: the item's end, with nothing of a page; `None`
+/// for an item that is still open or succeeded, whose result is still to
+/// be stored. The worker ends such a request with the item; this answers
+/// one it could not (a server that was killed between the two, or a
+/// request of a release before F109). Its id is the item's, so that every
+/// read names the same result.
+fn ended_with(item: &JobItem, request: RequestId) -> Option<FetchRecord> {
+    if !item.state.is_terminal() || item.state == JobItemState::Succeeded {
+        return None;
+    }
+    Some(FetchRecord {
+        id: ResultId::from_uuid(item.id.as_uuid()),
         request_id: request,
         outcome: item.outcome.unwrap_or(Outcome::ProviderError),
         status: None,
@@ -146,7 +152,7 @@ fn ended_with(item: &JobItem, request: RequestId) -> FetchRecord {
             .finished_at
             .or(item.started_at)
             .unwrap_or(item.created_at),
-    }
+    })
 }
 
 /// The result of a fetch, by the request's id.
@@ -186,35 +192,23 @@ pub(crate) async fn result(
         .get_by_request(id)
         .await
         .map_err(|error| ApiError::internal(&error))?;
-    let record = match record {
-        Some(record) => Some(record),
-        // A request whose item ended without a result has ended with it
-        // (F109): it is not running.
-        None => match request.job_id {
-            Some(_) => state
-                .store()
-                .job_items()
-                .find_by_request(id)
-                .await
-                .map_err(|error| ApiError::internal(&error))?
-                .filter(|item| item.state.is_terminal())
-                .map(|item| ended_with(&item, id)),
-            None => None,
-        },
+    // The job's item of a request that has no result yet.
+    let item = match (&record, request.job_id) {
+        (None, Some(_)) => state
+            .store()
+            .job_items()
+            .find_by_request(id)
+            .await
+            .map_err(|error| ApiError::internal(&error))?,
+        _ => None,
     };
+    // A request whose item ended without a result has ended with it
+    // (F109): it is not running.
+    let record = record.or_else(|| item.as_ref().and_then(|item| ended_with(item, id)));
     let Some(record) = record else {
         // A request a job has still to finish is running however long it
         // takes: the job waits for a paused site, for its visitor, for a
         // restart of the server.
-        let item = match request.job_id {
-            Some(_) => state
-                .store()
-                .job_items()
-                .find_by_request(id)
-                .await
-                .map_err(|error| ApiError::internal(&error))?,
-            None => None,
-        };
         let carried = item.as_ref().filter(|item| !item.state.is_terminal());
         let age = state.clock().now() - request.created_at;
         if carried.is_none() && age > Span::minutes(LOST_AFTER_MINUTES) {

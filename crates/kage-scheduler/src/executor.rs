@@ -898,6 +898,43 @@ fn blame_the_proxy(mut output: AttemptOutput, unrelayed: bool) -> AttemptOutput 
     output
 }
 
+/// The hosts and ports an attempt asked for itself: its page, the
+/// redirects it followed and where it ended. A third party's host the page
+/// loaded something from is none of them.
+fn targets_of(url: &Url, output: &AttemptOutput) -> Vec<(String, u16)> {
+    let hops = output
+        .redirects
+        .iter()
+        .chain(output.final_url.iter())
+        .filter_map(|hop| Url::parse(hop).ok());
+    std::iter::once(url.clone())
+        .chain(hops)
+        .filter_map(|url| {
+            let host = url.host_str()?.to_ascii_lowercase();
+            Some((host, url.port_or_known_default()?))
+        })
+        .collect()
+}
+
+/// Whose failure an attempt of `caller` for `url` that began at `started`
+/// was: the proxy's (`blame_the_proxy`) when the forwarder noted, while it
+/// ran, that the proxy failed a connection of `caller` to one of the
+/// attempt's own targets (`targets_of`).
+fn whose_failure(
+    meter: Option<&Meter>,
+    output: AttemptOutput,
+    caller: Caller,
+    url: &Url,
+    started: tokio::time::Instant,
+) -> AttemptOutput {
+    let unrelayed = meter.is_some_and(|meter| {
+        let targets = targets_of(url, &output);
+        let targets = targets.iter().map(|(host, port)| (host.as_str(), *port));
+        meter.unrelayed_since(caller, targets, started)
+    });
+    blame_the_proxy(output, unrelayed)
+}
+
 /// How a failure of the persona's own plumbing is named.
 fn plumbing(error: &PersonaError) -> (&'static str, bool) {
     match error {
@@ -1019,23 +1056,20 @@ impl PathExecutor {
     }
 
     /// Whose failure an attempt that got no answer from the site was: the
-    /// proxy's, when the forwarder could not relay the caller's connection
-    /// for a reason of its route while the attempt ran (F108). A browser
-    /// told a plain `http://` request that the forwarder had to close
-    /// without an answer reports `navigation_failed`, as for a site that
-    /// does not answer. The pool is told, so that the proxy is probed now.
+    /// proxy's, when the forwarder could not relay a connection of the
+    /// caller to the attempt's own page because the proxy failed while the
+    /// attempt ran (F108, `whose_failure`). A browser told a plain
+    /// `http://` request that the forwarder had to close without an answer
+    /// reports `navigation_failed`, as for a site that does not answer.
+    /// The pool is told, so that the proxy is probed now.
     fn whose(
         &self,
         output: AttemptOutput,
-        caller: Caller,
+        (caller, url): (Caller, &Url),
         proxy: Option<ProxyId>,
         started: tokio::time::Instant,
     ) -> AttemptOutput {
-        let unrelayed = self
-            .meter
-            .as_ref()
-            .is_some_and(|meter| meter.unrelayed_since(caller, started));
-        let output = blame_the_proxy(output, unrelayed);
+        let output = whose_failure(self.meter.as_deref(), output, caller, url, started);
         if output.reason.as_deref() == Some(PROXY_FAILED)
             && let Some(proxy) = proxy
         {
@@ -1486,7 +1520,7 @@ impl AttemptExecutor for PathExecutor {
         };
         self.whose(
             output,
-            Caller::Persona(job.persona.id),
+            (Caller::Persona(job.persona.id), &job.url),
             Some(job.persona.proxy_id),
             started,
         )
@@ -1501,7 +1535,7 @@ impl AttemptExecutor for PathExecutor {
             PlainRoute::Pool(proxy) => Some(proxy),
             PlainRoute::Host => None,
         };
-        self.whose(output, Caller::Plain(job.route), proxy, started)
+        self.whose(output, (Caller::Plain(job.route), &job.url), proxy, started)
     }
 }
 
@@ -1522,8 +1556,220 @@ mod tests {
 
     use super::{
         AttemptOutput, BehaviorWish, PathExecutor, Reached, behavior_for, blame_the_proxy,
-        draw_dwell, entry_from, origin_of, reached_of,
+        draw_dwell, entry_from, origin_of, reached_of, whose_failure,
     };
+
+    /// The real path of F108: a forwarder on loopback in front of one
+    /// proxy per persona, its meter, and `whose_failure`.
+    mod at_the_proxy {
+        use std::collections::HashSet;
+        use std::net::SocketAddr;
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        use async_trait::async_trait;
+        use base64::Engine as _;
+        use kage_core::domain::{ProxyEndpoint, ProxyScheme};
+        use kage_core::ids::{PersonaId, ProxyId};
+        use kage_core::outcome::Outcome;
+        use kage_core::schedule::politeness::Courtesy;
+        use kage_core::secret::Secret;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::{TcpListener, TcpStream};
+        use url::Url;
+
+        use super::{AttemptOutput, whose_failure};
+        use crate::forwarder::{
+            Caller, Forwarder, ForwarderSettings, PlainRoute, RouteRefusal, Routes, SystemResolver,
+            Tokens, Upstream,
+        };
+
+        const KEY: [u8; 32] = [9; 32];
+
+        /// Persona `dead` leaves through a proxy nobody listens on;
+        /// persona `refusing` through one that answers every tunnel `502`,
+        /// as a proxy that cannot reach the target does.
+        #[derive(Debug)]
+        struct Two {
+            dead: (PersonaId, ProxyEndpoint),
+            refusing: (PersonaId, ProxyEndpoint),
+        }
+
+        #[async_trait]
+        impl Routes for Two {
+            async fn upstream(&self, persona: PersonaId) -> Result<Upstream, RouteRefusal> {
+                [&self.dead, &self.refusing]
+                    .into_iter()
+                    .find(|(one, _)| *one == persona)
+                    .map(|(_, endpoint)| Upstream::Proxy(endpoint.clone()))
+                    .ok_or(RouteRefusal::UnknownPersona)
+            }
+
+            async fn plain(&self, _: PlainRoute) -> Result<Upstream, RouteRefusal> {
+                Err(RouteRefusal::NotConfigured)
+            }
+        }
+
+        fn endpoint(at: SocketAddr) -> ProxyEndpoint {
+            ProxyEndpoint {
+                id: ProxyId::new(),
+                host: at.ip().to_string(),
+                port: at.port(),
+                username: Secret::new("user"),
+                password: Secret::new("pass"),
+                scheme: ProxyScheme::Http,
+            }
+        }
+
+        /// A proxy that reads each request head and answers `502`.
+        async fn refusing_proxy() -> SocketAddr {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let at = listener.local_addr().unwrap();
+            tokio::spawn(async move {
+                while let Ok((mut stream, _)) = listener.accept().await {
+                    tokio::spawn(async move {
+                        let mut head = Vec::new();
+                        let mut byte = [0_u8; 1];
+                        while !head.ends_with(b"\r\n\r\n") {
+                            match stream.read(&mut byte).await {
+                                Ok(1) => head.push(byte[0]),
+                                _ => return,
+                            }
+                        }
+                        let _ = stream
+                            .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+                            .await;
+                    });
+                }
+            });
+            at
+        }
+
+        /// An address nobody listens on.
+        async fn dead_proxy() -> SocketAddr {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            listener.local_addr().unwrap()
+        }
+
+        /// Sends `head` through the forwarder as `persona` and reads
+        /// whatever comes back until the forwarder closes.
+        async fn ask(forwarder: &Forwarder, persona: PersonaId, head: &str) -> String {
+            let tokens = Tokens::new(&KEY);
+            let credential = base64::engine::general_purpose::STANDARD
+                .encode(format!("{persona}:{}", tokens.token(persona)));
+            let mut client = TcpStream::connect(forwarder.local_addr()).await.unwrap();
+            let request = head.replace(
+                "\r\n\r\n",
+                &format!("\r\nProxy-Authorization: Basic {credential}\r\n\r\n"),
+            );
+            client.write_all(request.as_bytes()).await.unwrap();
+            let mut answer = Vec::new();
+            let _ =
+                tokio::time::timeout(Duration::from_secs(5), client.read_to_end(&mut answer)).await;
+            String::from_utf8_lossy(&answer).into_owned()
+        }
+
+        fn unanswered(outcome: Outcome, reason: &str) -> AttemptOutput {
+            AttemptOutput::failed(outcome, reason, Courtesy::ServerError)
+        }
+
+        #[tokio::test]
+        async fn only_a_proxy_that_failed_the_attempts_own_page_is_blamed() {
+            let (dead, refusing) = (PersonaId::new(), PersonaId::new());
+            let routes = Arc::new(Two {
+                dead: (dead, endpoint(dead_proxy().await)),
+                refusing: (refusing, endpoint(refusing_proxy().await)),
+            });
+            let settings = ForwarderSettings {
+                advertised: ("kage".to_owned(), 0),
+                connect_timeout: Duration::from_secs(2),
+                idle_timeout: Duration::from_secs(5),
+                max_connections: 16,
+                operator_hosts: HashSet::new(),
+                private_names: HashSet::new(),
+                resolver: Arc::new(SystemResolver),
+            };
+            let (forwarder, listener) = Forwarder::bind(
+                "127.0.0.1:0".parse().unwrap(),
+                settings,
+                Tokens::new(&KEY),
+                routes,
+            )
+            .await
+            .unwrap();
+            let serving =
+                tokio::spawn(Arc::clone(&forwarder).serve(listener, std::future::pending::<()>()));
+            let meter = Arc::clone(forwarder.meter());
+            let page = Url::parse("http://shop.kage.test/a").unwrap();
+            let secure = Url::parse("https://shop.kage.test/a").unwrap();
+
+            // The true positive: the page's plain request reached no proxy,
+            // and the forwarder closed it without an answer.
+            let started = tokio::time::Instant::now();
+            let answer = ask(
+                &forwarder,
+                dead,
+                "GET http://shop.kage.test/a HTTP/1.1\r\nHost: shop.kage.test\r\n\r\n",
+            )
+            .await;
+            assert_eq!(answer, "");
+            let output = whose_failure(
+                Some(&meter),
+                unanswered(Outcome::ProviderError, "navigation_failed"),
+                Caller::Persona(dead),
+                &page,
+                started,
+            );
+            assert_eq!(output.reason.as_deref(), Some("proxy_failed"));
+            assert_eq!(output.courtesy, Courtesy::NotTheSite);
+            // Its page on another host is not blamed for it.
+            let other = Url::parse("http://other.kage.test/").unwrap();
+            let output = whose_failure(
+                Some(&meter),
+                unanswered(Outcome::Timeout, "timeout"),
+                Caller::Persona(dead),
+                &other,
+                started,
+            );
+            assert_eq!(output.reason.as_deref(), Some("timeout"));
+            assert_eq!(output.courtesy, Courtesy::ServerError);
+
+            // The false positive: the proxy answered a tunnel to a third
+            // party's host, and to the page's own, with `502`. The page timed
+            // out: that is the site's, not the proxy's.
+            let started = tokio::time::Instant::now();
+            for authority in ["cdn.kage.test:443", "shop.kage.test:443"] {
+                let answer = ask(
+                    &forwarder,
+                    refusing,
+                    &format!("CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n\r\n"),
+                )
+                .await;
+                assert!(answer.starts_with("HTTP/1.1 502"), "{answer}");
+            }
+            for url in [&page, &secure] {
+                let output = whose_failure(
+                    Some(&meter),
+                    unanswered(Outcome::Timeout, "timeout"),
+                    Caller::Persona(refusing),
+                    url,
+                    started,
+                );
+                assert_eq!(output.reason.as_deref(), Some("timeout"), "{url}");
+                assert_eq!(output.courtesy, Courtesy::ServerError, "{url}");
+            }
+            // And another persona's failure is never this one's.
+            let output = whose_failure(
+                Some(&meter),
+                unanswered(Outcome::ProviderError, "navigation_failed"),
+                Caller::Persona(refusing),
+                &page,
+                started,
+            );
+            assert_eq!(output.reason.as_deref(), Some("navigation_failed"));
+            serving.abort();
+        }
+    }
 
     fn policy(yaml: &str) -> EffectivePolicy {
         DomainPolicies::from_yaml(yaml)
