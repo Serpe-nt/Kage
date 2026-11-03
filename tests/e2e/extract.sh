@@ -27,9 +27,9 @@
 #     /sitemap.xml, by the same scout, and counts what it left out;
 #   - the series of /metrics;
 #   - a page cannot stop a sidecar (F103): a page that stops answering ends
-#     as a timeout of its own in Chromium, and a page whose depth crashes
-#     Chrome's renderer leaves the Chromium sidecar serving again without
-#     an operator.
+#     as a timeout of its own in Chromium, and a page whose depth may crash
+#     Chrome's renderer is rendered whole, ends typed, or costs one restart
+#     of the Chromium sidecar, after which the same persona reads again.
 #
 # The requests are made by a TypeScript client that was generated from the
 # API's OpenAPI document (tests/api-client).
@@ -306,8 +306,8 @@ check "it ended as a timeout, with nothing of the page" "${body}" "d.outcome ===
 spun="$(( $(date +%s) - began )) s"
 chromium_serves "after a page that stopped answering"
 [ "$(sidecar_restarts)" = "${restarts_before}" ] || fail "the sidecar restarted for a page that only stopped answering"
-# A page whose script nests 3000 elements: Chrome's renderer runs out of
-# stack and crashes, and the driver (patchright 1.63.0) can spin on the
+# A page whose script nests 3000 elements: where Chrome's renderer runs out
+# of stack it crashes, and the driver (patchright 1.63.0) can spin on the
 # crash without end (QA round one, extract-02). The fetch ends, the
 # sidecar's watchdog ends a process that stopped answering so that compose
 # starts it again, and Chromium serves again: no operator is needed. One
@@ -327,13 +327,32 @@ call POST /v1/fetch "${client}" "{\"url\":\"${site}/deep?depth=3000\",\"level\":
 expect 200 "the deep page"
 deep="$(value "${body}" "d.outcome + ' (' + (d.reason || '-') + ')'")"
 deep_took="$(( $(date +%s) - began )) s"
-# Nothing of the page is kept. When the driver spun, the sidecar died under
-# the request (`provider_error`, `sidecar_error`) and was started again
-# once; when the crash only cut the engine's reads, the request ended typed
-# and nothing restarted. Either way within the request's own bound.
-check "the deep page ended as a failure of its own, with nothing of the page" "${body}" \
-    "d.outcome !== 'ok' && !d.dom_html && d.persona !== null && d.persona.id === '${pinned}'"
-if [ "$(value "${body}" "d.reason === 'sidecar_error' ? 'died' : 'lived'")" = died ]; then
+# Three endings, by the machine: whether the renderer's stack holds the
+# page depends on the host (on GitHub's runner Chromium renders it in a few
+# seconds, run 41575014404; in a container with an 8 MB stack it crashes).
+#   rendered: `ok` with the document, by the pinned persona, no restart;
+#   died:     the driver spun on the crash and the watchdog ended the
+#             sidecar (`provider_error`, `sidecar_error`): nothing of the
+#             page, exactly one restart;
+#   cut:      the crash cut the engine's reads (`timeout`,
+#             `navigation_failed`, ...): nothing of the page, no restart.
+# In every case the same persona reads the next page.
+ending="$(value "${body}" "d.outcome === 'ok' ? 'rendered' : d.reason === 'sidecar_error' ? 'died' : 'cut'")"
+case "${ending}" in
+    rendered)
+        check "the deep page was rendered whole by the session's persona" "${body}" \
+            "d.outcome === 'ok' && d.status === 200 && typeof d.dom_html === 'string' && d.dom_html.includes('<title>Deep ') && d.persona.id === '${pinned}'"
+        ;;
+    died)
+        check "the deep page ended with the sidecar that died under it, and nothing of the page" "${body}" \
+            "d.outcome === 'provider_error' && d.reason === 'sidecar_error' && !d.dom_html && d.persona.id === '${pinned}'"
+        ;;
+    *)
+        check "the deep page ended as a typed failure of its own, with nothing of the page" "${body}" \
+            "d.outcome !== 'ok' && typeof d.outcome === 'string' && d.reason !== 'sidecar_error' && !d.dom_html && d.persona.id === '${pinned}'"
+        ;;
+esac
+if [ "${ending}" = died ]; then
     restarts_wanted=$(( restarts_before + 1 ))
     # Wait for compose to start the killed sidecar (its start time moves and
     # its restart count goes up), then for its health check: a stale
@@ -360,6 +379,6 @@ check "the same persona read a page again, its profile opened again" "${body}" \
 chromium_serves "after a page that crashed its renderer"
 restarts_kage="$(docker inspect --format '{{.RestartCount}}' "$("${compose[@]}" ps --quiet kage)")"
 [ "${restarts_kage}" = 0 ] || fail "the kage container restarted ${restarts_kage} times"
-echo "    a page that stopped answering: timeout after ${spun}; a page 3000 deep: ${deep} after ${deep_took}, the sidecar restarted $(( $(sidecar_restarts) - restarts_before )) time(s); ${pinned} read a page again"
+echo "    a page that stopped answering: timeout after ${spun}; a page 3000 deep: ${ending}, ${deep} after ${deep_took}, the sidecar restarted $(( $(sidecar_restarts) - restarts_before )) time(s); ${pinned} read a page again"
 
 echo "extract test passed"
