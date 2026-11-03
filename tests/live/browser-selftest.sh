@@ -155,11 +155,19 @@ export KAGE__PROXIES__PROVIDER=webshare
 # This check must never spend a replacement. Nothing it runs requests one;
 # a budget of zero makes that impossible as well.
 export KAGE__PROXIES__REPLACEMENTS_PER_MONTH=0
-# The stand-in's browser leaves through a forwarder of the command's own,
-# on a free port of this machine (F105): the sidecar reaches it at the
-# address of its host on Docker's bridge, and never holds the provider's
-# credentials.
-export KAGE__FORWARDER__BIND=0.0.0.0:8899
+# The stand-in's browser leaves through a forwarder of the command's own
+# (F105): the sidecar reaches it at the address of its host on Docker's
+# bridge (`host-gateway`, which on Docker Engine is the bridge's gateway),
+# and never holds the provider's credentials. The forwarder listens on that
+# address only, not on every interface of the machine; every request to it
+# carries the sidecar's token besides. KAGE_LIVE_FORWARDER_BIND names
+# another address where the bridge's gateway is not the host's (Docker
+# Desktop).
+bridge_gateway="$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}' 2> /dev/null || true)"
+forwarder_bind="${KAGE_LIVE_FORWARDER_BIND:-${bridge_gateway}}"
+[ -n "${forwarder_bind}" ] \
+    || fail "the address of Docker's bridge is unknown: set KAGE_LIVE_FORWARDER_BIND to the address the sidecar reaches this machine at"
+export KAGE__FORWARDER__BIND="${forwarder_bind}:8899"
 export KAGE__FORWARDER__ADVERTISE=http://host.docker.internal:8899
 # The configuration is the defaults plus the environment, whatever file the
 # caller's shell points at.

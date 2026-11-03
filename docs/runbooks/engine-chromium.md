@@ -247,8 +247,18 @@ names the host it is told (`kage` on the compose network; the bound port
 replaces the advertised one), and a sidecar run outside compose needs a
 name for the machine the command runs on (the live suite starts its
 sidecar with `--add-host host.docker.internal:host-gateway` and sets
-`KAGE__FORWARDER__ADVERTISE=http://host.docker.internal:8899`). Every run
-is an audit event (`selftest.browser`).
+`KAGE__FORWARDER__ADVERTISE=http://host.docker.internal:8899`, and binds
+the forwarder to the address of Docker's bridge only). Every run is an
+audit event (`selftest.browser`).
+
+Through the forwarder the stand-in's pages pass the SSRF guard as every
+persona's do. The operator's own test pages may live on a private
+address: the forwarder relays those it knows, the hosts of
+`selftest.browser.pages` and of `selftest.http.echo_url` in kage's
+configuration. A page only the sidecar knows (`SIDECAR_SELFTEST_PROBE_URL`,
+`SIDECAR_SELFTEST_ECHO_URL`, the pages a request names none for) on a
+private or loopback address is refused, and the run says it read no page:
+list such pages in `selftest.browser.pages` as well.
 
 A run that read none of its pages tested nothing: the table ends
 `INCONCLUSIVE: no page could be read, so nothing was tested`, the JSON
@@ -331,6 +341,15 @@ a second or two. Curing the crash itself (a larger renderer stack, which a
 page could tell from a stock Chrome's crash, or a driver that does not spin
 on a crash, which is a change of a pinned package) is F146's, and the
 owner's to decide.
+
+An operation that outlasted the server's bound is answered `internal` and
+its context closed. If it still has not ended a minute later (the driver
+never settles what it waited for on the closed browser), the health check
+fails and, `SIDECAR_STALL_MS` after that, the server ends itself: one such
+operation restarts the whole sidecar, every context of it included, as the
+watchdog's kill does. Both restarts keep the personas' profiles on their
+volume; the end-to-end suite checks that a persona pinned by a session
+reads a page again after one.
 
 What to look at: `docker inspect --format '{{.RestartCount}}'` of the
 sidecar's container, and the line of level 60 just before each restart in

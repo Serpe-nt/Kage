@@ -1491,7 +1491,12 @@ before it, has `driver_input: true`. A wall met inside a flow is judged as
 a wall and booked to the site that showed it: the persona cools down there,
 that site's breaker counts it, its window is closed, and another persona
 runs the script again from its first step inside the retry budget; the
-flow's first site is booked the page it served. A step that failed on a page that is no wall
+flow's first site is booked the page it served. A later site's trial the
+flow took ends with the attempt whatever site the flow ended on: a flow
+that came to what it asked for closes that site's breaker, since the site
+answered every page it was asked for; one that ended otherwise gives the
+trial back, so that the next request is the trial at once rather than
+after the trial's timeout. A step that failed on a page that is no wall
 is the script's failure (`flow_step_failed`) and is not tried again,
 unless the page did not arrive at all (a timeout, a failed connection). A
 flow in a session is never moved to another persona.
@@ -1524,8 +1529,9 @@ left in the table.
 
 **A page cannot stop a sidecar (F103).** Every read of a page (its title,
 text, document, links, a measurement of the behavior engine, a
-screenshot) is bounded: a renderer that crashed cuts the reads under way
-at once, and a read that takes longer than 10 s (`READ_LIMIT_MS`) marks the
+screenshot, a PDF) is bounded: a renderer that crashed cuts the reads under way
+at once, and a read that takes longer than 10 s (`READ_LIMIT_MS`; 20 s for
+a screenshot or a PDF, which paint the whole page) marks the
 page as one that does not answer. Every later read of it fails at once, the
 request ends with a typed error (`navigation_failed` for a crash,
 `timeout` otherwise), nothing of the page is kept, and the next request
@@ -1533,8 +1539,12 @@ takes a fresh tab whatever it names. Kage judges no soft block on a page of
 which nothing was read, though its response said 200: the failure is what
 the attempt came to, and another persona is not kept from the site for it. The server bounds a navigation by its
 own times (reaching the page, its patience, its dwell, as Kage's bound
-counts them) and a flow by its budget, each with a slack of 25 s that
-Kage's own wait outlasts: past it the request is answered `internal`, and
+counts them) with a slack of 25 s, and a flow by its budget with a slack
+of 10 s; Kage's own wait outlasts each by at least 5 s (its client waits a
+navigation 30 s past those times, its executor a flow 20 s past its
+budget, and a test on each side reads the other's number), so the typed
+answer comes first and a retry never finds the context busy. Past the
+bound the request is answered `internal`, and
 the context is closed, which ends the browser the operation hangs on. An
 operation that has not ended a minute after that makes the health check
 fail, and after `SIDECAR_STALL_MS` (default 30 s; 0 never) more the
@@ -2835,13 +2845,18 @@ are gzip-compressed on disk.
   `chrome-error://chromewebdata/` or another page of the browser's own, and
   nothing of such a page is kept: so a page that moves itself to a denied
   address (a meta refresh, a script, a form) and a redirect to a denied
-  address or scheme are `ssrf_denied` in both engines (F102).
+  address or scheme are `ssrf_denied` in both engines (F102). In a flow, a
+  click or the way back that leaves for an address the browser could not
+  load ends the step `navigation_failed` with that address, and a `goto`
+  after a driver's click that no pace watched does the same: the flow ends
+  where the tab was sent, and that is its last page.
 - **One outcome for a refusal (F102).** The forwarder keeps what the guard
   refused, per caller: a target refused by name or range, and under
   `egress.mode: direct` a name refused for one of its addresses. An
   attempt that failed because the forwarder refused the address it went to
-  (its target or a hop: the addresses the plain client asked for, the
-  hosts of a navigation's chain) ends `ssrf_denied`, never retried, nothing
+  (its target or a hop: the addresses the plain client or the persona's
+  http client asked for, the hosts of a navigation's chain, of a flow's
+  pages and its `goto` steps) ends `ssrf_denied`, never retried, nothing
   of it kept, whatever its client made of the refusal (a browser shows a
   failed connection, a plain client fails to connect). A name that does
   not resolve is a failed network, not a refusal.
