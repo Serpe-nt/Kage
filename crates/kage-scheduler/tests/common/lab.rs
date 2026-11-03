@@ -171,6 +171,16 @@ pub fn article(title: &str) -> String {
     )
 }
 
+/// Something a test does once, when the next flow is asked for: after the
+/// attempt is under way and before the sidecar answers it.
+pub struct OnFlow(pub Box<dyn FnOnce() + Send>);
+
+impl std::fmt::Debug for OnFlow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("OnFlow")
+    }
+}
+
 /// What a mock sidecar was asked, and what it answers.
 #[derive(Debug)]
 pub struct SidecarState {
@@ -213,6 +223,8 @@ pub struct SidecarState {
     pub next_flows: VecDeque<Value>,
     /// How long the next flows take to answer.
     pub flow_delay: Option<Duration>,
+    /// Run when the next flow is asked for, then dropped.
+    pub on_flow: Option<OnFlow>,
     pub exported: Vec<Value>,
     pub imported: Vec<Value>,
     /// Self-tests that were asked for.
@@ -426,6 +438,9 @@ impl SidecarResponder {
     /// capture the page the flow is on. One line per step, then the final
     /// one.
     fn flow(state: &mut SidecarState, context: &str, body: Value) -> ResponseTemplate {
+        if let Some(OnFlow(hook)) = state.on_flow.take() {
+            hook();
+        }
         // A flow starts in a fresh tab and leaves it nobody's (F96).
         state.tabs.remove(context);
         state.tab_names.insert(context.to_owned(), None);
@@ -629,6 +644,7 @@ impl MockSidecar {
             flows: Vec::new(),
             next_flows: VecDeque::new(),
             flow_delay: None,
+            on_flow: None,
             exported: Vec::new(),
             imported: Vec::new(),
             selftested: Vec::new(),
