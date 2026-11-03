@@ -1,0 +1,9 @@
+  # Added by the left agent (QA round two).
+  l1.left.test: { robots: enforce, pacing: fast, min_dwell: 500ms, active_hours: ignore }
+  l2.left.test: { robots: enforce, pacing: fast, min_dwell: 500ms, active_hours: ignore }
+  l3.left.test: { pacing: fast, min_dwell: 500ms, active_hours: ignore }
+  l4.left.test: { pacing: fast, min_dwell: 500ms, active_hours: ignore }
+  l5.left.test: { pacing: fast, min_dwell: 500ms, active_hours: ignore }
+  l6.left.test: { pacing: fast, min_dwell: 500ms, active_hours: ignore }
+  l7.left.test: { pacing: fast, min_dwell: 500ms, active_hours: ignore }
+  l8.left.test: { pacing: fast, min_dwell: 500ms, active_hours: ignore }

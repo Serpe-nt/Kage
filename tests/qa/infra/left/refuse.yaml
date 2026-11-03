@@ -1,0 +1,13 @@
+# QA round two, left: the responder also answers l1..l8.left.test and the three e2e proxies relay them.
+# Use at up: stack.sh up NAME --overlay=/scripts/qa/infra/left/refuse.yaml (proxy-b relays nothing to qa.kage.test, l7, l8: 403)
+services:
+  responder:
+    networks:
+      default:
+        aliases: [qa.kage.test, other.qa.test, l1.left.test, l2.left.test, l3.left.test, l4.left.test, l5.left.test, l6.left.test, l7.left.test, l8.left.test]
+  proxy-a:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-a, --pass, e2e-only-a, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091,l1.left.test:8091,l2.left.test:8091,l3.left.test:8091,l4.left.test:8091,l5.left.test:8091,l6.left.test:8091,l7.left.test:8091,l8.left.test:8091"]
+  proxy-b:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-b, --pass, e2e-only-b, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,other.qa.test:8091,l1.left.test:8091,l2.left.test:8091,l3.left.test:8091,l4.left.test:8091,l5.left.test:8091,l6.left.test:8091"]
+  proxy-c:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-c, --pass, e2e-only-c, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091,l1.left.test:8091,l2.left.test:8091,l3.left.test:8091,l4.left.test:8091,l5.left.test:8091,l6.left.test:8091,l7.left.test:8091,l8.left.test:8091"]

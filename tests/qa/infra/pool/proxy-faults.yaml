@@ -1,0 +1,13 @@
+# QA round two, pool: proxies of the e2e world that fail in the ways F108
+# names (spec §8.3): proxy-a and proxy-c refuse the provider's credential
+# (they expect another password: every request is answered 407), proxy-b
+# relays nothing to qa.kage.test (a CONNECT or a request for it is answered
+# 403 by the proxy). Copy into /target/qa/runs/NAME/overlay-09.yaml and run
+# `stack.sh dc NAME up --detach proxy-a proxy-b proxy-c`.
+services:
+  proxy-a:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-a, --pass, not-the-listed-password, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091"]
+  proxy-b:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-b, --pass, e2e-only-b, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,other.qa.test:8091"]
+  proxy-c:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-c, --pass, not-the-listed-password, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091"]

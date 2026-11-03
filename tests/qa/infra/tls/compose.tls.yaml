@@ -1,0 +1,71 @@
+# QA round two, topic tls: the world's https side, added to a stack with
+#   stack.sh up NAME --overlay=/scripts/qa/infra/tls/compose.tls.yaml
+# after `bash /scripts/qa/infra/tls/mkcerts.sh` (once).
+#
+#   tlsworld   tlsworld.mjs: https on 443 (certificate by SNI: good, expired,
+#              wrong name, unknown CA, self-signed), the same responder on
+#              plain http 80, and secure.kage.test:443 as a TLS front of
+#              the fixture site
+#   echo-tls   `kage echo serve` (the product's own fingerprint echo) on
+#              echo.tls.kage.test:8443 with the good certificate
+#   proxies    the three relay the new name:port pairs as well
+#   kage       has the private CA at /run/qa/ca.pem (read-only); nothing
+#              uses it until the stack is started with
+#              KAGE__SELFTEST__HTTP__ECHO_CA_FILE=/run/qa/ca.pem
+services:
+  tlsworld:
+    image: ${KAGE_BROWSER_CHROMIUM_IMAGE:-kage-browser-chromium:dev}
+    entrypoint: [node]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: "no"
+    init: true
+    mem_limit: 256m
+    cpus: 1
+    pids_limit: 128
+    # Ports below 1024 without a capability.
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
+    volumes:
+      - /scripts/qa/infra/tls:/qa/infra/tls:ro
+    command: [/qa/infra/tls/tlsworld.mjs, --certs, /qa/infra/tls/certs, --https-port, "443", --http-port, "80", --fixture, "fixture:8088"]
+    networks:
+      default:
+        aliases: [tls.kage.test, tls2.kage.test, secure.kage.test, expired.kage.test, wrongname.kage.test, unknownca.kage.test, selfsigned.kage.test, www.tlsf1.test, www.tlsf2.test, www.tlsf3.test, www.tlsf4.test, www.tlsf5.test, www.tlsf6.test, www.tlsf7.test, www.tlsf8.test, www.tlsf9.test]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:80/__log').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+  echo-tls:
+    image: ${KAGE_IMAGE:-kage:dev}
+    entrypoint: [/usr/local/bin/kage]
+    command: [echo, serve, --bind, "0.0.0.0:8443", --cert, /qa/certs/good.pem, --key, /qa/certs/good.key]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: "no"
+    mem_limit: 128m
+    healthcheck:
+      # The image's own check probes the API server, which this is not.
+      disable: true
+    volumes:
+      - /scripts/qa/infra/tls/certs:/qa/certs:ro
+    networks:
+      default:
+        aliases: [echo.tls.kage.test]
+  kage:
+    depends_on:
+      tlsworld:
+        condition: service_healthy
+      echo-tls:
+        condition: service_started
+    volumes:
+      - /scripts/qa/infra/tls/certs/ca.pem:/run/qa/ca.pem:ro
+  proxy-a:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-a, --pass, e2e-only-a, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091,tls.kage.test:443,tls.kage.test:80,tls2.kage.test:443,tls2.kage.test:80,secure.kage.test:443,expired.kage.test:443,wrongname.kage.test:443,unknownca.kage.test:443,selfsigned.kage.test:443,echo.tls.kage.test:8443,www.tlsf1.test:443,www.tlsf1.test:80,www.tlsf2.test:443,www.tlsf2.test:80,www.tlsf3.test:443,www.tlsf3.test:80,www.tlsf4.test:443,www.tlsf4.test:80,www.tlsf5.test:443,www.tlsf5.test:80,www.tlsf6.test:443,www.tlsf6.test:80,www.tlsf7.test:443,www.tlsf7.test:80,www.tlsf8.test:443,www.tlsf8.test:80,www.tlsf9.test:443,www.tlsf9.test:80"]
+  proxy-b:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-b, --pass, e2e-only-b, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091,tls.kage.test:443,tls.kage.test:80,tls2.kage.test:443,tls2.kage.test:80,secure.kage.test:443,expired.kage.test:443,wrongname.kage.test:443,unknownca.kage.test:443,selfsigned.kage.test:443,echo.tls.kage.test:8443,www.tlsf1.test:443,www.tlsf1.test:80,www.tlsf2.test:443,www.tlsf2.test:80,www.tlsf3.test:443,www.tlsf3.test:80,www.tlsf4.test:443,www.tlsf4.test:80,www.tlsf5.test:443,www.tlsf5.test:80,www.tlsf6.test:443,www.tlsf6.test:80,www.tlsf7.test:443,www.tlsf7.test:80,www.tlsf8.test:443,www.tlsf8.test:80,www.tlsf9.test:443,www.tlsf9.test:80"]
+  proxy-c:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-c, --pass, e2e-only-c, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091,tls.kage.test:443,tls.kage.test:80,tls2.kage.test:443,tls2.kage.test:80,secure.kage.test:443,expired.kage.test:443,wrongname.kage.test:443,unknownca.kage.test:443,selfsigned.kage.test:443,echo.tls.kage.test:8443,www.tlsf1.test:443,www.tlsf1.test:80,www.tlsf2.test:443,www.tlsf2.test:80,www.tlsf3.test:443,www.tlsf3.test:80,www.tlsf4.test:443,www.tlsf4.test:80,www.tlsf5.test:443,www.tlsf5.test:80,www.tlsf6.test:443,www.tlsf6.test:80,www.tlsf7.test:443,www.tlsf7.test:80,www.tlsf8.test:443,www.tlsf8.test:80,www.tlsf9.test:443,www.tlsf9.test:80"]

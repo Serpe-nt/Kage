@@ -1,0 +1,37 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>webrtc probe</title></head>
+<body>
+<h1>WebRTC probe</h1>
+<pre id="out">gathering</pre>
+<script>
+// The ssrf topic's WebRTC probe: gathers ICE candidates against the STUN
+// servers named in the query (?stun=host:port,host:port) and writes every
+// candidate, raw, into the page, then posts them back to its own origin.
+(async () => {
+  const q = new URLSearchParams(location.search);
+  const stun = (q.get('stun') || '').split(',').filter(Boolean).map((s) => ({ urls: 'stun:' + s }));
+  const found = [];
+  const errors = [];
+  const finish = (why) => {
+    if (document.body.dataset.done) return;
+    const report = { why, ua: navigator.userAgent, stun, candidates: found, errors };
+    document.getElementById('out').textContent = 'WEBRTC-REPORT ' + JSON.stringify(report);
+    document.body.dataset.done = '1';
+    try { fetch(location.pathname + '-report', { method: 'POST', body: JSON.stringify(report) }); } catch (e) {}
+  };
+  try {
+    const pc = new RTCPeerConnection({ iceServers: stun });
+    pc.onicecandidate = (e) => { if (e.candidate) found.push(e.candidate.candidate); else finish('complete'); };
+    pc.onicecandidateerror = (e) => errors.push(String(e.errorCode) + ' ' + (e.url || '') + ' ' + (e.errorText || ''));
+    pc.createDataChannel('x');
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    found.push('SDP-C-LINES:' + (pc.localDescription.sdp.match(/^c=.*$/gm) || []).join('|'));
+    setTimeout(() => finish('timeout'), 6000);
+  } catch (e) {
+    errors.push('throw ' + e);
+    finish('error');
+  }
+})();
+</script>
+</body></html>

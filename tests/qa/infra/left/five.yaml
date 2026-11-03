@@ -1,0 +1,18 @@
+# QA round two, left: on top of infra/pool/five-proxies.yaml, the responder also answers l1..l8.left.test;
+# every one of the five proxies relays l1..l7 and refuses l8.left.test (403 to CONNECT and to a request).
+# Use: pool/stack.sh up NAME --overlay=/scripts/qa/infra/pool/five-proxies.yaml --overlay=/scripts/qa/infra/left/five.yaml QA_PERSONAS=5
+services:
+  responder:
+    networks:
+      default:
+        aliases: [qa.kage.test, other.qa.test, pool1.test, pool2.test, pool3.test, pool4.test, pool5.test, pool6.test, pool7.test, pool8.test, pool9.test, l1.left.test, l2.left.test, l3.left.test, l4.left.test, l5.left.test, l6.left.test, l7.left.test, l8.left.test]
+  proxy-a:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-a, --pass, e2e-only-a, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091,pool1.test:8091,pool2.test:8091,pool3.test:8091,pool4.test:8091,pool5.test:8091,pool6.test:8091,pool7.test:8091,pool8.test:8091,pool9.test:8091,l1.left.test:8091,l2.left.test:8091,l3.left.test:8091,l4.left.test:8091,l5.left.test:8091,l6.left.test:8091,l7.left.test:8091"]
+  proxy-b:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-b, --pass, e2e-only-b, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091,pool1.test:8091,pool2.test:8091,pool3.test:8091,pool4.test:8091,pool5.test:8091,pool6.test:8091,pool7.test:8091,pool8.test:8091,pool9.test:8091,l1.left.test:8091,l2.left.test:8091,l3.left.test:8091,l4.left.test:8091,l5.left.test:8091,l6.left.test:8091,l7.left.test:8091"]
+  proxy-c:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-c, --pass, e2e-only-c, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091,pool1.test:8091,pool2.test:8091,pool3.test:8091,pool4.test:8091,pool5.test:8091,pool6.test:8091,pool7.test:8091,pool8.test:8091,pool9.test:8091,l1.left.test:8091,l2.left.test:8091,l3.left.test:8091,l4.left.test:8091,l5.left.test:8091,l6.left.test:8091,l7.left.test:8091"]
+  proxy-d:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-d, --pass, e2e-only-d, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091,pool1.test:8091,pool2.test:8091,pool3.test:8091,pool4.test:8091,pool5.test:8091,pool6.test:8091,pool7.test:8091,pool8.test:8091,pool9.test:8091,l1.left.test:8091,l2.left.test:8091,l3.left.test:8091,l4.left.test:8091,l5.left.test:8091,l6.left.test:8091,l7.left.test:8091"]
+  proxy-e:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-e, --pass, e2e-only-e, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091,pool1.test:8091,pool2.test:8091,pool3.test:8091,pool4.test:8091,pool5.test:8091,pool6.test:8091,pool7.test:8091,pool8.test:8091,pool9.test:8091,l1.left.test:8091,l2.left.test:8091,l3.left.test:8091,l4.left.test:8091,l5.left.test:8091,l6.left.test:8091,l7.left.test:8091"]

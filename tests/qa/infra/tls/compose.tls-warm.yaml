@@ -1,0 +1,21 @@
+# QA round two, topic tls: with compose.tls.yaml, a stack whose kage
+#   - trusts the private CA for the http self-test (selftest.http.echo_ca_file)
+#     and names the world's own https echo for it (no default URL left)
+#   - logs the scheduler's and the http path's debug lines
+#   - warms its personas up on the world's https pages only (start the
+#     stack with KAGE_PERSONAS_WARMUP=true; the list replaces the shipped
+#     one of public sites), quickly and at any hour
+services:
+  kage:
+    environment:
+      RUST_LOG: info,kage_scheduler=debug,kage_http=debug,kage_persona=debug
+      KAGE__SELFTEST__HTTP__ECHO_CA_FILE: /run/qa/ca.pem
+      KAGE__SELFTEST__HTTP__ECHO_URL: https://echo.tls.kage.test:8443/
+      KAGE__SELFTEST__HTTP__THIRD_PARTY_URL: https://echo.tls.kage.test:8443/
+      KAGE__PERSONAS__WARMUP__SITES: '[{url="https://tls.kage.test/warm/a/{language}"},{url="https://tls2.kage.test/warm/b"},{url="https://secure.kage.test/"},{url="https://tls.kage.test/warm/c"},{url="https://expired.kage.test/warm/x"}]'
+      KAGE__PERSONAS__WARMUP__MIN_VISITS: "3"
+      KAGE__PERSONAS__WARMUP__VISITS: '{min=4,max=5}'
+      KAGE__PERSONAS__WARMUP__FIRST_VISIT_AFTER: '{min="40s",max="50s"}'
+      KAGE__PERSONAS__WARMUP__GAP: '{median="5s",p95="10s"}'
+      KAGE__PERSONAS__WARMUP__ACTIVE_HOURS: '{from="00:00",until="23:59"}'
+      KAGE__PERSONAS__WARMUP__MAX_WAIT: 20m

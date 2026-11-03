@@ -1,0 +1,57 @@
+  # Added by the ssrf topic: its own zones at the pace of a test.
+  rebind.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  brw.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  m1.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  m2.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  m3.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  m4.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  f1.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  f2.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  f3.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  f4.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  f5.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  f6.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  f7.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  f8.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore

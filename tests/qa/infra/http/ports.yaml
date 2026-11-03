@@ -1,0 +1,14 @@
+# QA http topic: the responder answers on 8091 and 8092 (multi.mjs), also as
+# third.qa.test, and the proxies relay the new host:port pairs.
+services:
+  responder:
+    command: [/qa/infra/http/multi.mjs]
+    networks:
+      default:
+        aliases: [qa.kage.test, other.qa.test, third.qa.test]
+  proxy-a:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-a, --pass, e2e-only-a, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091,qa.kage.test:8092,other.qa.test:8092,third.qa.test:8091"]
+  proxy-b:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-b, --pass, e2e-only-b, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091,qa.kage.test:8092,other.qa.test:8092,third.qa.test:8091"]
+  proxy-c:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-c, --pass, e2e-only-c, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091,qa.kage.test:8092,other.qa.test:8092,third.qa.test:8091"]

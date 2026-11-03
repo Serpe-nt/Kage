@@ -1,0 +1,8 @@
+# QA round two, topic tls: with compose.tls.yaml, webhook receivers over
+# https on the tls world's names (private addresses of the compose network,
+# so they are private origins as well). tlsworld logs every POST it gets.
+services:
+  kage:
+    environment:
+      KAGE__WEBHOOKS__ALLOWED_ORIGINS: '["http://hooks.kage.test:8090","https://tls.kage.test","https://selfsigned.kage.test","https://expired.kage.test","https://wrongname.kage.test","https://unknownca.kage.test"]'
+      KAGE__WEBHOOKS__PRIVATE_ORIGINS: '["http://hooks.kage.test:8090","https://tls.kage.test","https://selfsigned.kage.test","https://expired.kage.test","https://wrongname.kage.test","https://unknownca.kage.test"]'

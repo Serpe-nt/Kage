@@ -1,0 +1,4 @@
+  # Added by the left agent (QA round two).
+  dc1.test: { pacing: single, min_dwell: 500ms, active_hours: ignore }
+  dc2.test: { pacing: fast, min_dwell: 500ms, active_hours: ignore }
+  refused.test: { pacing: fast, min_dwell: 500ms, active_hours: ignore }

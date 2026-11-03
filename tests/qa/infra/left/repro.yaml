@@ -1,0 +1,15 @@
+# QA round two, left: the repro stacks of left-01 and left-02. The responder also answers
+# dc1.test, dc2.test and refused.test; the three proxies relay dc1.test and dc2.test and refuse
+# refused.test (403 to a CONNECT and to a plain request), as a provider that blocks a target does.
+# Use at up: stack.sh up NAME --overlay=/scripts/qa/infra/left/repro.yaml
+services:
+  responder:
+    networks:
+      default:
+        aliases: [qa.kage.test, other.qa.test, dc1.test, dc2.test, refused.test]
+  proxy-a:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-a, --pass, e2e-only-a, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091,dc1.test:8091,dc2.test:8091"]
+  proxy-b:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-b, --pass, e2e-only-b, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091,dc1.test:8091,dc2.test:8091"]
+  proxy-c:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-c, --pass, e2e-only-c, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091,dc1.test:8091,dc2.test:8091"]

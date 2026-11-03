@@ -1,0 +1,37 @@
+  # QA round two, pool: the responder's pool1.test ... pool9.test at the pace of a test.
+  pool1.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  pool2.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  pool3.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  pool4.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  pool5.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  pool6.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  pool7.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  pool8.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  pool9.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore

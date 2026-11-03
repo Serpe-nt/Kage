@@ -1,0 +1,11 @@
+# QA round two, pool: with webshare.yaml, the automatic replacement of an
+# unreachable proxy within minutes (spec §7.3: M backoff cycles AND
+# replace_after of unbroken failure), for a test that stops one proxy.
+services:
+  kage:
+    environment:
+      KAGE__PROXIES__REPLACE_AFTER: 40s
+      KAGE__PROXIES__BACKOFF_BASE: 2s
+      KAGE__PROXIES__BACKOFF_CAP: 4s
+      KAGE__PROXIES__BACKOFF_CYCLES: "2"
+      KAGE__PROXIES__HEALTH__INTERVAL: 20s

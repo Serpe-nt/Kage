@@ -1,0 +1,40 @@
+# QA round two, pool: Kage on a fake Webshare API (infra/pool/webshare.mjs)
+# instead of the static list, so that a replacement really replaces. Use it
+# together with five-proxies.yaml (which adds proxy-d and proxy-e, the
+# reserve the fake hands out as replacements):
+#
+#   bash /scripts/qa/infra/pool/stack.sh up NAME \
+#     --overlay=/scripts/qa/infra/pool/five-proxies.yaml \
+#     --overlay=/scripts/qa/infra/pool/webshare.yaml QA_PERSONAS=3
+#
+# Kage accepts a plain-http API root only on its own loopback (keyed_url,
+# crates/kage-core/src/config/proxies.rs) and has no setting for a private
+# CA, so the fake shares kage's network namespace. The key is a made-up
+# value that opens the fake and nothing else.
+services:
+  webshare:
+    image: ${KAGE_BROWSER_CHROMIUM_IMAGE:-kage-browser-chromium:dev}
+    entrypoint: [node]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: "no"
+    init: true
+    mem_limit: 256m
+    cpus: 1
+    pids_limit: 128
+    network_mode: "service:kage"
+    # The image's own check is the sidecar's, which this is not.
+    healthcheck:
+      disable: true
+    volumes:
+      - /scripts/qa/infra/pool:/pool:ro
+    command: [/pool/webshare.mjs, --port, "9480",
+      --active, "proxy-a:3128:provider-a:e2e-only-a,proxy-b:3128:provider-b:e2e-only-b,proxy-c:3128:provider-c:e2e-only-c",
+      --reserve, "proxy-d:3128:provider-d:e2e-only-d,proxy-e:3128:provider-e:e2e-only-e"]
+  kage:
+    environment:
+      KAGE__PROXIES__PROVIDER: webshare
+      KAGE__WEBSHARE__API_KEY: qaqaqaqaqaqaqaqaqaqaqaqa
+      KAGE__WEBSHARE__BASE_URL: http://127.0.0.1:9480/api/
+      KAGE__PROXIES__SYNC_INTERVAL: 15s
