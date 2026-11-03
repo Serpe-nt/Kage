@@ -126,7 +126,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a forwarder of the command's own, so it reads its pages on the shipped
   compose and the provider's credentials never leave kage, and a run that
   read none of its pages says `inconclusive` and exits non-zero (spec
-  §7.4, §7.5).
+  §7.4, §7.5). A flow's later sites are named in the host's normal form
+  as a request's is (F104): `pay.example.` is the site `pay.example`, its
+  breaker, file and walls included.
 
 - **`KageWebhookFailing`, `KageBlockRateAboveThreshold` and
   `KagePoolUnavailable` fire on what they are for.** QA round one found the

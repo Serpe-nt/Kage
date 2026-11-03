@@ -1230,7 +1230,20 @@ async fn every_goto_of_a_flow_meets_the_file_of_its_own_address() {
         .unwrap();
     assert_eq!(other_site.outcome, Outcome::RobotsDenied);
     assert_eq!(other_site.attempts.len(), 0);
-    assert_eq!(other_site.robots, Some(disallowed));
+    assert_eq!(other_site.robots, Some(disallowed.clone()));
+    // The later site named with its root dot is the same site (F104): its
+    // file, asked for once, disallows the address.
+    let dotted = world
+        .pipeline
+        .fetch(flow_through(&[
+            "https://free.example/start",
+            "https://enforced.example./private/third",
+        ]))
+        .await
+        .unwrap();
+    assert_eq!(dotted.outcome, Outcome::RobotsDenied);
+    assert_eq!(dotted.attempts.len(), 0);
+    assert_eq!(dotted.robots, Some(disallowed));
     let (files, pages) = asked(&world);
     assert_eq!(
         files
