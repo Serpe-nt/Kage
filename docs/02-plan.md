@@ -1767,6 +1767,8 @@ order of severity (the report's "Proposed plan items" names the rows):
   the persona from a stock Chrome that shows "Aw, Snap!", or a
   `pnpm patch` of patchright-core so that a crashed session throws, a
   change of a fingerprint-critical package in a pull request of its own).
+  The owner keeps the bound (2026-11-03): no change of the renderer's
+  stack and no patch of patchright-core, so F146 stays a watch item.
 - **F147 (medium):** the parse of a page is bounded in time as it is in
   bytes: html5ever's parse grows with the square of the nesting depth
   (5000 elements 31 ms, 20 000 479 ms, 200 000 77 s), so a page under
@@ -2019,7 +2021,7 @@ The findings as plan items, in the order of severity (the report's
 
 ## After 2.0.0
 
-2.0.1 (2026-10-29) is the version to run; the field campaign's first
+2.0.2 (2026-11-04) is the version to run; the field campaign's first
 round is done (M13 above) and QA round one is reported (above). What
 remains, in the order the planner would take it, each a pull request of
 its own on the PR workflow, with the owner's word for every merge:
