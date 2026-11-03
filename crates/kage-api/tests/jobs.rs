@@ -505,13 +505,6 @@ async fn a_job_is_accepted_whole_or_not_at_all() {
             Some(("step", json!(0))),
         ),
         (
-            batch(
-                json!({ "webhook": { "url": "https://hooks.example.org../kage", "secret": "a secret of sixteen bytes or more" } }),
-            ),
-            "ssrf_denied",
-            Some(("field", json!("webhook.url"))),
-        ),
-        (
             flow(json!([
                 { "action": "goto", "url": Api::url("/start") },
                 { "action": "click", "selector": "#next", "human": false },
@@ -2033,5 +2026,58 @@ async fn a_carried_fetch_that_held_a_credential_and_lost_its_server_ends_interru
     // Nothing was asked of the site without the cookie.
     assert_eq!(asked(&api, "/kept").await.len(), 0);
     work.stop().await;
+    api.shut_down().await;
+}
+
+/// A webhook URL whose host has an empty label is refused before the
+/// operator's lists are read (F104, ssrf-04): here the operator listed it as
+/// allowed and as a receiver of its own network, which skips the SSRF guard,
+/// so the refusal is the empty label's own. A private receiver without one
+/// is accepted on the same lists.
+#[tokio::test]
+async fn a_webhook_to_a_host_with_an_empty_label_is_refused_whatever_the_operator_listed() {
+    let listed = vec![
+        "http://hooks.kage.test..:8090".to_owned(),
+        "http://hooks.kage.test:8090".to_owned(),
+    ];
+    let mut api = Api::start_with(1, 149, BROWSER_FAST, move |config| {
+        quick(config);
+        config.webhooks.allowed_origins.clone_from(&listed);
+        config.webhooks.private_origins = listed;
+    })
+    .await;
+    let token = api.key(&[Scope::Jobs]).await;
+    let batch = |hook: &str| {
+        json!({
+            "type": "batch",
+            "urls": [Api::url("/a")],
+            "defaults": { "level": 3 },
+            "webhook": { "url": hook, "secret": "a secret of sixteen bytes or more" },
+        })
+    };
+
+    let problem = api
+        .post(
+            &token,
+            "/v1/jobs",
+            &batch("http://hooks.kage.test..:8090/hooks"),
+        )
+        .await
+        .problem(StatusCode::UNPROCESSABLE_ENTITY, "ssrf_denied");
+    assert_eq!(problem["field"], "webhook.url", "{problem}");
+    assert!(
+        problem["detail"].as_str().unwrap().contains("empty label"),
+        "{problem}"
+    );
+    assert_eq!(count(&api, "jobs").await, 0);
+
+    let reply = api
+        .post(
+            &token,
+            "/v1/jobs",
+            &batch("http://hooks.kage.test:8090/hooks"),
+        )
+        .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.json());
     api.shut_down().await;
 }

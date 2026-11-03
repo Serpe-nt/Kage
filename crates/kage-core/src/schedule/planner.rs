@@ -438,9 +438,6 @@ struct DomainRun {
     /// When the plain client may start its next page on the domain, where
     /// the site's `Crawl-delay` is kept (`Work::gap_floor`).
     plain_next: Option<DateTime<Utc>>,
-    /// The plain client's pages on the domain that kept a floor: what
-    /// draws each gap's share above it.
-    plain_pages: u32,
 }
 
 #[derive(Debug)]
@@ -896,7 +893,10 @@ impl Planner {
                     .and_then(|domain| domain.plain_next)
                     .filter(|at| *at > now)
             {
-                return Looked::Wait(Some(at));
+                // A request that would wait past its patience is refused
+                // with the moment, as a persona's is: a job's page is put
+                // off, never held in the queue for an hour.
+                return self.wait_or_give_up(work, Some(at));
             }
             return Looked::GoPlain;
         }
@@ -1401,10 +1401,19 @@ impl Planner {
         domain.starts.push_back(now);
         domain.in_flight += 1;
         if let Some(floor) = work.gap_floor {
-            let seed = Seed::derive("plain-gap", &[seed.as_bytes(), work.domain.as_bytes()]);
-            let wait = floored(StdDuration::ZERO, Some(floor), &seed, domain.plain_pages);
+            // Drawn from what is recorded: the planner's seed, the domain and
+            // the moment of this start, which the attempt stores. A restart
+            // draws the same share for the same start.
+            let seed = Seed::derive(
+                "plain-gap",
+                &[
+                    seed.as_bytes(),
+                    work.domain.as_bytes(),
+                    &now.timestamp_millis().to_le_bytes(),
+                ],
+            );
+            let wait = floored(StdDuration::ZERO, Some(floor), &seed, 0);
             domain.plain_next = Some(now + chrono_of(wait));
-            domain.plain_pages = domain.plain_pages.saturating_add(1);
         }
         self.grants.insert(
             grant,

@@ -1,7 +1,11 @@
 //! How the http path reads a body as text (spec §9, F100): by the
 //! character encoding a browser would take for it, as the Encoding Standard
 //! and the HTML standard decide it, so that levels 0 and 1 read what levels
-//! 2 and 3 read in a browser.
+//! 2 and 3 read in a browser, for a page that says what it is written in.
+//! Two cases still read otherwise (spec §9): a `<meta>` past the first
+//! [`PRESCAN_BYTES`], which a browser's tree builder may still honour, and a
+//! page in another legacy encoding that declares nothing, which a browser's
+//! detector may name and this module reads as windows-1252.
 //!
 //! In order, the first that answers:
 //!
@@ -163,13 +167,60 @@ pub fn decode<'a>(content_type: Option<&str>, body: &'a [u8]) -> Decoded<'a> {
 }
 
 /// A body as text where it is text: decoded when its `Content-Type` says it
-/// is text (or says nothing), as it is when it is UTF-8 whatever it says,
-/// `None` otherwise.
+/// is text, or says nothing and the body starts as markup does or with a
+/// byte order mark (what a browser's MIME sniffing takes for a page); as it
+/// is when it is UTF-8 whatever it says; `None` otherwise, so that bytes of
+/// no declared type are not shown as windows-1252.
 pub fn text_of(content_type: Option<&str>, body: &[u8]) -> Option<String> {
-    if is_text(content_type) {
+    let typed = content_type.is_some_and(|value| !essence(Some(value)).is_empty());
+    let text = if typed {
+        is_text(content_type)
+    } else {
+        Encoding::for_bom(body).is_some() || sniffs_as_markup(body)
+    };
+    if text {
         return Some(decode(content_type, body).text.into_owned());
     }
     std::str::from_utf8(body).ok().map(str::to_owned)
+}
+
+/// The tags whose opening, after white space, makes a browser's MIME
+/// sniffing take a body of no declared type for HTML (the MIME Sniffing
+/// standard's HTML patterns).
+const MARKUP_STARTS: [&[u8]; 18] = [
+    b"<!doctype html",
+    b"<html",
+    b"<head",
+    b"<script",
+    b"<iframe",
+    b"<h1",
+    b"<div",
+    b"<font",
+    b"<table",
+    b"<a",
+    b"<style",
+    b"<title",
+    b"<b",
+    b"<body",
+    b"<br",
+    b"<p",
+    b"<!--",
+    b"<?xml",
+];
+
+/// Whether a body of no declared type starts as an HTML or XML document:
+/// after white space, one of [`MARKUP_STARTS`] followed by a space or `>`
+/// (or, for a comment and the XML declaration, anything).
+fn sniffs_as_markup(body: &[u8]) -> bool {
+    let start = body.trim_ascii_start();
+    MARKUP_STARTS.iter().any(|pattern| {
+        starts_with_at(start, 0, pattern)
+            && (pattern.starts_with(b"<!--")
+                || pattern.starts_with(b"<?")
+                || start
+                    .get(pattern.len())
+                    .is_some_and(|&next| next == b' ' || next == b'>'))
+    })
 }
 
 fn read<'a>(bytes: &'a [u8], encoding: &'static Encoding, by: DecidedBy) -> Decoded<'a> {
@@ -282,6 +333,11 @@ fn meta(bytes: &[u8], at: &mut usize) -> Option<&'static Encoding> {
             _ => {}
         }
         seen.push(name);
+    }
+    // A tag the bytes end inside declares nothing: the standard aborts
+    // there, and a browser ignores an unfinished tag.
+    if *at >= bytes.len() {
+        return None;
     }
     match need_pragma {
         Some(true) if !got_pragma => None,
@@ -599,6 +655,23 @@ mod tests {
     /// and a document cut anywhere declares nothing.
     #[test]
     fn the_prescan_reads_past_what_only_looks_like_a_declaration() {
+        // A `<meta>` the bytes end inside declares nothing: at the end of
+        // the body, and at the end of the 1024 bytes the prescan reads.
+        for cut in [
+            "<meta charset=shift_jis",
+            "<meta charset=\"shift_jis\"",
+            "<meta charset=\"shift_jis",
+            "<meta http-equiv=content-type content=\"text/html; charset=shift_jis\"",
+        ] {
+            assert_eq!(prescan(cut.as_bytes()), None, "{cut}");
+        }
+        let mut long = vec![b' '; 1000];
+        long.extend_from_slice(b"<meta charset=shift_jis>");
+        assert_eq!(long.len(), 1024);
+        assert_eq!(prescan(&long), Some(SHIFT_JIS));
+        long.insert(0, b' ');
+        assert_eq!(prescan(&long), None);
+        assert_eq!(decode(Some("text/html"), &long).by, DecidedBy::Utf8);
         assert_eq!(
             prescan(b"<p>x</p><!--><meta charset=euc-jp><!-- --><meta charset=shift_jis>"),
             Some(EUC_JP)
@@ -746,6 +819,35 @@ mod tests {
             text_of(Some("application/octet-stream"), b"plain").as_deref(),
             Some("plain")
         );
+        // A body of no declared type is text when it starts as markup does
+        // or with a byte order mark, or when it is UTF-8; bytes that are
+        // neither stay null, as a browser's sniffing shows no page of them.
+        let mut page = b"  <!DOCTYPE html><title>".to_vec();
+        page.extend_from_slice(LATIN1);
+        assert_eq!(
+            text_of(None, &page).as_deref(),
+            Some("  <!DOCTYPE html><title>Café Müller, Straße")
+        );
+        let mut tagged = b"<p>".to_vec();
+        tagged.extend_from_slice(LATIN1);
+        assert_eq!(
+            text_of(Some(""), &tagged).as_deref(),
+            Some("<p>Café Müller, Straße")
+        );
+        assert_eq!(
+            text_of(None, b"\xef\xbb\xbfplain").as_deref(),
+            Some("plain")
+        );
+        assert_eq!(text_of(None, b"plain \xc3\xa9").as_deref(), Some("plain é"));
+        assert_eq!(
+            text_of(None, &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0xff]),
+            None
+        );
+        assert_eq!(text_of(None, LATIN1), None);
+        // A tag that only begins like one of the patterns is no page.
+        let mut pre = b"<pre>".to_vec();
+        pre.extend_from_slice(LATIN1);
+        assert_eq!(text_of(None, &pre), None);
         assert_eq!(charset_of("text/html"), None);
         assert_eq!(charset_of("text/html; charset="), None);
         assert_eq!(charset_of("text/html; q=1; charset=sjis"), Some(SHIFT_JIS));
