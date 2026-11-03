@@ -118,11 +118,21 @@ async function traced<T>(
 /** The longest a persona dwells on a page with a human dwell, as Kage bounds it. */
 const HUMAN_DWELL_CAP_MS = 45_000;
 /**
- * What the server's bound of an operation leaves beyond the operation's own
- * times: less than the margin Kage waits beyond them, so that Kage hears
- * the typed answer before it gives up itself (F103).
+ * What the server's bound of a navigation leaves beyond the navigation's
+ * own times: less than the margin Kage's client waits beyond them (30 s,
+ * `navigation_bound` in kage-browser), so that Kage hears the typed answer
+ * before it gives up itself (F103).
  */
 const OPERATION_SLACK_MS = 25_000;
+/**
+ * What the server's bound of a flow leaves beyond the flow's budget: less
+ * than what Kage waits beyond that budget (20 s, `BROWSER_GRACE` in
+ * kage-scheduler's executor), with room for the answer to travel and the
+ * context to close, so that Kage hears the typed answer before it gives up
+ * itself and a retry never finds the context busy (F103). A test on each
+ * side reads the other side's number.
+ */
+export const FLOW_SLACK_MS = 10_000;
 
 /**
  * The longest the server waits for a navigation (F103): reaching the page,
@@ -143,7 +153,7 @@ export function navigateBoundMs(request: NavigateRequest): number {
 
 /** The longest the server waits for a flow (F103): its budget and a slack. */
 export function flowBoundMs(request: FlowRequest): number {
-  return (request.timeout_ms ?? DEFAULT_FLOW_TIMEOUT_MS) + OPERATION_SLACK_MS;
+  return (request.timeout_ms ?? DEFAULT_FLOW_TIMEOUT_MS) + FLOW_SLACK_MS;
 }
 
 /** The server and the parts tests and the entry point reach into. */

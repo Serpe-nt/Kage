@@ -236,6 +236,15 @@ export interface SessionParts {
  */
 export const READ_LIMIT_MS = 10_000;
 
+/**
+ * How many reads' time a screenshot or a PDF of a page may take: the
+ * renderer paints the whole page for them, which takes longer than a read
+ * on a long page, and a slow one that succeeds is kept (F103). Twice the
+ * read limit stays within the slack the server's bound leaves past a
+ * navigation's own times.
+ */
+const ARTIFACT_READS = 2;
+
 /** Why the open page answers no read any more (F103). */
 interface Unanswering {
   /** How the request reports it. */
@@ -961,12 +970,12 @@ export class PageSession {
    * the page counts as one that does not answer. What the page never
    * answers is left behind; it settles, or not, when the tab is closed.
    */
-  private answer<T>(work: Promise<T>): Promise<T> {
+  private answer<T>(work: Promise<T>, reads = 1): Promise<T> {
     work.catch(() => undefined);
     if (this.unanswering !== null) {
       return Promise.reject(new PageUnanswering(this.unanswering.message));
     }
-    const limit = this.parts.readLimitMs ?? READ_LIMIT_MS;
+    const limit = (this.parts.readLimitMs ?? READ_LIMIT_MS) * reads;
     return new Promise<T>((resolve, reject) => {
       const done = () => {
         clearTimeout(timer);
@@ -1171,9 +1180,32 @@ export class PageSession {
       return;
     }
     this.leave(state);
+    if (isBrowserErrorPage(from) || isBrowserErrorPage(this.page.url())) {
+      // The browser's own error page in place of the page a click or the
+      // way back sent the tab to: no document of the site, and where the
+      // tab was sent is kept, so that the capture names it (F102).
+      this.document = { ...newDocument(), sentTo: state.sentTo };
+      return;
+    }
     // Only a web page counts as a document that came back: the browser's
     // own pages (a blank one, an error) are nothing a capture describes.
     this.document = memory.get(from) ?? newDocument(/^https?:\/\//i.test(from) ? from : null);
+  }
+
+  /**
+   * Fails a step of a flow that left the page for one the browser could
+   * not load: the tab shows the browser's own error page, and the step
+   * names where the tab was sent (F102). The flow ends there, and its last
+   * page is that address, so that Kage judges it like a `goto` that did
+   * not arrive: a refused address is `ssrf_denied`.
+   */
+  private failIfNotLoaded(): void {
+    const shown = this.page.url();
+    if (isBrowserErrorPage(shown)) {
+      throw new FlowStepError(
+        `navigation_failed: the browser could not load ${this.document.sentTo ?? shown}: it shows its own error page`,
+      );
+    }
   }
 
   /**
@@ -1819,24 +1851,41 @@ export class PageSession {
     const sideEffects: SideEffect[] = [];
     let screenshot: ArtifactRef | null = null;
     let pdf: ArtifactRef | null = null;
+    // A renderer that crashes while it paints the page, or one that does
+    // not finish within the limit, leaves no artifact: the page is one that
+    // does not answer, and the capture says so like any read's (F103).
+    const unlessUnanswering = (thrown: unknown): null => {
+      if (thrown instanceof PageUnanswering) {
+        return null;
+      }
+      throw thrown;
+    };
     if (loaded && this.unanswering === null && options.screenshot !== null) {
-      const shot = await this.answer(driver.screenshot(options.screenshot));
-      sideEffects.push(...shot.sideEffects);
-      const extension = shot.format === 'jpeg' ? 'jpg' : shot.format;
-      screenshot = await env.artifacts.write(
-        `${names.prefix}/${names.stamp}-screenshot.${extension}`,
-        shot.data,
-        `image/${shot.format}`,
+      const shot = await this.answer(driver.screenshot(options.screenshot), ARTIFACT_READS).catch(
+        unlessUnanswering,
       );
+      if (shot !== null) {
+        sideEffects.push(...shot.sideEffects);
+        const extension = shot.format === 'jpeg' ? 'jpg' : shot.format;
+        screenshot = await env.artifacts.write(
+          `${names.prefix}/${names.stamp}-screenshot.${extension}`,
+          shot.data,
+          `image/${shot.format}`,
+        );
+      }
     }
     if (loaded && this.unanswering === null && options.pdf !== null) {
-      const printed = await this.answer(driver.pdf(options.pdf));
-      sideEffects.push(...printed.sideEffects);
-      pdf = await env.artifacts.write(
-        `${names.prefix}/${names.stamp}-page.pdf`,
-        printed.data,
-        'application/pdf',
+      const printed = await this.answer(driver.pdf(options.pdf), ARTIFACT_READS).catch(
+        unlessUnanswering,
       );
+      if (printed !== null) {
+        sideEffects.push(...printed.sideEffects);
+        pdf = await env.artifacts.write(
+          `${names.prefix}/${names.stamp}-page.pdf`,
+          printed.data,
+          'application/pdf',
+        );
+      }
     }
     return {
       url,
@@ -1853,7 +1902,7 @@ export class PageSession {
       title: loaded && this.unanswering === null ? extra.observation.title : null,
       dom_html: this.unanswering === null ? domHtml : null,
       dom_truncated: this.unanswering === null && domTruncated,
-      raw_body: rawBody,
+      raw_body: this.unanswering === null ? rawBody : null,
       xhr: xhr.responses(),
       xhr_dropped: xhr.dropped,
       console: options.console ? driver.console.since(extra.consoleStart) : [],
@@ -2141,6 +2190,10 @@ export class PageSession {
       },
       typos: request.behavior?.typos ?? false,
       goto: async (url, timeout) => {
+        // A driver's click that no pace watched may have left for an
+        // address the browser could not load: the flow ends there, where
+        // the tab was sent, before it goes anywhere else (F102).
+        this.failIfNotLoaded();
         this.leave(this.document);
         this.document = newDocument();
         try {
@@ -2155,6 +2208,7 @@ export class PageSession {
         // The same watch whoever goes back, and for an entry that goes
         // back to click as well (follow-ups F38, F28).
         const went = await this.goBack(timeout, by);
+        this.failIfNotLoaded();
         if (went === 'unanswered') {
           throw new FlowStepError(`the page before did not answer within ${timeout} ms`);
         }
@@ -2213,6 +2267,7 @@ export class PageSession {
           await this.adoptShown();
           await this.loaded(limit + ARRIVAL_LOAD_MS);
         }
+        this.failIfNotLoaded();
         return true;
       },
       exists: (selector) =>

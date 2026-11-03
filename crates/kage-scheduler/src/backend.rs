@@ -102,6 +102,11 @@ pub trait Backend: Send + Sync + fmt::Debug {
         at: DateTime<Utc>,
     ) -> Result<BreakerChange, SchedulerError>;
 
+    /// Gives back the trial of the domain's half-open breaker that a
+    /// request took and left without a verdict (F101): the next request
+    /// is the trial at once.
+    async fn breaker_release(&self, domain: &str, at: DateTime<Utc>) -> Result<(), SchedulerError>;
+
     /// Stores a request as it was accepted.
     async fn save_request(&self, request: &RequestRecord) -> Result<(), SchedulerError>;
 
@@ -383,6 +388,17 @@ impl Backend for StoreBackend {
             .domain_breakers()
             .modify(domain, at, |breaker| breaker.record_success(at))
             .await?)
+    }
+
+    async fn breaker_release(&self, domain: &str, at: DateTime<Utc>) -> Result<(), SchedulerError> {
+        if self.store.domain_breakers().get(domain).await?.is_none() {
+            return Ok(());
+        }
+        self.store
+            .domain_breakers()
+            .modify(domain, at, |breaker| breaker.release_trial(at))
+            .await?;
+        Ok(())
     }
 
     async fn save_request(&self, request: &RequestRecord) -> Result<(), SchedulerError> {

@@ -276,6 +276,18 @@ impl Backend for MemoryBackend {
             }))
     }
 
+    async fn breaker_release(&self, domain: &str, at: DateTime<Utc>) -> Result<(), SchedulerError> {
+        if let Some(breaker) = self
+            .state()
+            .facts
+            .get_mut(domain)
+            .and_then(|facts| facts.breaker.as_mut())
+        {
+            breaker.release_trial(at);
+        }
+        Ok(())
+    }
+
     async fn save_request(&self, request: &RequestRecord) -> Result<(), SchedulerError> {
         self.state().requests.push(request.clone());
         Ok(())

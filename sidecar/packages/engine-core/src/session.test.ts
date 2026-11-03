@@ -1,3 +1,4 @@
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -264,7 +265,13 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
       goBack: () => {
         if (history.length >= 2) {
           history.pop();
-          address = history[history.length - 1] ?? 'about:blank';
+          const entry = history[history.length - 1] ?? 'about:blank';
+          address = entry;
+          if (entry.includes('gone')) {
+            // The page before is asked for again, and nothing answers now.
+            emit('request', answer(entry).request());
+            address = 'chrome-error://chromewebdata/';
+          }
         }
         return Promise.resolve(null);
       },
@@ -275,7 +282,19 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
       // A page that has loaded and holds no text: every other read finds nothing.
       evaluate: (expression: string) =>
         reading((expression === 'document.readyState' ? 'complete' : '') as never),
-      click: refuse('driver click'),
+      click: (selector: string) => {
+        // A link to an address nothing answers: the tab is sent there, and
+        // the browser shows its own error page (F102).
+        const link = /^a\[href="(.+)"\]$/.exec(selector)?.[1];
+        if (link === undefined) {
+          return refuse('driver click')();
+        }
+        driven.input.push('driver click');
+        emit('request', answer(link).request());
+        address = 'chrome-error://chromewebdata/';
+        history.push(address);
+        return Promise.resolve();
+      },
       hover: refuse('driver hover'),
       fill: refuse('driver fill'),
       selectOption: refuse('driver select'),
@@ -680,6 +699,82 @@ describe('a page the browser could not load (F102)', () => {
       'http://192.168.1.1/admin',
     );
   });
+
+  const run = async (actions: FlowRequest['actions'], pace = true) => {
+    const on = session();
+    const events: FlowEvent[] = [];
+    await on.flow(
+      {
+        actions,
+        capture,
+        // A paced flow watches a driver's click for the page it leads to.
+        ...(pace ? { behavior: { pace: { dwell_ms: 0, min_dwell_ms: 0, wander: false } } } : {}),
+      },
+      env,
+      (event) => events.push(event),
+    );
+    const steps = events.flatMap((event) =>
+      event.type === 'step' ? [[event.action, event.ok, event.error]] : [],
+    );
+    const final = events.find((event) => event.type === 'final');
+    return { steps, final: final?.type === 'final' ? final : null };
+  };
+  const refused = 'http://10.0.0.7/internal';
+  const failed = (to: string) =>
+    `navigation_failed: the browser could not load ${to}: it shows its own error page`;
+
+  it('ends a flow where a click sent the tab when the browser could not load it', async () => {
+    const clicked = await run([
+      { action: 'goto', url: site('/start') },
+      { action: 'click', selector: `a[href="${refused}"]`, human: false },
+      { action: 'extract', capture },
+    ]);
+    expect(clicked.steps).toEqual([
+      ['goto', true, null],
+      ['click', false, failed(refused)],
+    ]);
+    expect(clicked.final).toMatchObject({ ok: false });
+    expect(clicked.final?.result).toMatchObject({
+      final_url: refused,
+      status: null,
+      dom_html: null,
+      title: null,
+    });
+    expect(clicked.final?.result.error?.code).toBe('navigation_failed');
+
+    // A click no pace watched: the flow ends at the next `goto`, before it
+    // goes anywhere else, with the same address.
+    const unwatched = await run(
+      [
+        { action: 'goto', url: site('/start') },
+        { action: 'click', selector: `a[href="${refused}"]`, human: false },
+        { action: 'goto', url: site('/elsewhere') },
+      ],
+      false,
+    );
+    expect(unwatched.steps).toEqual([
+      ['goto', true, null],
+      ['click', true, null],
+      ['goto', false, failed(refused)],
+    ]);
+    expect(unwatched.final?.result.final_url).toBe(refused);
+  });
+
+  it('ends a flow where the way back sent the tab when the page before no longer loads', async () => {
+    const gone = site('/gone');
+    const back = await run([
+      { action: 'goto', url: gone },
+      { action: 'goto', url: site('/b') },
+      { action: 'back', human: false },
+      { action: 'extract', capture },
+    ]);
+    expect(back.steps).toEqual([
+      ['goto', true, null],
+      ['goto', true, null],
+      ['back', false, failed(gone)],
+    ]);
+    expect(back.final?.result).toMatchObject({ final_url: gone, status: null, dom_html: null });
+  });
 });
 
 describe('a page that stops answering (F103)', () => {
@@ -724,6 +819,75 @@ describe('a page that stops answering (F103)', () => {
     expect(tabs.fresh).toBe(1);
     expect(next.error).toBeNull();
     expect(next.dom_html).toContain('A page');
+  });
+
+  it('keeps a slow screenshot, and answers one the page never paints with a typed error and no artifact', async () => {
+    const { driver, tabs } = scriptedDriver();
+    const artifacts: OperationEnv = {
+      artifacts: new ArtifactWriter(await mkdtemp(path.join(tmpdir(), 'kage-shots-'))),
+      defaultArtifactPrefix: 'sidecar/test',
+    };
+    let paint: 'slow' | 'never' = 'slow';
+    const shotIn = (ms: number) =>
+      new Promise<{ data: Buffer; sideEffects: never[]; format: 'png' }>((resolve) => {
+        setTimeout(() => {
+          resolve({ data: Buffer.from('png'), sideEffects: [], format: 'png' });
+        }, ms);
+      });
+    Object.assign(driver, {
+      screenshot: () => (paint === 'slow' ? shotIn(300) : new Promise<never>(() => undefined)),
+      pdf: () => new Promise<never>(() => undefined),
+    });
+    const on = new PageSession({
+      driver,
+      personaSeed: PERSONA_SEED,
+      selftestPages: [],
+      log: silentLog,
+      readLimitMs: 200,
+    });
+    const shooting = (pdf: boolean) => ({
+      ...capture,
+      screenshot: { full_page: true, format: 'png' as const },
+      pdf: pdf ? {} : null,
+    });
+
+    // Longer than a read, shorter than two: a long page painted, and kept.
+    const slow = await on.navigate(
+      { url: site('/long'), wait: { until: 'load' }, capture: shooting(false) },
+      artifacts,
+    );
+    expect(slow.error).toBeNull();
+    expect(slow.screenshot).not.toBeNull();
+    expect(slow.dom_html).toContain('A page');
+
+    // Never painted: no artifact, the page is one that does not answer, and
+    // the request is answered typed, not thrown (F103).
+    paint = 'never';
+    const began = Date.now();
+    const unpainted = await on.navigate(
+      { url: site('/painted'), wait: { until: 'load' }, capture: shooting(false) },
+      artifacts,
+    );
+    expect(Date.now() - began).toBeLessThan(3000);
+    expect(PageResultSchema.parse(unpainted)).toEqual(unpainted);
+    expect(unpainted.error).toMatchObject({ code: 'timeout' });
+    expect(unpainted).toMatchObject({ screenshot: null, dom_html: null, raw_body: null });
+
+    // A PDF the page never prints, the same; the next request is served.
+    paint = 'slow';
+    Object.assign(driver, {
+      screenshot: () => shotIn(0),
+    });
+    const unprinted = await on.navigate(
+      { url: site('/printed'), wait: { until: 'load' }, capture: shooting(true) },
+      artifacts,
+    );
+    expect(unprinted.error).toMatchObject({ code: 'timeout' });
+    expect(unprinted).toMatchObject({ pdf: null, dom_html: null });
+    const next = await on.navigate({ url: site('/after'), wait: { until: 'load' }, capture }, env);
+    expect(next.error).toBeNull();
+    // Every request that names no tab began in a fresh one but the first.
+    expect(tabs.fresh).toBe(3);
   });
 
   it('ends at once what waits for a renderer that crashed', async () => {
