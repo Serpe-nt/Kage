@@ -560,6 +560,32 @@ pub fn reported_state(proxy: &Proxy) -> ProxyState {
     }
 }
 
+/// Whether a proxy carries nothing because of a suspected outage of the
+/// pool (spec §7.3, F169): while the outage guard holds (`outage`, more
+/// than half of a live pool of 4 or more fails its latest probe), the
+/// counters of a failing proxy are frozen and it stays `healthy` or
+/// `degraded` by state, but one whose latest probe failed is held as if it
+/// were in backoff, until a probe of it passes: its persona is not ready,
+/// and `kage_proxy_state` counts it as `backoff` (F151).
+pub fn held_by_outage(proxy: &Proxy, outage: bool) -> bool {
+    outage
+        && proxy.state.is_usable()
+        && proxy
+            .last_health
+            .as_ref()
+            .is_some_and(|health| !health.reachable)
+}
+
+/// The state a proxy counts under in `kage_proxy_state` within its pool:
+/// [`reported_state`], and `backoff` for one [`held_by_outage`].
+pub fn reported_state_in(proxy: &Proxy, outage: bool) -> ProxyState {
+    if held_by_outage(proxy, outage) {
+        ProxyState::Backoff
+    } else {
+        reported_state(proxy)
+    }
+}
+
 /// Ends a backoff that has run out: the proxy becomes `degraded` and is
 /// probed once. With `force`, the backoff ends even if it has time left
 /// (an operator asked for a check now).

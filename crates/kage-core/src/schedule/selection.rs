@@ -16,6 +16,14 @@
 //! one the request was just blocked on is taken only when there is no
 //! other, because a block followed by the same request from the next
 //! address is what a rotating proxy looks like.
+//!
+//! After a block the rule and the score are worth something only over every
+//! persona that could take the retry, not over the first whose pause before
+//! the retry ran out (F168): each persona's pause is its own, at its own
+//! pace, so the one that is ready first is a matter of pace, not of where
+//! its address is. The planner ranks them all with [`best`], draws one of
+//! the best ([`draw`]) from the retry's own seed, so that each look draws
+//! the same, and waits for that one's pause to end.
 
 use std::net::IpAddr;
 
@@ -128,6 +136,16 @@ pub fn score(candidate: &Candidate, least_load: u32) -> i32 {
 /// when every candidate is. Among the rest the highest score wins and ties
 /// are drawn from `rng`.
 pub fn choose(candidates: &[Candidate], prefer_awake: bool, rng: &mut SeededRng) -> Option<usize> {
+    draw(&best(candidates, prefer_awake), rng)
+}
+
+/// The indices of the candidates that rank first, in order, before a tie
+/// is drawn; empty when there is no candidate.
+///
+/// With `prefer_awake` a sleeping persona ranks only when no candidate is
+/// awake. A candidate in the subnet of a blocked persona ranks only when
+/// every candidate is. Among the rest the highest score ranks first.
+pub fn best(candidates: &[Candidate], prefer_awake: bool) -> Vec<usize> {
     let mut pool: Vec<usize> = (0..candidates.len()).collect();
     if prefer_awake && pool.iter().any(|&index| candidates[index].awake) {
         pool.retain(|&index| candidates[index].awake);
@@ -138,18 +156,29 @@ pub fn choose(candidates: &[Candidate], prefer_awake: bool, rng: &mut SeededRng)
     {
         pool.retain(|&index| !candidates[index].same_subnet_as_blocked);
     }
-    let least_load = pool
+    let Some(least_load) = pool
         .iter()
         .map(|&index| candidates[index].recent_load)
-        .min()?;
-    let best = pool
+        .min()
+    else {
+        return pool;
+    };
+    let Some(top) = pool
         .iter()
         .map(|&index| score(&candidates[index], least_load))
-        .max()?;
-    pool.retain(|&index| score(&candidates[index], least_load) == best);
-    let last = u64::try_from(pool.len().checked_sub(1)?).ok()?;
+        .max()
+    else {
+        return pool;
+    };
+    pool.retain(|&index| score(&candidates[index], least_load) == top);
+    pool
+}
+
+/// One of `among`, drawn from `rng`; `None` when it is empty.
+pub fn draw(among: &[usize], rng: &mut SeededRng) -> Option<usize> {
+    let last = u64::try_from(among.len().checked_sub(1)?).ok()?;
     let drawn = usize::try_from(rng.int_inclusive(0, last)).ok()?;
-    pool.get(drawn).copied()
+    among.get(drawn).copied()
 }
 
 #[cfg(test)]
@@ -157,7 +186,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::net::IpAddr;
 
-    use super::{Candidate, Network, choose, score};
+    use super::{Candidate, Network, best, choose, draw, score};
     use crate::ids::PersonaId;
     use crate::seed::Seed;
 
@@ -322,6 +351,50 @@ mod tests {
         );
         // And the neighbour serves when it is the only one.
         assert_eq!(choose(&[neighbour], true, &mut rng), Some(0));
+    }
+
+    #[test]
+    fn the_best_are_ranked_before_the_draw_and_the_draw_keeps_to_them() {
+        // F168: the rank of every candidate, ready or not, before anyone is
+        // drawn: the neighbour of a blocked persona is out, the one in its
+        // autonomous system ranks below the two that are neither.
+        let candidates = [
+            with(|c| {
+                c.same_subnet_as_blocked = true;
+                c.visited_last_hour = false;
+            }),
+            with(|c| {
+                c.same_asn_as_blocked = true;
+                c.visited_last_hour = false;
+                c.recent_load = 0;
+            }),
+            with(|c| c.visited_last_hour = false),
+            with(|c| c.visited_last_hour = false),
+        ];
+        assert_eq!(best(&candidates, true), [2, 3]);
+        assert_eq!(best(&candidates[..2], true), [1]);
+        assert_eq!(best(&candidates[..1], true), [0]);
+        assert_eq!(best(&[], true), Vec::<usize>::new());
+
+        let mut rng = Seed::from_u64(6).rng();
+        let mut seen = std::collections::BTreeSet::new();
+        for _ in 0..200 {
+            seen.insert(draw(&[2, 3], &mut rng).unwrap());
+        }
+        assert_eq!(seen.into_iter().collect::<Vec<_>>(), [2, 3]);
+        assert_eq!(draw(&[], &mut rng), None);
+        // `choose` is the draw over the best: the same seed, the same pick.
+        let picks = |seed| {
+            let mut rng = Seed::from_u64(seed).rng();
+            (0..20)
+                .map(|_| choose(&candidates, true, &mut rng).unwrap())
+                .collect::<Vec<_>>()
+        };
+        let mut rng = Seed::from_u64(9).rng();
+        let drawn: Vec<usize> = (0..20)
+            .map(|_| draw(&best(&candidates, true), &mut rng).unwrap())
+            .collect();
+        assert_eq!(picks(9), drawn);
     }
 
     #[test]

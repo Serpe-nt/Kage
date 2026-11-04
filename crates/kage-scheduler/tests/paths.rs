@@ -22,8 +22,10 @@ use kage_core::ids::PersonaId;
 use kage_core::outcome::Outcome;
 use kage_core::persona::pacing_factor;
 use kage_core::schedule::budget::{BudgetLevel, BudgetRules};
+use kage_core::schedule::planner::Refusal;
 use kage_core::schedule::queue::Priority;
 use kage_proxy::machine::{ExitObservation, ProbeReport};
+use kage_scheduler::pipeline::JobFetch;
 use kage_scheduler::pipeline::attempt_seed;
 use kage_scheduler::{Arrival, Backend, Bandwidth, FetchOrder, Ledger, Reached, StoreLedger};
 use serde_json::json;
@@ -838,6 +840,92 @@ async fn nothing_is_fetched_while_a_leak_is_on_record() {
     lab.pool.clear_egress_unsafe().await.unwrap();
     let served = lab.pipeline.fetch(http("/page")).await.unwrap();
     assert_eq!(served.outcome, Outcome::Ok, "{:?}", served.reason);
+    lab.shut_down().await;
+}
+
+#[tokio::test]
+async fn a_suspected_outage_of_the_pool_holds_its_dead_proxies_and_work_waits_it_out() {
+    // F169 (pool-02): in a pool of four or more the outage guard of spec
+    // §7.3 freezes the counters, so no proxy reaches backoff and every
+    // persona used to stay ready: work was spent on dead proxies and failed
+    // `proxy_failed`. A proxy whose latest probe failed under the guard is
+    // held as one in backoff, and the work waits as F107 has it.
+    let mut lab = Lab::start(5, 149, FAST).await;
+    serve(&lab, "/page", page("The shop")).await;
+    let failed = ProbeReport {
+        at: lab.now(),
+        exit: Err(HealthFailure::Unreachable),
+        leak: None,
+        geo: None,
+    };
+    for persona in &lab.personas {
+        lab.pool
+            .record_probe(persona.proxy_id, &failed)
+            .await
+            .unwrap();
+    }
+    let live = lab.pool.live().await.unwrap();
+    assert!(kage_proxy::outage_suspected(&live));
+    // Frozen: the first two failures counted, the rest did not; none is in
+    // backoff by state.
+    assert!(
+        live.iter().all(|proxy| proxy.state.is_usable()),
+        "{:?}",
+        live.iter().map(|proxy| proxy.state).collect::<Vec<_>>()
+    );
+    let views = lab.backend.personas().await.unwrap();
+    assert_eq!(views.len(), 5);
+    assert!(views.iter().all(|view| !view.ready), "{views:?}");
+
+    // A caller who waits for the page is told when to ask again, and
+    // nothing went out.
+    let refused = lab.pipeline.fetch(http("/page")).await.unwrap();
+    assert_eq!(refused.outcome, Outcome::ProviderError);
+    assert_eq!(refused.reason.as_deref(), Some("no_persona"));
+    assert!(refused.retry_at.is_some());
+    assert_eq!(refused.attempts, []);
+    // A job's page is put off, not failed.
+    let (_keep, stop) = tokio::sync::watch::channel(false);
+    let job = FetchOrder::get(Lab::url("/page"), Priority::Job);
+    match lab
+        .pipeline
+        .fetch_for_job(kage_core::ids::RequestId::new(), job, None, stop)
+        .await
+        .unwrap()
+    {
+        JobFetch::Deferred(deferred) => {
+            assert_eq!(deferred.reason, Refusal::NoPersona);
+            assert!(deferred.retry_at.is_some());
+        }
+        other => panic!("deferred, not {other:?}"),
+    }
+    assert_eq!(lab.received("/page").await.len(), 0);
+
+    // Two proxies answer again: three of five still fail, the guard holds,
+    // and only the two that answered carry.
+    for number in 0..2_u8 {
+        lab.probe_ok(lab.personas[usize::from(number)].proxy_id, number)
+            .await;
+    }
+    assert!(kage_proxy::outage_suspected(
+        &lab.pool.live().await.unwrap()
+    ));
+    let ready: Vec<PersonaId> = lab
+        .backend
+        .personas()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|view| view.ready)
+        .map(|view| view.id)
+        .collect();
+    let back = [lab.personas[0].id, lab.personas[1].id];
+    assert_eq!(ready.len(), 2);
+    assert!(ready.iter().all(|id| back.contains(id)), "{ready:?}");
+    let served = lab.pipeline.fetch(http("/page")).await.unwrap();
+    assert_eq!(served.outcome, Outcome::Ok, "{:?}", served.reason);
+    assert_eq!(served.attempts.len(), 1);
+    assert!(back.contains(&served.attempts[0].persona_id.unwrap()));
     lab.shut_down().await;
 }
 

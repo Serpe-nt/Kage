@@ -25,7 +25,7 @@ use kage_core::schedule::breaker::{Admission, BreakerChange, BreakerRules};
 use kage_core::schedule::planner::{DomainFacts, PersonaView};
 use kage_core::schedule::selection::Network;
 use kage_persona::identity::http_spec;
-use kage_proxy::Pool;
+use kage_proxy::{Pool, machine};
 use kage_store::Store;
 use kage_store::repo::{ResponseCacheEntry, RobotsCacheEntry};
 use tokio::time::Instant;
@@ -190,8 +190,14 @@ fn exit_address(proxy: &Proxy) -> Option<IpAddr> {
 }
 
 /// A persona as the planner needs it, from its row and its proxy's.
-pub fn view_of(persona: &Persona, proxy: Option<&Proxy>) -> PersonaView {
-    let usable = proxy.is_some_and(|proxy| proxy.state.is_usable());
+/// `outage` says that the pool's outage guard holds (spec §7.3): then a
+/// proxy whose latest probe failed carries nothing until a probe of it
+/// passes, as one in backoff, and its persona is not ready, so that work
+/// waits the outage out with `no_persona` instead of failing on dead
+/// proxies (F169, F107).
+pub fn view_of(persona: &Persona, proxy: Option<&Proxy>, outage: bool) -> PersonaView {
+    let usable = proxy
+        .is_some_and(|proxy| proxy.state.is_usable() && !machine::held_by_outage(proxy, outage));
     let asn = proxy.and_then(|proxy| {
         proxy
             .observed_geo()
@@ -244,13 +250,11 @@ impl StoreBackend {
 #[async_trait]
 impl Backend for StoreBackend {
     async fn personas(&self) -> Result<Vec<PersonaView>, SchedulerError> {
-        let proxies: HashMap<_, _> = self
-            .pool
-            .live()
-            .await?
-            .into_iter()
-            .map(|proxy| (proxy.id, proxy))
-            .collect();
+        let live = self.pool.live().await?;
+        // The pool's own proxies under `proxies`; the host's rows, which are
+        // never probed, are left out of the guard's count by it.
+        let outage = !self.direct && kage_proxy::outage_suspected(&live);
+        let proxies: HashMap<_, _> = live.into_iter().map(|proxy| (proxy.id, proxy)).collect();
         // Never both: the host's personas under `direct`, the pool's under
         // `proxies` (spec §25).
         Ok(self
@@ -264,7 +268,7 @@ impl Backend for StoreBackend {
                     .get(&persona.proxy_id)
                     .is_none_or(|proxy| (proxy.provider == ProxyProviderKind::Host) == self.direct)
             })
-            .map(|persona| view_of(persona, proxies.get(&persona.proxy_id)))
+            .map(|persona| view_of(persona, proxies.get(&persona.proxy_id), outage))
             .collect())
     }
 

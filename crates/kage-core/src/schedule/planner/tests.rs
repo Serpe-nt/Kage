@@ -3978,3 +3978,358 @@ fn a_flow_keeps_the_personas_gap_and_the_limits_of_its_later_site() {
         .expect("the page left");
     assert!(page >= flow_start + secs(10), "{page} {flow_start}");
 }
+
+/// The world of QA round two's pool-01: five personas whose exits lie in
+/// three /24s and four autonomous systems, as the health probe reads them.
+///
+/// | persona | exit | ASN |
+/// |---|---|---|
+/// | 0 | 203.0.113.10 | AS64501 |
+/// | 1 | 203.0.113.20 | AS64501 |
+/// | 2 | 198.51.100.30 | AS64502 |
+/// | 3 | 192.0.2.40 | AS64501 |
+/// | 4 | 198.51.100.50 | AS64503 |
+fn five_exits() -> Vec<PersonaView> {
+    let exits = [
+        ([203, 0, 113, 10], "AS64501"),
+        ([203, 0, 113, 20], "AS64501"),
+        ([198, 51, 100, 30], "AS64502"),
+        ([192, 0, 2, 40], "AS64501"),
+        ([198, 51, 100, 50], "AS64503"),
+    ];
+    exits
+        .iter()
+        .zip(0_u8..)
+        .map(|((octets, asn), number)| PersonaView {
+            // One engine: nothing but the networks tells them apart.
+            engine: Engine::Chromium,
+            network: Network::of(Some(IpAddr::V4(Ipv4Addr::from(*octets))), Some(asn)),
+            ..persona(number)
+        })
+        .collect()
+}
+
+/// The pause before a retry as spec §8.3 sets it.
+fn spec_pause() -> Lognormal {
+    Lognormal {
+        median: 6000.0,
+        p95: 20_000.0,
+        min: Some(2000.0),
+        max: None,
+    }
+}
+
+/// The retry of a request blocked on every persona of `blocked`, in that
+/// order.
+fn retry_after(views: &[PersonaView], blocked: &[u8], seed: u64) -> Work {
+    Work {
+        exclude: blocked
+            .iter()
+            .map(|number| id(u128::from(*number)))
+            .collect(),
+        avoid: blocked
+            .iter()
+            .map(|number| views[usize::from(*number)].network.clone())
+            .collect(),
+        retry_pause: Some(RetryPause {
+            pause: spec_pause(),
+            seed: Seed::from_u64(seed),
+        }),
+        ..sync("pool1.test")
+    }
+}
+
+/// Who takes the retry of a request blocked on every persona of `blocked`,
+/// and when it leaves.
+fn retried_after(views: &[PersonaView], blocked: &[u8], seed: u64) -> (PersonaId, DateTime<Utc>) {
+    let mut sim = Sim::new(views.to_vec());
+    sim.submit(retry_after(views, blocked, seed));
+    sim.run_until(noon() + secs(120));
+    let [(at, dispatch)] = sim.log.as_slice() else {
+        panic!("one retry, not {:?}", sim.log);
+    };
+    (dispatch.persona, *at)
+}
+
+/// The moment the pause of `seed` ends for persona `number` of `views`.
+fn own_pause_end(views: &[PersonaView], number: usize, seed: u64) -> DateTime<Utc> {
+    let own = crate::schedule::retry::retry_pause(
+        &spec_pause(),
+        pacing_factor(&views[number].seed),
+        &Seed::from_u64(seed),
+    );
+    noon() + Duration::from_std(own).unwrap()
+}
+
+#[test]
+fn after_a_block_the_retry_leaves_from_another_subnet_and_another_system_whoever_is_ready_first() {
+    // F168 (pool-01): each persona's pause before the retry is its own, at
+    // its own pace, so the first one ready used to be taken whatever its
+    // address: the blocked persona's /24, or its autonomous system while
+    // personas of others were waiting.
+    let views = five_exits();
+    let network = |number: u8| &views[usize::from(number)].network;
+    let mut takers = BTreeSet::new();
+    for blocked in 0..5_u8 {
+        for seed in 0..12 {
+            let (taker, at) = retried_after(&views, &[blocked], seed);
+            let taker = views.iter().position(|view| view.id == taker).unwrap();
+            assert_eq!(
+                at,
+                own_pause_end(&views, taker, seed),
+                "{blocked} -> {taker}"
+            );
+            let taker = u8::try_from(taker).unwrap();
+            takers.insert((blocked, taker));
+            assert!(
+                !network(blocked).shares_subnet(network(taker)),
+                "{blocked} -> {taker}: the same /24"
+            );
+            // Every persona has another /24 and another autonomous system
+            // than its own among the others: the -2 keeps its own out.
+            assert!(
+                !network(blocked).shares_asn(network(taker)),
+                "{blocked} -> {taker}: the same ASN"
+            );
+        }
+    }
+    // Blocked on persona 2 (AS64502), the rest share AS64501 but persona
+    // 4 (AS64503), which shares its /24: so persona 4 is out, and of the
+    // three in AS64501 none is better than another.
+    let after_two: BTreeSet<u8> = takers
+        .iter()
+        .filter(|(blocked, _)| *blocked == 2)
+        .map(|(_, taker)| *taker)
+        .collect();
+    assert!(!after_two.contains(&4), "{after_two:?}");
+    // Blocked on persona 0: personas 2 and 4 tie, and the draw gives each
+    // its turn.
+    let after_zero: BTreeSet<u8> = takers
+        .iter()
+        .filter(|(blocked, _)| *blocked == 0)
+        .map(|(_, taker)| *taker)
+        .collect();
+    assert_eq!(after_zero, BTreeSet::from([2, 4]));
+}
+
+#[test]
+fn the_third_attempt_avoids_both_blocks_and_takes_the_systems_penalty_only_when_nothing_else_is_left()
+ {
+    let views = five_exits();
+    // Blocked on 0 (203.0.113/24, AS64501) and on 2 (198.51.100/24,
+    // AS64502): 1 and 4 are in their /24s, 3 is in the first one's system
+    // only. Nobody better is left: 3 takes it.
+    for seed in 0..6 {
+        assert_eq!(retried_after(&views, &[0, 2], seed).0, id(3));
+    }
+    // Blocked on 3 (192.0.2/24, AS64501) and on 4 (198.51.100/24,
+    // AS64503): 2 is in the second one's /24, 0 and 1 in the first one's
+    // system; one of them, never the neighbour.
+    for seed in 0..6 {
+        let taker = retried_after(&views, &[3, 4], seed).0;
+        assert!(taker == id(0) || taker == id(1), "{taker:?}");
+    }
+}
+
+#[test]
+fn the_neighbour_of_a_blocked_persona_is_taken_when_no_other_could_start_by_the_end_of_its_pause() {
+    let views = five_exits();
+    // Blocked on 0; 2, 3 and 4 cool on the site for hours: none of them
+    // is waited for, and 1, the neighbour, takes the retry at its pause.
+    let mut sim = Sim::new(views.clone());
+    for number in [2, 3, 4] {
+        sim.state(id(number), "pool1.test").cooldown_until = Some(noon() + Duration::hours(3));
+    }
+    sim.submit(retry_after(&views, &[0], 3));
+    sim.run_until(noon() + secs(60));
+    let [(at, dispatch)] = sim.log.as_slice() else {
+        panic!("one retry, not {:?}", sim.log);
+    };
+    assert_eq!(dispatch.persona, id(1));
+    assert_eq!(*at, own_pause_end(&views, 1, 3));
+
+    // One that is making an attempt is not waited for either: the
+    // neighbour takes it at its pause.
+    let three = views[..3].to_vec();
+    let mut busy = Sim::new(three.clone());
+    busy.takes = Box::new(|_| secs(600));
+    busy.submit(Work {
+        pin: Some(id(2)),
+        ..sync("elsewhere.test")
+    });
+    busy.settle();
+    assert_eq!(busy.log.len(), 1);
+    busy.submit(retry_after(&three, &[0], 3));
+    busy.run_until(noon() + secs(60));
+    assert_eq!(busy.log.len(), 2, "{:?}", busy.log);
+    assert_eq!(busy.log[1].1.persona, id(1));
+}
+
+#[test]
+fn a_visitor_in_the_subnet_of_a_blocked_persona_does_not_take_the_retry_while_another_can() {
+    // Personas 0 and 1 share a /24; 1 visits the site. A request blocked on
+    // 0 is retried by 2, from another /24, not by the visitor.
+    let views = five_exits();
+    let three = vec![views[0].clone(), views[1].clone(), views[3].clone()];
+    let mut sim = Sim::new(three.clone());
+    sim.submit(Work {
+        pin: Some(id(1)),
+        ..sync("pool1.test")
+    });
+    sim.run_until(noon() + secs(1));
+    assert_eq!(sim.planner.visitors("pool1.test", sim.now), 1);
+    let retry = sim.submit(Work {
+        retry_pause: None,
+        ..retry_after(&three, &[0], 5)
+    });
+    sim.run_until(noon() + secs(60));
+    let taken = sim
+        .log
+        .iter()
+        .find(|(_, dispatch)| dispatch.work == retry)
+        .map(|(_, dispatch)| dispatch.persona);
+    assert_eq!(taken, Some(id(3)), "{:?}", sim.log);
+}
+
+/// `brisk` with one seat: `domain_concurrency: 1`.
+fn one_seat() -> PacingProfile {
+    PacingProfile {
+        domain_concurrency: 1,
+        ..brisk()
+    }
+}
+
+#[test]
+fn a_flows_later_site_keeps_its_seats_while_another_persona_visits_it() {
+    // F188 (left-01): persona 0 (chromium) visits dc1.test, whose pacing
+    // has one seat; its page is over, its visit is not. A flow that only
+    // firefox may take (persona 1) begins on dc2.test and goes on to
+    // dc1.test: it waits for the visit to end, as a page of dc1.test does.
+    let mut sim = Sim::new(personas(2));
+    sim.submit(Work {
+        pin: Some(id(0)),
+        pacing: one_seat(),
+        ..sync("dc1.test")
+    });
+    sim.run_until(noon() + secs(5));
+    assert_eq!(sim.log.len(), 1);
+    assert_eq!(sim.planner.visitors("dc1.test", sim.now), 1);
+
+    let flow = sim.submit(Work {
+        engines: vec![Engine::Firefox],
+        legs: vec![Leg {
+            pacing: one_seat(),
+            ..leg("dc1.test")
+        }],
+        ..work("dc2.test")
+    });
+    let page = sim.submit(Work {
+        engines: vec![Engine::Firefox],
+        pacing: one_seat(),
+        ..work("dc1.test")
+    });
+    sim.run_until(noon() + secs(60));
+    assert_eq!(
+        sim.log.len(),
+        1,
+        "a second address at dc1.test: {:?}",
+        sim.log
+    );
+    // The planner looks again when the visit is over: ten minutes after
+    // its last page began.
+    let over = noon() + Duration::minutes(10);
+    assert!(
+        sim.planner
+            .wake_at()
+            .is_some_and(|wake| wake <= over + secs(1)),
+        "{:?}",
+        sim.planner.wake_at()
+    );
+    sim.run_until(over + secs(30));
+    let left: Vec<_> = sim
+        .log
+        .iter()
+        .filter(|(_, dispatch)| dispatch.work == flow || dispatch.work == page)
+        .collect();
+    assert_eq!(left.len(), 2, "{:?}", sim.log);
+    assert!(
+        left.iter()
+            .all(|(at, dispatch)| *at >= over && dispatch.persona == id(1)),
+        "{left:?}"
+    );
+}
+
+#[test]
+fn a_flow_whose_later_site_has_no_seat_is_given_to_its_visitor() {
+    // Two chromium personas: 0 visits dc1.test (one seat). A flow from
+    // dc2.test to dc1.test goes to persona 0, after its gap there, not to
+    // persona 2 at once.
+    let mut sim = Sim::new(vec![persona(0), persona(2)]);
+    sim.submit(Work {
+        pin: Some(id(0)),
+        pacing: one_seat(),
+        ..sync("dc1.test")
+    });
+    sim.settle();
+    let first = sim.log[0].1.clone();
+    sim.run_until(noon() + secs(1));
+    sim.submit(Work {
+        legs: vec![Leg {
+            pacing: one_seat(),
+            ..leg("dc1.test")
+        }],
+        ..work("dc2.test")
+    });
+    sim.run_until(noon() + secs(30));
+    assert_eq!(sim.log.len(), 2, "{:?}", sim.log);
+    let (at, flow) = &sim.log[1];
+    assert_eq!(flow.persona, id(0));
+    assert!(*at >= first.next_slot, "{at} before {}", first.next_slot);
+
+    // A synchronous flow goes past the seat only for a visitor's break
+    // that does not end within the visitor wait, as a page of the site.
+    let mut on_break = Sim::new(vec![persona(0), persona(2)]);
+    let long_break = PacingProfile {
+        burst_pages: IntRange { min: 1, max: 1 },
+        burst_break_ms: Distribution::Uniform(Uniform {
+            min: 600_000.0,
+            max: 600_000.0,
+        }),
+        ..one_seat()
+    };
+    on_break.submit(Work {
+        pin: Some(id(0)),
+        pacing: long_break,
+        ..sync("dc1.test")
+    });
+    on_break.run_until(noon() + secs(5));
+    on_break.submit(Work {
+        pin: Some(id(2)),
+        legs: vec![Leg {
+            pacing: long_break,
+            ..leg("dc1.test")
+        }],
+        ..sync("dc2.test")
+    });
+    on_break.run_until(noon() + secs(10));
+    assert_eq!(on_break.log.len(), 2, "{:?}", on_break.log);
+    assert_eq!(on_break.log[1].1.persona, id(2));
+    // A job does not: it waits for the visitor.
+    let mut job = Sim::new(vec![persona(0), persona(2)]);
+    job.submit(Work {
+        pin: Some(id(0)),
+        pacing: long_break,
+        ..sync("dc1.test")
+    });
+    job.run_until(noon() + secs(5));
+    job.submit(Work {
+        pin: Some(id(2)),
+        legs: vec![Leg {
+            pacing: long_break,
+            ..leg("dc1.test")
+        }],
+        ..work("dc2.test")
+    });
+    job.run_until(noon() + secs(10));
+    assert_eq!(job.log.len(), 1, "{:?}", job.log);
+}
