@@ -220,7 +220,8 @@ setting (spec §19, F57):
 
 What it costs: the Kage host's resolver sees every name a page asks for
 (the host's lookups are the operating system's, `getaddrinfo`), and the
-forwarder looks each name up once per 30 seconds. What it cannot do: the
+forwarder looks each name up once per 30 seconds (a lookup that failed is
+not kept: the next connection asks again). What it cannot do: the
 proxy resolves the name again where it connects, and a name whose answer
 changes between the two lookups is reached (the security review's G2).
 `egress.direct.private_names` does not reach the pool: under the pool a

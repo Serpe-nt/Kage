@@ -111,6 +111,8 @@ const TOKEN_CHARS: usize = 32;
 /// minute in Chromium) and leaves longer caching to the resolver beneath
 /// it, which honours the TTL. The answer decides what the forwarder lets
 /// through, never where a proxy connects: the proxy resolves again (G2).
+/// Only an answer with addresses is kept: a lookup that failed or found no
+/// address is asked again by the next connection.
 pub const NAME_KEPT: Duration = Duration::from_secs(30);
 
 /// How many names' answers are kept at most.
@@ -452,14 +454,31 @@ impl Names {
                 }
             }
         };
-        lookup
+        let answer = lookup
             .get_or_init(|| async {
                 tokio::time::timeout(LOOKUP_TIMEOUT, self.resolver.resolve(host))
                     .await
                     .unwrap_or_else(|_| Err(format!("no answer within {LOOKUP_TIMEOUT:?}")))
             })
             .await
-            .clone()
+            .clone();
+        // Only an answer with addresses is kept. A lookup that failed, ran
+        // out of time or found no address is the answer of the connections
+        // that waited for it, and the next connection asks again at once:
+        // one hiccup of the resolver must not refuse a name for every
+        // caller while it is kept, as the http path's own check never keeps
+        // a failure either. A name that keeps failing costs one lookup per
+        // connection, which the resolver beneath caches by its own rules.
+        if !matches!(&answer, Ok(addresses) if !addresses.is_empty()) {
+            let mut kept = self.kept.lock().unwrap_or_else(PoisonError::into_inner);
+            if kept
+                .get(host)
+                .is_some_and(|(_, held)| Arc::ptr_eq(held, &lookup))
+            {
+                kept.remove(host);
+            }
+        }
+        answer
     }
 }
 
