@@ -416,6 +416,19 @@ export const EXAMPLES: Readonly<Record<string, readonly unknown[]>> = {
       capture: null,
     },
     {
+      // A click on a link that opens a new tab (1.8.0, F184): the tab is the
+      // flow's, behind the flow's page, and closed when the flow ends.
+      type: 'step',
+      index: 2,
+      action: 'click',
+      ok: true,
+      duration_ms: 1630,
+      paced_ms: null,
+      error: null,
+      capture: null,
+      opened_tabs: ['https://example.org/terms'],
+    },
+    {
       // A step of a paced flow that only reads is never delayed.
       type: 'step',
       index: 6,

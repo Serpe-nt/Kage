@@ -266,6 +266,13 @@ export const FlowStepEventSchema = z
     capture: PageResultSchema.nullable().describe(
       'What an `extract`, `screenshot` or `pdf` step captured; null otherwise.',
     ),
+    opened_tabs: z
+      .array(z.string().max(8192))
+      .max(100)
+      .optional()
+      .describe(
+        "The addresses of the tabs the flow's page opened while this step ran (a link with `target=_blank`, a window a click opened), as the browser reported each: the address it was loading. Such a tab is the flow's: no later step acts on it (the flow's page is put in front of it again before the persona's next input, and a step whose input could not reach the flow's page fails), nothing of it is captured, and it is closed when the flow ends. Empty when the step opened none. Absent from a sidecar of before 1.8.0, which left such a tab open and in front. Since 1.8.0 (F184).",
+      ),
   })
   .meta({ id: 'FlowStepEvent', description: 'A finished step of a flow.' });
 

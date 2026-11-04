@@ -67,9 +67,10 @@ describe('contract basics', () => {
     // rests while it dwells (`behavior.pace.wander`). 1.6.0 adds how many times a
     // self-test page was loaded (`attempts` of a page report, F95). 1.7.0 adds the tab a
     // navigation runs in (`tab`, F96): named for a crawl's pages, which share one; every
-    // other request starts in a fresh tab. All of it is optional in a request and
-    // additional in an answer.
-    expect(CONTRACT_SEMVER).toBe('1.7.0');
+    // other request starts in a fresh tab. 1.8.0 adds the tabs a flow's page opened
+    // during a step (`opened_tabs` of a step event, F184). All of it is optional in a
+    // request and additional in an answer.
+    expect(CONTRACT_SEMVER).toBe('1.8.0');
     expect(HEALTH_PATH).toBe('/v1/health');
     expect(METRICS_PATH).toBe('/v1/metrics');
     for (const endpoint of Object.values<Endpoint>(ENDPOINTS)) {

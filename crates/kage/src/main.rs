@@ -301,7 +301,9 @@ enum PersonaCommand {
     },
     /// Run the self-tests of a persona through its own proxy: the http
     /// path when it has one, and its own browser context. Exits non-zero
-    /// when one fails. A passing run ends a cooling that waits for one.
+    /// unless every test it ran passed: one that failed, or one that could
+    /// not read its pages or its echo and so tested nothing. A passing run
+    /// ends a cooling that waits for one.
     ///
     /// By default the operator's own echo and pages are used.
     /// `--third-party` uses the echo and the detection pages run by
@@ -334,7 +336,8 @@ enum PersonaCommand {
 enum SelftestCommand {
     /// Send one navigation through a proxy to a fingerprint echo and
     /// compare JA4, the HTTP/2 fingerprint and the header order with the
-    /// values recorded for the profile. Exits non-zero when they differ.
+    /// values recorded for the profile. Exits non-zero when they differ,
+    /// or when the echo could not be read.
     ///
     /// The echo is the operator's own when `selftest.http.echo_url` is set,
     /// else the third-party one, which sees the proxy's exit address.
@@ -373,7 +376,8 @@ enum SelftestCommand {
     },
     /// Open a browser context through a proxy, load the self-test pages
     /// and let the sidecar judge what they show: automation flags and the
-    /// coherence of the identity. Exits non-zero when the test fails.
+    /// coherence of the identity. Exits non-zero when the test fails, and
+    /// when it could not read its pages and so tested nothing.
     ///
     /// The pages are the operator's own (`selftest.browser.pages`).
     /// `--third-party` adds the detection pages run by others, which see

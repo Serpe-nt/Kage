@@ -28,6 +28,7 @@ import {
   type BrowserCookie,
   type DriverPage,
   type DriverResponse,
+  type DriverTab,
   type EngineContext,
   type EngineLog,
   type OperationEnv,
@@ -174,6 +175,8 @@ export class ChromiumContext implements EngineContext, SessionDriver {
   /** The open tab's latest document request, as its debugger saw it (F167). */
   private requests = new DocumentRequests();
   private closed = false;
+  /** Whether {@link ChromiumContext.freshPage} is opening a tab: its report is no page's (F184). */
+  private opening = false;
 
   constructor(private readonly parts: ChromiumContextParts) {
     this.browserVersion = parts.browserVersion;
@@ -245,12 +248,33 @@ export class ChromiumContext implements EngineContext, SessionDriver {
    * closes itself.
    */
   async freshPage(): Promise<void> {
-    const next = await this.parts.openTab();
+    this.opening = true;
+    const next = await this.parts.openTab().finally(() => {
+      this.opening = false;
+    });
     const previous = this.tab;
     this.tab = next;
     this.driverPage = this.adopt(next);
     await previous.page.close().catch(() => undefined);
     await previous.session.detach().catch(() => undefined);
+  }
+
+  /** The context's tabs besides the open one: tabs a page opened (F184). */
+  otherTabs(): readonly DriverTab[] {
+    return this.parts.context.pages().filter((page) => page !== this.tab.page);
+  }
+
+  /** Activates the open tab in its window, as a click on the tab does (F184). */
+  async front(): Promise<void> {
+    await this.tab.page.bringToFront();
+  }
+
+  onOpenedTab(listener: () => void): void {
+    this.parts.context.on('page', (page) => {
+      if (!this.opening && page !== this.tab.page) {
+        listener();
+      }
+    });
   }
 
   classifyError(thrown: unknown): NavigationError {

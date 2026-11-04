@@ -719,8 +719,18 @@ row without it; never when the list is empty or shorter than half the pool.
 A run of `kage selftest browser` that read none of its pages tested
 nothing: it says so (`verdict: inconclusive`, `passed: false` in its JSON
 document, a line in its table) and exits non-zero, whatever the score of
-no check at all is (F105). For a persona's scheduled run the same report
-is inconclusive and changes nothing, as above.
+no check at all is (F105). Every road of the self-tests does the same
+(F185): `kage selftest browser --persona`, `kage selftest http --persona`
+and `kage persona selftest` exit with the status `passed` in their JSON
+document says, which is true only when every part they ran passed; a part
+that could not read what it tests (the browser test read none of its
+pages, or not all of them; the echo did not answer) is `inconclusive`, the
+document's `verdict` says so and the table ends with a line that says
+what was not tested; a command that ran no part says nothing was tested.
+A part that was not run says why and names only options its command has.
+Before 2.0.3 the persona's roads exited 0 on a run that read nothing (QA
+round two, flows-04). For a persona's scheduled run the same report is
+inconclusive and changes nothing, as above.
 
 All health traffic obeys pacing and never targets real target sites.
 `kage proxy health` ends with how many proxies answered and how many did
@@ -1491,6 +1501,39 @@ same window: the page it loads reads the same window as before, and a
 site sees timing only. The page that is left sees its tab close, as when a
 person opens a new tab (in Chrome its window loses focus first), not a
 navigation away; in Firefox a page left this way sends no farewell beacon.
+
+**A tab a flow's page opens (F184, contract 1.8.0).** The flow's page stays
+the flow's page: a step acts on it or fails, never on a tab the page
+opened. A tab the page opens (a link with `target=_blank`, a window a
+click opened; a window opened with nobody's click before it is refused by
+the browser, T3) is the flow's and nobody else's. The browser shows such a
+tab in front of the page, where the persona's hand and keys would reach it;
+the sidecar puts the flow's page in front of it again, as a person who
+goes back to it does, as soon as the browser reports the tab, before every
+step that acts, and between a `type` or `select`'s click and its keys. A
+step after which the flow's page does not have the focus again (the tab
+stays in front) fails with `a tab the page opened (<address>) stays in
+front of the flow's page`, and the flow ends there: no input of the
+persona's is sent to a page the flow did not ask for. A page that loses the
+focus while no tab is reported yet is given 1.5 s for the report, since a
+driver reports a tab once its first document has come. The step during
+which the browser reported the tab names it in its result (`opened_tabs`,
+the address the tab was loading, in the sidecar's step event and the
+public job item's `step`); nothing of the tab is captured, its requests are
+no part of the flow's capture, and the page the flow ended on is the
+flow's own. Every such tab is closed when the flow ends, before the flow is
+reported done, whether it succeeded or not. A tab a page opens while no
+flow runs belongs to no request and is closed at once, and every request
+closes any tab of another before it begins: nothing a page opened outlives
+the request it opened in or reaches another request, another key's least
+of all (§16.5). Before 2.0.3 the tab stayed in front and open: the
+persona's later clicks and typed text went into it while every step said
+`ok` on the flow's page, the text reached another site where the link
+pointed there, and the tab ran on across other keys' requests until the
+persona's context closed (QA round two, flows-02). A Chromium persona with
+`inject: window` gets no override in such a tab (its first request leaves
+before the driver can attach to it); the default `inject: none` shows the
+same browser in every tab.
 
 **A flow in Kage** is one browser attempt of one persona under one grant
 of the scheduler (`POST /v1/jobs` with `type: flow`, §16.6). It starts

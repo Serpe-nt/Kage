@@ -75,7 +75,19 @@ impl RunVerdict {
 /// is not failed for an outage of the test site (spec §7.4); this command
 /// answers the operator who asked whether the identity is coherent.
 fn verdict_of(report: &SelftestResponse) -> RunVerdict {
-    let read = if report.pages.is_empty() {
+    if !read_any(report) {
+        RunVerdict::Inconclusive
+    } else if report.passed {
+        RunVerdict::Passed
+    } else {
+        RunVerdict::Failed
+    }
+}
+
+/// Whether a run read any of its pages: a run that read none tested
+/// nothing, on every road of the command (F105, F185).
+pub(crate) fn read_any(report: &SelftestResponse) -> bool {
+    if report.pages.is_empty() {
         // A sidecar that names no pages: a finding that was judged is a
         // page that was read.
         report
@@ -87,13 +99,6 @@ fn verdict_of(report: &SelftestResponse) -> RunVerdict {
             .pages
             .iter()
             .any(|page| page.status == SelftestPageStatus::Ok)
-    };
-    if !read {
-        RunVerdict::Inconclusive
-    } else if report.passed {
-        RunVerdict::Passed
-    } else {
-        RunVerdict::Failed
     }
 }
 

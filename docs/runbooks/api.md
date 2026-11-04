@@ -583,9 +583,15 @@ A flow is a script of steps in one browser, by one persona:
   persona from the first step; a step that fails otherwise (a selector that is not there, an
   assertion) ends the flow and is not tried again.
 - The items of the job are the steps, each with `step.ok`,
-  `step.duration_ms` and `step.paced_ms`; an `extract`, `screenshot` or
-  `pdf` step names a result of its own; the last item is the page the
-  flow ended on.
+  `step.duration_ms`, `step.paced_ms` and `step.opened_tabs`; an `extract`,
+  `screenshot` or `pdf` step names a result of its own; the last item is the
+  page the flow ended on, always the flow's own page.
+- A tab the flow's page opens (a link with `target=_blank`) is the flow's
+  (F184): the step during which it opened names its address in
+  `opened_tabs`, no later step acts on it (the persona's hand and keys stay
+  on the flow's page, and a step whose input could not reach it fails),
+  nothing of it is captured, and it is closed when the flow ends. To read
+  what such a link points to, `goto` its address.
 
 ### Crawls
 

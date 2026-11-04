@@ -24,6 +24,7 @@ import {
   type DriverPage,
   type DriverRequest,
   type DriverResponse,
+  type DriverTab,
   type SessionDriver,
   type TabHistory,
 } from './session.js';
@@ -157,6 +158,16 @@ interface Driven {
 interface Tabs {
   /** How often a fresh tab replaced the open one. */
   fresh: number;
+  /** The tabs a page opened (F184), closed ones too. */
+  readonly opened: { readonly url: string; closed: boolean; readonly tab: DriverTab }[];
+  /** How often the open tab was put in front again. */
+  fronts: number;
+  /** Whether the open tab has the focus: not while a tab a page opened is in front of it. */
+  focused: boolean;
+  /** Whether putting the open tab in front gives it the focus back; a browser that refuses keeps the other in front. */
+  frontable: boolean;
+  /** Has a page open a tab: the browser shows it in front, and reports it. */
+  open(url: string): void;
 }
 
 /**
@@ -181,7 +192,33 @@ interface Tabs {
  */
 function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs } {
   const driven: Driven = { loaded: [], input: [], opened: 0 };
-  const tabs: Tabs = { fresh: 0 };
+  let reportTab: () => void = () => undefined;
+  const tabs: Tabs = {
+    fresh: 0,
+    opened: [],
+    fronts: 0,
+    focused: true,
+    frontable: true,
+    open: (url) => {
+      const entry = {
+        url,
+        closed: false,
+        tab: {
+          url: () => url,
+          close: () => {
+            entry.closed = true;
+            if (tabs.opened.every((other) => other.closed)) {
+              tabs.focused = true;
+            }
+            return Promise.resolve();
+          },
+        },
+      };
+      tabs.opened.push(entry);
+      tabs.focused = false;
+      reportTab();
+    },
+  };
   // What only the browser's debugger saw of the latest navigation (F167).
   let unanswered: RedirectHop[] = [];
   const refuse = (what: string) => () => {
@@ -310,9 +347,19 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
             ? 'complete'
             : expression === 'document.documentURI'
               ? (documentUri ?? address)
-              : '') as never,
+              : expression === 'document.hasFocus()'
+                ? tabs.focused
+                : '') as never,
         ),
       click: (selector: string) => {
+        // A link with `target=_blank`: the page opens a tab, which the
+        // browser shows in front of it (F184).
+        const blank = /^#blank-(.+)$/.exec(selector)?.[1];
+        if (blank !== undefined) {
+          driven.input.push('driver click');
+          tabs.open(site(`/${blank}`));
+          return Promise.resolve();
+        }
         // A link to an address nothing answers: the tab is sent there, and
         // the browser shows its own error page (F102).
         const link = /^a\[href="(.+)"\]$/.exec(selector)?.[1];
@@ -378,6 +425,15 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
       return Promise.resolve();
     },
     unansweredRedirects: () => unanswered,
+    otherTabs: () => tabs.opened.filter((entry) => !entry.closed).map((entry) => entry.tab),
+    front: () => {
+      tabs.fronts += 1;
+      tabs.focused = tabs.frontable;
+      return Promise.resolve();
+    },
+    onOpenedTab: (listener) => {
+      reportTab = listener;
+    },
   };
   return { driver, driven, tabs };
 }
@@ -491,6 +547,101 @@ describe('the tab a request runs in (F96)', () => {
     expect(tabs.fresh).toBe(4);
     await navigate(on, site('/crawl/4'), { tab: 'job-2' });
     expect(tabs.fresh).toBe(5);
+  });
+});
+
+describe('a tab a flow’s page opens (F184)', () => {
+  const env: OperationEnv = {
+    artifacts: new ArtifactWriter(path.join(tmpdir(), 'kage-opened-unused')),
+    defaultArtifactPrefix: 'sidecar/test',
+  };
+  const capture = { dom: true, raw: false, xhr: null, console: false, screenshot: null, pdf: null };
+  const session = () => {
+    const { driver, tabs } = scriptedDriver();
+    const parts = { driver, personaSeed: PERSONA_SEED, selftestPages: [], log: silentLog };
+    return { session: new PageSession(parts), tabs };
+  };
+  const flow = async (on: PageSession, actions: FlowRequest['actions']) => {
+    const events: FlowEvent[] = [];
+    await on.flow({ actions, capture }, env, (event) => events.push(event));
+    const steps = events.filter((event) => event.type === 'step');
+    const final = events.find((event) => event.type === 'final');
+    if (final === undefined) {
+      throw new Error('the flow sent no final event');
+    }
+    return { steps, final };
+  };
+
+  it('is reported by the step that opened it, kept behind the flow’s page, and closed with the flow', async () => {
+    const { session: on, tabs } = session();
+    // The round's flow (flows-02): a link that opens a tab, a wait, and
+    // more steps on the page the flow is on.
+    const run = await flow(on, [
+      { action: 'goto', url: site('/a') },
+      { action: 'click', selector: '#blank-terms', human: false },
+      { action: 'wait_for', ms: 10 },
+      { action: 'click', selector: 'a[href="https://www.example.org/b"]', human: false },
+    ]);
+    expect(run.steps.map((step) => [step.action, step.ok, step.opened_tabs])).toEqual([
+      ['goto', true, []],
+      ['click', true, [site('/terms')]],
+      ['wait_for', true, []],
+      ['click', true, []],
+    ]);
+    // The flow's page was put in front again as soon as the browser
+    // reported the tab, and had the focus for the next step.
+    expect(tabs.fronts).toBeGreaterThanOrEqual(1);
+    // The tab ended with the flow, before the flow said it was done.
+    expect(tabs.opened).toEqual([expect.objectContaining({ url: site('/terms'), closed: true })]);
+    expect(run.final.ok).toBe(true);
+  });
+
+  it('fails the step whose input could not reach the flow’s page, and is closed all the same', async () => {
+    const { session: on, tabs } = session();
+    // A browser that keeps the tab in front, whatever is asked.
+    tabs.frontable = false;
+    const run = await flow(on, [
+      { action: 'goto', url: site('/a') },
+      { action: 'click', selector: '#blank-ad', human: false },
+      { action: 'click', selector: 'a[href="https://www.example.org/b"]', human: false },
+    ]);
+    expect(run.steps.map((step) => [step.action, step.ok])).toEqual([
+      ['goto', true],
+      ['click', false],
+    ]);
+    expect(run.steps[1]?.error).toBe(
+      `a tab the page opened (${site('/ad')}) stays in front of the flow's page`,
+    );
+    expect(run.steps[1]?.opened_tabs).toEqual([site('/ad')]);
+    expect(run.final.ok).toBe(false);
+    expect(tabs.opened.every((tab) => tab.closed)).toBe(true);
+  });
+
+  it('is closed at once when no flow runs, and before the next request when the browser reported it late', async () => {
+    const { session: on, tabs } = session();
+    await on.navigate({ url: site('/a'), wait: { until: 'load' }, capture }, env);
+    // A tab that opens while no flow runs belongs to no request.
+    tabs.open(site('/late'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(tabs.opened).toEqual([expect.objectContaining({ url: site('/late'), closed: true })]);
+    // A request finds no tab of another's: one still open is closed first.
+    tabs.opened.push({
+      url: site('/unreported'),
+      closed: false,
+      tab: {
+        url: () => site('/unreported'),
+        close: () => {
+          const entry = tabs.opened.at(-1);
+          if (entry !== undefined) {
+            entry.closed = true;
+          }
+          return Promise.resolve();
+        },
+      },
+    });
+    const run = await flow(on, [{ action: 'goto', url: site('/b') }]);
+    expect(run.steps[0]).toMatchObject({ ok: true, opened_tabs: [] });
+    expect(tabs.opened.every((tab) => tab.closed)).toBe(true);
   });
 });
 

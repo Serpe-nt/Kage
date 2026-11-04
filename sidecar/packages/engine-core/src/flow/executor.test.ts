@@ -126,6 +126,9 @@ function rig(
       calls.push('pdf');
       return Promise.resolve(pageResult);
     },
+    // A page that opens no tab (F184): the flow's page stays in front.
+    keepFront: () => Promise.resolve(),
+    openedTabs: () => [],
   };
   const events: FlowEvent[] = [];
   const outcome = (actions: FlowAction[], timeout?: number, now?: () => number) =>
@@ -192,6 +195,85 @@ describe('the flow executor', () => {
         (event) => event.type === 'step' && event.capture === null && event.error === null,
       ),
     ).toBe(true);
+  });
+
+  it('keeps the flow’s page in front of a tab it opened, between a click and its keys too, and reports the tab with its step (F184)', async () => {
+    const { calls, events, run, host } = rig();
+    host.keepFront = () => {
+      calls.push('keepFront');
+      return Promise.resolve();
+    };
+    // The browser reports the tab the link opened once.
+    let reported = false;
+    host.openedTabs = () => {
+      if (reported || !calls.includes('human.click #blank')) {
+        return [];
+      }
+      reported = true;
+      return ['https://example.org/terms'];
+    };
+    const ok = await run([
+      { action: 'goto', url: 'https://example.org/' },
+      { action: 'click', selector: '#blank' },
+      { action: 'wait_for', ms: 0 },
+      { action: 'type', selector: '#q', text: 'hello' },
+    ]);
+    expect(ok).toBe(true);
+    expect(calls).toEqual([
+      'keepFront',
+      `goto https://example.org/ ${DEFAULT_STEP_TIMEOUT_MS}`,
+      'keepFront',
+      'keepFront',
+      `waitForSelector #blank ${DEFAULT_STEP_TIMEOUT_MS}`,
+      'human.click #blank',
+      'waitForNavigation 1200',
+      'keepFront',
+      // A step that only reads sends no input: nothing to keep before it.
+      'keepFront',
+      'keepFront',
+      `waitForSelector #q ${DEFAULT_STEP_TIMEOUT_MS}`,
+      'human.click #q',
+      // The click may have opened a tab: the keys are for the flow's page.
+      'keepFront',
+      'human.type hello',
+      'keepFront',
+    ]);
+    expect(
+      events.map((event) => (event.type === 'step' ? [event.action, event.opened_tabs] : event)),
+    ).toEqual([
+      ['goto', []],
+      ['click', ['https://example.org/terms']],
+      ['wait_for', []],
+      ['type', []],
+    ]);
+  });
+
+  it('fails the step whose input could not be kept on the flow’s page, and ends the flow there (F184)', async () => {
+    const { calls, events, run, host } = rig();
+    host.keepFront = () => {
+      calls.push('keepFront');
+      return calls.includes('human.click #q')
+        ? Promise.reject(
+            new FlowStepError(
+              "a tab the page opened (https://ads.example/) stays in front of the flow's page",
+            ),
+          )
+        : Promise.resolve();
+    };
+    const ok = await run([
+      { action: 'type', selector: '#q', text: 'hello' },
+      { action: 'click', selector: '#next' },
+    ]);
+    expect(ok).toBe(false);
+    // Not one key went out after the click that lost the page.
+    expect(calls.filter((call) => call.startsWith('human.'))).toEqual(['human.click #q']);
+    expect(events).toEqual([
+      expect.objectContaining({
+        action: 'type',
+        ok: false,
+        error: "a tab the page opened (https://ads.example/) stays in front of the flow's page",
+      }),
+    ]);
   });
 
   it('uses the driver for a step that says human: false', async () => {

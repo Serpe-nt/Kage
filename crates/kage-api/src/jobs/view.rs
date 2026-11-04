@@ -306,6 +306,11 @@ pub(crate) struct StepView {
     pub(crate) paced_ms: Option<u64>,
     /// Why it failed.
     pub(crate) error: Option<String>,
+    /// The addresses of the tabs the flow's page opened while the step ran
+    /// (a link with `target=_blank`, a window a click opened). Such a tab
+    /// is the flow's: no later step acts on it, nothing of it is captured,
+    /// and it is closed when the flow ends. Empty when the step opened none.
+    pub(crate) opened_tabs: Vec<String>,
 }
 
 /// One item of a job: a page of a batch or of a crawl, or a step of a
@@ -359,6 +364,15 @@ impl JobItemView {
             duration_ms: output("duration_ms").and_then(Value::as_u64),
             paced_ms: output("paced_ms").and_then(Value::as_u64),
             error: output("error").and_then(Value::as_str).map(str::to_owned),
+            opened_tabs: output("opened_tabs")
+                .and_then(Value::as_array)
+                .map(|tabs| {
+                    tabs.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default(),
         });
         Self {
             seq: item.seq,
@@ -553,7 +567,7 @@ mod tests {
             state: JobItemState::Succeeded,
             outcome: None,
             output: Some(
-                json!({ "ok": true, "duration_ms": 4200, "paced_ms": 2900, "error": null }),
+                json!({ "ok": true, "duration_ms": 4200, "paced_ms": 2900, "error": null, "opened_tabs": ["https://example.org/terms"] }),
             ),
             error: None,
             request_id: None,
@@ -563,7 +577,7 @@ mod tests {
         assert!(value["url"].is_null());
         assert_eq!(
             value["step"],
-            json!({ "action": "click", "ok": true, "duration_ms": 4200, "paced_ms": 2900, "error": null })
+            json!({ "action": "click", "ok": true, "duration_ms": 4200, "paced_ms": 2900, "error": null, "opened_tabs": ["https://example.org/terms"] })
         );
         // The last item of a flow is the page it ended on; a step that has
         // not run yet says nothing.

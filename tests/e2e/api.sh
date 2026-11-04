@@ -29,7 +29,10 @@
 #   - an audit row for every admin call, and the series of `/metrics`;
 #   - `kage selftest browser --proxy` reading its pages through kage on the
 #     shipped network layout, and a run that could read none of them
-#     ending as inconclusive with a failing exit (F105).
+#     ending as inconclusive with a failing exit (F105);
+#   - the same for a persona (`kage selftest browser --persona`, `kage
+#     persona selftest`): a run that read no page fails its exit, says so
+#     in its document and its table, and cools nobody down (F185).
 #
 # Level 1 cannot run here: no persona of this release has an http profile
 # for its browser's major (follow-up F30), and it is refused with
@@ -188,6 +191,41 @@ call GET /readyz
 expect 200 "/readyz"
 check "ready: the database, a persona, a sidecar" "${body}" "d.status === 'ready' && d.checks.database && d.checks.persona && d.checks.sidecar"
 echo "    ${body}"
+
+echo "==> a persona's self-test that read none of its pages is no pass either, on every road (F185)"
+# One page that is no probe: it loads, cannot be read as one, and no check
+# runs. The setting is the command's own, for these calls only. It runs
+# before any request has opened a persona's browser in the server: the
+# command opens the persona's context itself, which a context the server
+# holds open would refuse.
+unread_pages='[{id="unread",kind="probe",url="http://fixture.kage.test:8088/landing"}]'
+kage_unread() {
+    "${compose[@]}" exec -T -e "KAGE__SELFTEST__BROWSER__PAGES=${unread_pages}" \
+        -e KAGE__SELFTEST__BROWSER__PAGE_TIMEOUT=15s kage /usr/local/bin/kage "$@"
+}
+listed="$(kage persona list --json)"
+chromium_persona="$(value "${listed}" "d.personas.find((p) => p.engine === 'chromium' && p.ready).id")"
+firefox_persona="$(value "${listed}" "d.personas.find((p) => p.engine === 'firefox' && p.ready).id")"
+unread_status=0
+unread="$(kage_unread selftest browser --persona "${chromium_persona}" --json 2> /dev/null)" || unread_status=$?
+[ "${unread_status}" -ne 0 ] || fail "selftest browser --persona exited 0 on a run that read no page: $(printf '%s' "${unread}" | head -c 2000)"
+check "its document says that nothing was tested" "${unread}" \
+    "d.passed === false && d.verdict === 'inconclusive' && d.browser.verdict === 'inconclusive' && d.browser.report.pages.every((p) => p.status !== 'ok')"
+table_status=0
+table="$(kage_unread selftest browser --persona "${chromium_persona}" 2> /dev/null)" || table_status=$?
+[ "${table_status}" -ne 0 ] || fail "selftest browser --persona (table) exited 0 on a run that read no page: ${table}"
+printf '%s\n' "${table}" | grep --quiet --fixed-strings 'INCONCLUSIVE: no page could be read, so nothing was tested' \
+    || fail "the table does not say that nothing was tested: ${table}"
+both_status=0
+both="$(kage_unread persona selftest "${firefox_persona}" --json 2> /dev/null)" || both_status=$?
+[ "${both_status}" -ne 0 ] || fail "persona selftest exited 0 on a run that read no page: $(printf '%s' "${both}" | head -c 2000)"
+check "persona selftest says so too, and names no option it lacks" "${both}" \
+    "d.passed === false && d.verdict === 'inconclusive' && d.browser.verdict === 'inconclusive' && !JSON.stringify(d.http ?? {}).includes('--echo')"
+# An outage of the test page cools nobody down.
+after="$(kage persona list --json)"
+check "both personas are still active and ready" "${after}" \
+    "['${chromium_persona}', '${firefox_persona}'].every((id) => d.personas.some((p) => p.id === id && p.ready && p.state === 'active'))"
+echo "    selftest browser --persona: exit ${unread_status} (json), ${table_status} (table); persona selftest: exit ${both_status}"
 
 echo "==> the first admin key is made at the command line; its token is shown once"
 created="$(kage key create --name e2e-operator --scope admin --json)"
@@ -390,12 +428,14 @@ echo "    $(value "${body}" "d.outcome + ': ' + d.reason")"
 echo "==> a self-test runs in the server, in the persona's own browser, while real work has it open"
 call POST /v1/fetch "${client}" '{"url":"http://fixture.kage.test:8088/landing","level":3,"persona":{"engines":["chromium"]},"timeout_ms":30000}'
 expect 200 "a fetch before the self-test"
+# The command-line runs of F185 above are stored too: this one adds one.
+runs_before="$(psql "SELECT count(*) FROM selftest_runs WHERE persona_id = '${target}' AND render = 'browser'")"
 call POST "/v1/admin/personas/${target}/selftest" "${admin}"
 expect 200 "POST /v1/admin/personas/{id}/selftest"
 check "the browser path was tested and a run is stored; the http path has nothing to test" "${body}" \
     "['passed', 'failed', 'inconclusive'].includes(d.browser.verdict) && typeof d.browser.run === 'string' && typeof d.browser.score === 'number' && d.http.verdict === 'skipped' && d.persona.id === '${target}'"
 runs="$(psql "SELECT count(*) FROM selftest_runs WHERE persona_id = '${target}' AND render = 'browser'")"
-[ "${runs}" -eq 1 ] || fail "${runs} self-test runs are stored for the persona, expected 1"
+[ "${runs}" -eq $((runs_before + 1)) ] || fail "${runs} self-test runs are stored for the persona, expected $((runs_before + 1))"
 conflicts="$("${compose[@]}" logs --no-color browser-chromium 2> /dev/null | grep --count 'context_conflict' || true)"
 [ "${conflicts}" -eq 0 ] || fail "the self-test met context_conflict ${conflicts} times"
 echo "    $(value "${body}" "'browser: ' + d.browser.verdict + ' with a score of ' + d.browser.score + '; http: ' + d.http.verdict + '; the persona is ' + d.persona.state")"
