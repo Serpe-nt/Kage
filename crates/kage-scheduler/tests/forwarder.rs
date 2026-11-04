@@ -1371,6 +1371,68 @@ async fn with_resolve_on_host_every_name_relayed_through_a_proxy_is_judged_by_it
     rig.stop().await;
 }
 
+/// A resolver whose first lookup of every name fails, as one that hiccups
+/// or runs out of time does, and whose later lookups answer a public address.
+#[derive(Debug, Default)]
+struct FailsFirst {
+    asked: Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl HopResolver for FailsFirst {
+    async fn resolve(&self, host: &str) -> Result<Vec<IpAddr>, String> {
+        let mut asked = self.asked.lock().unwrap();
+        let first = !asked.iter().any(|seen| seen == host);
+        asked.push(host.to_owned());
+        if first {
+            return Err("the resolver did not answer".to_owned());
+        }
+        Ok(vec![IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34))])
+    }
+}
+
+/// A lookup that failed is the answer of the connection that asked, and of
+/// nobody after it: the next connection to the name asks again at once and
+/// is let through, while an answer with addresses is kept (F57).
+#[tokio::test]
+async fn a_lookup_that_failed_is_asked_again_by_the_next_connection() {
+    let resolver = Arc::new(FailsFirst::default());
+    let mut rig = Rig::start(ForwarderSettings {
+        resolver: Arc::<FailsFirst>::clone(&resolver),
+        resolve_names: true,
+        ..settings()
+    })
+    .await;
+    let shop = shop().await;
+    rig.provider.route("flaky.kage.test:443", *shop.address());
+    let mark = rig.forwarder.denials().mark();
+
+    // The first connection meets the failed lookup: no address, refused.
+    let (mut client, head) = rig.tunnel(id(0), "flaky.kage.test:443").await;
+    assert_eq!(head, "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n");
+    assert_eq!(client.rest().await, "");
+    assert!(
+        rig.forwarder
+            .denials()
+            .since(
+                Caller::Persona(id(0)),
+                mark,
+                &["flaky.kage.test".to_owned()]
+            )
+            .is_some()
+    );
+    assert_eq!(rig.provider.seen().len(), 0);
+
+    // The next one asks again, gets the answer, and goes through; the
+    // answer is kept for the one after it.
+    for _ in 0..2 {
+        let (_client, head) = rig.tunnel(id(0), "flaky.kage.test:443").await;
+        assert_eq!(head, "HTTP/1.1 200 Connection Established\r\n\r\n");
+    }
+    assert_eq!(resolver.asked.lock().unwrap().len(), 2);
+    rig.stop().await;
+}
+
 /// Without the setting the proxy resolves: the forwarder looks nothing up
 /// for a route through the pool.
 #[tokio::test]

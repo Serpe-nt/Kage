@@ -2826,8 +2826,11 @@ are gzip-compressed on disk.
   system's resolver does not say a name's TTL, so the forwarder keeps an
   answer for less than a browser keeps one in its own host cache (a
   minute in Chromium) and leaves the TTL to the resolver beneath it, which
-  honours it. The answer decides what the forwarder lets through, never
-  where a proxy connects: the proxy resolves the name again, and a name
+  honours it. Only an answer with addresses is kept: a lookup that failed,
+  ran out of time or found no address refuses the connections that waited
+  for it, and the next connection asks again at once, as the http path's
+  check never keeps a failure either. The answer decides what the
+  forwarder lets through, never where a proxy connects: the proxy resolves the name again, and a name
   can change its answer between the two lookups (the security review's
   G2, accepted).
 
