@@ -100,7 +100,7 @@ them sent somewhere, point an Alertmanager of your own at Prometheus.
 | Alert | When | What to do |
 |---|---|---|
 | KageDown (critical) | Prometheus has not scraped Kage for 2 minutes | `docker compose ps`, `docker compose logs kage` |
-| KagePoolUnavailable (critical) | no proxy healthy or degraded for 10 minutes; a proxy whose backoff ran out counts as `backoff` until a probe passes, so an outage holds the alert through every expiry; under `egress.mode: direct` the pool is idle and publishes nothing, so it stays quiet | [proxies.md](proxies.md) |
+| KagePoolUnavailable (critical) | no proxy healthy or degraded for 10 minutes; a proxy whose backoff ran out counts as `backoff` until a probe passes, so an outage holds the alert through every expiry, and so does one whose latest probe failed while the outage guard of a pool of four or more holds (F151); under `egress.mode: direct` the pool is idle and publishes nothing, so it stays quiet | [proxies.md](proxies.md) |
 | KageBandwidthBudget (warning) | 80 % of the month's cap used | [fetching.md](fetching.md#the-bandwidth-budget) |
 | KageBreakerOpen (warning) | a domain is paused | [block-report.md](block-report.md) |
 | KageBlockRateAboveThreshold (warning) | a domain was blocked, at levels 1 to 3, as often in the last hour as its `breaker_threshold` allows; the first block counts (see Metrics) | [block-report.md](block-report.md) |
@@ -145,8 +145,13 @@ left it in. A proxy whose backoff ran out is `degraded` in the store and in
 seconds at most; the gauge counts it as `backoff` until a probe passes, so
 that an outage of the whole pool reads as a flat zero of `healthy` and
 `degraded` through every expiry and `KagePoolUnavailable` holds its ten
-minutes (F111). The gauge is set at every change of a proxy's state and at
-every maintenance pass of the pool.
+minutes (F111). In a pool of four or more, while more than half fails its
+latest probe, the outage guard freezes the counters and no proxy changes
+state; the gauge then counts every proxy whose latest probe failed as
+`backoff`, as the scheduler holds it (F169), so that a pool that died whole
+reads as no usable proxy and the alert fires (F151). The gauge is set at
+every change of a proxy's state, after every probe while the guard holds or
+is lifted, and at every maintenance pass of the pool.
 
 Since 2.0 `kage_requests_total`, `kage_attempts_total` and
 `kage_attempt_duration_seconds` carry `level` (`"0"` to `"3"`) where 1.x

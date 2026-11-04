@@ -325,6 +325,14 @@ backoff ──3 cycles and 6 h of failing, or bad reputation──▶ replacing 
 - When more than half of a pool of four or more fails at once, the failure
   counters freeze and `pool_outage_suspected` is raised: the cause is the
   host's network, the provider's gateway or the echo, not the addresses.
+  The frozen proxies keep their state (`healthy` or `degraded` in `kage
+  proxy list`), but every one whose latest probe failed carries nothing
+  until a probe of it passes (F169): its persona is not ready, jobs are
+  `paused` with `no_persona` and resume by themselves, a synchronous fetch
+  is answered `no_persona` with `retry_at`, and `kage_proxy_state` counts
+  the proxy as `backoff`, so `KagePoolUnavailable` fires when the whole
+  pool is down (F151). The proxies whose latest probe passed go on
+  carrying. Nothing to do but find the cause.
 
 ## Replacing a proxy
 
