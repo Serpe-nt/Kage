@@ -165,6 +165,16 @@ are (F99); the file's `Crawl-delay`, where it is enforced, holds the plain
 client between two pages of the host. A proxy that leaves by an older proxy's address
 (`proxy_exit_shared`) carries no level 0.
 
+A level-0 redirect to **another site** leaves from that site's own plain
+exit, found the same way, never from the first site's (F166): the second
+site must not get `kage/<version>` from an address that may read it as a
+person. When the other site's exit cannot carry traffic the hop is not
+asked for at all: the attempt ends `provider_error` with the reason
+`hop_exit_unavailable` (a fetch is tried again after a pause, a job's page
+as any failed attempt). The same holds for a level-0 `robots.txt` that
+redirects to another site. Each such hop marks one more address for that
+site only if it is that site's own exit, which it already is.
+
 When that exit cannot carry traffic, level 0 waits or is refused and is
 never sent from another address: a fetch is answered `provider_error` with
 the reason `plain_exit_unavailable` and a `retry_at`, and a job's page
@@ -185,6 +195,36 @@ days). What to do:
 The plain client's bytes are counted with `egress: pool` and against the
 proxy plan's budget, and the pool's stops (a leak on record, the budget
 used up) hold it as they hold every persona.
+
+#### Proxies that could reach your own networks: `security.resolve_on_host`
+
+A residential provider's exits cannot reach your networks, so by default
+Kage looks no name up and leaves it to the proxy. Proxies of your own (a
+declared list of self-hosted proxies) can: a public page's redirect, meta
+refresh, script or form could send a browser to a name that resolves into
+your network. Turn on `security.resolve_on_host` for such a pool;
+`kage config check` warns about a declared list without it. Under the
+setting (spec §19, F57):
+
+- every target, every redirect hop of the http path and every webhook host
+  is resolved on the Kage host, as before;
+- the forwarder resolves every name it relays through a proxy (a browser's
+  own requests, a page's redirect, a scout's sitemaps and `robots.txt`)
+  and refuses one with an address in a private, loopback, link-local,
+  metadata or other denied range, or one the host cannot look up, before
+  the proxy is asked for it. The browser sees a connection that failed;
+  the request ends `ssrf_denied`, never retried, nothing kept;
+- a browser navigation's chain and a flow's pages are resolved again after
+  the fact with the http path's own check, so a hop that got past the
+  forwarder is `ssrf_denied` all the same.
+
+What it costs: the Kage host's resolver sees every name a page asks for
+(the host's lookups are the operating system's, `getaddrinfo`), and the
+forwarder looks each name up once per 30 seconds. What it cannot do: the
+proxy resolves the name again where it connects, and a name whose answer
+changes between the two lookups is reached (the security review's G2).
+`egress.direct.private_names` does not reach the pool: under the pool a
+name of your own network is refused whatever it is called.
 
 ### The host's own connection (`egress.mode: direct`)
 

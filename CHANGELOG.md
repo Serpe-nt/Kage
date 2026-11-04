@@ -49,6 +49,43 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   other visits are over; a visitor of the site may take the flow at
   once, and a synchronous flow goes past the seats only for a visitor's
   break that does not end within `visitor_wait`.
+- **With `security.resolve_on_host`, every name is resolved on every road
+  (F57, the security review's G1).** QA round two found that a public
+  page's redirect, meta refresh, script or self-submitting form, or a
+  flow's click, sent a browser to a name of the operator's network, the
+  forwarder relayed it by its URL alone, and the private page came back
+  `ok` with its document kept, in both engines at levels 2 and 3, while
+  the same name asked for directly was `422 ssrf_denied` (ssrf-01). Under
+  the setting the forwarder now looks up every name it relays through a
+  proxy, a browser's own requests and a scout's reads included, and
+  refuses one with an address in a denied range, or with none, before the
+  proxy is asked; the refusal is the guard's, so the attempt ends
+  `ssrf_denied`, never retried, nothing kept. Each name is looked up once
+  and its answer kept 30 seconds; the proxy still resolves where it
+  connects (G2). After the navigation the chain of a page and every page
+  of a flow are resolved with the http path's own address check, so a hop
+  that got past the forwarder is refused all the same. `kage config check`
+  warns about a declared proxy list without the setting.
+- **A browser's redirect to a scheme, and Firefox's error page, are
+  `ssrf_denied` (F167).** A redirect to `file:`, `data:`, `ftp:` or
+  `javascript:` ended `provider_error`, in Firefox with its own error page
+  kept and tried twice (ssrf-06), and under `egress.mode: direct` a
+  Firefox meta refresh to a refused name ended `soft_block` with that page
+  kept and a block booked to the site (ssrf-02). A server's redirect may
+  now only send a browser to `http` or `https`, any other `Location` is a
+  refused hop; the Chromium engine reads from Chrome's debugger the
+  redirect Chrome refuses by itself and never hands the driver, and a
+  page is Firefox's error page by its document's URI as well as by its
+  address. One outcome in both engines and both modes: `ssrf_denied`,
+  nothing of the browser's page kept, nothing booked, no retry.
+- **A level 0 redirect to another site leaves by that site's own exit
+  (F166).** A level 0 fetch, or a level 0 `robots.txt`, that redirected
+  to another site asked for the hop from the first site's plain exit, so
+  the second site got `kage/<version>` from an address that may read it
+  as a person (http-02). Each hop now leaves from its own site's plain
+  exit (the site's own, else its scout's); when that exit cannot carry
+  traffic the hop is not asked for at all and the attempt ends
+  `provider_error` with the new reason `hop_exit_unavailable`.
 
 ## [2.0.2] - 2026-11-04
 

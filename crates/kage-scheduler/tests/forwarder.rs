@@ -140,6 +140,7 @@ fn settings() -> ForwarderSettings {
         operator_hosts: HashSet::new(),
         private_names: HashSet::new(),
         resolver: Arc::new(Names::default()),
+        resolve_names: false,
     }
 }
 
@@ -1227,6 +1228,167 @@ async fn a_plain_clients_credential_names_its_exit_and_nothing_else() {
     rig.stop().await;
 }
 
+/// A resolver over [`Names`] that counts its lookups and answers slowly
+/// enough that connections asking at once meet the same lookup.
+#[derive(Debug, Default)]
+struct Counting {
+    names: Names,
+    lookups: Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl HopResolver for Counting {
+    async fn resolve(&self, host: &str) -> Result<Vec<IpAddr>, String> {
+        self.lookups.lock().unwrap().push(host.to_owned());
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        if host == "public.kage.test" {
+            return Ok(vec![IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34))]);
+        }
+        if host == "lan.kage.test" {
+            return Ok(vec![IpAddr::V4(Ipv4Addr::new(10, 0, 0, 7))]);
+        }
+        self.names.resolve(host).await
+    }
+}
+
+/// F57 (the security review's G1): under `security.resolve_on_host` the
+/// forwarder looks up every name it relays through a proxy, the browsers'
+/// tunnels and plain requests and every request of a kept connection, and
+/// refuses one with an address in a denied range, or with none, before
+/// the proxy is asked for it; the refusal is the guard's, kept for the
+/// caller. Each name is looked up once while its answer is kept.
+#[tokio::test]
+async fn with_resolve_on_host_every_name_relayed_through_a_proxy_is_judged_by_its_addresses() {
+    let resolver = Arc::new(Counting::default());
+    let mut rig = Rig::start(ForwarderSettings {
+        resolver: Arc::<Counting>::clone(&resolver),
+        resolve_names: true,
+        // Not for the pool: the host's own connection only.
+        private_names: HashSet::from(["lan.kage.test".to_owned()]),
+        ..settings()
+    })
+    .await;
+    let shop = shop().await;
+    rig.provider.route("public.kage.test:443", *shop.address());
+    let mark = rig.forwarder.denials().mark();
+
+    // A name of the operator's networks, one the cloud's metadata address,
+    // one with a public and a private address, and one the host cannot
+    // look up: never asked of the proxy.
+    for authority in [
+        "lan.kage.test:443",
+        "metadata.kage.test:80",
+        "mixed.kage.test:443",
+        "unknown.kage.test:443",
+    ] {
+        let (mut client, head) = rig.tunnel(id(0), authority).await;
+        assert_eq!(
+            head, "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n",
+            "{authority}"
+        );
+        assert_eq!(client.rest().await, "", "{authority}");
+    }
+    // A plain request for such a name gets no answer at all.
+    let mut client = rig.client().await;
+    client
+        .send(&format!(
+            "GET http://lan.kage.test/admin HTTP/1.1\r\nHost: lan.kage.test\r\nProxy-Authorization: {}\r\n\r\n",
+            rig.credential(id(0))
+        ))
+        .await;
+    assert_eq!(client.rest().await, "");
+    assert_eq!(rig.provider.seen().len(), 0);
+
+    // Each refusal is the guard's, kept for the caller it refused (F102):
+    // an address in a denied range, and a name with no address (F98).
+    let denials = rig.forwarder.denials();
+    let of = |name: &str| denials.since(Caller::Persona(id(0)), mark, &[name.to_owned()]);
+    for name in ["lan.kage.test", "metadata.kage.test", "mixed.kage.test"] {
+        let denial = of(name).unwrap_or_else(|| panic!("{name} is kept"));
+        assert!(denial.reason.contains("resolves to"), "{denial:?}");
+    }
+    let unknown = of("unknown.kage.test").expect("a name with no address is kept");
+    assert!(unknown.reason.contains("unknown.kage.test"), "{unknown:?}");
+    assert_eq!(
+        denials.since(Caller::Persona(id(1)), mark, &["lan.kage.test".to_owned()]),
+        None
+    );
+
+    // A public name passes, and connections that ask for it at once wait
+    // for one lookup, which serves the next ones while it is kept.
+    let at_once = tokio::join!(
+        rig.tunnel(id(0), "public.kage.test:443"),
+        rig.tunnel(id(0), "public.kage.test:443"),
+        rig.tunnel(id(0), "public.kage.test:443"),
+    );
+    for (_client, head) in [at_once.0, at_once.1, at_once.2] {
+        assert_eq!(head, "HTTP/1.1 200 Connection Established\r\n\r\n");
+    }
+    let (_client, head) = rig.tunnel(id(0), "public.kage.test:443").await;
+    assert_eq!(head, "HTTP/1.1 200 Connection Established\r\n\r\n");
+    let looked_up = |name: &str| {
+        resolver
+            .lookups
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|seen| *seen == name)
+            .count()
+    };
+    assert_eq!(looked_up("public.kage.test"), 1);
+    assert_eq!(looked_up("lan.kage.test"), 1, "kept, refused again");
+    // A literal address is judged by the guard as it is: nothing to look up.
+    rig.provider.route("93.184.216.34:443", *shop.address());
+    let (_client, head) = rig.tunnel(id(0), "93.184.216.34:443").await;
+    assert_eq!(head, "HTTP/1.1 200 Connection Established\r\n\r\n");
+    assert_eq!(resolver.lookups.lock().unwrap().len(), 5);
+
+    // A later request of a kept plain connection is judged the same way.
+    let provider = KeepAlive::start().await;
+    rig.table.set(id(0), Ok(provider.endpoint()));
+    let credential = rig.credential(id(0));
+    let mut client = rig.client().await;
+    client
+        .send(&format!(
+            "GET http://public.kage.test/a HTTP/1.1\r\nHost: public.kage.test\r\nProxy-Authorization: {credential}\r\n\r\n"
+        ))
+        .await;
+    client.until("answer 1").await;
+    let mark = rig.forwarder.denials().mark();
+    client
+        .send(&format!(
+            "GET http://lan.kage.test/b HTTP/1.1\r\nHost: lan.kage.test\r\nProxy-Authorization: {credential}\r\n\r\n"
+        ))
+        .await;
+    assert!(!client.rest().await.contains("HTTP/1.1"));
+    assert_eq!(provider.seen.lock().unwrap().len(), 1);
+    assert!(
+        rig.forwarder
+            .denials()
+            .since(Caller::Persona(id(0)), mark, &["lan.kage.test".to_owned()])
+            .is_some()
+    );
+    rig.stop().await;
+}
+
+/// Without the setting the proxy resolves: the forwarder looks nothing up
+/// for a route through the pool.
+#[tokio::test]
+async fn without_resolve_on_host_the_pool_looks_up_no_name() {
+    let resolver = Arc::new(Counting::default());
+    let mut rig = Rig::start(ForwarderSettings {
+        resolver: Arc::<Counting>::clone(&resolver),
+        ..settings()
+    })
+    .await;
+    let shop = shop().await;
+    rig.provider.route("lan.kage.test:443", *shop.address());
+    let (_client, head) = rig.tunnel(id(0), "lan.kage.test:443").await;
+    assert_eq!(head, "HTTP/1.1 200 Connection Established\r\n\r\n");
+    assert_eq!(resolver.lookups.lock().unwrap().len(), 0);
+    rig.stop().await;
+}
+
 #[test]
 fn the_settings_come_from_the_configuration() {
     let mut config = config(&[
@@ -1250,4 +1412,8 @@ fn the_settings_come_from_the_configuration() {
         settings.private_names,
         HashSet::from(["fixture.kage.test".to_owned()])
     );
+    // The proxy resolves unless the operator asks the host to (F57).
+    assert!(!settings.resolve_names);
+    config.security.resolve_on_host = true;
+    assert!(ForwarderSettings::from_config(&config).resolve_names);
 }

@@ -51,6 +51,7 @@
 //! success postpones the next health probe of the proxy it went through.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -63,6 +64,7 @@ use kage_browser::contract::{
     EntryStrategy, FlowAction, FlowBehavior, FlowEvent, FlowPace, FlowRequest, NavigateRequest,
     PageResult, Wait, WaitUntil,
 };
+use kage_browser::ssrf::DeniedHop;
 use kage_browser::{Navigation, navigation_bound, ssrf};
 use kage_core::classifier::{Classification, Observation};
 use kage_core::config::{BrowserConfig, Config};
@@ -74,8 +76,10 @@ use kage_core::persona::pacing_factor;
 use kage_core::policy::{EffectivePolicy, RefererStrategy};
 use kage_core::schedule::politeness::Courtesy;
 use kage_core::seed::Seed;
-use kage_core::ssrf::SsrfPolicy;
-use kage_http::{FetchSpec, Fetched, Guard, HttpError, PlainSpec, RequestKind};
+use kage_core::ssrf::{SsrfPolicy, check_url};
+use kage_http::{
+    FetchSpec, Fetched, Guard, HopExits, HttpError, PlainClient, PlainSpec, RequestKind,
+};
 use kage_persona::identity::http_spec;
 use kage_persona::{PersonaError, PersonaManager, Via};
 use url::Url;
@@ -280,6 +284,10 @@ pub struct PlainJob {
     /// Where it leaves from: the host's connection, or the site's plain
     /// exit of the pool.
     pub route: PlainRoute,
+    /// Where every other site's plain traffic leaves from: a redirect hop
+    /// to another site is asked for from that site's exit, or not at all
+    /// (F166). `None` asks every hop from `route`.
+    pub sites: Option<Arc<dyn SiteExits>>,
     /// The page.
     pub url: Url,
     /// `GET`, `HEAD` or `POST`.
@@ -294,6 +302,94 @@ pub struct PlainJob {
     pub timeout: Duration,
     /// The largest body kept.
     pub max_body_bytes: Option<u64>,
+}
+
+/// Where a site's plain traffic leaves from (spec §25, D50): under the pool
+/// the site's own plain exit, else its scout's proxy; the host's connection
+/// under `egress.plain: host`. The pipeline knows it; a plain attempt asks
+/// it for the exit of a redirect hop to another site (F166).
+#[async_trait]
+pub trait SiteExits: Send + Sync + fmt::Debug {
+    /// The route of `site`'s plain traffic, whose page `url` is; `None` when
+    /// that address cannot carry traffic now.
+    ///
+    /// # Errors
+    ///
+    /// Why it could not be found out.
+    async fn route_of(&self, site: &str, url: &Url) -> Result<Option<PlainRoute>, String>;
+}
+
+/// The exits of one plain attempt's redirect hops (F166): a hop to the
+/// request's own site leaves where the request does; a hop to another site
+/// from that site's own plain exit, through a plain client of that exit.
+struct AttemptExits<'a> {
+    executor: &'a PathExecutor,
+    egress: &'a ForwarderEgress,
+    sites: &'a dyn SiteExits,
+    /// The request's own site and route.
+    home: (String, PlainRoute),
+    /// The clients of the other routes a hop left by.
+    used: Mutex<Vec<(PlainRoute, Arc<PlainClient>)>>,
+}
+
+impl AttemptExits<'_> {
+    /// The routes other than the request's own that a hop left by.
+    fn routes(&self) -> Vec<PlainRoute> {
+        self.used
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|(route, _)| *route)
+            .collect()
+    }
+}
+
+#[async_trait]
+impl HopExits for AttemptExits<'_> {
+    async fn client_for(&self, url: &Url) -> Result<Option<Arc<PlainClient>>, String> {
+        let Some(host) = host_of(url) else {
+            return Ok(None);
+        };
+        let site = kage_crawl::site::of_host(&host);
+        if site == self.home.0 {
+            return Ok(None);
+        }
+        let route = self
+            .sites
+            .route_of(&site, url)
+            .await?
+            .ok_or_else(|| format!("the plain exit of {site} cannot carry traffic now"))?;
+        if route == self.home.1 {
+            return Ok(None);
+        }
+        if let Some((_, client)) = self
+            .used
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .find(|(used, _)| *used == route)
+        {
+            return Ok(Some(Arc::clone(client)));
+        }
+        let endpoint = self.egress.plain_endpoint(route);
+        let client = self
+            .executor
+            .manager
+            .http()
+            .plain(&endpoint, &self.executor.plain_user_agent)
+            .map_err(|error| error.to_string())?;
+        let client = Arc::new(client);
+        tracing::debug!(
+            site,
+            exit = route.exit().as_str(),
+            "a redirect hop to another site leaves from that site's exit"
+        );
+        self.used
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((route, Arc::clone(&client)));
+        Ok(Some(client))
+    }
 }
 
 impl PlainJob {
@@ -897,6 +993,35 @@ fn denied_by_forwarder(denial: &Denial) -> AttemptOutput {
     output
 }
 
+/// What a browser attempt comes to whose chain, or a flow's page, reached a
+/// hop the SSRF guard refuses (spec §19): `ssrf_denied` at the hop, never
+/// retried, and nothing the browser captured kept.
+fn denied_hop(
+    denied: DeniedHop,
+    mut page: Box<PageResult>,
+    behavior: BehaviorApplied,
+) -> AttemptOutput {
+    ssrf::drop_captures(&mut page);
+    let mut output =
+        AttemptOutput::failed(Outcome::SsrfDenied, "ssrf_denied", Courtesy::NotTheSite);
+    output.classification.evidence.push(denied.evidence());
+    output.final_url = Some(denied.url);
+    output.timing = timing_of(&page);
+    output.page = Some(page);
+    output.behavior = Some(behavior);
+    output
+}
+
+/// The hops of every page a flow captured and of the page it ended on.
+fn flow_hops(steps: &[FlowStep], page: &PageResult) -> Vec<(usize, Url)> {
+    steps
+        .iter()
+        .filter_map(|step| step.capture.as_deref())
+        .chain(std::iter::once(page))
+        .flat_map(ssrf::capture_hops)
+        .collect()
+}
+
 /// The attempt executor over the real paths.
 pub struct PathExecutor {
     manager: Arc<PersonaManager>,
@@ -1076,6 +1201,47 @@ impl PathExecutor {
         Some(output)
     }
 
+    /// The after-the-fact address check of a browser's chain under
+    /// `security.resolve_on_host` (spec §19, F57): every name of `hops` is
+    /// resolved with the http path's own check
+    /// ([`kage_http::check_target_addresses`]), and the first with an
+    /// address in a denied range, or with none, is the refused hop. The
+    /// forwarder refused such a name before a request to it left; this
+    /// holds when its lookup and this one disagree, and for a page that
+    /// arrived all the same. `None` without the setting: the proxy
+    /// resolves.
+    async fn denied_by_address(&self, hops: Vec<(usize, Url)>) -> Option<DeniedHop> {
+        let resolver = self.manager.http().resolver()?;
+        let mut judged = HashSet::new();
+        for (hop, url) in hops {
+            // What the URL check refuses was refused before this.
+            let Ok(target) = check_url(&url, self.security) else {
+                continue;
+            };
+            let Some(name) = target.name() else {
+                continue;
+            };
+            if !judged.insert(name.to_owned()) {
+                continue;
+            }
+            if let Err(reason) = kage_http::check_target_addresses(resolver.as_ref(), &target).await
+            {
+                tracing::warn!(
+                    hop,
+                    %url,
+                    %reason,
+                    "a browser reached a name the SSRF guard refuses by its addresses"
+                );
+                return Some(DeniedHop {
+                    hop,
+                    url: url.to_string(),
+                    reason,
+                });
+            }
+        }
+        None
+    }
+
     /// The same executor making plain attempts (level 0) through the
     /// forwarder of `egress`.
     #[must_use]
@@ -1112,13 +1278,33 @@ impl PathExecutor {
                 .and_then(|bytes| usize::try_from(bytes).ok()),
             max_redirects: None,
         };
+        let exits = job.sites.as_deref().map(|sites| AttemptExits {
+            executor: self,
+            egress,
+            sites,
+            home: (
+                host_of(&job.url)
+                    .map(|host| kage_crawl::site::of_host(&host))
+                    .unwrap_or_default(),
+                job.route,
+            ),
+            used: Mutex::new(Vec::new()),
+        });
         let mark = self.denials_mark();
         let mut asked = Vec::new();
-        let fetched = match client.fetch_traced(&spec, &mut asked).await {
+        let routed = exits.as_ref().map(|exits| {
+            let exits: &dyn HopExits = exits;
+            exits
+        });
+        let fetched = client.fetch_routed(&spec, &mut asked, routed).await;
+        let hop_routes = exits.as_ref().map(AttemptExits::routes).unwrap_or_default();
+        let fetched = match fetched {
             Ok(fetched) => fetched,
             Err(error) => {
-                return self
-                    .refused_hop(Caller::Plain(job.route), mark, &asked)
+                // A hop the forwarder refused, under whichever exit it left by.
+                return std::iter::once(job.route)
+                    .chain(hop_routes)
+                    .find_map(|route| self.refused_hop(Caller::Plain(route), mark, &asked))
                     .unwrap_or_else(|| Self::http_failure(&error));
             }
         };
@@ -1349,6 +1535,13 @@ impl PathExecutor {
                 Courtesy::NotTheSite,
             )
             .finally(),
+            // A hop to another site whose own exit cannot be had now (F166):
+            // nothing of the hop was asked for, and no other address may.
+            HttpError::HopExitUnavailable { .. } => AttemptOutput::failed(
+                Outcome::ProviderError,
+                "hop_exit_unavailable",
+                Courtesy::NotTheSite,
+            ),
             HttpError::Profile(_) | HttpError::Build(_) | HttpError::Cookies(_) => {
                 AttemptOutput::failed(Outcome::ProviderError, "http_client", Courtesy::NotTheSite)
             }
@@ -1453,6 +1646,13 @@ impl PathExecutor {
             output.behavior = Some(behavior);
             return Err(Box::new(output));
         }
+        // Under `security.resolve_on_host` every name the flow's pages
+        // reached is judged by its addresses too (F57).
+        let denied = if let Some(denied) = denied {
+            Some(denied)
+        } else {
+            self.denied_by_address(flow_hops(&steps, &page)).await
+        };
         if let Some(denied) = denied {
             tracing::warn!(
                 context = %context,
@@ -1460,15 +1660,7 @@ impl PathExecutor {
                 reason = %denied.reason,
                 "a flow visited what the SSRF guard refuses"
             );
-            ssrf::drop_captures(&mut page);
-            let mut output =
-                AttemptOutput::failed(Outcome::SsrfDenied, "ssrf_denied", Courtesy::NotTheSite);
-            output.classification.evidence.push(denied.evidence());
-            output.final_url = Some(denied.url);
-            output.timing = timing_of(&page);
-            output.page = Some(page);
-            output.behavior = Some(behavior);
-            return Err(Box::new(output));
+            return Err(Box::new(denied_hop(denied, page, behavior)));
         }
         Ok((page, behavior, FlowRun { steps, ok }))
     }
@@ -1644,17 +1836,16 @@ impl PathExecutor {
                     output.behavior = Some(behavior);
                     return Err(Box::new(output));
                 }
+                // Under `security.resolve_on_host` every name of the chain is
+                // judged by its addresses too, as the http path judges its
+                // hops (F57).
+                if let Some(denied) = self.denied_by_address(ssrf::chain_hops(&page)).await {
+                    return Err(Box::new(denied_hop(denied, page, behavior)));
+                }
                 Ok((page, behavior))
             }
             Navigation::SsrfDenied { denied, result } => {
-                let mut output =
-                    AttemptOutput::failed(Outcome::SsrfDenied, "ssrf_denied", Courtesy::NotTheSite);
-                output.classification.evidence.push(denied.evidence());
-                output.final_url = Some(denied.url);
-                output.timing = timing_of(&result);
-                output.page = Some(result);
-                output.behavior = Some(behavior);
-                Err(Box::new(output))
+                Err(Box::new(denied_hop(denied, result, behavior)))
             }
         }
     }
@@ -1845,6 +2036,7 @@ mod tests {
                 operator_hosts: HashSet::new(),
                 private_names: HashSet::new(),
                 resolver: Arc::new(SystemResolver),
+                resolve_names: false,
             };
             let (forwarder, listener) = Forwarder::bind(
                 "127.0.0.1:0".parse().unwrap(),
@@ -2329,6 +2521,20 @@ mod tests {
         assert_eq!(
             told(HttpError::Connect("no tunnel")).1,
             "proxy_failed".to_owned()
+        );
+        // A hop to another site whose own exit cannot be had now (F166):
+        // the site is not to blame, and a later attempt may find the exit.
+        assert_eq!(
+            told(HttpError::HopExitUnavailable {
+                url: "http://other.example/x".to_owned(),
+                reason: "its plain exit cannot carry traffic now".to_owned(),
+            }),
+            (
+                Outcome::ProviderError,
+                "hop_exit_unavailable".to_owned(),
+                Courtesy::NotTheSite,
+                true
+            )
         );
         assert_eq!(
             told(HttpError::Tls),

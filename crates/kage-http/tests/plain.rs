@@ -712,3 +712,105 @@ async fn a_body_is_read_in_the_encoding_it_declares_and_a_hop_without_a_host_is_
             .any(|seen| seen.target.contains("127.0.0.1"))
     );
 }
+
+/// The exits of a fetch's hops in the test below: `other.kage.test` leaves
+/// through a proxy of its own, `closed.kage.test` has no exit now, and every
+/// other site leaves where the fetch began.
+struct TwoExits {
+    other: std::sync::Arc<PlainClient>,
+}
+
+#[async_trait::async_trait]
+impl kage_http::HopExits for TwoExits {
+    async fn client_for(&self, url: &Url) -> Result<Option<std::sync::Arc<PlainClient>>, String> {
+        match url.host_str() {
+            Some("other.kage.test") => Ok(Some(std::sync::Arc::clone(&self.other))),
+            Some("closed.kage.test") => Err("its plain exit cannot carry traffic now".to_owned()),
+            _ => Ok(None),
+        }
+    }
+}
+
+/// F166 (QA round two, http-02): a site's level 0 traffic leaves through
+/// that site's own exit. A redirect hop to another site is asked for from
+/// the other site's exit, the way back from the first one's, and a hop
+/// whose site has no exit now is not asked for at all.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hop_to_another_site_leaves_from_that_sites_own_exit_or_not_at_all() {
+    let world = World::start().await;
+    let other_exit = TestProxy::start().await;
+    other_exit.route("other.kage.test:80", *world.other.address());
+    page(
+        &world.site,
+        "/go",
+        redirect(302, "http://other.kage.test/land"),
+    )
+    .await;
+    page(
+        &world.other,
+        "/land",
+        redirect(302, "http://site.kage.test/back"),
+    )
+    .await;
+    page(&world.site, "/back", ResponseTemplate::new(200)).await;
+    page(
+        &world.site,
+        "/shut",
+        redirect(302, "http://closed.kage.test/x"),
+    )
+    .await;
+    let exits = TwoExits {
+        other: std::sync::Arc::new(
+            world
+                .factory()
+                .plain(&other_exit.endpoint(), AGENT)
+                .unwrap(),
+        ),
+    };
+    let client = world.client();
+
+    let mut asked = Vec::new();
+    let fetched = client
+        .fetch_routed(&get("http://site.kage.test/go"), &mut asked, Some(&exits))
+        .await
+        .unwrap();
+    assert_eq!(fetched.status, 200);
+    assert_eq!(fetched.final_url.as_str(), "http://site.kage.test/back");
+    assert_eq!(asked.len(), 3);
+    let targets = |proxy: &TestProxy| -> Vec<String> {
+        proxy.seen().into_iter().map(|seen| seen.target).collect()
+    };
+    // The first site's exit carried only its own site's requests,
+    assert_eq!(
+        targets(&world.proxy),
+        ["http://site.kage.test/go", "http://site.kage.test/back"]
+    );
+    // and the other site's exit the hop to it, saying the same.
+    assert_eq!(targets(&other_exit), ["http://other.kage.test/land"]);
+    assert_eq!(
+        other_exit.seen()[0].header("user-agent").as_deref(),
+        Some(AGENT)
+    );
+
+    // A hop whose site's exit cannot be had is not asked for anywhere.
+    let mut asked = Vec::new();
+    let refused = client
+        .fetch_routed(&get("http://site.kage.test/shut"), &mut asked, Some(&exits))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&refused, HttpError::HopExitUnavailable { url, .. } if url == "http://closed.kage.test/x"),
+        "{refused:?}"
+    );
+    assert_eq!(asked, [url("http://site.kage.test/shut")]);
+    assert_eq!(world.proxy.seen().len(), 3);
+    assert_eq!(other_exit.seen().len(), 1);
+
+    // Without exits every hop leaves where the fetch began, as before.
+    let mut asked = Vec::new();
+    client
+        .fetch_routed(&get("http://site.kage.test/go"), &mut asked, None)
+        .await
+        .unwrap();
+    assert!(targets(&world.proxy).contains(&"http://other.kage.test/land".to_owned()));
+}

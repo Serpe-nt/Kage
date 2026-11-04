@@ -12,6 +12,7 @@ import type {
   NavigationError,
   PageResult,
   PdfOptions,
+  RedirectHop,
   ScreenshotFormat,
   ScreenshotOptions,
   SelftestPage,
@@ -35,6 +36,7 @@ import {
 } from '@kage/engine-core';
 import type { BrowserContext, CDPSession, Page } from 'patchright';
 
+import { DocumentRequests } from './document-requests.js';
 import { pageWithReader, type PageReader } from './page-reader.js';
 
 /** Paper sizes in inches, as the print command takes them. */
@@ -169,6 +171,8 @@ export class ChromiumContext implements EngineContext, SessionDriver {
   /** The open tab; replaced by {@link ChromiumContext.freshPage}. */
   private tab: ChromiumTab;
   private driverPage: DriverPage;
+  /** The open tab's latest document request, as its debugger saw it (F167). */
+  private requests = new DocumentRequests();
   private closed = false;
 
   constructor(private readonly parts: ChromiumContextParts) {
@@ -207,7 +211,24 @@ export class ChromiumContext implements EngineContext, SessionDriver {
         url: event.entry.url ?? null,
       });
     });
+    // The main frame's document requests and the redirects they were
+    // answered with, which Chrome does not all hand the driver (F167).
+    const requests = new DocumentRequests();
+    this.requests = requests;
+    tab.session
+      .send('Page.getFrameTree')
+      .then((tree) => {
+        requests.knowMainFrame(tree.frameTree.frame.id);
+      })
+      .catch(() => undefined);
+    tab.session.on('Network.requestWillBeSent', (event) => {
+      requests.requested(event);
+    });
+    tab.session.on('Network.responseReceivedExtraInfo', (event) => {
+      requests.seen(event);
+    });
     tab.session.on('Network.responseReceived', (event) => {
+      requests.answered(event);
       if (event.type === 'Document' && event.response.protocol !== undefined) {
         if (this.protocols.size > 200) {
           this.protocols.clear();
@@ -234,6 +255,10 @@ export class ChromiumContext implements EngineContext, SessionDriver {
 
   classifyError(thrown: unknown): NavigationError {
     return classifyNavigationError(thrown);
+  }
+
+  unansweredRedirects(): RedirectHop[] {
+    return this.requests.unanswered();
   }
 
   /**

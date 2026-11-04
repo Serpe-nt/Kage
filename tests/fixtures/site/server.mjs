@@ -403,6 +403,9 @@ const cookieOf = (req, name) =>
     .map((part) => part.split('='))
     .find(([key]) => key === name)?.[1] ?? null;
 
+/** Text as the value of an HTML attribute in double quotes. */
+const attribute = (text) =>
+  text.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 const send = (res, status, type, body, headers = {}) => {
   res.writeHead(status, { 'content-type': type, ...headers });
   res.end(body);
@@ -462,6 +465,20 @@ const routes = {
   '/redirect/a': (_req, res) => send(res, 302, 'text/plain', '', { location: '/redirect/b' }),
   '/redirect/b': (_req, res) => send(res, 301, 'text/plain', '', { location: '/landing?from=redirect' }),
   '/redirect/loopback': (_req, res) => send(res, 302, 'text/plain', '', { location: 'http://127.0.0.1:9/never' }),
+  // The guard's pages (tests/e2e/guard.sh; F57, F166, F167): each sends the
+  // client on to `to` by a redirect, a meta refresh, a script, a form that
+  // submits itself, or a link a flow clicks. `/guard/secret` is the page a
+  // name of the operator's network must never hand back.
+  '/guard/redirect': (_req, res, url) => send(res, 302, 'text/plain', '', { location: url.searchParams.get('to') ?? '/landing' }),
+  '/guard/meta': (_req, res, url) =>
+    html(res, page('Moving on', '<p>moving on</p>', `<meta http-equiv="refresh" content="0;url=${attribute(url.searchParams.get('to') ?? '/landing')}">`)),
+  '/guard/script': (_req, res, url) =>
+    html(res, page('Moving on', `<p>moving on</p><script>location.href = ${JSON.stringify(url.searchParams.get('to') ?? '/landing')};</script>`)),
+  '/guard/form': (_req, res, url) =>
+    html(res, page('Sending', `<form id="f" method="post" action="${attribute(url.searchParams.get('to') ?? '/landing')}"><input name="q" value="x"></form><script>document.getElementById('f').submit();</script>`)),
+  '/guard/link': (_req, res, url) =>
+    html(res, page('A link', `<main><p>Read on: <a class="next" href="${attribute(url.searchParams.get('to') ?? '/landing')}">the next page</a></p></main>`)),
+  '/guard/secret': (_req, res) => html(res, page('Internal', '<h1 id="secret">INTERNAL-PAGE</h1>')),
   '/landing': (_req, res) => html(res, page('Landing', '<h1 id="landing">Landed</h1>'), { 'x-fixture': 'landing' }),
   '/slow': (_req, res, url) => {
     setTimeout(() => html(res, page('Slow', '<h1>Slow</h1>')), Number(url.searchParams.get('ms') ?? '1000'));

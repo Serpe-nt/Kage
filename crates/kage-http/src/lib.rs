@@ -51,12 +51,12 @@ pub use cookies::{
     CookieBackend, CookieBackendError, CookieJar, JarOwner, MemoryCookies, StoreCookies,
 };
 pub use error::{HttpError, Stage};
-pub use fetch::{FetchSpec, Fetched, Guard, Hop};
+pub use fetch::{FetchSpec, Fetched, Guard, Hop, check_target_addresses};
 pub use headers::{
     CallerHeaders, FORWARDING_HEADERS, HeaderError, IdentityOverride, RequestKind,
     plain_denied_reason,
 };
-pub use plain::{PLAIN_ACCEPT, PLAIN_ACCEPT_ENCODING, PlainClient, PlainSpec};
+pub use plain::{HopExits, PLAIN_ACCEPT, PLAIN_ACCEPT_ENCODING, PlainClient, PlainSpec};
 pub use profile::{Family, ProfileChoice, ProfileError};
 pub use subresources::SubresourceReport;
 

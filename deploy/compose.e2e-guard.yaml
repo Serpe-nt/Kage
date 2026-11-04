@@ -1,0 +1,47 @@
+# Overlay on deploy/compose.e2e.yaml for the end-to-end test of the SSRF
+# guard under `security.resolve_on_host` (tests/e2e/guard.sh; F57, F166,
+# F167). Never for a deployment.
+#
+# Three names of three sites, `pub.kage-guard.test`, `pub.other-guard.test`
+# and `pub.third-guard.test`, are what a residential proxy's public pages
+# are to Kage: Kage's own
+# lookup (the kage container's /etc/hosts, read before any DNS) places
+# them at public addresses, and the proxies, which resolve on their own
+# side, reach them on the fixture site of this network. Kage never connects
+# to those addresses: under the pool only the proxies connect, and they ask
+# Docker's resolver. Every other name of the world resolves, for Kage and
+# the proxies alike, to a private address of this network, as a name of the
+# operator's own network would for a self-hosted proxy: under the setting
+# Kage refuses it on every road. Nothing here leaves the compose network;
+# the public addresses are assigned space that nothing in this test
+# ever sends a packet to.
+
+services:
+  kage:
+    environment:
+      KAGE__SECURITY__RESOLVE_ON_HOST: "true"
+    extra_hosts:
+      - "pub.kage-guard.test:11.66.0.10"
+      - "pub.other-guard.test:11.66.0.11"
+      - "pub.third-guard.test:11.66.0.12"
+
+  fixture:
+    networks:
+      default:
+        aliases:
+          - fixture.kage.test
+          - lenient.kage.test
+          - rules.kage.test
+          - wall.field.test
+          - pub.kage-guard.test
+          - pub.other-guard.test
+          - pub.third-guard.test
+
+  proxy-a:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-a, --pass, e2e-only-a, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,pub.kage-guard.test:8088,pub.other-guard.test:8088,pub.third-guard.test:8088"]
+
+  proxy-b:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-b, --pass, e2e-only-b, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,pub.kage-guard.test:8088,pub.other-guard.test:8088,pub.third-guard.test:8088"]
+
+  proxy-c:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-c, --pass, e2e-only-c, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,pub.kage-guard.test:8088,pub.other-guard.test:8088,pub.third-guard.test:8088"]

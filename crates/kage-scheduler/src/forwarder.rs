@@ -48,6 +48,16 @@
 //!   checked and to no other, answers a `CONNECT` itself and sends an
 //!   absolute-form request on in origin form. The stops of the pool (a
 //!   leak, the provider's budget) do not hold it: it uses neither.
+//!
+//! Under `security.resolve_on_host` (F57, the security review's G1) every
+//! name relayed through a proxy is looked up here too, as the http path
+//! looks up its hops: a name with an address in a range the guard refuses,
+//! or with no address the host can find, is refused before the proxy is
+//! asked for it, and the refusal is kept for the caller like any other of
+//! the guard's. The proxy resolves the name again where it connects (G2,
+//! accepted). Each name is looked up once while its answer is kept
+//! ([`NAME_KEPT`]); a page's many connections to one host wait for the
+//! one lookup.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
@@ -94,6 +104,21 @@ const PLAIN_PREFIX: &str = "plain-";
 
 /// Hexadecimal characters of a token: 128 bits.
 const TOKEN_CHARS: usize = 32;
+
+/// How long the forwarder keeps the answer of a name it looked up (F57).
+/// The system's resolver does not say a name's TTL, so the forwarder keeps
+/// every answer for less than a browser keeps one in its own host cache (a
+/// minute in Chromium) and leaves longer caching to the resolver beneath
+/// it, which honours the TTL. The answer decides what the forwarder lets
+/// through, never where a proxy connects: the proxy resolves again (G2).
+pub const NAME_KEPT: Duration = Duration::from_secs(30);
+
+/// How many names' answers are kept at most.
+const NAMES_KEPT: usize = 4096;
+
+/// How long one lookup may take; a name without an answer by then has no
+/// address.
+const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Where a plain client's traffic leaves (spec §25): the host's own
 /// connection, or the one proxy of the pool that is a site's plain exit.
@@ -385,6 +410,56 @@ impl HopResolver for SystemResolver {
         let mut addresses: Vec<IpAddr> = found.map(|address| address.ip()).collect();
         addresses.dedup();
         Ok(addresses)
+    }
+}
+
+/// One lookup of a name, shared by everyone who asks while it is kept.
+type Lookup = Arc<tokio::sync::OnceCell<Result<Vec<IpAddr>, String>>>;
+
+/// The forwarder's lookups: one per name while its answer is kept
+/// ([`NAME_KEPT`]), however many connections ask for the name at once.
+#[derive(Debug)]
+struct Names {
+    resolver: Arc<dyn HopResolver>,
+    kept: Mutex<HashMap<String, (Instant, Lookup)>>,
+}
+
+impl Names {
+    fn new(resolver: Arc<dyn HopResolver>) -> Self {
+        Self {
+            resolver,
+            kept: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// The addresses of `host` (lower case), looked up now or kept.
+    async fn resolve(&self, host: &str) -> Result<Vec<IpAddr>, String> {
+        let lookup = {
+            let now = Instant::now();
+            let mut kept = self.kept.lock().unwrap_or_else(PoisonError::into_inner);
+            match kept.get(host) {
+                Some((at, lookup)) if now.duration_since(*at) < NAME_KEPT => Arc::clone(lookup),
+                _ => {
+                    if kept.len() >= NAMES_KEPT {
+                        kept.retain(|_, (at, _)| now.duration_since(*at) < NAME_KEPT);
+                        if kept.len() >= NAMES_KEPT {
+                            kept.clear();
+                        }
+                    }
+                    let lookup = Lookup::default();
+                    kept.insert(host.to_owned(), (now, Arc::clone(&lookup)));
+                    lookup
+                }
+            }
+        };
+        lookup
+            .get_or_init(|| async {
+                tokio::time::timeout(LOOKUP_TIMEOUT, self.resolver.resolve(host))
+                    .await
+                    .unwrap_or_else(|_| Err(format!("no answer within {LOOKUP_TIMEOUT:?}")))
+            })
+            .await
+            .clone()
     }
 }
 
@@ -794,8 +869,14 @@ pub struct ForwarderSettings {
     /// Names, lower case, that may resolve to a private or loopback
     /// address on a route with no upstream (`egress.direct.private_names`).
     pub private_names: HashSet<String>,
-    /// How a route with no upstream resolves its targets.
+    /// How a route with no upstream resolves its targets, and every route
+    /// when `resolve_names` is on.
     pub resolver: Arc<dyn HopResolver>,
+    /// Whether every name relayed through a proxy is looked up here too
+    /// and refused for an address in a denied range or for having none
+    /// (`security.resolve_on_host`, F57). A route with no upstream always
+    /// looks its names up.
+    pub resolve_names: bool,
 }
 
 impl ForwarderSettings {
@@ -837,12 +918,13 @@ impl ForwarderSettings {
                 .filter_map(|name| kage_core::policy::normalize_host(name))
                 .collect(),
             resolver: Arc::new(SystemResolver),
+            resolve_names: config.security.resolve_on_host,
         }
     }
 }
 
-/// Why a route with no upstream found no address of a target to connect
-/// to.
+/// Why a target's name was refused for its addresses: on a route with no
+/// upstream, or on every route under `resolve_names`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum AddressRefusal {
     /// An address of the name lies in a range the guard refuses.
@@ -959,6 +1041,8 @@ pub struct Forwarder {
     relayed: AtomicU64,
     /// What the guard refused, per caller.
     denials: Arc<Denials>,
+    /// The names looked up, and their answers while they are kept.
+    names: Names,
 }
 
 impl Forwarder {
@@ -989,6 +1073,7 @@ impl Forwarder {
         }
         let forwarder = Arc::new(Self {
             connections: Arc::new(Semaphore::new(settings.max_connections.max(1))),
+            names: Names::new(Arc::clone(&settings.resolver)),
             settings,
             tokens: Arc::new(tokens),
             routes,
@@ -1160,6 +1245,9 @@ impl Forwarder {
         if let Some(reason) = self.stopped() {
             return refuse(client, tunnel, Refused::Stopped(reason)).await;
         }
+        if let Err(refused) = self.screen(caller, &host, port).await {
+            return refuse(client, tunnel, refused).await;
+        }
         let connecting = TcpStream::connect((upstream.host.as_str(), upstream.port));
         let mut server = match tokio::time::timeout(self.settings.connect_timeout, connecting).await
         {
@@ -1212,13 +1300,11 @@ impl Forwarder {
         (host, port): (&str, u16),
     ) -> Result<(), Refused> {
         let tunnel = head.is_connect();
-        let addresses = match self.addresses(host, port).await {
+        let private = self.settings.private_names.contains(host);
+        let addresses = match self.addresses(host, port, private).await {
             Ok(addresses) => addresses,
-            Err(AddressRefusal::Denied(reason)) => {
-                self.denials.record(caller, host, &reason);
-                return refuse(client, tunnel, Refused::Address(reason)).await;
-            }
-            Err(AddressRefusal::Unresolved(reason)) => {
+            Err(refusal) => {
+                let reason = self.refused_address(caller, host, refusal);
                 return refuse(client, tunnel, Refused::Address(reason)).await;
             }
         };
@@ -1256,11 +1342,65 @@ impl Forwarder {
         Ok(())
     }
 
-    /// The addresses of a target that a route with no upstream may connect
-    /// to: every address the name has must be one the guard allows, or a
-    /// private or loopback one of a name the operator listed; link-local,
-    /// metadata and multicast addresses never.
-    async fn addresses(&self, host: &str, port: u16) -> Result<Vec<IpAddr>, AddressRefusal> {
+    /// Records a refusal of `host` for its addresses as the guard's, and
+    /// says why. A name that resolves into a denied range always is the
+    /// guard's refusal; a name with no address only under `resolve_names`,
+    /// where a name the host cannot look up counts as one with no address
+    /// (F98) and is never asked of a proxy that might know it. Otherwise it
+    /// is a failed network.
+    fn refused_address(&self, caller: Caller, host: &str, refusal: AddressRefusal) -> String {
+        match refusal {
+            AddressRefusal::Denied(reason) => {
+                self.denials.record(caller, host, &reason);
+                reason
+            }
+            AddressRefusal::Unresolved(reason) => {
+                if self.settings.resolve_names {
+                    self.denials.record(caller, host, &reason);
+                }
+                reason
+            }
+        }
+    }
+
+    /// The address check of a name relayed through a proxy, under
+    /// `resolve_names` (F57): the name is looked up here, and one with an
+    /// address in a denied range, or with none, is refused before the
+    /// proxy is asked for it. Only the operator's own self-test hosts may
+    /// resolve to a private or loopback address; `egress.direct.private_names`
+    /// is for the host's own connection and does not reach the pool.
+    /// Without the setting the proxy resolves and nothing is looked up.
+    async fn screen(&self, caller: Caller, host: &str, port: u16) -> Result<(), Refused> {
+        if !self.settings.resolve_names {
+            return Ok(());
+        }
+        match self.addresses(host, port, false).await {
+            Ok(_) => Ok(()),
+            Err(refusal) => {
+                let reason = self.refused_address(caller, host, refusal);
+                tracing::info!(
+                    host,
+                    port,
+                    %reason,
+                    "the forwarder refused a name by its addresses"
+                );
+                Err(Refused::Address(reason))
+            }
+        }
+    }
+
+    /// The addresses of a target that the forwarder may let a client reach:
+    /// every address the name has must be one the guard allows, or a
+    /// private or loopback one of a name the operator listed (`private`)
+    /// or of the operator's own self-test hosts; link-local, metadata and
+    /// multicast addresses never. A name the host cannot look up has no
+    /// address.
+    async fn addresses(
+        &self,
+        host: &str,
+        port: u16,
+        private: bool,
+    ) -> Result<Vec<IpAddr>, AddressRefusal> {
         let operator = self
             .settings
             .operator_hosts
@@ -1272,17 +1412,14 @@ impl Forwarder {
             .ok();
         let addresses = match named {
             Some(address) => vec![address],
-            None => self
-                .settings
-                .resolver
-                .resolve(host)
-                .await
-                .map_err(AddressRefusal::Unresolved)?,
+            None => self.names.resolve(host).await.map_err(|reason| {
+                AddressRefusal::Unresolved(format!("{host} could not be looked up: {reason}"))
+            })?,
         };
         if addresses.is_empty() {
             return Err(AddressRefusal::Unresolved(format!("{host} has no address")));
         }
-        let private = operator || self.settings.private_names.contains(host);
+        let private = operator || private;
         for address in &addresses {
             match classify_ip(*address) {
                 None => {}
@@ -1473,19 +1610,13 @@ impl Forwarder {
                 let same_caller = next.credentials().and_then(|(username, password)| {
                     self.tokens.verify_caller(&username, &password)
                 }) == Some(caller);
-                let allowed = !next.is_connect()
+                let allowed = same_caller
+                    && !next.is_connect()
                     && (upstream.is_none() || self.stopped().is_none())
-                    && target_of(&next).is_some_and(|(url, host, port)| {
-                        self.check_target(&url, &host, port)
-                            .inspect_err(|reason| {
-                                if same_caller {
-                                    self.denials.record(caller, &host, reason);
-                                }
-                            })
-                            .is_ok()
-                            && (upstream.is_some() || opened_for.as_ref() == Some(&(host, port)))
-                    });
-                if !(same_caller && allowed) {
+                    && self
+                        .allows_next(&next, caller, upstream.is_some(), opened_for.as_ref())
+                        .await;
+                if !allowed {
                     // The connection ends: no answer of the forwarder's own
                     // may be mixed into the proxy's.
                     self.refused.fetch_add(1, Ordering::Relaxed);
@@ -1496,6 +1627,32 @@ impl Forwarder {
             let _ = server_write.shutdown().await;
         };
         tokio::join!(up, down);
+    }
+
+    /// Whether a later request of a kept plain connection of `caller` may
+    /// go on: its target passes the guard (a refusal is kept for the
+    /// caller), and through a proxy its name passes the address check
+    /// under `resolve_names`; with no upstream it is the one target the
+    /// connection was opened to and checked for.
+    async fn allows_next(
+        &self,
+        next: &Head,
+        caller: Caller,
+        through_proxy: bool,
+        opened_for: Option<&(String, u16)>,
+    ) -> bool {
+        let Some((url, host, port)) = target_of(next) else {
+            return false;
+        };
+        if let Err(reason) = self.check_target(&url, &host, port) {
+            self.denials.record(caller, &host, &reason);
+            return false;
+        }
+        if through_proxy {
+            self.screen(caller, &host, port).await.is_ok()
+        } else {
+            opened_for == Some(&(host, port))
+        }
     }
 }
 

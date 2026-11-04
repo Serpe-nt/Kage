@@ -49,6 +49,16 @@ pub enum HttpError {
     /// `ssrf_denied`; nothing fetched on the earlier hops is kept.
     #[error(transparent)]
     RedirectDenied(RedirectDenied),
+    /// A plain client's redirect hop to another site could not be asked
+    /// for from that site's own address (F166, spec §25): its plain exit
+    /// cannot carry traffic now. Nothing of the hop was asked for.
+    #[error("the redirect to {url:?} was not followed: {reason}")]
+    HopExitUnavailable {
+        /// The hop.
+        url: String,
+        /// Why its site's exit cannot be had.
+        reason: String,
+    },
     /// The server redirected more often than allowed.
     #[error("more than {max} redirects; the last one pointed at {location:?}")]
     TooManyRedirects {

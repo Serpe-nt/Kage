@@ -11,7 +11,7 @@ mod common;
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::lab::{FAST, Lab, SITE, article, cookie};
+use common::lab::{FAST, HIDDEN, Lab, SITE, article, cookie};
 use common::proxy::{PROXY_PASS, PROXY_USER, basic};
 use kage_core::alert::{Alert, AlertKind, AlertSeverity, AlertSink};
 use kage_core::config::DEFAULT_PLAIN_USER_AGENT;
@@ -649,6 +649,129 @@ async fn a_redirect_chain_that_leaves_for_a_private_address_ends_the_request() {
     lab.shut_down().await;
 }
 
+/// F57 (QA round two, ssrf-01): under `security.resolve_on_host` a browser's
+/// chain is judged by its addresses after the fact, with the http path's
+/// own check: a public page's redirect, or its script, that took the tab to
+/// a name of the operator's network is `ssrf_denied` at that hop, nothing
+/// of the page kept, never tried again, even when the page came back.
+#[tokio::test]
+async fn with_resolve_on_host_a_browsers_chain_is_judged_by_its_addresses() {
+    let mut lab = Box::pin(Lab::start_with(2, 149, FAST, |config| {
+        config.security.resolve_on_host = true;
+    }))
+    .await;
+    let hidden = format!("http://{HIDDEN}:8091/secret");
+    let redirected = Lab::url("/go").to_string();
+    let moved = Lab::url("/moves").to_string();
+    lab.chromium.with(|sidecar| {
+        sidecar.pages.insert(
+            redirected.clone(),
+            json!({
+                "final_url": hidden,
+                "redirects": [{ "url": redirected, "status": 302, "location": hidden }],
+                "dom_html": "<html><body>INTERNAL</body></html>",
+            }),
+        );
+        sidecar.pages.insert(
+            moved.clone(),
+            json!({ "final_url": hidden, "dom_html": "<html><body>INTERNAL</body></html>" }),
+        );
+    });
+
+    for path in ["/go", "/moves"] {
+        let report = lab.pipeline.fetch(get(path)).await.unwrap();
+
+        assert_eq!(report.outcome, Outcome::SsrfDenied, "{path}");
+        assert_eq!(report.reason.as_deref(), Some("ssrf_denied"));
+        assert_eq!(report.attempts.len(), 1, "{path}: never tried again");
+        let last = report.last.as_ref().unwrap();
+        assert_eq!(last.final_url.as_deref(), Some(hidden.as_str()));
+        assert_eq!(last.page.as_ref().unwrap().dom_html, None, "{path}");
+        let evidence = &last.classification.evidence;
+        assert!(
+            evidence
+                .iter()
+                .any(|seen| seen.starts_with(&format!("redirect:1:{hidden}"))
+                    && seen.contains("10.0.0.9")),
+            "{path}: {evidence:?}"
+        );
+    }
+    // A public chain passes; its names were looked up once each.
+    let report = lab.pipeline.fetch(get("/fine")).await.unwrap();
+    assert_eq!(report.outcome, Outcome::Ok, "{:?}", report.reason);
+    let asked = lab.names.asked.lock().unwrap().clone();
+    assert!(asked.iter().any(|name| name == SITE), "{asked:?}");
+    assert!(asked.iter().any(|name| name == HIDDEN), "{asked:?}");
+    lab.shut_down().await;
+}
+
+/// Without the setting the proxy resolves: a browser's chain is judged by
+/// its URL alone, and nothing is looked up on the host.
+#[tokio::test]
+async fn without_resolve_on_host_nothing_of_a_browsers_chain_is_looked_up() {
+    let mut lab = Lab::start(2, 149, FAST).await;
+    let redirected = Lab::url("/go").to_string();
+    let elsewhere = "http://elsewhere.kage.test/page";
+    lab.chromium.with(|sidecar| {
+        sidecar.pages.insert(
+            redirected.clone(),
+            json!({
+                "final_url": elsewhere,
+                "redirects": [{ "url": redirected, "status": 302, "location": elsewhere }],
+            }),
+        );
+    });
+    let report = lab.pipeline.fetch(get("/go")).await.unwrap();
+    assert_eq!(report.outcome, Outcome::Ok, "{:?}", report.reason);
+    assert_eq!(*lab.names.asked.lock().unwrap(), Vec::<String>::new());
+    lab.shut_down().await;
+}
+
+/// F167 (QA round two, ssrf-06): a server's redirect may only send a browser
+/// to `http` or `https`. A redirect to `file:`, `data:`, `ftp:` or
+/// `javascript:`, which the sidecar reports as a hop the browser did not
+/// get beyond, is `ssrf_denied` at the first attempt, nothing kept.
+#[tokio::test]
+async fn a_browsers_redirect_to_a_scheme_is_ssrf_denied_at_once() {
+    let mut lab = Lab::start(2, 149, FAST).await;
+    let targets = [
+        "file:///etc/passwd",
+        "data:text/html,<b>x</b>",
+        "ftp://shop.kage.test/x",
+        "javascript:alert(1)",
+    ];
+    for (n, target) in targets.iter().enumerate() {
+        let url = Lab::url(&format!("/scheme-{n}")).to_string();
+        lab.chromium.with(|sidecar| {
+            sidecar.pages.insert(
+                url.clone(),
+                json!({
+                    "final_url": url,
+                    "status": null,
+                    "redirects": [{ "url": url, "status": 302, "location": target }],
+                    "dom_html": "<html><body>the browser's own error page</body></html>",
+                    "error": {
+                        "code": "navigation_failed",
+                        "message": "net::ERR_UNSAFE_REDIRECT",
+                        "net_error": "ERR_UNSAFE_REDIRECT",
+                    },
+                }),
+            );
+        });
+        let report = lab
+            .pipeline
+            .fetch(get(&format!("/scheme-{n}")))
+            .await
+            .unwrap();
+        assert_eq!(report.outcome, Outcome::SsrfDenied, "{target}");
+        assert_eq!(report.attempts.len(), 1, "{target}");
+        let last = report.last.as_ref().unwrap();
+        assert_eq!(last.final_url.as_deref(), Some(*target));
+        assert_eq!(last.page.as_ref().unwrap().dom_html, None, "{target}");
+    }
+    lab.shut_down().await;
+}
+
 #[tokio::test]
 async fn without_an_http_path_level_one_is_refused_and_the_browser_is_not() {
     // Chromium 155: no profile exists for it, as in this release.
@@ -769,6 +892,82 @@ async fn a_plain_client_names_itself_and_leaves_through_the_sites_scouts_proxy()
     assert_eq!(attempts[0].persona_id, None);
     let request = store.requests().get(report.request).await.unwrap().unwrap();
     assert_eq!(request.level, Some(Level::Plain));
+    lab.shut_down().await;
+}
+
+/// F166 (QA round two, http-02): a site's level 0 traffic leaves through
+/// that site's one plain exit. A plain client's redirect to another site is
+/// asked for from the other site's own exit (its scout's proxy here), never
+/// from the first site's, which may read the other one as a person; the
+/// way back leaves from the first site's again.
+#[tokio::test]
+async fn a_plain_clients_hop_to_another_site_leaves_from_that_sites_own_exit() {
+    const OTHER: &str = "shop.other.test";
+    let mut lab = Lab::start(2, 149, FAST).await;
+    let other = wiremock::MockServer::start().await;
+    for proxy in &lab.proxies {
+        proxy.route(&format!("{OTHER}:80"), *other.address());
+    }
+    Mock::given(path("/land"))
+        .respond_with(
+            ResponseTemplate::new(302).insert_header("location", format!("http://{SITE}/home")),
+        )
+        .mount(&other)
+        .await;
+    serve(
+        &lab,
+        "/leave",
+        ResponseTemplate::new(302).insert_header("location", format!("http://{OTHER}/land")),
+    )
+    .await;
+    serve(&lab, "/home", page("The shop")).await;
+    // Each site has a scout of its own, and so an exit of its own.
+    let (first, second) = (lab.personas[0].clone(), lab.personas[1].clone());
+    let now = chrono::Utc::now();
+    let own_site = kage_crawl::site::of_host(SITE);
+    lab.backend
+        .set_scout(&own_site, first.id, now)
+        .await
+        .unwrap();
+    lab.backend
+        .set_scout(&kage_crawl::site::of_host(OTHER), second.id, now)
+        .await
+        .unwrap();
+
+    let report = lab
+        .pipeline
+        .fetch(at(Level::Plain, "/leave"))
+        .await
+        .unwrap();
+
+    assert_eq!(report.outcome, Outcome::Ok, "{:?}", report.reason);
+    let last = report.last.as_ref().unwrap();
+    assert_eq!(
+        last.final_url.as_deref(),
+        Some(format!("http://{SITE}/home").as_str())
+    );
+    let targets = |persona: &Persona| -> Vec<String> {
+        lab.proxy_of(persona)
+            .plain()
+            .into_iter()
+            .map(|seen| seen.target)
+            .collect()
+    };
+    assert_eq!(
+        targets(&first),
+        [
+            format!("http://{SITE}/leave"),
+            format!("http://{SITE}/home")
+        ]
+    );
+    assert_eq!(targets(&second), [format!("http://{OTHER}/land")]);
+    // The other site saw Kage's client from its own exit only.
+    let received = other.received_requests().await.unwrap();
+    assert_eq!(received.len(), 1);
+    assert_eq!(
+        header(&received[0], "user-agent"),
+        Some(DEFAULT_PLAIN_USER_AGENT.to_owned())
+    );
     lab.shut_down().await;
 }
 

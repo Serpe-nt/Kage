@@ -211,6 +211,15 @@ export interface SessionDriver {
    * the session listens to it anew.
    */
   freshPage(): Promise<void>;
+  /**
+   * The redirects the main frame's latest document request was answered
+   * with when it ended without a document, in order; empty when it got
+   * one. Chrome hands the driver no redirect it refuses to follow (to
+   * `file:`, `data:`, `ftp:`, `javascript:`): only its debugger saw the
+   * answer and its `Location` (F167). An engine whose driver reports every
+   * redirect leaves it out.
+   */
+  unansweredRedirects?(): RedirectHop[];
 }
 
 /** What a session is made of. */
@@ -717,6 +726,36 @@ export function isBrowserErrorPage(url: string): boolean {
   return /^(chrome-error:|about:(neterror|certerror|blocked|tabcrashed))/i.test(url);
 }
 
+/**
+ * The address of the document a tab shows. Firefox keeps the address the
+ * tab was sent to in `location` while it shows its own error page there,
+ * and only the document's URI says what it is (`about:neterror?...`,
+ * F167); Chrome's error page has an address of its own.
+ */
+const READ_DOCUMENT_URI = 'document.documentURI';
+
+/**
+ * The address an error page of Firefox's names as the one it could not
+ * load (`about:neterror?e=...&u=<address>`); `null` for any other page.
+ */
+export function errorPageTarget(documentUri: string): string | null {
+  if (!isBrowserErrorPage(documentUri)) {
+    return null;
+  }
+  const query = documentUri.split('?')[1] ?? '';
+  for (const pair of query.split('&')) {
+    const [key, value] = pair.split('=');
+    if (key === 'u' && value !== undefined && value !== '') {
+      try {
+        return decodeURIComponent(value);
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
 /** The status of a response that sends the browser on: a redirect with an address. */
 const redirectTarget = (response: DriverResponse): string | null => {
   const status = response.status();
@@ -728,6 +767,18 @@ const redirectTarget = (response: DriverResponse): string | null => {
     return new URL(location, response.url()).href;
   } catch {
     return location;
+  }
+};
+
+/** Where a redirect hop pointed, resolved against its address; `null` without one. */
+const targetOf = (hop: RedirectHop | null): string | null => {
+  if (hop?.location == null) {
+    return null;
+  }
+  try {
+    return new URL(hop.location, hop.url).href;
+  } catch {
+    return hop.location;
   }
 };
 
@@ -1807,11 +1858,40 @@ export class PageSession {
     // reported where the tab was sent (F102). What the tab showed before is
     // gone, and so is what came with it.
     const shown = page.url();
-    const failedThere = isBrowserErrorPage(shown);
-    const response = failedThere ? null : state.response;
+    // What the capture describes is the state as it is now: a response that
+    // arrives while the page is read below belongs to no capture of this
+    // navigation (a page that ran out of time stays one).
+    const seenResponse = state.response;
+    const seenSentTo = state.sentTo;
     // A page that answers no read is read no further: what it showed is
     // unknown, and the result says why (F103).
     const unanswering = this.unanswering;
+    // Firefox shows its error page under the address it could not load:
+    // the document says what it is (F167). Only a tab that had a document
+    // can show one in its place.
+    const errorDocument =
+      isBrowserErrorPage(shown) || seenResponse === null || unanswering !== null
+        ? null
+        : await this.read<string>(READ_DOCUMENT_URI).then(
+            (uri) => (isBrowserErrorPage(uri) ? uri : null),
+            () => null,
+          );
+    const failedThere = isBrowserErrorPage(shown) || errorDocument !== null;
+    const response = failedThere ? null : seenResponse;
+    // A redirect the browser refused to follow, which its driver never saw
+    // (Chrome's to a scheme it does not load): the hops and where the last
+    // one pointed, so that the chain check sees the refused hop (F167).
+    const unanswered = seenResponse === null ? (driver.unansweredRedirects?.() ?? []) : [];
+    const refusedTo = targetOf(unanswered[unanswered.length - 1] ?? null);
+    // Where the tab went after its document: the request for a new one,
+    // or a redirect's target. Firefox's error page names the address it
+    // could not load too, which helps where the request of a script's
+    // navigation was never seen (F167).
+    const loadedAt = seenResponse === null ? null : withoutFragment(seenResponse.url());
+    const sentOn =
+      seenSentTo !== null && withoutFragment(seenSentTo) !== loadedAt ? seenSentTo : null;
+    const errorTarget = errorDocument === null ? null : errorPageTarget(errorDocument);
+    const sentTo = refusedTo ?? sentOn ?? errorTarget ?? seenSentTo;
     // A page the browser brought back from before the flow is a document
     // too, though nothing is known of the response it once came with.
     const loaded =
@@ -1840,7 +1920,8 @@ export class PageSession {
       response === null
         ? []
         : toHeaders(await this.answer(response.headersArray()).catch(() => []));
-    const redirects = await this.redirects(failedThere ? state.response : response);
+    const seen = await this.redirects(failedThere ? seenResponse : response);
+    const redirects = seen.length === 0 && unanswered.length > 0 ? unanswered : seen;
     const xhr = new XhrCollector(options.xhr);
     for (const record of failedThere ? [] : state.xhr) {
       if (xhr.wants(record.contentType)) {
@@ -1889,7 +1970,7 @@ export class PageSession {
     }
     return {
       url,
-      final_url: failedThere ? (state.sentTo ?? url) : loaded ? shown : url,
+      final_url: failedThere || refusedTo !== null ? (sentTo ?? url) : loaded ? shown : url,
       status: response?.status() ?? null,
       http_version:
         response === null || unanswering !== null
@@ -1925,7 +2006,7 @@ export class PageSession {
         (failedThere
           ? {
               code: 'navigation_failed',
-              message: `the browser could not load ${state.sentTo ?? 'the page the tab was sent to'}: it shows its own error page`,
+              message: `the browser could not load ${sentTo ?? 'the page the tab was sent to'}: it shows its own error page`,
               net_error: null,
             }
           : null),

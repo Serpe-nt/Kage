@@ -21,9 +21,15 @@
 //! [`check_chain`] for a page that names the address it had when it was
 //! read instead of an address that was asked for.
 //!
-//! The check is by URL: scheme, credentials, port, host name, literal
-//! address. The proxy resolves host names, as on the http path, so no
-//! resolved address is known here.
+//! The check here is by URL: scheme, credentials, port, host name, literal
+//! address. A server's redirect may only send the browser to `http` or
+//! `https`: a `Location` with any other scheme, a local one included, is a
+//! refused hop (F167). The proxy resolves host names, as on the http path,
+//! so no resolved address is known here; under `security.resolve_on_host`
+//! the attempt executor resolves every hop [`chain_hops`] and
+//! [`capture_hops`] list with the http path's own address check
+//! (`kage_http::check_target_addresses`, F57), and the forwarder has
+//! refused such a name before any request to it left.
 
 use kage_core::ssrf::{RedirectChain, SsrfDenial, SsrfPolicy};
 use url::Url;
@@ -125,7 +131,8 @@ fn check_from(
             reason,
         })?;
     let mut hop = 0;
-    let mut step = |target: &str| -> Result<(), DeniedHop> {
+    // `location`: the target is where a server's redirect sent the browser.
+    let mut step = |target: &str, location: bool| -> Result<(), DeniedHop> {
         let Ok(next) = chain.current().join(target.trim()) else {
             return Err(DeniedHop {
                 hop: hop + 1,
@@ -134,8 +141,11 @@ fn check_from(
             });
         };
         // A local document is not a network address, and the URL the chain
-        // already points at is not a new hop.
-        if LOCAL_SCHEMES.contains(&next.scheme()) || same_document(chain.current(), &next) {
+        // already points at is not a new hop. A server's redirect to a
+        // local scheme is a hop all the same, and one the guard refuses: a
+        // redirect may only send a browser to `http` or `https` (F167).
+        let local = !location && LOCAL_SCHEMES.contains(&next.scheme());
+        if local || same_document(chain.current(), &next) {
             return Ok(());
         }
         hop += 1;
@@ -149,12 +159,65 @@ fn check_from(
             })
     };
     for redirect in &result.redirects {
-        step(&redirect.url)?;
+        step(&redirect.url, false)?;
         if let Some(location) = &redirect.location {
-            step(location)?;
+            step(location, true)?;
         }
     }
-    step(&result.final_url)
+    step(&result.final_url, false)
+}
+
+/// The network addresses of a navigation's chain with the number of each
+/// hop, in the order [`check_chain`] judges them: the URL that was asked
+/// for (hop 0), the redirects and where they pointed, and the captured
+/// document's address. A local document and the address the chain already
+/// points at are no hop. Under `security.resolve_on_host` the attempt
+/// executor resolves each of them after the fact with the http path's
+/// address check (F57).
+pub fn chain_hops(result: &PageResult) -> Vec<(usize, Url)> {
+    hops_from(&result.url, result)
+}
+
+/// [`chain_hops`] for a page a flow captured, begun where [`check_capture`]
+/// begins: at the first address of the page that is not local.
+pub fn capture_hops(result: &PageResult) -> Vec<(usize, Url)> {
+    let first = std::iter::once(result.url.as_str())
+        .chain(result.redirects.iter().flat_map(|redirect| {
+            std::iter::once(redirect.url.as_str()).chain(redirect.location.as_deref())
+        }))
+        .chain(std::iter::once(result.final_url.as_str()))
+        .find(|url| !is_local(url));
+    first.map_or_else(Vec::new, |first| hops_from(first, result))
+}
+
+/// The hops of a page's chain begun at `start`, numbered as [`check_from`]
+/// numbers them. What cannot be joined ends the list: the URL check
+/// refuses it.
+fn hops_from(start: &str, result: &PageResult) -> Vec<(usize, Url)> {
+    let Ok(first) = Url::parse(start) else {
+        return Vec::new();
+    };
+    let targets = result
+        .redirects
+        .iter()
+        .flat_map(|redirect| {
+            std::iter::once(redirect.url.as_str()).chain(redirect.location.as_deref())
+        })
+        .chain(std::iter::once(result.final_url.as_str()));
+    let mut hops = vec![(0, first)];
+    for target in targets {
+        let Some((_, current)) = hops.last() else {
+            break;
+        };
+        let Ok(next) = current.join(target.trim()) else {
+            break;
+        };
+        if LOCAL_SCHEMES.contains(&next.scheme()) || same_document(current, &next) {
+            continue;
+        }
+        hops.push((hops.len(), next));
+    }
+    hops
 }
 
 /// Removes everything a navigation captured, and keeps what describes it:
@@ -280,14 +343,93 @@ mod tests {
             let redirected = check(start, &[(start, target)], target).unwrap_err();
             assert_eq!(redirected.hop, 1, "{target}");
         }
-        // A redirect to a scheme the browser never asks the network for.
-        for target in ["file:///etc/passwd", "ftp://example.org/x"] {
-            let denied = check(start, &[(start, target)], target).unwrap_err();
-            assert!(matches!(denied.reason, SsrfDenial::Scheme(_)), "{target}");
+        // A redirect to a scheme the browser never asks the network for,
+        // a local one included (F167): a server's redirect may only send a
+        // browser to `http` or `https`, wherever the tab ended.
+        for target in [
+            "file:///etc/passwd",
+            "ftp://example.org/x",
+            "data:text/html,<b>x</b>",
+            "javascript:alert(1)",
+            "about:blank",
+        ] {
+            for final_url in [target, start] {
+                let denied = check(start, &[(start, target)], final_url).unwrap_err();
+                assert!(matches!(denied.reason, SsrfDenial::Scheme(_)), "{target}");
+                assert_eq!(denied.hop, 1, "{target}");
+                assert_eq!(denied.url, target);
+            }
         }
         // A protocol-relative hop takes the scheme of the page before.
         let relative = check(start, &[(start, "//10.0.0.1/x")], "https://10.0.0.1/x").unwrap_err();
         assert_eq!(relative.url, "https://10.0.0.1/x");
+    }
+
+    #[test]
+    fn the_hops_of_a_chain_are_its_network_addresses_numbered_as_the_check_numbers_them() {
+        let hops = |page: &PageResult, capture: bool| -> Vec<(usize, String)> {
+            let listed = if capture {
+                super::capture_hops(page)
+            } else {
+                super::chain_hops(page)
+            };
+            listed
+                .into_iter()
+                .map(|(hop, url)| (hop, url.to_string()))
+                .collect()
+        };
+        let page = result(
+            "https://example.org/a",
+            &[
+                ("https://example.org/a", "/b"),
+                ("https://example.org/b", "https://lan.example.org/c"),
+            ],
+            "https://lan.example.org/c#top",
+        );
+        assert_eq!(
+            hops(&page, false),
+            vec![
+                (0, "https://example.org/a".to_owned()),
+                (1, "https://example.org/b".to_owned()),
+                (2, "https://lan.example.org/c".to_owned()),
+            ]
+        );
+        // A script moved the page on; a local document is no hop.
+        let moved = result("https://example.org/a", &[], "https://lan.example.org/x");
+        assert_eq!(
+            hops(&moved, false)[1],
+            (1, "https://lan.example.org/x".to_owned())
+        );
+        let local = result("https://example.org/a", &[], "about:blank");
+        assert_eq!(hops(&local, false).len(), 1);
+        // A flow's page begins at its first address that is not local.
+        let captured = result("about:blank", &[], "https://lan.example.org/x");
+        assert_eq!(
+            hops(&captured, true),
+            vec![(0, "https://lan.example.org/x".to_owned())]
+        );
+        assert_eq!(
+            hops(&result("about:blank", &[], "about:blank"), true),
+            vec![]
+        );
+        // What is no URL has no hops; what cannot be joined ends them.
+        assert_eq!(hops(&result("not a url", &[], "not a url"), false), vec![]);
+        let broken = result("https://example.org/a", &[], "http://[::1");
+        assert_eq!(hops(&broken, false).len(), 1);
+        // The same numbering as the check's: a refused hop names the same
+        // place in both.
+        let refused = result(
+            "https://example.org/a",
+            &[("https://example.org/a", "http://10.0.0.5/admin")],
+            "http://10.0.0.5/admin",
+        );
+        let denied =
+            check_chain(&refused, SsrfPolicy::default(), DEFAULT_MAX_REDIRECTS).unwrap_err();
+        assert!(
+            hops(&refused, false)
+                .iter()
+                .any(|(hop, url)| *hop == denied.hop && *url == denied.url)
+        );
     }
 
     #[test]

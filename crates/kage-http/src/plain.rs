@@ -26,11 +26,14 @@
 //! Like every client of this crate it leaves through a proxy: the
 //! forwarder, under a credential that names no persona, which connects to
 //! the site's plain exit (the host or one proxy of the pool), checks every
-//! address and counts every byte.
+//! address and counts every byte. A site's plain traffic leaves through
+//! that site's exit only: a redirect hop to another site is asked for from
+//! the other site's own exit, or not at all ([`HopExits`], F166).
 
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::Utc;
 use http::header::{
@@ -82,6 +85,48 @@ pub struct PlainSpec {
     pub max_body_bytes: Option<usize>,
     /// Redirect hops to follow; the client's setting when `None`.
     pub max_redirects: Option<usize>,
+}
+
+/// Where a plain client's redirect hops leave from (F166, spec §25).
+///
+/// The level 0 traffic of a site leaves through that site's one plain exit
+/// and never through another site's: an address that sends `kage/<version>`
+/// to a site must be that site's own. So a hop to another site is asked for
+/// from that site's exit, and a hop whose site's exit cannot be had now is
+/// not asked for at all.
+#[async_trait]
+pub trait HopExits: Send + Sync {
+    /// The client a redirect hop to `url` is asked for with; `None` for the
+    /// client the fetch began with, when the hop's site leaves where the
+    /// first URL's does.
+    ///
+    /// # Errors
+    ///
+    /// Why the hop's site's exit cannot be had now. The hop is not asked
+    /// for and the fetch ends [`HttpError::HopExitUnavailable`].
+    async fn client_for(&self, url: &Url) -> Result<Option<Arc<PlainClient>>, String>;
+}
+
+/// The client hop `hop` of a chain (0 for the first URL) is asked for
+/// with: the one `exits` names for a redirect hop, `None` for the client
+/// the fetch began with.
+async fn hop_client(
+    exits: Option<&dyn HopExits>,
+    url: &Url,
+    hop: usize,
+) -> Result<Option<Arc<PlainClient>>, HttpError> {
+    match exits {
+        Some(exits) if hop > 0 => {
+            exits
+                .client_for(url)
+                .await
+                .map_err(|reason| HttpError::HopExitUnavailable {
+                    url: url.to_string(),
+                    reason,
+                })
+        }
+        _ => Ok(None),
+    }
 }
 
 /// The plain client: wreq untouched, through the forwarder.
@@ -298,6 +343,23 @@ impl PlainClient {
         spec: &PlainSpec,
         asked: &mut Vec<Url>,
     ) -> Result<Fetched, HttpError> {
+        self.fetch_routed(spec, asked, None).await
+    }
+
+    /// [`Self::fetch_traced`], with every redirect hop asked for from the
+    /// client `exits` names for it: a hop to another site from that site's
+    /// own exit (F166). The first URL is always asked for with this client.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::fetch`], and [`HttpError::HopExitUnavailable`] when a
+    /// hop's site's exit cannot be had.
+    pub async fn fetch_routed(
+        &self,
+        spec: &PlainSpec,
+        asked: &mut Vec<Url>,
+        exits: Option<&dyn HopExits>,
+    ) -> Result<Fetched, HttpError> {
         if !matches!(spec.method, Method::GET | Method::HEAD | Method::POST) {
             return Err(HttpError::Method(spec.method.to_string()));
         }
@@ -322,8 +384,12 @@ impl PlainClient {
             // name points into a denied range is never asked for.
             check_addresses(self.resolver.as_deref(), &trail).await?;
             let url = trail.current().clone();
+            // A hop to another site leaves from that site's own exit, or not
+            // at all (F166).
+            let routed = hop_client(exits, &url, trail.redirects()).await?;
+            let via = routed.as_deref().unwrap_or(self);
             asked.push(url.clone());
-            let incoming = self
+            let incoming = via
                 .send(
                     &method,
                     &url,

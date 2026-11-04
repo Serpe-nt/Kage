@@ -469,6 +469,7 @@ mod tests {
                 operator_hosts: HashSet::new(),
                 private_names: HashSet::new(),
                 resolver: Arc::new(SystemResolver),
+                resolve_names: false,
             },
             Tokens::new(&[1; 32]),
             Arc::new(NoRoutes),

@@ -11,7 +11,7 @@
 
 mod common;
 
-use common::lab::{Lab, OnFlow, SITE};
+use common::lab::{HIDDEN, Lab, OnFlow, SITE};
 use kage_browser::contract::FlowAction;
 use kage_core::domain::{BreakerState, Level, Render};
 use kage_core::outcome::Outcome;
@@ -873,5 +873,50 @@ async fn a_flow_that_a_click_sent_to_a_refused_address_is_ssrf_denied_at_once() 
     assert_eq!(report.outcome, Outcome::SsrfDenied, "{:?}", report.reason);
     assert_eq!(report.attempts.len(), 1);
     assert_eq!(report.last.as_ref().unwrap().flow, None);
+    lab.shut_down().await;
+}
+
+/// F57 (QA round two, ssrf-01): under `security.resolve_on_host` every page
+/// a flow reached is judged by its addresses after the fact, as a
+/// navigation's chain is: a click that took the tab to a name of the
+/// operator's network is `ssrf_denied`, nothing of the flow kept, even when
+/// the page came back.
+#[tokio::test]
+async fn with_resolve_on_host_a_flows_pages_are_judged_by_their_addresses() {
+    let mut lab = Box::pin(Lab::start_with(2, 149, BROWSER_FAST, |config| {
+        config.security.resolve_on_host = true;
+    }))
+    .await;
+    let hidden = format!("http://{HIDDEN}/admin");
+    let clicked = flow(&json!([
+        { "action": "goto", "url": site("/start") },
+        { "action": "click", "selector": "a.admin" },
+    ]));
+    lab.chromium.with(|sidecar| {
+        sidecar.next_flows.push_back(json!({
+            "final": {
+                "final_url": hidden,
+                "status": 200,
+                "dom_html": "<html><body>INTERNAL</body></html>",
+            },
+        }));
+    });
+
+    let report = lab.pipeline.fetch(clicked).await.unwrap();
+
+    assert_eq!(report.outcome, Outcome::SsrfDenied, "{:?}", report.reason);
+    assert_eq!(report.attempts.len(), 1);
+    let last = report.last.as_ref().unwrap();
+    assert_eq!(last.flow, None);
+    assert_eq!(last.page.as_ref().unwrap().dom_html, None);
+    assert_eq!(last.final_url.as_deref(), Some(hidden.as_str()));
+    assert!(
+        last.classification
+            .evidence
+            .iter()
+            .any(|seen| seen.contains(&hidden) && seen.contains("10.0.0.9")),
+        "{:?}",
+        last.classification.evidence
+    );
     lab.shut_down().await;
 }

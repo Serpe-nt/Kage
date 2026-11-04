@@ -33,7 +33,7 @@ use kage_core::ids::ProxyId;
 use kage_core::policy::PolicyStore;
 use kage_core::secret::Secret;
 use kage_core::seed::Seed;
-use kage_http::{ClientFactory, HttpSettings, StoreCookies};
+use kage_http::{ClientFactory, HopResolver, HttpSettings, StoreCookies};
 use kage_persona::{BrowserGate, Egress, PersonaManager, PersonaParts, Sidecars};
 use kage_proxy::machine::{ExitObservation, ProbeReport};
 use kage_proxy::provider::{Capabilities, ProviderError, ProviderProxy, ProxyProvider};
@@ -65,6 +65,34 @@ pub const MASTER_KEY: &str = "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f
 
 /// The name the site is reached by.
 pub const SITE: &str = "shop.kage.test";
+
+/// A name of the operator's own network: it resolves to a private address
+/// under the lab's lookups.
+pub const HIDDEN: &str = "hidden.kage.test";
+
+/// The host's lookups in the lab under `security.resolve_on_host`: never
+/// the system's, so that nothing here asks a resolver of the network. Every
+/// name of the lab is a public address but [`HIDDEN`], which is private; a
+/// name the table does not know cannot be looked up.
+#[derive(Debug, Default)]
+pub struct LabNames {
+    /// Every name looked up, in order.
+    pub asked: Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl HopResolver for LabNames {
+    async fn resolve(&self, host: &str) -> Result<Vec<IpAddr>, String> {
+        self.asked.lock().unwrap().push(host.to_owned());
+        match host {
+            HIDDEN => Ok(vec![IpAddr::V4(Ipv4Addr::new(10, 0, 0, 9))]),
+            name if name.ends_with(".kage.test") => {
+                Ok(vec![IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34))])
+            }
+            _ => Err(format!("{host} is not a name of the lab")),
+        }
+    }
+}
 
 /// A Postgres server that lives as long as this value, with every
 /// migration applied.
@@ -716,6 +744,8 @@ pub struct Lab {
     /// The site every provider proxy reaches as [`SITE`], port 80.
     pub site: MockServer,
     pub config: Config,
+    /// The host's lookups under `security.resolve_on_host`.
+    pub names: Arc<LabNames>,
     stops: Vec<oneshot::Sender<()>>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
     policy_dir: TempDir,
@@ -796,9 +826,15 @@ impl Lab {
             PoolRoutes::new(store.clone(), Arc::clone(&pool))
                 .with_plain_exit(config.egress.plain_exit()),
         );
+        // Under `security.resolve_on_host` the host's lookups are the lab's.
+        let names = Arc::new(LabNames::default());
+        let mut settings = ForwarderSettings::from_config(&config);
+        if config.security.resolve_on_host {
+            settings.resolver = Arc::<LabNames>::clone(&names);
+        }
         let (forwarder, listener) = Forwarder::bind(
             "127.0.0.1:0".parse().unwrap(),
-            ForwarderSettings::from_config(&config),
+            settings,
             Tokens::new(&key),
             routes,
         )
@@ -815,10 +851,14 @@ impl Lab {
             },
         )));
 
-        let http = Arc::new(ClientFactory::new(
+        let mut factory = ClientFactory::new(
             HttpSettings::from_config(&config.http),
             Arc::new(StoreCookies::new(store.clone())),
-        ));
+        );
+        if config.security.resolve_on_host {
+            factory = factory.with_resolver(Arc::<LabNames>::clone(&names));
+        }
+        let http = Arc::new(factory);
         let egress: Arc<dyn Egress> = Arc::new(forwarder.egress());
         let manager = Arc::new(
             PersonaManager::new(PersonaParts {
@@ -900,6 +940,7 @@ impl Lab {
             policies,
             site: MockServer::start().await,
             config,
+            names,
             stops,
             tasks,
             policy_dir,
