@@ -1060,13 +1060,24 @@ merged branches on GitHub.
   drop the `zip` ignore when `utoipa-swagger-ui` is on `zip` 9.
 - **F56 (M13, observe):** count `domain_rpm` at the moment a page's
   request leaves, if a site is ever seen to count by the minute.
-- **F57 (security review):** with `resolve_on_host` on, the forwarder
+- **F57 (security review; critical since QA round two, the owner's
+  word of 2026-11-04):** with `resolve_on_host` on, the forwarder
   resolves the names it relays and refuses denied ranges, and `kage
   config check` warns about a static proxy list without it (G1); the
   http path refuses the browsers' unsafe ports (G3); the forwarder relays
   the authority it checked, not the client's text (G5); a per-key limit
   of open jobs and queued items (L2); a bound on the distinct `domain`
   label values (L3); a volume of the sidecars' own for their files (V1).
+  QA round two (ssrf-01) measured what G1 costs under the pool: a public
+  page's 302, meta refresh, script redirect, form, click or submit sends
+  the browser to a name that resolves to a private address, the
+  forwarder judges the browser's request by its URL alone, the request
+  reaches the private target and the private page comes back `ok` at
+  levels 2 and 3, while the same name asked for directly is `422`
+  `ssrf_denied`. The forwarder resolves every name it relays under the
+  setting, and the after-the-fact check of a navigation's chain resolves
+  names as the http path's hops do since F98; first of the round two
+  fixes.
 - **F58 (CI):** the report-only mutants job reaches 78 of 2375 mutants
   in its 30 min on a runner; run the mutants of the pull request's diff
   (`cargo mutants --in-diff`) or a weekly job on a larger runner. The
@@ -1862,7 +1873,8 @@ order of severity (the report's "Proposed plan items" names the rows):
   typed instead of clicked (`element_not_reachable` after two attempts,
   `Human.reveal` giving up when a flick no longer moves `scrollY`) in
   two of three gate runs of the round B browser session on the same
-  images, never on GitHub; find why a reveal flicks for an element in
+  images, and once on GitHub (run 41752925582 on [Serpe-nt/Kage#46](https://github.com/Serpe-nt/Kage/pull/46), the Chromium
+  reading room, 2026-11-04); find why a reveal flicks for an element in
   view and what the hand does when the page cannot scroll further (the
   round B browser session, 2026-11-03).
 - **F165 (low):** the executor's test
@@ -1877,8 +1889,131 @@ The round did not reach level 1 (F30), `https` targets, a replacement
 that replaces, real-length timers, two servers on one database, DNS
 rebinding, WebRTC, the /24 and ASN rules, or the Grafana, Jaeger and
 Collector images; the report says so under "What the round did not
-cover". A second QA round runs on the owner's word once the critical and
-high items are fixed, those gaps first.
+cover". A second QA round ran on 2026-11-03, those gaps first (below).
+
+## QA round two (2026-11-03)
+
+One QA agent per topic, six (`tls`, `pool`, `ssrf`, `timers`, `http`,
+`flows`) and a seventh for what they named as not reached, ran against
+`main` at `91b7ab2` (2.0.1 with rounds A and B, F96 to F111 fixed) in the
+closed fixture world, the gaps of round one first, then a regression sweep
+of round one's 111 reproductions, then the edges of what rounds A and B
+fixed. The report is `docs/qa/2026-11-03.md` ([Serpe-nt/Kage#46](https://github.com/Serpe-nt/Kage/pull/46)): 32 findings, 9
+high, 11 medium, 12 low, none critical, every one reproduced by the
+session; the harness and the worlds it built (TLS with a private CA, a
+fake provider, five proxies in three /24s and four ASNs, two servers on
+one database, DNS rebinding, WebRTC catchers, real-length timers) are
+`tests/qa/`. The 28 reproductions of F96 to F111 all end
+`NOT-REPRODUCED`; every open item of round one still reproduces but two a
+fix took in passing. A DROP rule on the nested Docker and on the
+container's own way out held from before the first stack; nothing reached
+anyone. Out of reach, and why: level 1 (F30: wreq-util 0.2.0's newest
+profiles are Chrome 149 and Firefox 151, the images run 155 and 156, so
+no persona can have an http profile until a verified profile exists),
+level 0 over `https` and a provider stand-in over `https` (level 0 and the
+provider client trust wreq's built-in roots only: F191), persona
+exclusivity and seats across two servers (per process by design, ADR
+0005), and the timers past a two-hour window. Two of the report's
+questions are decided: F57 is critical and goes first; F191 is wanted.
+
+The findings as plan items, in the order of severity (the report's
+"Proposed plan items" names the rows):
+
+- **F166 (high):** a level 0 redirect to another site leaves through that
+  site's own plain exit, or is refused with a typed reason; today the hop
+  is followed from the first site's exit, so the second site sees
+  `kage/<version>` from an address that read it as a person, against
+  §25 and D50 (http-02).
+- **F167 (high):** F102 for schemes and for a Firefox meta refresh under
+  `direct`: a browser's redirect to `file:`, `data:`, `ftp:` or
+  `javascript:` is `ssrf_denied` in both engines, never
+  `provider_error`, and a meta refresh to a name the forwarder refuses
+  is `ssrf_denied`, never `soft_block` with the browser's own page kept
+  and a block booked (ssrf-06, ssrf-02).
+- **F168 (high):** the retry after a block keeps §8.2's rule, never the
+  blocked persona's /24 and minus two for its ASN while another persona
+  is eligible; today each persona's own retry pause decides who is ready
+  first and the score only orders the ready (pool-01).
+- **F169 (high):** F107 for a pool of four or more: a suspected pool
+  outage pauses jobs and answers `no_persona` with `retry_at` as backoff
+  does; today the outage guard freezes the counters, no proxy reaches
+  `backoff`, and a batch fails `proxy_failed` within half a minute
+  (pool-02; with F151).
+- **F170 (medium):** a certificate level 0 refuses, and a site's own
+  `407` over `https`, are the site's answer (`connection_failed`), not
+  `proxy_failed`: wreq reports a refused handshake as a connect error,
+  so `HttpError::Tls` is never produced, the proxies stay blamed and a
+  robots file is `robots_unavailable` for a minute instead of an hour
+  (tls-01, tls-03).
+- **F171 (medium):** a site's NUL bytes (a UTF-16 `robots.txt`) are read
+  or refused as data and cached once, never `500 internal` on every
+  fetch of the origin (http-01).
+- **F172 (medium):** level 0 decoding edges: a `<meta charset>` inside an
+  inline script is not the page's, an undeclared UTF-8 page reads as the
+  browsers read it, a sitemap in a declared legacy encoding is read in it
+  (http-06, http-05, http-04).
+- **F173 (medium):** the markdown of nested quotes and lists grows
+  linearly in size and time; today 4000 nested blockquotes make 32 M
+  characters in 18 s and 6000 take 105 s on one core (http-07).
+- **F174 (medium, the owner's question):** two servers on one database:
+  refused at start, or supported with a lost context closed or the
+  attempt retried, never an item `running` with nothing in flight after
+  a lease moved; ADR 0005 and §16.6 say different things and one must
+  give (pool-03).
+- **F175 (medium):** a flow's cancel stops at the step under way, or the
+  cancel's documents say a flow cannot be stopped; today the flow runs to
+  its last step and the job ends `succeeded` (pool-04).
+- **F176 (medium):** Grafana's trace search by service works on the
+  pinned Jaeger: its data source asks the removed v1 search and gets
+  `404` (timers-01).
+- **F177 (medium):** a shared exit is judged against live proxies' latest
+  probes only; today a proxy that comes back on an address a dead proxy
+  once had is `exit_shared_with` that proxy by its stale address and its
+  persona is retired for good (timers-04).
+- **F178 (low):** a revalidated page (`304`) has one `status` and the shown
+  response's headers in both engines (tls-02).
+- **F179 (low):** robots.txt and percent-encoding: RFC 9309's decoding of
+  unreserved characters or Google's matcher, decided and written
+  (http-03).
+- **F180 (low):** a binary body with no type gets no `extract`, as it gets
+  no `raw_body` (http-08).
+- **F181 (low):** the guard's edges, all failing closed today:
+  `private_names` with `resolve_on_host` under `direct`, a hop's trailing
+  dot, and one outcome for one redirect too many at every level (ssrf-03,
+  ssrf-05, ssrf-07).
+- **F182 (low):** no seed in a span event (§20), and
+  `kage_api_refusals_total{code="scope_missing"}` counts the 403 it
+  names (timers-03, timers-02).
+- **F183 (low):** the Firefox runbook's WebRTC row: Camoufox gathers no
+  candidate at all (ssrf-04).
+- **F184 (high):** a tab a flow's click opens is the flow's and ends with
+  it; later steps act on the flow's page or fail; today the persona's
+  later clicks and typed text land in the new tab while every step
+  reports `ok`, and the tab outlives the flow across other keys'
+  requests (flows-02; with F96 and the security review).
+- **F185 (high):** F105 for `kage selftest browser --persona` and
+  `kage persona selftest`: a run that read no page exits non-zero, and
+  the hint names options that exist (flows-04).
+- **F186 (medium):** a flow's result carries the robots verdict of the
+  address it ended on, not the first site's (flows-01).
+- **F187 (medium):** a fetch redirected to another site's wall books the
+  block to the site that showed it, as a flow does since F101 (flows-03).
+- **F188 (high):** a flow's later site keeps its `domain_concurrency`
+  against open visits, not only pages in flight: today F101's hold
+  counts pages in flight (`site_hold`), and the flow reads the site from
+  a second address while a visitor's visit is open (left-01).
+- **F189 (high):** F108 for Firefox: a proxy's refusal of a target (a
+  `403` to its CONNECT) is never the site's `forbidden`; nothing booked,
+  no browser page kept, one answer in both engines (left-02).
+- **F190 (medium):** Firefox's result headers are the field lines as
+  sent, not split at commas: today `Last-Modified` comes as two values
+  (left-03).
+- **F191 (medium, the owner's word of 2026-11-04):** an operator trust
+  anchor for the http path and the provider client (a CA file in the
+  configuration, none by default), so that level 0 reaches a site under
+  a private CA and the QA world can test level 0 over `https` and a
+  provider stand-in over `https`; the self-test's `echo_ca_file` reaches
+  the self-test's clients alone today.
 
 ---
 
@@ -1905,7 +2040,12 @@ its own on the PR workflow, with the owner's word for every merge:
    and F105, [Serpe-nt/Kage#44](https://github.com/Serpe-nt/Kage/pull/44)); every fix keeps the report's reproduction as its
    regression test, and the OpenAPI document and the runbooks move with
    it. F146 to F165, what the fix sessions, their reviews, the nightly
-   and the merges found, go with the area they belong to.
+   and the merges found, go with the area they belong to. QA round two
+   (2026-11-03, [Serpe-nt/Kage#46](https://github.com/Serpe-nt/Kage/pull/46)) added F166 to F191 and raised F57 to critical:
+   F57 first, then the nine high items by area (the forwarder and the
+   guard F167, F166; the scheduler and the pool F168, F169, F188; the
+   browsers and the sidecar F184, F185, F189), then the medium and low
+   ones, each a pull request of its own.
 3. **What the field campaign found, the stealth items first:** F89 (the
    behaviour engine answers a consent dialog by hand before its first
    scroll, reject non-essential by default or accept where a site's policy
