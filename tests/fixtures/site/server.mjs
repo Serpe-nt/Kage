@@ -171,6 +171,30 @@ document.body.setAttribute('data-done', '1');
 </script>`,
 );
 
+// A page with a link that opens a tab, and an input, and the page that tab
+// shows (F184): each tells the server every key and every press of a button
+// it receives, so a test can say which page the persona's input reached.
+const openerRecorder = (who) => `<script>
+for (const type of ['keydown', 'mousedown']) {
+  document.addEventListener(type, (event) => navigator.sendBeacon('/__kage/report', JSON.stringify({ page: 'opener', who: '${who}', type, key: event.key ?? null })));
+}
+document.body.setAttribute('data-ready', '1');
+</script>`;
+const OPENER_PAGE = page(
+  'Opener',
+  `<h1>A page that opens a tab</h1>
+<p><a id="blank" target="_blank" href="/opener/new" style="display:block;width:420px;height:90px;background:#ddd">Read the terms in a new tab</a></p>
+<p><input id="q" style="display:block;width:520px;height:48px;font-size:24px"></p>
+${openerRecorder('opener')}`,
+);
+const OPENER_NEW_PAGE = page(
+  'Opened',
+  `<h1>The tab the link opened</h1>
+<p><input id="other" style="display:block;width:520px;height:48px;margin-top:120px;font-size:24px"></p>
+${openerRecorder('opened')}
+<script>setInterval(() => navigator.sendBeacon('/__kage/report', JSON.stringify({ page: 'opener', who: 'opened', type: 'alive', at: Date.now() })), 250);</script>`,
+);
+
 // What a page reads of how its browser was started (the Chrome switch
 // audit, ADR 0014): the automation flag, how much of the window the
 // browser's own bars take (a bar over the page makes it more), and what the
@@ -533,6 +557,8 @@ const routes = {
   '/partition/top': (_req, res, url) => html(res, partitionTopPage(url.searchParams.get('frame') ?? '')),
   '/partition/frame': (_req, res) => html(res, PARTITION_FRAME_PAGE),
   '/popup.html': (_req, res) => html(res, POPUP_PAGE),
+  '/opener/': (_req, res) => html(res, OPENER_PAGE),
+  '/opener/new': (_req, res) => html(res, OPENER_NEW_PAGE),
   '/launch.html': (_req, res) => html(res, LAUNCH_PAGE.replace('<html lang="en">', '<html lang="de">')),
   '/cached.html': (_req, res) => html(res, page('Cached', '<h1>Cached for ten minutes</h1>'), { 'cache-control': 'max-age=600' }),
   '/big.html': (_req, res) => html(res, page('Big', `<p>${'ä'.repeat(40_000)}</p>`)),

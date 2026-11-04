@@ -74,6 +74,19 @@ kage selftest browser --persona <id> [--third-party]
 
 `retire`, `regenerate` and `selftest` leave an audit event.
 
+A self-test command's exit status says what `passed` in its JSON document
+says (spec §7.4, F185): 0 only when every part it ran passed. A part that
+could not read what it tests (no page of the browser test arrived as its
+kind, the echo did not answer) is `inconclusive`: the table ends with an
+`INCONCLUSIVE:` line that says what was not tested, the document's
+`verdict` is `inconclusive`, and the command exits non-zero. A command
+that ran no part at all (no echo and no page configured) says "nothing was
+tested" and exits non-zero. A part that is not run is named with why
+(`http: not run (selftest.http.echo_url is not set; set it to the
+operator's own echo, or pass --third-party)`); `kage persona selftest`
+takes no `--echo`, `kage selftest http --persona <id> --echo <url>` does.
+The scheduled runs are unchanged: an inconclusive run cools nobody down.
+
 - **retire.** The persona is gone for good: its sessions end and its http
   cookies are deleted at once. Its proxy gets a new persona at the server's
   next sweep (one minute), which inherits nothing.

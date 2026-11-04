@@ -177,9 +177,36 @@ export interface DriverPage {
   on(event: 'domcontentloaded' | 'load' | 'crash', listener: () => void): unknown;
 }
 
+/**
+ * A tab of the context besides the persona's open one: one a page opened
+ * (a link with `target=_blank`, `window.open` after a click). It is never
+ * driven; the session only reads its address and closes it (F184).
+ */
+export interface DriverTab {
+  url(): string;
+  close(): Promise<void>;
+}
+
 /** What only an engine knows how to do with its browser. */
 export interface SessionDriver {
   readonly page: DriverPage;
+  /**
+   * The context's tabs besides the open one, in the order the browser
+   * reported them: tabs a page opened (F184). A tab the browser has not
+   * reported yet (a driver may wait for its first document) is not among
+   * them.
+   */
+  otherTabs(): readonly DriverTab[];
+  /**
+   * Puts the open tab in front of its window again, as a person does who
+   * goes back to it; the others stay open behind it (F184).
+   */
+  front(): Promise<void>;
+  /**
+   * Calls `listener` whenever the browser reports a tab a page opened
+   * (F184); never for the tab {@link SessionDriver.freshPage} opens.
+   */
+  onOpenedTab(listener: () => void): void;
   /** Turns what the driver threw for a navigation into the contract's error. */
   classifyError(thrown: unknown): NavigationError;
   /** Waits until the browser has settled after a failed navigation. */
@@ -294,6 +321,15 @@ const SOFT_NAVIGATION_MS = 1500;
 const DOCUMENT_LOOKS = 25;
 /** How often the hand goes to a link of the open page before it gives up on resting on it. */
 const HOVER_ATTEMPTS = 2;
+/**
+ * How long a flow's page that lost the focus, with no tab reported, waits
+ * for the browser to report the tab that took it (F184): a driver reports a
+ * tab a page opened once its first document came, which a slow site keeps.
+ */
+const TAB_REPORT_MS = 1500;
+/** How often a page put in front again is asked whether it has the focus, and the rest between two looks (F184). */
+const FRONT_LOOKS = 20;
+const FRONT_REST_MS = 50;
 /** How many addresses of documents a session remembers its tab to have shown. */
 const SHOWN_LIMIT = 256;
 /** How often a page that still glides from the last flick is asked where it is, and the rest between two looks. */
@@ -948,9 +984,118 @@ export class PageSession {
   private unanswering: Unanswering | null = null;
   /** The reads under way, each with what cuts it short. */
   private readonly reading = new Set<(error: Error) => void>();
+  /**
+   * The tabs the page of the flow that runs opened (F184): those the
+   * persona was put back in front of, and those a step has reported. `null`
+   * outside a flow, where a tab a page opens is closed at once.
+   */
+  private flowTabs: { readonly fronted: Set<DriverTab>; readonly reported: Set<DriverTab> } | null =
+    null;
+  /** Whether the open tab is being replaced by a fresh one (F96). */
+  private replacing = false;
 
   constructor(private readonly parts: SessionParts) {
     this.listen(parts.driver.page);
+    parts.driver.onOpenedTab(() => {
+      this.tabOpened();
+    });
+  }
+
+  /**
+   * A page opened a tab (F184). In a flow the tab is the flow's: the
+   * persona is put back in front of the flow's page at once, and the step
+   * that runs reports it. Outside a flow no request asked for it, and it is
+   * closed at once: nothing a page opens outlives the request it opened in,
+   * or reaches another.
+   */
+  private tabOpened(): void {
+    if (this.replacing) {
+      // The fresh tab's own report, or one that comes while it opens: the
+      // request it is for closes what is not its tab once it has one.
+      return;
+    }
+    if (this.flowTabs !== null) {
+      this.keepFront().catch(() => undefined);
+    } else {
+      void this.closeOtherTabs();
+    }
+  }
+
+  /** Closes every tab of the context besides the open one (F184). */
+  private async closeOtherTabs(): Promise<void> {
+    await Promise.all(
+      this.parts.driver.otherTabs().map((tab) => tab.close().catch(() => undefined)),
+    );
+  }
+
+  /** Whether the open page has the focus: whether the persona's keys reach it. */
+  private focused(): Promise<boolean> {
+    // A page that cannot be asked (it is between two documents) is not
+    // taken for one that lost the focus.
+    return this.read<boolean>('document.hasFocus()').catch(() => true);
+  }
+
+  /**
+   * Keeps the flow's page the one the persona's hand and keys reach
+   * (F184). A browser puts a tab a page opened in front of the page; the
+   * page is put in front of it again, as a person who goes back to it does,
+   * and must then have the focus. A page that lost the focus while no tab
+   * was reported yet is given a moment for the report: a driver may report
+   * a tab only once its first document came.
+   *
+   * @throws FlowStepError when a tab the page opened stays in front of it.
+   */
+  private async keepFront(): Promise<void> {
+    const tabs = this.flowTabs;
+    if (tabs === null) {
+      return;
+    }
+    const { driver } = this.parts;
+    let others = driver.otherTabs();
+    if (others.length === 0) {
+      if (await this.focused()) {
+        return;
+      }
+      const until = Date.now() + TAB_REPORT_MS;
+      while (others.length === 0 && Date.now() < until) {
+        await sleep(FRONT_REST_MS);
+        others = driver.otherTabs();
+      }
+      if (others.length === 0) {
+        // The page lost the focus to nothing of a page's: nothing to put behind it.
+        return;
+      }
+    }
+    const unseen = others.some((tab) => !tabs.fronted.has(tab));
+    if (!unseen && (await this.focused())) {
+      return;
+    }
+    for (const tab of others) {
+      tabs.fronted.add(tab);
+    }
+    await driver.front();
+    for (let look = 0; look < FRONT_LOOKS; look += 1) {
+      if (await this.focused()) {
+        return;
+      }
+      await sleep(FRONT_REST_MS);
+    }
+    throw new FlowStepError(
+      `a tab the page opened (${others.map((tab) => tab.url()).join(', ')}) stays in front of the flow's page`,
+    );
+  }
+
+  /** The addresses of the tabs the flow's page opened that no step has reported yet (F184). */
+  private openedTabs(): string[] {
+    const tabs = this.flowTabs;
+    if (tabs === null) {
+      return [];
+    }
+    const fresh = this.parts.driver.otherTabs().filter((tab) => !tabs.reported.has(tab));
+    for (const tab of fresh) {
+      tabs.reported.add(tab);
+    }
+    return fresh.map((tab) => tab.url());
   }
 
   private get page(): DriverPage {
@@ -1070,7 +1215,12 @@ export class PageSession {
   private async tabFor(name: string | null): Promise<void> {
     // A page that answers no read is given up, whoever named its tab (F103).
     if (this.tabUsed && (name === null || name !== this.tab || this.unanswering !== null)) {
-      await this.parts.driver.freshPage();
+      this.replacing = true;
+      try {
+        await this.parts.driver.freshPage();
+      } finally {
+        this.replacing = false;
+      }
       // A read of the tab that was replaced ends now: its limit must not
       // mark the fresh one as a page that does not answer (F103).
       for (const cut of [...this.reading]) {
@@ -1082,6 +1232,10 @@ export class PageSession {
       this.documentsAsked = 0;
       this.document = newDocument();
     }
+    // A tab a page opened is closed by the request it opened in; one the
+    // browser reported only after that is closed here, before anything of
+    // this request runs (F184).
+    await this.closeOtherTabs();
     this.tab = name;
     this.tabUsed = true;
   }
@@ -2213,6 +2367,8 @@ export class PageSession {
     // first navigation is of another request.
     await this.tabFor(null);
     const page = this.page;
+    // A tab the flow's page opens is the flow's until the flow ends (F184).
+    this.flowTabs = { fronted: new Set(), reported: new Set() };
     const started = Date.now();
     const consoleStart = driver.console.mark();
     const prefix = env.defaultArtifactPrefix;
@@ -2378,12 +2534,18 @@ export class PageSession {
       extract: (options) => snapshot(options, null),
       screenshot: (options) => snapshot({ ...nothing, screenshot: options }, null),
       pdf: (options) => snapshot({ ...nothing, pdf: options }, null),
+      keepFront: () => this.keepFront(),
+      openedTabs: () => this.openedTabs(),
     };
     try {
       const outcome = await runFlow(request, host, emit).finally(() => {
         this.freshOnNavigation = 'never';
       });
       const result = await snapshot(request.capture, null);
+      // The tabs the flow's page opened end with the flow, before it is
+      // reported done (F184).
+      this.flowTabs = null;
+      await this.closeOtherTabs();
       const done = acting.current;
       emit({
         type: 'final',
@@ -2394,6 +2556,10 @@ export class PageSession {
       });
     } finally {
       this.remembered = null;
+      if (this.flowTabs !== null) {
+        this.flowTabs = null;
+        await this.closeOtherTabs();
+      }
     }
   }
 

@@ -2239,6 +2239,83 @@ export function defineParitySuite(subject: ParitySubject): void {
       expect(run.final.behavior?.clicks).toBeGreaterThanOrEqual(4);
     });
 
+    it('keeps a tab its page opened behind the flow’s page, reports it, and closes it with the flow (F184)', async () => {
+      await site.reset();
+      const opened = named('/opener/new');
+      const ended = await withContext('opener', async (context) => {
+        // The round's flow (flows-02): a link that opens a tab, a wait,
+        // then a click and typed text meant for the flow's own page.
+        const run = await flow(context, {
+          behavior: { seed: SEEDS.first, typos: false },
+          timeout_ms: 120_000,
+          actions: [
+            { action: 'goto', url: named('/opener/') },
+            { action: 'wait_for', selector: 'body[data-ready]' },
+            { action: 'click', selector: '#blank' },
+            { action: 'wait_for', ms: 2500 },
+            { action: 'click', selector: '#q' },
+            // Five keys, none twice: the hand presses a letter again while it
+            // may still hold it, and the display drops such a press.
+            { action: 'type', selector: '#q', text: 'world' },
+          ],
+        });
+        const at = Date.now();
+        expect(run.steps.map((step) => [step.action, step.ok, step.error])).toEqual(
+          ['goto', 'wait_for', 'click', 'wait_for', 'click', 'type'].map((action) => [
+            action,
+            true,
+            null,
+          ]),
+        );
+        // The tab is reported once, by the step in which the browser
+        // reported it: the click, or the wait after it.
+        expect(run.steps.flatMap((step) => step.opened_tabs ?? [])).toEqual([opened]);
+        expect(run.steps.slice(4).flatMap((step) => step.opened_tabs ?? [])).toEqual([]);
+        // The page the flow ended on is the flow's page, not the tab.
+        expect(run.final.result.final_url).toBe(named('/opener/'));
+        return at;
+      });
+      // Every beacon has come once five keys are in, or after a while.
+      let reports: Record<string, unknown>[] = [];
+      for (let look = 0; look < 30; look += 1) {
+        reports = (await site.reports()).filter((entry) => entry['page'] === 'opener');
+        if (reports.filter((entry) => entry['type'] === 'keydown').length >= 5) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      const heard = (who: string, type: string) =>
+        reports.filter((entry) => entry['who'] === who && entry['type'] === type);
+      measured('what each page heard', {
+        opener: reports.filter((entry) => entry['who'] === 'opener').map((entry) => entry['type']),
+        opened: reports
+          .filter((entry) => entry['who'] === 'opened' && entry['type'] !== 'alive')
+          .map((entry) => entry['type']),
+      });
+      // Every key and every press reached the flow's page; the tab heard none.
+      expect(heard('opener', 'keydown').map((entry) => entry['key'])).toEqual([
+        'w',
+        'o',
+        'r',
+        'l',
+        'd',
+      ]);
+      expect(heard('opener', 'mousedown').length).toBeGreaterThanOrEqual(3);
+      expect(heard('opened', 'keydown')).toEqual([]);
+      expect(heard('opened', 'mousedown')).toEqual([]);
+      // The tab was open while the flow ran, and ran no more once it ended.
+      expect(heard('opened', 'alive').length).toBeGreaterThan(0);
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const late = (await site.reports()).filter(
+        (entry) =>
+          entry['page'] === 'opener' &&
+          entry['type'] === 'alive' &&
+          typeof entry['at'] === 'number' &&
+          entry['at'] > ended + 300,
+      );
+      expect(late).toEqual([]);
+    });
+
     it("gives two personas two hands, each a person's", async () => {
       // The two personas of this suite were picked so that their typing
       // differs more than one person's does from one run to the next.

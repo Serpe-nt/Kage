@@ -114,6 +114,9 @@ pub struct FlowStep {
     pub error: Option<String>,
     /// What an `extract`, `screenshot` or `pdf` step captured.
     pub capture: Option<Box<PageResult>>,
+    /// The addresses of the tabs the flow's page opened while the step ran
+    /// (F184): the flow's, kept behind its page and closed with it.
+    pub opened_tabs: Vec<String>,
 }
 
 /// What a flow came to: the steps that ran, in order. The page it ended on
@@ -1590,6 +1593,7 @@ impl PathExecutor {
                     error,
                     index,
                     ok,
+                    opened_tabs,
                     paced_ms,
                 } => steps.push(FlowStep {
                     index: u32::try_from(index).unwrap_or(u32::MAX),
@@ -1599,6 +1603,7 @@ impl PathExecutor {
                     paced_ms,
                     error,
                     capture: capture.map(Box::new),
+                    opened_tabs: opened_tabs.unwrap_or_default(),
                 }),
                 FlowEvent::Final { ok, result, .. } => last = Some((ok, Box::new(result))),
             }

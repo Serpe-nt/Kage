@@ -746,6 +746,12 @@ fn write_http(out: &mut impl Write, part: &Part<HttpRun>) -> anyhow::Result<()> 
                     run.run.findings["error"].as_str().unwrap_or("-")
                 )?,
             }
+            if run.verdict == Verdict::Inconclusive {
+                writeln!(
+                    out,
+                    "INCONCLUSIVE: the echo could not be read, so the http path was not tested"
+                )?;
+            }
         }
     }
     Ok(())
@@ -791,9 +797,71 @@ fn write_browser(out: &mut impl Write, part: &Part<BrowserRun>) -> anyhow::Resul
             for line in crate::selftest_browser::page_notes(&report.pages) {
                 writeln!(out, "{line}")?;
             }
+            if run.verdict == Verdict::Inconclusive {
+                // The line the stand-in's table ends with (F105), on this
+                // road too (F185).
+                writeln!(
+                    out,
+                    "{}",
+                    if crate::selftest_browser::read_any(report) {
+                        "INCONCLUSIVE: a page could not be read, so the test is incomplete; see the pages above"
+                    } else {
+                        "INCONCLUSIVE: no page could be read, so nothing was tested; see the pages above"
+                    }
+                )?;
+            }
         }
     }
     Ok(())
+}
+
+/// Why a self-test command exits non-zero; `None` when it passed. The exit
+/// status says what `passed` in the command's document says, on every road
+/// (spec §7.4, F105, F185): a part that failed fails the command, and so
+/// does one that could not read what it tests, or a run with no part.
+fn failure_of(id: PersonaId, verdicts: &[(Render, Verdict)]) -> Option<String> {
+    if verdicts.is_empty() {
+        return Some(format!("nothing was tested for persona {id}"));
+    }
+    if verdicts
+        .iter()
+        .any(|(_, verdict)| *verdict == Verdict::Failed)
+    {
+        return Some(format!("the self-test of persona {id} failed"));
+    }
+    let unread: Vec<&str> = verdicts
+        .iter()
+        .filter(|(_, verdict)| *verdict == Verdict::Inconclusive)
+        .map(|(render, _)| render.as_str())
+        .collect();
+    if unread.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "the self-test of persona {id} is inconclusive: the {} self-test could not read \
+             what it tests, so it tested nothing; see the report above for why",
+            unread.join(" and the ")
+        ))
+    }
+}
+
+/// What a command's self-tests came to, as its document names it: the
+/// same three words as the stand-in's (F105).
+fn verdict_of(verdicts: &[(Render, Verdict)]) -> Verdict {
+    if verdicts
+        .iter()
+        .any(|(_, verdict)| *verdict == Verdict::Failed)
+    {
+        Verdict::Failed
+    } else if verdicts.is_empty()
+        || verdicts
+            .iter()
+            .any(|(_, verdict)| *verdict == Verdict::Inconclusive)
+    {
+        Verdict::Inconclusive
+    } else {
+        Verdict::Passed
+    }
 }
 
 /// Why a path's self-test was not run, when that is no failure of the
@@ -847,16 +915,23 @@ impl Tested {
             }),
             Part::Skipped(why) => json!({ "skipped": why }),
         });
+        let verdict = verdict_of(&verdicts);
         json!({
             "persona": document(persona),
             "third_party": third_party,
             "http": http,
             "browser": browser,
-            "passed": !verdicts.is_empty()
-                && verdicts.iter().all(|(_, verdict)| *verdict == Verdict::Passed),
+            "verdict": verdict.as_str(),
+            "passed": verdict == Verdict::Passed,
         })
     }
 }
+
+/// Why the http part of `kage persona selftest` was not run: no echo of the
+/// operator's own. It names what the command has: `--third-party`, and the
+/// setting (F185; `--echo` is `kage selftest http`'s alone).
+const NO_ECHO: &str = "selftest.http.echo_url is not set; set it to the operator's own echo, \
+                       or pass --third-party";
 
 /// Runs the self-tests a command asked for.
 async fn run_selftests(
@@ -868,11 +943,7 @@ async fn run_selftests(
         None
     } else {
         Some(match echo_of(config, options)? {
-            None => Part::Skipped(
-                "selftest.http.echo_url is not set; name an echo with --echo or pass \
-                 --third-party"
-                    .to_owned(),
-            ),
+            None => Part::Skipped(NO_ECHO.to_owned()),
             Some(echo) => match manager.selftest_http(options.id, &echo).await {
                 Ok(run) => Part::Ran(Box::new(run)),
                 Err(error) => match skipped(&error) {
@@ -908,14 +979,12 @@ pub(crate) async fn selftest(
         let persona = manager.get(options.id).await?;
         let tested = run_selftests(config, manager, options).await?;
         let verdicts = tested.verdicts();
-        let failed = verdicts
-            .iter()
-            .any(|(_, verdict)| *verdict == Verdict::Failed);
+        let failure = failure_of(options.id, &verdicts);
         session
             .audit(
                 "persona.selftest",
                 Some(options.id.to_string()),
-                outcome_of(!failed && !verdicts.is_empty()),
+                outcome_of(failure.is_none()),
                 json!({
                     "third_party": options.third_party,
                     "verdicts": verdicts
@@ -955,13 +1024,10 @@ pub(crate) async fn selftest(
             };
             writeln!(out, "the persona is {state}")?;
         }
-        if failed {
-            bail!("the self-test of persona {} failed", options.id);
+        match failure {
+            Some(why) => bail!(why),
+            None => Ok(()),
         }
-        if verdicts.is_empty() {
-            bail!("nothing was tested for persona {}", options.id);
-        }
-        Ok(())
     })
     .await
 }
@@ -970,17 +1036,25 @@ pub(crate) async fn selftest(
 mod tests {
     use std::sync::Arc;
 
+    use kage_browser::contract::{
+        EXAMPLES_JSON, FindingStatus, SelftestPageStatus, SelftestResponse,
+    };
     use kage_core::config::Config;
     use kage_core::domain::{
-        ClaimedOs, Engine, Persona, PersonaState, ProxyEndpoint, ProxyScheme, Screen,
+        ClaimedOs, Engine, Persona, PersonaState, ProxyEndpoint, ProxyScheme, Render, Screen,
+        SelftestRun,
     };
-    use kage_core::ids::{PersonaId, ProxyId};
+    use kage_core::ids::{PersonaId, ProxyId, SelftestRunId};
     use kage_core::persona::mix::default_mix;
     use kage_core::persona::{self};
     use kage_core::secret::Secret;
     use kage_http::{ClientSpec, MemoryCookies, ProfileChoice};
+    use kage_persona::selftest::{BrowserRun, Verdict};
 
-    use super::{Paths, SelftestOptions, distribution, echo_of, http_factory};
+    use super::{
+        NO_ECHO, Part, Paths, SelftestOptions, Tested, distribution, echo_of, failure_of,
+        http_factory, verdict_of, write_browser, write_http,
+    };
 
     fn config() -> Config {
         Config::load(
@@ -1095,50 +1169,222 @@ mod tests {
         }
     }
 
+    fn browser_run(persona: &Persona, read: bool) -> BrowserRun {
+        let examples: serde_json::Value =
+            serde_json::from_str(EXAMPLES_JSON).expect("the examples are JSON");
+        let mut report: SelftestResponse =
+            serde_json::from_value(examples["SelftestResponse"][0].clone()).expect("a report");
+        if read {
+            for page in &mut report.pages {
+                page.status = SelftestPageStatus::Ok;
+            }
+        } else {
+            // The finding's run (flows-04): the one page answered 500 and
+            // could not be read as its kind; not one check ran, the score
+            // is a hundred and the sidecar calls the run passed.
+            for page in &mut report.pages {
+                page.status = SelftestPageStatus::Unparsed;
+            }
+            for finding in &mut report.findings {
+                finding.status = FindingStatus::Unknown;
+            }
+            report.passed = true;
+            report.score = 100.0;
+        }
+        report.complete = read;
+        let verdict = if read {
+            Verdict::Passed
+        } else {
+            Verdict::Inconclusive
+        };
+        BrowserRun {
+            run: SelftestRun {
+                id: SelftestRunId::new(),
+                persona_id: persona.id,
+                engine: persona.engine,
+                render: Render::Browser,
+                started_at: chrono::Utc::now(),
+                finished_at: chrono::Utc::now(),
+                passed: read,
+                score: Some(100.0),
+                findings: serde_json::json!({ "verdict": verdict.as_str() }),
+            },
+            verdict,
+            report,
+            persona: persona.clone(),
+        }
+    }
+
+    #[test]
+    fn a_selftest_that_read_no_page_exits_non_zero_on_every_road() {
+        let persona = persona(Engine::Chromium, ClaimedOs::Linux, true);
+        let id = persona.id;
+        // `kage selftest browser --persona` and `kage persona selftest`
+        // without an echo of the operator's own (flows-04): the browser part
+        // read none of its pages. The command says so and fails, as the
+        // stand-in's does (F105, F185).
+        let tested = Tested {
+            http: Some(Part::Skipped(NO_ECHO.to_owned())),
+            browser: Some(Part::Ran(Box::new(browser_run(&persona, false)))),
+        };
+        let verdicts = tested.verdicts();
+        let why = failure_of(id, &verdicts).expect("an inconclusive run is no pass");
+        assert!(
+            why.contains("inconclusive") && why.contains("browser"),
+            "{why}"
+        );
+        let document = tested.document(&persona, false);
+        assert_eq!(document["passed"], false);
+        assert_eq!(document["verdict"], "inconclusive");
+        assert_eq!(document["browser"]["verdict"], "inconclusive");
+        let mut table = Vec::new();
+        write_browser(&mut table, tested.browser.as_ref().expect("a part")).expect("a table");
+        let table = String::from_utf8(table).expect("text");
+        assert!(
+            table.ends_with(
+                "INCONCLUSIVE: no page could be read, so nothing was tested; see the pages above\n"
+            ),
+            "{table}"
+        );
+        // The hint names what the command has (`kage persona selftest` has no `--echo`).
+        let mut table = Vec::new();
+        write_http(&mut table, tested.http.as_ref().expect("a part")).expect("a table");
+        let table = String::from_utf8(table).expect("text");
+        assert!(
+            table.contains("--third-party") && !table.contains("--echo"),
+            "{table}"
+        );
+
+        // A page that was read and one that was not: incomplete, still no pass.
+        let mut partly = browser_run(&persona, true);
+        partly.verdict = Verdict::Inconclusive;
+        partly.report.complete = false;
+        for page in &mut partly.report.pages {
+            page.status = SelftestPageStatus::Unreachable;
+        }
+        partly.report.pages[0].status = SelftestPageStatus::Ok;
+        let mut table = Vec::new();
+        write_browser(&mut table, &Part::Ran(Box::new(partly))).expect("a table");
+        let table = String::from_utf8(table).expect("text");
+        assert!(
+            table.contains("INCONCLUSIVE: a page could not be read"),
+            "{table}"
+        );
+
+        // A run that read its pages and passed is the one that exits 0.
+        let passed = Tested {
+            http: Some(Part::Skipped(NO_ECHO.to_owned())),
+            browser: Some(Part::Ran(Box::new(browser_run(&persona, true)))),
+        };
+        assert_eq!(failure_of(id, &passed.verdicts()), None);
+        assert_eq!(passed.document(&persona, false)["passed"], true);
+        assert_eq!(passed.document(&persona, false)["verdict"], "passed");
+    }
+
+    #[test]
+    fn every_ending_of_a_selftest_has_the_exit_and_the_verdict_its_parts_give() {
+        let id = PersonaId::new();
+        let cases = [
+            (vec![], Some("nothing was tested"), Verdict::Inconclusive),
+            (
+                vec![
+                    (Render::Http, Verdict::Passed),
+                    (Render::Browser, Verdict::Failed),
+                ],
+                Some("failed"),
+                Verdict::Failed,
+            ),
+            (
+                vec![
+                    (Render::Http, Verdict::Inconclusive),
+                    (Render::Browser, Verdict::Failed),
+                ],
+                Some("failed"),
+                Verdict::Failed,
+            ),
+            (
+                vec![
+                    (Render::Http, Verdict::Inconclusive),
+                    (Render::Browser, Verdict::Passed),
+                ],
+                Some("the http self-test"),
+                Verdict::Inconclusive,
+            ),
+            (
+                vec![
+                    (Render::Http, Verdict::Inconclusive),
+                    (Render::Browser, Verdict::Inconclusive),
+                ],
+                Some("the http and the browser self-test"),
+                Verdict::Inconclusive,
+            ),
+            (
+                vec![
+                    (Render::Http, Verdict::Passed),
+                    (Render::Browser, Verdict::Passed),
+                ],
+                None,
+                Verdict::Passed,
+            ),
+        ];
+        for (verdicts, why, verdict) in cases {
+            let failure = failure_of(id, &verdicts);
+            match why {
+                Some(words) => assert!(
+                    failure.as_deref().is_some_and(|said| said.contains(words)),
+                    "{verdicts:?}: {failure:?}"
+                ),
+                None => assert_eq!(failure, None, "{verdicts:?}"),
+            }
+            assert_eq!(verdict_of(&verdicts), verdict, "{verdicts:?}");
+        }
+    }
+
+    fn persona(engine: Engine, claimed_os: ClaimedOs, live: bool) -> Persona {
+        let id = PersonaId::new();
+        Persona {
+            id,
+            proxy_id: ProxyId::new(),
+            engine,
+            claimed_os,
+            browser_major: 155,
+            seed: persona::seed_for(id),
+            fingerprint: serde_json::json!({}),
+            user_agent: "Mozilla/5.0".to_owned(),
+            hardware_concurrency: 8,
+            wreq_profile: None,
+            country: None,
+            locale: "en-US".to_owned(),
+            languages: vec!["en-US".to_owned(), "en".to_owned()],
+            timezone: "Etc/UTC".to_owned(),
+            geolocation: None,
+            screen: Screen {
+                width: 1920,
+                height: 1080,
+                dpr: 1.0,
+                color_depth: 24,
+            },
+            tables_version: persona::TABLES_VERSION.to_owned(),
+            profile_dir: persona::profile_dir(engine, id),
+            state: if live {
+                PersonaState::Active
+            } else {
+                PersonaState::Retired
+            },
+            cooling_reason: None,
+            warmup_visits: 0,
+            warmed_at: None,
+            created_at: chrono::Utc::now(),
+            retired_at: None,
+            retire_reason: None,
+            profile_archived_at: None,
+            profile_archive: None,
+            profile_deleted_at: None,
+        }
+    }
+
     #[test]
     fn the_distribution_counts_live_personas_per_entry_of_the_mix() {
-        let persona = |engine: Engine, claimed_os: ClaimedOs, live: bool| {
-            let id = PersonaId::new();
-            Persona {
-                id,
-                proxy_id: ProxyId::new(),
-                engine,
-                claimed_os,
-                browser_major: 155,
-                seed: persona::seed_for(id),
-                fingerprint: serde_json::json!({}),
-                user_agent: "Mozilla/5.0".to_owned(),
-                hardware_concurrency: 8,
-                wreq_profile: None,
-                country: None,
-                locale: "en-US".to_owned(),
-                languages: vec!["en-US".to_owned(), "en".to_owned()],
-                timezone: "Etc/UTC".to_owned(),
-                geolocation: None,
-                screen: Screen {
-                    width: 1920,
-                    height: 1080,
-                    dpr: 1.0,
-                    color_depth: 24,
-                },
-                tables_version: persona::TABLES_VERSION.to_owned(),
-                profile_dir: persona::profile_dir(engine, id),
-                state: if live {
-                    PersonaState::Active
-                } else {
-                    PersonaState::Retired
-                },
-                cooling_reason: None,
-                warmup_visits: 0,
-                warmed_at: None,
-                created_at: chrono::Utc::now(),
-                retired_at: None,
-                retire_reason: None,
-                profile_archived_at: None,
-                profile_archive: None,
-                profile_deleted_at: None,
-            }
-        };
         let personas = [
             persona(Engine::Chromium, ClaimedOs::Linux, true),
             persona(Engine::Chromium, ClaimedOs::Linux, true),

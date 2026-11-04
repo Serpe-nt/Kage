@@ -28,7 +28,10 @@
 #   - a flow whose later goto meets the policy of its own site (F101): the
 #     site's floor refuses it at acceptance, the site's enforced robots.txt
 #     ends it before anything is asked, and a wall the site shows is booked
-#     to that site, not to the flow's first one.
+#     to that site, not to the flow's first one;
+#   - a flow whose page opens a tab (F184), in each engine: the persona's
+#     later click and keys reach the flow's page and not the tab, the step
+#     names the tab, and the tab runs no more once the flow has ended.
 #
 # The batch, the flows and the cancel are run by a TypeScript client that
 # was generated from the API's OpenAPI document (tests/api-client).
@@ -474,5 +477,37 @@ breakers="$(psql "SELECT coalesce(max(block_count_1h), 0) FROM domain_breakers W
 [ "${breakers}" = 1 ] || fail "the wall's breaker did not count it: ${breakers}"
 [ "$(fixture_blocks)" = "${blocks_before}" ] || fail "the first site's breaker counted a wall it did not show"
 echo "    floor: 422 at step 1; robots: denied at the second address, nothing asked; wall: booked to wall.field.test (its breaker at ${breakers}), the fixture's left at ${blocks_before}"
+
+echo "==> a tab a flow's page opens is the flow's: the keys stay on the flow's page, the step names the tab, and it ends with the flow (F184)"
+# The round's flow (flows-02): a link with target=_blank, a wait, then a
+# click and typed text meant for the flow's own page. Both pages tell the
+# fixture every key and press they get; the opened one also beats every
+# 250 ms while it is open.
+alive() {
+    got "http://fixture:8088/__kage/reports" | node -e "let t = ''; process.stdin.on('data', (c) => (t += c)).on('end', () => console.log(JSON.parse(t).filter((r) => r.page === 'opener' && r.type === 'alive').length));"
+}
+opened_note=''
+for engine in chromium firefox; do
+    got "http://fixture:8088/__kage/reset" > /dev/null
+    call POST /v1/jobs "${client}" "{\"type\":\"flow\",\"level\":3,\"max_retries\":0,\"persona\":{\"engines\":[\"${engine}\"]},\"behavior\":{\"dwell_ms\":500},\"timeout_ms\":120000,\"actions\":[{\"action\":\"goto\",\"url\":\"${site}/opener/?${engine}\"},{\"action\":\"wait_for\",\"selector\":\"body[data-ready]\"},{\"action\":\"click\",\"selector\":\"#blank\"},{\"action\":\"wait_for\",\"ms\":2500},{\"action\":\"click\",\"selector\":\"#q\"},{\"action\":\"type\",\"selector\":\"#q\",\"text\":\"world\"}]}"
+    expect 201 "a flow whose page opens a tab (${engine})"
+    opener="$(value "${body}" "d.id")"
+    wait_flow "${opener}"
+    [ "${state}" = succeeded ] || fail "the flow that opened a tab ended ${state} on ${engine}"
+    call GET "/v1/jobs/${opener}/items" "${client}"
+    check "every step ok, the tab named once, the page it ended on the flow's own (${engine})" "${body}" \
+        "d.items.filter((i) => i.step.action !== 'final').every((i) => i.step.ok === true) && JSON.stringify(d.items.flatMap((i) => i.step.opened_tabs)) === JSON.stringify(['${site}/opener/new']) && d.items.at(-1).result.final_url.startsWith('${site}/opener/')"
+    steps="$(value "${body}" "d.items.filter((i) => i.step.opened_tabs.length > 0).map((i) => i.step.action).join(',')")"
+    sleep 1
+    before="$(alive)"
+    reports="$(got "http://fixture:8088/__kage/reports")"
+    check "the flow's page heard the five keys and the presses, the tab none (${engine})" "${reports}" \
+        "d.filter((r) => r.page === 'opener' && r.who === 'opener' && r.type === 'keydown').map((r) => r.key).join('') === 'world' && d.filter((r) => r.page === 'opener' && r.who === 'opener' && r.type === 'mousedown').length >= 3 && !d.some((r) => r.page === 'opener' && r.who === 'opened' && r.type !== 'alive')"
+    [ "${before}" -gt 0 ] || fail "the tab never ran on ${engine}: the link opened none"
+    sleep 3
+    [ "$(alive)" = "${before}" ] || fail "the tab ran on after its flow ended on ${engine}"
+    opened_note="${opened_note} ${engine}: named by ${steps}, ${before} beats while open, none after;"
+done
+echo "   ${opened_note}"
 
 echo "jobs test passed"

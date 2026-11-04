@@ -640,6 +640,8 @@ async fn a_flow_runs_its_steps_in_one_browser_and_each_capture_is_a_result() {
         assert_eq!(step["ok"], true);
         assert_eq!(step["duration_ms"], 12 + index);
         assert_eq!(step["paced_ms"], 7);
+        // No step of this flow opened a tab (F184).
+        assert_eq!(step["opened_tabs"], json!([]));
         assert_eq!(step["error"], Value::Null);
         // Only a step that captured the page names a result.
         let captured = matches!(index, 4 | 6);

@@ -1602,6 +1602,7 @@ impl Runner {
                 "duration_ms": step.duration_ms,
                 "paced_ms": step.paced_ms,
                 "error": step.error,
+                "opened_tabs": step.opened_tabs,
             }));
             let mut outcome = None;
             if let Some(page) = step.capture.as_deref() {

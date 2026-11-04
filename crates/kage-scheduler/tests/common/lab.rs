@@ -524,6 +524,8 @@ impl SidecarResponder {
                     "paced_ms": paced.then_some(7),
                     "error": failed.then(|| script["fail"]["error"].clone()),
                     "capture": capture,
+                    // The tabs the script says this step's page opened (F184).
+                    "opened_tabs": script["opened"].get(index.to_string()).cloned().unwrap_or(json!([])),
                 })
                 .to_string(),
             );

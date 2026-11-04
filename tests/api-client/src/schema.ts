@@ -2968,6 +2968,13 @@ export interface components {
             /** @description Whether the step succeeded; null while it has not run. */
             ok?: boolean | null;
             /**
+             * @description The addresses of the tabs the flow's page opened while the step ran
+             *     (a link with `target=_blank`, a window a click opened). Such a tab
+             *     is the flow's: no later step acts on it, nothing of it is captured,
+             *     and it is closed when the flow ends. Empty when the step opened none.
+             */
+            opened_tabs: string[];
+            /**
              * Format: int64
              * @description How much of that was the persona's dwell and thinking time.
              */

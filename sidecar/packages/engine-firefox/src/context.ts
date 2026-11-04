@@ -28,6 +28,7 @@ import {
   type BrowserCookie,
   type DriverPage,
   type DriverResponse,
+  type DriverTab,
   type EngineContext,
   type EngineLog,
   type InputDevice,
@@ -121,6 +122,8 @@ export class FirefoxContext implements EngineContext, SessionDriver {
   private current: Page;
   private input: Promise<X11Input> | null = null;
   private closed = false;
+  /** Whether {@link FirefoxContext.freshPage} is opening a tab: its report is no page's (F184). */
+  private opening = false;
 
   constructor(private readonly parts: FirefoxContextParts) {
     this.browserVersion = parts.browserVersion;
@@ -165,11 +168,32 @@ export class FirefoxContext implements EngineContext, SessionDriver {
    * closes itself.
    */
   async freshPage(): Promise<void> {
-    const next = await this.parts.context.newPage();
+    this.opening = true;
+    const next = await this.parts.context.newPage().finally(() => {
+      this.opening = false;
+    });
     this.listen(next);
     const previous = this.current;
     this.current = next;
     await previous.close().catch(() => undefined);
+  }
+
+  /** The context's tabs besides the open one: tabs a page opened (F184). */
+  otherTabs(): readonly DriverTab[] {
+    return this.parts.context.pages().filter((page) => page !== this.current);
+  }
+
+  /** Selects the open tab in its window and raises the window, as a click on the tab does (F184). */
+  async front(): Promise<void> {
+    await this.current.bringToFront();
+  }
+
+  onOpenedTab(listener: () => void): void {
+    this.parts.context.on('page', (page) => {
+      if (!this.opening && page !== this.current) {
+        listener();
+      }
+    });
   }
 
   classifyError(thrown: unknown): NavigationError {

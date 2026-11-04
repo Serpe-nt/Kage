@@ -228,6 +228,44 @@ async fn a_flow_is_one_browser_attempt_paced_like_a_person_with_a_capture_per_st
 }
 
 #[tokio::test]
+async fn a_tab_a_flows_page_opened_is_reported_with_the_step_that_opened_it() {
+    let mut lab = Lab::start(2, 149, BROWSER_FAST).await;
+    // The round's flow (flows-02): the step after the first opens a tab of
+    // another site, which the sidecar keeps behind the flow's page and
+    // closes with the flow (F184).
+    lab.chromium.with(|sidecar| {
+        sidecar.next_flows.push_back(json!({
+            "opened": { "1": ["https://other.example/terms"] },
+        }));
+    });
+
+    let report = lab.pipeline.fetch(flow(&search())).await.unwrap();
+
+    assert_eq!(report.outcome, Outcome::Ok, "{:?}", report.reason);
+    let last = report.last.as_ref().unwrap();
+    let run = last.flow.as_ref().unwrap();
+    let opened: Vec<(&str, &[String])> = run
+        .steps
+        .iter()
+        .map(|step| (step.action.as_str(), step.opened_tabs.as_slice()))
+        .collect();
+    assert_eq!(
+        opened[1],
+        ("type", &["https://other.example/terms".to_owned()][..])
+    );
+    assert!(
+        opened
+            .iter()
+            .enumerate()
+            .all(|(index, (_, tabs))| index == 1 || tabs.is_empty()),
+        "{opened:?}"
+    );
+    // The page the flow ended on is its own, not the tab's.
+    assert_eq!(last.final_url.as_deref(), Some(site("/start").as_str()));
+    lab.shut_down().await;
+}
+
+#[tokio::test]
 async fn a_request_may_slow_a_flow_down_but_never_below_the_policys_dwell() {
     let rules = "defaults: { pacing: fast, active_hours: ignore, min_dwell: 3s }\n\
                  domains: {}\n";

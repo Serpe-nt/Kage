@@ -94,6 +94,16 @@ export interface FlowHost {
   extract(capture: CaptureOptions): Promise<PageResult>;
   screenshot(options: ScreenshotOptions): Promise<PageResult>;
   pdf(options: PdfOptions): Promise<PageResult>;
+  /**
+   * Keeps the flow's page the one the persona's hand and keys reach (F184):
+   * a tab the page opened, which a browser shows in front of it, is put
+   * behind it again.
+   *
+   * @throws FlowStepError when a tab the page opened stays in front of it.
+   */
+  keepFront(): Promise<void>;
+  /** The addresses of the tabs the flow's page opened since the last time this was asked (F184). */
+  openedTabs(): string[];
 }
 
 /** A step failed; the message is what the step event reports. */
@@ -152,6 +162,8 @@ async function selectByKeyboard(
     throw new FlowStepError(`${selector} has no option with the value ${JSON.stringify(value)}`);
   }
   await human.click(selector);
+  // The click may have opened a tab: the keys are for the flow's page (F184).
+  await host.keepFront();
   const steps = state.wanted - state.index;
   for (let step = 0; step < Math.abs(steps); step += 1) {
     await human.press(steps > 0 ? 'ArrowDown' : 'ArrowUp');
@@ -228,6 +240,9 @@ async function perform(
       if (humanly) {
         const human = await host.human();
         await human.click(action.selector);
+        // The click may have opened a tab, which the browser shows in
+        // front: the keys are for the flow's page (F184).
+        await host.keepFront();
         await human.type(action.text, { typos: host.typos });
       } else {
         await host.driver.fill(action.selector, action.text, timeout);
@@ -453,6 +468,10 @@ export async function runFlow(
           paced += thought;
           left -= thought;
         }
+        // Every step starts on the flow's page, never on a tab it opened (F184).
+        if (!READING.has(action.action)) {
+          await host.keepFront();
+        }
         const timeout = Math.min(action.timeout_ms ?? DEFAULT_STEP_TIMEOUT_MS, Math.max(0, left));
         // Human steps take the time a person takes; the step's budget still ends them.
         const performed = await withTimeout(
@@ -462,6 +481,9 @@ export async function runFlow(
           action.action,
         );
         capture = performed.capture;
+        // A tab the step opened goes behind the flow's page before the
+        // persona dwells there (F184).
+        await host.keepFront();
         if (pacer !== null) {
           paced += await pacer.after(performed);
         }
@@ -478,6 +500,7 @@ export async function runFlow(
       paced_ms: pacer === null ? null : Math.max(0, Math.round(paced)),
       error,
       capture,
+      opened_tabs: host.openedTabs(),
     });
     if (error !== null) {
       return { ok: false, dwellMs: pacer?.dwelled ?? 0 };

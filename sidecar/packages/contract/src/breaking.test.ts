@@ -431,7 +431,7 @@ describe('findBreakingChanges', () => {
     delete schemas['PageLink'];
     delete schemas['ScrollEnd'];
     before.info['version'] = '1.2.0';
-    expect(now.info['version']).toBe('1.7.0');
+    expect(now.info['version']).toBe('1.8.0');
     const current = now.components['schemas'] as Record<string, JsonObject>;
     // Asked for with optional fields only, so that a caller of 1.2.0 is still served.
     for (const [name, fields] of [
@@ -579,6 +579,29 @@ describe('findBreakingChanges', () => {
     expect(
       findBreakingChanges(now, before).map((change) => `${change.where}: ${change.what}`),
     ).toEqual(['POST /v1/contexts/{id}/navigate request.tab: is no longer accepted']);
+  });
+
+  it('takes the tabs a flow’s step opened (1.8.0) as an addition, and their removal as a break', () => {
+    const now = buildOpenApiDocument();
+    // The document as it was at 1.7.0: a step that names no tab.
+    const before = structuredClone(now);
+    const schemas = before.components['schemas'] as Record<string, JsonObject>;
+    delete properties(schemas['FlowStepEvent'])['opened_tabs'];
+    before.info['version'] = '1.7.0';
+    const current = now.components['schemas'] as Record<string, JsonObject>;
+    // Additional in an answer, and optional there: a Kage of 1.7.0 reads a
+    // step of 1.8.0, and a Kage of 1.8.0 one of a sidecar that names none
+    // (F184).
+    const step = named(current, 'FlowStepEvent');
+    expect(properties(step)['opened_tabs']).toMatchObject({ type: 'array', maxItems: 100 });
+    expect(step['required'] ?? []).not.toContain('opened_tabs');
+    expect(checkBreaking(before, now)).toEqual({ changes: [], majorBumped: false, ok: true });
+    // The other way round a step could no longer name the tab it opened.
+    const removed = findBreakingChanges(now, before).map(
+      (change) => `${change.where}: ${change.what}`,
+    );
+    expect(removed).toHaveLength(1);
+    expect(removed[0]).toMatch(/opened_tabs: is no longer returned$/);
   });
 
   it('compares a schema used twice only once per direction', () => {

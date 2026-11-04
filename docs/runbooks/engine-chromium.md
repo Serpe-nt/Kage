@@ -266,7 +266,12 @@ document says `verdict: inconclusive` and `passed: false`, and the command
 exits non-zero (F105). The pages above the score say why each could not be
 read. Before 2.0.2 the stand-in handed the sidecar the provider's proxy,
 which a sidecar on the network `browsers` cannot reach: on the shipped
-compose the command read no page and said `passed`, score 100.
+compose the command read no page and said `passed`, score 100. The same
+holds for a persona (`kage selftest browser --persona <id>`, `kage persona
+selftest <id>`, F185): its table ends with the same line, its JSON document
+says `verdict: inconclusive` and `passed: false`, and the command exits
+non-zero; before 2.0.3 those two exited 0 on a run that read nothing
+(QA round two, flows-04).
 
 The gated live suite (`just test-live`, `tests/live/browser-selftest.sh`)
 runs it with `--third-party` through two proxies per run for each engine of

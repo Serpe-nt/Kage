@@ -96,6 +96,33 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   exit (the site's own, else its scout's); when that exit cannot carry
   traffic the hop is not asked for at all and the attempt ends
   `provider_error` with the new reason `hop_exit_unavailable`.
+- **A tab a flow's page opens is the flow's, behind its page and closed
+  with it (F184).** After a flow clicked a link that opens a new tab
+  (`target=_blank`), the persona's later clicks and typed text went into
+  that tab, which the browser shows in front, on both engines, while every
+  step reported `ok: true` on the flow's own page; with the link on
+  another site the text reached that site, and the tab ran on across
+  other keys' requests for up to 17 minutes (QA round two, flows-02). The
+  flow's page now stays the flow's page: the sidecar puts it in front of
+  such a tab again as soon as the browser reports the tab, before every
+  step that acts and between a `type` or `select`'s click and its keys,
+  and a step whose input could not reach the flow's page fails. The step
+  names the tab's address in `opened_tabs` (sidecar contract 1.8.0, and
+  the public job item's `step`), nothing of the tab is captured, every
+  such tab is closed when the flow ends, and a tab a page opens outside a
+  flow is closed at once (spec §10.5).
+- **A self-test that read none of its pages exits non-zero on every road
+  (F185).** `kage selftest browser --persona <id>` and `kage persona
+  selftest <id>` exited 0 on a run that read none of its pages
+  (`passed: false`, `verdict: inconclusive`), so a script that checked the
+  exit status took a run that tested nothing for a pass, though `kage
+  selftest browser --proxy` exited 1 since F105 (QA round two, flows-04).
+  The persona's self-test commands now exit with what `passed` says: a part
+  that could not read its pages or its echo is `inconclusive`, its table
+  ends with a line that says what was not tested, the JSON document has a
+  `verdict`, and the command exits non-zero. The hint for a missing echo
+  no longer names an `--echo` that `kage persona selftest` does not have
+  (spec §7.4).
 
 ## [2.0.2] - 2026-11-04
 
