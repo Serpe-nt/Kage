@@ -962,6 +962,40 @@ export function defineParitySuite(subject: ParitySubject): void {
       }
     });
 
+    it('reports a redirect to a scheme where it pointed, and keeps nothing of the browser’s own page (F167)', async () => {
+      await withContext('refused', async (context) => {
+        // Chrome refuses these redirects by itself and tells the driver
+        // nothing of them; Firefox shows its error page under the address.
+        // Either way the capture names the redirect and where it pointed,
+        // and Kage's chain check refuses the scheme.
+        for (const target of [
+          'file:///etc/passwd',
+          'data:text/html,<b>x</b>',
+          'javascript:alert(1)',
+        ]) {
+          const start = named(`/guard/redirect?to=${encodeURIComponent(target)}`);
+          const refused = await go(context, start, { capture: DOM });
+          expect(refused, target).toMatchObject({ status: null, dom_html: null, title: null });
+          const last = refused.redirects.at(-1);
+          expect(last, target).toMatchObject({ url: start, status: 302 });
+          expect(last?.location?.split(':')[0], target).toBe(target.split(':')[0]);
+          expect(refused.final_url.split(':')[0], target).toBe(target.split(':')[0]);
+        }
+
+        // A page whose meta refresh sends the tab where nothing answers
+        // (the test proxy refuses every tunnel): no page of the site, and
+        // where the tab was sent, not a page of the browser's own.
+        const gone = 'https://gone.kage.test/away';
+        const moved = await go(context, named(`/guard/meta?to=${encodeURIComponent(gone)}`), {
+          capture: DOM,
+          dwell_ms: 1500,
+          behavior: { seed: SEEDS.first, mode: 'still', entry: { strategy: 'direct' } },
+        });
+        expect(moved).toMatchObject({ final_url: gone, status: null, dom_html: null, title: null });
+        expect(moved.error?.code).toBe('navigation_failed');
+      });
+    });
+
     it('reports failures as what they are and keeps what it has', async () => {
       await withContext('failures', async (context) => {
         const slow = await go(context, named('/slow?ms=4000'), { timeout_ms: 1000 });

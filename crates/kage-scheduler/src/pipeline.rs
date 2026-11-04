@@ -115,7 +115,7 @@ use crate::archive::{Archive, Archived, Keep};
 use crate::backend::Backend;
 use crate::executor::{
     Arrival, AttemptExecutor, AttemptJob, AttemptOutput, BehaviorWish, FlowPlan, PlainJob,
-    default_capture, default_wait,
+    SiteExits, default_capture, default_wait,
 };
 use crate::forwarder::PlainRoute;
 use crate::metrics;
@@ -1416,15 +1416,25 @@ impl Pipeline {
     /// then on). `None` when that address cannot carry traffic now: the
     /// request waits or is refused, never sent from another address.
     async fn plain_route(&self, course: &Course) -> Result<Option<PlainRoute>, SchedulerError> {
+        self.plain_route_of(&course.site, &course.order.url).await
+    }
+
+    /// [`Self::plain_route`] of the site `site`, whose page `url` is: what a
+    /// redirect hop of a plain client to another site leaves from (F166).
+    pub(crate) async fn plain_route_of(
+        &self,
+        site: &str,
+        url: &Url,
+    ) -> Result<Option<PlainRoute>, SchedulerError> {
         if self.settings.plain_exit == Exit::Host {
             return Ok(Some(PlainRoute::Host));
         }
-        if let Some(exit) = self.own_plain_exit(&course.site).await? {
+        if let Some(exit) = self.own_plain_exit(site).await? {
             return Ok(exit.map(PlainRoute::Pool));
         }
-        let scout = match self.site_scout(&course.site).await? {
+        let scout = match self.site_scout(site).await? {
             Some(scout) => Some(scout),
-            None => self.scout_for(&course.order.url, &[], 1).await?,
+            None => self.scout_for(url, &[], 1).await?,
         };
         let Some(scout) = scout else {
             return Ok(None);
@@ -1863,6 +1873,9 @@ impl Pipeline {
             request: course.request.id,
             n,
             route,
+            // A redirect hop to another site leaves from that site's own
+            // exit (F166).
+            sites: Some(Arc::new(PipelineExits(self.clone()))),
             url: course.order.url.clone(),
             method: course.order.method.clone(),
             headers: course.order.headers.clone(),
@@ -2094,6 +2107,21 @@ impl Pipeline {
             cached: None,
             visit: kept,
         })
+    }
+}
+
+/// Where each site's plain traffic leaves from, as the pipeline knows it:
+/// the exits of a plain client's redirect hops to another site (F166).
+#[derive(Debug)]
+struct PipelineExits(Pipeline);
+
+#[async_trait::async_trait]
+impl SiteExits for PipelineExits {
+    async fn route_of(&self, site: &str, url: &Url) -> Result<Option<PlainRoute>, String> {
+        self.0
+            .plain_route_of(site, url)
+            .await
+            .map_err(|error| error.to_string())
     }
 }
 

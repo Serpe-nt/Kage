@@ -214,7 +214,9 @@ pub(crate) struct AttemptView {
     #[schema(required = true)]
     pub(crate) exit: Option<ExitField>,
     /// Why it ended as it did when the site did not say, for example
-    /// `proxy_failed`.
+    /// `proxy_failed`, or `hop_exit_unavailable` (a level-0 redirect to
+    /// another site whose own plain exit could not carry traffic: the hop
+    /// was not asked for).
     #[schema(required = true)]
     pub(crate) reason: Option<String>,
     /// The seed its behavior and pauses were drawn from. Admin keys only.
@@ -439,7 +441,10 @@ pub(crate) struct FetchResult {
     /// Why it ended without the site's verdict, as a stable name:
     /// `no_persona`, `domain_paused`, `egress_unsafe`,
     /// `bandwidth_exhausted`, `proxy_failed`, `timeout`, `interrupted`
-    /// (the server stopped while the page was being read) and others.
+    /// (the server stopped while the page was being read),
+    /// `hop_exit_unavailable` (a level-0 redirect to another site whose own
+    /// plain exit could not carry traffic now: the hop was not asked for,
+    /// and never from another address) and others.
     pub(crate) reason: Option<String>,
     /// When asking again is worth it, when Kage knows: the end of a
     /// domain's pause or of a persona's cooldown.

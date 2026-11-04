@@ -8,6 +8,7 @@ import {
   type FlowRequest,
   type NavigateRequest,
   type PageResult,
+  type RedirectHop,
 } from '@kage/contract';
 import { describe, expect, it } from 'vitest';
 
@@ -18,6 +19,7 @@ import { EngineError, silentLog, type OperationEnv } from './engine.js';
 import {
   PageSession,
   entriesToGoBack,
+  errorPageTarget,
   plainAddress,
   type DriverPage,
   type DriverRequest,
@@ -165,6 +167,11 @@ interface Tabs {
  * the browser cannot load; one with `moves=<address>` loads, and its
  * script then sends the tab there, which the browser cannot load either:
  * both end on the browser's own error page, as Chrome does (F102). One
+ * with `ffmoves=<address>` loads and moves there as Firefox does: the tab
+ * keeps that address and its document is Firefox's error page (F167). One
+ * with `refused=<address>` is answered with a redirect there that the
+ * browser refuses to follow and tells only its debugger of, as Chrome does
+ * for `file:` (F167). One
  * with `stuck` in it loads, and then answers no read again (its script
  * never yields); one with `crash` loads, and then its renderer crashes
  * (F103).
@@ -175,6 +182,8 @@ interface Tabs {
 function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs } {
   const driven: Driven = { loaded: [], input: [], opened: 0 };
   const tabs: Tabs = { fresh: 0 };
+  // What only the browser's debugger saw of the latest navigation (F167).
+  let unanswered: RedirectHop[] = [];
   const refuse = (what: string) => () => {
     driven.input.push(what);
     return Promise.reject(new Error(`no ${what} in this test`));
@@ -188,6 +197,8 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
       }
     };
     let address = 'about:blank';
+    // The document's own address where it is not the tab's (Firefox's error page).
+    let documentUri: string | null = null;
     const history = ['about:blank'];
     // A page whose script never yields answers no read again.
     let stuck = false;
@@ -226,10 +237,17 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
       frames: () => [mainFrame],
       goto: (url) => {
         driven.loaded.push(url);
+        documentUri = null;
+        unanswered = [];
         if (url.includes('fail')) {
           return Promise.reject(new Error('net::ERR_NAME_NOT_RESOLVED'));
         }
         const sent = (key: string) => new URL(url).searchParams.get(key);
+        const refused = sent('refused');
+        if (refused !== null) {
+          unanswered = [{ url, status: 302, location: refused }];
+          return Promise.reject(new Error('net::ERR_UNSAFE_REDIRECT'));
+        }
         const redirect = sent('redirect');
         if (redirect !== null) {
           const moved = answer(url, 302, redirect);
@@ -253,6 +271,12 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
           // The page's own script sends the tab on; nothing answers.
           emit('request', answer(moves).request());
           address = 'chrome-error://chromewebdata/';
+        }
+        const ffmoves = sent('ffmoves');
+        if (ffmoves !== null) {
+          // Firefox: the tab shows the address, its document is the error page.
+          address = ffmoves;
+          documentUri = `about:neterror?e=connectionFailure&u=${encodeURIComponent(ffmoves)}&c=UTF-8`;
         }
         stuck = url.includes('stuck') || url.includes('crash');
         if (url.includes('crash')) {
@@ -281,7 +305,13 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
       waitForLoadState: () => Promise.resolve(),
       // A page that has loaded and holds no text: every other read finds nothing.
       evaluate: (expression: string) =>
-        reading((expression === 'document.readyState' ? 'complete' : '') as never),
+        reading(
+          (expression === 'document.readyState'
+            ? 'complete'
+            : expression === 'document.documentURI'
+              ? (documentUri ?? address)
+              : '') as never,
+        ),
       click: (selector: string) => {
         // A link to an address nothing answers: the tab is sent there, and
         // the browser shows its own error page (F102).
@@ -347,6 +377,7 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
       current = makePage();
       return Promise.resolve();
     },
+    unansweredRedirects: () => unanswered,
   };
   return { driver, driven, tabs };
 }
@@ -672,6 +703,49 @@ describe('a page the browser could not load (F102)', () => {
     const scheme = await navigate(on, sending('/s', 'redirect', 'file:///etc/passwd'));
     expect(scheme.final_url).toBe('file:///etc/passwd');
     expect(scheme.redirects[0]?.location).toBe('file:///etc/passwd');
+  });
+
+  it('is Firefox’s error page by its document, under whatever address the tab shows (F167)', async () => {
+    const on = session();
+    // A meta refresh to a name the forwarder refused: Firefox keeps the
+    // address in the tab and shows its error page as the document.
+    const refused = 'http://m06.m1.test:8091/meta';
+    const start = sending('/m', 'ffmoves', refused);
+    const moved = await navigate(on, start);
+    expect(PageResultSchema.parse(moved)).toEqual(moved);
+    expect(moved).toMatchObject({
+      final_url: refused,
+      status: null,
+      headers: [],
+      title: null,
+      dom_html: null,
+      raw_body: null,
+    });
+    expect(moved.error).toMatchObject({ code: 'navigation_failed' });
+    expect(moved.error?.message).toContain(refused);
+
+    expect(
+      errorPageTarget(`about:neterror?e=dnsNotFound&u=${encodeURIComponent(refused)}&c=UTF-8`),
+    ).toBe(refused);
+    expect(errorPageTarget('about:certerror?e=nssBadCert&u=')).toBeNull();
+    expect(errorPageTarget('about:neterror?e=x&u=%E0%A4%A')).toBeNull();
+    expect(errorPageTarget(refused)).toBeNull();
+  });
+
+  it('names a redirect the browser refused to follow and told only its debugger of (F167)', async () => {
+    const on = session();
+    for (const target of ['file:///etc/passwd', 'data:text/html,<b>x</b>', 'javascript:alert(1)']) {
+      const start = sending('/u', 'refused', target);
+      const refused = await navigate(on, start);
+      expect(PageResultSchema.parse(refused)).toEqual(refused);
+      expect(refused.redirects).toEqual([{ url: start, status: 302, location: target }]);
+      expect(refused.final_url).toBe(new URL(target).href);
+      expect(refused).toMatchObject({ status: null, dom_html: null, title: null });
+      expect(refused.error?.code).toBe('navigation_failed');
+    }
+    // A page that arrived is what it is, whatever the debugger kept before.
+    const arrived = await navigate(on, site('/fine'));
+    expect(arrived).toMatchObject({ final_url: site('/fine'), status: 200, redirects: [] });
   });
 
   it('is where a flow ended when its page moved on to an address that did not load', async () => {

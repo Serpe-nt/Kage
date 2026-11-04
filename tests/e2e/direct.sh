@@ -18,7 +18,10 @@
 #     private address of this network, never reached;
 #   - every byte counted as the host's, none against the pool's budget;
 #   - `kage config check` saying where requests leave from, with its
-#     warnings.
+#     warnings;
+#   - a meta refresh to that name in the host persona's browser: the
+#     guard's refusal, the browser's own error page neither kept nor
+#     judged a block (F167).
 #
 # It uses its own compose project name and host port.
 set -euo pipefail
@@ -177,6 +180,17 @@ check "level 3: ssrf_denied at the first attempt, nothing kept" "${report}" \
 seen="$(got "http://fixture:8088/__kage/requests")"
 check "the site saw nothing" "${seen}" "d.length === 0"
 echo "    level 0: ${plain_denied}; level 3: $(value "${report}" "d.outcome + ' after ' + d.attempts.length + ' attempt'")"
+# A listed page whose meta refresh sends the browser there: the guard's
+# refusal too, the browser's own error page neither kept nor judged a block
+# (F167; Firefox showed its error page under the refused address).
+fetch_json "http://fixture.kage.test:8088/guard/meta?to=http%3A%2F%2Frules.kage.test%3A8088%2Fguard%2Fsecret" --level 3 --timeout 30s
+[ "${fetch_status}" -ne 0 ] || fail "a meta refresh to an unlisted private name was fetched: ${report}"
+check "a meta refresh there: ssrf_denied at the first attempt, nothing kept" "${report}" \
+    "d.outcome === 'ssrf_denied' && d.attempts.length === 1 && !d.dom_html && !d.block"
+seen="$(got "http://fixture:8088/__kage/requests")"
+check "the private page was never asked for" "${seen}" \
+    "!d.some((r) => r.path.startsWith('/guard/secret'))"
+echo "    meta refresh in ${engine}: $(value "${report}" "d.outcome + ' after ' + d.attempts.length + ' attempt'")"
 
 echo "==> nothing went through the pool, and every byte is the host's"
 for proxy in proxy-a proxy-b proxy-c; do

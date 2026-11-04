@@ -47,7 +47,7 @@ use http::{Method, StatusCode, Uri, Version};
 use http_body_util::BodyExt;
 use kage_core::domain::{Header, Timing};
 use kage_core::seed::Seed;
-use kage_core::ssrf::{RedirectChain, SsrfDenial, SsrfPolicy, check_resolved};
+use kage_core::ssrf::{RedirectChain, SsrfDenial, SsrfPolicy, Target, check_resolved};
 use tokio::time::Instant;
 use url::Url;
 
@@ -432,27 +432,55 @@ pub(crate) async fn check_addresses(
     let Some(name) = chain.target().name() else {
         return Ok(());
     };
+    check_target_addresses(resolver, chain.target())
+        .await
+        .map_err(|reason| {
+            let hop = chain.redirects();
+            tracing::info!(
+                host = name,
+                hop,
+                %reason,
+                "the SSRF guard refused a hop of the http path by its addresses"
+            );
+            if hop == 0 {
+                HttpError::Denied(reason)
+            } else {
+                HttpError::RedirectDenied(chain.denied(reason))
+            }
+        })
+}
+
+/// The address check of the SSRF guard (spec §19) for one target the URL
+/// check let through: its name is resolved with `resolver`, and it is
+/// refused when any of its addresses lies in a denied range or when it has
+/// none. A name the resolver cannot look up counts as one with no address
+/// (F98). A literal address was judged by the URL already and is not
+/// looked up.
+///
+/// The http path runs it on every hop before the hop is asked for
+/// ([`check_addresses`]); the browser path runs the same function on every
+/// hop of a navigation's chain and of a flow's pages after the fact (F57),
+/// so that both roads judge a name by the same rule.
+///
+/// # Errors
+///
+/// The guard's refusal: [`SsrfDenial::Address`] or
+/// [`SsrfDenial::Unresolved`].
+pub async fn check_target_addresses(
+    resolver: &dyn HopResolver,
+    target: &Target,
+) -> Result<(), SsrfDenial> {
+    let Some(name) = target.name() else {
+        return Ok(());
+    };
     let addresses = match resolver.resolve(name).await {
         Ok(addresses) => addresses,
         Err(reason) => {
-            tracing::debug!(host = name, reason, "a hop's name could not be looked up");
+            tracing::debug!(host = name, reason, "a name could not be looked up");
             Vec::new()
         }
     };
-    check_resolved(chain.target(), &addresses).map_err(|reason| {
-        let hop = chain.redirects();
-        tracing::info!(
-            host = name,
-            hop,
-            %reason,
-            "the SSRF guard refused a hop of the http path by its addresses"
-        );
-        if hop == 0 {
-            HttpError::Denied(reason)
-        } else {
-            HttpError::RedirectDenied(chain.denied(reason))
-        }
-    })
+    check_resolved(target, &addresses)
 }
 
 pub(crate) fn millis(duration: Duration) -> u64 {

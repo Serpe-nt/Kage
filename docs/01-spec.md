@@ -993,7 +993,9 @@ finished (F109).
   and the plain client of level 0 alike, and refuses a hop with any address
   in a denied range or with none, a name the host cannot look up counting
   as one with none. Without the setting no resolver is injected
-  (`HopResolver`) and nothing is looked up from the host.
+  (`HopResolver`) and nothing is looked up from the host. At level 0 a
+  hop to another site is asked for from that site's own plain exit, never
+  from the first site's (§25, F166).
 - **Cookies.** One jar per persona (§6.4; per proxy for a client without a persona), with
   the rules browsers apply (RFC 6265bis): `SameSite` with `Lax` as the
   default, `Secure`, the `__Secure-` and `__Host-` prefixes, no cookie for a
@@ -2808,11 +2810,26 @@ are gzip-compressed on disk.
   By default Kage looks no name up: the proxy resolves every target, and a
   lookup from the Kage host would show the operator's resolver to the name
   servers of whatever a consumer asks for. With `security.resolve_on_host`
-  the target of a fetch, the redirect hops of the http path and webhook
-  hosts are also resolved with the system's resolver, and a name with any
-  address in a denied range, or with none, is refused. Turn it on when the
-  proxies could reach the operator's own networks (a static list of
-  self-hosted proxies); a residential provider's exits cannot.
+  the target of a fetch, the redirect hops of the http path, webhook
+  hosts, every name the forwarder relays through a proxy (a browser's own
+  requests and those a page's redirect, script or form makes, the
+  sitemaps and `robots.txt` a scout reads in one) and, after the fact,
+  every name of a browser navigation's chain and of a flow's pages are
+  also resolved with the system's resolver, and a name with any address
+  in a denied range, or with none, is refused: a name the host cannot
+  look up counts as one with none (F98, F57). Turn it on when the proxies
+  could reach the operator's own networks (a static list of self-hosted
+  proxies; `kage config check` warns about a declared list without it); a
+  residential provider's exits cannot. The forwarder looks each name up
+  once and keeps the answer for 30 seconds (`forwarder::NAME_KEPT`), a
+  page's many connections to one host waiting for the one lookup: the
+  system's resolver does not say a name's TTL, so the forwarder keeps an
+  answer for less than a browser keeps one in its own host cache (a
+  minute in Chromium) and leaves the TTL to the resolver beneath it, which
+  honours it. The answer decides what the forwarder lets through, never
+  where a proxy connects: the proxy resolves the name again, and a name
+  can change its answer between the two lookups (the security review's
+  G2, accepted).
 
   A webhook is the one request that leaves from the host's own address, so
   the guard alone is not its rule: it goes only to an origin the operator
@@ -2866,8 +2883,14 @@ are gzip-compressed on disk.
   container of each engine with a context open.
 - **Browser path.** Loopback is sent through the proxy (`<-loopback>`), so
   a page cannot reach the sidecar's own network. The redirect chain of a
-  navigation is checked after the fact with the same functions as the http
-  path; a denied hop is `ssrf_denied` and nothing read from it is returned.
+  navigation, and every page of a flow, is checked after the fact with the
+  same functions as the http path: by URL, and under
+  `security.resolve_on_host` by the addresses of its names with the http
+  path's own address check (`kage_http::check_target_addresses`, F57); a
+  denied hop is `ssrf_denied` and nothing read from it is returned, stored
+  or booked. Under the setting the forwarder has refused such a name
+  before any request to it left; the check after the fact holds where its
+  lookup and the forwarder's disagree.
   The request to such a hop has left through the proxy by then; that is the
   limit of a check that does not intercept requests. WebRTC sends no UDP
   outside the proxy. A page the browser could not load is reported where
@@ -2876,21 +2899,32 @@ are gzip-compressed on disk.
   `chrome-error://chromewebdata/` or another page of the browser's own, and
   nothing of such a page is kept: so a page that moves itself to a denied
   address (a meta refresh, a script, a form) and a redirect to a denied
-  address or scheme are `ssrf_denied` in both engines (F102). In a flow, a
+  address or scheme are `ssrf_denied` in both engines (F102). A server's
+  redirect may only send a browser to `http` or `https`: a `Location` with
+  any other scheme (`file:`, `data:`, `ftp:`, `javascript:`, a local one
+  included) is a refused hop, whether the browser followed it, refused it
+  by itself (Chrome then tells only its debugger, which the Chromium
+  engine reads for the main frame's document requests) or showed its own
+  error page there (Firefox keeps the address in the tab and only the
+  document's URI, `about:neterror?...`, says what the page is) (F167). In a flow, a
   click or the way back that leaves for an address the browser could not
   load ends the step `navigation_failed` with that address, and a `goto`
   after a driver's click that no pace watched does the same: the flow ends
   where the tab was sent, and that is its last page.
 - **One outcome for a refusal (F102).** The forwarder keeps what the guard
-  refused, per caller: a target refused by name or range, and under
-  `egress.mode: direct` a name refused for one of its addresses. An
+  refused, per caller: a target refused by name or range, and a name
+  refused for one of its addresses (under `egress.mode: direct`, and under
+  the pool with `security.resolve_on_host`, F57). An
   attempt that failed because the forwarder refused the address it went to
   (its target or a hop: the addresses the plain client or the persona's
   http client asked for, the hosts of a navigation's chain, of a flow's
   pages and its `goto` steps) ends `ssrf_denied`, never retried, nothing
   of it kept, whatever its client made of the refusal (a browser shows a
   failed connection, a plain client fails to connect). A name that does
-  not resolve is a failed network, not a refusal.
+  not resolve is a failed network, not a refusal, except under
+  `security.resolve_on_host`, where it counts as one with no address and
+  is refused (F98, F57). A browser's error page is never a result: not
+  kept, not judged as a block, nothing booked against the site (F167).
 - **Forwarder.** The provider's proxy credentials never leave the kage
   process (the stand-in self-test of a proxy too since 2.0.2, §7.5):
   browsers and sidecars hold a per-persona credential that opens
@@ -3149,7 +3183,12 @@ from then on); when that proxy cannot carry traffic the request waits or
 is refused (`plain_exit_unavailable`), never sent from another address. A
 proxy that leaves by an older proxy's address carries no level 0 (§7.3).
 robots.txt
-and sitemaps at level 0 go the same way. An address that sends
+and sitemaps at level 0 go the same way, and so does a redirect hop of
+a level 0 fetch or of its `robots.txt` that leads to another site: it is
+asked for from that site's own plain exit (the site's own, else its
+scout's), and when that exit cannot carry traffic the hop is not asked
+for at all and the attempt ends `provider_error` with the reason
+`hop_exit_unavailable` (F166). An address that sends
 `kage/<version>` to a site is never one that reads it as a person. There
 is no mixed mode and `kage config check` refuses one: a site that sees a
 visitor move from a residential address to the host's has seen a bot.

@@ -1916,7 +1916,7 @@
               "string",
               "null"
             ],
-            "description": "Why it ended as it did when the site did not say, for example\n`proxy_failed`."
+            "description": "Why it ended as it did when the site did not say, for example\n`proxy_failed`, or `hop_exit_unavailable` (a level-0 redirect to\nanother site whose own plain exit could not carry traffic: the hop\nwas not asked for)."
           },
           "render": {
             "$ref": "#/components/schemas/RenderTaken",
@@ -3796,7 +3796,7 @@
               "string",
               "null"
             ],
-            "description": "Why it ended without the site's verdict, as a stable name:\n`no_persona`, `domain_paused`, `egress_unsafe`,\n`bandwidth_exhausted`, `proxy_failed`, `timeout`, `interrupted`\n(the server stopped while the page was being read) and others."
+            "description": "Why it ended without the site's verdict, as a stable name:\n`no_persona`, `domain_paused`, `egress_unsafe`,\n`bandwidth_exhausted`, `proxy_failed`, `timeout`, `interrupted`\n(the server stopped while the page was being read),\n`hop_exit_unavailable` (a level-0 redirect to another site whose own\nplain exit could not carry traffic now: the hop was not asked for,\nand never from another address) and others."
           },
           "redirects": {
             "type": "array",

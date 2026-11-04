@@ -121,6 +121,21 @@ fn proxies(config: &Config, static_proxies: usize) -> serde_json::Value {
             endpoints.echo
         ));
     }
+    // A declared list may be the operator's own proxies, which can reach
+    // the operator's networks: then a name that resolves there must be
+    // refused before a proxy is asked for it (spec §19, F57).
+    if static_proxies > 0
+        && config.egress.mode == EgressMode::Proxies
+        && !config.security.resolve_on_host
+    {
+        warnings.push(
+            "the declared proxy list is used without security.resolve_on_host: if any of its \
+             proxies can reach your own networks, a page or a redirect can send a browser or \
+             the http path to a name that resolves there; turn security.resolve_on_host on \
+             unless every proxy is a provider's"
+                .to_owned(),
+        );
+    }
     serde_json::json!({
         // What `auto` resolved to.
         "provider": provider,
@@ -352,7 +367,7 @@ mod tests {
             serde_json::json!(["198.51.100.11:8080"])
         );
         let warnings = fixed["proxies"]["warnings"].as_array().unwrap();
-        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert_eq!(warnings.len(), 3, "{warnings:?}");
         assert!(
             warnings[0]
                 .as_str()
@@ -366,6 +381,41 @@ mod tests {
                 .unwrap()
                 .contains("whose operator sees every proxy address"),
             "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn a_declared_list_without_the_hosts_lookup_is_warned_about() {
+        // F57: a declared list may be proxies of the operator's own, which
+        // can reach the operator's networks: without the host's lookup it is
+        // said, with it not.
+        let report = |extra: &[(&str, &str)]| -> Vec<String> {
+            let mut vars = vec![(
+                "KAGE__PROXIES__STATIC_LIST",
+                "198.51.100.10:8080:user-c41d:pass-77aa:AT",
+            )];
+            vars.extend_from_slice(extra);
+            let output: serde_json::Value =
+                serde_json::from_str(&run(None, env(&shipped_policies(), &vars)).unwrap()).unwrap();
+            output["proxies"]["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|warning| warning.as_str().unwrap().to_owned())
+                .collect()
+        };
+        let without = report(&[]);
+        assert!(
+            without
+                .iter()
+                .any(|warning| warning.contains("without security.resolve_on_host")),
+            "{without:?}"
+        );
+        let with = report(&[("KAGE__SECURITY__RESOLVE_ON_HOST", "true")]);
+        assert!(
+            with.iter()
+                .all(|warning| !warning.contains("resolve_on_host")),
+            "{with:?}"
         );
     }
 
