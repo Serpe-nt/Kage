@@ -474,6 +474,9 @@ const routes = {
       ? html(res, page('Behind the challenge', '<h1 id="content">Content behind the challenge</h1>'))
       : html(res, CHALLENGE_PAGE, {}, 403),
   '/challenge/stuck': (_req, res) => html(res, STUCK_CHALLENGE_PAGE, {}, 403),
+  // A bare refusal, no vendor's marker: a `forbidden` block at once, for
+  // the pool's test (tests/e2e/pool.sh) of where a retry leaves from.
+  '/denied': (_req, res) => html(res, page('Access denied', '<h1>Access denied</h1>'), {}, 403),
   // The field runner's test (tests/e2e/field.sh): a page whose first link
   // leads into a challenge that never resolves, so that a batch meets a
   // wall with a page still to read, which nobody may then ask for.
