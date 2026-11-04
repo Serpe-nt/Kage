@@ -669,12 +669,12 @@ async fn a_flows_later_site_with_one_seat_waits_for_another_personas_visit_to_en
     // only the other persona may take goes there next. It waits for the
     // reader's visit to end, as a page of the site would, instead of a
     // second address reading the site at once.
-    let mut lab = Lab::start_with(2, 149, BROWSER_FAST, |config| {
+    let mut lab = Box::pin(Lab::start_with(2, 149, BROWSER_FAST, |config| {
         config.scheduler.visit_idle =
             kage_core::duration::HumanDuration::new(std::time::Duration::from_secs(3));
         config.scheduler.visitor_wait =
             kage_core::duration::HumanDuration::new(std::time::Duration::from_secs(1));
-    })
+    }))
     .await;
     let profiles = lab.policy_dir().join("pacing-profiles.yaml");
     let mut text = std::fs::read_to_string(&profiles).unwrap();
