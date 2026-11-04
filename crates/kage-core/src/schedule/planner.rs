@@ -32,6 +32,22 @@
 //! the site sees one address reading at its gap, not every persona of the
 //! pool taking turns (F106).
 //!
+//! The later sites of a flow keep to their seats too (F188): a persona that
+//! is not visiting such a site waits, while as many others visit it as its
+//! `domain_concurrency` allows, until one of their visits is over; a
+//! visitor of the site can take the flow at once.
+//!
+//! # After a block
+//!
+//! The retry of a blocked request goes to another persona after a pause at
+//! that persona's own pace. Who takes it is ranked over every persona that
+//! could, those still in their pause included: the blocked persona's /24
+//! is the last resort and its autonomous system costs points, as spec §8.2
+//! says, whoever's pause happens to end first (F168). A tie among the best
+//! is drawn from the retry's own seed, and the retry waits for the pause of
+//! the one drawn, never longer; nobody making an attempt, cooling, asleep
+//! or on a break is waited for.
+//!
 //! # Nobody ready, and a proxy that failed
 //!
 //! Work that no persona could take because none that may take it is ready
@@ -576,6 +592,20 @@ struct Possible<'a> {
     /// suspicion ends: until then it is set aside for another persona that
     /// could start before (`set_suspects_aside`).
     suspect_until: Option<DateTime<Utc>>,
+    /// Whether the pause before a retry, at its own pace, is all that keeps
+    /// it from starting: after a block it competes with those whose pause
+    /// is over (F168).
+    pausing: bool,
+}
+
+/// Whether a later site of an attempt has a seat for a persona (F188).
+enum Seat {
+    /// It is visiting the site, or fewer than `domain_concurrency` are.
+    Open,
+    /// Not before this moment, when enough of the other visits are over.
+    At(DateTime<Utc>),
+    /// Not before a visitor of the site ends the attempt it is making.
+    Unknown,
 }
 
 /// See the module documentation.
@@ -637,6 +667,35 @@ fn set_suspects_aside(possible: Vec<Possible<'_>>) -> (Vec<Possible<'_>>, Option
         .filter(|one| one.suspect_until.is_none())
         .collect();
     (rest, Some(cleared))
+}
+
+/// After a block, the personas in the /24 of one the request was blocked on
+/// are out while another could take it (spec §8.2, F168): one that is
+/// ready, one whose pause before the retry is all that holds it, or a
+/// visitor of the domain. One cooling, at its cap, asleep or on its break
+/// is no such other, and the neighbour stays the last resort.
+fn keep_off_blocked_subnets<'a>(
+    work: &Work,
+    possible: Vec<Possible<'a>>,
+    now: DateTime<Utc>,
+) -> Vec<Possible<'a>> {
+    if work.avoid.is_empty() {
+        return possible;
+    }
+    let neighbour = |one: &Possible<'_>| {
+        work.avoid
+            .iter()
+            .any(|network| network.shares_subnet(&one.view.network))
+    };
+    let other = possible.iter().any(|one| {
+        !neighbour(one)
+            && !one.barred
+            && (one.at.is_some_and(|at| at <= now) || one.pausing || one.visiting)
+    });
+    if !other {
+        return possible;
+    }
+    possible.into_iter().filter(|one| !neighbour(one)).collect()
 }
 
 /// What is stored about every later site of `work`, in the order of its
@@ -1150,6 +1209,7 @@ impl Planner {
             }
             _ => possible.to_vec(),
         };
+        let possible = keep_off_blocked_subnets(work, possible, now);
 
         // A persona that is visiting takes the work when its slot is open.
         let visitor = possible
@@ -1197,9 +1257,14 @@ impl Planner {
                 .filter(|one| one.visiting)
                 .all(|one| one.on_break && one.after > now + patience);
         if room || past_room {
+            // After a block, one whose own pause before the retry has not
+            // ended yet competes as well: who takes the retry is decided by
+            // where the addresses are, not by whose pause is the shortest
+            // (F168).
+            let after_block = !work.avoid.is_empty();
             let fresh: Vec<&Possible<'_>> = possible
                 .iter()
-                .filter(|one| !one.visiting && ready(one))
+                .filter(|one| !one.visiting && (ready(one) || (after_block && one.pausing)))
                 .collect();
             if !fresh.is_empty() {
                 let candidates: Vec<Candidate> = fresh
@@ -1207,17 +1272,36 @@ impl Planner {
                     .map(|one| self.candidate(now, one, work, facts))
                     .collect();
                 let prefer_awake = work.active_hours != ActiveHoursMode::Ignore;
+                let best = selection::best(&candidates, prefer_awake);
                 // The draw of a tie is the planner's, but looking must not
                 // move it: a request that then waits would change what the
-                // next one draws.
-                let mut rng = self
-                    .seed
-                    .child("tie")
-                    .child(&format!("{}:{}", work.domain, now.timestamp_millis()))
-                    .rng();
-                if let Some(index) = selection::choose(&candidates, prefer_awake, &mut rng)
+                // next one draws. A retry draws from its own seed among the
+                // best, ready or in their pause, so that every look draws
+                // the same one and the tie is not settled by pace.
+                let retry_seed = work
+                    .retry_pause
+                    .filter(|_| after_block)
+                    .map(|retry| retry.seed);
+                let (among, mut rng) = match retry_seed {
+                    Some(seed) => (best, seed.child("tie").rng()),
+                    None => (
+                        best.into_iter()
+                            .filter(|index| fresh.get(*index).is_some_and(|one| ready(one)))
+                            .collect(),
+                        self.seed
+                            .child("tie")
+                            .child(&format!("{}:{}", work.domain, now.timestamp_millis()))
+                            .rng(),
+                    ),
+                };
+                if let Some(index) = selection::draw(&among, &mut rng)
                     && let Some(chosen) = fresh.get(index)
                 {
+                    if !ready(chosen) {
+                        // In its pause: the retry waits for it, never
+                        // longer than that pause.
+                        return self.wait_or_give_up(work, chosen.at);
+                    }
                     if let Some(at) = self.spaced(now, chosen) {
                         return Looked::Wait(Some(at));
                     }
@@ -1391,16 +1475,28 @@ impl Planner {
                 at = at.max(up);
             }
             // Its gap on a later site is no gap of its own on the domain.
+            let mut seat_unknown = false;
             for leg in &work.legs {
                 if let Some(cadence) = self.cadences.get(&(view.id, leg.domain.clone())) {
                     at = at.max(cadence.next_at);
                 }
+                // And a later site keeps to its own `domain_concurrency` as
+                // the domain does: while as many others visit it as it
+                // allows, the persona waits for a visit to end (F188).
+                match self.leg_seat(now, view.id, leg, work.priority) {
+                    Seat::Open => {}
+                    Seat::At(when) => at = at.max(when),
+                    Seat::Unknown => seat_unknown = true,
+                }
             }
+            let mut pause_until = None;
             if let Some(retry) = &work.retry_pause {
                 // A retry leaves a pause after the block, at the pace of
                 // the persona that makes it.
                 let pause = retry_pause(&retry.pause, pacing_factor(&view.seed), &retry.seed);
-                at = at.max(queued.since + chrono_of(pause));
+                let until = queued.since + chrono_of(pause);
+                pause_until = Some(until);
+                at = at.max(until);
             }
             // Whether anything but the persona's own pacing delays it.
             let held_back = at > now;
@@ -1409,6 +1505,7 @@ impl Planner {
                 at = at.max(cadence.next_at);
             }
             let in_use = self.busy(view.id)
+                || seat_unknown
                 || (work.render == Render::Browser
                     && self.engine_load(view.engine) >= self.rules.max_per_engine);
             possible.push(Possible {
@@ -1430,9 +1527,80 @@ impl Planner {
                     .and_then(|run| run.proxy_failed_at)
                     .map(|at| at + PROXY_SUSPICION)
                     .filter(|until| *until > now),
+                // Its own pause ends last: nothing else holds it longer.
+                pausing: !in_use
+                    && !barred
+                    && pause_until.is_some_and(|until| until > now && until >= at),
             });
         }
         possible
+    }
+
+    /// Whether `persona` has a seat on a later site of an attempt (F188): a
+    /// flow's `goto` reads the site as a request of its own would, so while
+    /// as many other personas visit it as its `domain_concurrency` allows,
+    /// the persona waits for one of their visits to end, and a visitor of
+    /// the site is the one that can take the flow now. A synchronous
+    /// request goes past the seats for a break only, as on its own domain.
+    fn leg_seat(
+        &self,
+        now: DateTime<Utc>,
+        persona: PersonaId,
+        leg: &Leg,
+        priority: Priority,
+    ) -> Seat {
+        let own = self
+            .cadences
+            .get(&(persona, leg.domain.clone()))
+            .is_some_and(|cadence| self.is_visiting(persona, cadence, now));
+        if own {
+            return Seat::Open;
+        }
+        let others: Vec<(PersonaId, &Cadence)> = self
+            .cadences
+            .iter()
+            .filter(|((visitor, on), cadence)| {
+                *visitor != persona && *on == leg.domain && self.is_visiting(*visitor, cadence, now)
+            })
+            .map(|((visitor, _), cadence)| (*visitor, cadence))
+            .collect();
+        let seats = usize::try_from(leg.pacing.domain_concurrency).unwrap_or(usize::MAX);
+        if others.len() < seats {
+            return Seat::Open;
+        }
+        let patience = chrono_of(self.rules.visitor_wait);
+        if priority == Priority::Sync
+            && others.iter().all(|(visitor, cadence)| {
+                !self.busy(*visitor) && cadence.on_break && cadence.next_at > now + patience
+            })
+        {
+            return Seat::Open;
+        }
+        // Enough visits have to end to leave one seat: the one that ends
+        // that many visits after the first. One whose visitor is making an
+        // attempt ends with that attempt at the earliest, which nobody
+        // knows before it comes.
+        let mut ends: Vec<Option<DateTime<Utc>>> = others
+            .iter()
+            .map(|(visitor, cadence)| self.visit_end(*visitor, cadence))
+            .collect();
+        ends.sort_by_key(|end| (end.is_none(), *end));
+        match ends.get(others.len() - seats) {
+            Some(Some(end)) => Seat::At(*end),
+            _ => Seat::Unknown,
+        }
+    }
+
+    /// When a visit is over if its persona takes no other page of it, as
+    /// [`Self::is_visiting`] counts it; `None` while the persona is making
+    /// an attempt.
+    fn visit_end(&self, persona: PersonaId, cadence: &Cadence) -> Option<DateTime<Utc>> {
+        if self.busy(persona) {
+            return None;
+        }
+        let idle = cadence.last_start + chrono_of(self.rules.visit_idle);
+        let wait = cadence.next_at + chrono_of(self.rules.visitor_wait) + Duration::milliseconds(1);
+        Some(idle.max(wait))
     }
 
     fn candidate(

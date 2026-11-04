@@ -663,6 +663,72 @@ async fn a_flow_that_ended_before_a_half_open_site_answered_gives_its_trial_back
 }
 
 #[tokio::test]
+async fn a_flows_later_site_with_one_seat_waits_for_another_personas_visit_to_end() {
+    // F188 (left-01): the other site has one seat (`fast` with
+    // `domain_concurrency: 1`). One persona reads a page of it; a flow that
+    // only the other persona may take goes there next. It waits for the
+    // reader's visit to end, as a page of the site would, instead of a
+    // second address reading the site at once.
+    let mut lab = Lab::start_with(2, 149, BROWSER_FAST, |config| {
+        config.scheduler.visit_idle =
+            kage_core::duration::HumanDuration::new(std::time::Duration::from_secs(3));
+        config.scheduler.visitor_wait =
+            kage_core::duration::HumanDuration::new(std::time::Duration::from_secs(1));
+    })
+    .await;
+    let profiles = lab.policy_dir().join("pacing-profiles.yaml");
+    let mut text = std::fs::read_to_string(&profiles).unwrap();
+    text.push_str(
+        "\nsingle:\n  gap_ms: { dist: uniform, min: 300, max: 1200 }\n  burst_pages: { min: 50, max: 50 }\n  burst_break_ms: { dist: uniform, min: 0, max: 0 }\n  daily_cap_per_persona_per_domain: 5000\n  domain_concurrency: 1\n  domain_rpm: 300\n",
+    );
+    std::fs::write(&profiles, text).unwrap();
+    std::fs::write(
+        lab.policy_dir().join("domains.yaml"),
+        format!(
+            "defaults: {{ pacing: fast, active_hours: ignore }}\ndomains:\n  {PAY}:\n    pacing: single\n"
+        ),
+    )
+    .unwrap();
+    lab.policies.reload().unwrap();
+    let (reader, other) = (lab.personas[0].id, lab.personas[1].id);
+
+    let read = lab
+        .pipeline
+        .fetch(FetchOrder {
+            level: Level::Human,
+            exclude: vec![other],
+            ..FetchOrder::get(url::Url::parse(&pay("/page")).unwrap(), Priority::Sync)
+        })
+        .await
+        .unwrap();
+    assert_eq!(read.outcome, Outcome::Ok, "{:?}", read.reason);
+    assert_eq!(read.attempts[0].persona_id, Some(reader));
+    let read_at = read.attempts[0].started_at;
+
+    let report = lab
+        .pipeline
+        .fetch(FetchOrder {
+            exclude: vec![reader],
+            priority: Priority::Sync,
+            ..flow(&across())
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(report.outcome, Outcome::Ok, "{:?}", report.reason);
+    assert_eq!(report.attempts[0].persona_id, Some(other));
+    // Not before the reader's visit was over: three seconds after its page
+    // began, with nothing more asked of it.
+    let began = report.attempts[0].started_at;
+    assert!(
+        began - read_at >= chrono::Duration::seconds(3),
+        "the flow began {} after the reader's page",
+        began - read_at
+    );
+    lab.shut_down().await;
+}
+
+#[tokio::test]
 async fn a_persona_that_cools_at_a_flows_later_site_does_not_run_the_flow() {
     let mut lab = Lab::start(2, 149, BROWSER_FAST).await;
     let (cooling, other) = (lab.personas[0].id, lab.personas[1].id);

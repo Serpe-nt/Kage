@@ -977,10 +977,6 @@ impl Pool {
 
     // --- Health -------------------------------------------------------------
 
-    /// Whether more than half of the pool is failing right now, counting
-    /// `failing` as failed whatever its record says. The cause is then on
-    /// the path (the host's network, the provider's gateway, the echo), not
-    /// in the addresses.
     /// The live proxies of the pool, without the host's own rows, which
     /// no upkeep touches.
     async fn pooled_live(&self) -> Result<Vec<Proxy>, PoolError> {
@@ -989,6 +985,10 @@ impl Pool {
         Ok(live)
     }
 
+    /// Whether more than half of the pool is failing right now, counting
+    /// `failing` as failed whatever its record says. The cause is then on
+    /// the path (the host's network, the provider's gateway, the echo), not
+    /// in the addresses.
     fn outage_suspected(live: &[Proxy], failing: Option<ProxyId>) -> bool {
         let probed: Vec<&Proxy> = live
             .iter()
@@ -1052,6 +1052,10 @@ impl Pool {
         let live = self.store.proxies().list_live(None).await?;
         let failed = report.exit.is_err();
         let outage = failed && Self::outage_suspected(&live, Some(id));
+        // Under the outage guard what a probe says moves the published
+        // states without a change of state (F151): before, during and at
+        // the end of a suspected outage the gauge is published again.
+        let guarded = outage || Self::outage_suspected(&live, None);
         let shared = Self::shared_exit(&live, id, report);
         let jitter = self.backoff_jitter(id, report.at);
         let rules = self.rules;
@@ -1095,6 +1099,9 @@ impl Pool {
             }
         }
         self.handle(&proxy, effects, cause).await;
+        if guarded {
+            self.republish_states().await;
+        }
         Ok(Some(proxy))
     }
 
@@ -2180,9 +2187,19 @@ pub fn register_metrics() {
     }
 }
 
+/// Whether the outage guard of spec §7.3 holds over a pool's live
+/// proxies: more than half of a pool of 4 or more fails its latest probe.
+/// While it holds, a proxy whose latest probe failed carries nothing
+/// ([`machine::held_by_outage`], F169). The host's own rows are never
+/// counted.
+pub fn outage_suspected(live: &[Proxy]) -> bool {
+    Pool::outage_suspected(live, None)
+}
+
 /// The live proxies by the state each counts under in `kage_proxy_state`
-/// ([`machine::reported_state`]): every state but `retired`, at zero when
-/// none is in it.
+/// ([`machine::reported_state_in`]): every state but `retired`, at zero
+/// when none is in it. Under a suspected outage a proxy whose latest probe
+/// failed counts as `backoff`, though its counters are frozen (F151).
 fn states_of(live: &[Proxy]) -> BTreeMap<ProxyState, usize> {
     let mut counts: BTreeMap<ProxyState, usize> = ProxyState::ALL
         .iter()
@@ -2190,8 +2207,9 @@ fn states_of(live: &[Proxy]) -> BTreeMap<ProxyState, usize> {
         .filter(|state| *state != ProxyState::Retired)
         .map(|state| (state, 0))
         .collect();
+    let outage = outage_suspected(live);
     for proxy in live {
-        if let Some(count) = counts.get_mut(&machine::reported_state(proxy)) {
+        if let Some(count) = counts.get_mut(&machine::reported_state_in(proxy, outage)) {
             *count += 1;
         }
     }
@@ -2257,7 +2275,7 @@ mod tests {
     use chrono::Duration;
     use kage_core::domain::ProxyState;
 
-    use super::{register_metrics, states_of};
+    use super::{outage_suspected, register_metrics, states_of};
     use crate::machine::{self, ExitObservation, PoolRules, ProbeReport};
     use crate::test_support::{noon, proxy};
 
@@ -2340,6 +2358,85 @@ mod tests {
         pool[1].state = ProxyState::Retired;
         let counts = states_of(&pool);
         assert_eq!(counts.values().sum::<usize>(), 2);
+    }
+
+    #[test]
+    fn under_a_suspected_outage_a_proxy_whose_probe_failed_is_held_and_counts_as_backoff() {
+        // F169 and F151: in a pool of four or more the outage guard freezes
+        // the counters, so no proxy reaches backoff by state; the proxies
+        // whose latest probe failed are held all the same, and the gauge
+        // says so, until a probe of each passes.
+        let rules = PoolRules::default();
+        let mut pool: Vec<_> = (1..=5).map(|n| proxy(&format!("o-{n}"))).collect();
+        for member in &mut pool {
+            machine::apply_probe(member, &passed(noon()), false, 0.5, &rules);
+        }
+        assert!(!outage_suspected(&pool));
+        let mut now = noon();
+        for _ in 0..4 {
+            now += Duration::minutes(5);
+            for member in &mut pool {
+                machine::apply_probe(member, &failed(now), true, 0.5, &rules);
+            }
+        }
+        assert!(outage_suspected(&pool));
+        // Frozen: every proxy is usable by state, none in backoff.
+        assert!(pool.iter().all(|member| member.state.is_usable()));
+        assert!(
+            pool.iter()
+                .all(|member| machine::held_by_outage(member, true))
+        );
+        let counts = states_of(&pool);
+        assert_eq!(counts[&ProxyState::Backoff], 5);
+        assert_eq!(
+            counts[&ProxyState::Healthy] + counts[&ProxyState::Degraded],
+            0
+        );
+
+        // Two come back: three of five still fail, the guard holds, and
+        // the two that answered carry again.
+        now += Duration::minutes(1);
+        for member in &mut pool[..2] {
+            machine::apply_probe(member, &passed(now), false, 0.5, &rules);
+        }
+        assert!(outage_suspected(&pool));
+        assert!(!machine::held_by_outage(&pool[0], true));
+        let counts = states_of(&pool);
+        assert_eq!(counts[&ProxyState::Backoff], 3);
+        assert_eq!(counts[&ProxyState::Healthy], 2);
+
+        // A third: two of five fail, the guard is lifted, and the two that
+        // still fail count as what they are; their counters move again.
+        machine::apply_probe(&mut pool[2], &passed(now), false, 0.5, &rules);
+        assert!(!outage_suspected(&pool));
+        let counts = states_of(&pool);
+        assert_eq!(counts[&ProxyState::Backoff], 0);
+        assert_eq!(counts[&ProxyState::Healthy], 5);
+    }
+
+    #[test]
+    fn below_four_proxies_there_is_no_guard_and_nothing_is_held_by_it() {
+        let rules = PoolRules::default();
+        let mut pool: Vec<_> = (1..=3).map(|n| proxy(&format!("s-{n}"))).collect();
+        for member in &mut pool {
+            machine::apply_probe(member, &passed(noon()), false, 0.5, &rules);
+            machine::apply_probe(
+                member,
+                &failed(noon() + Duration::minutes(5)),
+                false,
+                0.5,
+                &rules,
+            );
+        }
+        assert!(!outage_suspected(&pool));
+        // One failure each: degraded, usable, counted as degraded (F111's
+        // backoff is what holds such a pool).
+        let counts = states_of(&pool);
+        assert_eq!(counts[&ProxyState::Degraded], 3);
+        assert!(
+            pool.iter()
+                .all(|member| !machine::held_by_outage(member, outage_suspected(&pool)))
+        );
     }
 
     #[test]

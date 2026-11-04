@@ -39,7 +39,7 @@ pub use health::{CheckResult, HealthChecker, HealthSettings, HealthSetupError};
 pub use machine::PoolRules;
 pub use pool::{
     BudgetWindow, Pool, PoolError, PoolEvent, PoolParts, PoolSummary, ProxyEndpoint,
-    ReconcileReport, ReplacementOutcome, TickReport,
+    ReconcileReport, ReplacementOutcome, TickReport, outage_suspected,
 };
 pub use provider::{
     AccountInfo, AutoReplace, Capabilities, Operation, PUBLIC_ECHO_URL, ProviderError,

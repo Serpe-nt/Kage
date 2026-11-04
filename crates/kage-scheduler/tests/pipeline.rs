@@ -9,6 +9,7 @@
 mod common;
 
 use std::collections::BTreeSet;
+use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 
 use chrono::Duration as Span;
@@ -21,6 +22,7 @@ use kage_core::pacing::{Distribution, PacingProfile, Uniform};
 use kage_core::policy::PacingRequest;
 use kage_core::schedule::politeness::Courtesy;
 use kage_core::schedule::queue::Priority;
+use kage_core::schedule::selection::Network;
 use kage_scheduler::pipeline::attempt_seed;
 use kage_scheduler::{
     AttemptOutput, FetchOrder, JobFetch, PlainRoute, SchedulerError, Synchronous,
@@ -180,6 +182,82 @@ async fn three_blocked_attempts_are_made_by_three_personas() {
     // The pause counts as time the request waited.
     assert!(report.pacing.waited >= Duration::from_millis(3200));
     world.shut_down().await;
+}
+
+/// QA round two's pool-01 world (F168): five personas whose exits lie in
+/// three /24s and four autonomous systems.
+fn five_exits() -> Vec<Network> {
+    [
+        ([203, 0, 113, 10], "AS64501"),
+        ([203, 0, 113, 20], "AS64501"),
+        ([198, 51, 100, 30], "AS64502"),
+        ([192, 0, 2, 40], "AS64501"),
+        ([198, 51, 100, 50], "AS64503"),
+    ]
+    .iter()
+    .map(|(octets, asn)| Network::of(Some(IpAddr::V4(Ipv4Addr::from(*octets))), Some(asn)))
+    .collect()
+}
+
+#[tokio::test(start_paused = true)]
+async fn after_a_block_no_retry_leaves_from_its_subnet_or_its_system_while_another_is_untried() {
+    // F168 (pool-01): the retries of a blocked request went to whichever
+    // persona's own pause ended first, in the /24 of the block or its
+    // autonomous system while personas of others were untried.
+    let networks = five_exits();
+    for round in 0..8 {
+        let mut world = World::with(5, false, DEFAULT_DOMAINS, &[]);
+        for (number, network) in (0_u8..).zip(&networks) {
+            world
+                .backend
+                .put_persona(persona(number, false), true, network.clone());
+        }
+        for _ in 0..3 {
+            world.script.then(blocked(Outcome::Forbidden, 1.0));
+        }
+        let report = world
+            .pipeline
+            .fetch(browser(&format!("https://pool{round}.example/denied")))
+            .await
+            .unwrap();
+        assert_eq!(report.attempts.len(), 3);
+        let tried: Vec<usize> = world
+            .script
+            .personas()
+            .iter()
+            .map(|persona| (0_u8..5).position(|number| id(number) == *persona).unwrap())
+            .collect();
+        for (n, taker) in tried.iter().enumerate().skip(1) {
+            let before = &tried[..n];
+            let theirs = &networks[*taker];
+            assert!(
+                before
+                    .iter()
+                    .all(|blocked| !networks[*blocked].shares_subnet(theirs)),
+                "round {round}: {tried:?}, attempt {} in the /24 of a block",
+                n + 1
+            );
+            // Another /24 and another system, untried: then not this one's
+            // system either.
+            let better = (0..5).any(|other| {
+                !tried[..=n].contains(&other)
+                    && before.iter().all(|blocked| {
+                        !networks[*blocked].shares_subnet(&networks[other])
+                            && !networks[*blocked].shares_asn(&networks[other])
+                    })
+            });
+            if better {
+                assert!(
+                    before
+                        .iter()
+                        .all(|blocked| !networks[*blocked].shares_asn(theirs)),
+                    "round {round}: {tried:?}, attempt {} in the system of a block",
+                    n + 1
+                );
+            }
+        }
+        world.shut_down().await;
+    }
 }
 
 #[tokio::test(start_paused = true)]
