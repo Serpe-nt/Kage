@@ -574,6 +574,12 @@ const routes = {
   '/download': (_req, res) =>
     send(res, 200, 'application/octet-stream', 'file body', { 'content-disposition': 'attachment; filename="file.bin"' }),
   '/status/404': (_req, res) => html(res, page('Not found', '<h1>404</h1>'), {}, 404),
+  // An empty error answer, as a proxy refuses a plain `http://` target:
+  // both browsers show their own page in its place (F189).
+  '/status/empty-403': (_req, res) => {
+    res.writeHead(403, { connection: 'close' });
+    res.end();
+  },
   '/headers': (req, res) => json(res, { headers: headerPairs(req) }),
 
   // The coherence probe (spec §6.2).

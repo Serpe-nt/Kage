@@ -1916,7 +1916,7 @@
               "string",
               "null"
             ],
-            "description": "Why it ended as it did when the site did not say, for example\n`proxy_failed`, or `hop_exit_unavailable` (a level-0 redirect to\nanother site whose own plain exit could not carry traffic: the hop\nwas not asked for)."
+            "description": "Why it ended as it did when the site did not say, for example\n`proxy_failed`, `proxy_refused` (the persona's proxy refused the\ntunnel to the target, as a provider that will not carry a site\ndoes: neither the site's answer nor a failure of the proxy), or\n`hop_exit_unavailable` (a level-0 redirect to another site whose\nown plain exit could not carry traffic: the hop was not asked for)."
           },
           "render": {
             "$ref": "#/components/schemas/RenderTaken",
@@ -3796,7 +3796,7 @@
               "string",
               "null"
             ],
-            "description": "Why it ended without the site's verdict, as a stable name:\n`no_persona`, `domain_paused`, `egress_unsafe`,\n`bandwidth_exhausted`, `proxy_failed`, `timeout`, `interrupted`\n(the server stopped while the page was being read),\n`hop_exit_unavailable` (a level-0 redirect to another site whose own\nplain exit could not carry traffic now: the hop was not asked for,\nand never from another address) and others."
+            "description": "Why it ended without the site's verdict, as a stable name:\n`no_persona`, `domain_paused`, `egress_unsafe`,\n`bandwidth_exhausted`, `proxy_failed`, `proxy_refused` (the\npersona's proxy refused the tunnel to the target: nothing was\nasked of the site, and the proxy is not set aside for it),\n`timeout`, `interrupted`\n(the server stopped while the page was being read),\n`hop_exit_unavailable` (a level-0 redirect to another site whose own\nplain exit could not carry traffic now: the hop was not asked for,\nand never from another address) and others."
           },
           "redirects": {
             "type": "array",

@@ -530,6 +530,9 @@ struct MeterState {
     /// When each caller's connection to each target was last not relayed
     /// because its proxy failed.
     unrelayed: HashMap<Unrelayed, Instant>,
+    /// When each caller's tunnel to each target was last refused by its
+    /// proxy, and with which status (F189).
+    refused: HashMap<Unrelayed, (Instant, u16)>,
 }
 
 /// Counts what passes, per persona and per domain being fetched.
@@ -632,8 +635,9 @@ impl Meter {
     /// answer, refused the provider's credential, or is not usable. A
     /// page of that target that fails meanwhile without an answer failed
     /// at the proxy, not at the site (F108). A proxy that answered a
-    /// tunnel with a refusal of its own (a `502` for a target it could not
-    /// reach) and a client that went away are not the proxy's failure.
+    /// tunnel with a refusal of the target (`note_refused`) or a `5xx`
+    /// for a target it could not reach, and a client that went away, are
+    /// not the proxy's failure.
     pub fn note_unrelayed(&self, caller: Caller, host: &str, port: u16) {
         let now = Instant::now();
         let mut state = self.state();
@@ -643,6 +647,40 @@ impl Meter {
         state
             .unrelayed
             .insert((caller, host.to_ascii_lowercase(), port), now);
+    }
+
+    /// Notes that a caller's tunnel to `host`:`port` was refused by its
+    /// proxy with `status` (a `4xx` other than `407`): the provider will
+    /// not carry that target, which says nothing of the site and is no
+    /// failure of the proxy (F189). A page of that target that
+    /// fails meanwhile failed at the proxy's refusal (`proxy_refused`).
+    pub fn note_refused(&self, caller: Caller, host: &str, port: u16, status: u16) {
+        let now = Instant::now();
+        let mut state = self.state();
+        state
+            .refused
+            .retain(|_, (at, _)| now.duration_since(*at) < UNRELAYED_KEPT);
+        state
+            .refused
+            .insert((caller, host.to_ascii_lowercase(), port), (now, status));
+    }
+
+    /// The status with which the proxy refused a tunnel of `caller` to one
+    /// of `targets` (host and port) at `since` or later, when it did.
+    pub fn refused_since<'a>(
+        &self,
+        caller: Caller,
+        targets: impl IntoIterator<Item = (&'a str, u16)>,
+        since: Instant,
+    ) -> Option<u16> {
+        let state = self.state();
+        targets.into_iter().find_map(|(host, port)| {
+            state
+                .refused
+                .get(&(caller, host.to_ascii_lowercase(), port))
+                .filter(|(at, _)| *at >= since)
+                .map(|(_, status)| *status)
+        })
     }
 
     /// Whether a connection of `caller` to one of `targets` (host and
@@ -970,10 +1008,14 @@ enum Refused {
     /// The persona's proxy could not be reached, did not answer, or
     /// refused the provider's credential: the proxy's own failure.
     Upstream(String),
-    /// The target could not be reached (a proxy's refusal of the tunnel,
-    /// no address that answered), or the client went away: not the
-    /// proxy's own failure.
+    /// The target could not be reached (a proxy's `5xx` to the tunnel, no
+    /// address that answered), or the client went away: not the proxy's
+    /// own failure.
     Unreached(String),
+    /// The proxy answered the tunnel with this `4xx`, not a `407`: the
+    /// provider will not carry the target (its blocklist, its policy).
+    /// Not the proxy's own failure, and not the site's answer (F189).
+    Tunnel(u16),
 }
 
 // --- What the guard refused ------------------------------------------------
@@ -1288,9 +1330,7 @@ impl Forwarder {
             let tunnelled = self
                 .tunnel(client, &mut server, &head, buffer, &payer, &upstream)
                 .await;
-            if matches!(tunnelled, Err(Refused::Upstream(_))) {
-                self.meter.note_unrelayed(caller, &host, port);
-            }
+            self.note_tunnel(&tunnelled, caller, (&host, port), upstream.id);
             tunnelled
         } else {
             self.plain(
@@ -1304,6 +1344,32 @@ impl Forwarder {
             )
             .await;
             Ok(())
+        }
+    }
+
+    /// Notes how a tunnel through a proxy ended, for the executor: the
+    /// proxy's failure (F108), or its refusal of the target (F189), which
+    /// is logged so that an operator sees a provider's blocklist at work.
+    fn note_tunnel(
+        &self,
+        tunnelled: &Result<(), Refused>,
+        caller: Caller,
+        (host, port): (&str, u16),
+        proxy: ProxyId,
+    ) {
+        match tunnelled {
+            Err(Refused::Upstream(_)) => self.meter.note_unrelayed(caller, host, port),
+            Err(Refused::Tunnel(status)) => {
+                self.meter.note_refused(caller, host, port, *status);
+                tracing::info!(
+                    proxy = %proxy,
+                    host = %host,
+                    port,
+                    status,
+                    "the proxy refused a tunnel to the target"
+                );
+            }
+            _ => {}
         }
     }
 
@@ -1540,12 +1606,8 @@ impl Forwarder {
                 "the proxy refused the provider's credential".to_owned(),
             ));
         }
-        if !(200..300).contains(&status) {
-            // A proxy that could not reach the target says so (a `502`, a
-            // `504`): the target's failure, not the proxy's.
-            return Err(Refused::Unreached(format!(
-                "the proxy answered the tunnel with {status}"
-            )));
+        if let Some(refused) = tunnel_refusal(status) {
+            return Err(refused);
         }
         self.relayed.fetch_add(1, Ordering::Relaxed);
         if !early.is_empty() {
@@ -1678,6 +1740,22 @@ impl Forwarder {
 /// Ends a connection that is not relayed. A tunnel that is refused is a
 /// failed connection to the browser; a plain request gets no answer at
 /// all, so that no page reads a response the forwarder wrote.
+/// What a proxy's answer to a tunnel other than a success or a `407` is,
+/// `None` for a success. A `4xx` is the provider's refusal of the target
+/// (its blocklist, its policy), alike for every proxy of it: neither the
+/// proxy's failure nor the site's answer (F189). Any other (a `502`, `503`
+/// or `504`: a target the exit could not reach, a proxy overloaded now) is
+/// the target's failed connection, not the proxy's (F108).
+fn tunnel_refusal(status: u16) -> Option<Refused> {
+    match status {
+        200..=299 => None,
+        400..=499 => Some(Refused::Tunnel(status)),
+        _ => Some(Refused::Unreached(format!(
+            "the proxy answered the tunnel with {status}"
+        ))),
+    }
+}
+
 async fn refuse(client: &mut TcpStream, tunnel: bool, reason: Refused) -> Result<(), Refused> {
     if tunnel {
         let _ = client
@@ -1925,8 +2003,8 @@ mod tests {
     use kage_core::secret::Secret;
 
     use super::{
-        Body, Caller, Counted, Head, Meter, Payer, PlainRoute, RouteRefusal, Tokens, base64_decode,
-        base64_encode, target_of,
+        Body, Caller, Counted, Head, Meter, Payer, PlainRoute, Refused, RouteRefusal, Tokens,
+        base64_decode, base64_encode, target_of,
     };
 
     fn head(text: &str) -> Head {
@@ -2182,6 +2260,66 @@ mod tests {
         tokio::time::advance(super::UNRELAYED_KEPT).await;
         meter.note_unrelayed(exit, "other.kage.test", 80);
         assert_eq!(meter.state().unrelayed.len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_meter_says_whose_tunnel_the_proxy_refused_and_with_what() {
+        let meter = Meter::default();
+        let (one, other) = (PersonaId::new(), PersonaId::new());
+        let before = tokio::time::Instant::now();
+        tokio::time::advance(std::time::Duration::from_secs(1)).await;
+        let site = [("shop.kage.test", 443)];
+        assert_eq!(
+            meter.refused_since(Caller::Persona(one), site, before),
+            None
+        );
+
+        meter.note_refused(Caller::Persona(one), "Shop.Kage.Test", 443, 403);
+        assert_eq!(
+            meter.refused_since(Caller::Persona(one), site, before),
+            Some(403)
+        );
+        // A refusal is no failure of the proxy (F189).
+        assert!(!meter.unrelayed_since(Caller::Persona(one), site, before));
+        // One of the attempt's targets is enough; another caller's is its own.
+        let chain = [("cdn.kage.test", 443), ("shop.kage.test", 443)];
+        assert_eq!(
+            meter.refused_since(Caller::Persona(one), chain, before),
+            Some(403)
+        );
+        assert_eq!(
+            meter.refused_since(Caller::Persona(other), site, before),
+            None
+        );
+        assert_eq!(
+            meter.refused_since(Caller::Persona(one), [("shop.kage.test", 80)], before),
+            None
+        );
+        // An attempt that began after it saw nothing of it.
+        tokio::time::advance(std::time::Duration::from_secs(1)).await;
+        let later = tokio::time::Instant::now();
+        assert_eq!(meter.refused_since(Caller::Persona(one), site, later), None);
+        // What is older than any attempt is forgotten at the next note.
+        tokio::time::advance(super::UNRELAYED_KEPT).await;
+        meter.note_refused(Caller::Persona(other), "other.kage.test", 443, 451);
+        assert_eq!(meter.state().refused.len(), 1);
+    }
+
+    #[test]
+    fn only_a_4xx_to_a_tunnel_is_the_providers_refusal_of_the_target() {
+        assert_eq!(super::tunnel_refusal(200), None);
+        assert_eq!(super::tunnel_refusal(204), None);
+        for status in [400, 403, 404, 451, 499] {
+            assert_eq!(super::tunnel_refusal(status), Some(Refused::Tunnel(status)));
+        }
+        // A target the exit could not reach, a proxy overloaded now: the
+        // target's failed connection (F108), never a refusal.
+        for status in [301, 500, 502, 503, 504] {
+            assert!(
+                matches!(super::tunnel_refusal(status), Some(Refused::Unreached(_))),
+                "{status}"
+            );
+        }
     }
 
     #[test]

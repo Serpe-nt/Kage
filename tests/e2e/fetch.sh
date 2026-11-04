@@ -21,6 +21,10 @@
 #     Shift_JIS read at level 0 as a browser reads them; a host with the
 #     DNS root's dot asked for without it, and one with two dots refused
 #     before anything is sent (F100, F104);
+#   - a target the proxies refuse (F189): a plain one, whose empty 403
+#     the browser replaces with its own page, is `navigation_failed` at
+#     once and nobody's block (Firefox reports the 403 it saw); a refused
+#     tunnel is `proxy_refused`, logged with the proxy and the host;
 #   - every byte counted: what Kage wrote to the store is what the proxies
 #     carried for it.
 # It also measures what the forwarder adds to a connection.
@@ -276,6 +280,38 @@ fetch_json "http://fixture.kage.test:8088/challenge" --level 3 --timeout 40s
 check "challenge_passed, with the page behind it" "${report}" \
     "d.outcome === 'challenge_passed' && d.attempts.length === 1 && d.challenge.interstitial === true && d.challenge.resolved === true && d.title === 'Behind the challenge'"
 echo "    $(value "${report}" "d.outcome + ' after ' + d.challenge.waited_ms + ' ms'")"
+
+echo "==> a target the proxies refuse is nobody's block, and a refused tunnel is the proxy's refusal (F189)"
+# The world's proxies relay only what they allow: refused.kage.test gets an
+# empty 403 to a plain request and a 403 to a CONNECT, as a provider's
+# blocklist answers. Nothing reaches a site.
+for engine in chromium firefox; do
+    case "${engine}" in
+        chromium) seen_status=null ;;
+        firefox) seen_status=403 ;;
+    esac
+    fetch_json "http://refused.kage.test:8088/${engine}" --level 2 --engine "${engine}" --timeout 20s --retries 0
+    [ "${fetch_status}" -ne 0 ] || fail "a refused plain target was reported as fetched: ${report}"
+    # At once, not at the timeout; the browser's own page is no document.
+    check "${engine}: a refused plain target is navigation_failed, nobody's block" "${report}" \
+        "d.outcome === 'provider_error' && d.reason === 'navigation_failed' && d.block === null && d.attempts.length === 1 && d.attempts[0].reason === 'navigation_failed' && d.attempts[0].status === ${seen_status} && d.attempts[0].total_ms < 10000 && d.title === null && d.document_bytes === 0"
+    echo "    plain, ${engine}: $(value "${report}" "d.reason + ', status ' + d.attempts[0].status + ', ' + d.attempts[0].total_ms + ' ms'")"
+    # `kage fetch` runs a pipeline and a forwarder of its own: its log is
+    # its standard error, kept here for the forwarder's line.
+    fetch_status=0
+    report="$(kage fetch "https://refused.kage.test/${engine}" --level 2 --engine "${engine}" --timeout 20s --retries 0 --json 2>> "${policies}/fetch-stderr.log")" || fetch_status=$?
+    [ "${fetch_status}" -ne 0 ] || fail "a refused tunnel was reported as fetched: ${report}"
+    check "${engine}: a refused tunnel is proxy_refused" "${report}" \
+        "d.outcome === 'provider_error' && d.reason === 'proxy_refused' && d.block === null && d.attempts.length === 1 && d.attempts[0].reason === 'proxy_refused' && d.attempts[0].status === null"
+    echo "    tunnel, ${engine}: $(value "${report}" "d.reason + ', ' + d.attempts[0].total_ms + ' ms'")"
+done
+booked="$(psql "SELECT count(*) FROM persona_domain_state WHERE domain = 'refused.kage.test' AND (cooldown_until IS NOT NULL OR block_count_24h > 0)")"
+[ "${booked}" -eq 0 ] || fail "${booked} personas are booked a block or a cooldown for refused.kage.test"
+breakers="$(psql "SELECT count(*) FROM domain_breakers WHERE domain = 'refused.kage.test' AND block_count_1h > 0")"
+[ "${breakers}" -eq 0 ] || fail "the breaker of refused.kage.test counted a block"
+refusals="$(grep 'the proxy refused a tunnel to the target' "${policies}/fetch-stderr.log" | grep -c 'refused.kage.test' || true)"
+[ "${refusals}" -ge 2 ] || fail "${refusals} refusals of refused.kage.test are logged, expected one per engine at least"
+echo "    nothing booked to the site, nothing against a proxy; ${refusals} refusals logged at info with the proxy and the host"
 
 echo "==> a challenge that does not resolve is a block: the persona cools, another one tries, the breaker opens"
 fetch_json "http://fixture.kage.test:8088/challenge/stuck" --level 3 --timeout 45s --retries 1

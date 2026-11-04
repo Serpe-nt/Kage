@@ -2,7 +2,9 @@
 //! provider's proxy. It forwards plain requests and opens `CONNECT`
 //! tunnels, resolves the test host names itself (as a real proxy resolves
 //! the target), and keeps the raw head of every request it saw, so a test
-//! can assert what went on the wire. Nothing here leaves the machine.
+//! can assert what went on the wire. A tunnel to a host whose name begins
+//! with `refused.` is refused with `403`, as a provider refuses a target
+//! it will not carry. Nothing here leaves the machine.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -303,6 +305,14 @@ async fn serve(mut client: TcpStream, shared: &ProxyShared) -> std::io::Result<(
     let bad_gateway = b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n";
 
     if method.eq_ignore_ascii_case("CONNECT") {
+        if target.starts_with("refused.") {
+            return answer(
+                &mut client,
+                shared,
+                b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n",
+            )
+            .await;
+        }
         let Some(upstream) = route(target) else {
             return answer(&mut client, shared, bad_gateway).await;
         };

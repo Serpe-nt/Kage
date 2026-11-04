@@ -746,7 +746,10 @@ at the health checker's next turn; the probe decides the proxy's state as
 any probe does. The scheduler's own setting aside of the persona for 5
 minutes (§8.2) is not lifted by a healthy probe, only by an answered attempt
 of the persona or by the end of the 5 minutes: a proxy that answers the
-echo may still fail the persona's traffic, and the time is short.
+echo may still fail the persona's traffic, and the time is short. A
+proxy that refused the target of an attempt (`proxy_refused`, §8.3) did
+not fail: it is neither reported nor probed, and its persona is not set
+aside (F189).
 
 ### 7.5 The forwarder and the bandwidth budget
 
@@ -898,10 +901,33 @@ persona's proxy fails in the browser as if the site did not answer
 (`navigation_failed`, a timeout); the forwarder notes each connection whose
 proxy failed by caller and by target host and port, and an attempt that got
 no answer while that happened to its own page (its address, a redirect it
-followed, where it ended) is the proxy's (F108). A proxy's own refusal of a
-tunnel (a `502` or `504` for a target it could not reach), a third party's
+followed, where it ended) is the proxy's (F108). A third party's
 host on the page and a client that went away are never the proxy's. The pool is told, and
-the proxy is probed at the health checker's next turn. Circuit breaker
+the proxy is probed at the health checker's next turn. A `5xx` to a
+tunnel (`502`, `503`, `504`: a target the exit could not reach, a proxy
+overloaded now) is the target's failed connection and never the proxy's.
+A proxy that answers a tunnel with a `4xx` other than `407` refuses the
+target by its provider's policy (a blocklist), alike for every proxy of
+that provider, and works; the forwarder notes the refusal by caller and by
+target host and port, as it notes a failure, and logs it at `info` with
+the proxy's id and the target's host. An attempt that got no answer from
+the site while its own page's tunnel was refused so ended at the proxy's
+refusal, whatever the browser named it (`proxy_failed`, a failed
+navigation, a timeout): `provider_error` with the reason `proxy_refused`,
+not retried, with nothing booked against the site (no cooldown, no
+breaker count, no server-error pause) and nothing against the proxy (no
+setting aside, no report to the pool) (F189). Inside a tunnel
+the site's answer is the site's and the proxy's `4xx` to the `CONNECT`
+is the proxy's. A plain `http://` request has no such line: the proxy
+relays the site's answer, and its own refusal of the target comes back the
+same way, an error status with an empty body that the forwarder passes on
+as it came; Kage cannot tell whose it was. Where a browser replaced such
+an empty error answer with its own page (§10.2), the attempt is
+`provider_error` with the reason `navigation_failed`, keeps the status the
+browser saw (Firefox) or none (Chrome), and is nobody's block: no
+cooldown, no breaker count, and like any failed navigation it counts
+toward the server-error pause; an empty error answer is judged as an
+answer only where it was read (the http path, a level 0 client). Circuit breaker
 per domain: if `block_count_1h` over all personas ≥
 `policy.breaker_threshold` (default 5), the domain is `paused` for
 `policy.breaker_pause` (default 30 min); requests return `provider_error`
@@ -1142,6 +1168,21 @@ not know the content of Kage's environment or secrets (security review
 S1). A navigation that fails is a page result too, with a typed `error`
 (`timeout`, `navigation_failed`, `proxy_failed`, `aborted`) and whatever
 was captured until then.
+
+A browser shows a page of its own in place of an error answer with an
+empty body (an empty `403`, as a provider's proxy refuses a plain
+`http://` target it will not carry, or as a site may answer). Chrome
+fails the load at once (`ERR_HTTP_RESPONSE_CODE_FAILURE`) and its
+`chrome-error://` page names nothing of the answer; Firefox has seen the
+answer, shows `about:neterror?e=httpErrorPage` under the address and never
+fires `load`. The engine ends the navigation as soon as the tab's document
+is the browser's page (it looks at `document.documentURI` once an error
+answer to the document arrived) instead of at `timeout_ms`, and the page
+result is `navigation_failed` with nothing of the browser's page and no
+headers kept; its `status` is the one the browser saw where the error page
+names that very document (Firefox), else `null` (Chrome). A flow's `goto`
+fails its step there the same way. Whose answer it was is unknown, so it is
+nobody's block (§8.3, F189).
 
 Captures must not change what the page experiences. Bodies come from
 network events, never from request interception; the DOM is read in an

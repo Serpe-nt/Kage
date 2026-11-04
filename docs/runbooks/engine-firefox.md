@@ -399,6 +399,16 @@ Paper size and orientation of a PDF are the profile's (A4, portrait,
 backgrounds on): Firefox takes them from preferences, not per print, so
 the request's `format` and `landscape` are not honored on this engine.
 
+An error answer with an empty body (an empty `403`, as a provider's proxy
+refuses a plain `http://` target) is replaced by Firefox's own page,
+`about:neterror?e=httpErrorPage`, under the page's address, and Firefox
+never fires `load` on it. The engine looks at `document.documentURI`
+once an error answer to the document arrived and ends the navigation as
+soon as it is Firefox's page: `navigation_failed` with the `status` Firefox
+saw, nothing of its page kept, at once rather than at `timeout_ms`
+(spec §10.2, F189). Before 2.0.3 such a page was kept as the document and
+judged the site's `forbidden`.
+
 ## Settings
 
 | Variable (compose) | Sidecar variable | Default | Meaning |

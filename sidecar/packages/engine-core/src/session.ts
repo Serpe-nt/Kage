@@ -771,6 +771,15 @@ export function isBrowserErrorPage(url: string): boolean {
 const READ_DOCUMENT_URI = 'document.documentURI';
 
 /**
+ * How often a load whose document was answered with an error status looks
+ * whether the browser shows its own error page in its place (F189).
+ */
+const ERROR_PAGE_LOOK_MS = 100;
+
+/** A load that ended on the browser's own error page in place of an error answer. */
+const SHOWS_ERROR_PAGE = Symbol('shows its own error page');
+
+/**
  * The address an error page of Firefox's names as the one it could not
  * load (`about:neterror?e=...&u=<address>`); `null` for any other page.
  */
@@ -1321,6 +1330,48 @@ export class PageSession {
 
   private read<T>(expression: string): Promise<T> {
     return this.answer(this.page.evaluate<T>(expression));
+  }
+
+  /**
+   * Loads `url` in the open tab and waits as asked, or until the browser
+   * shows its own error page in place of an error answer to the document.
+   * Firefox does so for an error status with an empty body (a proxy's
+   * refusal of a plain `http://` target among them) and never fires
+   * `load` on its page, so the wait would last to its timeout (F189);
+   * Chrome fails the load at once. The look is the document's URI, read
+   * only once an error answer arrived, and never counts against the page
+   * as a read that went unanswered.
+   */
+  private async load(
+    url: string,
+    options: { waitUntil: LoadState; timeout: number },
+  ): Promise<DriverResponse | null | typeof SHOWS_ERROR_PAGE> {
+    const page = this.page;
+    const going = page.goto(url, options);
+    let ended = false;
+    const done = () => {
+      ended = true;
+    };
+    // Read anew at every look: the load ends while the look waits.
+    const settled = (): boolean => ended;
+    going.then(done, done);
+    const watching = async (): Promise<typeof SHOWS_ERROR_PAGE> => {
+      while (!settled()) {
+        await sleep(ERROR_PAGE_LOOK_MS);
+        const status = this.document.response?.status() ?? 0;
+        if (settled() || page !== this.page || status < 400) {
+          continue;
+        }
+        const looked = page.evaluate<string>(READ_DOCUMENT_URI);
+        const uri = await Promise.race([looked, sleep(ERROR_PAGE_LOOK_MS * 5)]).catch(() => null);
+        if (!settled() && typeof uri === 'string' && isBrowserErrorPage(uri)) {
+          return SHOWS_ERROR_PAGE;
+        }
+      }
+      // The load ended by itself: its own outcome is the answer.
+      return new Promise<never>(() => undefined);
+    };
+    return Promise.race([going, watching()]);
   }
 
   // --- the document a flow is on (follow-up F21) --------------------------
@@ -2046,6 +2097,19 @@ export class PageSession {
       seenSentTo !== null && withoutFragment(seenSentTo) !== loadedAt ? seenSentTo : null;
     const errorTarget = errorDocument === null ? null : errorPageTarget(errorDocument);
     const sentTo = refusedTo ?? sentOn ?? errorTarget ?? seenSentTo;
+    // Where the browser showed its own page in place of an error answer to
+    // the very document it names (Firefox, for an error status with an
+    // empty body), the answer's status is what the browser saw, and the
+    // result says so; nothing else of the answer or the page is kept
+    // (F189). Chrome's error page names nothing, and its status stays
+    // unknown.
+    const replacedStatus =
+      seenResponse !== null &&
+      errorTarget !== null &&
+      withoutFragment(errorTarget) === loadedAt &&
+      seenResponse.status() >= 400
+        ? seenResponse.status()
+        : null;
     // A page the browser brought back from before the flow is a document
     // too, though nothing is known of the response it once came with.
     const loaded =
@@ -2125,7 +2189,7 @@ export class PageSession {
     return {
       url,
       final_url: failedThere || refusedTo !== null ? (sentTo ?? url) : loaded ? shown : url,
-      status: response?.status() ?? null,
+      status: response?.status() ?? replacedStatus,
       http_version:
         response === null || unanswering !== null
           ? null
@@ -2152,7 +2216,17 @@ export class PageSession {
       screenshot,
       pdf,
       side_effects: sideEffects,
+      // An error answer the browser replaced with its own page failed
+      // there, however long the wait for it lasted: the timeout of a load
+      // that never fired is no answer of the site's (F189).
       error:
+        (replacedStatus !== null && extra.error?.code !== 'navigation_failed'
+          ? {
+              code: 'navigation_failed' as const,
+              message: `the browser could not load ${sentTo ?? url}: it answered with ${replacedStatus} and shows its own error page`,
+              net_error: null,
+            }
+          : null) ??
         extra.error ??
         (this.unanswering === null
           ? null
@@ -2240,11 +2314,17 @@ export class PageSession {
       }
       if (typed) {
         this.begin(filters);
-        const arrived = await page.goto(request.url, {
+        const arrived = await this.load(request.url, {
           waitUntil: WAIT_UNTIL[request.wait.until],
           timeout: remaining(),
         });
-        if (arrived?.status() === 407) {
+        if (arrived === SHOWS_ERROR_PAGE) {
+          error = {
+            code: 'navigation_failed',
+            message: `the browser could not load ${request.url}: it answered with an error and shows its own error page`,
+            net_error: null,
+          };
+        } else if (arrived?.status() === 407) {
           error = {
             code: 'proxy_failed',
             message: 'the proxy refused the credentials of the persona (407)',
@@ -2433,12 +2513,18 @@ export class PageSession {
         this.failIfNotLoaded();
         this.leave(this.document);
         this.document = newDocument();
+        let arrived: DriverResponse | null | typeof SHOWS_ERROR_PAGE;
         try {
-          await page.goto(url, { waitUntil: 'load', timeout });
+          arrived = await this.load(url, { waitUntil: 'load', timeout });
         } catch (thrown) {
           const error = driver.classifyError(thrown);
           await driver.settleAfterFailure(error);
           throw new Error(`${error.code}: ${error.message}`, { cause: thrown });
+        }
+        if (arrived === SHOWS_ERROR_PAGE) {
+          throw new Error(
+            `navigation_failed: the browser could not load ${url}: it answered with an error and shows its own error page`,
+          );
         }
       },
       back: async (timeout, by) => {
