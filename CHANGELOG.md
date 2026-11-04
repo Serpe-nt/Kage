@@ -6,6 +6,50 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **After a block the retry leaves from another /24 and another
+  autonomous system whoever is ready first** (F168; QA round two's
+  pool-01). Each persona waits its own pause before a retry, at its own
+  pace, and the planner compared only the personas whose pause was over,
+  so the fastest persona took the retry whatever its address: with five
+  proxies in three /24s and four autonomous systems, nine of nine blocked
+  requests went on from the blocked persona's /24, or from its system
+  while personas of others were untried. The rule of spec §8.2 and the
+  score now run over every persona that could take the retry once its
+  pause is over; a tie is drawn from the retry's own seed, and the retry
+  waits for the pause of the one drawn, never longer. A persona that is
+  busy, cooling, at its cap or asleep is not waited for, and the
+  neighbour of the blocked persona takes the retry when nobody else is
+  left; a visitor of the site in the blocked /24 no longer takes it while
+  another can.
+- **A suspected outage of the pool pauses jobs instead of failing them
+  on dead proxies, and `KagePoolUnavailable` fires for it** (F169, F151;
+  QA round two's pool-02). In a pool of four or more the outage guard of
+  spec §7.3 freezes the failure counters while more than half of the
+  pool fails its latest probe, so no proxy reached backoff, every
+  persona stayed ready, and a batch sent during an outage of every proxy
+  was `failed` `proxy_failed` within half a minute, its sync fetch
+  `proxy_failed` with no `retry_at`; the gauge `kage_proxy_state` kept
+  such a pool `healthy` and the alert could not fire. While the guard
+  holds, a proxy whose latest probe failed is now held as one in backoff
+  until a probe of it passes: its persona is not ready, a job is
+  `paused` with `no_persona` and resumes by itself (F107), a synchronous
+  fetch is answered `no_persona` with `retry_at`, the proxies whose probe
+  passed go on carrying, and the gauge counts the held proxies as
+  `backoff`, republished after every probe while the guard holds or is
+  lifted.
+- **A flow's later site keeps to its `domain_concurrency` while another
+  persona visits it** (F188; QA round two's left-01). F101's hold on a
+  flow's later site counted pages in flight, not visits, so while
+  another persona's visit of a site with one seat was open, a flow's
+  `goto` read it from a second address at once (a batch item of the same
+  site waited, as it should). A persona that is not visiting such a site
+  now waits for a seat as a page of the site does, until enough of the
+  other visits are over; a visitor of the site may take the flow at
+  once, and a synchronous flow goes past the seats only for a visitor's
+  break that does not end within `visitor_wait`.
+
 ## [2.0.2] - 2026-11-04
 
 ### Added

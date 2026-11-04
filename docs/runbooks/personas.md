@@ -209,6 +209,23 @@ that turns over at midnight of its own time zone, and a count of blocks in
 24 hours (`kage persona show <id>`). The scheduler that reads them arrives
 with M7.
 
+After a block the request is retried by another persona, after a pause at
+that persona's own pace, and never from the blocked persona's /24 while
+another persona could take it; one in the blocked persona's autonomous
+system comes after the others. Who takes it is chosen among every persona
+that could, those still in their pause included, and the retry waits for
+the pause of the one chosen (F168): with a pool spread over few /24s,
+expect a retry to leave a few seconds later than the shortest pause, from
+another network. When only the blocked persona's /24 is left (the others
+cool, sleep or are busy), its neighbour takes it.
+
+A persona is not ready while its proxy cannot carry traffic: in backoff,
+being replaced, or, in a pool of four or more under a suspected outage
+(`pool_outage_suspected`), while its proxy's latest probe failed (F169,
+[proxies.md](proxies.md)): the scheduler passes it over and jobs wait with
+`no_persona` until the proxy answers a probe. `kage persona list` shows the
+persona's own readiness (active and warmed up), not its proxy's.
+
 ## The live check
 
 `tests/live/personas.sh` is part of the gated live suite but not of the

@@ -676,8 +676,17 @@ when an operator runs `kage proxy egress --clear`.
 
 Pool-wide outage guard: while more than half of a live pool of 4 or more
 fails its latest probe, failures are recorded but advance no counter, and
-`pool_outage_suspected` fires. `pool_capacity_low` fires when a quarter or
-more of such a pool is in `backoff` or `replacing`.
+`pool_outage_suspected` fires. The freeze keeps a failing proxy `healthy`
+or `degraded` by state, but it carries nothing: while the guard holds, a
+proxy whose latest probe failed is held as one in `backoff`, until a probe
+of it passes (F169). Its persona is not ready, so a job waits the outage
+out (`paused`, `no_persona`) and a synchronous fetch is answered
+`no_persona` with `retry_at` (§8.2, F107), instead of spending its
+attempts on dead proxies; and `kage_proxy_state` counts it as `backoff`,
+so `KagePoolUnavailable` fires for a pool that died whole (F151). The
+proxies whose latest probe passed carry as before; when the guard lifts,
+the counters of those still failing move again. `pool_capacity_low` fires
+when a quarter or more of such a pool is in `backoff` or `replacing`.
 
 Replacement: budget `proxies.replacements_per_month` (default 5) counts
 requests in the current budget window (the provider's subscription term
@@ -829,7 +838,8 @@ every visitor that could take it is on a break that does not end within
 `scheduler.visitor_wait`. A visitor in its gap or on a page is waited
 for, however many synchronous requests wait for it (F106). Work that
 nobody could take because no persona that may take it is ready now (every
-proxy in backoff, a persona cooling or not warmed up) is refused
+proxy in backoff or held by a suspected outage of the pool, §7.3, F169; a
+persona cooling or not warmed up) is refused
 `no_persona` with `retry_at` a minute on, and a job waits it out (F107);
 work no persona could ever take is refused without one. A persona whose
 attempt failed at its proxy leaves its visit and, for 5 minutes or until
@@ -842,7 +852,17 @@ Score = country preference match (+3) + no visit to this domain in the last
 hour (+2) + low load (+1) + previous `ok` on this domain (+1); an awake
 persona is always taken before a sleeping one (`active_hours: prefer`);
 after a block, never the blocked persona's /24 while another is eligible
-and minus 2 for its ASN. Ties seeded.
+and minus 2 for its ASN. Ties seeded. After a block the rule and the score
+run over every eligible persona that could take the retry once its pause
+of §8.3 is over, not only over the one whose pause ended first: each
+persona's pause is its own, at its own pace, and the first one ready used
+to be taken whatever its address (F168). A tie among the best is drawn
+from the retry's own seed, and the planner waits for the pause of the one
+drawn (at least 2 s, median 6 s, p95 20 s, scaled by that persona's pace)
+and no longer: a persona in the middle of an attempt, cooling, at its
+cap or asleep is not waited for, and when only the blocked persona's /24
+is left its neighbour takes the retry. A visitor of the domain in the blocked /24
+does not take the retry while another can.
 
 ### 8.3 Retry policy
 
@@ -1482,7 +1502,13 @@ flow begins (`robots_denied` with that address's verdict, and nothing of
 the flow is asked for), and in the scheduler its breaker (an open one
 refuses the flow, a half-open one takes it as its one trial), its pause
 after server errors, its `domain_concurrency` and `domain_rpm`, its hours
-and the persona's cooldown, daily cap and gap there; the flow's persona is
+and the persona's cooldown, daily cap and gap there. `domain_concurrency`
+counts visits there as §11 does, not only pages in flight (F188): while as
+many other personas visit the site as it allows, a persona that is not
+one of them waits for a visit to end, as a page of the site would, and a
+visitor of the site may take the flow at once; a synchronous flow goes
+past the seats only for a visitor's break that does not end within
+`scheduler.visitor_wait`. The flow's persona is
 one every site's engines and countries allow and the scout of none of
 them, and the flow counts as a page of the persona on every site it goes
 to. A `human: false` step is refused (`driver_input_denied`) unless the
@@ -1619,7 +1645,9 @@ domain's work for `visit_bursts` bursts (default 2 to 5), then leaves for
 `visit_break_ms` (log-normal, median 25 min, p95 90 min, in place of the
 last burst break). Other personas join only while fewer than
 `domain_concurrency` are visiting, so a site sees a few households
-reading, not twenty addresses taking turns. A sync request never waits for
+reading, not twenty addresses taking turns; a flow that goes on to the
+site counts as one more visitor there and waits for a seat as a page of
+the site does (§10.5, F188). A sync request never waits for
 a visitor's break: when every visitor is on a break that does not end
 within `scheduler.visitor_wait`, another persona starts a visit, past
 `domain_concurrency`; a visitor in its gap or on a page is waited for,
@@ -2972,7 +3000,9 @@ are gzip-compressed on disk.
   the state its last probe left it in: one whose backoff ran out and that
   waits for the probe that decides it counts as `backoff` until a probe
   passes, so an outage of the pool reads as no usable proxy through every
-  expiry (F111).
+  expiry (F111); and while the outage guard of §7.3 holds, one whose latest
+  probe failed counts as `backoff` though its counters are frozen, so a
+  pool of four or more that died whole reads the same (F151).
 - Traces: OTLP over HTTP with protobuf from both processes, to the
   collector `telemetry.otlp_endpoint` names (Kage, through wreq, never
   through a proxy) and `SIDECAR_OTLP_ENDPOINT` (a sidecar); without one
