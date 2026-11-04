@@ -11,10 +11,15 @@
 //     GET /__stats (asked directly, not as a proxy) returns the counts.
 //
 //   node world.mjs echo --port 8089 [--places 'name|CC|City|Zone|lat,lon;...']
+//                                   [--exits 'name=exit|ASN;...']
 //     What the proxy health probe asks: /ip answers with the address the
 //     request came from, /geo places that address: where --places puts
 //     the address a name resolves to (a proxy of this world), else in
-//     Berlin.
+//     Berlin. With --exits a proxy of this world is seen from the exit
+//     address given for its name, in the autonomous system given (/ip and
+//     the geo's ip and org), so that the /24 and ASN rules of spec §8.2 can
+//     be observed in a world where every container shares one subnet; an
+//     address of no name there keeps its own, in AS64500.
 //
 //   node world.mjs hooks --port 8090 --secret S --fail-first N
 //     A receiver of a job's webhooks (spec §16.6), as an operator would
@@ -45,6 +50,27 @@ if (role === 'echo') {
       const [name, country, city, timezone, loc] = spec.split('|');
       return { name, country, city, timezone, loc };
     });
+  const exits = option('exits', '')
+    .split(';')
+    .filter(Boolean)
+    .map((spec) => {
+      const [name, rest] = spec.split('=');
+      const [exit, asn] = (rest ?? '').split('|');
+      return { name, exit, asn: asn || 'AS64500' };
+    });
+  // The exit a name of --exits declares for an address, looked up at the
+  // time of asking, else the address itself.
+  const exitOf = async (ip) => {
+    for (const entry of exits) {
+      try {
+        const { address } = await dns.promises.lookup(entry.name, { family: 4 });
+        if (address === ip) return entry;
+      } catch {
+        // Not up yet, or stopped: not this one.
+      }
+    }
+    return { exit: ip, asn: 'AS64500' };
+  };
   // Where an address is: the place of the name it is, looked up at the
   // time of asking (the proxies may start after the echo), else Berlin.
   const placeOf = async (ip) => {
@@ -62,24 +88,25 @@ if (role === 'echo') {
     .createServer(async (req, res) => {
       const ip = remote(req.socket);
       const path = new URL(req.url ?? '/', 'http://echo.invalid').pathname;
+      const seen = await exitOf(ip);
       if (path === '/geo') {
         const place = await placeOf(ip);
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(
           JSON.stringify({
-            ip,
+            ip: seen.exit,
             city: place.city,
             region: place.city,
             country: place.country,
             loc: place.loc,
-            org: 'AS64500 Example Broadband',
+            org: `${seen.asn} Example Broadband`,
             timezone: place.timezone,
           }),
         );
         return;
       }
       res.writeHead(200, { 'content-type': 'text/plain' });
-      res.end(`${ip}\n`);
+      res.end(`${seen.exit}\n`);
     })
     .listen(port, '0.0.0.0');
 } else if (role === 'proxy') {
