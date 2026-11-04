@@ -182,7 +182,9 @@ interface Tabs {
  * keeps that address and its document is Firefox's error page (F167). One
  * with `refused=<address>` is answered with a redirect there that the
  * browser refuses to follow and tells only its debugger of, as Chrome does
- * for `file:` (F167). One
+ * for `file:` (F167). One with `ffrefused` in it is answered with an
+ * empty `403` that Firefox replaces with its own error page, and never
+ * loads (F189). One
  * with `stuck` in it loads, and then answers no read again (its script
  * never yields); one with `crash` loads, and then its renderer crashes
  * (F103).
@@ -272,12 +274,29 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
       content: () => reading('<html><body><p>A page</p></body></html>'),
       mainFrame: () => mainFrame,
       frames: () => [mainFrame],
-      goto: (url) => {
+      goto: (url, options) => {
         driven.loaded.push(url);
         documentUri = null;
         unanswered = [];
         if (url.includes('fail')) {
           return Promise.reject(new Error('net::ERR_NAME_NOT_RESOLVED'));
+        }
+        if (url.includes('ffrefused')) {
+          // Firefox: the answer is seen, its own page shown, no `load`.
+          const refusal = answer(url, 403);
+          emit('request', refusal.request());
+          address = url;
+          history.push(url);
+          emit('response', refusal);
+          documentUri = `about:neterror?e=httpErrorPage&u=${encodeURIComponent(url)}&c=UTF-8`;
+          return new Promise((_, reject) =>
+            setTimeout(
+              () => {
+                reject(new Error('Timeout exceeded'));
+              },
+              Math.min(options.timeout, 3000),
+            ),
+          );
         }
         const sent = (key: string) => new URL(url).searchParams.get(key);
         const refused = sent('refused');
@@ -881,6 +900,46 @@ describe('a page the browser could not load (F102)', () => {
     expect(errorPageTarget('about:certerror?e=nssBadCert&u=')).toBeNull();
     expect(errorPageTarget('about:neterror?e=x&u=%E0%A4%A')).toBeNull();
     expect(errorPageTarget(refused)).toBeNull();
+  });
+
+  it('ends where Firefox shows its own page for an error answer, with the status it saw and nothing else (F189)', async () => {
+    const on = session();
+    const refused = site('/ffrefused/x');
+    const started = Date.now();
+    const result = await on.navigate(
+      { url: refused, wait: { until: 'load' }, timeout_ms: 20_000, capture },
+      env,
+    );
+    // At once, not at the timeout.
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(PageResultSchema.parse(result)).toEqual(result);
+    expect(result).toMatchObject({
+      final_url: refused,
+      status: 403,
+      http_version: null,
+      headers: [],
+      title: null,
+      dom_html: null,
+      raw_body: null,
+    });
+    expect(result.error).toMatchObject({ code: 'navigation_failed' });
+    expect(result.error?.message).toContain('answered with an error');
+
+    // A flow's goto fails its step there as well.
+    const events: FlowEvent[] = [];
+    const flowStarted = Date.now();
+    await on.flow({ actions: [{ action: 'goto', url: refused }], capture }, env, (event) =>
+      events.push(event),
+    );
+    expect(Date.now() - flowStarted).toBeLessThan(2_000);
+    const step = events.find((event) => event.type === 'step' && event.action === 'goto');
+    expect(step).toMatchObject({ ok: false });
+    expect(step?.type === 'step' ? step.error : null).toMatch(/^navigation_failed: /);
+
+    // A page whose document moved on to an address that failed has its
+    // own status; only the very document the error page names has one.
+    const moved = await navigate(on, sending('/m', 'ffmoves', 'http://m.test:8091/x'));
+    expect(moved.status).toBeNull();
   });
 
   it('names a redirect the browser refused to follow and told only its debugger of (F167)', async () => {

@@ -396,10 +396,15 @@ impl Verdicts {
             // block is judged by what a page says, so a page of which
             // nothing was read (a file the browser saved, a page that
             // stopped answering, F103) is none: the persona that asked for
-            // it was not turned away.
-            (Some(_), Some(seen))
+            // it was not turned away. Nor is an error answer the browser
+            // replaced with its own page (F189): its status is all that is
+            // known of it, and an empty error answer over plain http may be
+            // the proxy's as well as the site's, so it is nobody's block.
+            (Some(failure), Some(seen))
                 if seen.outcome.is_block()
-                    && !(seen.outcome == Outcome::SoftBlock && read_nothing(page)) =>
+                    && !(read_nothing(page)
+                        && (seen.outcome == Outcome::SoftBlock
+                            || failure.reason == "navigation_failed")) =>
             {
                 seen
             }

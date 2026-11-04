@@ -876,9 +876,12 @@ async fn a_proxy_that_refuses_or_is_gone_is_a_failed_connection() {
         ..settings()
     })
     .await;
+    let began = tokio::time::Instant::now();
+    let meter = Arc::clone(rig.forwarder.meter());
 
     // The provider does not know the credentials Kage holds: its answer
-    // reaches the client as it came, and no tunnel exists.
+    // reaches the client as it came, and no tunnel exists. That is the
+    // proxy's own failure (F108).
     rig.table
         .set(id(1), Ok(rig.provider.endpoint_with("stale", "stale")));
     let (mut client, head) = rig.tunnel(id(1), "shop.kage.test:443").await;
@@ -888,10 +891,38 @@ async fn a_proxy_that_refuses_or_is_gone_is_a_failed_connection() {
     );
     assert!(head.contains("realm=\"provider\""), "{head}");
     assert_eq!(client.rest().await, "");
+    let stale = [("shop.kage.test", 443)];
+    assert!(meter.unrelayed_since(Caller::Persona(id(1)), stale, began));
+    assert_eq!(
+        meter.refused_since(Caller::Persona(id(1)), stale, began),
+        None
+    );
 
-    // The provider cannot reach the target.
-    let (_client, head) = rig.tunnel(id(0), "nowhere.kage.test:443").await;
+    // The provider cannot reach the target: its answer reaches the client
+    // as it came, and it is neither the proxy's failure nor a refusal of
+    // the target (F108).
+    let (mut client, head) = rig.tunnel(id(0), "nowhere.kage.test:443").await;
     assert!(head.starts_with("HTTP/1.1 502 "), "{head}");
+    assert_eq!(client.rest().await, "");
+    let nowhere = [("nowhere.kage.test", 443)];
+    assert_eq!(
+        meter.refused_since(Caller::Persona(id(0)), nowhere, began),
+        None
+    );
+    assert!(!meter.unrelayed_since(Caller::Persona(id(0)), nowhere, began));
+
+    // The provider will not carry the target: its refusal reaches the
+    // client as it came, and is noted as the proxy's refusal of the
+    // target, not as its failure (F189).
+    let (mut client, head) = rig.tunnel(id(0), "refused.kage.test:443").await;
+    assert!(head.starts_with("HTTP/1.1 403 "), "{head}");
+    assert_eq!(client.rest().await, "");
+    let refused = [("refused.kage.test", 443)];
+    assert_eq!(
+        meter.refused_since(Caller::Persona(id(0)), refused, began),
+        Some(403)
+    );
+    assert!(!meter.unrelayed_since(Caller::Persona(id(0)), refused, began));
 
     // Nothing listens where the proxy should be.
     let gone = TcpListener::bind("127.0.0.1:0").await.unwrap();

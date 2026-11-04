@@ -374,6 +374,15 @@ named in the result's `side_effects`:
 | screenshot `full_page: true` | the page is laid out at its full height once | a `resize` |
 | PDF | the print pipeline | `beforeprint`, `afterprint` |
 
+An error answer with an empty body (an empty `403`, as a provider's proxy
+refuses a plain `http://` target) fails the load at once
+(`ERR_HTTP_RESPONSE_CODE_FAILURE`) and Chrome shows its `chrome-error://`
+page, which names nothing of the answer: `navigation_failed`, `status:
+null`, nothing kept, nobody's block (spec §10.2, F189; Firefox reports the
+status it saw). A `CONNECT` the proxy refuses is `ERR_TUNNEL_CONNECTION_FAILED`,
+which Kage reports as the proxy's refusal (`proxy_refused`) when the
+forwarder saw it.
+
 ### Reading a page without touching it
 
 The driver marks every evaluation of a page as a user gesture:

@@ -996,6 +996,32 @@ export function defineParitySuite(subject: ParitySubject): void {
       });
     });
 
+    it('ends at the browser’s own page for an empty error answer, keeps none of it, and says what status it saw where it saw one (F189)', async () => {
+      await withContext('replaced', async (context) => {
+        // The bytes a provider's proxy answers a plain request for a
+        // target it will not carry with: Firefox shows its own page and
+        // never fires `load`, Chrome fails the load. Neither waits for
+        // the timeout, and nothing of the browser's page is the site's.
+        const started = Date.now();
+        const replaced = await go(context, named('/status/empty-403'), {
+          capture: DOM,
+          timeout_ms: 20_000,
+        });
+        expect(Date.now() - started).toBeLessThan(8_000);
+        expect(replaced).toMatchObject({
+          final_url: named('/status/empty-403'),
+          headers: [],
+          title: null,
+          dom_html: null,
+          raw_body: null,
+        });
+        expect(replaced.error?.code).toBe('navigation_failed');
+        // Firefox saw the answer before it replaced it; Chrome's page
+        // names nothing of it.
+        expect(replaced.status).toBe(subject.name === 'firefox' ? 403 : null);
+      });
+    });
+
     it('reports failures as what they are and keeps what it has', async () => {
       await withContext('failures', async (context) => {
         const slow = await go(context, named('/slow?ms=4000'), { timeout_ms: 1000 });

@@ -123,6 +123,23 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `verdict`, and the command exits non-zero. The hint for a missing echo
   no longer names an `--echo` that `kage persona selftest` does not have
   (spec §7.4).
+- **A proxy's refusal of a target is never the site's `forbidden`
+  (F189).** On Firefox a proxy that refused a plain `http://` target with
+  an empty `403` made the attempt the site's `forbidden`, with Firefox's
+  own error page as `dom_html`, after the whole `timeout_ms`; the persona
+  cooled 15 minutes and the breaker counted a block the site never gave
+  (QA round two, left-02). Chrome said `navigation_failed`. Both engines
+  now end such a navigation as soon as the browser shows its own page,
+  keep nothing of it, and report `navigation_failed` with the status the
+  browser saw (Firefox) or none (Chrome): an empty error answer over plain
+  http may be the proxy's as well as the site's, so it is nobody's block
+  (spec §10.2). A tunnel the proxy refuses with a `4xx` other than `407`
+  (a provider's `403` to the `CONNECT`), which both engines reported as a
+  failed proxy, now ends `provider_error` with the new reason
+  `proxy_refused`, not retried: nothing against the site and nothing
+  against the proxy (no setting aside, no probe), and the forwarder logs
+  the refusal at `info` with the proxy and the target's host (spec §8.3).
+  A `5xx` to the tunnel stays the target's failed connection.
 
 ## [2.0.2] - 2026-11-04
 

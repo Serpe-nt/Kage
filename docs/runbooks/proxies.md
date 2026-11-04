@@ -71,6 +71,29 @@ what it offers (`ProxyProvider::capabilities`, spec §7.1):
 Another vendor's API (replacement, account) is a provider module of its own:
 `CONTRIBUTING.md`, "Adding a proxy provider".
 
+### A provider that refuses a target
+
+Providers keep blocklists of their own, and a proxy may refuse to carry a
+target: a `4xx` other than `407` to the `CONNECT` (mostly `403`). That is
+not a failure of the proxy: an attempt whose own page was refused so ends
+`provider_error` with the reason `proxy_refused` and is not tried again
+(every proxy of the provider refuses alike), and nothing is counted
+against the proxy (no
+setting aside of its persona, no report to the pool, no probe) or against
+the site (no cooldown, no breaker, no pause) (spec §8.3, F189). The
+forwarder logs each refusal at `info`:
+
+    the proxy refused a tunnel to the target  proxy=<id> host=<target host> port=443 status=403
+
+Many such lines for one target and every proxy of a provider are its
+blocklist at work; another provider, or level 0 from a plain exit of
+another, is the way to that site. A `5xx` to the `CONNECT` (`502`, `503`,
+`504`) is no refusal: the exit could not reach the target, or the proxy
+is overloaded now; the attempt is the target's failed connection, tried
+again by another persona within `max_retries`, nothing booked. A plain `http://` target refused the same
+way gives an empty error answer that Kage cannot tell from the site's
+(`navigation_failed`, nobody's block; [fetching.md](fetching.md)).
+
 ## Webshare
 
 1. Create an API key in the Webshare dashboard and set

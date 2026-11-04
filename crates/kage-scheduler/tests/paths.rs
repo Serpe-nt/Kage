@@ -1329,3 +1329,55 @@ async fn a_page_that_stopped_answering_is_its_failure_and_no_empty_page() {
     assert_eq!(facts.breaker, None);
     lab.shut_down().await;
 }
+
+/// QA round two's left-02 (F189): a plain `http://` page whose answer was
+/// an empty `403`, which Firefox replaced with its own error page. Kage
+/// cannot tell the proxy's refusal from the site's, so it is nobody's
+/// block: the status the browser saw is reported, nothing of the page is
+/// kept, no persona cools and the breaker counts nothing.
+#[tokio::test]
+async fn an_error_answer_the_browser_replaced_with_its_own_page_is_nobodys_block() {
+    let mut lab = Lab::start(1, 189, FAST).await;
+    let replaced = |status: u16| {
+        json!({
+            "status": status,
+            "title": null,
+            "dom_html": null,
+            "raw_body": null,
+            "headers": [],
+            "error": {
+                "code": "navigation_failed",
+                "message": format!("the browser could not load http://{SITE}/refused: it answered with {status} and shows its own error page"),
+                "net_error": null,
+            },
+        })
+    };
+    lab.chromium.with(|sidecar| {
+        sidecar.next_pages.push_back(replaced(403));
+    });
+
+    let report = lab
+        .pipeline
+        .fetch(FetchOrder {
+            max_retries: Some(0),
+            ..get("/refused")
+        })
+        .await
+        .unwrap();
+
+    let first = &report.attempts[0];
+    assert_eq!(first.outcome, Outcome::ProviderError, "{report:?}");
+    assert_eq!(first.reason.as_deref(), Some("navigation_failed"));
+    assert_eq!(first.status, Some(403));
+    assert_eq!(first.block, None);
+    assert_eq!(report.outcome, Outcome::ProviderError);
+    assert_eq!(report.last.as_ref().and_then(|last| last.status), Some(403));
+    assert_eq!(report.block, None);
+    let facts = lab.backend.facts(SITE).await.unwrap();
+    assert_eq!(
+        facts.states[&first.persona_id.unwrap()].cooldown_until,
+        None
+    );
+    assert_eq!(facts.breaker, None);
+    lab.shut_down().await;
+}

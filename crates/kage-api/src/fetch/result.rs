@@ -214,9 +214,11 @@ pub(crate) struct AttemptView {
     #[schema(required = true)]
     pub(crate) exit: Option<ExitField>,
     /// Why it ended as it did when the site did not say, for example
-    /// `proxy_failed`, or `hop_exit_unavailable` (a level-0 redirect to
-    /// another site whose own plain exit could not carry traffic: the hop
-    /// was not asked for).
+    /// `proxy_failed`, `proxy_refused` (the persona's proxy refused the
+    /// tunnel to the target, as a provider that will not carry a site
+    /// does: neither the site's answer nor a failure of the proxy), or
+    /// `hop_exit_unavailable` (a level-0 redirect to another site whose
+    /// own plain exit could not carry traffic: the hop was not asked for).
     #[schema(required = true)]
     pub(crate) reason: Option<String>,
     /// The seed its behavior and pauses were drawn from. Admin keys only.
@@ -440,7 +442,10 @@ pub(crate) struct FetchResult {
     pub(crate) outcome: OutcomeField,
     /// Why it ended without the site's verdict, as a stable name:
     /// `no_persona`, `domain_paused`, `egress_unsafe`,
-    /// `bandwidth_exhausted`, `proxy_failed`, `timeout`, `interrupted`
+    /// `bandwidth_exhausted`, `proxy_failed`, `proxy_refused` (the
+    /// persona's proxy refused the tunnel to the target: nothing was
+    /// asked of the site, and the proxy is not set aside for it),
+    /// `timeout`, `interrupted`
     /// (the server stopped while the page was being read),
     /// `hop_exit_unavailable` (a level-0 redirect to another site whose own
     /// plain exit could not carry traffic now: the hop was not asked for,
