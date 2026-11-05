@@ -190,6 +190,107 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a page that scrolls no further either way the hand goes to the part of
   an element that shows when at least half of it does. A miss logs where
   the element was and what the last flicks did.
+- **A NUL character in a request is refused naming the member, never
+  `500 internal` with the body in Postgres' log** (F112; QA round one's
+  api-02, secrecy-10). Every body is checked as a document before it is
+  read as a type: a NUL in a string or a name is `422 validation_failed`
+  with the member as `field` (`url`, `actions[1].text`, `urls[1]`), on
+  `POST /v1/fetch`, `/v1/jobs`, `/v1/sessions`, `/v1/admin/keys` and the
+  rest; nothing reaches the store, so nothing of it reaches a log.
+- **The self-test of a persona reads its body as every other endpoint
+  does** (F113; api-03): `POST /v1/admin/personas/{id}/selftest` answers a
+  body that does not come with `408`, a body too large with `413
+  payload_too_large` as a problem, a body of another media type with
+  `415`, and one that is not JSON with `400`. No body at all is still the
+  default test.
+- **The OpenAPI document names every status an operation answers**
+  (F114; api-05, docs-02): `401`, `403`, `429` and `500` on every
+  operation that takes a key, `400`, `408`, `415` and `422` where a body
+  is taken, `413`, `414` and `431` everywhere, as shared responses
+  (`#/components/responses/...`) that an operation's own description of a
+  status overrides. `GET /v1/artifacts/{id}` answers `*/*` with a binary
+  string, so a generated client reads bytes instead of failing on JSON;
+  the TypeScript client was generated again.
+- **A refusal while a body is read is `422` and names its member, its
+  step and its item** (F115; api-06, api-07, jobs-08): a null or a number
+  for an enumerated member (`robots`, `request_kind`, `wait.until`,
+  `screenshot.format`) is no longer `400` "Failed to parse the request
+  body as JSON"; `field` is the path as written (`items[1].timeout_ms`,
+  `defaults.timeout_ms`, `webhook.url`, `actions[2].selector`), with
+  `step` for a flow's step and `item` for a batch's item.
+- **An operator's key reads and cancels any key's job, on the audit
+  trail** (F117; auth-02, decided by the planner): a key with `admin`
+  beside `jobs` reads and cancels another key's job as an operator's
+  power, and each such read and every cancel, the owner's own included,
+  writes an audit event (`job.show`, `job.items`, `job.cancel`) with the
+  caller's key and the job's as `owner_key`. A key without `admin` still
+  reads `404 job_not_found`. Spec §16.3 says so.
+- **`/readyz` answers `503 stopping` for as long as the server stops**
+  (F121; jobs-04, api-16): the listener stayed open only until the signal,
+  so for the whole wind-down every request, a load balancer's included,
+  met a reset connection. It now stays open while the pages that are
+  being read are waited for and the requests with a key in flight end (at
+  most `server.shutdown_grace` from the signal), and closes after.
+- **The `method` label of the API's metrics is bounded** (F131;
+  secrecy-04): a method HTTP defines, or `other`; a client without a key
+  could add a series for every method it made up, 4 kB labels included.
+- **Every nested configuration key can be set alone** (F132; cli-01):
+  `KAGE__PERSONAS__WARMUP__VISITS__MIN=2`, or the same member alone in
+  `kage.yaml`, was `missing field max` for twenty keys of that shape; the
+  defaults are now the first layer of the configuration.
+- **A password in a URL is refused or never shown, on every road**
+  (F133; cli-03, cli-06, cli-08): `kage fetch` refuses a URL with
+  credentials before anything is stored (it was kept in `requests`, the
+  audit trail and the error line); the sidecars' URLs, a self-test page
+  and a CORS origin refuse credentials at load without repeating them; a
+  parameter of `database.url` the driver does not read is refused at load,
+  naming the parameter and never its value, which the driver logged.
+- **The API's small conformance items** (F134; api-09 to api-15,
+  auth-01): an answer from the cache says `created_at` as a read of it
+  later does; a path parameter that cannot be read (`%ff`) is `400
+  invalid_request` as a problem; a head over `server.max_headers` or
+  `server.max_header_bytes` is `431 headers_too_large` (a new code) as a
+  problem with its request id, and a target over `server.max_uri_bytes`
+  `414`, up to twice the limits, past which the HTTP layer answers alone
+  (documented); a `Content-Length` over `server.max_body_bytes` is `413`
+  on every endpoint, one that takes no body included; a member given twice
+  is refused in a job as in a fetch; a `+json` media type is `415`; a
+  `daily_page_budget` over 100 000 is `422`, not `500`, at the API and at
+  `kage key create`.
+- **The audit trail's gaps** (F135; auth-04, auth-06): a refusal at
+  `/metrics` and `/docs` for a missing `admin` scope is on the trail
+  (`admin.metrics.read`, `admin.docs.read`, `denied`), and a command of
+  the CLI whose audit event cannot be written shows what it did and then
+  ends non-zero, saying so.
+- **What the loaders take and cannot mean is refused** (F136; auth-05,
+  cli-12, extract-11, policy-06): a wildcard in
+  `server.cors_allowed_origins` or in `egress.direct.private_names` (it
+  matched nothing); a policy's `cache.max_ttl` or `cache.ttl` longer than
+  the configuration's `cache.max_ttl`, at start, at a reload and in
+  `kage config check`; and `GET /v1/policies/domains/{domain}` for a
+  wildcard, an empty label or a label over 63 characters (`422`). The
+  preview shows the cache lifetimes that hold.
+- **The CLI and compose edges** (F137; cli-04, cli-05, cli-07, cli-09,
+  cli-10, cli-11, cli-13): a list file named relative to `deploy/` without
+  `./` (`KAGE_STATIC_LIST_FILE=list.txt`) is mounted as the documents say,
+  where compose took it for the name of a volume and refused the project
+  (the compose file mounts it in the long form); `scripts/dev-secrets.sh` no longer glues a
+  new key onto a last line without its newline; `config check` refuses
+  the values that made `serve` panic or run out of memory
+  (`personas.retention_days`, `personas.archive_after`,
+  `proxies.health.interval`, `database.max_connections`), and the archive
+  sweep no longer panics on an overflowing date; `egress.direct.engines`
+  outside `personas.mix` is refused; `kage fetch --output` is checked
+  before a site is asked and the result is shown before the file is
+  written; `--timeout` keeps the API's bounds; `null` from the
+  environment switches an optional key off as in the file.
+- **The items of a job show the result of an item that ended without its
+  page** (F155), as `GET /v1/results/{id}` has since F109: `provider_error`
+  with what ended it, where the list said `null`.
+- **The doc comment of `GET /v1/results/{id}` says what is kept with a
+  result** (F158): `pacing`, `behavior`, `console` and `side_effects` are
+  stored with the result since F36 and read back, as spec §16.5 says; the
+  comment that called them null was out of date.
 
 ## [2.0.2] - 2026-11-04
 

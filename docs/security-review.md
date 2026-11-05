@@ -87,6 +87,13 @@ ten secrets of the run and found none (`tests/e2e/observability.sh`, the
 redaction audit: 2121 lines, 10 secrets, no finding). The `Secret` type
 zeroes its memory on drop; the 32 bytes of the master key are copied into plain arrays where the
 cipher and the token key are made, and those copies are not zeroed (S5).
+Two roads past the redaction were closed after QA round one: a request
+body or a flow's text with a NUL character is refused at the API before
+anything is stored (F112; Postgres had logged the value in clear while it
+refused it), and a parameter of `database.url` the driver does not read is
+refused at load, naming the parameter only (F133; the driver logged its
+value). A URL with credentials is refused by `kage fetch` before it is
+stored, as by the API.
 
 ## The API's limits
 
@@ -102,7 +109,10 @@ endpoints need `admin` and every admin call is in the audit log. The API
 listens on loopback; beyond it the connection is plain HTTP and needs a
 TLS-terminating proxy in front (the server warns at start). CORS is off
 until origins are named. Every error is a problem document with a stable
-code.
+code; the one exception is a head the HTTP layer cuts off before the API
+sees it (twice the limits or more, or no HTTP at all), which gets an empty
+`431` or `400`. Every metric label of the API is bounded: the route is the
+pattern, the method one HTTP defines or `other` (F131).
 
 ## The forwarder
 

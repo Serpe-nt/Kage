@@ -271,7 +271,8 @@ seen by the sites it reads. Under `direct`:
   connection, so a name you forgot to list shows as what it is. A name
   that does not resolve at all is a failed connection (`provider_error`).
 - **`egress.direct.private_names`** lists exact host names (no scheme, no
-  port, no path; at most 64) that may resolve to a private or loopback
+  port, no path, no wildcard: `*.home.arpa` would match nothing and is
+  refused; at most 64) that may resolve to a private or loopback
   address: the operator's own network. `kage config check` warns while
   the list is not empty. List only what you run yourself.
 - **No leak check and no provider budget.** There is no proxy to leak

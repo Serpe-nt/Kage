@@ -2216,15 +2216,32 @@ minute like any call.
 
 ### 16.1 Conventions
 
-- Base path `/v1`. JSON only: a body is `application/json` or the request
-  is `415 unsupported_media_type`. A field the API does not know is an
-  error (`422 validation_failed`), never ignored.
+- Base path `/v1`. JSON only: a body is `application/json` (a parameter
+  such as `charset` aside; a `+json` type is another type) or the request
+  is `415 unsupported_media_type`. A body that is no well-formed JSON is
+  `400 invalid_request`. A field the API does not know is an error
+  (`422 validation_failed`), never ignored; so are a member given twice
+  and a NUL character in a string or a name, which can be neither kept
+  nor sent, and a value of the wrong type, a null where a value is needed
+  and a name outside an enumeration included. Every such refusal names
+  the member as `field` (`actions[2].selector`, `items[1].timeout_ms`,
+  `defaults.level`), with `step` for a flow's step and `item` for a
+  batch's item (F112, F115, F134). Every endpoint reads a body by these
+  rules, `POST /v1/admin/personas/{id}/selftest` included (F113).
 - Errors follow RFC 9457 problem details (`application/problem+json`) with
   a stable `code`, the request's id as `request_id`, and what a client
   needs to act as further members (`field`, `header`, `retry_after_s`,
   `constraint`). A problem never carries an address, a persona's id or a
   sidecar's words. The codes are the `ErrorCode` enumeration of the OpenAPI
-  document.
+  document, and every operation of the document names every status it
+  answers: its own, and those of the layers around it (`401`, `403`,
+  `429`, `500` where a key is taken; `400`, `408`, `415`, `422` where a
+  body is; `413`, `414`, `431` everywhere; F114). A path parameter that
+  cannot be read (an escape that is no UTF-8, `%ff`) is `400
+  invalid_request`. The one exception is what the HTTP layer answers
+  before the API sees a request: a head that is no HTTP (`400`) and a head
+  beyond twice the limits of §19 (`431`) get an empty answer without
+  `X-Request-Id`, and the connection is closed (F134).
 - A fetch that was made answers `200` whatever the site did: a block is
   the result's `outcome`, not an HTTP error. Only a request that cannot be
   made as asked, or that the API cannot serve, is a problem.
@@ -2238,7 +2255,12 @@ minute like any call.
 - Liveness `/healthz` (no dependency), readiness `/readyz` (the database
   answers, at least one persona is ready behind a usable proxy, at least
   one sidecar answers; `503` with the three checks otherwise, and from the
-  moment the server is told to stop), both without a key. Metrics
+  moment the server is told to stop: the listener stays open and answers,
+  `status: "stopping"`, while the pages that are being read are waited
+  for (`jobs.wind_down`) and the requests in flight end (at most
+  `server.shutdown_grace` from the signal); then it closes, and what is
+  still open gets `server.shutdown_grace` once more (F121)), both without
+  a key. Metrics
   `/metrics` needs the admin scope on the API; `server.metrics_bind` opens
   a second listener that serves `/metrics` and `/healthz` without a key,
   for a Prometheus on the same private network.
@@ -2276,9 +2298,14 @@ Keys are made, listed, disabled and rotated through the admin endpoints or
 `kage key create|list|revoke|rotate`, which works on the store and needs no
 running server: the first admin key of a deployment is made there. Every
 admin call through the API, whatever came of it (a refusal for a missing
-scope included), and every change at the command line is written to
-`audit_events` with the key, the action (`admin.persona.retire`,
-`key.create`), its target and its outcome; never a token or a hash.
+scope included, at `/metrics` and `/docs` too: `admin.metrics.read`,
+`admin.docs.read`, F135), and every change at the command line is written
+to `audit_events` with the key, the action (`admin.persona.retire`,
+`key.create`), its target and its outcome; never a token or a hash. A
+command whose event cannot be written shows what it did and ends
+non-zero, saying so (F135). So is every cancel of a job and every read
+of another key's job (`job.cancel`, `job.show`, `job.items`, with the
+job's key as `owner_key`; F117).
 
 ### 16.3 Endpoints
 
@@ -2286,14 +2313,14 @@ scope included), and every change at the command line is written to
 |---|---|---|
 | `POST /v1/fetch` | fetch | Synchronous fetch. One that outlasts `scheduler.sync_wall_time` (180 s) is carried on as a job (§8.4) and is answered `202` with the request's id, the job's id (`job_id`), `Location` and `Retry-After`; its result is stored when it ends |
 | `POST /v1/jobs` | jobs / crawl | Create a `batch` or a `flow` job (`crawl` with M10): `201` with the job, `200` with `Idempotency-Replayed: true` for the job an `Idempotency-Key` made before, `409 idempotency_key_reused` for another request under that key. A job is accepted whole or refused whole (§16.6) |
-| `GET /v1/jobs/{id}` | jobs | State, counters, why and until when it is paused, its deadline, and the delivery log of its webhook. A key reads the jobs it made; another key's is `404 job_not_found` |
-| `GET /v1/jobs/{id}/items?cursor=&limit=&results=` | jobs | The items in the job's order, 50 a page unless said and at most 200, each with its stored result as `GET /v1/results/{id}` shows it without the document and the body (which are artifacts); `results=false` leaves the results out |
-| `POST /v1/jobs/{id}/cancel` | jobs | Cooperative cancel: what waits is cancelled at once (a job queued behind `jobs.max_running`, a paused one, a fetch carried on as a job), a page that is being fetched is finished, so at most one more item per visitor ends. A job that has ended is answered as it ended |
+| `GET /v1/jobs/{id}` | jobs | State, counters, why and until when it is paused, its deadline, and the delivery log of its webhook. A key reads the jobs it made; another key's is `404 job_not_found`, but for a key with the `admin` scope beside `jobs`: an operator reads and cancels any key's job, and every read or cancel of another key's job is on the audit trail with both keys' ids (`owner_key`; F117) |
+| `GET /v1/jobs/{id}/items?cursor=&limit=&results=` | jobs | The items in the job's order, 50 a page unless said and at most 200, each with its stored result as `GET /v1/results/{id}` shows it without the document and the body (which are artifacts), an item that ended without its page with what ended it (F155); `results=false` leaves the results out. Read as `GET /v1/jobs/{id}` is |
+| `POST /v1/jobs/{id}/cancel` | jobs | Cooperative cancel: what waits is cancelled at once (a job queued behind `jobs.max_running`, a paused one, a fetch carried on as a job), a page that is being fetched is finished, so at most one more item per visitor ends. A job that has ended is answered as it ended. Every cancel is on the audit trail (`job.cancel`), the owner's own included (F117) |
 | `GET /v1/results/{id}` | fetch | The result of a fetch by the request's id (the `id` of the result, `X-Request-Id` of the fetch): `200` once it ended, `202` while it runs. A request whose job ended without it (cancelled, expired, interrupted) has ended: `200`, `provider_error` with the item's reason (F109). A key reads what it fetched; another key's is `404` |
 | `GET /v1/artifacts/{id}` | fetch | What was kept of a page (document, raw body, screenshot, PDF, the body of a captured XHR response), streamed; served with `nosniff` and a sandboxing CSP, gzip passed through to a client that takes it |
 | `POST /v1/sessions` | sessions | Open a session pinned to a persona matching the hints and a `domain`'s policy: `201` new, `200` when the id is open already, `409 no_matching_persona` |
 | `GET /v1/sessions/{id}` / `DELETE` | sessions | Inspect (not a use: the idle time does not start again) or end |
-| `GET /v1/policies/domains/{domain}` | fetch | Effective policy preview: the policy as it resolves, the pacing profile, the floor `min_level`, a pause in force |
+| `GET /v1/policies/domains/{domain}` | fetch | Effective policy preview: the policy as it resolves (its `cache` as it holds under the configuration's `cache.max_ttl`), the pacing profile, the floor `min_level`, a pause in force. What is no host name (a wildcard, an empty label, a label over 63 characters) is `422 validation_failed` (F136) |
 | `GET /v1/admin/personas[?state=&all=]`, `GET …/{id}[?fingerprint=true]`, `POST …/{id}/retire`, `POST …/{id}/regenerate`, `POST …/{id}/selftest` | admin | The self-test runs in the server: the http path when the persona has one and an echo is configured, the browser path in the persona's own context through the scheduler's gate and the forwarder, so it never meets `context_conflict` with real work (F29) |
 | `GET /v1/admin/proxies[?all=]`, `POST …/{id}/replace`, `POST …/{id}/health` | admin | Never a proxy's user name or password |
 | `GET /v1/admin/pool` | admin | Pool and bandwidth summary |
@@ -2695,7 +2722,12 @@ admin purge (§16.3) does the same for one key before that time.
 `serde-saphyr` reading the YAML: a repeated key and a merge key are errors
 with line and column, depth 128, a million nodes and 16 MiB of scalars at
 most, only `true` and `false` are booleans, and text that reads as a number
-is written in quotes where text is expected; F45). Secrets
+is written in quotes where text is expected; F45). The defaults are the
+first layer, so every key, a member of an object included
+(`KAGE__PERSONAS__WARMUP__VISITS__MIN`), can be set alone and the others
+keep their default (F132); a list is replaced whole. An environment value
+of `null` is what `null` is in the file: no value, which switches off what
+an optional key does (`KAGE__PROXIES__HEALTH__GEO_URL=null`; F137). Secrets
 MUST come only from env or files mounted via Docker secrets:
 `KAGE__WEBSHARE__API_KEY`, `KAGE__DATABASE__URL`, `KAGE__SIDECAR__TOKEN`,
 `KAGE__SECRETS__MASTER_KEY` (for encrypting proxy credentials at rest;
@@ -2707,7 +2739,15 @@ conflict with its `_FILE` form. Required for every command except
 optional. Startup fails on a missing required secret. A static list given
 as `KAGE__PROXIES__STATIC_LIST_FILE` keeps its path
 (`proxies.static_list_file`, set by the loader only) and is read again at
-every sync (§7.1). `kage config check`
+every sync (§7.1). `database.url` names only the parameters the driver
+reads (`sslmode`, `application_name`, `options` and the rest of sqlx's
+list): another is refused at load, naming the parameter and never its
+value, which the driver would have written to the log (F133). A URL key
+carries no credentials: the sidecars' URLs, a self-test page, an origin
+of `server.cors_allowed_origins` (F133). What the program cannot count
+with is refused at load: `database.max_connections` at most 1000,
+`personas.retention_days` and `personas.archive_after` at most ten years,
+`proxies.health.interval` at most a day (F137). `kage config check`
 validates and prints the effective config as JSON with secrets redacted,
 and reports under `proxies` the provider in force, its capabilities and
 the operations it does not offer, the declared list's plain exits, the
@@ -2745,7 +2785,9 @@ drawn from, §10.4), `crawl` (`default_max_depth` 3, `default_max_pages`
 (`ttl` 24 h, `error_ttl` 1 h, `max_bytes` 512 KiB, `agents` `["kage"]`,
 `scout_quarantine` 30 d; §14), `telemetry` (`otlp_endpoint` none,
 `service_name` `kage`, `export_timeout` 10 s; §20), `cache` (`max_ttl` 24 h, never longer than
-`artifacts.retention_days`; §15), `bandwidth` and `forwarder` (§7.5).
+`artifacts.retention_days`; §15; a policy's `cache.max_ttl` or `cache.ttl`
+longer than it is refused at load, at a reload and by `kage config
+check`, F136), `bandwidth` and `forwarder` (§7.5).
 `kage config check` reports the scheduler's caps, the budget and the
 forwarder. `server` holds what the API's listener enforces (§19): `bind`
 (`127.0.0.1:8080`), `metrics_bind` (unset), `max_body_bytes` (1 MiB),
@@ -2754,7 +2796,10 @@ forwarder. `server` holds what the API's listener enforces (§19): `bind`
 `request_timeout` (30 s, for everything but a fetch, a self-test and a
 proxy probe), `shutdown_grace` (30 s), `max_connections` (1024),
 `requests_per_minute` (600 over all keys; 0 for none),
-`cors_allowed_origins` (none) and `docs` (true). `security` holds
+`cors_allowed_origins` (none; each an origin as a browser sends it: a
+scheme, a host and an optional port, no credentials, no path and no
+wildcard, which would be compared as it is written and match nothing;
+F136) and `docs` (true). `security` holds
 `allow_ip_targets`, `resolve_on_host` and `expose_set_cookie`, all false.
 `jobs` holds `max_items` (10 000), `max_running` (8), `max_items_in_flight`
 (24), `max_age` (7 d), `retention_days` (14), `lease` (1 m),
@@ -2811,10 +2856,13 @@ characters; an operator's own, as `acme-bot/1 (+https://acme.example/bot)`)
 and `direct`: `personas` (1, at most 4: the host's personas),
 `country`, `locale` and `timezone` (declared, by the rule of every
 declaration, §6.1; a lookup only verifies them),
-`engines` (the host personas' engines, a subset of `personas.mix`) and
+`engines` (the host personas' engines, a subset of `personas.mix`: an
+engine the mix lacks is refused at load, since no host persona could be
+drawn on it; F137) and
 `private_names` (exact names that may resolve to a private or loopback
-address on the host's own connection; empty, and `kage config check`
-warns while it is not). `kage config check` reports `egress` with its
+address on the host's own connection, a wildcard refused since it would
+match nothing; empty, and `kage config check` warns while it is not;
+F136). `kage config check` reports `egress` with its
 warnings: a provider configured under `direct` (the pool is idle), no
 way to place the host's personas, private names.
 
@@ -3042,14 +3090,20 @@ are gzip-compressed on disk.
   background traffic and a page's redirect to the compose network would
   pass, and it is never published on the host.
 - **Input limits.** A body of at most `server.max_body_bytes` on every
-  endpoint (`413 payload_too_large`, whether it says its length or not)
-  that arrives within `server.body_read_timeout` (`408`); a head of at
-  most `server.max_header_bytes` with at most `server.max_headers` headers
-  (`431`, by the HTTP layer) that arrives within
+  endpoint (`413 payload_too_large`: a `Content-Length` beyond it on
+  every endpoint, one that takes no body included, before anything is
+  done; a body that does not say its length where a body is read; an
+  endpoint that takes no body does not read one, F134)
+  that arrives within `server.body_read_timeout` (`408`); headers of at
+  most `server.max_header_bytes` and at most `server.max_headers` in
+  number (`431 headers_too_large` as a problem; the HTTP layer reads
+  twice that, and answers a longer head itself with an empty `431`, §16.1)
+  that arrive within
   `server.header_read_timeout`, which runs from the moment a connection is
   accepted and so also ends one that sends nothing or trickles its headers
   (slowloris); a request target of at most
-  `server.max_uri_bytes` (`414`); at most `server.max_connections`
+  `server.max_uri_bytes` (`414`, whatever its length up to the HTTP
+  layer's bound); at most `server.max_connections`
   connections; `server.request_timeout` for every endpoint that does not
   wait for the network. At most `jobs.max_items` items per job (10 000)
   and 100 steps per flow. A caller's headers pass a denylist: what is the persona's identity or the
@@ -3080,7 +3134,10 @@ are gzip-compressed on disk.
   states responsible-use expectations.
 - **Audit.** Every admin API call and CLI mutation writes an audit event
   with key id, action, target, and outcome; an admin call whose event
-  cannot be written is not answered as done.
+  cannot be written is not answered as done, and a CLI mutation whose
+  event cannot be written ends non-zero once it has shown what it did
+  (F135). Every cancel of a job and an operator's read of another key's
+  job are on the trail too (§16.3, F117).
 
 ---
 
@@ -3104,7 +3161,8 @@ are gzip-compressed on disk.
   `kage_selftest_score{persona,engine}`, `kage_replacements_total`,
   `sidecar_contexts_open{engine}`, `sidecar_navigation_duration_seconds`.
   The API adds `kage_api_requests_total{route,method,status}` (the route
-  is the pattern, never the path a client sent),
+  is the pattern, never the path a client sent; the method one HTTP
+  defines, `other` for anything else a client sends, F131),
   `kage_api_request_duration_seconds{route,method}`,
   `kage_api_requests_in_flight` and `kage_api_refusals_total{code}`.
   Jobs add `kage_jobs{job_type,state}`, `kage_job_items{state}` (what
