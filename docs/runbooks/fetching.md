@@ -154,9 +154,12 @@ policy enforces its `robots.txt` (`docs/runbooks/api.md`, "robots.txt").
 
 What follows is a persona's pace, at levels 1 to 3. A request at level 0
 has no persona and waits only for the site's own limits: its concurrency
-and requests per minute, the breaker's pause, the pause after server
-errors and, where the site's `robots.txt` is enforced, its `Crawl-delay`
-between two pages of the plain client.
+and requests per minute, the breaker's pause (until the pause's end, which
+its refusal names as `retry_at`; never for the trial that follows, F126),
+the pause after server errors and, where the site's `robots.txt` is
+enforced, its `Crawl-delay` between two pages of the plain client. While
+a suspected outage of the pool holds the site's plain exit (spec §7.3), it
+waits for that exit (`plain_exit_unavailable` with `retry_at`, F193).
 
 A site is one site however its host is spelled: `Example.org.`, with the
 dot of the DNS root at its end, is `example.org` to the pace, the breaker,

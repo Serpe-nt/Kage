@@ -659,14 +659,25 @@ confirmation echo both fail), backoff = 1 min × 2^k capped at 1 h and
 jittered into `[0.5 d, d]`, M = 3 consecutive backoff cycles AND
 `proxies.replace_after` (default 6 h) of unbroken failure. A proxy leaving
 backoff is probed at once; success resets everything, failure returns it
-with k + 1.
+with k + 1. One cycle per backoff, whatever an operator probes: an
+operator's probe of a proxy still in backoff (`kage proxy health`,
+`POST /v1/admin/proxies/{id}/health`) ends the backoff when it passes, and
+when it fails is recorded and leaves the backoff's end and k as they were
+(F129). Before, every such probe that failed was one more cycle: a few
+looks in a row added minutes to the outage and spent M toward replacement.
 
 Shared exit (decision D6, M15): a probe that reads an exit address an
 older live proxy's last probe also saw marks the later proxy
 (`exit_shared_with`): it is kept `degraded`, carries no persona and no
 level 0, and `proxy_exit_shared` names both until a probe sees an address
 of its own again. A leak, or a probe that read nothing, changes nothing
-of it; the host's own rows are never compared.
+of it; the host's own rows are never compared. Only a latest probe that
+read an address counts (F177): an older proxy whose latest probe failed (it
+is down, in backoff) leaves by no address now, and the address its record
+keeps from its last good probe is not compared; before, a proxy that came
+back on an address a dead proxy once had (a restarted container, a
+reassigned address) was marked by that stale address and its persona
+retired for good.
 
 Leak (exit IP equals host IP): `backoff` from any state, critical alert,
 never counts toward replacement, and sets the pool-wide `egress_unsafe`
@@ -685,7 +696,12 @@ out (`paused`, `no_persona`) and a synchronous fetch is answered
 attempts on dead proxies; and `kage_proxy_state` counts it as `backoff`,
 so `KagePoolUnavailable` fires for a pool that died whole (F151). The
 proxies whose latest probe passed carry as before; when the guard lifts,
-the counters of those still failing move again. `pool_capacity_low` fires
+the counters of those still failing move again. A site's plain exit at
+level 0 (its own exit of the pool's, or its scout's proxy, §25) is held
+the same way (F193): a plain client's request waits as the plain route's
+own wait has it (`plain_exit_unavailable` with `retry_at`, a job
+`paused`), never sent from another address, and the forwarder relays
+nothing through a held exit. `pool_capacity_low` fires
 when a quarter or more of such a pool is in `backoff` or `replacing`.
 
 Replacement: budget `proxies.replacements_per_month` (default 5) counts
@@ -943,7 +959,12 @@ the pause ends one trial request goes through on one persona; success
 closes it, a block reopens it with the pause doubled (at most 6 h) and a
 success resets the length. Blocks of real work and warm-up count; server
 errors, a passed challenge, an attempt at level 0 and self-tests never do;
-the server-error pause counts every level.
+the server-error pause counts every level. A request at level 0 waits for
+the pause and nothing more (F126): it is refused `domain_paused` with the
+pause's end as `retry_at` while the pause runs, and goes on once it has
+run out, never being the trial and never waiting for one; before, a site
+read only at level 0 stayed refused, with no `retry_at`, until some
+request at level 2 or 3 came to be the trial.
 
 ### 8.4 Timeouts
 
@@ -3145,26 +3166,46 @@ are gzip-compressed on disk.
 
 - Logs: JSON via tracing, one event per attempt with request id, persona
   id (or the exit of a level-0 attempt), domain, level, render, outcome,
-  vendor, timing. Sidecar logs via pino in the
-  same shape; both carry the trace id.
+  vendor, timing. Sidecar logs via pino in the same shape (F144):
+  `timestamp` in ISO 8601, `level` in upper case, the text and the
+  line's fields under `fields` (`fields.message`, `fields.persona`), the
+  trace's ids at the top; both carry the trace id. A proxy is named by its
+  id at `info` and above, never by its host, port or exit address, which
+  an alert's details in the log have as `[redacted]` (F153); a redirect
+  target a site sent is named by its origin only, at every level.
+  `RUST_LOG` and `LOG_LEVEL` reach Kage and the sidecars through the
+  shipped compose file.
 - Metrics (Prometheus): `kage_requests_total{domain,level,outcome,vendor}`,
   `kage_attempts_total{domain,level,outcome,vendor}`,
   `kage_attempt_duration_seconds{level,outcome}`, `kage_persona_state{state}`,
   `kage_proxy_state{state}`, `kage_scheduler_wait_seconds{kind}`,
   `kage_queue_depth{kind}`, `kage_scheduler_in_flight{render}`,
-  `kage_scheduler_refusals_total{reason}`, `kage_breaker_open{domain}`,
+  `kage_scheduler_refusals_total{reason}`, `kage_breaker_open{domain}` (1
+  while a domain's pause runs, read from the stored breakers at the scrape,
+  F126),
   `kage_policy_breaker_threshold{domain}` (the blocks per hour that pause a
   domain under its policy, set at each attempt there),
   `kage_bandwidth_bytes_total{direction,egress}`, `kage_bandwidth_budget_ratio`
   (the scheduler's are recorded through the `metrics` facade since M7 and
   exported with the API's since M8),
   `kage_selftest_score{persona,engine}`, `kage_replacements_total`,
-  `sidecar_contexts_open{engine}`, `sidecar_navigation_duration_seconds`.
+  `sidecar_contexts_open{engine}`,
+  `sidecar_navigation_duration_seconds{engine,outcome}`,
+  `sidecar_context_opens_total{engine,result}` (`opened`, `reused`,
+  `refused`, `failed`), `sidecar_context_closes_total{engine,reason}`
+  (`requested`, `idle`, `failed`, `shutdown`),
+  `sidecar_browser_recycles_total{engine}`,
+  `sidecar_selftests_total{engine,result}` (`passed`, `failed`,
+  `incomplete`), `sidecar_flows_total{engine,result}` (`ok`, `failed`,
+  `error`), and each sidecar's process and Node.js families (`process_*`,
+  `nodejs_*`), every one under its `engine` (F144).
   The API adds `kage_api_requests_total{route,method,status}` (the route
   is the pattern, never the path a client sent; the method one HTTP
   defines, `other` for anything else a client sends, F131),
   `kage_api_request_duration_seconds{route,method}`,
-  `kage_api_requests_in_flight` and `kage_api_refusals_total{code}`.
+  `kage_api_requests_in_flight` and `kage_api_refusals_total{code}` (what
+  was refused for the key, its scope, its limits or the target's length;
+  `scope_missing` counted where a handler asks for its scope, F182).
   Jobs add `kage_jobs{job_type,state}`, `kage_job_items{state}` (what
   waits and what is being worked) and `kage_webhook_deliveries_pending`,
   read from the store at the scrape, and `kage_jobs_accepted_total{job_type,level}`,
@@ -3187,12 +3228,14 @@ are gzip-compressed on disk.
   `kage_scheduler_wait_seconds{kind}` have a `job` kind for what jobs have
   in the queue.
   `/metrics` is one exposition: the process's recorder (histograms of
-  seconds with fixed buckets, so they aggregate), `kage_persona_state` and
-  `kage_selftest_score` read from the store at the scrape, and each
+  seconds with fixed buckets, so they aggregate), `kage_persona_state`,
+  `kage_selftest_score` and `kage_breaker_open` read from the store at
+  the scrape, and each
   sidecar's own `/v1/metrics` merged in by family; a sidecar that does not
   answer is missing from the scrape. No label is a secret, a token or a
   proxy's address. Every counter whose label values are known before any
-  event exists at zero from the start of the process, so that its first
+  event exists at zero from the start of the process, a sidecar's own
+  counters too (F150), so that its first
   event is a change and not the birth of a series, which `increase()`
   never counts (F110); a counter with a label that arrives with the event
   (a domain, a route's status) is born with it, and the rule and the
@@ -3217,7 +3260,9 @@ are gzip-compressed on disk.
   `traceparent` of Kage's own request to the sidecar. A job's page is a
   trace of its own from `job.item`; a webhook attempt is `webhook.deliver`.
   No span holds a URL's path or query, an address, a seed, a token, a
-  fingerprint or a body. Every JSON line of Kage and of a sidecar written
+  fingerprint or a body, nor does an event of a span: a log line written in
+  a span leaves with it, so the attempt's line holds no seed (F182; the
+  seed is kept as `attempts.seed`). Every JSON line of Kage and of a sidecar written
   inside a span carries `trace_id` and `span_id`, also when nothing is
   sent.
 - Dashboards (optional profile): overview, per-domain block rate, persona
@@ -3348,7 +3393,8 @@ draw seeded by the site and recorded in `site_exits`, ADR 0013), else its
 scout's (chosen by the scout rule when the site has none, and its scout
 from then on); when that proxy cannot carry traffic the request waits or
 is refused (`plain_exit_unavailable`), never sent from another address. A
-proxy that leaves by an older proxy's address carries no level 0 (§7.3).
+proxy that leaves by an older proxy's address carries no level 0, nor one
+a suspected outage of the pool holds (§7.3, F193).
 robots.txt
 and sitemaps at level 0 go the same way, and so does a redirect hop of
 a level 0 fetch or of its `robots.txt` that leads to another site: it is

@@ -341,6 +341,11 @@ backoff ──3 cycles and 6 h of failing, or bad reputation──▶ replacing 
 - `backoff` lasts 1 min, doubling with every cycle in a row up to 1 h, each
   jittered into its upper half. When it ends the proxy is `degraded` and is
   probed at once: one more failure sends it back.
+- `kage proxy health` (or the admin probe) on a proxy in backoff is a look,
+  not a cycle (F129): a probe that passes ends the backoff at once, one
+  that fails is recorded and leaves the backoff's end and its count as they
+  were. Probing a dead proxy again and again neither lengthens its outage
+  nor brings its replacement nearer.
 - A proxy is replaced only after three backoff cycles in a row **and** six
   hours of failing without a single passing check (`proxies.replace_after`),
   and only by a provider that offers replacement. A short outage never
@@ -355,7 +360,15 @@ backoff ──3 cycles and 6 h of failing, or bad reputation──▶ replacing 
   is answered `no_persona` with `retry_at`, and `kage_proxy_state` counts
   the proxy as `backoff`, so `KagePoolUnavailable` fires when the whole
   pool is down (F151). The proxies whose latest probe passed go on
-  carrying. Nothing to do but find the cause.
+  carrying, and so does level 0 only through a site's exit whose latest
+  probe passed: a site whose plain exit is held waits for it
+  (`plain_exit_unavailable` with `retry_at`, F193), never sent from another
+  address. Nothing to do but find the cause.
+- An attempt through a proxy that cannot be reached fails within seconds
+  (F159): the forwarder looks up a proxy's name within five seconds, connects
+  within `forwarder.connect_timeout`, and refuses a proxy it could not reach
+  at once for fifteen seconds, so that a browser's second try of the tunnel
+  costs nothing. The pool's probes are not held by it.
 
 ## Replacing a proxy
 
@@ -429,7 +442,9 @@ sends the persona's traffic out of the host's own connection.
 
 ## Alerts
 
-Alerts are logged and stored in `health_events`. Each is raised once per
+Alerts are logged and stored in `health_events`. In the log a proxy is named
+by its id; its host, port and exit address are `[redacted]` at `info` and
+above and in full at `debug` (F153), since a log may be public. Each is raised once per
 episode, not once per check. What is standing is kept in memory, so a
 restart, and a `kage proxy` command, raise a still-standing alert once more.
 
@@ -443,7 +458,7 @@ restart, and a `kage proxy` command, raise a still-standing alert once more.
 | `replacement_failed` | warning | A replacement was refused, failed at the provider or left no trace: the proxy is back in backoff and the budget slot is free. Also raised when a replacement has been pending at the provider for over an hour; that one is still waited for |
 | `pool_capacity_low` | warning | A quarter or more of the pool is in backoff or being replaced |
 | `proxy_geo_mismatch` | warning | Two geo lookups in a row place the exit address in another country than the provider states or the operator declared. The proxy stays usable, `degraded`. A Webshare persona goes by the observed country; a declared one keeps its declaration (see "Verification by the lookup") |
-| `proxy_exit_shared` | warning | A proxy's probe saw the exit address of an older proxy: two personas would share one address (decision D6). The later proxy carries nothing, neither a persona nor level 0, until it leaves by an address of its own: fix the list |
+| `proxy_exit_shared` | warning | A proxy's probe saw the exit address of an older proxy: two personas would share one address (decision D6). The later proxy carries nothing, neither a persona nor level 0, until it leaves by an address of its own: fix the list. Only the latest probes of proxies that answer are compared: a dead proxy's address from before its outage is nobody's (F177) |
 | `proxy_reputation_bad` | warning | AbuseIPDB scored the address at or above `reputation.bad_score` twice in a row. It is replaced when the provider and the budget allow, else it stays usable as `degraded` |
 | `reputation_usage_type_suspicious` | warning | AbuseIPDB classifies a residential address as data center or hosting space. Never replaced automatically: decide, and use `kage proxy replace` |
 | `provider_replaced_proxy` | warning (info for a reason `webshare.accepted_auto_replace` covers) | Webshare replaced a proxy by itself. Switch its automatic replacement off, unless the reason is an accepted one |
