@@ -2,7 +2,10 @@
 #
 # kage reads the file named by --config or KAGE_CONFIG, else ./kage.yaml when
 # it exists. Every key can be overridden by an environment variable of the
-# form KAGE__SECTION__KEY, for example KAGE__ARTIFACTS__RETENTION_DAYS=7.
+# form KAGE__SECTION__KEY, for example KAGE__ARTIFACTS__RETENTION_DAYS=7, a
+# member of an object alone too (KAGE__PERSONAS__WARMUP__VISITS__MIN=2; the
+# others keep their default). An environment value of null is what null is
+# here: KAGE__PROXIES__HEALTH__GEO_URL=null switches the lookup off.
 #
 # Secrets are NOT set here; kage refuses to start if they are. They come from
 # the environment, or from a file named by the same variable with _FILE

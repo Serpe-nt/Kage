@@ -10,6 +10,12 @@ cd "$(dirname "$0")/.."
 env_file="deploy/.env"
 umask 077
 touch "${env_file}"
+# A last line without its newline (as an editor may leave it) would have the
+# first key added glued onto it, spoiling both. A command substitution drops
+# a newline: anything left is another byte.
+if [ -n "$(tail -c 1 "${env_file}")" ]; then
+    printf '\n' >> "${env_file}"
+fi
 
 # Hex keeps the value safe inside URLs and shell words.
 random_hex() {

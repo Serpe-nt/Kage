@@ -209,6 +209,67 @@ fn a_key_command_that_is_not_one_is_refused_before_anything_is_read() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_change_whose_audit_event_cannot_be_written_is_shown_and_fails() {
+    // F135 (auth-06): a trigger stands in for a full disk or a lost grant.
+    let container = Postgres::default()
+        .with_tag("17.11-trixie")
+        .start()
+        .await
+        .expect("cannot start the Postgres test container; is Docker running?");
+    let port = container.get_host_port_ipv4(5432).await.unwrap();
+    let host = container.get_host().await.unwrap();
+    let database_url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
+    let dir = TempDir::new().unwrap();
+    let artifacts = dir.path().join("artifacts");
+    let policies = shipped_policies();
+    let env = [
+        ("KAGE__DATABASE__URL", database_url.as_str()),
+        ("KAGE__SIDECAR__TOKEN", TOKEN),
+        ("KAGE__SECRETS__MASTER_KEY", MASTER),
+        ("KAGE__POLICIES__DIR", policies.to_str().unwrap()),
+        ("KAGE__ARTIFACTS__DIR", artifacts.to_str().unwrap()),
+        ("RUST_LOG", "warn"),
+    ];
+    ok(kage(&env).arg("migrate"));
+    let pool = PgPoolOptions::new().connect(&database_url).await.unwrap();
+    for statement in [
+        "CREATE FUNCTION refuse_audit() RETURNS trigger LANGUAGE plpgsql AS \
+         $$ BEGIN RAISE EXCEPTION 'audit refused for the test'; END $$",
+        "CREATE TRIGGER refuse_audit BEFORE INSERT ON audit_events \
+         FOR EACH ROW EXECUTE FUNCTION refuse_audit()",
+    ] {
+        sqlx::query(statement).execute(&pool).await.unwrap();
+    }
+
+    let created = run(kage(&env).args([
+        "key",
+        "create",
+        "--name",
+        "unaudited",
+        "--scope",
+        "fetch",
+        "--json",
+    ]));
+    assert_eq!(created.status.code(), Some(1), "{}", text(&created.stderr));
+    // The key was made: its token is shown, or nobody could ever use it.
+    let shown = json(&text(&created.stdout));
+    assert!(shown["token"].as_str().unwrap().starts_with("kage_"));
+    let stderr = text(&created.stderr);
+    assert!(
+        stderr.contains("audit event could not be written"),
+        "{stderr}"
+    );
+    let keys: i64 = sqlx::query_scalar("SELECT count(*) FROM api_keys")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(keys, 1);
+    // A command that changes nothing writes no event and ends well.
+    ok(kage(&env).args(["key", "list"]));
+    pool.close().await;
+}
+
 // One database followed from its first key to a server that takes it: each
 // step needs the one before.
 #[tokio::test(flavor = "multi_thread")]

@@ -142,10 +142,15 @@ services:
       - personas:/var/lib/kage/personas
       - artifacts:/var/lib/kage/artifacts
       # The declared list when KAGE_STATIC_LIST_FILE names one (an absolute
-      # path, or one relative to this directory), else nothing. It holds
-      # passwords: let the container's user, uid 65532, read it and nobody
-      # else (`sudo chown 65532 <file> && sudo chmod 0400 <file>`).
-      - ${KAGE_STATIC_LIST_FILE:-/dev/null}:/run/kage/static-list:ro
+      # path, or one relative to this directory: list.txt, ./secrets/list.txt),
+      # else nothing. The long form on purpose: in the short one compose takes
+      # a bare list.txt for the name of a volume and refuses the project. It
+      # holds passwords: let the container's user, uid 65532, read it and
+      # nobody else (`sudo chown 65532 <file> && sudo chmod 0400 <file>`).
+      - type: bind
+        source: ${KAGE_STATIC_LIST_FILE:-/dev/null}
+        target: /run/kage/static-list
+        read_only: true
     mem_limit: 1g
     cpus: 2
     pids_limit: 512
