@@ -6,7 +6,7 @@ use axum::extract::{Path, State};
 use chrono::{DateTime, Utc};
 use kage_core::domain::Scope;
 use kage_core::pacing::PacingProfile;
-use kage_core::policy::{EffectivePolicy, normalize_host};
+use kage_core::policy::{EffectivePolicy, is_host_name, normalize_host};
 use serde::Serialize;
 use utoipa::ToSchema;
 
@@ -20,7 +20,8 @@ use crate::state::ApiState;
 pub(crate) struct PolicyPreview {
     /// Every field of the policy as it resolves for the host: `host`,
     /// `matched` (the entry that applies), `inherits`, `min_level`,
-    /// `countries`, `engines`, `pacing`, `pacing_locked`, `robots`,
+    /// `countries`, `engines`, `pacing`, `pacing_locked`, `robots`, `cache` (as it
+    /// holds under the configuration's `cache.max_ttl`),
     /// `referer_strategy`, `active_hours`, `min_dwell`, `behavior_locked`,
     /// `retries`, `breaker_threshold`, `breaker_pause`, `cooldowns`.
     #[schema(value_type = FreeForm)]
@@ -62,11 +63,25 @@ pub(crate) async fn preview(
     Path(domain): Path<String>,
 ) -> ApiResult<Json<PolicyPreview>> {
     caller.require(Scope::Fetch)?;
+    // What is no host name has no policy: a wildcard, an empty label, a
+    // label too long (F136).
     let host = normalize_host(&domain)
-        .filter(|_| !domain.contains('/'))
-        .ok_or_else(|| ApiError::field("domain", "a host name, without a scheme or a path"))?;
+        .filter(|host| {
+            !domain.contains('/')
+                && !domain.contains('*')
+                && (host.starts_with('[') || is_host_name(host))
+        })
+        .ok_or_else(|| {
+            ApiError::field(
+                "domain",
+                "a host name, without a scheme, a path or a wildcard: an entry already covers \
+                 its subdomains",
+            )
+        })?;
     let policies = state.policies().current();
-    let policy = policies.domains.resolve(&host);
+    let mut policy = policies.domains.resolve(&host);
+    // The cache as it holds under the configuration's bound.
+    policy.cache = policy.cache.bounded(state.config().cache.max_ttl.get());
     let pacing = policy
         .pacing_for(None, &policies.pacing)
         .map_err(|error| ApiError::internal(&error))?;

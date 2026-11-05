@@ -1,9 +1,15 @@
 //! The listener (spec §19 "Input limits"): what `axum::serve` does, with
 //! the limits it has no switch for.
 //!
-//! - **The head of a request** is at most `server.max_header_bytes` long
-//!   and has at most `server.max_headers` headers; a longer one is
-//!   answered `431` by the HTTP layer and the connection is closed.
+//! - **The head of a request**: its headers are at most
+//!   `server.max_header_bytes` long and at most `server.max_headers` in
+//!   number, its target at most `server.max_uri_bytes`. The API checks
+//!   these and answers `431 headers_too_large` and `414 uri_too_long` as
+//!   problems with a request id. The HTTP layer reads twice as much before
+//!   it gives up: a head beyond that (twice the headers' bytes plus the
+//!   target's, or twice their number) and a head that is not HTTP are
+//!   answered by the HTTP layer itself, `431` or `400` with an empty
+//!   body and no request id, and the connection is closed (spec §16.1).
 //! - **A client that trickles its headers** (slowloris), or sends nothing
 //!   at all, is cut off after `server.header_read_timeout`: the deadline
 //!   runs from the moment a connection is accepted, covers the whole head
@@ -46,10 +52,12 @@ const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
 /// The limits of a listener.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ServeSettings {
-    /// Largest head of a request, in bytes.
+    /// Largest headers of a request, in bytes, as the API checks them.
     pub max_header_bytes: usize,
-    /// Most headers of a request.
+    /// Most headers of a request, as the API checks them.
     pub max_headers: usize,
+    /// Longest request target, as the API checks it.
+    pub max_uri_bytes: usize,
     /// How long the head of a request may take to arrive.
     pub header_read_timeout: Duration,
     /// Most connections served at once.
@@ -64,12 +72,38 @@ impl ServeSettings {
         Self {
             max_header_bytes: usize::try_from(server.max_header_bytes).unwrap_or(usize::MAX),
             max_headers: usize::try_from(server.max_headers).unwrap_or(usize::MAX),
+            max_uri_bytes: usize::try_from(server.max_uri_bytes).unwrap_or(usize::MAX),
             header_read_timeout: server.header_read_timeout.get(),
             max_connections: usize::try_from(server.max_connections).unwrap_or(usize::MAX),
             shutdown_grace: server.shutdown_grace.get(),
         }
     }
+
+    /// The most bytes of a head the HTTP layer reads: twice the headers'
+    /// limit and the target's, so that a head over the limits the API
+    /// checks still reaches it and is answered with a problem. Never below
+    /// what hyper needs to read a head at all.
+    pub const fn head_buffer(&self) -> usize {
+        let wanted = self
+            .max_header_bytes
+            .saturating_mul(2)
+            .saturating_add(self.max_uri_bytes);
+        if wanted < MIN_HEAD_BUFFER {
+            MIN_HEAD_BUFFER
+        } else {
+            wanted
+        }
+    }
+
+    /// The most headers the HTTP layer reads: twice the limit the API
+    /// checks.
+    pub const fn head_headers(&self) -> usize {
+        self.max_headers.saturating_mul(2)
+    }
 }
+
+/// The smallest read buffer hyper's HTTP/1 server accepts.
+const MIN_HEAD_BUFFER: usize = 8192;
 
 /// The HTTP layer of one connection, with the limits applied.
 fn connections(settings: ServeSettings) -> Builder {
@@ -77,8 +111,8 @@ fn connections(settings: ServeSettings) -> Builder {
     builder
         .timer(TokioTimer::new())
         .header_read_timeout(settings.header_read_timeout)
-        .max_headers(settings.max_headers)
-        .max_buf_size(settings.max_header_bytes);
+        .max_headers(settings.head_headers())
+        .max_buf_size(settings.head_buffer());
     builder
 }
 
@@ -171,6 +205,16 @@ mod tests {
 
         assert_eq!(settings.max_header_bytes, 16 * 1024);
         assert_eq!(settings.max_headers, 64);
+        assert_eq!(settings.max_uri_bytes, 8 * 1024);
+        // The HTTP layer reads twice as much, so that the API answers.
+        assert_eq!(settings.head_buffer(), 2 * 16 * 1024 + 8 * 1024);
+        assert_eq!(settings.head_headers(), 128);
+        let tiny = ServeSettings {
+            max_header_bytes: 1,
+            max_uri_bytes: 1,
+            ..settings
+        };
+        assert_eq!(tiny.head_buffer(), 8192);
         assert_eq!(settings.header_read_timeout, Duration::from_secs(10));
         assert_eq!(settings.max_connections, 1024);
         assert_eq!(settings.shutdown_grace, Duration::from_secs(30));

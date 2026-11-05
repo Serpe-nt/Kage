@@ -3,7 +3,8 @@
 
 use std::fmt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::Duration;
 
 use kage_core::config::Config;
 use kage_core::policy::PolicyStore;
@@ -71,6 +72,46 @@ impl fmt::Debug for ApiParts {
     }
 }
 
+/// The requests with a key that are being answered: what a stopping server
+/// waits for before it closes its listener (F121).
+#[derive(Debug, Default)]
+pub(crate) struct InFlight {
+    count: AtomicUsize,
+}
+
+/// One request counted in [`InFlight`] until it is dropped.
+#[derive(Debug)]
+pub(crate) struct Counted<'a>(&'a InFlight);
+
+impl Drop for Counted<'_> {
+    fn drop(&mut self) {
+        self.0.count.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// How often a stopping server looks whether its requests have ended.
+const SETTLE_EVERY: Duration = Duration::from_millis(50);
+
+impl InFlight {
+    /// Counts a request until the guard is dropped.
+    pub(crate) fn enter(&self) -> Counted<'_> {
+        self.count.fetch_add(1, Ordering::AcqRel);
+        Counted(self)
+    }
+
+    /// How many are being answered.
+    pub(crate) fn count(&self) -> usize {
+        self.count.load(Ordering::Acquire)
+    }
+
+    /// Waits until none is being answered, or until `until`.
+    pub(crate) async fn settle(&self, until: tokio::time::Instant) {
+        while self.count() > 0 && tokio::time::Instant::now() < until {
+            tokio::time::sleep(SETTLE_EVERY).await;
+        }
+    }
+}
+
 pub(crate) struct Inner {
     pub(crate) parts: ApiParts,
     pub(crate) limits: Limits,
@@ -79,6 +120,7 @@ pub(crate) struct Inner {
     pub(crate) resolver: Option<HostResolver>,
     pub(crate) readiness: Mutex<Option<Readiness>>,
     pub(crate) stopping: AtomicBool,
+    pub(crate) in_flight: InFlight,
 }
 
 /// The state every handler shares.
@@ -130,6 +172,7 @@ impl ApiState {
             resolver,
             readiness: Mutex::new(None),
             stopping: AtomicBool::new(false),
+            in_flight: InFlight::default(),
             parts,
         })))
     }
@@ -226,5 +269,60 @@ impl ApiState {
 
     pub(crate) fn is_stopping(&self) -> bool {
         self.0.stopping.load(Ordering::Relaxed)
+    }
+
+    /// Counts a request with a key until the guard is dropped.
+    pub(crate) fn enter(&self) -> Counted<'_> {
+        self.0.in_flight.enter()
+    }
+
+    /// Waits until no request with a key is being answered, or until
+    /// `until`: what a stopping server waits for, after its jobs wound down,
+    /// before it closes its listener. `/readyz` answers `503 stopping` all
+    /// the while (spec §16.1).
+    pub async fn settle(&self, until: tokio::time::Instant) {
+        self.0.in_flight.settle(until).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::InFlight;
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stopping_server_waits_for_its_requests_and_no_longer_than_it_may() {
+        let requests = InFlight::default();
+        // Nothing in flight: no wait at all.
+        let start = tokio::time::Instant::now();
+        requests.settle(start + Duration::from_secs(30)).await;
+        assert_eq!(start.elapsed(), Duration::ZERO);
+
+        // One in flight: the wait ends when it does.
+        let counted = requests.enter();
+        assert_eq!(requests.count(), 1);
+        let settled = requests.settle(start + Duration::from_secs(30));
+        let ended = async {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            drop(counted);
+        };
+        tokio::join!(settled, ended);
+        assert_eq!(requests.count(), 0);
+        let took = start.elapsed();
+        assert!(
+            took >= Duration::from_secs(2) && took < Duration::from_secs(3),
+            "{took:?}"
+        );
+
+        // One that never ends: the wait ends at the bound.
+        let _held = requests.enter();
+        let start = tokio::time::Instant::now();
+        requests.settle(start + Duration::from_secs(30)).await;
+        let took = start.elapsed();
+        assert!(
+            took >= Duration::from_secs(30) && took < Duration::from_secs(31),
+            "{took:?}"
+        );
     }
 }

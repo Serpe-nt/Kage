@@ -563,8 +563,9 @@ export interface paths {
          * @description `200` with the result once the fetch has ended; `202` while it runs.
          *     A request whose job ended without it (cancelled, expired, interrupted)
          *     has ended too: `200` with what ended it.
-         *     What only the synchronous answer has (`pacing`, `behavior`, `console`,
-         *     `side_effects`) is null here.
+         *     What the visit did (`pacing`, `behavior`, `console`, `side_effects`) is
+         *     kept with the result and said here as the synchronous answer said it
+         *     (F36); `console` when the request asked for it.
          */
         get: operations["get_result"];
         put?: never;
@@ -1387,7 +1388,7 @@ export interface components {
          *     what a problem document carries as `code`.
          * @enum {string}
          */
-        ErrorCode: "missing_key" | "invalid_key" | "key_disabled" | "scope_missing" | "rate_limited" | "concurrency_limited" | "budget_exhausted" | "invalid_request" | "validation_failed" | "invalid_url" | "ssrf_denied" | "header_denied" | "header_invalid" | "header_not_placeable" | "level_required" | "level_below_policy" | "level_unavailable" | "level_include_conflict" | "level_kind_conflict" | "level_needs_http" | "session_needs_persona" | "request_kind_needs_referer" | "preflight_required" | "timeout_too_short" | "robots_enforced" | "robots_ignored" | "cache_ttl_too_long" | "invalid_pacing" | "invalid_session_id" | "session_not_found" | "session_persona_conflict" | "no_matching_persona" | "not_found" | "method_not_allowed" | "result_not_found" | "artifact_not_found" | "persona_not_found" | "proxy_not_found" | "key_not_found" | "job_not_found" | "idempotency_key_reused" | "webhook_origin_not_allowed" | "driver_input_denied" | "conflict" | "payload_too_large" | "uri_too_long" | "unsupported_media_type" | "request_timeout" | "unavailable" | "internal";
+        ErrorCode: "missing_key" | "invalid_key" | "key_disabled" | "scope_missing" | "rate_limited" | "concurrency_limited" | "budget_exhausted" | "invalid_request" | "validation_failed" | "invalid_url" | "ssrf_denied" | "header_denied" | "header_invalid" | "header_not_placeable" | "level_required" | "level_below_policy" | "level_unavailable" | "level_include_conflict" | "level_kind_conflict" | "level_needs_http" | "session_needs_persona" | "request_kind_needs_referer" | "preflight_required" | "timeout_too_short" | "robots_enforced" | "robots_ignored" | "cache_ttl_too_long" | "invalid_pacing" | "invalid_session_id" | "session_not_found" | "session_persona_conflict" | "no_matching_persona" | "not_found" | "method_not_allowed" | "result_not_found" | "artifact_not_found" | "persona_not_found" | "proxy_not_found" | "key_not_found" | "job_not_found" | "idempotency_key_reused" | "webhook_origin_not_allowed" | "driver_input_denied" | "conflict" | "payload_too_large" | "uri_too_long" | "headers_too_large" | "unsupported_media_type" | "request_timeout" | "unavailable" | "internal";
         /**
          * @description Where a plain client's attempt (level 0) left from: never an address.
          * @enum {string}
@@ -2455,7 +2456,8 @@ export interface components {
             /**
              * @description Every field of the policy as it resolves for the host: `host`,
              *     `matched` (the entry that applies), `inherits`, `min_level`,
-             *     `countries`, `engines`, `pacing`, `pacing_locked`, `robots`,
+             *     `countries`, `engines`, `pacing`, `pacing_locked`, `robots`, `cache` (as it
+             *     holds under the configuration's `cache.max_ttl`),
              *     `referer_strategy`, `active_hours`, `min_dwell`, `behavior_locked`,
              *     `retries`, `breaker_threshold`, `breaker_pause`, `cooldowns`.
              */
@@ -3169,7 +3171,111 @@ export interface components {
             responses: components["schemas"]["FreeForm"][];
         };
     };
-    responses: never;
+    responses: {
+        /** @description `invalid_request`: the body is not well-formed JSON, or a path parameter cannot be read (an escape that is no UTF-8). */
+        BadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `scope_missing`: the key lacks a scope this operation needs; `scope` names it. */
+        Forbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `headers_too_large`: more headers than `server.max_headers`, or longer than `server.max_header_bytes`. A head beyond twice those limits is cut off by the HTTP layer itself: an empty `431` without `X-Request-Id`. */
+        HeadersTooLarge: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `internal`: something failed inside Kage, the store most likely; the log has the cause under the request id. */
+        InternalError: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `payload_too_large`: the body is larger than `server.max_body_bytes`, or its `Content-Length` says so, on every operation. */
+        PayloadTooLarge: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `request_timeout`: the body did not arrive within `server.body_read_timeout`, or the answer was not ready within `server.request_timeout`. */
+        RequestTimeout: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `rate_limited`, `concurrency_limited` or `budget_exhausted`: a limit of the key or of the API; `Retry-After` and `retry_after_s` say how long to wait. */
+        TooManyRequests: {
+            headers: {
+                /** @description Seconds to wait before asking again. */
+                "Retry-After"?: number;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `missing_key`, `invalid_key` or `key_disabled`: the request carries no valid API key. */
+        Unauthorized: {
+            headers: {
+                /** @description `Bearer realm="kage"`. */
+                "WWW-Authenticate"?: string;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `validation_failed`, or another code of a request that cannot be made as asked: `field` names the member (a member given twice and a NUL character in a string included). */
+        UnprocessableEntity: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `unsupported_media_type`: a body is sent as `application/json`, and as no other type (a `+json` type included). */
+        UnsupportedMediaType: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description `uri_too_long`: the request target is longer than `server.max_uri_bytes`. */
+        UriTooLong: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+    };
     parameters: never;
     requestBodies: never;
     headers: never;
@@ -3195,6 +3301,9 @@ export interface operations {
                     "application/json": components["schemas"]["Liveness"];
                 };
             };
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
+            431: components["responses"]["HeadersTooLarge"];
         };
     };
     metrics: {
@@ -3233,6 +3342,12 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            408: components["responses"]["RequestTimeout"];
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
+            429: components["responses"]["TooManyRequests"];
+            431: components["responses"]["HeadersTooLarge"];
+            500: components["responses"]["InternalError"];
         };
     };
     readyz: {
@@ -3253,6 +3368,9 @@ export interface operations {
                     "application/json": components["schemas"]["ReadyReport"];
                 };
             };
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
+            431: components["responses"]["HeadersTooLarge"];
             /** @description Kage cannot fetch now; `checks` says why. */
             503: {
                 headers: {
@@ -3287,6 +3405,14 @@ export interface operations {
                     "application/json": components["schemas"]["AuditPage"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            408: components["responses"]["RequestTimeout"];
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
+            429: components["responses"]["TooManyRequests"];
+            431: components["responses"]["HeadersTooLarge"];
+            500: components["responses"]["InternalError"];
         };
     };
     list_keys: {
@@ -3307,6 +3433,14 @@ export interface operations {
                     "application/json": components["schemas"]["KeyList"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            408: components["responses"]["RequestTimeout"];
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
+            429: components["responses"]["TooManyRequests"];
+            431: components["responses"]["HeadersTooLarge"];
+            500: components["responses"]["InternalError"];
         };
     };
     create_key: {
@@ -3331,6 +3465,13 @@ export interface operations {
                     "application/json": components["schemas"]["KeyCreated"];
                 };
             };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            408: components["responses"]["RequestTimeout"];
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
+            415: components["responses"]["UnsupportedMediaType"];
             /** @description The name, the scopes or a limit is not acceptable. */
             422: {
                 headers: {
@@ -3340,6 +3481,9 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            429: components["responses"]["TooManyRequests"];
+            431: components["responses"]["HeadersTooLarge"];
+            500: components["responses"]["InternalError"];
         };
     };
     revoke_key: {
@@ -3363,6 +3507,9 @@ export interface operations {
                     "application/json": components["schemas"]["KeyView"];
                 };
             };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             /** @description `key_not_found`. */
             404: {
                 headers: {
@@ -3372,6 +3519,12 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            408: components["responses"]["RequestTimeout"];
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
+            429: components["responses"]["TooManyRequests"];
+            431: components["responses"]["HeadersTooLarge"];
+            500: components["responses"]["InternalError"];
         };
     };
     rotate_key: {
@@ -3395,6 +3548,9 @@ export interface operations {
                     "application/json": components["schemas"]["KeyCreated"];
                 };
             };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             /** @description `key_not_found`. */
             404: {
                 headers: {
@@ -3404,6 +3560,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            408: components["responses"]["RequestTimeout"];
             /** @description `conflict`: the key is disabled. */
             409: {
                 headers: {
@@ -3413,6 +3570,11 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
+            429: components["responses"]["TooManyRequests"];
+            431: components["responses"]["HeadersTooLarge"];
+            500: components["responses"]["InternalError"];
         };
     };
     list_personas: {
@@ -3441,6 +3603,14 @@ export interface operations {
                     "application/json": components["schemas"]["PersonaList"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            408: components["responses"]["RequestTimeout"];
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
+            429: components["responses"]["TooManyRequests"];
+            431: components["responses"]["HeadersTooLarge"];
+            500: components["responses"]["InternalError"];
         };
     };
     get_persona: {
@@ -3467,6 +3637,9 @@ export interface operations {
                     "application/json": components["schemas"]["PersonaAdminView"];
                 };
             };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             /** @description `persona_not_found`. */
             404: {
                 headers: {
@@ -3476,6 +3649,12 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            408: components["responses"]["RequestTimeout"];
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
+            429: components["responses"]["TooManyRequests"];
+            431: components["responses"]["HeadersTooLarge"];
+            500: components["responses"]["InternalError"];
         };
     };
     regenerate_persona: {
@@ -3499,6 +3678,9 @@ export interface operations {
                     "application/json": components["schemas"]["PersonaAdminView"];
                 };
             };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             /** @description `persona_not_found`. */
             404: {
                 headers: {
@@ -3508,6 +3690,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            408: components["responses"]["RequestTimeout"];
             /** @description `conflict`: the persona is retired, or its proxy cannot carry traffic. */
             409: {
                 headers: {
@@ -3517,6 +3700,11 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
+            429: components["responses"]["TooManyRequests"];
+            431: components["responses"]["HeadersTooLarge"];
+            500: components["responses"]["InternalError"];
         };
     };
     retire_persona: {
@@ -3540,6 +3728,9 @@ export interface operations {
                     "application/json": components["schemas"]["PersonaAdminView"];
                 };
             };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             /** @description `persona_not_found`. */
             404: {
                 headers: {
@@ -3549,6 +3740,12 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            408: components["responses"]["RequestTimeout"];
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
+            429: components["responses"]["TooManyRequests"];
+            431: components["responses"]["HeadersTooLarge"];
+            500: components["responses"]["InternalError"];
         };
     };
     selftest_persona: {
@@ -3577,6 +3774,9 @@ export interface operations {
                     "application/json": components["schemas"]["SelftestView"];
                 };
             };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             /** @description `persona_not_found`. */
             404: {
                 headers: {
@@ -3586,6 +3786,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            408: components["responses"]["RequestTimeout"];
             /** @description `conflict`: the persona is retired, held by other work, or its proxy cannot carry traffic. */
             409: {
                 headers: {
@@ -3595,6 +3796,13 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["UnprocessableEntity"];
+            429: components["responses"]["TooManyRequests"];
+            431: components["responses"]["HeadersTooLarge"];
+            500: components["responses"]["InternalError"];
         };
     };
     reload_policies: {
@@ -3615,6 +3823,11 @@ export interface operations {
                     "application/json": components["schemas"]["PoliciesView"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            408: components["responses"]["RequestTimeout"];
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
             /** @description `validation_failed`: a policy file is invalid; the last good policies stay in force. */
             422: {
                 headers: {
@@ -3624,6 +3837,9 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            429: components["responses"]["TooManyRequests"];
+            431: components["responses"]["HeadersTooLarge"];
+            500: components["responses"]["InternalError"];
         };
     };
     get_pool: {
@@ -3644,6 +3860,14 @@ export interface operations {
                     "application/json": components["schemas"]["PoolView"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            408: components["responses"]["RequestTimeout"];
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
+            429: components["responses"]["TooManyRequests"];
+            431: components["responses"]["HeadersTooLarge"];
+            500: components["responses"]["InternalError"];
         };
     };
     list_proxies: {
@@ -3667,6 +3891,14 @@ export interface operations {
                     "application/json": components["schemas"]["ProxyList"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            408: components["responses"]["RequestTimeout"];
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
+            429: components["responses"]["TooManyRequests"];
+            431: components["responses"]["HeadersTooLarge"];
+            500: components["responses"]["InternalError"];
         };
     };
     check_proxy: {
@@ -3690,6 +3922,9 @@ export interface operations {
                     "application/json": components["schemas"]["ProxyAdminView"];
                 };
             };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             /** @description `proxy_not_found`. */
             404: {
                 headers: {
@@ -3708,6 +3943,11 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
+            429: components["responses"]["TooManyRequests"];
+            431: components["responses"]["HeadersTooLarge"];
+            500: components["responses"]["InternalError"];
         };
     };
     replace_proxy: {
@@ -3731,6 +3971,9 @@ export interface operations {
                     "application/json": components["schemas"]["ReplacementView"];
                 };
             };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             /** @description `proxy_not_found`. */
             404: {
                 headers: {
@@ -3740,6 +3983,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            408: components["responses"]["RequestTimeout"];
             /** @description `conflict`: no provider is configured. */
             409: {
                 headers: {
@@ -3749,6 +3993,11 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
+            429: components["responses"]["TooManyRequests"];
+            431: components["responses"]["HeadersTooLarge"];
+            500: components["responses"]["InternalError"];
         };
     };
     purge: {
@@ -3773,6 +4022,9 @@ export interface operations {
                     "application/json": components["schemas"]["Purged"];
                 };
             };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             /** @description `key_not_found`. */
             404: {
                 headers: {
@@ -3782,6 +4034,10 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            408: components["responses"]["RequestTimeout"];
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
+            415: components["responses"]["UnsupportedMediaType"];
             /** @description `before` lies in the future. */
             422: {
                 headers: {
@@ -3791,6 +4047,9 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            429: components["responses"]["TooManyRequests"];
+            431: components["responses"]["HeadersTooLarge"];
+            500: components["responses"]["InternalError"];
         };
     };
     replace_site_scout: {
@@ -3814,6 +4073,10 @@ export interface operations {
                     "application/json": components["schemas"]["SiteScoutView"];
                 };
             };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            408: components["responses"]["RequestTimeout"];
             /** @description `no_matching_persona`: nobody else may ask the site (every other persona that may read it is needed to read it, read it lately, or is not ready); the site keeps the scout it has. */
             409: {
                 headers: {
@@ -3823,6 +4086,8 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
             /** @description `validation_failed`: what was named is no host. */
             422: {
                 headers: {
@@ -3832,6 +4097,9 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            429: components["responses"]["TooManyRequests"];
+            431: components["responses"]["HeadersTooLarge"];
+            500: components["responses"]["InternalError"];
             /** @description `unavailable`: no proxy pool is configured. */
             503: {
                 headers: {
@@ -3855,15 +4123,18 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The artifact's bytes, in its own media type. */
+            /** @description The artifact's bytes, in its own media type (`Content-Type`): an HTML document, a body as the site sent it, a WebP, PNG or JPEG image, a PDF. Read it as bytes, not as JSON. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/octet-stream": number[];
+                    "*/*": string;
                 };
             };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             /** @description `artifact_not_found`: no such artifact of this key, or it expired. */
             404: {
                 headers: {
@@ -3873,6 +4144,12 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            408: components["responses"]["RequestTimeout"];
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
+            429: components["responses"]["TooManyRequests"];
+            431: components["responses"]["HeadersTooLarge"];
+            500: components["responses"]["InternalError"];
         };
     };
     fetch: {
@@ -3946,6 +4223,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            408: components["responses"]["RequestTimeout"];
             /** @description `session_persona_conflict`. */
             409: {
                 headers: {
@@ -3955,6 +4233,9 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
+            415: components["responses"]["UnsupportedMediaType"];
             /** @description The request cannot be made as asked; `code` says why. */
             422: {
                 headers: {
@@ -3973,6 +4254,8 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            431: components["responses"]["HeadersTooLarge"];
+            500: components["responses"]["InternalError"];
             /** @description Nothing can be fetched: no proxy pool, or the server stops. */
             503: {
                 headers: {
@@ -4058,6 +4341,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            408: components["responses"]["RequestTimeout"];
             /** @description `idempotency_key_reused`, `session_persona_conflict`. */
             409: {
                 headers: {
@@ -4067,6 +4351,9 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
+            415: components["responses"]["UnsupportedMediaType"];
             /** @description The job cannot be accepted as asked; `code` says why, `item` (a batch's item, a crawl's seed) or `step` which part. */
             422: {
                 headers: {
@@ -4085,6 +4372,8 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            431: components["responses"]["HeadersTooLarge"];
+            500: components["responses"]["InternalError"];
             /** @description Nothing can be fetched: no proxy pool, or the server stops. */
             503: {
                 headers: {
@@ -4117,6 +4406,9 @@ export interface operations {
                     "application/json": components["schemas"]["JobView"];
                 };
             };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             /** @description `job_not_found`: no such job of this key. */
             404: {
                 headers: {
@@ -4126,6 +4418,12 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            408: components["responses"]["RequestTimeout"];
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
+            429: components["responses"]["TooManyRequests"];
+            431: components["responses"]["HeadersTooLarge"];
+            500: components["responses"]["InternalError"];
         };
     };
     cancel_job: {
@@ -4149,6 +4447,9 @@ export interface operations {
                     "application/json": components["schemas"]["JobView"];
                 };
             };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             /** @description `job_not_found`. */
             404: {
                 headers: {
@@ -4158,6 +4459,12 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            408: components["responses"]["RequestTimeout"];
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
+            429: components["responses"]["TooManyRequests"];
+            431: components["responses"]["HeadersTooLarge"];
+            500: components["responses"]["InternalError"];
         };
     };
     list_job_items: {
@@ -4188,6 +4495,9 @@ export interface operations {
                     "application/json": components["schemas"]["JobItemsPage"];
                 };
             };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             /** @description `job_not_found`. */
             404: {
                 headers: {
@@ -4197,6 +4507,9 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            408: components["responses"]["RequestTimeout"];
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
             /** @description The cursor or the limit is not one. */
             422: {
                 headers: {
@@ -4206,6 +4519,9 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            429: components["responses"]["TooManyRequests"];
+            431: components["responses"]["HeadersTooLarge"];
+            500: components["responses"]["InternalError"];
         };
     };
     preview_policy: {
@@ -4229,6 +4545,12 @@ export interface operations {
                     "application/json": components["schemas"]["PolicyPreview"];
                 };
             };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            408: components["responses"]["RequestTimeout"];
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
             /** @description Not a host name. */
             422: {
                 headers: {
@@ -4238,6 +4560,9 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            429: components["responses"]["TooManyRequests"];
+            431: components["responses"]["HeadersTooLarge"];
+            500: components["responses"]["InternalError"];
         };
     };
     get_result: {
@@ -4272,6 +4597,9 @@ export interface operations {
                     "application/json": components["schemas"]["FetchAccepted"];
                 };
             };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             /** @description `result_not_found`: no such request of this key, or it expired. */
             404: {
                 headers: {
@@ -4281,6 +4609,12 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            408: components["responses"]["RequestTimeout"];
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
+            429: components["responses"]["TooManyRequests"];
+            431: components["responses"]["HeadersTooLarge"];
+            500: components["responses"]["InternalError"];
         };
     };
     open_session: {
@@ -4314,6 +4648,10 @@ export interface operations {
                     "application/json": components["schemas"]["SessionView"];
                 };
             };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            408: components["responses"]["RequestTimeout"];
             /** @description `no_matching_persona`, or `session_persona_conflict` for an open session whose persona the request excludes. */
             409: {
                 headers: {
@@ -4323,6 +4661,9 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
+            415: components["responses"]["UnsupportedMediaType"];
             /** @description The id or a hint is not well formed. */
             422: {
                 headers: {
@@ -4332,6 +4673,9 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            429: components["responses"]["TooManyRequests"];
+            431: components["responses"]["HeadersTooLarge"];
+            500: components["responses"]["InternalError"];
         };
     };
     get_session: {
@@ -4355,6 +4699,9 @@ export interface operations {
                     "application/json": components["schemas"]["SessionView"];
                 };
             };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             /** @description `session_not_found`: never opened, or ended. */
             404: {
                 headers: {
@@ -4364,6 +4711,12 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            408: components["responses"]["RequestTimeout"];
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
+            429: components["responses"]["TooManyRequests"];
+            431: components["responses"]["HeadersTooLarge"];
+            500: components["responses"]["InternalError"];
         };
     };
     end_session: {
@@ -4385,6 +4738,9 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             /** @description `session_not_found`. */
             404: {
                 headers: {
@@ -4394,6 +4750,12 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            408: components["responses"]["RequestTimeout"];
+            413: components["responses"]["PayloadTooLarge"];
+            414: components["responses"]["UriTooLong"];
+            429: components["responses"]["TooManyRequests"];
+            431: components["responses"]["HeadersTooLarge"];
+            500: components["responses"]["InternalError"];
         };
     };
 }

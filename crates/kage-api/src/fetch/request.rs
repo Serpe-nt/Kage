@@ -99,14 +99,13 @@ pub(crate) const MAX_URL_BYTES: usize = 8 * 1024;
 /// The most headers a request may carry (spec §16.4).
 pub(crate) const MAX_HEADERS: usize = 32;
 
-/// The shortest `timeout_ms` of an attempt that may run in a browser: the
-/// page has to load, an interstitial has to be given its time, and the
-/// persona has to stay at least as long as the policy's shortest dwell.
-/// A shorter budget would cut the behavior down to a bare load.
-pub(crate) const MIN_BROWSER_TIMEOUT: Duration = Duration::from_secs(15);
+/// The shortest `timeout_ms` of an attempt that may run in a browser
+/// ([`kage_core::config::MIN_BROWSER_ATTEMPT_TIMEOUT`]).
+pub(crate) const MIN_BROWSER_TIMEOUT: Duration = kage_core::config::MIN_BROWSER_ATTEMPT_TIMEOUT;
 
-/// The shortest `timeout_ms` on the http path.
-pub(crate) const MIN_HTTP_TIMEOUT: Duration = Duration::from_secs(1);
+/// The shortest `timeout_ms` on the http path
+/// ([`kage_core::config::MIN_HTTP_ATTEMPT_TIMEOUT`]).
+pub(crate) const MIN_HTTP_TIMEOUT: Duration = kage_core::config::MIN_HTTP_ATTEMPT_TIMEOUT;
 
 /// The longest median a request may ask the dwell to have.
 pub(crate) const MAX_DWELL: Duration = Duration::from_secs(60);

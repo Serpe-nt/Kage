@@ -54,6 +54,8 @@ metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# Names the member a body was refused for, as the `field` of the problem.
+serde_path_to_error = { workspace = true }
 sha2 = { workspace = true }
 subtle = { workspace = true }
 thiserror = { workspace = true }

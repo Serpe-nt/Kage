@@ -48,6 +48,7 @@ mod results;
 mod schema;
 pub mod serve;
 mod sessions;
+mod shared;
 mod state;
 #[cfg(test)]
 mod test_support;
@@ -60,7 +61,8 @@ use axum::http::{HeaderName, Method};
 use axum::middleware::{Next, from_fn};
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json, Router};
-use kage_core::domain::Scope;
+use kage_core::domain::{AuditOutcome, Scope};
+use serde_json::json;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
@@ -164,9 +166,42 @@ impl Modify for Security {
 )]
 struct ApiDoc;
 
-/// Asks for the `admin` scope: in front of Swagger UI.
-async fn admins_only(caller: Caller, request: Request, next: Next) -> Response {
-    scoped(Scope::Admin, &caller, request, next).await
+/// Asks for the `admin` scope: in front of Swagger UI and `/metrics`. A
+/// refusal is on the audit trail as the admin endpoints' are (spec §16.2,
+/// F135); a scrape that is let through is not, it would be noise.
+async fn admins_only(
+    Extension(state): Extension<ApiState>,
+    caller: Caller,
+    request: Request,
+    next: Next,
+) -> Response {
+    let Err(error) = caller.require(Scope::Admin) else {
+        return next.run(request).await;
+    };
+    let path = request.uri().path().to_owned();
+    let action = if path.starts_with(DOCS_PATH) {
+        "admin.docs.read"
+    } else {
+        "admin.metrics.read"
+    };
+    let written = auth::record(
+        &state,
+        &caller,
+        action.to_owned(),
+        None,
+        AuditOutcome::Denied,
+        json!({
+            "request_id": caller.request,
+            "path": path,
+            "status": error.code().status().as_u16(),
+            "code": error.code().as_str(),
+        }),
+    )
+    .await;
+    match written {
+        Ok(()) => error.into_response(),
+        Err(failed) => failed.into_response(),
+    }
 }
 
 /// Asks for the `fetch` scope before the request's body is read.
@@ -318,7 +353,8 @@ fn cors(origins: &[String]) -> Option<CorsLayer> {
 
 /// Builds the HTTP router with every route of the API.
 pub fn router(state: ApiState) -> Router {
-    let (documented, openapi) = api().split_for_parts();
+    let (documented, mut openapi) = api().split_for_parts();
+    shared::complete(&mut openapi);
     let openapi = Arc::new(openapi);
     let settings = &state.config().server;
     let limit = usize::try_from(settings.max_body_bytes).unwrap_or(usize::MAX);
@@ -371,7 +407,8 @@ pub fn metrics_router(state: ApiState) -> Router {
 /// Builds the OpenAPI document that describes [`router`]. It needs no
 /// state: the document is the same whatever is configured.
 pub fn openapi() -> utoipa::openapi::OpenApi {
-    let (_, openapi) = api().split_for_parts();
+    let (_, mut openapi) = api().split_for_parts();
+    shared::complete(&mut openapi);
     openapi
 }
 

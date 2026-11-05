@@ -43,7 +43,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::auth::AuditNote;
 use crate::error::{ApiError, ApiResult, ErrorCode, Problem};
-use crate::extract::{Body, Params};
+use crate::extract::{Body, OptionalBody, Params};
 use crate::fetch::request::EngineField;
 use crate::fetch::result::ClaimedOsField;
 use crate::keys::{self, DEFAULT_LIMITS, KeyError, NewKey};
@@ -548,17 +548,13 @@ fn skip_reason(error: &PersonaError) -> Option<String> {
 pub(crate) async fn selftest_persona(
     State(state): State<ApiState>,
     Path(id): Path<String>,
-    body: axum::body::Bytes,
+    OptionalBody(request): OptionalBody<SelftestRequest>,
 ) -> ApiResult<Response> {
     let id: PersonaId = parse_id(&id, ErrorCode::PersonaNotFound)?;
     let engine = engine(&state)?;
-    // The body is optional: nothing at all asks for the default.
-    let request = if body.iter().all(u8::is_ascii_whitespace) {
-        SelftestRequest::default()
-    } else {
-        serde_json::from_slice::<SelftestRequest>(&body)
-            .map_err(|error| ApiError::new(ErrorCode::ValidationFailed, error.to_string()))?
-    };
+    // The body is optional: nothing at all asks for the default. One that
+    // is there is read by the rules of every other body (F113).
+    let request = request.unwrap_or_default();
     let third_party = request.third_party;
     let selftest = &state.config().selftest;
     // Unknown and retired personas are told apart from a test that fails.
@@ -1226,15 +1222,15 @@ pub(crate) struct KeyRequest {
     pub(crate) scopes: Vec<ScopeField>,
     /// Requests per minute; 60 when left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schema(minimum = 1)]
+    #[schema(minimum = 1, maximum = 100_000)]
     pub(crate) requests_per_minute: Option<u32>,
     /// Requests in flight at once; 4 when left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schema(minimum = 1)]
+    #[schema(minimum = 1, maximum = 100_000)]
     pub(crate) max_concurrent: Option<u32>,
     /// Pages per day (UTC); no budget when left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schema(minimum = 1)]
+    #[schema(minimum = 1, maximum = 100_000)]
     pub(crate) daily_page_budget: Option<u32>,
 }
 

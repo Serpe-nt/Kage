@@ -116,16 +116,16 @@ impl NewKey {
         if self.scopes.is_empty() {
             return Err(KeyError::NoScopes);
         }
+        // The budget too: a number the store cannot keep is refused here,
+        // not answered `internal` by the store (F134).
         for (field, value) in [
-            ("requests_per_minute", self.limits.requests_per_minute),
-            ("max_concurrent", self.limits.max_concurrent),
+            ("requests_per_minute", Some(self.limits.requests_per_minute)),
+            ("max_concurrent", Some(self.limits.max_concurrent)),
+            ("daily_page_budget", self.limits.daily_page_budget),
         ] {
-            if value == 0 || value > MAX_KEY_RATE {
+            if value.is_some_and(|value| value == 0 || value > MAX_KEY_RATE) {
                 return Err(KeyError::Limit(field));
             }
-        }
-        if self.limits.daily_page_budget == Some(0) {
-            return Err(KeyError::Limit("daily_page_budget"));
         }
         Ok(())
     }
@@ -337,6 +337,14 @@ mod tests {
         );
         assert_eq!(
             refused(|new| new.limits.daily_page_budget = Some(0)),
+            KeyError::Limit("daily_page_budget")
+        );
+        assert_eq!(
+            refused(|new| new.limits.daily_page_budget = Some(MAX_KEY_RATE + 1)),
+            KeyError::Limit("daily_page_budget")
+        );
+        assert_eq!(
+            refused(|new| new.limits.daily_page_budget = Some(2_147_483_648)),
             KeyError::Limit("daily_page_budget")
         );
         let budgeted = NewKey {

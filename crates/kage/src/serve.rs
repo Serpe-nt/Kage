@@ -72,6 +72,7 @@ pub(crate) async fn run(config: Config, bind: Option<SocketAddr>) -> anyhow::Res
     let (alerts, recorder) = alerts::recorder(store.clone());
     let policies = Arc::new(
         PolicyStore::open(&config.policies.dir, Arc::clone(&alerts))
+            .and_then(|store| store.with_cache_bound(config.cache.max_ttl.get()))
             .context("policies are invalid")?,
     );
     let current = policies.current();
@@ -185,8 +186,11 @@ async fn serve_api(
         None => None,
     };
 
-    // One signal stops both listeners, the upkeep and the work on jobs.
+    // One signal stops the upkeep and the work on jobs at once; the
+    // listeners close once that work and the requests in flight are done,
+    // so that `/readyz` answers `503 stopping` all the while (F121).
     let (stop, stopped) = watch::channel(false);
+    let (close, closed) = watch::channel(false);
     let upkeep = tokio::spawn(upkeep(state.clone(), stopped.clone()));
     let sender = state
         .webhook_sender(Arc::new(DirectTransport::system()))
@@ -206,13 +210,13 @@ async fn serve_api(
     let settings = ServeSettings::from_config(&config.server);
     let metrics_server = metrics_listener.map(|listener| {
         let router = kage_api::metrics_router(state.clone());
-        tokio::spawn(serve(listener, router, settings, wait_for(stopped.clone())))
+        tokio::spawn(serve(listener, router, settings, wait_for(closed.clone())))
     });
     let mut api = tokio::spawn(serve(
         listener,
         kage_api::router(state.clone()),
         settings,
-        wait_for(stopped),
+        wait_for(closed),
     ));
 
     tokio::select! {
@@ -220,6 +224,7 @@ async fn serve_api(
         // The listener gave up by itself: nothing is left to wait for.
         ended = &mut api => {
             let _ = stop.send(true);
+            let _ = close.send(true);
             upkeep.abort();
             for task in background {
                 let _ = task.await;
@@ -227,23 +232,36 @@ async fn serve_api(
             return ended.context("the API server task failed")?;
         }
     }
-    // Readiness says so at once; the requests in flight finish. The
+    // Readiness says so at once, and the listener stays to say it: a load
+    // balancer is told `503 stopping`, never a reset connection. The
     // scheduler grants nothing more from here on: what waited for a
     // persona is told `shutting_down`, a job's page is given back.
+    let signalled = tokio::time::Instant::now();
     state.stop();
     if let Some((engine, _)) = engine {
         engine.quiesce();
     }
     let _ = stop.send(true);
-    let served = api.await.context("the API server task failed")?;
-    if let Some(server) = metrics_server {
-        let _ = server.await;
-    }
+    tracing::info!(
+        "the server stops: /readyz answers 503 until the pages that are being read and the \
+         requests in flight have ended"
+    );
     // Before the engine stops: the worker waits for the pages that are
     // being read (`jobs.wind_down`), writes down what it has to cut, and
     // gives its jobs back; the sender its deliveries.
     for task in background {
         let _ = task.await;
+    }
+    // The requests with a key that are being answered, for at most
+    // `server.shutdown_grace` from the signal; then the listeners close,
+    // and what is still open gets that grace once more.
+    state
+        .settle(signalled + config.server.shutdown_grace.get())
+        .await;
+    let _ = close.send(true);
+    let served = api.await.context("the API server task failed")?;
+    if let Some(server) = metrics_server {
+        let _ = server.await;
     }
     upkeep.abort();
     served

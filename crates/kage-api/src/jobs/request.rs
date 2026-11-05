@@ -39,6 +39,7 @@ use utoipa::{PartialSchema, ToSchema};
 
 use super::crawl::CrawlJob;
 use crate::error::{ApiError, ApiResult, ErrorCode};
+use crate::extract::typed_value;
 use crate::fetch::request::{
     ExtractField, FetchRequest, Include, PacingField, PdfField, PersonaHints, Planned,
     ScreenshotField, XhrField, is_credential, level_of, plan, url_refused,
@@ -599,6 +600,193 @@ impl JobRequest {
     }
 }
 
+/// The name of a job's types, as a refusal lists them.
+const JOB_TYPES: &str = "batch, flow or crawl";
+
+/// Reads a job from the body `POST /v1/jobs` was sent with, naming the
+/// member a refusal is about (`field`), the step of a flow (`step`) and
+/// the item of a batch (`item`) as the checks after it do (F115).
+///
+/// The job's `type` chooses the struct the rest is read as, so that the
+/// path of a refusal reaches into it: an internally tagged enum would read
+/// the members into a buffer first and lose the path.
+///
+/// # Errors
+///
+/// `validation_failed` naming the member.
+pub(crate) fn parse_job(body: &Value) -> ApiResult<JobRequest> {
+    let Value::Object(members) = body else {
+        return Err(ApiError::new(
+            ErrorCode::ValidationFailed,
+            "a job is an object with a type",
+        ));
+    };
+    let kind = match members.get("type") {
+        Some(Value::String(kind)) => kind.as_str(),
+        Some(_) => {
+            return Err(ApiError::field(
+                "type",
+                format!("type: the job's type is a name: {JOB_TYPES}"),
+            ));
+        }
+        None => {
+            return Err(ApiError::field(
+                "type",
+                format!("type: missing; a job is a {JOB_TYPES}"),
+            ));
+        }
+    };
+    let mut rest = members.clone();
+    rest.remove("type");
+    let rest = Value::Object(rest);
+    match kind {
+        "batch" => typed_value(rest).map(JobRequest::Batch),
+        "flow" => match typed_value::<FlowJob>(rest.clone()) {
+            Ok(flow) => Ok(JobRequest::Flow(Box::new(flow))),
+            Err(error) => Err(step_refused(error, &rest)),
+        },
+        "crawl" => typed_value(rest).map(|crawl| JobRequest::Crawl(Box::new(crawl))),
+        other => Err(ApiError::field(
+            "type",
+            format!("type: unknown type {other:?}; a job is a {JOB_TYPES}"),
+        )),
+    }
+}
+
+/// The step a path into a flow is about: `actions[2]...` is step 2.
+fn step_of(field: &str) -> Option<usize> {
+    let rest = field.strip_prefix("actions[")?;
+    let (index, _) = rest.split_once(']')?;
+    index.parse().ok()
+}
+
+/// A refusal of a flow that is about one of its steps names the step, and
+/// the member of the step where one is to blame. A step is an internally
+/// tagged enum whose members are read into a buffer first, so the path of
+/// the refusal ends at the step; the step is read again here as the struct
+/// its action names, which reaches the member.
+fn step_refused(error: ApiError, flow: &Value) -> ApiError {
+    let field = error
+        .problem()
+        .extensions
+        .get("field")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let Some(index) = field.as_deref().and_then(step_of) else {
+        return error;
+    };
+    let step = &flow["actions"][index];
+    let named = |error: ApiError| {
+        let member = error
+            .problem()
+            .extensions
+            .get("field")
+            .and_then(Value::as_str)
+            .map_or_else(
+                || format!("actions[{index}]"),
+                |member| format!("actions[{index}].{member}"),
+            );
+        let detail = error.detail().to_owned();
+        let detail = detail
+            .split_once(": ")
+            .filter(|(path, _)| !path.contains(' '))
+            .map_or(detail.as_str(), |(_, said)| said)
+            .to_owned();
+        at_step(
+            ApiError::field(&member, format!("{member}: {detail}")),
+            index,
+        )
+    };
+    let Value::Object(members) = step else {
+        return at_step(error, index);
+    };
+    let action = match members.get("action") {
+        Some(Value::String(action)) => action.clone(),
+        _ => {
+            return named(ApiError::field(
+                "action",
+                "action: missing, or not the name of an action",
+            ));
+        }
+    };
+    let mut rest = members.clone();
+    rest.remove("action");
+    let rest = Value::Object(rest);
+    let read = match action.as_str() {
+        "goto" => typed_value::<GotoStep>(rest).map(drop),
+        "click" | "hover" => typed_value::<TargetStep>(rest).map(drop),
+        "type" => typed_value::<TypeStep>(rest).map(drop),
+        "press" => typed_value::<PressStep>(rest).map(drop),
+        "scroll" => typed_value::<ScrollStep>(rest).map(drop),
+        "wait_for" => typed_value::<WaitForStep>(rest).map(drop),
+        "select" => typed_value::<SelectStep>(rest).map(drop),
+        "back" => typed_value::<BackStep>(rest).map(drop),
+        "extract" => typed_value::<ExtractStep>(rest).map(drop),
+        "screenshot" => typed_value::<ScreenshotStep>(rest).map(drop),
+        "pdf" => typed_value::<PdfStep>(rest).map(drop),
+        "assert" => typed_value::<AssertStep>(rest).map(drop),
+        unknown => Err(ApiError::field(
+            "action",
+            format!("action: unknown action {unknown:?}"),
+        )),
+    };
+    match read {
+        Err(refusal) => named(refusal),
+        // The step reads alone: what is wrong is in the step as a whole.
+        Ok(()) => at_step(error, index),
+    }
+}
+
+/// Where a member of a batch's item came from: the item's own list
+/// (`items[1].timeout_ms`), its URL (`urls[0]`), or the batch's
+/// `defaults` (`defaults.timeout_ms`).
+fn batch_field(batch: &BatchJob, index: usize, item: &Map<String, Value>, member: &str) -> String {
+    let first = member.split(['.', '[']).next().unwrap_or(member);
+    if index < batch.urls.len() {
+        if first == "url" {
+            return format!("urls[{index}]");
+        }
+    } else if item.contains_key(first) {
+        return format!("items[{}].{member}", index - batch.urls.len());
+    }
+    if batch
+        .defaults
+        .as_ref()
+        .is_some_and(|defaults| defaults.contains_key(first))
+    {
+        return format!("defaults.{member}");
+    }
+    member.to_owned()
+}
+
+/// Reads an item of a batch as the fetch it is, naming where the member a
+/// refusal is about was written.
+fn batch_request(
+    batch: &BatchJob,
+    index: usize,
+    item: &Map<String, Value>,
+    input: Value,
+) -> ApiResult<FetchRequest> {
+    typed_value::<FetchRequest>(input).map_err(|error| {
+        let Some(member) = error
+            .problem()
+            .extensions
+            .get("field")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+        else {
+            return at_item(error, index);
+        };
+        let field = batch_field(batch, index, item, &member);
+        let detail = error
+            .detail()
+            .strip_prefix(&format!("{member}: "))
+            .unwrap_or(error.detail())
+            .to_owned();
+        at_item(ApiError::field(&field, format!("{field}: {detail}")), index)
+    })
+}
+
 /// What the checks of a job need of the server.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Checks<'a> {
@@ -710,13 +898,12 @@ pub(crate) async fn plan_batch(
     let mut planned = Vec::with_capacity(count);
     for (index, item) in from_urls.chain(from_items).enumerate() {
         let item = item.map_err(|error| at_item(error, index))?;
-        let input = merged(batch.defaults.as_ref(), item, batch.session_id.as_deref());
-        let request: FetchRequest = serde_json::from_value(input).map_err(|error| {
-            at_item(
-                ApiError::new(ErrorCode::ValidationFailed, error.to_string()),
-                index,
-            )
-        })?;
+        let input = merged(
+            batch.defaults.as_ref(),
+            item.clone(),
+            batch.session_id.as_deref(),
+        );
+        let request = batch_request(batch, index, &item, input)?;
         let mut one = plan(&request, checks.pacing()).map_err(|error| at_item(error, index))?;
         if let Some(name) = request.headers.keys().find(|name| is_credential(name)) {
             // Only a fetch the caller waits for may carry one: Kage holds
@@ -865,9 +1052,8 @@ fn capture_of(
     if let Value::Object(fields) = fields {
         request.extend(fields);
     }
-    let request: FetchRequest = serde_json::from_value(Value::Object(request))
-        .map_err(|error| ApiError::new(ErrorCode::ValidationFailed, error.to_string()))
-        .map_err(|error| at_step(error, index))?;
+    let request: FetchRequest =
+        typed_value(Value::Object(request)).map_err(|error| at_step(error, index))?;
     let mut planned = plan(&request, checks.pacing()).map_err(|error| at_step(error, index))?;
     // What counts as thin is the configuration's.
     settle(
@@ -1201,8 +1387,7 @@ pub(crate) async fn plan_flow(flow: &FlowJob, checks: Checks<'_>) -> ApiResult<P
             request.insert(name.to_owned(), value);
         }
     }
-    let request: FetchRequest = serde_json::from_value(Value::Object(request))
-        .map_err(|error| ApiError::new(ErrorCode::ValidationFailed, error.to_string()))?;
+    let request: FetchRequest = typed_value(Value::Object(request))?;
     let mut planned = plan(&request, checks.pacing())?;
     // A flow is a script in a browser: the cache knows nothing of it.
     settle(

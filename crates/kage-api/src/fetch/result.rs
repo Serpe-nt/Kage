@@ -1007,7 +1007,9 @@ pub(crate) fn from_stored(
         session_id: session.map(str::to_owned),
         cached: record.cached,
         cached_at: record.cached_at,
-        created_at: record.created_at,
+        // As the store keeps it: a result served from the cache was made
+        // just now and must say what a read of it says later (F134).
+        created_at: crate::stored(record.created_at),
     }
 }
 

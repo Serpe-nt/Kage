@@ -173,6 +173,8 @@ error_codes! {
     PayloadTooLarge => ("payload_too_large", PAYLOAD_TOO_LARGE, "The request body is too large"),
     /// The request target is longer than the server takes.
     UriTooLong => ("uri_too_long", URI_TOO_LONG, "The request target is too long"),
+    /// The request has more headers, or longer ones, than the server takes.
+    HeadersTooLarge => ("headers_too_large", REQUEST_HEADER_FIELDS_TOO_LARGE, "The request's headers are too large"),
     /// The body is not `application/json`.
     UnsupportedMediaType => ("unsupported_media_type", UNSUPPORTED_MEDIA_TYPE, "The body must be application/json"),
     /// The client took too long to send the request, or the server to answer.

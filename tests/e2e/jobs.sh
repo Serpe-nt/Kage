@@ -322,9 +322,25 @@ check "the result names the job too" "${body}" "d.job_id === '${carried}'"
 # The server stops while the page is being fetched, and starts again. It
 # waits for the page that is being read before it stops (jobs.wind_down,
 # follow-up F39), so the restart takes as long as the page has left.
+# Readiness is asked all the while: from the signal until the page has been
+# read, the listener stays and says `503 stopping`, never a reset (F121).
+readiness="${scratch}/readyz-during-stop"
+: > "${readiness}"
+(
+    for _ in $(seq 1 300); do
+        printf '%s\n' "$(curl --silent --max-time 2 --write-out ' %{http_code}' "${base}/readyz" 2> /dev/null || true)" >> "${readiness}"
+        sleep 0.2
+    done
+) &
+poller=$!
 restarting="$(date +%s)"
 "${compose[@]}" restart kage > /dev/null 2>&1 || fail "the server did not restart"
 restarted_after="$(($(date +%s) - restarting))"
+kill "${poller}" 2> /dev/null || true
+wait "${poller}" 2> /dev/null || true
+stopping_answers="$(grep --count '"status":"stopping".* 503$' "${readiness}" || true)"
+[ "${stopping_answers}" -ge 3 ] \
+    || fail "/readyz did not answer 503 stopping while the server stopped: $(sort "${readiness}" | uniq --count | head -c 2000)"
 for _ in $(seq 1 60); do
     call GET /readyz || true
     [ "${status}" = 200 ] && break
@@ -353,7 +369,7 @@ expect 200 "the job after the restart"
 check "the job ended with its item" "${body}" "d.state === 'succeeded' && d.items.succeeded === 1"
 call GET "/v1/jobs/${carried}/items" "${client}"
 check "the item is the request of the fetch" "${body}" "d.items.length === 1 && d.items[0].request_id === '${request}' && d.items[0].state === 'succeeded'"
-echo "    request ${request}: 202 with job ${carried}, the server restarted (its stop took ${restarted_after} s: it waited for the page), finished after ${attempts} attempt(s), the site asked once"
+echo "    request ${request}: 202 with job ${carried}, the server restarted (its stop took ${restarted_after} s: it waited for the page, and /readyz said 503 stopping ${stopping_answers} times meanwhile), finished after ${attempts} attempt(s), the site asked once"
 
 echo "==> a fetch that waits for its site's one visitor is carried on, and cancelled: the site never gets it"
 # One seat on the site and a gap of a minute: the second page waits for the
@@ -399,7 +415,31 @@ check "the request ended with its job: provider_error, cancelled, nothing attemp
 seen="$(got "${site}/__kage/requests")"
 check "the site got the first page once and never the cancelled one" "${seen}" \
     "d.filter((r) => r.path === '/slow?ms=10&n=seat-1').length === 1 && d.filter((r) => r.path === '/slow?ms=10&n=seat-2').length === 0"
+call GET "/v1/jobs/${waiting_job}/items" "${client}"
+expect 200 "the items of the cancelled job"
+check "the item shows what ended it, as its result does (F155)" "${body}" \
+    "d.items.length === 1 && d.items[0].result !== null && d.items[0].result.outcome === 'provider_error' && d.items[0].result.reason === 'cancelled' && d.items[0].result.id === '${waiting_request}'"
 echo "    request ${waiting_request}: 202 with job ${waiting_job}, cancelled in ${cancelled_after} s, 200 provider_error/cancelled, never asked of the site"
+
+echo "==> an operator's key reads any key's job, and the trail says so; every cancel is on it (F117)"
+call POST /v1/admin/keys "${admin}" '{"name":"e2e-operator-jobs","scopes":["admin","jobs"]}'
+expect 201 "POST /v1/admin/keys"
+operator="$(value "${body}" "d.token")"
+operator_id="$(value "${body}" "d.key.id")"
+call POST /v1/admin/keys "${admin}" '{"name":"e2e-other-jobs","scopes":["jobs"]}'
+expect 201 "POST /v1/admin/keys"
+other="$(value "${body}" "d.token")"
+call GET "/v1/jobs/${waiting_job}" "${other}"
+problem 404 job_not_found "another key's job, for a key without admin"
+call GET "/v1/jobs/${waiting_job}" "${operator}"
+expect 200 "an operator reads another key's job"
+call GET '/v1/admin/audit?limit=200' "${admin}"
+expect 200 "GET /v1/admin/audit"
+check "the operator's read is on the trail with both keys" "${body}" \
+    "d.events.some((e) => e.action === 'job.show' && e.api_key_id === '${operator_id}' && e.target === '${waiting_job}' && e.details.owner_key === '${client_id}' && e.details.another_keys === true)"
+check "the owner's cancel is on the trail" "${body}" \
+    "d.events.some((e) => e.action === 'job.cancel' && e.api_key_id === '${client_id}' && e.target === '${waiting_job}' && e.details.another_keys === false)"
+echo "    another key: 404; the operator: 200, on the trail with owner_key ${client_id}; the owner's cancel on the trail"
 
 echo "==> an admin purges everything the key fetched; it is on the audit log"
 before="$(psql "SELECT count(*) FROM requests WHERE api_key_id = '${client_id}'")"
