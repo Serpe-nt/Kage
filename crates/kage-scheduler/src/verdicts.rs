@@ -29,7 +29,6 @@ use kage_proxy::Clock;
 
 use crate::SchedulerError;
 use crate::backend::Backend;
-use crate::metrics;
 
 /// What the classifier and the rules around it need to judge and settle
 /// an attempt.
@@ -318,11 +317,6 @@ impl Verdicts {
         } else {
             BreakerChange::Unchanged
         };
-        match change {
-            BreakerChange::Opened { .. } => metrics::breaker(domain, true),
-            BreakerChange::Closed => metrics::breaker(domain, false),
-            BreakerChange::Unchanged => {}
-        }
         Ok(Settled {
             cooldown,
             breaker: change,
@@ -346,7 +340,6 @@ impl Verdicts {
         }
         if self.backend.breaker_success(domain, at).await? == BreakerChange::Closed {
             tracing::info!(%domain, "the domain answers again: its breaker closed");
-            metrics::breaker(domain, false);
         }
         Ok(())
     }

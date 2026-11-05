@@ -3219,6 +3219,7 @@ fn a_plain_client_counts_toward_the_sites_rpm_with_the_personas() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // A stop, a pause, its end, a trial under way, server errors: one client.
 fn a_plain_client_is_refused_by_a_stop_and_a_paused_site_and_is_never_a_trial() {
     let mut planner = Planner::new(rules(), Seed::from_u64(5));
     planner.set_personas(Vec::new());
@@ -3237,8 +3238,9 @@ fn a_plain_client_is_refused_by_a_stop_and_a_paused_site_and_is_never_a_trial() 
     );
     planner.set_stop(None);
 
-    // A breaker that waits for its one trial: the plain client does not
-    // take it, and is told the site is paused.
+    // While a breaker's pause runs the plain client is refused with the
+    // pause's end; once it has run out and the breaker waits for its one
+    // trial, the plain client does not take it and goes on (F126).
     let breaker_rules = BreakerRules {
         threshold: 5,
         pause: StdDuration::from_mins(30),
@@ -3252,20 +3254,52 @@ fn a_plain_client_is_refused_by_a_stop_and_a_paused_site_and_is_never_a_trial() 
             &breaker_rules,
         );
     }
+    let until = breaker.paused_until.unwrap();
+    assert!(until < noon());
     let mut facts = facts_for(&["example.org"]);
     if let Some(known) = facts.get_mut("example.org") {
         known.breaker = Some(breaker);
     }
-    planner.submit(plain("example.org"), noon());
-    let decisions = planner.plan(noon(), &facts);
+    let during = until - Duration::minutes(10);
+    planner.submit(plain("example.org"), during);
+    let decisions = planner.plan(during, &facts);
     assert!(
         matches!(
             decisions.as_slice(),
             [Decision::Refuse {
                 reason: Refusal::DomainPaused,
+                retry_at: Some(at),
                 ..
-            }]
+            }] if *at == until
         ),
+        "{decisions:?}"
+    );
+    // policy-03: after the pause, with no trial under way, it goes.
+    planner.submit(plain("example.org"), noon());
+    let decisions = planner.plan(noon(), &facts);
+    let [Decision::Plain(left)] = decisions.as_slice() else {
+        panic!("{decisions:?}");
+    };
+    // A plain dispatch carries no trial: the breaker still waits for one.
+    planner.complete(
+        left.grant,
+        noon(),
+        Completion {
+            courtesy: Courtesy::Answered,
+            blocked: false,
+            proxy_failed: false,
+        },
+    );
+    // And while a persona's trial is under way, too.
+    if let Some(known) = facts.get_mut("example.org")
+        && let Some(breaker) = known.breaker.as_mut()
+    {
+        breaker.begin_trial(noon());
+    }
+    planner.submit(plain("example.org"), noon() + secs(1));
+    let decisions = planner.plan(noon() + secs(1), &facts);
+    assert!(
+        matches!(decisions.as_slice(), [Decision::Plain(_)]),
         "{decisions:?}"
     );
     // Server errors in a row hold it too.

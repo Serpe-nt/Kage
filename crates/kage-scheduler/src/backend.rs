@@ -129,18 +129,21 @@ pub trait Backend: Send + Sync + fmt::Debug {
     /// The proxy of a persona when it can carry traffic now: a site's
     /// plain exit under `egress.plain: pool` is its scout's when the pool
     /// has no plain exit of its own (spec §25). `None` when the persona is
-    /// gone or its proxy is not usable.
+    /// gone or its proxy is not usable, or is held by a suspected outage of
+    /// the pool (F193).
     async fn plain_exit(&self, persona: PersonaId) -> Result<Option<ProxyId>, SchedulerError>;
 
     /// The plain exit recorded for a site, and whether it can carry
-    /// traffic now: `None` when none is recorded or its proxy is retired,
-    /// which means "choose again" (ADR 0013, spec §25).
+    /// traffic now (not while a suspected outage of the pool holds it,
+    /// F193): `None` when none is recorded or its proxy is retired, which
+    /// means "choose again" (ADR 0013, spec §25).
     async fn site_exit(&self, site: &str) -> Result<Option<(ProxyId, bool)>, SchedulerError>;
 
-    /// The pool's own plain exits that can carry traffic now: proxies that
-    /// carry no persona (a declared entry without a country), oldest
-    /// first. A site's plain traffic prefers them, since they never read
-    /// any site as a person.
+    /// The pool's own plain exits that can carry traffic by their state:
+    /// proxies that carry no persona (a declared entry without a country),
+    /// oldest first. A site's plain traffic prefers them, since they never
+    /// read any site as a person. A site's exit is drawn from these, held
+    /// or not, and whether it can carry traffic now is [`Self::site_exit`]'s.
     async fn plain_exits(&self) -> Result<Vec<ProxyId>, SchedulerError>;
 
     /// Records the plain exit of a site, its own from then on.
@@ -228,6 +231,20 @@ pub struct StoreBackend {
 }
 
 impl StoreBackend {
+    /// A proxy of the pool, and whether the outage guard of spec §7.3
+    /// holds over the pool now (never under `direct`): a level 0 exit
+    /// whose latest probe failed then waits, as a persona does (F193).
+    async fn with_outage(&self, id: ProxyId) -> Result<(Option<Proxy>, bool), SchedulerError> {
+        let live = self.pool.live().await?;
+        let outage = !self.direct && kage_proxy::outage_suspected(&live);
+        let found = match live.into_iter().find(|proxy| proxy.id == id) {
+            Some(proxy) => Some(proxy),
+            // Not live: retired, whatever it was.
+            None => self.pool.get(id).await?,
+        };
+        Ok((found, outage))
+    }
+
     /// A backend over the store and the pool.
     pub const fn new(store: Store, pool: Arc<Pool>) -> Self {
         Self {
@@ -306,11 +323,9 @@ impl Backend for StoreBackend {
         else {
             return Ok(None);
         };
-        Ok(self
-            .pool
-            .get(persona.proxy_id)
-            .await?
-            .filter(|proxy| proxy.state.is_usable())
+        let (proxy, outage) = self.with_outage(persona.proxy_id).await?;
+        Ok(proxy
+            .filter(|proxy| proxy.state.is_usable() && !machine::held_by_outage(proxy, outage))
             .map(|proxy| proxy.id))
     }
 
@@ -438,12 +453,14 @@ impl Backend for StoreBackend {
         let Some(id) = self.store.site_exits().get(site).await? else {
             return Ok(None);
         };
-        // One that leaves by another proxy's address carries nothing.
-        let usable = self
-            .pool
-            .get(id)
-            .await?
-            .is_some_and(|proxy| proxy.state.is_usable() && !proxy.exit_shared());
+        // One that leaves by another proxy's address carries nothing, nor
+        // one a suspected outage holds (F193): the site waits for it.
+        let (proxy, outage) = self.with_outage(id).await?;
+        let usable = proxy.is_some_and(|proxy| {
+            proxy.state.is_usable()
+                && !proxy.exit_shared()
+                && !machine::held_by_outage(&proxy, outage)
+        });
         Ok(Some((id, usable)))
     }
 
@@ -616,19 +633,22 @@ impl Routes for PoolRoutes {
         let PlainRoute::Pool(id) = route else {
             return Ok(Upstream::Direct);
         };
-        let proxy = self
-            .pool
-            .get(id)
-            .await
-            .map_err(|error| {
-                tracing::warn!(proxy = %id, %error, "the forwarder cannot look up a plain exit");
-                RouteRefusal::Unavailable
-            })?
+        let live = self.pool.live().await.map_err(|error| {
+            tracing::warn!(proxy = %id, %error, "the forwarder cannot look up a plain exit");
+            RouteRefusal::Unavailable
+        })?;
+        // Under a suspected outage of the pool an exit whose latest probe
+        // failed carries nothing, as a persona's proxy does (F193).
+        let outage = !self.direct && kage_proxy::outage_suspected(&live);
+        let proxy = live
+            .into_iter()
+            .find(|proxy| proxy.id == id)
             // One that leaves by another proxy's address carries nothing.
             .filter(|proxy| {
                 proxy.state.is_usable()
                     && proxy.provider != ProxyProviderKind::Host
                     && !proxy.exit_shared()
+                    && !machine::held_by_outage(proxy, outage)
             })
             .ok_or(RouteRefusal::ProxyNotUsable)?;
         self.upstream_of(&proxy, &id)

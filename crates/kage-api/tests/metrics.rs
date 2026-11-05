@@ -16,7 +16,7 @@ mod common;
 use axum::http::{Method, StatusCode};
 use common::{Api, ask, request};
 use kage_core::config::{SelftestPageConfig, SelftestPageKind};
-use kage_core::domain::Scope;
+use kage_core::domain::{BreakerState, DomainBreaker, Scope};
 use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
@@ -282,6 +282,22 @@ async fn metrics_expose_the_series_of_the_specification() {
     )
     .await;
 
+    // A breaker stored open whose pause has run out (F126, secrecy-03): the
+    // gauge is read from the store at the scrape and says 0, though no
+    // request has come since to close it.
+    let now = chrono::Utc::now();
+    let mut ended = DomainBreaker::closed("ended.kage.test", now - chrono::Duration::hours(1));
+    ended.state = BreakerState::Open;
+    ended.paused_until = Some(now - chrono::Duration::minutes(1));
+    ended.trips = 1;
+    api.lab
+        .db
+        .store
+        .domain_breakers()
+        .upsert(&ended)
+        .await
+        .unwrap();
+
     // Who may read them: a key with the admin scope.
     send(Method::GET, "/metrics", None, None)
         .await
@@ -378,6 +394,11 @@ async fn metrics_expose_the_series_of_the_specification() {
         &text,
         "kage_breaker_open",
         &["domain=\"walled.kage.test\"", " 1"],
+    );
+    expect(
+        &text,
+        "kage_breaker_open",
+        &["domain=\"ended.kage.test\"", " 0"],
     );
     // What the alert compares a domain's blocks with: its policy's.
     expect(
@@ -532,6 +553,15 @@ async fn metrics_expose_the_series_of_the_specification() {
     );
     expect(&text, "kage_api_requests_in_flight", &[]);
     expect(&text, "kage_api_refusals_total", &["code=\"missing_key\""]);
+    // A key without the scope a route needs is counted too (F182, timers-02).
+    let scope_missing = text
+        .lines()
+        .find_map(|line| line.strip_prefix("kage_api_refusals_total{code=\"scope_missing\"} "))
+        .and_then(|value| value.trim().parse::<f64>().ok());
+    assert!(
+        scope_missing.is_some_and(|count| count >= 1.0),
+        "{scope_missing:?}"
+    );
     // Every family is described once, and no line is there twice.
     for family in [
         "kage_requests_total",

@@ -1055,13 +1055,19 @@ impl Planner {
             leg_trials.push(tried);
         }
         let mut trial = false;
-        if let Some(breaker) = &facts.breaker {
+        if let Some(breaker) = &facts.breaker
+            && work.plain
+        {
+            // A plain client waits only for the pause itself (F126): it is
+            // never a breaker's trial and never counts on one, so once the
+            // pause has run out it goes on while the breaker waits for a
+            // persona's trial.
+            if breaker.is_open(now) {
+                return Looked::Refuse(Refusal::DomainPaused, breaker.paused_until);
+            }
+        } else if let Some(breaker) = &facts.breaker {
             match breaker.admission(now, &self.breaker_rules(work)) {
                 Admission::Flow => {}
-                // A plain client is never the trial of a breaker.
-                Admission::Trial if work.plain => {
-                    return Looked::Refuse(Refusal::DomainPaused, None);
-                }
                 Admission::Trial if !trials.contains(&work.domain) => trial = true,
                 Admission::Trial => return Looked::Refuse(Refusal::DomainPaused, None),
                 Admission::Paused { until } => {

@@ -65,6 +65,9 @@ impl Caller {
     }
 
     /// Asks for a scope. Scopes are independent: `admin` implies no other.
+    /// A refusal is counted under `kage_api_refusals_total{code="scope_missing"}`
+    /// with the refusals of the key's layer, though the scope is asked for by
+    /// the handler (F182).
     ///
     /// # Errors
     ///
@@ -73,6 +76,7 @@ impl Caller {
         if self.has(scope) {
             return Ok(());
         }
+        crate::metrics::refusal(ErrorCode::ScopeMissing.as_str());
         Err(ApiError::new(
             ErrorCode::ScopeMissing,
             format!("this endpoint needs the {scope} scope, which the key does not have"),

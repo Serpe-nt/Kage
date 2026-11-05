@@ -122,6 +122,14 @@ const NAMES_KEPT: usize = 4096;
 /// address.
 const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How long a proxy that could not be reached is refused at once, without
+/// another try (F159). A browser asks for its tunnel again at once, and
+/// each try of a proxy that is gone cost a name lookup and the connect
+/// timeout: 40 s per attempt in the QA world. Short, so that a proxy that
+/// is back is tried again within seconds; the pool's probes never go
+/// through the forwarder and are not held by it.
+pub const UNREACHABLE_KEPT: Duration = Duration::from_secs(15);
+
 /// Where a plain client's traffic leaves (spec §25): the host's own
 /// connection, or the one proxy of the pool that is a site's plain exit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -927,7 +935,8 @@ pub struct ForwarderSettings {
     /// address on a route with no upstream (`egress.direct.private_names`).
     pub private_names: HashSet<String>,
     /// How a route with no upstream resolves its targets, and every route
-    /// when `resolve_names` is on.
+    /// when `resolve_names` is on; also how a proxy given by name is found,
+    /// within [`LOOKUP_TIMEOUT`] (F159).
     pub resolver: Arc<dyn HopResolver>,
     /// Whether every name relayed through a proxy is looked up here too
     /// and refused for an address in a denied range or for having none
@@ -1104,6 +1113,9 @@ pub struct Forwarder {
     denials: Arc<Denials>,
     /// The names looked up, and their answers while they are kept.
     names: Names,
+    /// The proxies that could not be reached a moment ago, by where they
+    /// are reached, and when.
+    unreachable: Mutex<HashMap<(String, u16), Instant>>,
 }
 
 impl Forwarder {
@@ -1144,6 +1156,7 @@ impl Forwarder {
             refused: AtomicU64::new(0),
             relayed: AtomicU64::new(0),
             denials: Arc::new(Denials::default()),
+            unreachable: Mutex::new(HashMap::new()),
         });
         Ok((forwarder, listener))
     }
@@ -1247,6 +1260,63 @@ impl Forwarder {
     }
 
     /// Checks one request and relays its connection.
+    /// Opens the connection to a proxy (F159): its name looked up within
+    /// [`LOOKUP_TIMEOUT`] (a stopped container's name can take tens of
+    /// seconds to fail), the connection made within the connect timeout,
+    /// and a proxy that could not be reached refused at once for
+    /// [`UNREACHABLE_KEPT`]. The reason names neither the proxy's address
+    /// nor its name.
+    async fn connect_upstream(&self, upstream: &ProxyEndpoint) -> Result<TcpStream, String> {
+        let now = Instant::now();
+        {
+            let mut unreachable = self
+                .unreachable
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            unreachable.retain(|_, at| now.duration_since(*at) < UNREACHABLE_KEPT);
+            if unreachable.contains_key(&(upstream.host.clone(), upstream.port)) {
+                return Err("the proxy could not be reached a moment ago".to_owned());
+            }
+        }
+        let connected = self.try_upstream(upstream).await;
+        if connected.is_err() {
+            self.unreachable
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert((upstream.host.clone(), upstream.port), Instant::now());
+        }
+        connected
+    }
+
+    async fn try_upstream(&self, upstream: &ProxyEndpoint) -> Result<TcpStream, String> {
+        let addresses: Vec<SocketAddr> = if let Ok(address) = upstream.host.parse::<IpAddr>() {
+            vec![SocketAddr::new(address, upstream.port)]
+        } else {
+            let looked_up = self.settings.resolver.resolve(&upstream.host);
+            match tokio::time::timeout(LOOKUP_TIMEOUT, looked_up).await {
+                Ok(Ok(found)) => found
+                    .into_iter()
+                    .map(|address| SocketAddr::new(address, upstream.port))
+                    .collect(),
+                Ok(Err(_)) => return Err("the proxy's name cannot be looked up".to_owned()),
+                Err(_) => {
+                    return Err(format!(
+                        "the proxy's name had no answer within {LOOKUP_TIMEOUT:?}"
+                    ));
+                }
+            }
+        };
+        if addresses.is_empty() {
+            return Err("the proxy's name has no address".to_owned());
+        }
+        let connecting = TcpStream::connect(addresses.as_slice());
+        match tokio::time::timeout(self.settings.connect_timeout, connecting).await {
+            Ok(Ok(server)) => Ok(server),
+            Ok(Err(error)) => Err(error.to_string()),
+            Err(_) => Err("the proxy did not answer".to_owned()),
+        }
+    }
+
     async fn relay(
         &self,
         client: &mut TcpStream,
@@ -1309,18 +1379,11 @@ impl Forwarder {
         if let Err(refused) = self.screen(caller, &host, port).await {
             return refuse(client, tunnel, refused).await;
         }
-        let connecting = TcpStream::connect((upstream.host.as_str(), upstream.port));
-        let mut server = match tokio::time::timeout(self.settings.connect_timeout, connecting).await
-        {
-            Ok(Ok(server)) => server,
-            Ok(Err(error)) => {
+        let mut server = match self.connect_upstream(&upstream).await {
+            Ok(server) => server,
+            Err(reason) => {
                 self.meter.note_unrelayed(caller, &host, port);
-                return refuse(client, tunnel, Refused::Upstream(error.to_string())).await;
-            }
-            Err(_) => {
-                self.meter.note_unrelayed(caller, &host, port);
-                let reason = Refused::Upstream("the proxy did not answer".to_owned());
-                return refuse(client, tunnel, reason).await;
+                return refuse(client, tunnel, Refused::Upstream(reason)).await;
             }
         };
         let _ = server.set_nodelay(true);
