@@ -312,6 +312,21 @@ const LEAVE_PAGE = page(
 ${LEAVE_RECORDER}`,
 );
 
+// The recorder on a page that puts its link at the top edge of the window
+// when it is at its end, whatever the window's height (F164): what follows
+// the link is a window's height less 13 pixels, so the link's middle lies
+// about 4 pixels below the top of the window, in the band where a hand
+// looks before it goes. Opened as #end, the page is at its end. A persona with a window 1481 pixels
+// high met the reading room's link there, and the hand gave up on it.
+const LEAVE_EDGE_PAGE = page(
+  'Leave, the link at the edge',
+  `<div style="height:150vh">A page read to its end.</div>
+<a id="edge" href="/landing?from=edge" style="display:block;height:18px;line-height:18px">At the top edge</a>
+<div style="height:calc(100vh - 13px)"></div><div id="end"></div>
+${LEAVE_RECORDER}`,
+  '<style>html, body { margin: 0; padding: 0; }</style>',
+);
+
 // The same recorder on a page whose links are not what a list of links
 // makes of them (follow-up F28): one that runs over the end of a line, so
 // that the rectangle around it holds text that is no part of it; one that
@@ -606,6 +621,7 @@ const routes = {
   // The leave recorder (follow-up F28): how a page was left.
   '/leave/': (_req, res) => html(res, LEAVE_PAGE),
   '/leave/odd': (_req, res) => html(res, LEAVE_ODD_PAGE),
+  '/leave/edge': (_req, res) => html(res, LEAVE_EDGE_PAGE),
 
   // What a list of links has to tell apart (spec §13).
   '/links': (_req, res, url) => html(res, linksPage(url)),

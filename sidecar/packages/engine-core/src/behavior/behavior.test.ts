@@ -682,6 +682,55 @@ describe('a persona at its mouse and keyboard', () => {
     expect(on(back.pointer(), near, back.scrollY())).toBe(true);
   });
 
+  it('turns the wheel up for a link whose top shows at the top of the window (F164)', async () => {
+    // The crawl's reading room as a persona with a tall window read it: the
+    // page at its end, and the link to click with its middle 5 pixels from
+    // the top. Until F164 the hand flicked down, which a page at its end
+    // does not follow, and gave up after three flicks.
+    const edge = { x: 300, y: 396, width: 160, height: 18 };
+    const page = rig({ boxes: { '#next': edge }, scrollHeight: 1200 });
+    expect(await page.human.scrollTo(1)).toBe('depth');
+    expect(page.scrollY()).toBe(400);
+    expect(edge.y + edge.height / 2 - page.scrollY()).toBe(5);
+    const read = page.log.length;
+    await page.human.click('#next');
+    const middle = edge.y + edge.height / 2 - page.scrollY();
+    expect(middle).toBeGreaterThanOrEqual(12);
+    expect(middle).toBeLessThanOrEqual(800 - 12);
+    const wheel = page.log.slice(read).filter((entry) => entry.startsWith('wheel'));
+    expect(wheel.length).toBeGreaterThan(0);
+    expect(wheel.every((entry) => entry === 'wheel up')).toBe(true);
+    const pointer = page.pointer();
+    expect(pointer.y - 90).toBeGreaterThan(edge.y - page.scrollY());
+    expect(pointer.y - 90).toBeLessThan(edge.y + edge.height - page.scrollY());
+  });
+
+  it('goes to the part of an element that shows when the page scrolls no further (F164)', async () => {
+    // At the top of a page, a link whose middle is 6 pixels from the top of
+    // the window: no flick up moves the page, and half of it shows.
+    const top = { x: 300, y: -3, width: 160, height: 18 };
+    const high = rig({ boxes: { '#top': top }, scrollHeight: 4000 });
+    await high.human.click('#top');
+    expect(high.scrollY()).toBe(0);
+    expect(high.pointer().y - 90).toBeGreaterThanOrEqual(0);
+    expect(high.pointer().y - 90).toBeLessThan(top.y + top.height);
+    expect(
+      high.log.filter((entry) => entry.startsWith('wheel')).every((entry) => entry === 'wheel up'),
+    ).toBe(true);
+    expect(high.log.at(-1)?.startsWith('up left')).toBe(true);
+    // At the end of a page, one whose middle is 5 pixels from the bottom.
+    const bottom = { x: 300, y: 1186, width: 160, height: 18 };
+    const low = rig({ boxes: { '#bottom': bottom }, scrollHeight: 1200 });
+    expect(await low.human.scrollTo(1)).toBe('depth');
+    expect(low.scrollY()).toBe(400);
+    expect(bottom.y + bottom.height / 2 - low.scrollY()).toBe(795);
+    await low.human.click('#bottom');
+    expect(low.scrollY()).toBe(400);
+    expect(low.pointer().y - 90).toBeGreaterThan(bottom.y - low.scrollY());
+    expect(low.pointer().y - 90).toBeLessThan(800);
+    expect(low.log.at(-1)?.startsWith('up left')).toBe(true);
+  });
+
   it('says so when there is no such element, or it cannot be reached', async () => {
     const { human } = rig({
       boxes: { '#below': { x: 0, y: 9000, width: 10, height: 10 } },
@@ -691,6 +740,13 @@ describe('a persona at its mouse and keyboard', () => {
     const stuck: unknown = await human.hover('#below').catch((error: unknown) => error);
     expect(stuck).toBeInstanceOf(BehaviorError);
     expect(stuck).toMatchObject({ reason: 'element_not_reachable' });
+    // What it saw when it gave up, for the log: the page at its end, the
+    // last flicks moving nothing.
+    const seen = (stuck as BehaviorError).seen;
+    expect(seen.length).toBeGreaterThanOrEqual(2);
+    expect(seen.at(-1)).toMatchObject({ direction: 'down', scrollHeight: 1200, viewport: 800 });
+    expect(seen.at(-1)?.after).toBe(seen.at(-1)?.before);
+    expect(seen.at(-1)?.middle).toBeGreaterThan(800);
   });
 
   it('scrolls to a depth in flicks with rests, moving the mouse first, sometimes back', async () => {

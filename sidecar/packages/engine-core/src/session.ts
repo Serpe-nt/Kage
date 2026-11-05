@@ -51,6 +51,7 @@ import {
   type MotorProfile,
   type PageSurface,
   type Point,
+  type RevealStep,
   type SurfaceMetrics,
   type Tempo,
 } from './behavior/index.js';
@@ -1871,6 +1872,7 @@ export class PageSession {
     this.freshOnNavigation = 'once';
     let onLink = false;
     let missed = 'not_on_link';
+    let seen: readonly RevealStep[] = [];
     try {
       // The pointer goes to the link once the page rests from the wheel,
       // and the page is asked what it rests on. A page that moved by itself
@@ -1888,13 +1890,14 @@ export class PageSession {
       }
       // The link went away, or cannot be brought into view.
       missed = thrown.reason;
+      seen = thrown.seen;
     }
     if (!onLink) {
       // Rare, and the result says only `link_not_found`: the log says why
       // (follow-up F66), so that a crawl that typed what it meant to click
       // can be told from one whose page had no such link.
       this.parts.log.warn(
-        { attempts: HOVER_ATTEMPTS, missed },
+        { attempts: HOVER_ATTEMPTS, missed, seen },
         'the hand did not come to rest on the link, so it did not click',
       );
       this.freshOnNavigation = 'never';
