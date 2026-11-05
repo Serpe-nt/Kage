@@ -469,8 +469,16 @@ batch may differ in level. A job keeps its items until they run, so it
 refuses a caller's `Cookie` or `Authorization` header (`header_denied`).
 
 A job is accepted whole or not at all: one item the API would refuse as a
-fetch refuses the job (`item` in the problem says which), and nothing is
-stored. Send an `Idempotency-Key` header with every submission you might
+fetch refuses the job (`item` in the problem says which, `step` for a
+flow's step, and `field` the member as written: `items[1].timeout_ms`,
+`defaults.level`, `actions[2].selector`), and nothing is stored. A member
+given twice is refused, never the last one taken.
+
+A job is its key's: another key reads `404 job_not_found`. A key with the
+`admin` scope beside `jobs` is an operator's and reads and cancels any
+key's job; each such read (`job.show`, `job.items`) and every cancel
+(`job.cancel`, the owner's own too) is on the audit trail with the
+caller's key and the job's as `owner_key`. Send an `Idempotency-Key` header with every submission you might
 repeat: the same request under the same key within a day is answered
 `200` with the job it made the first time (`Idempotency-Replayed: true`),
 so a client that lost the answer does not start the batch twice.
@@ -850,9 +858,13 @@ the persona's real id and the seeds.
 
 Every call below is written to the audit trail with the key, the action,
 what it was done to and how it ended, a refusal for a missing scope
-included. `GET /v1/admin/audit` reads it, newest first (`limit` up to 200,
+included; so is a refusal at `/metrics` (`admin.metrics.read`) and at
+`/docs` (`admin.docs.read`), while a scrape that is let through is not.
+`GET /v1/admin/audit` reads it, newest first (`limit` up to 200,
 `cursor` from `next_cursor`); what was done at the command line is in the
-same trail with the actor `cli`.
+same trail with the actor `cli`. A command whose event cannot be written
+(the store refuses it) shows what it did and ends non-zero saying so: a
+script that reads the exit code learns that the trail misses it.
 
 | Endpoint | What |
 |---|---|
@@ -894,9 +906,13 @@ and says why.
 database answers, at least one persona is ready behind a usable proxy and
 at least one sidecar answers; otherwise `503` with the three checks, and
 `503` with `status: "stopping"` from the moment the server is told to
-stop, while requests in flight finish (`server.shutdown_grace`, 30 s) and
-the pages that are being read are waited for (`jobs.wind_down`, 150 s;
-`docs/runbooks/fetching.md`, "Stopping the server").
+stop, while the pages that are being read are waited for
+(`jobs.wind_down`, 150 s; `docs/runbooks/fetching.md`, "Stopping the
+server") and requests in flight finish (`server.shutdown_grace`, 30 s from
+the signal). The listener stays open all that while, so a load balancer
+or a watch is told `503`, never a reset connection; then it closes, and
+what is still open gets `server.shutdown_grace` once more. The compose
+file's `stop_grace_period` (200 s) covers both.
 
 `/metrics` on the API needs a key with the `admin` scope. For a Prometheus
 on the compose network set `server.metrics_bind` (for example
@@ -908,7 +924,8 @@ the latest browser self-test score of each live persona, and the series
 of both sidecars. The API's own: `kage_api_requests_total{route,method,
 status}`, `kage_api_request_duration_seconds`, `kage_api_requests_in_flight`
 and `kage_api_refusals_total{code}`, which counts what was refused before a
-handler ran: a rise of `invalid_key` is someone guessing, a rise of
+handler ran (`method` is one HTTP defines, `other` for anything else a
+client sends, so the series stay few whatever is sent): a rise of `invalid_key` is someone guessing, a rise of
 `rate_limited` a consumer that needs a larger allowance or a slower loop.
 
 For jobs: `kage_jobs{job_type,state}` (a growing `paused` is sites that
@@ -932,9 +949,9 @@ traps), and `kage_crawl_duplicates_total{kind}` what repeated.
 
 | Setting | Default | Answer |
 |---|---|---|
-| `server.max_body_bytes` | 1 MiB | `413 payload_too_large` |
+| `server.max_body_bytes` | 1 MiB | `413 payload_too_large`; a `Content-Length` beyond it on every endpoint, one that takes no body included |
 | `server.body_read_timeout` | 30 s | `408 request_timeout` |
-| `server.max_header_bytes`, `server.max_headers` | 16 KiB, 64 | `431` from the HTTP layer, and the connection is closed |
+| `server.max_header_bytes`, `server.max_headers` | 16 KiB, 64 | `431 headers_too_large`. A head beyond twice the limits is cut off by the HTTP layer itself: an empty `431` without `X-Request-Id`, and the connection is closed; so is a head that is not HTTP (`400`) |
 | `server.header_read_timeout` | 10 s | The connection is closed: a client that trickles its headers, or sends nothing, is cut off |
 | `server.max_uri_bytes` | 8 KiB | `414 uri_too_long` |
 | `server.max_connections` | 1024 | Further connections wait in the accept queue |
@@ -973,7 +990,10 @@ behind a residential provider.
 |---|---|
 | `missing_key`, `invalid_key`, `key_disabled` | `401`. A token that does not parse, a key that does not exist and a wrong secret are all `invalid_key`. |
 | `scope_missing` | `403`; `scope` names the one the key lacks. |
-| `validation_failed` | `422`; `field` names what is wrong. A field the API does not know is one. |
+| `invalid_request` | `400`: the body is not well-formed JSON, or a path parameter cannot be read (`%ff`). |
+| `unsupported_media_type` | `415`: a body is sent as `application/json`, a `+json` type is another. |
+| `validation_failed` | `422`; `field` names what is wrong. A field the API does not know is one, and so are a member given twice, a NUL character in a string, a null where a value belongs and a name outside an enumeration. |
+| `payload_too_large`, `uri_too_long`, `headers_too_large`, `request_timeout` | `413`, `414`, `431`, `408`: the limits above. |
 | `invalid_url`, `ssrf_denied` | The target (above). |
 | `header_denied`, `header_invalid`, `header_not_placeable` | A caller's header; `header` names it. |
 | `level_required` | The request, an item of a batch with no `defaults.level`, a crawl's `defaults` or a flow names no `level`. Nothing is decided for the caller. |
@@ -985,7 +1005,7 @@ behind a residential provider.
 | `timeout_too_short`, `invalid_pacing` | `minimum_ms` says the least; a pacing profile that does not exist or leaves D9's bounds. |
 | `robots_enforced`, `robots_ignored` | The request asks for less care about `robots.txt` than the site's policy enforces, or to have a file enforced that the policy never asks for. |
 | `cache_ttl_too_long` | `cache_ttl_s` is more than the site's results may be served for; `maximum_s` says the most. |
-| `job_not_found` | `404`: no such job among those this key made. |
+| `job_not_found` | `404`: no such job among those this key made (an operator's key reads every key's). |
 | `idempotency_key_reused` | `409`: the `Idempotency-Key` made another job within the last day; `job_id` names it. |
 | `webhook_origin_not_allowed` | `422`: the webhook's receiver is not in `webhooks.allowed_origins`. |
 | `driver_input_denied` | `422`: a flow step with `human: false` on a site whose policy does not have `driver_input: true`. |

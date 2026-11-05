@@ -19,16 +19,19 @@ relayed; `--json` prints one document, with the level and the behavior
 the browser reports having performed. It exits non-zero unless the page
 was fetched. The request, its attempts and its result are stored like any
 other, and the command is in the audit log.
+A URL with a user name or a password in it is refused before anything is
+opened or stored, and the message does not repeat it, as the API refuses
+it (`invalid_url`).
 
 | Option | What |
 |---|---|
 | `--level 0\|1\|2\|3` | Required: the camouflage level ([levels-and-egress.md](levels-and-egress.md)). 0 a plain HTTP client that says it is Kage, 1 a persona's http client, 2 a persona's browser that loads the page and leaves, 3 a persona's browser as a person. A level below the site's `min_level` is refused (`level_below_policy`), never raised; nothing escalates. `--render` is gone and refused. |
 | `--persona <id>` | Only this persona. A pinned persona that is blocked is not replaced. Refused at level 0. |
 | `--engine chromium\|firefox` | Only personas on this engine. Refused at level 0. |
-| `--timeout 45s` | Longest one attempt may take (default 60 s in the browser, 30 s over http, at most 300 s). A browser attempt includes the time the persona spends on the page. |
+| `--timeout 45s` | Longest one attempt may take (default 60 s in the browser, 30 s over http; at least 15 s at level 2 and 3 and 1 s at 0 and 1, at most 300 s, as `timeout_ms` of the API: anything else is refused before anything starts, never cut). A browser attempt includes the time the persona spends on the page. |
 | `--retries N` | Retries after the first attempt, instead of the policy's. |
 | `--pacing <profile>` | A pacing profile instead of the policy's, unless the policy locks pacing. Refused at level 0, which has no persona to pace. |
-| `--output FILE` | Write the document there. |
+| `--output FILE` | Write the document there. Whether the file can be written is checked before a site is asked; the result is shown before the file is written, so a write that fails still leaves what was fetched on the screen. In the `kage` container the root file system is read-only: name a file on a volume. |
 | `--extract` | Also read what the page says from the document that was fetched (`docs/runbooks/api.md`, "What a page says"): the title, the words of the main content and the links in a sentence, everything under `extract` with `--json`. Nothing is extracted from a page that was not fetched or from a response that is no HTML document. |
 | `--cache-ttl 10m` | For how long the result may be answered from the response cache; `0s` is never; left out, the site's policy decides (`cache.ttl`). Longer than results of the site are served for is refused, not cut. |
 | `--robots policy\|report\|enforce\|ignore` | What to do about the site's `robots.txt`. More care than the policy takes may be asked for, never less: `enforce` where the policy never asks for the file, and `report` or `ignore` where it enforces it, are refused before anything starts. |
