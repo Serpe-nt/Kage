@@ -2341,3 +2341,101 @@ async fn a_proxy_that_leaves_by_an_older_ones_address_carries_nothing() {
         1
     );
 }
+
+/// F177 (timers-04): a shared exit is judged against what the other live
+/// proxies' latest probes read. An older proxy that is down keeps the exit
+/// address of its last good probe in its record; a later proxy that comes
+/// back on that address (a restarted container, a reassigned address)
+/// shares nothing with it, and its persona stays.
+#[tokio::test]
+async fn an_address_a_dead_proxy_once_had_is_shared_with_nobody() {
+    let db = TestDb::migrated().await;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("proxies.txt");
+    std::fs::write(
+        &file,
+        "proxies:
+  - {id: b, host: proxy-b, port: 3128, username: u, password: p, country: AT}
+  - {id: c, host: proxy-c, port: 3128, username: u, password: p, country: AT}
+",
+    )
+    .unwrap();
+    let (pool, alerts, clock) = declared_pool(&db, &file);
+    pool.reconcile().await.unwrap();
+    let live = pool.live().await.unwrap();
+    let (older, later) = (&live[0], &live[1]);
+    let passed = |at: DateTime<Utc>, last: u8| ProbeReport {
+        at,
+        exit: Ok(ExitObservation {
+            ip: IpAddr::from([172, 22, 0, last]),
+            latency_ms: 90,
+            connect_ms: None,
+            tls_ms: None,
+        }),
+        leak: Some(false),
+        geo: None,
+    };
+    let failed = |at: DateTime<Utc>| ProbeReport {
+        at,
+        exit: Err(HealthFailure::Unreachable),
+        leak: None,
+        geo: None,
+    };
+
+    // Both answer, each by its own address.
+    pool.record_probe(older.id, &passed(clock.now(), 3))
+        .await
+        .unwrap();
+    pool.record_probe(later.id, &passed(clock.now(), 4))
+        .await
+        .unwrap();
+    // The older one goes down: three failed probes put it in backoff, and
+    // its record keeps the address its last good probe read.
+    for _ in 0..3 {
+        clock.advance(chrono::Duration::minutes(1));
+        pool.record_probe(older.id, &failed(clock.now()))
+            .await
+            .unwrap();
+    }
+    let down = pool.get(older.id).await.unwrap().unwrap();
+    assert_eq!(down.state, ProxyState::Backoff);
+    let kept = down.last_health.as_ref().unwrap();
+    assert!(!kept.reachable);
+    assert_eq!(kept.exit_ip, Some(IpAddr::from([172, 22, 0, 3])));
+
+    // The later one comes back on the address the dead one had.
+    clock.advance(chrono::Duration::minutes(1));
+    let back = pool
+        .record_probe(later.id, &passed(clock.now(), 3))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(back.last_health.as_ref().unwrap().exit_shared_with, None);
+    assert_eq!(back.state, ProxyState::Healthy);
+    assert!(back.carries_persona());
+    assert_eq!(
+        alerts
+            .alerts()
+            .into_iter()
+            .filter(|alert| alert.kind == AlertKind::ProxyExitShared)
+            .count(),
+        0
+    );
+
+    // Should the older one come back on that address too, the later one is
+    // marked at its next probe, as two live proxies on one address are.
+    clock.advance(chrono::Duration::minutes(10));
+    pool.end_backoff(older.id).await.unwrap();
+    pool.record_probe(older.id, &passed(clock.now(), 3))
+        .await
+        .unwrap();
+    let shared = pool
+        .record_probe(later.id, &passed(clock.now(), 3))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        shared.last_health.as_ref().unwrap().exit_shared_with,
+        Some(older.id)
+    );
+}

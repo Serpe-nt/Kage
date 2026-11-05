@@ -275,18 +275,62 @@ impl AlertSink for TracingAlertSink {
         let kind = alert.kind.as_str();
         let subject = alert.subject.map(|subject| subject.to_string());
         let subject = subject.as_deref().unwrap_or("");
+        let (details, hidden) = for_the_log(&alert.details);
         match alert.severity {
             AlertSeverity::Info => {
-                tracing::info!(alert = kind, subject, details = %alert.details, "{}", alert.message);
+                tracing::info!(alert = kind, subject, %details, "{}", alert.message);
             }
             AlertSeverity::Warning => {
-                tracing::warn!(alert = kind, subject, details = %alert.details, "{}", alert.message);
+                tracing::warn!(alert = kind, subject, %details, "{}", alert.message);
             }
             AlertSeverity::Critical => {
-                tracing::error!(alert = kind, subject, details = %alert.details, "{}", alert.message);
+                tracing::error!(alert = kind, subject, %details, "{}", alert.message);
             }
         }
+        if hidden {
+            tracing::debug!(alert = kind, subject, details = %alert.details, "the alert's addresses");
+        }
     }
+}
+
+/// The keys of an alert's details that name a proxy's address: the host and
+/// port it is reached at and the address it leaves by.
+const ADDRESS_KEYS: [&str; 3] = ["host", "port", "exit_ip"];
+
+/// What is put in place of an address in a log line.
+pub const REDACTED: &str = "[redacted]";
+
+/// An alert's details as they go into a log line at INFO and above: every
+/// proxy address ([`ADDRESS_KEYS`], at any depth) replaced by
+/// [`REDACTED`], since a log may be public (the nightly's on GitHub,
+/// F153) and the addresses are the operator's. The alert keeps them where
+/// it is stored and served; the log has them at DEBUG. Also says whether
+/// anything was replaced.
+pub fn for_the_log(details: &serde_json::Value) -> (serde_json::Value, bool) {
+    fn walk(value: &mut serde_json::Value, hidden: &mut bool) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for (key, value) in map.iter_mut() {
+                    if ADDRESS_KEYS.contains(&key.as_str()) && !value.is_null() {
+                        *value = serde_json::Value::String(REDACTED.to_owned());
+                        *hidden = true;
+                    } else {
+                        walk(value, hidden);
+                    }
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    walk(item, hidden);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut copy = details.clone();
+    let mut hidden = false;
+    walk(&mut copy, &mut hidden);
+    (copy, hidden)
 }
 
 /// Keeps alerts in memory. Used by tests and by `kage config check`, which
@@ -456,6 +500,91 @@ mod tests {
         ] {
             sink.raise(sample(severity));
             sink.raise(sample(severity).about(ProxyId::new()));
+        }
+    }
+
+    #[test]
+    fn a_proxys_address_is_left_out_of_the_alerts_log_line_at_info() {
+        // F153: the nightly's log is public; the addresses are the operator's.
+        let details = json!({
+            "host": "198.51.100.7", "port": 8080, "exit_ip": "203.0.113.9",
+            "with": "01a1", "nested": [{ "host": "gw.example.net" }], "geo": { "port": null },
+        });
+        let (logged, hidden) = super::for_the_log(&details);
+        assert!(hidden);
+        assert_eq!(
+            logged,
+            json!({
+                "host": "[redacted]", "port": "[redacted]", "exit_ip": "[redacted]",
+                "with": "01a1", "nested": [{ "host": "[redacted]" }], "geo": { "port": null },
+            })
+        );
+        assert_eq!(
+            super::for_the_log(&json!({ "file": "x" })),
+            (json!({ "file": "x" }), false)
+        );
+
+        let lines = Lines::default();
+        let alert = Alert::new(
+            AlertKind::ProxyLeak,
+            AlertSeverity::Critical,
+            "a leak",
+            details,
+        );
+        let info = tracing_subscriber::fmt()
+            .with_writer(lines.clone())
+            .with_max_level(tracing::Level::INFO)
+            .without_time()
+            .finish();
+        tracing::subscriber::with_default(info, || TracingAlertSink.raise(alert.clone()));
+        let text = lines.text();
+        assert!(text.contains("a leak"), "{text}");
+        assert!(
+            !text.contains("198.51.100.7") && !text.contains("8080"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("203.0.113.9") && !text.contains("gw.example.net"),
+            "{text}"
+        );
+
+        // At DEBUG the operator's own log has them.
+        let lines = Lines::default();
+        let debug = tracing_subscriber::fmt()
+            .with_writer(lines.clone())
+            .with_max_level(tracing::Level::DEBUG)
+            .without_time()
+            .finish();
+        tracing::subscriber::with_default(debug, || TracingAlertSink.raise(alert));
+        assert!(lines.text().contains("198.51.100.7"), "{}", lines.text());
+    }
+
+    /// Log lines written to memory.
+    #[derive(Clone, Default)]
+    struct Lines(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl Lines {
+        fn text(&self) -> String {
+            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+        }
+    }
+
+    impl std::io::Write for Lines {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Lines {
+        type Writer = Self;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
         }
     }
 }

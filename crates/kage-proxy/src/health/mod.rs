@@ -435,8 +435,9 @@ impl HealthChecker {
     }
 
     /// Probes proxies now, whatever their schedule says: every live proxy
-    /// of the pool, or only those in `only`. A proxy in backoff has its
-    /// backoff ended first; a proxy that is being replaced is left alone;
+    /// of the pool, or only those in `only`. A proxy in backoff is probed as
+    /// it is: a pass ends its backoff, a failure leaves the backoff's end and
+    /// its count as they were (F129); a proxy that is being replaced is left alone;
     /// the host's own rows are never probed. The host address is read
     /// first if it is not known yet. For an operator's `kage proxy
     /// health`.
@@ -457,12 +458,14 @@ impl HealthChecker {
                 continue;
             }
             match proxy.state {
-                ProxyState::Backoff => {
-                    if let Some(ended) = self.pool.end_backoff(proxy.id).await? {
-                        proxies.push(ended);
-                    }
-                }
-                ProxyState::New | ProxyState::Healthy | ProxyState::Degraded => {
+                // A proxy in backoff is looked at as it is: a probe that
+                // passes ends the backoff, one that fails is recorded and
+                // leaves the backoff's end and count alone, so that an
+                // operator's looks never add a cycle (F129).
+                ProxyState::New
+                | ProxyState::Healthy
+                | ProxyState::Degraded
+                | ProxyState::Backoff => {
                     proxies.push(proxy);
                 }
                 ProxyState::Replacing | ProxyState::Retired => {}

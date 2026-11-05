@@ -14,8 +14,9 @@ use proptest::prelude::*;
 use super::{
     ALLOWED_TRANSITIONS, Effect, ExitObservation, PoolRules, ProbeReport, ReplacementDecision,
     ReputationReport, apply_probe, apply_reputation, backoff_delay, budget_window_start,
-    clear_leak, expire_backoff, fail_replacement, finish_replacement, is_allowed, is_hosting,
-    mark_shared_exit, month_start, replacement_due, reported_state, retire, start_replacement,
+    clear_leak, end_backoff_on_pass, expire_backoff, fail_replacement, finish_replacement,
+    is_allowed, is_hosting, mark_shared_exit, month_start, replacement_due, reported_state, retire,
+    start_replacement,
 };
 use crate::test_support::{noon, proxy};
 
@@ -1310,6 +1311,56 @@ fn the_default_rules_are_the_configured_defaults() {
     assert_eq!(PoolRules::from_config(&config), PoolRules::default());
 }
 
+#[test]
+fn a_look_at_a_proxy_in_backoff_ends_it_only_when_it_passes() {
+    // F129 (sched-06): an operator's probes of a proxy in backoff are looks;
+    // a failed one keeps the backoff's end and count, a passing one ends it.
+    let mut proxy = healthy(noon());
+    let rules = rules();
+    let mut now = noon();
+    for _ in 0..3 {
+        now += Duration::minutes(5);
+        apply_probe(&mut proxy, &failed(now), false, MID, &rules);
+    }
+    assert_eq!(proxy.state, ProxyState::Backoff);
+    let (until, count) = (proxy.backoff_until, proxy.backoff_count);
+    for _ in 0..5 {
+        now += Duration::seconds(1);
+        let mut effects = end_backoff_on_pass(&mut proxy, &failed(now));
+        effects.extend(apply_probe(&mut proxy, &failed(now), false, MID, &rules));
+        assert_eq!(effects, []);
+        assert_eq!(proxy.state, ProxyState::Backoff);
+        assert_eq!((proxy.backoff_until, proxy.backoff_count), (until, count));
+        assert_eq!(proxy.last_health.as_ref().unwrap().checked_at, now);
+    }
+    // A leak is no pass: the backoff stays.
+    assert_eq!(end_backoff_on_pass(&mut proxy, &leaked(now)), []);
+    assert_eq!(proxy.state, ProxyState::Backoff);
+
+    now += Duration::seconds(1);
+    let mut effects = end_backoff_on_pass(&mut proxy, &ok(now));
+    effects.extend(apply_probe(&mut proxy, &ok(now), false, MID, &rules));
+    assert_eq!(
+        effects,
+        [
+            changed(ProxyState::Backoff, ProxyState::Degraded),
+            changed(ProxyState::Degraded, ProxyState::Healthy)
+        ]
+    );
+    assert_eq!(proxy.backoff_count, 0);
+    assert_eq!(proxy.backoff_until, None);
+
+    // Outside a backoff a look changes nothing beyond the probe itself.
+    assert_eq!(end_backoff_on_pass(&mut proxy, &ok(now)), []);
+}
+
+/// A probe as the pool applies it ([`crate::Pool::record_probe`]): a pass
+/// ends a backoff with time left, then the probe is applied.
+fn looked(proxy: &mut Proxy, report: &ProbeReport, outage: bool, jitter: f64, rules: &PoolRules) {
+    end_backoff_on_pass(proxy, report);
+    apply_probe(proxy, report, outage, jitter, rules);
+}
+
 // --- Property tests ---------------------------------------------------------
 
 /// One thing that can happen to a proxy.
@@ -1431,7 +1482,7 @@ fn step(
                 geo: lookup.map(|matches| geo(if matches { "DE" } else { "AT" }, now)),
                 ..ok(now)
             };
-            apply_probe(proxy, &report, false, jitter, rules);
+            looked(proxy, &report, false, jitter, rules);
         }
         Op::Fail { auth, outage } => {
             let report = ProbeReport {
@@ -1442,17 +1493,17 @@ fn step(
                 }),
                 ..failed(now)
             };
-            apply_probe(proxy, &report, *outage, jitter, rules);
+            looked(proxy, &report, *outage, jitter, rules);
         }
         Op::Leak => {
-            apply_probe(proxy, &leaked(now), false, jitter, rules);
+            looked(proxy, &leaked(now), false, jitter, rules);
         }
         Op::PassUnknownHost => {
             let report = ProbeReport {
                 leak: None,
                 ..ok(now)
             };
-            apply_probe(proxy, &report, false, jitter, rules);
+            looked(proxy, &report, false, jitter, rules);
         }
         Op::Expire { force } => {
             expire_backoff(proxy, now, *force);
@@ -1511,11 +1562,21 @@ proptest! {
             step(&mut pool, index, op, *jitter, now, &rules);
 
             let after = &pool[index];
-            // No transition outside the diagram.
+            // No transition outside the diagram: a probe that passes while
+            // the proxy is in backoff goes by the expiry's edge.
+            let ended_early = before.state == ProxyState::Backoff
+                && after.state != ProxyState::Backoff
+                && is_allowed(ProxyState::Backoff, ProxyState::Degraded)
+                && is_allowed(ProxyState::Degraded, after.state);
             prop_assert!(
-                is_allowed(before.state, after.state),
+                is_allowed(before.state, after.state) || ended_early,
                 "{} -> {} after {:?}", before.state, after.state, op
             );
+            // A probe that fails during a backoff adds no cycle (F129).
+            if before.state == ProxyState::Backoff && matches!(op, Op::Fail { .. } | Op::Leak) {
+                prop_assert_eq!(after.backoff_count, before.backoff_count, "{:?}", op);
+                prop_assert_eq!(after.backoff_until, before.backoff_until, "{:?}", op);
+            }
             // Retired is final: nothing about a retired proxy changes its state.
             if before.state == ProxyState::Retired {
                 prop_assert_eq!(after.state, ProxyState::Retired);

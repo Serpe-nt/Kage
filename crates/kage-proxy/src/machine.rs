@@ -601,6 +601,21 @@ pub fn expire_backoff(proxy: &mut Proxy, now: DateTime<Utc>, force: bool) -> Vec
     effects
 }
 
+/// Ends a backoff that has time left when a probe of the proxy passed (an
+/// operator's look, `kage proxy health`): the proxy answers, so it is
+/// `degraded` as at an expiry and [`apply_probe`] then makes it `healthy`.
+/// A probe that failed, or saw a leak, ends nothing here, and
+/// [`apply_probe`] only records it: one backoff cycle per backoff, whatever
+/// an operator probes in between (F129, spec §7.3). The backoff keeps its
+/// end and its count.
+pub fn end_backoff_on_pass(proxy: &mut Proxy, report: &ProbeReport) -> Vec<Effect> {
+    if report.exit.is_ok() && report.leak != Some(true) {
+        expire_backoff(proxy, report.at, true)
+    } else {
+        Vec::new()
+    }
+}
+
 /// Applies one reputation lookup to a live proxy.
 pub fn apply_reputation(
     proxy: &mut Proxy,

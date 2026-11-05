@@ -39,3 +39,5 @@ uuid = { workspace = true }
 # Property tests of URL normalization (spec §13).
 proptest = { workspace = true }
 tempfile = { workspace = true }
+# The log lines of the alert sink (F153).
+tracing-subscriber = { workspace = true, features = ["fmt"] }
