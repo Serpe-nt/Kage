@@ -3,6 +3,15 @@ import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from '@pro
 
 import type { CloseReason, ContextEvents } from './context-manager.js';
 
+/** The results of a context open request, as the context manager reports them. */
+export const OPEN_RESULTS = ['opened', 'reused', 'refused', 'failed'] as const;
+/** Why a context was closed. */
+export const CLOSE_REASONS: readonly CloseReason[] = ['requested', 'idle', 'failed', 'shutdown'];
+/** The results of a self-test. */
+export const SELFTEST_RESULTS = ['passed', 'failed', 'incomplete'] as const;
+/** The results of a flow. */
+export const FLOW_RESULTS = ['ok', 'failed', 'error'] as const;
+
 /** Outcome label of a navigation: `ok`, or the contract's navigation error code. */
 export type NavigationOutcome =
   'ok' | 'timeout' | 'navigation_failed' | 'proxy_failed' | 'aborted' | 'error';
@@ -80,14 +89,33 @@ export class SidecarMetrics implements ContextEvents {
       labelNames: ['engine', 'result'],
       registers,
     });
+    // Every counter exists from zero for the label values known at the
+    // start, as Kage's do (F110, F150): its first event is then a change
+    // that `increase()` counts, not the birth of a series.
+    for (const result of OPEN_RESULTS) {
+      this.opens.inc({ engine, result }, 0);
+    }
+    for (const reason of CLOSE_REASONS) {
+      this.closes.inc({ engine, reason }, 0);
+    }
+    this.recycles.inc({ engine }, 0);
+    for (const result of SELFTEST_RESULTS) {
+      this.selftests.inc({ engine, result }, 0);
+    }
+    for (const result of FLOW_RESULTS) {
+      this.flows.inc({ engine, result }, 0);
+    }
+    // Every series under the engine it is of: Kage merges both sidecars'
+    // metrics into one exposition, where a series without it would be there
+    // twice. The event loop's utilization takes no label of
+    // `collectDefaultMetrics`; the registry's default fills it in (F144).
+    this.registry.setDefaultLabels({ engine });
     if (processMetrics) {
-      // Under the engine they are of: Kage merges both sidecars' metrics into
-      // one exposition, where a series without it would be there twice.
       collectDefaultMetrics({ register: this.registry, labels: { engine } });
     }
   }
 
-  opened(result: 'opened' | 'reused' | 'refused' | 'failed'): void {
+  opened(result: (typeof OPEN_RESULTS)[number]): void {
     this.opens.inc({ engine: this.engine, result });
   }
 
@@ -105,12 +133,12 @@ export class SidecarMetrics implements ContextEvents {
   }
 
   /** Records one flow: every step succeeded, a step failed, or the flow itself broke. */
-  flowed(result: 'ok' | 'failed' | 'error'): void {
+  flowed(result: (typeof FLOW_RESULTS)[number]): void {
     this.flows.inc({ engine: this.engine, result });
   }
 
   /** Records one self-test. */
-  selftested(result: 'passed' | 'failed' | 'incomplete'): void {
+  selftested(result: (typeof SELFTEST_RESULTS)[number]): void {
     this.selftests.inc({ engine: this.engine, result });
   }
 
