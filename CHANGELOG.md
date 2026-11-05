@@ -177,6 +177,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   which a loaded machine fails by drawing the page late and by telling it
   of a path in as few events as it drew frames; it is counted from the
   page's second frame, and the path is the one the hand reports.
+- **The hand clicks a link at the very top of the window of a page at its
+  end** (F164). The hand goes to an element once its middle is 12 pixels
+  inside the window; one whose middle lay in the top 12 pixels was
+  flicked further up with the wheel turned down, and a page at its end
+  does not move for that, so after three flicks the hand gave up
+  (`element_not_reachable`) and a crawl typed the address of a link that
+  was there to click. It happened to personas with a tall window at the
+  end of the crawl's reading room (1481 pixels high, the link's middle 5
+  pixels from the top), in two of three gate runs of one session and once
+  on GitHub. Such an element now comes down as the wheel turns up, and on
+  a page that scrolls no further either way the hand goes to the part of
+  an element that shows when at least half of it does. A miss logs where
+  the element was and what the last flicks did.
 
 ## [2.0.2] - 2026-11-04
 

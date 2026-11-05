@@ -1514,6 +1514,52 @@ export function defineParitySuite(subject: ParitySubject): void {
       });
     });
 
+    it('clicks a link at the top edge of the window of a page at its end (F164)', async () => {
+      await withContext('read-edge', async (context) => {
+        // The page is opened at its end (its #end), which leaves its link
+        // about 4 pixels below the top of the window whatever the window's
+        // height: the wheel down moves nothing there, the wheel up brings
+        // the link in. Until F164 the hand flicked down three times and
+        // gave up, and the link was not clicked.
+        await site.reset();
+        const edge = secure('/leave/edge?run=edge');
+        const read = await go(context, `${edge}#end`, {
+          tab: 'crawl',
+          wait: { until: 'load', selector: 'body[data-ready]' },
+          dwell_ms: 600,
+          behavior: { seed: SEEDS.first, scroll_depth: 0, wander: false },
+        });
+        expect(read.error).toBeNull();
+        const target = secure('/landing?from=edge');
+        const next = await go(context, target, {
+          tab: 'crawl',
+          capture: DOM,
+          behavior: {
+            seed: SEEDS.other,
+            entry: { strategy: 'link', from_url: edge, from_open_page: true },
+          },
+        });
+        expect(next.error).toBeNull();
+        expect(next).toMatchObject({ status: 200, final_url: target, title: 'Landing' });
+        expect(next.behavior).toMatchObject({
+          clicks: 1,
+          keys: 0,
+          entry: { strategy: 'link', outcome: 'arrived', referer: edge, backs: 0 },
+        });
+        const left = await leaveReport('edge');
+        expect(pressesOf(left)).toEqual([
+          ['mousedown', true, 'edge'],
+          ['mouseup', true, 'edge'],
+          ['click', true, 'edge'],
+        ]);
+        measured('a click on a link at the top edge of a page read to its end', {
+          read_notches: read.behavior?.notches,
+          back_notches: next.behavior?.notches,
+          scroll_y_when_left: left.scrollY,
+        });
+      });
+    });
+
     it('goes back in the tab to the page that holds the link and clicks there, at no cost to the site', async () => {
       const articles = secure('/site/articles');
       const from = (page: string, backs?: number) => ({

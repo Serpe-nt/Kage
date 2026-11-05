@@ -22,9 +22,22 @@ export class BehaviorError extends Error {
   constructor(
     readonly reason: 'element_not_found' | 'element_not_reachable',
     message: string,
+    /** What the hand saw when it gave up, for the log: numbers only, never the page's address. */
+    readonly seen: readonly RevealStep[] = [],
   ) {
     super(message);
   }
+}
+
+/** One look and flick of a reveal: where the element was, and what the wheel did. */
+export interface RevealStep {
+  /** The middle of the element, from the top of the window. */
+  readonly middle: number;
+  readonly viewport: number;
+  readonly scrollHeight: number;
+  readonly direction: 'up' | 'down';
+  readonly before: number;
+  readonly after: number;
 }
 
 /** What a stretch of behavior consisted of; returned with the result of the request. */
@@ -78,6 +91,8 @@ const PAINT_WAIT_MS = 2000;
  */
 const REST_LOOKS = 30;
 const REST_LOOK_MS = 60;
+/** How far inside the window the middle of an element has to be for the hand to go to it at once. */
+const VIEW_MARGIN = 12;
 
 /**
  * One persona at the mouse and keyboard of its own display for the length
@@ -149,7 +164,21 @@ export class Human {
 
   private static inView(box: Box, metrics: SurfaceMetrics): boolean {
     const middle = box.y + box.height / 2;
-    return middle >= 12 && middle <= metrics.viewport.height - 12;
+    return middle >= VIEW_MARGIN && middle <= metrics.viewport.height - VIEW_MARGIN;
+  }
+
+  /**
+   * The part of an element the window shows, when that is at least half of
+   * it (its middle is inside the window); `null` otherwise.
+   */
+  private static shownPart(box: Box, metrics: SurfaceMetrics): Box | null {
+    const middle = box.y + box.height / 2;
+    if (middle < 0 || middle > metrics.viewport.height) {
+      return null;
+    }
+    const top = Math.max(0, box.y);
+    const bottom = Math.min(metrics.viewport.height, box.y + box.height);
+    return { ...box, y: top, height: bottom - top };
   }
 
   /**
@@ -239,11 +268,24 @@ export class Human {
    * Finds an element and scrolls with the wheel until it is in view, and
    * says where it is once the page rests.
    *
+   * An element whose middle lies above the band the hand looks at, also one
+   * whose top shows at the very top of the window, comes down as the wheel
+   * turns up; one below it comes up as the wheel turns down. When the page
+   * does not scroll any further that way, an element that shows at least
+   * half of itself at the window's edge is gone to where it shows, as a
+   * person points at what they see. Until F164 an element whose middle lay
+   * in the top 12 pixels of the window was flicked further up, and on a page
+   * at its end, which no flick down moves, the hand gave up: a persona with
+   * a window 1481 pixels high, at the end of the crawl's reading room, had
+   * the link to click 5 pixels from the top, three flicks moved nothing, and
+   * the crawl typed the address instead (`element_not_reachable`).
+   *
    * @throws {BehaviorError} when no element matches, or it cannot be brought into view.
    */
   private async reveal(selector: string): Promise<{ box: Box; metrics: SurfaceMetrics }> {
     const { surface, random } = this.parts;
     await this.seeing();
+    const seen: RevealStep[] = [];
     for (let attempt = 0; attempt < 60; attempt += 1) {
       if (this.mayGlide) {
         await this.resting();
@@ -257,17 +299,39 @@ export class Human {
       }
       await this.overPage(metrics);
       const middle = box.y + box.height / 2;
-      const direction = middle < 0 ? 'up' : 'down';
+      const direction = middle < VIEW_MARGIN ? 'up' : 'down';
       const remaining = Math.abs(middle - metrics.viewport.height * random.uniform(0.35, 0.6));
       const before = metrics.scrollY;
       await this.flick(direction, remaining);
       const after = await surface.metrics();
-      if (after.scrollY === before && attempt > 1) {
-        break;
+      seen.push({
+        middle: Math.round(middle),
+        viewport: metrics.viewport.height,
+        scrollHeight: metrics.scrollHeight,
+        direction,
+        before,
+        after: after.scrollY,
+      });
+      if (after.scrollY === before) {
+        // The page does not scroll any further this way, or not yet: once
+        // it rests, an element that shows half of itself is enough.
+        await this.resting();
+        const [now, at] = await Promise.all([surface.boxOf(selector), surface.metrics()]);
+        const shown = now === null ? null : Human.inView(now, at) ? now : Human.shownPart(now, at);
+        if (shown !== null) {
+          return { box: shown, metrics: at };
+        }
+        if (attempt > 1) {
+          break;
+        }
       }
       await this.clock.sleep(random.uniform(90, 260));
     }
-    throw new BehaviorError('element_not_reachable', `${selector} cannot be scrolled into view`);
+    throw new BehaviorError(
+      'element_not_reachable',
+      `${selector} cannot be scrolled into view`,
+      seen.slice(-4),
+    );
   }
 
   /** Moves the pointer onto an element and rests there as a person does before acting. */
