@@ -3,8 +3,14 @@ import { pathStatistics, type PathStatistics, type PointerSample } from '../beha
 /** One event the fixture site's input recorder saw (`tests/fixtures/site/input/`). */
 export interface RecordedEvent {
   readonly type: string;
-  /** Milliseconds since the page loaded. */
+  /** Milliseconds since the page loaded, when the page's listener ran. */
   readonly t: number;
+  /**
+   * The event's own `timeStamp`: when the browser took the input from the
+   * display, on the clock of `performance.now()`. A page that is busy runs
+   * its listener later than that; this time does not move with it.
+   */
+  readonly stamp?: number;
   readonly trusted: boolean;
   readonly target: string | null;
   readonly x?: number;
@@ -97,6 +103,24 @@ export interface InputStatistics {
 
 const MODIFIERS = new Set(['Shift', 'AltGraph', 'Control', 'Alt', 'Meta']);
 
+/**
+ * When the browser took an event from the display: its `timeStamp`, on the
+ * clock of the page's `performance.now()` (a recording without one falls
+ * back on when its listener ran). A button's hold is measured on it (F81). A
+ * page that is still busy with what it just loaded runs its listeners late,
+ * and not by the same amount for two events: on a loaded machine the first
+ * click on Firefox's input page had its press's listener run 246 ms late and
+ * its release's 149 ms, and a button held for 102 ms by the stamps read as
+ * held for 5; in another run 189 ms against 3, and 103 ms read as 289. The
+ * other clicks of the same runs, on a page at rest, read the same either
+ * way, and the stamps of all of them gave 102 to 108 ms. The mouse's path
+ * stays on the listeners' times: the display hands a loaded page its motion
+ * in bursts, and the stamps of a burst lie closer together than the
+ * listeners ran (a path measured on them read shorter than 120 ms in five
+ * runs of ten, on the listeners' times in one).
+ */
+const at = (event: RecordedEvent): number => event.stamp ?? event.t;
+
 /** Measures what the input recorder saw. */
 export function inputStatistics(report: InputReport): InputStatistics {
   const { events } = report;
@@ -156,12 +180,12 @@ export function inputStatistics(report: InputReport): InputStatistics {
     if (event.type === 'mousemove') {
       lastMove = event.t;
     } else if (event.type === 'mousedown') {
-      pressed = event.t;
+      pressed = at(event);
       if (lastMove !== null) {
         hovers.push(event.t - lastMove);
       }
     } else if (event.type === 'mouseup' && pressed !== null) {
-      buttonHolds.push(event.t - pressed);
+      buttonHolds.push(at(event) - pressed);
       pressed = null;
     }
   }
