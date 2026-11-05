@@ -19,7 +19,10 @@
 #     gauge counts every proxy as `backoff` (F151), a batch is `paused`
 #     with `no_persona` instead of failing on dead proxies, a synchronous
 #     fetch is answered `no_persona` with `retry_at`, and when the proxies
-#     are back the batch ends with its pages (F169, pool-02).
+#     are back the batch ends with its pages (F169, pool-02); level 0 waits
+#     for its site's exit, which the guard holds: a fetch is answered
+#     `plain_exit_unavailable` with `retry_at` and a batch is paused, never
+#     sent through the dead proxy (F193).
 #
 # It uses its own compose project name and host port. With
 # KAGE_E2E_EVIDENCE set to a directory, what was measured is kept there.
@@ -61,6 +64,9 @@ sed --in-place 's/^domains: {}$/domains:/' "${policies}/domains.yaml"
         printf '  %s.kage.test:\n    pacing: fast\n    min_dwell: 500ms\n    active_hours: ignore\n' "${name}"
     done
     printf '  dc1.kage.test:\n    pacing: single\n    min_dwell: 500ms\n    active_hours: ignore\n'
+    # A site of its own for level 0, which no persona reads: its scout's
+    # proxy is its plain exit (F193). Every kage.test host is one site.
+    printf '  outage.field.test:\n    pacing: fast\n    active_hours: ignore\n'
 } >> "${policies}/domains.yaml"
 chmod --recursive a+rX "${policies}"
 scratch="$(mktemp -d)"
@@ -249,7 +255,12 @@ check "the flow's goto came from another persona" "${seats}" "d.later && d.later
 # shorter by its pages' loads.
 check "not before the visit was over" "${seats}" "d.gap_ms >= 15000"
 
-echo "==> every proxy stopped: the guard holds, work waits, nothing fails (F169, F151)"
+echo "==> a site read only at level 0 has its plain exit: a page before the outage"
+call POST /v1/fetch "${client}" '{"url":"http://outage.field.test:8088/listing?page=plain-before","level":0}'
+expect 200 "a page at level 0"
+check "the page at level 0 was read" "${body}" "d.outcome === 'ok' && d.attempts.length === 1"
+
+echo "==> every proxy stopped: the guard holds, work waits, nothing fails (F169, F151, F193)"
 "${compose[@]}" stop "${proxies[@]}" > /dev/null 2>&1
 exposition=''
 for _ in $(seq 1 60); do
@@ -290,8 +301,24 @@ keep outage-fetch.json "${body}"
 check "a synchronous fetch is told when to ask again" "${body}" \
     "d.outcome === 'provider_error' && d.reason === 'no_persona' && d.retry_at && d.attempts.length === 0"
 retry_at="$(value "${body}" "d.retry_at")"
+# Level 0 waits for its site's exit too, which the guard holds (F193): it
+# is never sent through the dead proxy, nor from another address.
+call POST /v1/fetch "${client}" '{"url":"http://outage.field.test:8088/listing?page=plain-sync","level":0}'
+expect 200 "the level 0 fetch during the outage"
+keep outage-plain-fetch.json "${body}"
+check "a level 0 fetch waits for its exit" "${body}" \
+    "d.outcome === 'provider_error' && d.reason === 'plain_exit_unavailable' && d.retry_at && d.attempts.length === 0"
+call POST /v1/jobs "${client}" '{"type":"batch","defaults":{"level":0},"items":[{"url":"http://outage.field.test:8088/listing?page=plain-1"}]}'
+expect 201 "the level 0 batch"
+plain_batch="$(value "${body}" "d.id")"
+sleep 15
+call GET "/v1/jobs/${plain_batch}" "${client}"
+keep outage-plain-batch.json "${body}"
+check "the level 0 batch waits the outage out" "${body}" \
+    "d.paused && !['failed', 'partial'].includes(d.state) && d.items.failed === 0"
+plain_paused="$(value "${body}" "d.paused.reason")"
 call GET "/v1/jobs/${batch}" "${client}"
-echo "    batch: $(value "${body}" "d.state + ', paused ' + d.paused.reason + ' until ' + d.paused.until"); the fetch: no_persona, retry_at ${retry_at}"
+echo "    batch: $(value "${body}" "d.state + ', paused ' + d.paused.reason + ' until ' + d.paused.until"); the fetch: no_persona, retry_at ${retry_at}; level 0: plain_exit_unavailable, its batch paused ${plain_paused}"
 
 echo "==> the proxies are back: the batch ends with its pages"
 "${compose[@]}" start "${proxies[@]}" > /dev/null 2>&1
@@ -302,6 +329,23 @@ for _ in $(seq 1 90); do
 done
 keep recovered-batch.json "${body}"
 check "the batch succeeded" "${body}" "d.state === 'succeeded' && d.items.succeeded === 2"
+# Level 0 goes on through its exit once it answers. (The level 0 batch
+# looks again at the time it was given, a few minutes on; it never failed.)
+call POST /v1/fetch "${client}" '{"url":"http://outage.field.test:8088/listing?page=plain-after","level":0}'
+expect 200 "the level 0 fetch after the outage"
+keep recovered-plain-fetch.json "${body}"
+check "a level 0 fetch goes on after the outage" "${body}" "d.outcome === 'ok' && d.attempts.length === 1"
+call GET "/v1/jobs/${plain_batch}" "${client}"
+keep recovered-plain-batch.json "${body}"
+check "the level 0 batch did not fail" "${body}" "!['failed', 'partial'].includes(d.state) && d.items.failed === 0"
+# The site saw the pages at level 0 before and after the outage, nothing
+# during it (a restarted proxy may come back on another address, so the
+# addresses are kept, not compared).
+plain_hosts="$(got 'http://fixture.kage.test:8088/__kage/requests' | "${compose[@]}" exec -T world node -e \
+    "let t = ''; process.stdin.on('data', (c) => (t += c)).on('end', () => { const d = JSON.parse(t); const seen = d.filter((r) => r.host === 'outage.field.test:8088' && /page=plain/.test(r.path)); console.log(JSON.stringify({ pages: seen.map((r) => r.path), from: [...new Set(seen.map((r) => r.from))] })); });")"
+keep outage-plain-site.json "${plain_hosts}"
+check "nothing at level 0 reached the site during the outage" "${plain_hosts}" \
+    "['plain-before', 'plain-after'].every((page) => d.pages.some((p) => p.endsWith(page))) && !d.pages.some((p) => /plain-sync/.test(p))"
 exposition="$(got 'http://kage:9464/metrics')"
 keep recovered-metrics.txt "$(grep '^kage_proxy_state' <<< "${exposition}")"
 grep -qx 'kage_proxy_state{state="backoff"} 0' <<< "${exposition}" \

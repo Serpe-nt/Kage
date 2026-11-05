@@ -15,7 +15,7 @@
 # pool1 to pool4 (a retry after a block), dc1 and dc2 (a flow's later site
 # with one seat) and outage (work during an outage of the pool).
 
-x-allow: &allow "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,pool1.kage.test:8088,pool2.kage.test:8088,pool3.kage.test:8088,pool4.kage.test:8088,dc1.kage.test:8088,dc2.kage.test:8088,outage.kage.test:8088"
+x-allow: &allow "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,pool1.kage.test:8088,pool2.kage.test:8088,pool3.kage.test:8088,pool4.kage.test:8088,dc1.kage.test:8088,dc2.kage.test:8088,outage.kage.test:8088,outage.field.test:8088"
 x-proxy: &proxy
   image: ${KAGE_BROWSER_CHROMIUM_IMAGE:-kage-browser-chromium:dev}
   entrypoint: [node]
@@ -62,7 +62,7 @@ services:
   fixture:
     networks:
       default:
-        aliases: [fixture.kage.test, lenient.kage.test, rules.kage.test, wall.field.test, pool1.kage.test, pool2.kage.test, pool3.kage.test, pool4.kage.test, dc1.kage.test, dc2.kage.test, outage.kage.test]
+        aliases: [fixture.kage.test, lenient.kage.test, rules.kage.test, wall.field.test, pool1.kage.test, pool2.kage.test, pool3.kage.test, pool4.kage.test, dc1.kage.test, dc2.kage.test, outage.kage.test, outage.field.test]
 
   world:
     command:

@@ -20,7 +20,13 @@
 #   - the log redaction audit: no secret of the stack, no proxy credential
 #     header and no API token in any line any service wrote, nor in any
 #     span exported, after a page, a batch job with a webhook and a refused
-#     request.
+#     request; no proxy's address in a line of Kage at INFO (F153), and no
+#     seed in a span (F182);
+#   - Grafana's Explore finds the trace by its service (F176), a sidecar's
+#     lines are in Kage's shape and name their span (F144), the sidecars'
+#     counters exist from zero (F150) and every series of theirs has its
+#     engine (F144), and a key without a route's scope is counted
+#     (`scope_missing`, F182).
 #
 # Needs what `just setup` installs: docker and curl. It uses its own
 # compose project name and host ports.
@@ -118,7 +124,8 @@ kage() {
     "${compose[@]}" exec -T kage /usr/local/bin/kage "$@"
 }
 # search <service> <traces>: Jaeger's v3 search for a service's traces of
-# the last hour (Jaeger 2.22 has no v1 search).
+# the last hour (the API the runbook's queries use; Grafana's data source
+# asks the v1 search, which the pinned Jaeger 2.20 still has, F176).
 search() {
     local from to
     from="$(date -u -d '-1 hour' +%Y-%m-%dT%H:%M:%SZ)"
@@ -189,6 +196,9 @@ done
 check "the job succeeded" "${body}" "d.state === 'succeeded'"
 call POST /v1/fetch "x${token}" '{"url":"http://fixture.kage.test:8088/","level":3}'
 expect 401 "a wrong key"
+# A key without the scope a route needs (F182, timers-02).
+call GET /v1/admin/pool "${token}"
+expect 403 "a key without the admin scope"
 echo "    request ${request}, job ${job}"
 
 echo "==> the queries of the runbooks block-report.md and field-campaign.md run against the schema"
@@ -212,6 +222,9 @@ done
 trace_id="$(value "${trace}" "d.trace")"
 got "http://jaeger:16686/api/v3/traces/${trace_id}" > "${evidence}/trace.json"
 echo "    ${trace}"
+# No span and no span event holds a seed (spec §20, F182, timers-03).
+grep -q '"key":"seed"' "${evidence}/trace.json" && fail "a span of the trace holds a seed"
+grep -q '"key":"persona"' "${evidence}/trace.json" || fail "the trace's attributes were not read"
 
 echo "==> the lines of the request carry the trace's id, in Kage and in the sidecar"
 "${compose[@]}" logs --no-color kage browser-chromium browser-firefox > "${scratch}/stack.log"
@@ -220,6 +233,13 @@ grep -q "\"trace_id\":\"${trace_id}\"" <(grep '^kage-' "${scratch}/stack.log") \
 grep -Eq "^browser-(chromium|firefox).*\"trace_id\":\"${trace_id}\"" "${scratch}/stack.log" \
     || fail "no line of a sidecar carries the trace ${trace_id}"
 echo "    kage: $(grep -c "\"trace_id\":\"${trace_id}\"" <(grep '^kage-' "${scratch}/stack.log")) lines, sidecars: $(grep -Ec "^browser-.*\"trace_id\":\"${trace_id}\"" "${scratch}/stack.log") lines"
+# Every line of a sidecar of the trace names its span, in Kage's shape (F144).
+grep -E "^browser-(chromium|firefox).*\"trace_id\":\"${trace_id}\"" "${scratch}/stack.log" \
+    | sed 's/^[^|]*| //' > "${scratch}/sidecar-trace.log"
+while IFS= read -r line; do
+    check "a sidecar's line of the trace in Kage's shape" "${line}" \
+        "/^[0-9a-f]{16}$/.test(d.span_id) && /^[A-Z]+$/.test(d.level) && typeof d.timestamp === 'string' && typeof d.fields.message === 'string' && !('msg' in d) && !('time' in d)"
+done < "${scratch}/sidecar-trace.log"
 
 echo "==> every scrape target is up, and the alert rules are loaded"
 for _ in $(seq 1 30); do
@@ -264,11 +284,25 @@ echo "==> the counters exist from zero, and a first webhook failure for good fir
 exposition="$(got 'http://kage:9464/metrics')"
 for sample in 'kage_webhook_deliveries_total{event="job.completed",result="failed"} 0' \
     'kage_scheduler_refusals_total{reason="domain_paused"} 0' \
+    'sidecar_flows_total{engine="chromium",result="ok"} 0' \
+    'sidecar_flows_total{engine="firefox",result="error"} 0' \
+    'sidecar_browser_recycles_total{engine="chromium"} 0' \
+    'sidecar_context_closes_total{engine="firefox",reason="shutdown"} 0' \
+    'kage_api_refusals_total{code="scope_missing"} 1' \
     'kage_replacements_total{reason="unreachable"} 0' \
     'kage_jobs_finished_total{job_type="batch",state="failed"} 0'; do
     grep -qF "${sample}" <<< "${exposition}" \
         || fail "/metrics (${#exposition} bytes) lacks a series at zero: ${sample}; it has: $(grep -E '^kage_(webhook_deliveries|scheduler_refusals|replacements|jobs_finished)_total' <<< "${exposition}" | tr '\n' ' ')"
 done
+# Every series of a sidecar has its engine, the event loop's too, and none
+# is there twice (F144, secrecy-06).
+grep -E '^nodejs_eventloop_utilization_(summary|histogram)' <<< "${exposition}" > "${scratch}/loops" || true
+[ -s "${scratch}/loops" ] || fail "no event loop series in /metrics"
+if grep -v 'engine=' "${scratch}/loops" > "${scratch}/unlabelled"; then
+    fail "an event loop series without its engine: $(head -n 3 "${scratch}/unlabelled")"
+fi
+[ "$(sed 's/ [^ ]*$//' "${scratch}/loops" | sort | uniq -d | wc -l)" -eq 0 ] \
+    || fail "an event loop series is there twice: $(sed 's/ [^ ]*$//' "${scratch}/loops" | sort | uniq -d | head -n 3)"
 [ "$(rule_state KageWebhookFailing)" = 'inactive ' ] || fail "KageWebhookFailing is not quiet before a failure: $(rule_state KageWebhookFailing)"
 # A secret the receiver does not know: it refuses the signature twice, and
 # after the one retry the delivery fails for good.
@@ -308,6 +342,19 @@ for uid in prometheus jaeger; do
     health="$(curl --silent --show-error --user "${auth}" "${grafana}/api/datasources/uid/${uid}/health")"
     check "the ${uid} data source is healthy" "${health}" "d.status === 'OK'"
 done
+# Explore's search by service (F176, timers-01): the page's trace is found
+# as an operator finds it, by the service `kage`.
+from_ms="$(( ($(date -u +%s) - 3600) * 1000 ))"
+to_ms="$(( ($(date -u +%s) + 300) * 1000 ))"
+query='{"queries":[{"refId":"A","datasource":{"type":"jaeger","uid":"jaeger"},"queryType":"search","service":"kage","limit":200}],"from":"FROM","to":"TO"}'
+query="${query/FROM/${from_ms}}"
+query="${query/TO/${to_ms}}"
+searched="$(curl --silent --show-error --user "${auth}" --header 'Content-Type: application/json' \
+    --data "${query}" "${grafana}/api/ds/query")"
+printf '%s\n' "${searched}" > "${evidence}/grafana-search.json"
+check "Grafana's search by service finds the page's trace" "${searched}" \
+    "d.results.A.status === 200 && JSON.stringify(d.results.A.frames).includes('${trace_id}')"
+echo "    Grafana's search by service kage finds trace ${trace_id}"
 dashboards="$(curl --silent --show-error --user "${auth}" "${grafana}/api/search?tag=kage")"
 check "seven dashboards in the folder Kage" "${dashboards}" \
     "d.length === 7 && d.every((x) => x.folderTitle === 'Kage')"
@@ -382,5 +429,15 @@ secrets="$(printf '%s\n' "${KAGE_POSTGRES_PASSWORD}" "${KAGE_SIDECAR_TOKEN}" "${
 audit="$("${compose[@]}" exec -T -e AUDIT_SECRETS="${secrets}" world node /e2e/observability.mjs audit < "${scratch}/all.log")" \
     || fail "the redaction audit found something (see above)"
 echo "    ${audit}"
+# A proxy's address is the operator's, and a log may be public (F153): a
+# line of Kage at INFO and above names a proxy by its id.
+"${compose[@]}" logs --no-color kage > "${scratch}/kage.log"
+grep -q '"message":"proxy added to the pool"' "${scratch}/kage.log" || fail "no proxy was added to the pool"
+if grep -E '"(host|port)":("proxy-[a-c]"|3128)' "${scratch}/kage.log" | grep -v '"level":"DEBUG"' > "${scratch}/addresses.log"; then
+    fail "a line of Kage names a proxy's address: $(head -n 2 "${scratch}/addresses.log")"
+fi
+if grep -E '\\"(host|port)\\":(\\"proxy-[a-c]\\"|3128)' "${scratch}/kage.log" > "${scratch}/addresses.log"; then
+    fail "an alert's details in a line of Kage name a proxy's address: $(head -n 2 "${scratch}/addresses.log")"
+fi
 cp "${scratch}/all.log" "${evidence}/all-lines-and-spans.log" 2> /dev/null || true
 echo "observability: all checks passed"
