@@ -56,10 +56,11 @@ export KAGE_PERSONAS_WARMUP=false
 # fixture site, through the persona's proxy.
 export KAGE_E2E_SELFTEST_PAGES='[{id="probe",kind="probe",url="http://fixture.kage.test:8088/probe/"}]'
 
-# The shipped policies; the test changes them later, to reload them.
+# The shipped policies, with no persona asleep (policies.sh); the test
+# changes them later, to reload them.
 policies="$(mktemp -d)"
 export KAGE_E2E_POLICIES="${policies}"
-cp policies/*.yaml "${policies}/"
+tests/e2e/policies.sh "${policies}"
 chmod --recursive a+rX "${policies}"
 # What a call to the API answered.
 scratch="$(mktemp -d)"
@@ -80,6 +81,9 @@ cleanup() {
     exit "${status}"
 }
 trap cleanup EXIT
+# A bound on the script (`just test-e2e`) stops it with TERM: leave through
+# the cleanup then too, whatever the script was waiting for.
+trap 'exit 143' TERM INT
 
 fail() {
     echo "FAIL: $*" >&2

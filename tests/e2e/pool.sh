@@ -35,12 +35,12 @@ export KAGE_WEBSHARE_API_KEY=
 export KAGE_ABUSEIPDB_KEY=
 export KAGE_PERSONAS_WARMUP=false
 
-# The shipped policies, a profile of one seat, and the domain rules of the
-# test: the fixture site is the operator's own, so it may be read at the
-# pace of a test.
+# The shipped policies (no persona asleep: policies.sh), a profile of one
+# seat, and the domain rules of the test: the fixture site is the operator's
+# own, so it may be read at the pace of a test.
 policies="$(mktemp -d)"
 export KAGE_E2E_POLICIES="${policies}"
-cp policies/*.yaml "${policies}/"
+tests/e2e/policies.sh "${policies}"
 cat >> "${policies}/pacing-profiles.yaml" << 'EOF'
 
 # Added by tests/e2e/pool.sh: `fast` with one seat on the site.
@@ -83,6 +83,9 @@ cleanup() {
     exit "${status}"
 }
 trap cleanup EXIT
+# A bound on the script (`just test-e2e`) stops it with TERM: leave through
+# the cleanup then too, whatever the script was waiting for.
+trap 'exit 143' TERM INT
 
 fail() {
     echo "FAIL: $*" >&2

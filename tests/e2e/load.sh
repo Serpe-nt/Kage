@@ -42,11 +42,12 @@ export KAGE_WEBSHARE_API_KEY=
 export KAGE_ABUSEIPDB_KEY=
 export KAGE_PERSONAS_WARMUP=false
 
-# The shipped policies with the domain rule of this test, and for design B
-# the test-only profile: never shipped, never a default.
+# The shipped policies (no persona asleep: policies.sh) with the domain rule
+# of this test, and for design B the test-only profile: never shipped, never
+# a default.
 policies="$(mktemp -d)"
 export KAGE_E2E_POLICIES="${policies}"
-cp policies/*.yaml "${policies}/"
+tests/e2e/policies.sh "${policies}"
 if [ "${design}" = load ]; then
     cat >> "${policies}/pacing-profiles.yaml" << 'EOF'
 
@@ -94,6 +95,9 @@ cleanup() {
     exit "${status}"
 }
 trap cleanup EXIT
+# A bound on the script (`just test-e2e`) stops it with TERM: leave through
+# the cleanup then too, whatever the script was waiting for.
+trap 'exit 143' TERM INT
 
 fail() {
     echo "FAIL: $*" >&2

@@ -32,10 +32,10 @@ export KAGE_WEBSHARE_API_KEY=
 export KAGE_ABUSEIPDB_KEY=
 export KAGE_PERSONAS_WARMUP=false
 
-# The shipped policies, unchanged.
+# The shipped policies, with no persona asleep (policies.sh).
 policies="$(mktemp -d)"
 export KAGE_E2E_POLICIES="${policies}"
-cp policies/*.yaml "${policies}/"
+tests/e2e/policies.sh "${policies}"
 chmod --recursive a+rX "${policies}"
 
 compose=(docker compose --file deploy/compose.yaml --file deploy/compose.e2e.yaml
@@ -54,6 +54,9 @@ cleanup() {
     exit "${status}"
 }
 trap cleanup EXIT
+# A bound on the script (`just test-e2e`) stops it with TERM: leave through
+# the cleanup then too, whatever the script was waiting for.
+trap 'exit 143' TERM INT
 
 fail() {
     echo "FAIL: $*" >&2

@@ -20,6 +20,11 @@ sqlx_cli_version := "0.9.0"
 # `tool@version,...` for taiki-e/install-action in CI: `just --evaluate rust_tools`.
 rust_tools := "cargo-deny@" + cargo_deny_version + ",cargo-audit@" + cargo_audit_version + ",cargo-llvm-cov@" + cargo_llvm_cov_version + ",cargo-cyclonedx@" + cargo_cyclonedx_version + ",cargo-mutants@" + cargo_mutants_version
 
+# The longest one end-to-end script may take (a `timeout` duration): the
+# slowest, tests/e2e/crawl.sh, took 5.5 minutes on a GitHub runner
+# (run 41752925582 on 2026-11-04).
+e2e_bound := "20m"
+
 # Scanners run from images pinned by digest, so no host install is needed.
 gitleaks_image := "ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"
 trivy_image := "ghcr.io/aquasecurity/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa"
@@ -218,21 +223,26 @@ test-node:
 
 # Compose-based end-to-end suite: the stack smoke test, which also opens a
 # browser context in each sidecar and checks the hardening of both
-# containers (Chromium since M4, Firefox since M5).
+# containers (Chromium since M4, Firefox since M5), then the rest in order.
+#
+# It passes at any hour (F154): no world's persona sleeps
+# (tests/e2e/policies.sh) and the field round's sites keep their days
+# where it is noon (tests/e2e/field.sh). Each script is bounded by
+# `e2e_bound`: one that waits for something that never comes fails and
+# takes its stack down (`timeout` signals the script and everything it
+# started, and the script's own trap cleans up) instead of holding the job
+# until CI cancels it.
 test-e2e: setup-env
-    tests/e2e/smoke.sh
-    tests/e2e/fetch.sh
-    tests/e2e/direct.sh
-    tests/e2e/guard.sh
-    tests/e2e/declared.sh
-    tests/e2e/pool.sh
-    tests/e2e/api.sh
-    tests/e2e/jobs.sh
-    tests/e2e/crawl.sh
-    tests/e2e/extract.sh
-    tests/e2e/field.sh
-    tests/e2e/observability.sh
-    tests/e2e/load.sh
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for name in smoke fetch direct guard declared pool api jobs crawl extract field observability load; do
+        status=0
+        timeout --kill-after=2m {{ e2e_bound }} "tests/e2e/${name}.sh" || status=$?
+        if [ "${status}" -eq 124 ] || [ "${status}" -eq 137 ]; then
+            echo "FAIL: tests/e2e/${name}.sh did not end within {{ e2e_bound }}" >&2
+        fi
+        [ "${status}" -eq 0 ] || exit "${status}"
+    done
 
 # The load test's design B (M12): 200 pages under the test-only `load`
 # profile, at the shipped caps, in 540 s to 720 s; about 12 minutes. Before
