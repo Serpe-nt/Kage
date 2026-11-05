@@ -367,6 +367,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   holds is passed over for the next free one (20 races of 20 on two
   numbers, at most 123 ms). `setxkbmap` keeps its 10 s: under seven times
   more work than CPUs it took at most 165 ms.
+- Two tests that read a slow runner as a failure: the carried fetch's
+  test (`kage-api`) wanted its first page answered within the 300 ms wall
+  time it sets for the second, and the test of a flow that waits for a
+  site's one visitor (`kage-scheduler`, F188) measured the visit from the
+  attempt's start, which comes after the moment the visit counts from.
+
 ## [2.0.2] - 2026-11-04
 
 ### Added

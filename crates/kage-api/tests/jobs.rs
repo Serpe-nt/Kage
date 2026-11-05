@@ -1752,8 +1752,19 @@ async fn a_cancel_reaches_a_carried_fetch_and_a_job_queued_behind_the_limit_at_o
     pages(&api, "/carry", page("Carried")).await;
     let token = api.key(&[Scope::Fetch, Scope::Jobs]).await;
     let fetch = |number: u32| json!({ "url": Api::url(&format!("/carry/{number}")), "level": 1, "pacing": one_seat(60_000) });
+    // The first page makes its persona the domain's one visitor. A slow
+    // host may take longer than the 300 ms wall time for it, and then it
+    // is carried on as a job too (a GitHub runner did, on #52): that is not
+    // what this test is about, so either way it is read to its end before
+    // the second is asked for.
     let first = api.post(&token, "/v1/fetch", &fetch(1)).await;
-    assert_eq!(first.status, StatusCode::OK, "{:?}", first.json());
+    if first.status == StatusCode::ACCEPTED {
+        let job = first.json()["job_id"].as_str().unwrap().to_owned();
+        let done = api.job_until(&token, &job, ended).await;
+        assert_eq!(done["state"], "succeeded", "{done}");
+    } else {
+        assert_eq!(first.status, StatusCode::OK, "{:?}", first.json());
+    }
     let carried = api.post(&token, "/v1/fetch", &fetch(2)).await;
     assert_eq!(carried.status, StatusCode::ACCEPTED, "{:?}", carried.json());
     let request = carried.json()["id"].as_str().unwrap().to_owned();
