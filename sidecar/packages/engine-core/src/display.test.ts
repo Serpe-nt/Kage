@@ -33,6 +33,30 @@ describe('displays', () => {
     pool.release(number);
   });
 
+  it('starts two displays at once from two pools that know nothing of each other, each its own', async () => {
+    // Two vitest workers, or two sidecars on one host: both pools hand out
+    // the same first free number. Until the display race of #52 the one
+    // whose Xvfb lost found the other's socket, called the display up and
+    // went on to prepare the other's server (or failed: "Xvfb exited").
+    const geometry = { width: 1366, height: 768, depth: 24 };
+    const started = await Promise.all(
+      [0, 1].map(() => new DisplayPool().start(geometry, { layout: 'de' })),
+    );
+    try {
+      const [first, second] = started;
+      expect(first?.number).not.toBe(second?.number);
+      for (const { display } of started) {
+        const connection = await X11Connection.connect(display.name);
+        expect(connection.setup.width).toBe(1366);
+        connection.close();
+      }
+    } finally {
+      for (const { display } of started) {
+        await display.stop();
+      }
+    }
+  });
+
   it('reports an X server that cannot start', async () => {
     const number = new DisplayPool().acquire();
     const error: unknown = await startXvfb(number, { width: 0, height: 0, depth: 7 }).catch(

@@ -1318,7 +1318,10 @@ one on the base branch and fails otherwise.
 at a pinned version and started by its path (what `channel: "chrome"`
 resolves to) through a wrapper that sets the persona's CPU affinity.
 Headful, one Xvfb display per context sized from the persona's screen, no
-viewport override, Chrome's sandbox on. The persona is made by launch
+viewport override, Chrome's sandbox on. A display is the context's once
+the X server whose lock holds its number is the context's own and answers
+a client; a number another process's server took first is passed over
+(F80: two pools on one host that picked the same number shared a display). The persona is made by launch
 parameters: the display, `TZ`, `--lang` and `LANG`, and two preferences
 merged into the profile before launch (`intl.accept_languages`, and
 `webrtc.ip_handling_policy = disable_non_proxied_udp` so that no UDP
