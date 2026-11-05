@@ -49,12 +49,13 @@ export KAGE_WEBSHARE_API_KEY=
 export KAGE_ABUSEIPDB_KEY=
 export KAGE_PERSONAS_WARMUP=false
 
-# The shipped policies with the domain rules of this test: the fixture
-# site is the operator's own, so it may be read at the pace of a test, and
-# under one of its names its robots.txt is enforced.
+# The shipped policies (no persona asleep: policies.sh) with the domain
+# rules of this test: the fixture site is the operator's own, so it may be
+# read at the pace of a test, and under one of its names its robots.txt is
+# enforced.
 policies="$(mktemp -d)"
 export KAGE_E2E_POLICIES="${policies}"
-cp policies/*.yaml "${policies}/"
+tests/e2e/policies.sh "${policies}"
 # The rules are entries of the shipped file's `domains` mapping, its last
 # key: a second `domains:` would be a duplicate key, which the policy
 # loader refuses, and `domains: {}` takes no entry.
@@ -92,6 +93,9 @@ cleanup() {
     exit "${status}"
 }
 trap cleanup EXIT
+# A bound on the script (`just test-e2e`) stops it with TERM: leave through
+# the cleanup then too, whatever the script was waiting for.
+trap 'exit 143' TERM INT
 
 fail() {
     echo "FAIL: $*" >&2

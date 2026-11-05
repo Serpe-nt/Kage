@@ -48,11 +48,12 @@ export KAGE_E2E_PATIENCE_MEDIAN=2s
 export KAGE_E2E_PATIENCE_P95=4s
 export KAGE_E2E_PATIENCE_MAX=6s
 
-# The shipped policies; the runner writes the round's entries into the
-# same directory, as it does into the private one of a round.
+# The shipped policies (no persona asleep: policies.sh); the runner writes
+# the round's entries into the same directory, as it does into the private
+# one of a round.
 policies="$(mktemp -d)"
 export KAGE_E2E_POLICIES="${policies}"
-cp policies/*.yaml "${policies}/"
+tests/e2e/policies.sh "${policies}"
 chmod --recursive a+rwX "${policies}"
 scratch="$(mktemp -d)"
 private="${scratch}/private"
@@ -73,6 +74,9 @@ cleanup() {
     exit "${status}"
 }
 trap cleanup EXIT
+# A bound on the script (`just test-e2e`) stops it with TERM: leave through
+# the cleanup then too, whatever the script was waiting for.
+trap 'exit 143' TERM INT
 
 fail() {
     echo "FAIL: $*" >&2
@@ -134,6 +138,24 @@ created="$(curl --silent --show-error --fail --request POST --header "Authorizat
     "${base}/v1/admin/keys")"
 token="$(value "${created}" "d.token")"
 entry='{ "pacing": "fast", "active_hours": "ignore", "min_dwell": "500ms" }'
+# The round's sites keep their days in a zone where it is between noon and
+# one o'clock now, so that no run meets the end of a site's day (F154).
+# A site's day is its window in its own zone, and the runner reads a block
+# that cools the persona past the window's end as the end of the day. In
+# UTC a run near midnight ended the day before site 2's wall (the window
+# closed at 23:59), ran site 1 again "the same day" a minute after
+# midnight, or, when the wall came after 00:00 and before about 01:12,
+# waited for 23:59 of that day: the wall's 24 h cooldown times its
+# confidence of 0.95 ends 22.8 h on, before the window does. From noon
+# the window ends 11 to 12 h on, every block of the test cools the persona
+# past it, and the date does not change before the test ends.
+hour="$(date -u +%-H)"
+if [ "${hour}" -le 12 ]; then
+    zone="Etc/GMT-$((12 - hour))"
+else
+    zone="Etc/GMT+$((hour - 12))"
+fi
+[ "${zone}" = Etc/GMT-0 ] && zone=Etc/UTC
 cat > "${scratch}/sites.json" << EOF
 {
   "round": "e2e-field",
@@ -143,14 +165,14 @@ cat > "${scratch}/sites.json" << EOF
   "stops": { "min_usable_proxies": 3, "max_term_share": 0.9, "max_round_bytes": 500000000 },
   "sites": [
     { "index": "1", "domain": "fixture.kage.test", "seed": "http://fixture.kage.test:8088/site/about",
-      "category": "reading room", "country": "DE", "engine": null, "persona": null, "timezone": "UTC",
+      "category": "reading room", "country": "DE", "engine": null, "persona": null, "timezone": "${zone}",
       "window": { "from": "00:00", "until": "23:59" }, "pages": 4, "max_depth": 2,
       "names": ["harbour"], "deny": ["(?i)^https?://lenient\\\\."], "entry": ${entry} },
     { "index": "2", "domain": "wall.field.test", "seed": "http://wall.field.test:8088/wall/",
-      "category": "test barrier", "country": "DE", "engine": null, "persona": null, "timezone": "UTC",
+      "category": "test barrier", "country": "DE", "engine": null, "persona": null, "timezone": "${zone}",
       "window": { "from": "00:00", "until": "23:59" }, "pages": 3, "max_depth": 1, "entry": ${entry} },
     { "index": "C1", "domain": "rules.kage.test", "seed": "http://rules.kage.test:8088/site/",
-      "category": "control, no defence", "country": "DE", "timezone": "UTC", "control": true,
+      "category": "control, no defence", "country": "DE", "timezone": "${zone}", "control": true,
       "window": { "from": "00:00", "until": "23:59" }, "pages": 1, "max_depth": 0, "entry": ${entry} }
   ]
 }

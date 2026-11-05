@@ -39,9 +39,10 @@ export KAGE_GRAFANA_PORT="${KAGE_E2E_GRAFANA_PORT:-13086}"
 export KAGE_WEBSHARE_API_KEY=
 export KAGE_ABUSEIPDB_KEY=
 export KAGE_PERSONAS_WARMUP=false
+# The shipped policies, with no persona asleep (policies.sh).
 policies="$(mktemp -d)"
 export KAGE_E2E_POLICIES="${policies}"
-cp policies/*.yaml "${policies}/"
+tests/e2e/policies.sh "${policies}"
 # The batch is a job, and a job never wakes a persona that sleeps: at
 # night in the personas' time zones it would wait for the morning. The
 # rule is an entry of the shipped file's `domains` mapping, its last key:
@@ -93,6 +94,9 @@ cleanup() {
     exit "${status}"
 }
 trap cleanup EXIT
+# A bound on the script (`just test-e2e`) stops it with TERM: leave through
+# the cleanup then too, whatever the script was waiting for.
+trap 'exit 143' TERM INT
 
 fail() {
     echo "FAIL: $*" >&2

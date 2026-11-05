@@ -162,6 +162,51 @@ queue. Each job calls the same `just` targets a developer runs locally, and
 | `coverage-badge` | none | on a push to `main` only: writes the figure `cov-rust` measured to the `gh-pages` branch ("Badges" below); not a check, and `ci-ok` does not wait for it |
 | `ci-ok` | none | fails unless all required jobs passed |
 
+### The end-to-end suite at any hour
+
+`just test-e2e` passes at any hour of the day, and a run may span midnight.
+Until F154 it could not: no gate, rerun or merge was started whose end-to-end
+stage would run between 22:00 and 05:50 UTC, a third of every day. Two
+things tied the suite to the wall clock, and neither was what it tests:
+
+- **The worlds' personas slept.** Every world's personas are Germans (their
+  proxies are DE), and under the shipped `active_hours: prefer` a persona is
+  awake from 06:30 to 08:30 until 22:30 to 00:30 Berlin time, a job never
+  wakes one, and so a job or a flow started at night waited for the
+  morning: `tests/e2e/guard.sh`'s flow stayed `queued` until 05:56 UTC on a
+  run at 01:33 UTC. Every script now starts from the policies of
+  `tests/e2e/policies.sh`: the shipped files with the defaults'
+  `active_hours` at `ignore`, which is the policy for "the hour does not
+  matter here" (spec §11). How the planner treats a persona's day is tested
+  under a clock of its own one layer down (`kage-core`'s
+  `schedule/planner/tests.rs` and `schedule/day.rs`).
+- **The field round's days were UTC days.** `tests/e2e/field.sh` gave its
+  sites a window of 00:00 to 23:59 UTC. A run near midnight met the end of
+  the window before site 2's wall, ran site 1 a second time "the same day"
+  after midnight, or, when the wall came between 00:00 and about 01:12, read
+  its cooldown (24 h × 0.95, ending 22.8 h on, before 23:59) as "the day goes
+  on" and waited for 23:59: a gate that reached the script at 00:08 UTC was
+  cancelled at 01:11. The sites now keep their days in a fixed-offset zone
+  (`Etc/GMT±n`) where it is between noon and one o'clock when the script
+  starts: the window ends 11 to 12 hours on, the wall cools the persona past
+  it, and the date does not change before the script ends.
+
+Each script is also bounded by `e2e_bound` in the `justfile`: one that waits
+for something that never comes fails with `did not end within`, and its own
+trap takes its stack down (`timeout` signals the script and everything it
+started), instead of holding the `images` job until GitHub cancels it.
+
+Both were shown with the clock moved by libfaketime, not by waiting for
+the night: in kage, its migrations, the world's node helpers and the
+scripts' own `node`, `curl` and `date` (F154's pull request has the
+evidence). On `main`, `guard.sh` at 02:00 UTC and `field.sh` started at
+23:58 or at 00:00 UTC failed; with these changes they passed, and so did
+the whole suite at 02:00 UTC and across 00:00 UTC, but for
+`observability.sh`, which cannot be run that way: Jaeger, Prometheus and
+the Docker daemon keep the real clock (libfaketime cannot move a Go
+binary), so they hold nothing of a moved kage. Its world ignored the hour
+already, and it passed at 02:22 UTC on GitHub (run 41752925582).
+
 Coverage gates:
 
 - Rust: `scripts/check-rust-coverage.mjs` reads the llvm-cov summary and

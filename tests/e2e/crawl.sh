@@ -51,12 +51,13 @@ export KAGE_E2E_PATIENCE_MEDIAN=4s
 export KAGE_E2E_PATIENCE_P95=8s
 export KAGE_E2E_PATIENCE_MAX=12s
 
-# The shipped policies with the domain rule of this test (the fixture site
-# is the operator's own, so it may be read at the pace of a test) and a
-# pacing profile that is `fast` with a rest between two pages.
+# The shipped policies (no persona asleep: policies.sh) with the domain rule
+# of this test (the fixture site is the operator's own, so it may be read at
+# the pace of a test) and a pacing profile that is `fast` with a rest
+# between two pages.
 policies="$(mktemp -d)"
 export KAGE_E2E_POLICIES="${policies}"
-cp policies/*.yaml "${policies}/"
+tests/e2e/policies.sh "${policies}"
 # The rule is an entry of the shipped file's `domains` mapping, its last
 # key: a second `domains:` would be a duplicate key, which the policy
 # loader refuses, and `domains: {}` takes no entry.
@@ -104,6 +105,9 @@ cleanup() {
     exit "${status}"
 }
 trap cleanup EXIT
+# A bound on the script (`just test-e2e`) stops it with TERM: leave through
+# the cleanup then too, whatever the script was waiting for.
+trap 'exit 143' TERM INT
 
 fail() {
     echo "FAIL: $*" >&2

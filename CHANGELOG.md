@@ -152,6 +152,21 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the tab is given up to 3 s to load where it went, and the capture says
   where that is (a refused name is `ssrf_denied`). Any other failed read
   fails as before (spec §10.6).
+- The end-to-end suite passes at any hour and across midnight (F154). Its
+  worlds' personas are Germans and slept by Berlin's night under the
+  shipped `active_hours: prefer`, so a job or a flow started at night
+  waited for the morning (`tests/e2e/guard.sh`'s flow stayed `queued`
+  until 05:42 UTC on a run at 02:00 UTC); every world now starts from the
+  shipped policies with the defaults' `active_hours` at `ignore`
+  (`tests/e2e/policies.sh`). The field runner's test gave its sites a
+  window of 00:00 to 23:59 UTC and failed or hung near midnight: it closed
+  the window before site 2, ran site 1 again "the same day" after
+  midnight, or read the wall's cooldown as "the day goes on" and waited
+  for 23:59; its sites now keep their days where it is noon. Each script
+  of `just test-e2e` is bounded (`e2e_bound`, 20 minutes) and fails
+  instead of holding a CI job until it is cancelled. Shown with the
+  stack's clock moved by libfaketime, at 02:00 UTC and across 00:00 UTC
+  (`docs/runbooks/repo.md`).
 
 ## [2.0.2] - 2026-11-04
 
