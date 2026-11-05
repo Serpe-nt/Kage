@@ -1675,6 +1675,20 @@ every context of it included, per attempt: the cure of the crash itself (a
 larger renderer stack, or a driver that does not spin on a crash) is an
 open question of F146.
 
+**A page that moves under the hand (F192).** A page may send the tab on by
+itself (a meta refresh, a script) while the persona's hand reads where it
+is to scroll or wander, and the read fails because its document went away
+(either driver's "execution context was destroyed", or "target page ...
+closed", on a page that asked for a new document or changed its address
+meanwhile). That ends the behavior of the navigation there, never the
+request: the tab is given up to 3 s to have its new document answered and
+loaded as the request's `wait.until` asks, the page is looked at again,
+and the capture says where the tab went as for any page that moved (a
+refused name is `ssrf_denied`, an address nothing answers
+`navigation_failed`). The behavior report counts what the hand did
+before. Any other failure of such a read fails as it did; a flow's step
+that meets one fails as before, with the driver's message.
+
 ---
 
 ## 11. Pacing and scheduling

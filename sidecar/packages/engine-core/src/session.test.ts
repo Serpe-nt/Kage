@@ -17,6 +17,7 @@ import { motorProfile, type InputDevice } from './behavior/index.js';
 import { ConsoleLog } from './console-log.js';
 import { EngineError, silentLog, type OperationEnv } from './engine.js';
 import {
+  PageMoved,
   PageSession,
   entriesToGoBack,
   errorPageTarget,
@@ -187,7 +188,10 @@ interface Tabs {
  * loads (F189). One
  * with `stuck` in it loads, and then answers no read again (its script
  * never yields); one with `crash` loads, and then its renderer crashes
- * (F103).
+ * (F103). One with `refreshes=<address>` loads, and its meta refresh
+ * sends the tab there while the hand reads where the page is: the read
+ * fails as Firefox's does (F192). One with `readbreaks=<message>` loads,
+ * and the hand's look at where the page is fails with that message.
  * Each tab keeps a history as Chrome keeps it: the blank page it began
  * with stays an entry, every navigation adds one, and the browser's own way
  * back moves to the entry before without asking anyone for it.
@@ -241,6 +245,9 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
     const history = ['about:blank'];
     // A page whose script never yields answers no read again.
     let stuck = false;
+    // The page's meta refresh, and a look of the hand's that fails (F192).
+    let refreshTo: string | null = null;
+    let readFailure: string | null = null;
     const never = new Promise<never>(() => undefined);
     const reading = <T>(value: T): Promise<T> => (stuck ? never : Promise.resolve(value));
     const mainFrame = { url: () => address };
@@ -334,6 +341,8 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
           address = ffmoves;
           documentUri = `about:neterror?e=connectionFailure&u=${encodeURIComponent(ffmoves)}&c=UTF-8`;
         }
+        refreshTo = sent('refreshes');
+        readFailure = sent('readbreaks');
         stuck = url.includes('stuck') || url.includes('crash');
         if (url.includes('crash')) {
           setTimeout(() => {
@@ -360,8 +369,26 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
       waitForSelector: () => Promise.resolve(null),
       waitForLoadState: () => Promise.resolve(),
       // A page that has loaded and holds no text: every other read finds nothing.
-      evaluate: (expression: string) =>
-        reading(
+      evaluate: (expression: string) => {
+        if (expression.includes('innerWidth')) {
+          if (refreshTo !== null) {
+            // The meta refresh sends the tab on while the hand reads the page.
+            const to = refreshTo;
+            refreshTo = null;
+            emit('request', answer(to).request());
+            address = to;
+            history.push(to);
+            return Promise.reject(
+              new Error(
+                'page.evaluate: Execution context was destroyed, most likely because of a navigation',
+              ),
+            );
+          }
+          if (readFailure !== null) {
+            return Promise.reject(new Error(readFailure));
+          }
+        }
+        return reading(
           (expression === 'document.readyState'
             ? 'complete'
             : expression === 'document.documentURI'
@@ -369,7 +396,8 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
               : expression === 'document.hasFocus()'
                 ? tabs.focused
                 : '') as never,
-        ),
+        );
+      },
       click: (selector: string) => {
         // A link with `target=_blank`: the page opens a tab, which the
         // browser shows in front of it (F184).
@@ -822,6 +850,59 @@ describe('a still visit (contract 1.5.0)', () => {
     const { result } = await navigate(bare, { dwell_ms: 50 });
     expect(result.behavior).toBeNull();
     expect(untouched).toEqual({ loaded: [target], input: [], opened: 0 });
+  });
+});
+
+describe('a page that moves itself away under the hand (F192)', () => {
+  const env: OperationEnv = {
+    artifacts: new ArtifactWriter(path.join(tmpdir(), 'kage-moved-unused')),
+    defaultArtifactPrefix: 'sidecar/test',
+  };
+  const capture = { dom: true, raw: false, xhr: null, console: false, screenshot: null, pdf: null };
+  const visit = (url: string) => {
+    const { driver, driven } = scriptedDriver();
+    const parts = { driver, personaSeed: PERSONA_SEED, selftestPages: [], log: silentLog };
+    const going = new PageSession(parts).navigate(
+      {
+        url,
+        wait: { until: 'load' },
+        capture,
+        behavior: { seed: REQUEST_SEED, scroll_depth: 0.5, wander: false },
+      },
+      env,
+    );
+    return { going, driven };
+  };
+  const destroyed =
+    'page.evaluate: Execution context was destroyed, most likely because of a navigation';
+
+  it('ends the hand’s work there, and the capture says where the tab went', async () => {
+    const elsewhere = 'http://rules.kage.test:8088/guard/secret';
+    const { going, driven } = visit(site(`/m?refreshes=${encodeURIComponent(elsewhere)}`));
+    const result = await going;
+    expect(PageResultSchema.parse(result)).toEqual(result);
+    expect(result.final_url).toBe(elsewhere);
+    // The hand stopped at its first look: it sent nothing.
+    expect(driven.input).toEqual([]);
+    expect(result.behavior).toMatchObject({
+      seed: REQUEST_SEED,
+      dwell_ms: 0,
+      scroll_reached: null,
+      scroll_ended_by: null,
+    });
+  });
+
+  it('fails as before where the read failed for another reason, or the page did not move', async () => {
+    for (const failure of ['boom', destroyed]) {
+      const { going } = visit(site(`/m?readbreaks=${encodeURIComponent(failure)}`));
+      const thrown: unknown = await going.then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect(thrown).toBeInstanceOf(Error);
+      expect(thrown).not.toBeInstanceOf(PageMoved);
+      expect((thrown as Error).message).toBe(failure);
+    }
   });
 });
 

@@ -1022,6 +1022,48 @@ export function defineParitySuite(subject: ParitySubject): void {
       });
     });
 
+    it('lets a page that moves itself away under the persona’s hand end where it went (F192)', async () => {
+      await withContext('moving', async (context) => {
+        // A meta refresh of `0` sends the tab on at once, while the hand
+        // starts to read where the page is to scroll it; whether a read is
+        // under way when the document goes is a race, so each page is
+        // visited a few times. A read cut so ends the hand's work, and the
+        // capture says where the tab went: the page that loaded there, or
+        // where nothing answered (the test proxy refuses every tunnel).
+        // Where the hand is done before the page moves, the dwell gives the
+        // move its time, as for the still visit above.
+        const gone = 'https://gone.kage.test/away';
+        const human = { seed: SEEDS.first, scroll_depth: 0.6, wander: false };
+        for (let round = 0; round < 5; round += 1) {
+          const landed = await go(
+            context,
+            named(`/guard/meta?to=${encodeURIComponent(named('/landing'))}`),
+            { capture: DOM, dwell_ms: 1500, behavior: human },
+          );
+          expect(landed, `round ${round}`).toMatchObject({
+            final_url: named('/landing'),
+            status: 200,
+            error: null,
+          });
+          expect(landed.dom_html, `round ${round}`).toContain('id="landing"');
+          expect(landed.behavior?.seed, `round ${round}`).toBe(SEEDS.first);
+
+          const moved = await go(context, named(`/guard/meta?to=${encodeURIComponent(gone)}`), {
+            capture: DOM,
+            dwell_ms: 1500,
+            behavior: human,
+          });
+          expect(moved, `round ${round}`).toMatchObject({
+            final_url: gone,
+            status: null,
+            dom_html: null,
+            title: null,
+          });
+          expect(moved.error?.code, `round ${round}`).toBe('navigation_failed');
+        }
+      });
+    });
+
     it('reports failures as what they are and keeps what it has', async () => {
       await withContext('failures', async (context) => {
         const slow = await go(context, named('/slow?ms=4000'), { timeout_ms: 1000 });

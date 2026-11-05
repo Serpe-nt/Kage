@@ -140,6 +140,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   against the proxy (no setting aside, no probe), and the forwarder logs
   the refusal at `info` with the proxy and the target's host (spec §8.3).
   A `5xx` to the tunnel stays the target's failed connection.
+- **A page that moves itself away under the persona's hand ends where it
+  went (F192).** A page that sends the tab on at once (a meta refresh of
+  `0`, a script) while the hand reads it to scroll could make a level 2
+  or 3 navigation with `behavior: human` fail as `sidecar_error`: on
+  Firefox the read failed with "Execution context was destroyed" and the
+  error escaped the navigation as a 500 (seen in `tests/e2e/direct.sh`'s
+  meta refresh check on #53's CI; a race, in production too). Such a read,
+  on a page that asked for a new document, now ends the behavior there:
+  the tab is given up to 3 s to load where it went, and the capture says
+  where that is (a refused name is `ssrf_denied`). Any other failed read
+  fails as before (spec §10.6).
 
 ## [2.0.2] - 2026-11-04
 

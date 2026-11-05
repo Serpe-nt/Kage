@@ -293,6 +293,35 @@ export class PageUnanswering extends Error {
   override readonly name = 'PageUnanswering';
 }
 
+/**
+ * A read the persona's hand made failed because the page moved itself
+ * away under it (F192): a meta refresh or a script sent the tab on while
+ * the hand read where things were. The hand's work on that page ends
+ * there, and where the tab went is the capture's to judge. The message is
+ * the driver's, so that anything that names the failure names it as before.
+ */
+export class PageMoved extends Error {
+  override readonly name = 'PageMoved';
+}
+
+/**
+ * What either driver says of a read whose document went away under it:
+ * the page navigated, or the tab it was in is gone. Only on a page that
+ * moved is it a {@link PageMoved}.
+ */
+const DOCUMENT_GONE =
+  /Execution context was destroyed|Cannot find context with specified id|Inspected target navigated or closed|No frame for given id found|Target page, context or browser has been closed/;
+/**
+ * How long a hand's read that failed so waits for the driver to report the
+ * page's navigation, which may come just after the failure.
+ */
+const MOVED_LOOK_MS = 100;
+/**
+ * How long a page that moved away under the hand is given to load where it
+ * went before it is captured, within what the request has left.
+ */
+const MOVED_SETTLE_MS = 3000;
+
 /** Longest page text read for interstitial detection and evidence. */
 const TEXT_LIMIT = 200_000;
 /** How long bodies of XHR responses are waited for once the page settled. */
@@ -1604,10 +1633,12 @@ export class PageSession {
 
   // --- behavior ---------------------------------------------------------
 
+  // The hand's reads: one that the page's own navigation cut is a
+  // `PageMoved` (F192).
   private readonly surface: PageSurface = {
     metrics: async (): Promise<SurfaceMetrics> => {
       const m =
-        await this.read<Record<'iw' | 'ih' | 'ow' | 'oh' | 'sy' | 'sh', number>>(READ_METRICS);
+        await this.handRead<Record<'iw' | 'ih' | 'ow' | 'oh' | 'sy' | 'sh', number>>(READ_METRICS);
       const window = this.parts.driver.windowOrigin();
       // A window has its side borders left and right and everything else
       // (title, tabs, toolbar) above the page.
@@ -1619,21 +1650,44 @@ export class PageSession {
         scrollHeight: m.sh,
       };
     },
-    visibleWords: () => this.read<number>(READ_WORDS),
+    visibleWords: () => this.handRead<number>(READ_WORDS),
     boxOf: (selector: string) => {
       if (selector.startsWith(LINK_PREFIX)) {
         const { target, mode } = JSON.parse(selector.slice(LINK_PREFIX.length)) as {
           target: string;
           mode: LinkMode;
         };
-        return this.read<Box | null>(linkExpression(target, mode));
+        return this.handRead<Box | null>(linkExpression(target, mode));
       }
-      return this.read<Box | null>(
+      return this.handRead<Box | null>(
         boxExpression(`document.querySelector(${JSON.stringify(selector)})`),
       );
     },
-    painted: (limitMs: number) => this.read<boolean>(readPainted(limitMs)),
+    painted: (limitMs: number) => this.handRead<boolean>(readPainted(limitMs)),
   };
+
+  /**
+   * A read the hand makes (F192). One that fails because its document went
+   * away, on a page that asked for a new document or changed its address
+   * meanwhile, is a {@link PageMoved}; every other failure is as it was.
+   */
+  private async handRead<T>(expression: string): Promise<T> {
+    const asked = this.documentsAsked;
+    const address = this.page.url();
+    try {
+      return await this.read<T>(expression);
+    } catch (thrown) {
+      const message = thrown instanceof Error ? thrown.message : String(thrown);
+      if (thrown instanceof PageUnanswering || !DOCUMENT_GONE.test(message)) {
+        throw thrown;
+      }
+      const moved = () => this.documentsAsked > asked || this.page.url() !== address;
+      if (!moved()) {
+        await sleep(MOVED_LOOK_MS);
+      }
+      throw moved() ? new PageMoved(message, { cause: thrown }) : thrown;
+    }
+  }
 
   /**
    * The persona at its mouse and keyboard for one request.
@@ -2361,6 +2415,9 @@ export class PageSession {
     }
 
     if (error === null || this.document.response !== null) {
+      // The document the request loaded: one that the page's own
+      // navigation replaces under the hand is waited for after it (F192).
+      const loadedWith = this.document.response;
       try {
         const challenge = await waitForChallenge(
           () => this.observe(),
@@ -2403,7 +2460,21 @@ export class PageSession {
       } catch (thrown) {
         // A page that stopped answering ends its visit here: what was sent
         // is reported, and the capture says why the page is unread (F103).
-        if (!(thrown instanceof PageUnanswering)) {
+        // One that moved itself away under the hand (a meta refresh, a
+        // script) ends the hand's work too: the tab is given a moment to
+        // load where it went, and the capture judges what it shows (F192).
+        if (thrown instanceof PageMoved) {
+          this.parts.log.info(
+            { url: request.url, at: page.url() },
+            'the page moved away while the persona read it: its behavior ends there',
+          );
+          // As after a click: until the new document is answered and has
+          // loaded as the request asks, or nothing answers in the moment.
+          const limit = Math.min(deadline - CAPTURE_RESERVE_MS, Date.now() + MOVED_SETTLE_MS);
+          await this.afterClick(loadedWith, request.wait.until, limit).catch(() => false);
+          // What the tab shows now is what the result describes.
+          observation = await this.observe();
+        } else if (!(thrown instanceof PageUnanswering)) {
           throw thrown;
         }
       }
