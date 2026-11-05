@@ -8,6 +8,68 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A proxy that comes back on an address a dead proxy once had keeps its
+  persona (F177).** The shared-exit check compares a probe with the
+  latest probes of the other live proxies that read an address; a proxy
+  that is down no longer lends the address its record kept from before
+  the outage. Before, a restarted proxy that Docker or the provider gave a
+  dead proxy's old address was marked `exit_shared_with` that proxy and
+  its persona retired for good (QA round two, timers-04).
+- **An operator's probes add no backoff cycle (F129).** `kage proxy
+  health` and the admin probe look at a proxy in backoff as it is: a pass
+  ends the backoff, a failure is recorded and leaves its end and its count
+  alone. Before, every failed look was one more cycle, so a few probes in
+  a row added minutes to an outage and spent the three cycles toward a
+  replacement (sched-06).
+- **Level 0 waits out a suspected outage of the pool (F193).** A site's
+  plain exit whose latest probe failed is held by the outage guard as a
+  persona's proxy is since F169: the request is answered
+  `plain_exit_unavailable` with `retry_at`, a job waits, and the forwarder
+  relays nothing through the held exit; before, a level 0 job still met
+  dead exits during an outage (the review of #50).
+- **After a breaker's pause level 0 goes on, and `kage_breaker_open` is
+  read from the store (F126).** A plain client is refused `domain_paused`
+  with the pause's end as `retry_at` while the pause runs, and goes on
+  when it ends, never waiting for the trial a persona makes; before, a
+  site read only at level 0 stayed refused with no `retry_at` until some
+  browser request came (policy-03). The gauge is read from the stored
+  breakers at every scrape: it survives a restart and is 0 when the pause
+  ends, so `KageBreakerOpen` follows the pause (secrecy-03).
+- **An attempt through a proxy nobody answers for fails within seconds
+  (F159).** The forwarder looks up a proxy's name within five seconds and
+  refuses a proxy it could not reach at once for fifteen seconds, so a
+  browser's second try of the tunnel costs nothing; in the QA world an
+  attempt through a stopped proxy took 40 s.
+- **The log names a proxy by its id (F153).** "proxy added to the pool",
+  "proxy retired" and the replacement lines carry the proxy's host and port
+  at DEBUG only, and an alert's details in the log have the host, port and
+  exit address `[redacted]` at INFO and above; the nightly's public log
+  printed the pool's addresses.
+- **Grafana's trace search by service works (F176).** The profile's Jaeger
+  is pinned to 2.20.0, the last release with the v1 search Grafana's Jaeger
+  data source sends (2.21.0 removed it and no Grafana release searches
+  through v3 yet), and the data source's v3 toggle is off; with 2.22.0
+  Explore's search answered `404` (timers-01).
+- **No seed in a trace, and a missing scope is counted (F182).** The
+  attempt's log line, which leaves with its span as an event, no longer
+  carries the attempt's seed (timers-03; the seed stays in
+  `attempts.seed`). `kage_api_refusals_total{code="scope_missing"}` counts
+  the `403` it names (timers-02).
+- **Observability's small items (F144).** The sidecars' event loop series
+  carry `engine`, so the merged exposition holds each once (secrecy-06); a
+  sidecar's lines of a traced request carry `span_id` (secrecy-07) and are
+  in Kage's shape: `timestamp`, `level` in upper case, `fields.message`,
+  `request`, `persona` (secrecy-08); spec §20 lists the sidecars' families
+  and labels (secrecy-09); `RUST_LOG` and `LOG_LEVEL` reach the services of
+  the shipped compose file (secrecy-11); a redirect target a site sent is
+  logged by its origin only, never its query (secrecy-12).
+- **The sidecars' counters exist from zero (F150).**
+  `sidecar_context_opens_total`, `sidecar_context_closes_total`,
+  `sidecar_browser_recycles_total`, `sidecar_selftests_total` and
+  `sidecar_flows_total` are exported at zero for every result and reason
+  from the start, as Kage's own are since F110, so `increase()` counts the
+  first event.
+
 - **The engine images take Debian's security updates at build.** On
   2026-11-05 Trivy refused both engine images for CVE-2026-109518 in
   `apt` 3.0.3 (fixed in 3.0.4) while the pinned base image, and the

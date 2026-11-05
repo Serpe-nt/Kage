@@ -8,10 +8,17 @@ collector is named; the dashboards and alerts come with the
 ## Logs
 
 Kage and both sidecars write one JSON object per line on stdout
-(`docker compose logs`). A line written inside a request carries
-`trace_id` and `span_id`: the same `trace_id` in Kage's lines and in the
-sidecar's for one request, also when no trace is sent anywhere. To follow
-one request:
+(`docker compose logs`), in one shape (F144): `timestamp` (ISO 8601,
+UTC), `level` (`INFO`, `WARN`, ...), the text and everything the line
+was written with under `fields` (`fields.message`, `fields.persona`),
+and `trace_id` and `span_id` at the top. Kage's lines add `target` (the
+module); a sidecar's request lines carry its own id of the request as
+`request` (Kage's request id is in Kage's lines; the trace joins the
+two). A line written inside a request carries `trace_id` and `span_id`:
+the same `trace_id` in Kage's lines and in the sidecar's for one request,
+also when no trace is sent anywhere; a sidecar's line names the sidecar's
+span, or outside it the span of Kage's request to it. To follow one
+request:
 
 ```bash
 docker compose --file deploy/compose.yaml logs --no-color kage browser-chromium browser-firefox | grep '"trace_id":"<trace id>"'
@@ -20,8 +27,22 @@ docker compose --file deploy/compose.yaml logs --no-color kage browser-chromium 
 No line holds a secret, a proxy credential, an API token, a cookie's
 value or a request body; `tests/e2e/observability.sh` greps every line of
 every service for the stack's secrets after real traffic (the redaction
-audit). `RUST_LOG` sets Kage's level (`info` unless said); `LOG_LEVEL` a
-sidecar's.
+audit). `RUST_LOG` sets Kage's level (`info` unless said, or a filter
+such as `kage_scheduler=debug`); `LOG_LEVEL` a sidecar's (`trace`,
+`debug`, `info`, `warn`, `error`). The shipped compose file passes both
+through from the shell or `deploy/.env` (F144):
+
+```bash
+RUST_LOG=kage_scheduler=debug LOG_LEVEL=debug docker compose --file deploy/compose.yaml up --detach
+```
+
+A proxy is named by its id in a line at `info` and above, never by its
+host or port, and an alert's details in the log have its addresses
+replaced by `[redacted]` (F153): a log may be public (the nightly's is on
+GitHub) and the addresses are the operator's. The full details stay with
+the alert in the store (`health_events`) and are in the log at `debug`. At
+`debug`, a redirect target a site sent is named by its origin only, never
+its path or query (F144).
 
 ## Traces
 
@@ -38,7 +59,9 @@ Every request is one trace:
 | `webhook.deliver` | Kage | one delivery attempt: the delivery, its job, its event, the status, the result |
 
 No span holds a URL's path or query, an address, a seed, a token, a
-fingerprint or a body. Traces are sent only when Kage is given
+fingerprint or a body. That includes the span events: a log line written
+inside a span leaves with the trace as an event of it, so the attempt's
+line carries no seed (F182; the seed is `attempts.seed` in the store). Traces are sent only when Kage is given
 `telemetry.otlp_endpoint` (`KAGE__TELEMETRY__OTLP_ENDPOINT`) and a sidecar
 `SIDECAR_OTLP_ENDPOINT`: OTLP over HTTP with protobuf, the address with
 its path (`http://otel-collector:4318/v1/traces`), asked directly and
@@ -55,7 +78,7 @@ docker compose --file deploy/compose.yaml --file deploy/compose.observability.ya
 | Service | Image | What it does |
 |---|---|---|
 | `otel-collector` | OpenTelemetry Collector (core) 0.162.0 | takes OTLP over HTTP from Kage and the sidecars, hands it to Jaeger |
-| `jaeger` | Jaeger 2.22.0 | keeps the traces for seven days (Badger, volume `jaeger-data`) |
+| `jaeger` | Jaeger 2.20.0 | keeps the traces for seven days (Badger, volume `jaeger-data`); the last release with the v1 search that Grafana's Jaeger data source sends (F176, [versions.md](../versions.md)) |
 | `prometheus` | Prometheus 3.13.4 (LTS) | scrapes Kage on its metrics listener every 15 s, keeps 15 days, evaluates the alert rules |
 | `grafana` | Grafana OSS 13.2.4 | the dashboards, with Prometheus and Jaeger as its data sources |
 
@@ -102,7 +125,7 @@ them sent somewhere, point an Alertmanager of your own at Prometheus.
 | KageDown (critical) | Prometheus has not scraped Kage for 2 minutes | `docker compose ps`, `docker compose logs kage` |
 | KagePoolUnavailable (critical) | no proxy healthy or degraded for 10 minutes; a proxy whose backoff ran out counts as `backoff` until a probe passes, so an outage holds the alert through every expiry, and so does one whose latest probe failed while the outage guard of a pool of four or more holds (F151); under `egress.mode: direct` the pool is idle and publishes nothing, so it stays quiet | [proxies.md](proxies.md) |
 | KageBandwidthBudget (warning) | 80 % of the month's cap used | [fetching.md](fetching.md#the-bandwidth-budget) |
-| KageBreakerOpen (warning) | a domain is paused | [block-report.md](block-report.md) |
+| KageBreakerOpen (warning) | a domain is paused: `kage_breaker_open` is read from the stored breakers at every scrape, so it holds across a restart and ends with the pause, not with the trial that closes the breaker (F126) | [block-report.md](block-report.md) |
 | KageBlockRateAboveThreshold (warning) | a domain was blocked, at levels 1 to 3, as often in the last hour as its `breaker_threshold` allows; the first block counts (see Metrics) | [block-report.md](block-report.md) |
 | KagePersonaRetired (info) | a persona was retired in the last 30 minutes | [personas.md](personas.md) |
 | KageWebhookFailing (warning) | a webhook delivery failed for good in the last 30 minutes; the first failure counts | [api.md](api.md) |
@@ -126,9 +149,11 @@ Every counter whose label values are known before any event exists at
 zero from the start of the process: the webhook deliveries by event and
 result, the jobs accepted and finished and the items finished by kind,
 state and level, the crawl's pages, skips and duplicates, the API's
-refusals by code, the scheduler's refusals by reason, the bytes by
+refusals by code (`scope_missing` included, counted where the handler asks
+for the scope, F182), the scheduler's refusals by reason, the bytes by
 direction and exit, the cache, the `robots.txt` asked for and the robots
-denials by result, the replacements by reason. So the first event of each
+denials by result, the replacements by reason, and the sidecars' own
+counters by result and reason (F150). So the first event of each
 is a change from zero, which `increase()` sees (F110). A counter with a
 label that arrives with the event is still born with it: `kage_requests_total`
 and `kage_attempts_total` carry a domain, `kage_api_requests_total` a

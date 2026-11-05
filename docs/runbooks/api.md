@@ -923,10 +923,13 @@ One scrape carries Kage's own series (spec §20), the personas by state,
 the latest browser self-test score of each live persona, and the series
 of both sidecars. The API's own: `kage_api_requests_total{route,method,
 status}`, `kage_api_request_duration_seconds`, `kage_api_requests_in_flight`
-and `kage_api_refusals_total{code}`, which counts what was refused before a
-handler ran (`method` is one HTTP defines, `other` for anything else a
-client sends, so the series stay few whatever is sent): a rise of `invalid_key` is someone guessing, a rise of
-`rate_limited` a consumer that needs a larger allowance or a slower loop.
+and `kage_api_refusals_total{code}`, which counts what was refused for the
+key, its scope, its limits or the head of the request (`method` is one
+HTTP defines, `other` for anything else a client sends, so the series
+stay few whatever is sent; `scope_missing` is counted where a handler
+asks for its scope, F182): a rise of `invalid_key` is someone guessing, of
+`scope_missing` a consumer with the wrong key, of `rate_limited` one that
+needs a larger allowance or a slower loop.
 
 For jobs: `kage_jobs{job_type,state}` (a growing `paused` is sites that
 are closed or personas that sleep; a growing `queued` is more work than

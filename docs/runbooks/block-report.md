@@ -78,6 +78,10 @@ blocked. Two alerts go with it:
   the dashboard's panels show every level.
 - **KageBreakerOpen**: the domain is paused for `breaker_pause`. Requests
   for it are answered `domain_paused` with `retry_at`; jobs wait.
+  `kage_breaker_open` is read from the stored breakers at every scrape
+  (F126): it survives a restart, and it is 0 again when the pause ends,
+  while the breaker waits for its trial at level 2 or 3; level 0 goes on
+  from then.
 
 Without the profile, the same from the store:
 
