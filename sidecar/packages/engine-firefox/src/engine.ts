@@ -15,7 +15,6 @@ import {
   EngineError,
   majorOfVersion,
   parseFingerprint,
-  startXvfb,
   summarize,
   type Engine,
   type EngineContext,
@@ -159,15 +158,19 @@ export class FirefoxEngine implements Engine {
     }
     await writeFile(path.join(paths.fontconfig, 'fonts.conf'), plan.fontconfig, { mode: 0o600 });
 
-    const displayNumber = this.displays.acquire();
+    let displayNumber: number | null = null;
     let display: VirtualDisplay | null = null;
     let browser: BrowserContext | null = null;
     const release = async () => {
       await display?.stop();
-      this.displays.release(displayNumber);
+      if (displayNumber !== null) {
+        this.displays.release(displayNumber);
+      }
     };
     try {
-      display = await startXvfb(displayNumber, plan.display, { layout: plan.layout });
+      ({ number: displayNumber, display } = await this.displays.start(plan.display, {
+        layout: plan.layout,
+      }));
       browser = await firefox.launchPersistentContext(paths.userData, {
         executablePath: CAMOUFOX_WRAPPER,
         headless: false,

@@ -354,6 +354,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stored with the result since F36 and read back, as spec §16.5 says; the
   comment that called them null was out of date.
 
+- **A persona's display is its own X server's** (F80). Each engine's pool
+  of display numbers knew only its own process: two pools on one host
+  (two test workers, two sidecars sharing `/tmp`) gave out `:100` at the
+  same moment, and the engine whose Xvfb lost either failed the start
+  ("Xvfb exited with 1") or found the other's socket, called the display
+  up and prepared the other's server; on a GitHub runner its `setxkbmap`
+  there hung for its 10 s and the context failed `browser_launch_failed`.
+  Measured locally, two such starts took the same number in 10 races of
+  10. A display is now up only once Xvfb's lock names this engine's own
+  server and the server answers a client, and a number another server
+  holds is passed over for the next free one (20 races of 20 on two
+  numbers, at most 123 ms). `setxkbmap` keeps its 10 s: under seven times
+  more work than CPUs it took at most 165 ms.
 ## [2.0.2] - 2026-11-04
 
 ### Added

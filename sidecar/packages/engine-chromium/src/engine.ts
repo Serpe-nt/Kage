@@ -15,7 +15,6 @@ import {
   moveToVersion,
   DisplayPool,
   parseFingerprint,
-  startXvfb,
   summarize,
   type Engine,
   type EngineContext,
@@ -154,18 +153,20 @@ export class ChromiumEngine implements Engine {
     const profileDir = path.join(this.options.personasDir, ...request.profile_dir.split('/'));
     const paths = await prepareProfile(profileDir, plan.preferences);
 
-    const displayNumber = this.displays.acquire();
+    let displayNumber: number | null = null;
     let display: VirtualDisplay | null = null;
     let browser: BrowserContext | null = null;
     const release = async () => {
       await display?.stop();
-      this.displays.release(displayNumber);
+      if (displayNumber !== null) {
+        this.displays.release(displayNumber);
+      }
     };
     try {
-      display = await startXvfb(displayNumber, plan.display, {
+      ({ number: displayNumber, display } = await this.displays.start(plan.display, {
         layout: plan.layout,
         workArea: plan.workArea,
-      });
+      }));
       browser = await chromium.launchPersistentContext(paths.userData, {
         // The real Chrome of the image (the driver's `chrome` channel),
         // started through a wrapper that only sets the CPU affinity mask.

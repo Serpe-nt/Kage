@@ -1,8 +1,9 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { promisify } from 'node:util';
 
 import { EngineError } from './engine.js';
+import { X11Connection } from './x11/connection.js';
 import { announceWorkArea, type WorkArea } from './x11/workarea.js';
 
 const run = promisify(execFile);
@@ -18,6 +19,44 @@ const START_TIMEOUT_MS = 10_000;
 
 const socketOf = (display: number) => `/tmp/.X11-unix/X${display}`;
 const lockOf = (display: number) => `/tmp/.X${display}-lock`;
+
+/** How many numbers another X server took first are passed over before a start gives up. */
+const TAKEN_RETRIES = 10;
+
+/**
+ * The live process that holds a display: the pid Xvfb wrote into its lock
+ * file, or `null` while there is no lock or its process is gone (a server
+ * that starts then takes the stale lock over).
+ */
+function holderOf(display: number): number | null {
+  let pid: number;
+  try {
+    pid = Number(readFileSync(lockOf(display), 'utf8').trim());
+  } catch {
+    return null;
+  }
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return null;
+  }
+  try {
+    process.kill(pid, 0);
+    return pid;
+  } catch (error) {
+    // EPERM: alive, another user's.
+    return (error as NodeJS.ErrnoException).code === 'EPERM' ? pid : null;
+  }
+}
+
+/**
+ * Another X server holds the display number that was asked for: one that
+ * another process (another engine, another sidecar on the host) started
+ * between the number's check and this one's start.
+ */
+class DisplayTaken extends EngineError {
+  constructor(readonly display: number) {
+    super('browser_launch_failed', `the display :${display} is another X server's`);
+  }
+}
 
 /** A running virtual display. */
 export interface VirtualDisplay {
@@ -66,6 +105,36 @@ export class DisplayPool {
   /** Gives a display number back. */
   release(display: number): void {
     this.taken.delete(display);
+  }
+
+  /**
+   * Reserves a display number and starts an X server on it: the number this
+   * process's pool knows to be free, and, when another process's server
+   * took it first, the next one. Two pools know nothing of each other's
+   * numbers: two vitest workers started `:100` at the same moment, and the
+   * one whose Xvfb lost went on to prepare the other's display (a
+   * `setxkbmap` there hung for its 10 s on a GitHub runner).
+   *
+   * @throws {EngineError} `browser_launch_failed` as {@link startXvfb} does,
+   *   or when every number tried was another server's.
+   */
+  async start(
+    geometry: DisplayGeometry,
+    options: DisplayOptions = {},
+  ): Promise<{ readonly number: number; readonly display: VirtualDisplay }> {
+    for (let passed = 0; ; passed += 1) {
+      const number = this.acquire();
+      try {
+        return { number, display: await startXvfb(number, geometry, options) };
+      } catch (error) {
+        // Given back either way: while another server holds it, its lock
+        // keeps `acquire` off it, and the next number is tried.
+        this.release(number);
+        if (!(error instanceof DisplayTaken) || passed >= TAKEN_RETRIES) {
+          throw error;
+        }
+      }
+    }
   }
 }
 
@@ -153,7 +222,10 @@ export function keyboardLayoutOf(locale: string): string {
  * Starts an X virtual framebuffer with one screen of the given geometry and
  * waits until it accepts clients.
  *
- * The server listens on its Unix socket only, never on TCP.
+ * The server listens on its Unix socket only, never on TCP. The display is
+ * up when its lock names this Xvfb and the server answers a client; a lock
+ * of another live process means another server holds the number, and this
+ * one stops (see {@link DisplayPool.start}).
  *
  * @throws {EngineError} `browser_launch_failed` when Xvfb is missing, exits
  *   or does not come up in time, or when the display cannot be prepared.
@@ -194,16 +266,42 @@ export async function startXvfb(
   // after a clean stop must not become an unhandled rejection.
   failure.catch(() => undefined);
 
+  const deadline = Date.now() + START_TIMEOUT_MS;
+  const later = async () => {
+    if (Date.now() > deadline) {
+      throw new EngineError(
+        'browser_launch_failed',
+        `Xvfb ${name} did not come up within ${START_TIMEOUT_MS} ms`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  };
   const ready = (async () => {
-    const deadline = Date.now() + START_TIMEOUT_MS;
-    while (!existsSync(socketOf(display))) {
-      if (Date.now() > deadline) {
-        throw new EngineError(
-          'browser_launch_failed',
-          `Xvfb ${name} did not come up within ${START_TIMEOUT_MS} ms`,
-        );
+    // The lock comes first, and names the server that holds the display.
+    for (;;) {
+      const holder = holderOf(display);
+      if (holder !== null && holder !== child.pid) {
+        throw new DisplayTaken(display);
       }
-      await new Promise((resolve) => setTimeout(resolve, 25));
+      if (holder === child.pid && existsSync(socketOf(display))) {
+        break;
+      }
+      await later();
+    }
+    // The socket is there once the server listens; it answers once it has
+    // started.
+    for (;;) {
+      const answered = await X11Connection.connect(name, Math.max(1, deadline - Date.now())).then(
+        (connection) => {
+          connection.close();
+          return true;
+        },
+        () => false,
+      );
+      if (answered) {
+        break;
+      }
+      await later();
     }
   })();
 
@@ -218,6 +316,12 @@ export async function startXvfb(
     }
   } catch (error) {
     await stopProcess(child);
+    // An Xvfb that found the display held exits on its own: it is the
+    // other server's number all the same.
+    const holder = holderOf(display);
+    if (holder !== null && holder !== child.pid) {
+      throw new DisplayTaken(display);
+    }
     if (error instanceof EngineError) {
       throw error;
     }
