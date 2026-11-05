@@ -17,8 +17,13 @@ kage-core = { workspace = true }
 kage-store = { workspace = true }
 
 async-trait = { workspace = true }
+# A refused TLS handshake is told from a failed connection by its error type
+# (F170); the version wreq links.
+btls = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
+# Guesses the encoding of an undeclared page as Firefox does (F160).
+chardetng = { workspace = true }
 # Decodes a body by its declared or sniffed character encoding (F100).
 encoding_rs = { workspace = true }
 futures-util = { workspace = true }

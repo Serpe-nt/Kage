@@ -139,14 +139,27 @@ impl WebshareProvider {
     /// Fails when the configuration has no API key, the key cannot be sent
     /// in a header, or the HTTP client cannot be built.
     pub fn new(config: &WebshareConfig) -> Result<Self> {
+        Self::trusting(config, None)
+    }
+
+    /// A client for the configured account that trusts `anchors` (PEM,
+    /// the operator's `http.ca_file`, F191) besides the public
+    /// authorities: for an API reached under a private authority, such as
+    /// a test world's stand-in.
+    ///
+    /// # Errors
+    ///
+    /// As [`WebshareProvider::new`], and when `anchors` holds no valid PEM
+    /// certificate.
+    pub fn trusting(config: &WebshareConfig, anchors: Option<&[u8]>) -> Result<Self> {
         let key = config
             .api_key
             .as_ref()
             .ok_or_else(|| ProviderError::Setup("KAGE__WEBSHARE__API_KEY is not set".to_owned()))?;
-        Self::with_key(config, key)
+        Self::with_key(config, key, anchors)
     }
 
-    fn with_key(config: &WebshareConfig, key: &Secret) -> Result<Self> {
+    fn with_key(config: &WebshareConfig, key: &Secret, anchors: Option<&[u8]>) -> Result<Self> {
         let mut authorization =
             HeaderValue::from_str(&format!("Token {}", key.expose())).map_err(|_| {
                 ProviderError::Setup(
@@ -157,16 +170,22 @@ impl WebshareProvider {
         authorization.set_sensitive(true);
         let base = Url::parse(&config.base_url)
             .map_err(|_| ProviderError::Setup("webshare.base_url is not a URL".to_owned()))?;
-        let client = wreq::Client::builder()
+        let mut builder = wreq::Client::builder()
             // The provider API is reached directly, never through a proxy,
             // and never through one named in the environment.
             .no_proxy()
             .user_agent(USER_AGENT)
             .timeout(config.timeout.get())
             .connect_timeout(config.timeout.get())
-            .redirect(wreq::redirect::Policy::limited(3))
-            .build()
-            .map_err(|error| ProviderError::Setup(format!("cannot build the HTTP client: {error}")))?;
+            .redirect(wreq::redirect::Policy::limited(3));
+        if let Some(anchors) = anchors {
+            let roots = kage_http::client::public_roots_and(&[anchors])
+                .map_err(|error| ProviderError::Setup(format!("http.ca_file: {error}")))?;
+            builder = builder.tls_cert_store(roots);
+        }
+        let client = builder.build().map_err(|error| {
+            ProviderError::Setup(format!("cannot build the HTTP client: {error}"))
+        })?;
         Ok(Self {
             client,
             base,

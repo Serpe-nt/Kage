@@ -389,7 +389,14 @@ impl Pool {
         alerts: Arc<dyn AlertSink>,
     ) -> Result<Self, PoolError> {
         let provider: Option<Arc<dyn ProxyProvider>> = match config.proxy_provider() {
-            ResolvedProvider::Webshare => Some(Arc::new(WebshareProvider::new(&config.webshare)?)),
+            // The operator's own authorities (`http.ca_file`, F191) reach
+            // the provider's API client too.
+            ResolvedProvider::Webshare => Some(Arc::new(WebshareProvider::trusting(
+                &config.webshare,
+                kage_http::trust_anchor(&config.http)
+                    .map_err(PoolError::Setup)?
+                    .as_deref(),
+            )?)),
             ResolvedProvider::Static => Some(Arc::new(
                 StaticListProvider::from_config(&config.proxies)
                     .map_err(|error| PoolError::Setup(error.to_string()))?,

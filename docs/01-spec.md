@@ -1077,35 +1077,63 @@ finished (F109).
   is always null because the proxy resolves, and a request on a reused
   connection has neither `connect_ms` nor `tls_ms`. The health probe (§7.4)
   uses the same client and records both per proxy.
-- **A body as text** (`kage_http::charset`, F100). The http path reads a
-  body in the encoding a browser takes for it, as the Encoding Standard and
-  the HTML standard decide it, so that levels 0 and 1 read what levels 2
-  and 3 read for a page that says what it is written in: a byte order mark first, which wins over any declaration;
-  then the `charset` of `Content-Type`, read as an Encoding Standard label
-  (`latin1` and `us-ascii` are windows-1252, `sjis` is Shift_JIS); then,
-  for HTML or a body that does not say what it is, the `<meta charset>` or
-  `<meta http-equiv="content-type">` the standard's prescan finds in the
-  first 1024 bytes (outside comments; a UTF-16 label there means UTF-8),
-  and for XML the `encoding` of its declaration; then UTF-8 when the bytes
-  are UTF-8, else windows-1252, the standard's fallback for the locales of
-  every persona country. JSON is UTF-8. A header that says otherwise than
-  the bytes is believed, as a browser believes it; bytes that are not
-  valid in the chosen encoding are replaced. The classifier, the
-  extraction, the links and text a crawl reads and `raw_body` all read
-  that text; the bytes are stored as they came (`artifacts.raw_body`).
-  A link's path is always UTF-8, percent-encoded, as a browser asks for
-  it; a query written in a legacy encoding is encoded as UTF-8 too, where
-  a browser would use the document's encoding (a known difference). Two
-  more cases read otherwise than in a browser: a `<meta charset>` past
-  the first 1024 bytes (a long script or comment before it in the head),
-  which a browser still honours while its guess is tentative (Chrome
-  scans on, Firefox parses the page again) and level 0 does not see; and
-  a page that declares nothing and is in another legacy encoding, which
-  Chrome's detector names (Shift_JIS, GBK and others) and level 0 reads
-  as windows-1252. A cut `<meta>` declares nothing, as in a browser. A
-  body with no `Content-Type` is text when it begins as markup does, has
-  a byte order mark or is UTF-8 (MIME sniffing); `raw_body` is null for
-  other bytes.
+- **A body as text** (`kage_http::charset`, F100, F160, F172). The http
+  path reads a body in the encoding a browser takes for it, so that levels
+  0 and 1 read what levels 2 and 3 read: a byte order mark first, which
+  wins over any declaration; then the `charset` of `Content-Type`, read as
+  an Encoding Standard label (`latin1` and `us-ascii` are windows-1252,
+  `sjis` is Shift_JIS); then, for HTML or a body that does not say what it
+  is, the `<meta charset>` or `<meta http-equiv="content-type">` that
+  Chrome's scan for it finds: the markup is read token by token as the HTML
+  tokenizer reads it, so a `<meta>` inside a comment, a script (its escaped
+  states included), a style, a title, a text area or another tag's
+  attribute is none, the first one that names an encoding the Encoding
+  Standard knows counts (a UTF-16 label there means UTF-8), and the scan
+  goes on past the first 1024 bytes while the document's head lasts (it
+  ends at a start tag, or an end tag, of an element a head does not hold),
+  as a browser honours a late `<meta>` there; for XML, the `encoding` of
+  its declaration; then what a browser's detector guesses for the bytes:
+  Firefox's own detector (chardetng), told the site's top-level domain and
+  never allowed to answer UTF-8, as neither browser takes an undeclared
+  page from the web for UTF-8. An undeclared page in Shift_JIS, GBK,
+  EUC-KR, windows-1251 or another legacy encoding is read in it, and an
+  undeclared UTF-8 page reads as the mojibake both browsers show (QA round
+  two's http-05). XML that declares nothing is UTF-8; JSON is UTF-8. A
+  header that says otherwise than the bytes is believed, as a browser
+  believes it; bytes that are not valid in the chosen encoding are
+  replaced. The classifier, the extraction, the links and text a crawl
+  reads and `raw_body` all read that text; the bytes are stored as they
+  came (`artifacts.raw_body`). A link's path is always UTF-8,
+  percent-encoded, and its query is written in the document's encoding (a
+  UTF-16 document's in UTF-8, a character the encoding lacks as
+  `%26%23…%3B`), as the URL standard has it and both browsers ask for it
+  (F161; `kage_core::urlnorm::join_in`). A tree a browser serialized (the
+  DOM of levels 2 and 3) carries no encoding of its own: its links are the
+  browser's, or read as UTF-8. A sitemap is read in the encoding of its
+  byte order mark, its `Content-Type` or its XML declaration, else UTF-8
+  (§13). A cut `<meta>` declares nothing, as in a browser. A body with no
+  `Content-Type` is text when it begins as markup does, has a byte order
+  mark or is UTF-8 (MIME sniffing); `raw_body` is null for other bytes.
+  Where the two browsers differ, level 0 follows one of them: a `<meta>`
+  inside `<noscript>` counts in Chrome's scan (it runs with scripting off)
+  and not in Firefox's, and level 0 reads as Chrome; Chrome's own detector
+  (CED) is not Firefox's, and where the two would name different encodings
+  for an undeclared page level 0 reads it as Firefox does (both measured on
+  Chrome 155 and Camoufox 156 in QA round two's world).
+- **Trust.** The persona's clients and the plain client of level 0 trust
+  the public certificate authorities wreq ships (Mozilla's) and, when the
+  operator names a PEM file in `http.ca_file` (none by default, F191), the
+  authorities in it too; the proxy provider's API client adds the same
+  file to its roots. It is for a private authority the operator's own sites
+  live under (an intranet, a test world), never for a public authority's
+  root someone else holds the key of: a root added there is trusted for
+  every name (`docs/runbooks/levels-and-egress.md`). A certificate the
+  client refuses (expired, the wrong name, an authority it does not trust)
+  and a handshake the site breaks off are the site's answer: the proxy
+  opened the tunnel, so the attempt is `connection_failed` with a server
+  error's courtesy, never `proxy_failed` (F170; wreq reports a refused
+  handshake as a connection error, and kage-http tells the two apart by the
+  TLS library's own error).
 - **Subresource emulation** (`http.fetch_subresources`, default off): after
   a `200` HTML document fetched with GET, up to `http.subresources.max`
   (default 12) stylesheets, scripts and preloads of the document's own site,
@@ -1115,7 +1143,12 @@ finished (F109).
   its kind's `Sec-Fetch-Dest` and header table. An asset the client already
   holds fresh is not fetched again and a stale one is revalidated. Bodies
   are read to the end and dropped (2 MB each, 8 MB per page); a failing
-  asset never fails the fetch; counts and bytes are reported.
+  asset never fails the fetch; counts and bytes are reported. The markup
+  is read as decoded in the document's own encoding, and an asset's query
+  is written in that encoding (F161). Each asset and each of its redirects
+  passes the SSRF guard's URL check, and under `security.resolve_on_host`
+  its name is resolved on the host and refused before it is asked for, as
+  the page's own hops are (F148).
 - **Fingerprint self-test.** kage-http contains its own echo (`kage echo
   serve`; compose profile `echo`, off by default). It terminates TLS and
   reports the JA4 of the ClientHello, the Akamai HTTP/2 string and the
@@ -2129,10 +2162,23 @@ never fetch what the file disallows, keep to its `Crawl-delay`).
   server error, a timeout or a block is "unreachable" for
   `robots.error_ttl` (1 h). An attempt that failed before the site had a
   say (the proxy, the sidecar) is nothing: nothing is kept, and it is
-  tried again a minute later. At most `robots.max_bytes` (512 KiB, what
-  Google reads) of a file are read.
+  tried again a minute later. A certificate the client refuses is the
+  site's say (§9, F170): "unreachable" for the hour, not a minute. At most
+  `robots.max_bytes` (512 KiB, what Google reads) of a file are read. The
+  file is text as RFC 9309 has it, UTF-8, or the encoding its byte order
+  mark names (a file saved as UTF-16); a byte that is no UTF-8 is replaced
+  and a NUL left out, so that a file saved as UTF-16 without a mark reads
+  as its ASCII and a NUL in a rule is no fault of Kage's: the answer is
+  kept once like any other, never `500 internal` on every fetch of the
+  origin (F171).
 - **The verdict** is Kage's own reading of the file by Google's rules
-  (RFC 9309: the longest match, `Allow` on a tie, `*` and `$`; the group
+  and RFC 9309, which is the rule where the two differ: a percent-escape
+  of an unreserved character (a letter, a digit, `-`, `.`, `_`, `~`) is
+  that character in the rule's path and in the request's alike
+  (§2.2.2: `/%70rivate` is `/private` and `Disallow: /private` refuses
+  it), where Google's matcher compares escapes as written; an escape of
+  any other octet stays one (`/a%2Fb` is not `/a/b`; F179). The rest is
+  where the two agree (the longest match, `Allow` on a tie, `*` and `$`; the group
   of `*`, and before it any group that names a token of `robots.agents`,
   `["kage"]`, so that a site owner can address Kage):
   `{ fetched, allowed, matched_rule, crawl_delay }` on every result. The
@@ -2783,7 +2829,9 @@ unused (`echo_url`, `confirm_url`, `interval`, `jitter`, `max_concurrent`,
 `startup_spread`, `profile`).
 Sections at this point: `server`, `database`, `secrets`, `sidecar`,
 `policies`, `artifacts`, `proxies` (with `proxies.health`), `webshare`,
-`reputation`, `http` (with `http.subresources`), `selftest` (`selftest.http`,
+`reputation`, `http` (with `http.subresources`, and `http.ca_file`, the
+operator's own certificate authorities, none by default; §9, F191),
+`selftest` (`selftest.http`,
 `selftest.browser` with its own pages and the third-party pages, each with
 the `interval` of its scheduled run), `personas` (`dir`, `mix`,
 `retention_days`, `upgrade_backup_days`, `archive_after`, `sweep_interval`,
@@ -2988,7 +3036,8 @@ are gzip-compressed on disk.
   By default Kage looks no name up: the proxy resolves every target, and a
   lookup from the Kage host would show the operator's resolver to the name
   servers of whatever a consumer asks for. With `security.resolve_on_host`
-  the target of a fetch, the redirect hops of the http path, webhook
+  the target of a fetch, the redirect hops of the http path and the
+  assets its subresource emulation asks for (F148), webhook
   hosts, every name the forwarder relays through a proxy (a browser's own
   requests and those a page's redirect, script or form makes, the
   sitemaps and `robots.txt` a scout reads in one) and, after the fact,

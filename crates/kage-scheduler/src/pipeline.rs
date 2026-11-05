@@ -1200,9 +1200,14 @@ impl Pipeline {
             (Some(document), Some(options), Ok(loaded_from))
                 if outcome.is_success() && read::is_html(&output.headers) =>
             {
-                read::read_document(document.clone(), loaded_from, false, Some(options))
-                    .await
-                    .extract
+                read::read_document(
+                    (document.clone(), encoding_rs::UTF_8),
+                    loaded_from,
+                    false,
+                    Some(options),
+                )
+                .await
+                .extract
             }
             _ => None,
         };

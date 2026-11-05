@@ -142,10 +142,11 @@ pub struct Extract {
 }
 
 fn found(content: &content::Content<'_>, document: &Document, markdown: bool) -> MainContent {
-    let text = render::render(content, document.base(), Mode::Text);
+    let resolve = |href: &str| document.resolve(href);
+    let text = render::render_with(content, &resolve, Mode::Text);
     MainContent {
         markdown: if markdown {
-            render::render(content, document.base(), Mode::Markdown).text
+            render::render_with(content, &resolve, Mode::Markdown).text
         } else {
             String::new()
         },

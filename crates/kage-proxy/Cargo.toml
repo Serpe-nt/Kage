@@ -38,6 +38,8 @@ zeroize = { workspace = true }
 [dev-dependencies]
 axum = { workspace = true }
 proptest = { workspace = true }
+# A private authority for the provider API stand-in over https (F191).
+rcgen = { workspace = true }
 sqlx = { workspace = true }
 tempfile = { workspace = true }
 testcontainers = { workspace = true }

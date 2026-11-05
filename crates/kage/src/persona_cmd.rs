@@ -109,7 +109,7 @@ pub(crate) fn build(
     let http = Arc::new(http_factory(
         config,
         Arc::new(StoreCookies::new(store.clone())),
-    ));
+    )?);
     PersonaManager::new(PersonaParts {
         store: store.clone(),
         pool,
@@ -128,14 +128,20 @@ pub(crate) fn build(
 /// one of level 0, resolves each redirect hop here and refuses one whose
 /// name points into a denied range, or has no address, before it is asked
 /// for. Off by default: the proxy resolves, and no name a consumer asks for
-/// is looked up from this host.
-pub(crate) fn http_factory(config: &Config, cookies: Arc<dyn CookieBackend>) -> ClientFactory {
-    let http = ClientFactory::new(HttpSettings::from_config(&config.http), cookies);
-    if config.security.resolve_on_host {
-        http.with_resolver(Arc::new(kage_api::resolve::HostResolver::system()))
-    } else {
-        http
+/// is looked up from this host. With `http.ca_file` its clients trust the
+/// operator's own authorities besides the public ones (F191).
+pub(crate) fn http_factory(
+    config: &Config,
+    cookies: Arc<dyn CookieBackend>,
+) -> anyhow::Result<ClientFactory> {
+    let mut http = ClientFactory::new(HttpSettings::from_config(&config.http), cookies);
+    if let Some(pem) = kage_http::trust_anchor(&config.http).map_err(anyhow::Error::msg)? {
+        http = http.with_trust_anchor(pem);
     }
+    if config.security.resolve_on_host {
+        http = http.with_resolver(Arc::new(kage_api::resolve::HostResolver::system()));
+    }
+    Ok(http)
 }
 
 /// Runs `work` with a session and a manager, and closes the session
@@ -1095,9 +1101,11 @@ mod tests {
         let spec = ClientSpec::new(ProfileChoice::named("chrome_149", ClaimedOs::Windows).unwrap());
         let mut config = config();
 
-        // Off, the default: no name a consumer asks for is looked up here.
-        let factory = http_factory(&config, Arc::new(MemoryCookies::new()));
+        // Off, the default: no name a consumer asks for is looked up here,
+        // and only the public authorities are trusted.
+        let factory = http_factory(&config, Arc::new(MemoryCookies::new())).unwrap();
         assert!(factory.resolver().is_none());
+        assert_eq!(factory.trust_anchors(), 0);
         assert!(
             factory
                 .plain(&proxy, "kage/test")
@@ -1117,7 +1125,7 @@ mod tests {
         // hands the host's resolver to the plain client of level 0 and to
         // the persona's client alike (F98).
         config.security.resolve_on_host = true;
-        let factory = http_factory(&config, Arc::new(MemoryCookies::new()));
+        let factory = http_factory(&config, Arc::new(MemoryCookies::new())).unwrap();
         assert!(factory.resolver().is_some());
         assert!(
             factory
@@ -1132,6 +1140,29 @@ mod tests {
                 .unwrap()
                 .resolver()
                 .is_some()
+        );
+
+        // `http.ca_file` (F191): the operator's authorities, read once; a
+        // file that cannot be read stops the start with the key's name.
+        let dir = tempfile::tempdir().unwrap();
+        let ca = dir.path().join("ca.pem");
+        std::fs::write(
+            &ca,
+            rcgen::CertificateParams::new(Vec::<String>::new())
+                .unwrap()
+                .self_signed(&rcgen::KeyPair::generate().unwrap())
+                .unwrap()
+                .pem(),
+        )
+        .unwrap();
+        config.http.ca_file = Some(ca);
+        let factory = http_factory(&config, Arc::new(MemoryCookies::new())).unwrap();
+        assert_eq!(factory.trust_anchors(), 1);
+        config.http.ca_file = Some(dir.path().join("missing.pem"));
+        let error = http_factory(&config, Arc::new(MemoryCookies::new())).unwrap_err();
+        assert!(
+            error.to_string().starts_with("http.ca_file: cannot read"),
+            "{error}"
         );
     }
 

@@ -1116,6 +1116,38 @@ fn blame_the_refusal(mut output: AttemptOutput, refused: Option<u16>) -> Attempt
     output.finally()
 }
 
+/// An attempt its client reported as a failed proxy (`proxy_failed`), with
+/// no answer of the site's, while a tunnel of it to one of its own targets
+/// was open (`relayed`: opened while it ran, or kept open from an earlier
+/// page, as a browser keeps it) and the forwarder noted no failure or
+/// refusal of the proxy, ended at the site: the proxy did its part, and what ended
+/// the page came through the tunnel from the site. Firefox names a site's
+/// own `407` inside TLS a proxy error (QA round two's tls-03), and a
+/// connection the site broke off is a failed connection to the client
+/// (F170). It is the site's failure: `navigation_failed` for a browser's
+/// page, as Chrome names the same page, `connection_failed` on the http
+/// path, a server error's courtesy; the pool is not told. Anything else is
+/// as it was.
+fn blame_the_site(mut output: AttemptOutput, relayed: bool) -> AttemptOutput {
+    if !relayed || output.status.is_some() || output.reason.as_deref() != Some(PROXY_FAILED) {
+        return output;
+    }
+    let reason = if output.page.is_some() {
+        "navigation_failed"
+    } else {
+        "connection_failed"
+    };
+    let retryable = output.classification.retryable;
+    let mut evidence = std::mem::take(&mut output.classification.evidence);
+    evidence.push(format!("tunnel_opened:{PROXY_FAILED}"));
+    output.classification = unanswered(Outcome::ProviderError, reason);
+    output.classification.evidence.extend(evidence);
+    output.classification.retryable = retryable;
+    output.courtesy = Courtesy::ServerError;
+    output.reason = Some(reason.to_owned());
+    output
+}
+
 /// The hosts and ports an attempt asked for itself: its page, the
 /// redirects it followed and where it ended. A third party's host the page
 /// loaded something from is none of them.
@@ -1139,7 +1171,9 @@ fn targets_of(url: &Url, output: &AttemptOutput) -> Vec<(String, u16)> {
 /// ran, that the proxy failed a connection of `caller` to one of the
 /// attempt's own targets (`targets_of`); else the proxy's refusal
 /// (`blame_the_refusal`) when it noted that the proxy refused a tunnel of
-/// `caller` to one of them.
+/// `caller` to one of them; else the site's (`blame_the_site`) when the
+/// client named a failed proxy although a tunnel of it to one of them was
+/// open.
 fn whose_failure(
     meter: Option<&Meter>,
     output: AttemptOutput,
@@ -1156,7 +1190,11 @@ fn whose_failure(
         return blame_the_proxy(output, true);
     }
     let refused = meter.refused_since(caller, targets(), started);
-    blame_the_refusal(output, refused)
+    if refused.is_some() {
+        return blame_the_refusal(output, refused);
+    }
+    let relayed = meter.relayed_since(caller, targets(), started);
+    blame_the_site(output, relayed)
 }
 
 /// How a failure of the persona's own plumbing is named.
@@ -1562,11 +1600,13 @@ impl PathExecutor {
                 Courtesy::Answered,
             )
             .finally(),
-            HttpError::Tls | HttpError::Request(_) | HttpError::Body(_) => AttemptOutput::failed(
-                Outcome::ProviderError,
-                "connection_failed",
-                Courtesy::ServerError,
-            ),
+            HttpError::Tls(_) | HttpError::Request(_) | HttpError::Body(_) => {
+                AttemptOutput::failed(
+                    Outcome::ProviderError,
+                    "connection_failed",
+                    Courtesy::ServerError,
+                )
+            }
             // The request itself cannot be sent: no persona changes that.
             HttpError::Header(_)
             | HttpError::InvalidUrl(_)
@@ -2113,6 +2153,9 @@ mod tests {
         /// A provider that will not carry the target, as it says to every tunnel.
         const FORBIDDEN: &[u8] = b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n";
 
+        /// A proxy that opens every tunnel, to a site that hangs up at once.
+        const OPENED: &[u8] = b"HTTP/1.1 200 Connection established\r\n\r\n";
+
         /// A proxy that reads each request head and answers `answer`.
         async fn refusing_proxy(answer: &'static [u8]) -> SocketAddr {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2274,6 +2317,124 @@ mod tests {
                 started,
             );
             assert_eq!(output.reason.as_deref(), Some("navigation_failed"));
+            serving.abort();
+        }
+
+        /// QA round two's tls-03 and tls-01 (F170): the proxy opened the
+        /// page's own tunnel, and the client still named a failed proxy:
+        /// Firefox does for a site's own `407` inside TLS. That was the
+        /// site's answer, a failed navigation (a failed connection on the
+        /// http path) with a server error's courtesy, and the pool is not
+        /// told; a tunnel to another target, or another persona's, changes
+        /// nothing, nor does an answer the site gave.
+        #[tokio::test]
+        async fn a_failed_proxy_whose_tunnel_was_open_was_the_sites_answer() {
+            let (dead, opening) = (PersonaId::new(), PersonaId::new());
+            let (gone, _held) = dead_proxy();
+            let (forwarder, serving) = forwarder(Arc::new(Two {
+                dead: (dead, endpoint(gone)),
+                refusing: (opening, endpoint(refusing_proxy(OPENED).await)),
+            }))
+            .await;
+            let meter = Arc::clone(forwarder.meter());
+            let secure = Url::parse("https://www.tlsf4.test/p407").unwrap();
+            let proxy_failed = || {
+                AttemptOutput::failed(Outcome::ProviderError, "proxy_failed", Courtesy::NotTheSite)
+            };
+
+            let started = tokio::time::Instant::now();
+            // Before any tunnel: the proxy's, as it was.
+            let output = whose_failure(
+                Some(&meter),
+                proxy_failed(),
+                Caller::Persona(opening),
+                &secure,
+                started,
+            );
+            assert_eq!(output.reason.as_deref(), Some("proxy_failed"));
+            let answer = ask(
+                &forwarder,
+                opening,
+                "CONNECT www.tlsf4.test:443 HTTP/1.1\r\nHost: www.tlsf4.test:443\r\n\r\n",
+            )
+            .await;
+            assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+
+            // A browser's page.
+            let mut browser = proxy_failed();
+            let examples: serde_json::Value =
+                serde_json::from_str(kage_browser::contract::EXAMPLES_JSON).unwrap();
+            browser.page = Some(Box::new(
+                serde_json::from_value::<kage_browser::contract::PageResult>(
+                    examples["PageResult"][0].clone(),
+                )
+                .unwrap(),
+            ));
+            let output = whose_failure(
+                Some(&meter),
+                browser,
+                Caller::Persona(opening),
+                &secure,
+                started,
+            );
+            assert_eq!(output.reason.as_deref(), Some("navigation_failed"));
+            assert_eq!(output.classification.outcome, Outcome::ProviderError);
+            assert_eq!(output.courtesy, Courtesy::ServerError);
+            assert!(
+                output
+                    .classification
+                    .evidence
+                    .contains(&"tunnel_opened:proxy_failed".to_owned()),
+                "{:?}",
+                output.classification.evidence
+            );
+            // The http path.
+            let output = whose_failure(
+                Some(&meter),
+                proxy_failed(),
+                Caller::Persona(opening),
+                &secure,
+                started,
+            );
+            assert_eq!(output.reason.as_deref(), Some("connection_failed"));
+            assert_eq!(output.courtesy, Courtesy::ServerError);
+
+            // Another target, another persona, an attempt that began after
+            // the tunnel closed, an answer: nothing changes. The forwarder
+            // lets go of the tunnel just after the client saw it close.
+            let mut after = tokio::time::Instant::now();
+            for _ in 0..100 {
+                if !meter.relayed_since(Caller::Persona(opening), [("www.tlsf4.test", 443)], after)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                after = tokio::time::Instant::now();
+            }
+            for (caller, url, since) in [
+                (opening, "https://other.tlsf4.test/", started),
+                (dead, "https://www.tlsf4.test/p407", started),
+                (opening, "https://www.tlsf4.test/p407", after),
+            ] {
+                let output = whose_failure(
+                    Some(&meter),
+                    proxy_failed(),
+                    Caller::Persona(caller),
+                    &Url::parse(url).unwrap(),
+                    since,
+                );
+                assert_eq!(output.reason.as_deref(), Some("proxy_failed"), "{url}");
+            }
+            let mut answered = proxy_failed();
+            answered.status = Some(407);
+            let output = whose_failure(
+                Some(&meter),
+                answered,
+                Caller::Persona(opening),
+                &secure,
+                started,
+            );
+            assert_eq!(output.reason.as_deref(), Some("proxy_failed"));
             serving.abort();
         }
 
@@ -2788,7 +2949,7 @@ mod tests {
             )
         );
         assert_eq!(
-            told(HttpError::Tls),
+            told(HttpError::Tls("the site's certificate was refused")),
             (
                 Outcome::ProviderError,
                 "connection_failed".to_owned(),
@@ -2823,12 +2984,13 @@ mod tests {
             "http_client".to_owned()
         );
         // The error itself is part of the evidence.
-        let output = PathExecutor::http_failure(&HttpError::Tls);
+        let output =
+            PathExecutor::http_failure(&HttpError::Tls("the site's certificate was refused"));
         assert_eq!(
             output.classification.evidence,
             [
                 "failure:connection_failed",
-                "error:the TLS handshake with the target failed"
+                "error:the TLS handshake with the target failed: the site's certificate was refused"
             ]
         );
     }

@@ -1122,10 +1122,17 @@ impl Crawl {
         };
         // The file as the site sent it: the body of the browser's page, or
         // the body the plain client of level 0 read (F99: that one was not
-        // looked at, and every sitemap at level 0 was unreadable).
+        // looked at, and every sitemap at level 0 was unreadable), read in
+        // the encoding its `Content-Type` or its declaration names (F172).
+        let content_type = last.and_then(|last| {
+            last.headers
+                .iter()
+                .find(|header| header.name.eq_ignore_ascii_case("content-type"))
+                .map(|header| header.value.clone())
+        });
         let read = last
             .and_then(AttemptOutput::sent_body)
-            .and_then(|body| sitemap::parse(&body, limits).ok());
+            .and_then(|body| sitemap::parse_typed(&body, content_type.as_deref(), limits).ok());
         let Some(read) = read else {
             // Nothing a sitemap can be read from: a gzipped file a Chrome
             // scout showed nothing of, or what is there is no sitemap.

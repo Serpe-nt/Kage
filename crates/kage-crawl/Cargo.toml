@@ -17,6 +17,9 @@ chrono = { workspace = true }
 # The tree scraper keeps a page in: its own walk over the nodes, which is a
 # loop and not a call per level of nesting (F97).
 ego-tree = { workspace = true }
+# The encoding a document was read in: its links' queries are written in it
+# (F161).
+encoding_rs = { workspace = true }
 kage-core = { workspace = true }
 # Gzipped sitemaps.
 flate2 = { workspace = true }

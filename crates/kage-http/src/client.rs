@@ -111,6 +111,41 @@ impl Default for HttpSettings {
     }
 }
 
+/// The roots a client trusts when the operator added authorities of its
+/// own: the public ones wreq trusts by default (Mozilla's, through
+/// `webpki-root-certs`) and each PEM of `anchors`. A store set on a wreq
+/// client replaces its default roots, so the public ones are named again.
+/// The persona's clients, the plain client of level 0 and the proxy
+/// provider's API client build theirs here (F191).
+///
+/// # Errors
+///
+/// [`HttpError::Build`] when an anchor holds no valid PEM certificate.
+pub fn public_roots_and(
+    anchors: &[impl AsRef<[u8]>],
+) -> Result<wreq::tls::trust::CertStore, HttpError> {
+    let mut store = wreq::tls::trust::CertStore::builder()
+        .add_der_certs(webpki_root_certs::TLS_SERVER_ROOT_CERTS);
+    for anchor in anchors {
+        if !holds_certificate(anchor.as_ref()) {
+            return Err(HttpError::Build(
+                "a trusted certificate authority is not valid PEM".to_owned(),
+            ));
+        }
+        store = store.add_stack_pem_certs(anchor.as_ref());
+    }
+    store.build().map_err(|_| {
+        HttpError::Build("a trusted certificate authority is not valid PEM".to_owned())
+    })
+}
+
+/// Whether PEM text holds a certificate at all: a file without one would
+/// add nothing to the roots and say nothing of it.
+pub(crate) fn holds_certificate(pem: &[u8]) -> bool {
+    const BEGIN: &[u8] = b"-----BEGIN CERTIFICATE-----";
+    pem.windows(BEGIN.len()).any(|window| window == BEGIN)
+}
+
 /// Who a client is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientSpec {
@@ -258,8 +293,10 @@ impl ClientFactory {
     }
 
     /// Makes the clients trust a certificate authority in addition to the
-    /// public ones: the one of the operator's own fingerprint echo. `pem`
-    /// holds one or more certificates.
+    /// public ones: the one of the operator's own fingerprint echo, or the
+    /// operator's own authorities of `http.ca_file` (F191), which the
+    /// persona's clients and the plain client of level 0 alike add to their
+    /// roots. `pem` holds one or more certificates.
     #[must_use]
     pub fn with_trust_anchor(mut self, pem: impl Into<Vec<u8>>) -> Self {
         self.trust_anchors.push(pem.into());
@@ -269,6 +306,12 @@ impl ClientFactory {
     /// The limits and timeouts of the clients.
     pub const fn settings(&self) -> &HttpSettings {
         &self.settings
+    }
+
+    /// How many sets of the operator's own authorities the clients trust
+    /// besides the public ones ([`ClientFactory::with_trust_anchor`]).
+    pub fn trust_anchors(&self) -> usize {
+        self.trust_anchors.len()
     }
 
     /// The resolver every client of the factory checks each hop with, when
@@ -369,14 +412,7 @@ impl ClientFactory {
         if self.trust_anchors.is_empty() {
             return Ok(None);
         }
-        let mut store = wreq::tls::trust::CertStore::builder()
-            .add_der_certs(webpki_root_certs::TLS_SERVER_ROOT_CERTS);
-        for anchor in &self.trust_anchors {
-            store = store.add_stack_pem_certs(anchor);
-        }
-        store.build().map(Some).map_err(|_| {
-            HttpError::Build("a trusted certificate authority is not valid PEM".to_owned())
-        })
+        public_roots_and(&self.trust_anchors).map(Some)
     }
 
     fn build(

@@ -3,6 +3,7 @@
 //! asked to have extracted. The document is the one the visit captured,
 //! never a second request, and it is parsed once for both.
 
+use encoding_rs::Encoding;
 use kage_core::domain::Header;
 use kage_core::outcome::Outcome;
 use kage_crawl::html::Page;
@@ -133,27 +134,31 @@ pub(super) fn is_html(headers: &[Header]) -> bool {
     mime.is_empty() || mime == "text/html" || mime == "application/xhtml+xml"
 }
 
-/// The document an attempt captured: the tree as the browser had it after
-/// the page settled, else the body the http path fetched.
-fn document_of(output: &AttemptOutput) -> Option<String> {
+/// The document an attempt captured and the encoding it was written in:
+/// the tree as the browser had it after the page settled (UTF-8, the
+/// browser resolved what it wrote), else the body the http path fetched,
+/// decoded as a browser decodes it, in the encoding a link's query is
+/// written in (F161).
+fn document_of(output: &AttemptOutput) -> Option<(String, &'static Encoding)> {
     output
         .page
         .as_ref()
         .and_then(|page| page.dom_html.clone())
-        .or_else(|| output.fetched.as_ref().map(|fetched| fetched.text()))
+        .map(|dom| (dom, encoding_rs::UTF_8))
+        .or_else(|| output.fetched.as_ref().map(|fetched| fetched.decoded()))
 }
 
-/// Parses a document once and reads from it what is asked for. Off the
-/// async threads: a large page takes milliseconds.
+/// Parses a document written in `encoding` once and reads from it what is
+/// asked for. Off the async threads: a large page takes milliseconds.
 pub(super) async fn read_document(
-    document: String,
+    (document, encoding): (String, &'static Encoding),
     loaded_from: Url,
     page: bool,
     options: Option<Options>,
 ) -> Reading {
     let started = std::time::Instant::now();
     let read = tokio::task::spawn_blocking(move || {
-        let document = Document::parse(&document, &loaded_from);
+        let document = Document::parse_in(&document, &loaded_from, encoding);
         let page = page.then(|| document.page());
         let extract = options.map(|options| kage_extract::extract(&document, &options));
         (page, extract)
@@ -212,6 +217,7 @@ impl Pipeline {
 
 #[cfg(test)]
 mod tests {
+    use encoding_rs::UTF_8;
     use kage_core::domain::Header;
     use kage_extract::Options;
     use url::Url;
@@ -271,10 +277,16 @@ mod tests {
         );
         let base = Url::parse("https://example.org/a/page").unwrap();
 
-        let nothing = read_document(html.clone(), base.clone(), false, None).await;
+        let nothing = read_document((html.clone(), UTF_8), base.clone(), false, None).await;
         assert!(nothing.page.is_none() && nothing.extract.is_none() && !nothing.thin);
 
-        let both = read_document(html.clone(), base.clone(), true, Some(Options::default())).await;
+        let both = read_document(
+            (html.clone(), UTF_8),
+            base.clone(),
+            true,
+            Some(Options::default()),
+        )
+        .await;
         let page = both.page.unwrap();
         assert_eq!(page.title, "A page");
         let links: Vec<&str> = page.links.iter().map(|link| link.url.as_str()).collect();
@@ -305,7 +317,7 @@ mod tests {
             ..Options::default()
         };
         let shell = "<html><body><div id=\"root\">Loading</div></body></html>".to_owned();
-        let thin = read_document(shell, base, false, Some(lean)).await;
+        let thin = read_document((shell, UTF_8), base, false, Some(lean)).await;
         assert!(thin.page.is_none() && thin.thin);
         let extract = thin.extract.unwrap();
         assert_eq!(extract["thin_content"], true);
@@ -336,7 +348,7 @@ mod tests {
                 "<div>".repeat(depth)
             );
             let read = runtime.block_on(read_document(
-                html,
+                (html, UTF_8),
                 base.clone(),
                 true,
                 Some(Options::default()),
@@ -388,17 +400,24 @@ mod tests {
               <body><article><p>Stra\xdfe M\xfcnchen "
                 .to_vec();
         body.extend_from_slice(words.as_bytes());
-        body.extend_from_slice(b"<a href=\"/f\xfcr\">f\xfcr</a></p></article></body></html>");
+        body.extend_from_slice(b"<a href=\"/f\xfcr\">f\xfcr</a> <a href=\"/s?q=f\xfcr\">s</a></p></article></body></html>");
         let output = fetched("text/html", &body);
         let document = document_of(&output).unwrap();
-        assert!(document.contains("<title>Café</title>"), "{document}");
+        assert!(document.0.contains("<title>Café</title>"), "{}", document.0);
+        assert_eq!(document.1, encoding_rs::WINDOWS_1252);
         let base = Url::parse("http://latin.kage.test/page").unwrap();
         let read = read_document(document, base, true, Some(Options::default())).await;
         let page = read.page.unwrap();
         assert_eq!(page.title, "Café");
+        // A path is UTF-8; a query is written in the page's encoding, as a
+        // browser writes it (F161).
         assert_eq!(
             page.links[0].url.as_str(),
             "http://latin.kage.test/f%C3%BCr"
+        );
+        assert_eq!(
+            page.links[1].url.as_str(),
+            "http://latin.kage.test/s?q=f%FCr"
         );
         let extract = read.extract.unwrap();
         assert_eq!(extract["title"], "Café");

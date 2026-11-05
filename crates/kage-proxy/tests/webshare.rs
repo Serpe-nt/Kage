@@ -758,3 +758,69 @@ async fn a_client_needs_a_key_it_can_send() {
     assert!(printed.contains("WebshareProvider"), "{printed}");
     assert!(!printed.contains(WEBSHARE_TOKEN), "{printed}");
 }
+
+/// A certificate authority of the test's own and a certificate for
+/// `localhost` it signed, PEM: (authority, certificate, key).
+fn private_authority() -> (String, String, String) {
+    let ca_key = rcgen::KeyPair::generate().unwrap();
+    let mut ca = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+    ca.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    ca.distinguished_name
+        .push(rcgen::DnType::CommonName, "Kage provider test authority");
+    let ca_cert = ca.self_signed(&ca_key).unwrap();
+    let issuer = rcgen::Issuer::new(ca, ca_key);
+    let leaf_key = rcgen::KeyPair::generate().unwrap();
+    let leaf = rcgen::CertificateParams::new(vec!["localhost".to_owned()])
+        .unwrap()
+        .signed_by(&leaf_key, &issuer)
+        .unwrap();
+    (ca_cert.pem(), leaf.pem(), leaf_key.serialize_pem())
+}
+
+/// The provider's API client trusts the public authorities alone unless the
+/// operator adds its own (`http.ca_file`, F191): an API stand-in under a
+/// private authority is refused at the handshake without them and reached
+/// with them. The stand-in here is an https server (the fingerprint echo)
+/// that answers every request with a JSON object of its own, which the list
+/// reads as a page without proxies.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_api_under_a_private_authority_is_reached_only_with_the_operators_anchor() {
+    let (ca, certificate, key) = private_authority();
+    let tls = kage_http::echo::EchoTls::from_pem(certificate.as_bytes(), key.as_bytes()).unwrap();
+    let server = kage_http::echo::EchoServer::bind("127.0.0.1:0".parse().unwrap(), tls)
+        .await
+        .unwrap();
+    let port = server.local_addr().unwrap().port();
+    let serving = tokio::spawn(server.serve());
+    let config = WebshareConfig {
+        api_key: Some(Secret::new(WEBSHARE_TOKEN)),
+        base_url: format!("https://localhost:{port}/api/"),
+        timeout: HumanDuration::from_secs(5),
+        max_retries: 0,
+        ..WebshareConfig::default()
+    };
+
+    let refused = WebshareProvider::new(&config)
+        .unwrap()
+        .list()
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains("connection failed"), "{refused}");
+
+    let reached = WebshareProvider::trusting(&config, Some(ca.as_bytes()))
+        .unwrap()
+        .list()
+        .await;
+    assert!(
+        matches!(&reached, Ok(proxies) if proxies.is_empty()),
+        "{reached:?}"
+    );
+
+    let broken = WebshareProvider::trusting(&config, Some(b"no certificate".as_slice()));
+    assert!(
+        matches!(&broken, Err(ProviderError::Setup(message)) if message.starts_with("http.ca_file")),
+        "{broken:?}"
+    );
+    serving.abort();
+}

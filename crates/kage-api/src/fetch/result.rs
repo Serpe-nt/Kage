@@ -796,13 +796,20 @@ fn bodies_of_page(page: &PageResult) -> Bodies {
         .iter()
         .find(|header| header.name.eq_ignore_ascii_case("content-type"))
         .map(|header| header.value.as_str());
+    // The page's address is the detector's hint for an undeclared body
+    // (F160).
+    let loaded_from = url::Url::parse(&page.final_url).ok();
     let raw_body = page.raw_body.as_ref().and_then(|body| match body.encoding {
-        BodyEncoding::Utf8 => kage_http::charset::text_of(content_type, body.data.as_bytes()),
+        BodyEncoding::Utf8 => kage_http::charset::text_of_from(
+            loaded_from.as_ref(),
+            content_type,
+            body.data.as_bytes(),
+        ),
         BodyEncoding::Base64 => {
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(body.data.as_bytes())
                 .ok()?;
-            kage_http::charset::text_of(content_type, &bytes)
+            kage_http::charset::text_of_from(loaded_from.as_ref(), content_type, &bytes)
         }
     });
     Bodies {
@@ -909,8 +916,11 @@ pub(crate) fn from_report(
         .unwrap_or_default();
     if let Some(fetched) = fetched.filter(|_| readable) {
         // Read in the encoding a browser would take for it (F100).
-        bodies.raw_body =
-            kage_http::charset::text_of(fetched.header("content-type"), &fetched.body);
+        bodies.raw_body = kage_http::charset::text_of_from(
+            Some(&fetched.final_url),
+            fetched.header("content-type"),
+            &fetched.body,
+        );
     }
     let wants_raw = include.has(Include::Raw) || (include.has(Include::Dom) && fetched.is_some());
     let visit = visit_of(&report.visit, &report.attempts, include, viewer);

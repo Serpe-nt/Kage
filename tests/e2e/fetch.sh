@@ -18,7 +18,9 @@
 #     a block: the persona cools, another one tries, and the domain's
 #     breaker opens and answers the next request at once;
 #   - a page in ISO-8859-1 (by its header, by its <meta>) and one in
-#     Shift_JIS read at level 0 as a browser reads them; a host with the
+#     Shift_JIS read at level 0 as a browser reads them, and the decoding
+#     edges (a <meta> in a script, a late <meta>, undeclared UTF-8 and
+#     Shift_JIS, a link's legacy query; F160, F161, F172); a host with the
 #     DNS root's dot asked for without it, and one with two dots refused
 #     before anything is sent (F100, F104);
 #   - a target the proxies refuse (F189): a plain one, whose empty 403
@@ -212,6 +214,28 @@ fetch_json "http://fixture.kage.test:8088/legacy/sjis" --level 0 --extract
 check "level 0: a page in Shift_JIS by its <meta> says what it says" "${report}" \
     "d.outcome === 'ok' && d.extract.title === '日本語' && !JSON.stringify(d.extract).includes(String.fromCharCode(0xfffd))"
 echo "    level 0: $(value "${report}" "'title ' + d.extract.title + ', ' + d.extract.word_count + ' words'")"
+# The decoding edges (F160, F161, F172): a <meta> inside a script is not the
+# page's, a late <meta> in a long head is, an undeclared page reads as the
+# browsers read it (UTF-8 as windows-1252, Shift_JIS by the detector), and
+# a link's query is written in the page's encoding.
+for legacy in scripted late-meta; do
+    fetch_json "http://fixture.kage.test:8088/legacy/${legacy}" --level 0 --extract
+    [ "${fetch_status}" -eq 0 ] || fail "kage fetch --level 0 of /legacy/${legacy} failed: ${report}"
+    check "level 0: a page whose <meta> stands after a script (${legacy}) is read in it" "${report}" \
+        "d.outcome === 'ok' && d.extract.title === 'Café' && d.extract.text.startsWith('Café Müller') && !JSON.stringify(d.extract).includes(String.fromCharCode(0xfffd))"
+done
+fetch_json "http://fixture.kage.test:8088/legacy/undeclared-utf8" --level 0 --extract
+[ "${fetch_status}" -eq 0 ] || fail "kage fetch --level 0 of /legacy/undeclared-utf8 failed: ${report}"
+check "level 0: an undeclared UTF-8 page reads as both browsers read it" "${report}" \
+    "d.outcome === 'ok' && d.extract.title === 'CafÃ©'"
+fetch_json "http://fixture.kage.test:8088/legacy/undeclared-sjis" --level 0 --extract
+[ "${fetch_status}" -eq 0 ] || fail "kage fetch --level 0 of /legacy/undeclared-sjis failed: ${report}"
+check "level 0: an undeclared Shift_JIS page is named by the detector" "${report}" \
+    "d.outcome === 'ok' && d.extract.title === '日本語' && !JSON.stringify(d.extract).includes(String.fromCharCode(0xfffd))"
+fetch_json "http://fixture.kage.test:8088/legacy/query" --level 0 --extract
+[ "${fetch_status}" -eq 0 ] || fail "kage fetch --level 0 of /legacy/query failed: ${report}"
+check "level 0: a link's query is written in its page's encoding" "${report}" \
+    "d.outcome === 'ok' && d.extract.links.some((link) => link.url === 'http://fixture.kage.test:8088/legacy/suche?q=f%FCr')"
 # The host with the dot of the DNS root is the site's own name: asked for
 # without the dot, from the site's one exit.
 got "http://fixture:8088/__kage/reset" > /dev/null

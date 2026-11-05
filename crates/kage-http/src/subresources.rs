@@ -17,7 +17,15 @@
 //!   without `nomodule` and with a script type), and style or script
 //!   preloads; then the icon (`<link rel~=icon>`, else `/favicon.ico`).
 //!   `<base href>` is honoured. Markup inside comments, scripts, styles,
-//!   `<noscript>` and `<template>` is not markup and is skipped.
+//!   `<noscript>` and `<template>` is not markup and is skipped. The
+//!   markup is read from the document as decoded in its own encoding
+//!   ([`crate::charset`]), and an asset's query is written in that
+//!   encoding, as a browser writes it (F161).
+//! - **The guard.** Each asset and each of its redirects passes the SSRF
+//!   guard's URL check, and with a resolver (`security.resolve_on_host`)
+//!   its name is resolved on the host and refused when it points into a
+//!   denied range, before it is asked for, as the page's own hops are
+//!   (F148).
 //! - **First-party only.** An asset is fetched when it is on the page's own
 //!   site (or origin, by configuration). Never another site's: a CDN, an
 //!   analytics host or a bot-management vendor would see a script that is
@@ -57,12 +65,13 @@ use http::{Method, StatusCode};
 use kage_core::config::SubresourceScope;
 use kage_core::seed::Seed;
 use kage_core::ssrf::check_url;
+use kage_core::urlnorm::join_in;
 use tokio::time::Instant;
 use url::Url;
 
 use crate::client::HttpClient;
 use crate::cookies::parse_http_date;
-use crate::fetch::{Fetched, Guard, Outgoing, read_body};
+use crate::fetch::{Fetched, Guard, Outgoing, check_target_addresses, read_body};
 use crate::headers::{CallerHeaders, FetchSite, RequestKind};
 use crate::site;
 
@@ -288,18 +297,19 @@ pub(crate) struct Asset {
     pub url: Url,
 }
 
-/// Turns what the markup names into the first-party assets to fetch, in
-/// document order, and the icon.
+/// Turns what the markup of a document written in `encoding` names into
+/// the first-party assets to fetch, in document order, and the icon.
 pub(crate) fn plan(
     document: &Url,
     discovered: &Discovered,
     scope: SubresourceScope,
     max: usize,
+    encoding: &'static encoding_rs::Encoding,
 ) -> (Vec<Asset>, Option<Asset>) {
     let base = discovered
         .base
         .as_deref()
-        .and_then(|href| document.join(href.trim()).ok())
+        .and_then(|href| join_in(document, href.trim(), encoding))
         .filter(|base| matches!(base.scheme(), "http" | "https"))
         .unwrap_or_else(|| document.clone());
     let own = |url: &Url| match scope {
@@ -311,7 +321,7 @@ pub(crate) fn plan(
         if href.is_empty() || href.starts_with('#') {
             return None;
         }
-        let mut url = base.join(href).ok()?;
+        let mut url = join_in(&base, href, encoding)?;
         if !matches!(url.scheme(), "http" | "https") || url.host().is_none() {
             return None;
         }
@@ -606,7 +616,14 @@ impl AssetRun<'_> {
         let mut site = FetchSite::between(self.document, &url);
         for _ in 0..=ASSET_REDIRECTS {
             if let Guard::Target(policy) = self.guard {
-                check_url(&url, policy).map_err(|denial| denial.to_string())?;
+                let target = check_url(&url, policy).map_err(|denial| denial.to_string())?;
+                // Under `resolve_on_host` an asset's name is resolved before
+                // it is asked for, as every hop of the page is (F148).
+                if let Some(resolver) = self.client.resolver() {
+                    check_target_addresses(resolver.as_ref(), &target)
+                        .await
+                        .map_err(|denial| denial.to_string())?;
+                }
             }
             let incoming = self
                 .client
@@ -693,7 +710,16 @@ impl HttpClient {
             return None;
         }
         let document = &page.final_url;
-        let (assets, icon) = plan(document, &scan(&page.body), settings.scope, settings.max);
+        // The markup as the browser reads it: decoded in the document's
+        // own encoding, which an asset's query is written in (F161).
+        let (text, encoding) = page.decoded();
+        let (assets, icon) = plan(
+            document,
+            &scan(text.as_bytes()),
+            settings.scope,
+            settings.max,
+            encoding,
+        );
 
         let seed = seed.unwrap_or_else(|| {
             let nanos = Utc::now().timestamp_nanos_opt().unwrap_or_default();
@@ -897,7 +923,7 @@ mod tests {
         scope: SubresourceScope,
         max: usize,
     ) -> (Vec<String>, Option<String>) {
-        let (assets, icon) = plan(&url(document), discovered, scope, max);
+        let (assets, icon) = plan(&url(document), discovered, scope, max, encoding_rs::UTF_8);
         (
             assets.iter().map(|asset| asset.url.to_string()).collect(),
             icon.map(|icon| icon.url.to_string()),
@@ -1032,6 +1058,7 @@ mod tests {
             },
             SubresourceScope::SameSite,
             12,
+            encoding_rs::UTF_8,
         );
         assert_eq!(
             plain.0,
@@ -1241,6 +1268,39 @@ mod tests {
         assert_eq!(
             cache.decide(&url("https://www.example.org/new.js"), later),
             CacheDecision::Fresh
+        );
+    }
+
+    /// A query is written in the document's encoding, a path in UTF-8, and a
+    /// character the encoding lacks as a numeric character reference, as the
+    /// URL standard writes them; a UTF-16 document writes UTF-8 (F161).
+    #[test]
+    fn an_assets_query_is_written_in_the_documents_encoding() {
+        let base = url("https://www.example.org/dir/page");
+        let joined = |href: &str, encoding| {
+            kage_core::urlnorm::join_in(&base, href, encoding)
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(
+            joined("für.js?q=für", encoding_rs::WINDOWS_1252),
+            "https://www.example.org/dir/f%C3%BCr.js?q=f%FCr"
+        );
+        assert_eq!(
+            joined("/s?q=日本", encoding_rs::SHIFT_JIS),
+            "https://www.example.org/s?q=%93%FA%96{"
+        );
+        assert_eq!(
+            joined("/s?q=日", encoding_rs::WINDOWS_1252),
+            "https://www.example.org/s?q=%26%2326085%3B"
+        );
+        assert_eq!(
+            joined("/s?q=für", encoding_rs::UTF_16LE),
+            "https://www.example.org/s?q=f%C3%BCr"
+        );
+        assert_eq!(
+            joined("/s?q=für", encoding_rs::UTF_8),
+            "https://www.example.org/s?q=f%C3%BCr"
         );
     }
 }

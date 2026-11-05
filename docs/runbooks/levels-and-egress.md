@@ -338,6 +338,49 @@ are its request as given. A browser's `User-Agent` there does not make the
 client a browser (its TLS, HTTP/2 settings and header set stay the plain
 client's); it is the caller's request, not camouflage.
 
+## Sites under a private certificate authority: `http.ca_file`
+
+Levels 0 and 1 trust the public certificate authorities wreq ships
+(Mozilla's list) and nothing else, so a site whose certificate a private
+authority signed (an intranet's, a lab's, a test world's) is refused at
+the handshake: `connection_failed` ("the TLS handshake with the target
+failed: the site's certificate was refused"). To read such sites at level
+0, name the authority's certificate in the configuration (F191):
+
+```yaml
+http:
+  # PEM, one or more certificates of the authorities the http path trusts
+  # besides the public ones. None by default.
+  ca_file: /etc/kage/private-ca.pem
+```
+
+or `KAGE__HTTP__CA_FILE=/etc/kage/private-ca.pem`. The persona's http
+clients, the plain client of level 0 and the proxy provider's API client
+add the file to their roots; the browsers of levels 2 and 3 do not (their
+trust store is the persona's profile's). `kage config check` and the
+server's start refuse a file that cannot be read or holds no certificate,
+naming the key. The self-test's `selftest.http.echo_ca_file` stays the
+self-test's alone.
+
+What it must never be: the root of a public authority, or any authority
+whose key someone else holds. A root added here is trusted for every name,
+not only for your sites: whoever holds its key can stand in for any site
+level 0 reads, and for the provider's API with your key. Use an authority
+made for your own sites, keep its key off the Kage host, and prefer one
+whose certificate is constrained to your names (`nameConstraints`). Kage
+does not check what the file holds beyond that it is PEM; a public
+authority's root added by mistake changes nothing for the public sites
+(they are trusted already) and widens nothing, but a private one made for
+another purpose does.
+
+A certificate level 0 refuses (expired, the wrong name, an authority it
+does not trust) is the site's answer, not the proxy's: the proxy opened
+the tunnel and the site's TLS was refused, so the attempt is
+`connection_failed` with a server error's courtesy, the proxy is not
+blamed or probed, and a `robots.txt` behind it is unreachable for
+`robots.error_ttl` (an hour) instead of being asked for again a minute
+later (F170). Before 2.1 it was `proxy_failed`.
+
 ## A caller's `Cookie` and `Authorization` at level 0
 
 At level 0 the caller's headers are sent as given, `User-Agent`, `Cookie`

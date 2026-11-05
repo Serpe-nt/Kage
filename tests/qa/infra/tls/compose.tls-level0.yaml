@@ -1,0 +1,16 @@
+# Level 0 over https (F191, F170): with compose.tls.yaml, a stack whose kage
+# trusts the world's private CA on the http path (`http.ca_file`), so that
+# the plain client of level 0 (and a persona's http client) reaches the
+# world's https sites as it reaches a public site, and refuses the
+# certificates the CA did not sign or that are broken (expired, wrong name,
+# unknown CA, self-signed) as the site's answer.
+#
+#   stack.sh up NAME --overlay=/scripts/qa/infra/tls/compose.tls.yaml \
+#                    --overlay=/scripts/qa/infra/tls/compose.tls-level0.yaml
+#
+# `level0.sh` runs the checks on such a stack.
+services:
+  kage:
+    environment:
+      RUST_LOG: info,kage_scheduler=debug,kage_http=debug
+      KAGE__HTTP__CA_FILE: /run/qa/ca.pem

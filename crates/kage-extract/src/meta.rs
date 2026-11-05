@@ -231,7 +231,7 @@ pub fn read(document: &Document) -> Meta {
             "link" if meta.canonical.is_none() && rel_has(element, "canonical") => {
                 meta.canonical = value
                     .attr("href")
-                    .and_then(|href| document.base().join(href.trim()).ok())
+                    .and_then(|href| document.resolve(href))
                     .filter(|url| matches!(url.scheme(), "http" | "https"))
                     .map(|url| url.to_string());
             }
