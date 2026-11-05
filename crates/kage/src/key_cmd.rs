@@ -62,6 +62,7 @@ async fn audit(store: &Store, action: &str, key: ApiKeyId, outcome: AuditOutcome
     };
     if let Err(error) = store.audit_events().insert(&event).await {
         tracing::error!(%error, action, "cannot write the audit event");
+        crate::audit_unwritten();
     }
 }
 

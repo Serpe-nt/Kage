@@ -11,14 +11,16 @@
 
 use std::io::Write;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, bail};
 use kage_core::alert::AlertSink;
 use kage_core::cache::CacheKey;
-use kage_core::config::Config;
+use kage_core::config::{
+    Config, MAX_ATTEMPT_TIMEOUT, MIN_BROWSER_ATTEMPT_TIMEOUT, MIN_HTTP_ATTEMPT_TIMEOUT,
+};
 use kage_core::domain::{
     ArtifactKind, ArtifactRef, AuditOutcome, Engine as BrowserEngine, Exit, Level, Render,
 };
@@ -113,12 +115,77 @@ const fn robots_word(wish: RobotsWish) -> &'static str {
     }
 }
 
+/// What the command refuses before anything is opened, asked or stored, as
+/// `POST /v1/fetch` refuses it (spec §16.4, §19): credentials in the URL
+/// (never repeated: the message would show them), a `--timeout` outside
+/// the bounds of an attempt, an `--output` that cannot be written (F133,
+/// F137).
+///
+/// # Errors
+///
+/// What is wrong, as a sentence.
+pub(crate) fn check_options(options: &FetchOptions) -> anyhow::Result<()> {
+    if !options.url.username().is_empty() || options.url.password().is_some() {
+        bail!(
+            "the URL carries credentials, and Kage sends none (invalid_url): nothing was \
+             fetched or kept. Give the URL without them"
+        );
+    }
+    if let Some(timeout) = options.timeout {
+        let level = options.level.number();
+        let least = if options.level.render() == Render::Browser {
+            MIN_BROWSER_ATTEMPT_TIMEOUT
+        } else {
+            MIN_HTTP_ATTEMPT_TIMEOUT
+        };
+        if timeout < least {
+            bail!(
+                "--timeout is at least {} at level {level} (timeout_too_short): a shorter one \
+                 is refused, not raised",
+                HumanDuration::new(least)
+            );
+        }
+        if timeout > MAX_ATTEMPT_TIMEOUT {
+            bail!(
+                "--timeout is at most {}: no attempt takes longer",
+                HumanDuration::new(MAX_ATTEMPT_TIMEOUT)
+            );
+        }
+    }
+    if let Some(path) = &options.output {
+        writable(path)?;
+    }
+    Ok(())
+}
+
+/// Whether the document can be written where `--output` says, before a
+/// site is visited for it: a file is made beside it and taken away again.
+fn writable(path: &Path) -> anyhow::Result<()> {
+    if path.is_dir() {
+        bail!("--output {} is a directory; name a file", path.display());
+    }
+    let dir = match path.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    let probe = dir.join(format!(".kage-output-{}", std::process::id()));
+    std::fs::write(&probe, b"").with_context(|| {
+        format!(
+            "--output {} cannot be written: nothing was fetched",
+            path.display()
+        )
+    })?;
+    let _ = std::fs::remove_file(&probe);
+    Ok(())
+}
+
 /// Runs `kage fetch`, writing its result to `out`.
 pub(crate) async fn fetch(
     config: &Config,
     options: &FetchOptions,
     out: &mut impl Write,
 ) -> anyhow::Result<()> {
+    check_options(options)?;
     let session = Session::open(config).await?;
     let result = Box::pin(run(config, &session, options, out)).await;
     session.close().await;
@@ -134,6 +201,7 @@ async fn run(
     let alerts: Arc<dyn AlertSink> = session.alerts.clone();
     let policies = Arc::new(
         PolicyStore::open(&config.policies.dir, Arc::clone(&alerts))
+            .and_then(|store| store.with_cache_bound(config.cache.max_ttl.get()))
             .context("policies are invalid")?,
     );
     // Settled against the site's policy before anything starts: a wish
@@ -197,10 +265,6 @@ async fn run(
         }
         _ => document_of(&report),
     };
-    if let Some(path) = &options.output {
-        std::fs::write(path, &document)
-            .with_context(|| format!("cannot write {}", path.display()))?;
-    }
     let shown = Shown {
         relayed: Relayed { up, down },
         document_bytes: document.len(),
@@ -212,6 +276,12 @@ async fn run(
         writeln!(out)?;
     } else {
         write_report(out, &report, &shown)?;
+    }
+    // After the report: what was fetched is shown even when the file then
+    // cannot be written (F137).
+    if let Some(path) = &options.output {
+        std::fs::write(path, &document)
+            .with_context(|| format!("cannot write {}", path.display()))?;
     }
     if !report.outcome.is_success() {
         bail!(

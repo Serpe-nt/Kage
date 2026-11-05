@@ -112,6 +112,7 @@ impl Session {
         };
         if let Err(error) = self.store.audit_events().insert(&event).await {
             tracing::error!(%error, action, "cannot write the audit event");
+            crate::audit_unwritten();
         }
     }
 

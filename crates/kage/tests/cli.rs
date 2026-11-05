@@ -162,6 +162,144 @@ fn config_check_fails_on_an_invalid_policy_file() {
     assert!(stderr.contains("pacing-profiles.yaml"), "{stderr}");
 }
 
+#[test]
+fn config_check_refuses_a_policy_cache_lifetime_past_the_configurations_bound() {
+    // F136 (extract-11): a day is the configuration's bound.
+    let dir = TempDir::new().unwrap();
+    for name in ["pacing-profiles.yaml", "block-signatures.yaml"] {
+        std::fs::copy(shipped_policies().join(name), dir.path().join(name)).unwrap();
+    }
+    std::fs::write(
+        dir.path().join("domains.yaml"),
+        "domains:\n  example.org:\n    cache: { max_ttl: 30d }\n",
+    )
+    .unwrap();
+
+    let output =
+        run(kage(&secrets(DB_URL, dir.path().to_str().unwrap())).args(["config", "check"]));
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = text(&output.stderr);
+    assert!(stderr.contains("cache.max_ttl"), "{stderr}");
+    assert!(stderr.contains("longer than the configuration"), "{stderr}");
+}
+
+#[test]
+fn config_check_refuses_what_it_cannot_mean_without_repeating_a_password() {
+    // F133, F136, F137: each of these passed the check before.
+    let policies = shipped_policies();
+    let policies = policies.to_str().unwrap();
+    for (name, value) in [
+        ("KAGE__SIDECAR__CHROMIUM_URL", "http://u:pw-71c3@a.test:1"),
+        (
+            "KAGE__SERVER__CORS_ALLOWED_ORIGINS",
+            "[\"https://*.example.invalid\"]",
+        ),
+        ("KAGE__PERSONAS__RETENTION_DAYS", "4294967295"),
+        ("KAGE__PROXIES__HEALTH__INTERVAL", "99999999d"),
+        ("KAGE__DATABASE__MAX_CONNECTIONS", "4294967295"),
+    ] {
+        let mut env = secrets(DB_URL, policies);
+        env.push((name, value));
+        let output = run(kage(&env).args(["config", "check"]));
+        assert_eq!(output.status.code(), Some(1), "{name}={value}");
+        assert!(!text(&output.stderr).contains("pw-71c3"), "{name}");
+        assert!(!text(&output.stdout).contains("pw-71c3"), "{name}");
+    }
+    // A misspelt parameter of the database URL is named, its value never.
+    let output = run(kage(&secrets(
+        "postgres://kage@db.internal/kage?passwd=pw-71c3",
+        policies,
+    ))
+    .args(["config", "check"]));
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = text(&output.stderr);
+    assert!(stderr.contains("passwd"), "{stderr}");
+    assert!(!stderr.contains("pw-71c3"), "{stderr}");
+    // A member of an object alone, and null for an optional key.
+    let mut env = secrets(DB_URL, policies);
+    env.push(("KAGE__PERSONAS__WARMUP__VISITS__MAX", "9"));
+    env.push(("KAGE__PROXIES__HEALTH__GEO_URL", "null"));
+    let output = run(kage(&env).args(["config", "check"]));
+    assert!(output.status.success(), "{}", text(&output.stderr));
+    let report: serde_json::Value = serde_json::from_str(&text(&output.stdout)).unwrap();
+    assert_eq!(report["config"]["personas"]["warmup"]["visits"]["max"], 9);
+    assert_eq!(
+        report["config"]["proxies"]["health"]["geo_url"],
+        serde_json::Value::Null
+    );
+}
+
+#[test]
+fn fetch_refuses_what_it_cannot_do_before_anything_is_opened() {
+    // F133 (cli-03), F137 (cli-10, cli-11): nothing is asked of a site or
+    // stored, and the database is never reached (it is nowhere here).
+    let policies = shipped_policies();
+    let dir = TempDir::new().unwrap();
+    let blocked = dir.path().join("missing").join("doc.html");
+    let blocked = blocked.to_str().unwrap();
+    for (arguments, said) in [
+        (
+            vec!["http://user:pw-71c3@fixture.kage.test/", "--level", "0"],
+            "credentials",
+        ),
+        (
+            vec![
+                "http://fixture.kage.test/",
+                "--level",
+                "2",
+                "--timeout",
+                "999ms",
+            ],
+            "at least 15s at level 2",
+        ),
+        (
+            vec![
+                "http://fixture.kage.test/",
+                "--level",
+                "0",
+                "--timeout",
+                "0s",
+            ],
+            "at least 1s at level 0",
+        ),
+        (
+            vec![
+                "http://fixture.kage.test/",
+                "--level",
+                "3",
+                "--timeout",
+                "301s",
+            ],
+            "at most 5m",
+        ),
+        (
+            vec![
+                "http://fixture.kage.test/",
+                "--level",
+                "0",
+                "--output",
+                blocked,
+            ],
+            "cannot be written",
+        ),
+    ] {
+        let started = Instant::now();
+        let output = run(kage(&secrets(
+            "postgres://kage@127.0.0.1:9/kage",
+            policies.to_str().unwrap(),
+        ))
+        .arg("fetch")
+        .args(&arguments));
+        assert_eq!(output.status.code(), Some(1), "{arguments:?}");
+        let stderr = text(&output.stderr);
+        assert!(stderr.contains(said), "{arguments:?}: {stderr}");
+        assert!(!stderr.contains("pw-71c3"), "{stderr}");
+        assert!(!stderr.contains("database"), "{arguments:?}: {stderr}");
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+}
+
 /// A server process that is killed when the test ends, pass or fail.
 struct Server(Child);
 

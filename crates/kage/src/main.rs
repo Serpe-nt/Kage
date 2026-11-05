@@ -28,8 +28,9 @@ mod telemetry;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use anyhow::Context;
+use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
 use kage_core::config::process_env;
 use kage_core::domain::{ClaimedOs, Engine, Level, PersonaState, ProxyState, Scope};
@@ -659,13 +660,37 @@ fn print_openapi() -> anyhow::Result<()> {
     std::io::Write::write_all(&mut out, b"\n").context("cannot write to stdout")
 }
 
+/// Set when an audit event of this command could not be written.
+static AUDIT_UNWRITTEN: AtomicBool = AtomicBool::new(false);
+
+/// Says that an audit event of this command could not be written: the
+/// command then ends non-zero once its result is shown, as an admin call
+/// of the API whose event cannot be written is not answered as done (spec
+/// §19, F135).
+pub(crate) fn audit_unwritten() {
+    AUDIT_UNWRITTEN.store(true, Ordering::SeqCst);
+}
+
+/// The command's end once its result is shown: a failure when an audit
+/// event of it could not be written.
+fn audited(result: anyhow::Result<()>) -> anyhow::Result<()> {
+    result?;
+    if AUDIT_UNWRITTEN.load(Ordering::SeqCst) {
+        bail!(
+            "what the command did is done and shown, but its audit event could not be written \
+             (spec §19): the log says why. The audit trail misses it"
+        );
+    }
+    Ok(())
+}
+
 /// Writes what a command produced to stdout, whatever came of the command:
 /// what was found, or a token that was made, is shown even when the command
-/// then fails.
+/// then fails, or its audit event could not be written.
 fn shown(out: &[u8], result: anyhow::Result<()>) -> anyhow::Result<()> {
     std::io::Write::write_all(&mut std::io::stdout().lock(), out)
         .context("cannot write to stdout")?;
-    result
+    audited(result)
 }
 
 #[tokio::main]
@@ -721,7 +746,7 @@ async fn main() -> anyhow::Result<()> {
                 .await
                 .context("the fingerprint echo failed")
         }
-        Command::Selftest { command } => selftest(command, config_file.as_deref()).await,
+        Command::Selftest { command } => audited(selftest(command, config_file.as_deref()).await),
         Command::Fetch(args) => {
             let config = config_cmd::load(config_file.as_deref(), process_env())?;
             let options = fetch_cmd::FetchOptions::from(args);
