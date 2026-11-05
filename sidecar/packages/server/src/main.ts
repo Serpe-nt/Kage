@@ -10,6 +10,7 @@ import { startAudioServer } from '@kage/engine-core';
 import { buildApp } from './app.js';
 import { loadConfig } from './config.js';
 import { loadEngine } from './engine-loader.js';
+import { line } from './log.js';
 import { createTracer } from './tracing.js';
 import { startWatchdog } from './watchdog.js';
 
@@ -19,13 +20,13 @@ try {
   // container is restarted (F103).
   startWatchdog(config.stallMs);
   // The engine logs through the server's logger once that exists; until
-  // then its start-up lines go to stderr as JSON, like pino's.
+  // then its start-up lines go to stderr in the log's shape (F144).
   let sink: ((level: string, fields: Record<string, unknown>, message: string) => void) | null =
     null;
   const early = (level: string) => (fields: Record<string, unknown>, message: string) => {
     if (sink === null) {
-      process.stderr.write(`${JSON.stringify({ level, msg: message, ...fields })}
-`);
+      const name = level === 'error' ? 'ERROR' : level === 'warn' ? 'WARN' : 'INFO';
+      process.stderr.write(`${line(name, fields, message)}\n`);
     } else {
       sink(level, fields, message);
     }

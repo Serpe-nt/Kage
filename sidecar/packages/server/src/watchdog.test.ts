@@ -48,8 +48,12 @@ describe('the watchdog of the event loop (F103)', () => {
       string,
       unknown
     >;
-    expect(line['msg']).toContain('the event loop stopped answering');
-    expect(line['limit_ms']).toBe(800);
+    // Kage's shape (F144).
+    expect(line['level']).toBe('FATAL');
+    expect(typeof line['timestamp']).toBe('string');
+    const fields = line['fields'] as Record<string, unknown>;
+    expect(fields['message']).toContain('the event loop stopped answering');
+    expect(fields['limit_ms']).toBe(800);
   });
 
   it('leaves a process alone whose main thread answers, and keeps none alive', async () => {

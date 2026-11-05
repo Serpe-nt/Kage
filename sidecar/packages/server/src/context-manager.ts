@@ -224,7 +224,7 @@ export class ContextManager {
         entry.context = await this.engine.openContext(entry.request);
         entry.navigations = 0;
         this.events.recycled();
-        this.log.info({ context_id: id, persona_id: entry.personaId }, 'browser recycled');
+        this.log.info({ context_id: id, persona: entry.personaId }, 'browser recycled');
       }
       if (navigation) {
         entry.navigations += 1;
@@ -234,7 +234,7 @@ export class ContextManager {
     } catch (error) {
       if (!(error instanceof EngineError)) {
         this.log.error(
-          { err: error, context_id: id, persona_id: entry.personaId },
+          { err: error, context_id: id, persona: entry.personaId },
           'operation failed; closing the context',
         );
         await this.remove(entry, 'failed');
@@ -261,7 +261,7 @@ export class ContextManager {
         };
         work.then(settled, settled);
         this.log.error(
-          { context_id: entry.id, persona_id: entry.personaId, bound_ms: boundMs },
+          { context_id: entry.id, persona: entry.personaId, bound_ms: boundMs },
           'an operation outlasted its bound; closing its context',
         );
         void this.remove(entry, 'failed');
@@ -333,7 +333,7 @@ export class ContextManager {
     await Promise.all(
       idle.map((entry) => {
         this.log.info(
-          { context_id: entry.id, persona_id: entry.personaId },
+          { context_id: entry.id, persona: entry.personaId },
           'closing an idle context',
         );
         return this.remove(entry, 'idle');

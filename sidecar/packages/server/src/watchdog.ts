@@ -95,12 +95,16 @@ const timer = setInterval(() => {
   if (stopped) return;
   state = look(state, Date.now(), beat[0], lookMs);
   if (state.stalled > limitMs) {
+    // The log's shape (log.ts, F144), written by hand: this thread loads
+    // no module of the server's.
     const line = JSON.stringify({
-      level: 60,
-      time: Date.now(),
-      msg: 'the event loop stopped answering: the sidecar ends itself so that it is restarted',
-      stalled_ms: Math.round(state.stalled),
-      limit_ms: limitMs,
+      level: 'FATAL',
+      timestamp: new Date().toISOString(),
+      fields: {
+        message: 'the event loop stopped answering: the sidecar ends itself so that it is restarted',
+        stalled_ms: Math.round(state.stalled),
+        limit_ms: limitMs,
+      },
     });
     try { writeSync(2, line + '\\n'); } catch {}
     process.kill(process.pid, workerData.signal);

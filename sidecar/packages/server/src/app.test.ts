@@ -611,10 +611,32 @@ describe('lifecycle and metrics', () => {
     expect(text).not.toMatch(/persona|example\.org/);
   });
 
+  it('has every counter from zero for the label values known at the start (F150)', async () => {
+    const { app } = await start();
+    const text = await app.metrics.render();
+    for (const line of [
+      'sidecar_context_opens_total{engine="chromium",result="opened"} 0',
+      'sidecar_context_opens_total{engine="chromium",result="failed"} 0',
+      'sidecar_context_closes_total{engine="chromium",reason="idle"} 0',
+      'sidecar_context_closes_total{engine="chromium",reason="shutdown"} 0',
+      'sidecar_browser_recycles_total{engine="chromium"} 0',
+      'sidecar_selftests_total{engine="chromium",result="passed"} 0',
+      'sidecar_flows_total{engine="chromium",result="ok"} 0',
+      'sidecar_flows_total{engine="chromium",result="error"} 0',
+    ]) {
+      expect(text).toContain(line);
+    }
+  });
+
   it('collects the process metrics unless told not to, under the engine they are of', async () => {
     const { app } = await start({ processMetrics: true });
+    // The event loop's utilization is sampled every 100 ms (F144: it took
+    // no engine of its own and was in Kage's exposition twice).
+    await new Promise((resolve) => setTimeout(resolve, 350));
     const text = await app.metrics.render();
     expect(text).toContain('process_cpu_user_seconds_total');
+    expect(text).toMatch(/^nodejs_eventloop_utilization_summary\{[^}]*engine="chromium"/m);
+    expect(text).toMatch(/^nodejs_eventloop_utilization_histogram_bucket\{[^}]*engine="chromium"/m);
     // Kage merges both sidecars' metrics into one exposition: a series
     // without its engine would be there twice.
     const samples = text.split('\n').filter((line) => /^(process|nodejs)_/.test(line));
@@ -698,12 +720,41 @@ describe('traces', () => {
     ]);
     // The request that opened the context came without a trace; the
     // navigation's lines all carry it, and none the shared secret.
-    const completed = lines.filter((line) => line['msg'] === 'request completed');
+    const fields = (line: Record<string, unknown>) => line['fields'] as Record<string, unknown>;
+    const completed = lines.filter((line) => fields(line)['message'] === 'request completed');
     expect(completed).toHaveLength(2);
     expect(completed[0]?.['trace_id']).toBeUndefined();
+    expect(completed[0]?.['span_id']).toBeUndefined();
     expect(completed[1]?.['trace_id']).toBe(TRACE);
     const keys = Object.keys(completed[1] ?? {});
     expect(keys.filter((key) => key === 'trace_id')).toHaveLength(1);
+    // Every line of the traced request names a span too (F144, secrecy-07):
+    // Kage's request outside the sidecar's span, the sidecar's own inside.
+    const traced = lines.filter((line) => line['trace_id'] === TRACE);
+    expect(traced.length).toBeGreaterThanOrEqual(2);
+    for (const line of traced) {
+      expect(['00f067aa0ba902b7', 'b'.repeat(16)]).toContain(line['span_id']);
+    }
+    expect(completed[1]?.['span_id']).toBe('00f067aa0ba902b7');
+    // Kage's shape (F144, secrecy-08): the level in upper case, an ISO
+    // time, the text and the rest under `fields`, the request's id as
+    // `request`, a request by its method and path only.
+    for (const line of lines) {
+      expect(['TRACE', 'DEBUG', 'INFO', 'WARN', 'ERROR', 'FATAL']).toContain(line['level']);
+      expect(String(line['timestamp'])).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+      expect(typeof fields(line)['message']).toBe('string');
+      expect(line).not.toHaveProperty('msg');
+      expect(line).not.toHaveProperty('time');
+      expect(line).not.toHaveProperty('reqId');
+      expect(line).not.toHaveProperty('pid');
+    }
+    expect(typeof completed[1]?.['request']).toBe('string');
+    expect(fields(completed[1] ?? {})['res']).toEqual({ status: 200 });
+    const incoming = traced.find((line) => fields(line)['message'] === 'incoming request');
+    expect(fields(incoming ?? {})['req']).toEqual({
+      method: 'POST',
+      url: '/v1/contexts/' + id + '/navigate',
+    });
     expect(JSON.stringify(lines)).not.toContain(TEST_TOKEN);
   });
 

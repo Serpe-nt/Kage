@@ -34,12 +34,18 @@ import {
   type EngineLog,
   type OperationEnv,
 } from '@kage/engine-core';
-import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
+import Fastify, {
+  LogController,
+  type FastifyInstance,
+  type FastifyReply,
+  type FastifyRequest,
+} from 'fastify';
 import type { DestinationStream } from 'pino';
 import type { z } from 'zod';
 
 import type { LogLevel } from './config.js';
 import { ContextManager } from './context-manager.js';
+import { lineShape } from './log.js';
 import { SidecarMetrics } from './metrics.js';
 import {
   currentTrace,
@@ -86,6 +92,9 @@ export interface AppOptions {
   /** One bound for every navigation and flow in place of the ones their requests make; for tests. */
   readonly operationBoundMs?: number;
 }
+
+/** The span of Kage's request each request's logger was made for. */
+const requestSpans = new WeakMap<object, string>();
 
 /** How often the server looks whether its engine still answers. */
 const STALL_LOOK_MS = 5000;
@@ -211,20 +220,33 @@ export function buildApp(options: AppOptions): App {
         ? false
         : {
             level: options.logLevel,
-            // Requests are logged by method and path. The secret header and
-            // request bodies (which hold proxy passwords) never are.
-            redact: [`req.headers["${TOKEN_HEADER}"]`, 'req.headers.authorization'],
-            // A line written in a span carries its ids (spec §20).
-            mixin: (_merge, _level, logger) => traceFields(logger.bindings()),
+            // Kage's line shape (spec §20, F144).
+            ...lineShape(),
+            // Requests are logged by method and path (`lineShape`). The
+            // secret header and request bodies (which hold proxy passwords)
+            // never are; the redaction stays as a second guard.
+            redact: [`fields.req.headers["${TOKEN_HEADER}"]`, 'fields.req.headers.authorization'],
+            // A line written in a span carries its ids (spec §20): the
+            // sidecar's span, or outside it the span of Kage's request.
+            mixin: (_merge, _level, logger) =>
+              traceFields(logger.bindings(), requestSpans.get(logger)),
             ...(options.logStream === undefined ? {} : { stream: options.logStream }),
           },
-    // Every line of a request of Kage's carries Kage's trace id.
+    // A request's lines carry its id under Kage's name for it.
+    logController: new LogController({ requestIdLogLabel: 'request' }),
+    // Every line of a request of Kage's carries Kage's trace id, and the
+    // span of Kage's request to the sidecar where no span of the sidecar's
+    // own is under way (F144).
     childLoggerFactory: (logger, bindings, childOptions, raw) => {
       const parent = parseTraceparent(raw.headers['traceparent']);
-      return logger.child(
+      const child = logger.child(
         parent === null ? bindings : { ...bindings, trace_id: parent.traceId },
         childOptions,
       );
+      if (parent !== null) {
+        requestSpans.set(child, parent.spanId);
+      }
+      return child;
     },
   });
   const log: EngineLog = {

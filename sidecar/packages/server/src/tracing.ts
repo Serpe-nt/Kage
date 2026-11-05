@@ -171,12 +171,17 @@ export const currentTrace = new AsyncLocalStorage<TraceIds>();
 
 /**
  * What a log line adds: the ids of the span it is written in, unless the
- * logger has them already.
+ * logger has them already. Outside a span of the sidecar's own, a line of a
+ * request of Kage's names Kage's span, `requestSpan` (F144): every line
+ * written for a traced request carries both ids.
  */
-export function traceFields(bound: Readonly<Record<string, unknown>>): Partial<TraceIds> {
+export function traceFields(
+  bound: Readonly<Record<string, unknown>>,
+  requestSpan?: string,
+): Partial<TraceIds> {
   const ids = currentTrace.getStore();
   if (ids === undefined) {
-    return {};
+    return requestSpan !== undefined && 'trace_id' in bound ? { span_id: requestSpan } : {};
   }
   return 'trace_id' in bound ? { span_id: ids.span_id } : ids;
 }
