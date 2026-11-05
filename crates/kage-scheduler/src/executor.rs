@@ -76,7 +76,7 @@ use kage_core::persona::pacing_factor;
 use kage_core::policy::{EffectivePolicy, RefererStrategy};
 use kage_core::schedule::politeness::Courtesy;
 use kage_core::seed::Seed;
-use kage_core::ssrf::{SsrfPolicy, check_url};
+use kage_core::ssrf::{SsrfDenial, SsrfPolicy, check_url};
 use kage_http::{
     FetchSpec, Fetched, Guard, HopExits, HttpError, PlainClient, PlainSpec, RequestKind,
 };
@@ -1544,7 +1544,7 @@ impl PathExecutor {
     }
 
     fn http_failure(error: &HttpError) -> AttemptOutput {
-        tracing::debug!(%error, "an http attempt failed");
+        tracing::debug!(error = %loggable(error), "an http attempt failed");
         let mut output = match error {
             HttpError::Timeout { .. } => {
                 AttemptOutput::failed(Outcome::Timeout, "timeout", Courtesy::ServerError)
@@ -1932,6 +1932,45 @@ impl AttemptExecutor for PathExecutor {
     }
 }
 
+/// An http attempt's error as it goes into the log: a redirect target the
+/// server sent is named by its origin only, never with its path or query,
+/// where signed URLs and tokens travel (F144, secrecy-12). Every other
+/// error names no target the caller did not give.
+fn loggable(error: &HttpError) -> String {
+    match error {
+        HttpError::RedirectDenied(denied) => {
+            // A location that does not parse is named in its reason whole.
+            let reason = match &denied.reason {
+                SsrfDenial::InvalidUrl(_) => "the location is not a valid URL".to_owned(),
+                other => other.to_string(),
+            };
+            format!(
+                "redirect hop {} to {} denied: {reason}",
+                denied.hop,
+                sent_origin(&denied.location),
+            )
+        }
+        HttpError::TooManyRedirects { max, location } => format!(
+            "more than {max} redirects; the last one pointed at {}",
+            sent_origin(location)
+        ),
+        HttpError::HopExitUnavailable { url, reason } => format!(
+            "the redirect to {} was not followed: {reason}",
+            sent_origin(url)
+        ),
+        other => other.to_string(),
+    }
+}
+
+/// The scheme, host and port of a URL a server sent, or a placeholder for
+/// one that has none.
+fn sent_origin(location: &str) -> String {
+    Url::parse(location)
+        .ok()
+        .and_then(|url| origin_of(&url))
+        .unwrap_or_else(|| "a location without a host".to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -1953,6 +1992,58 @@ mod tests {
         whose_failure,
     };
     use crate::forwarder::{Caller, Denials, PlainRoute};
+
+    #[test]
+    fn a_redirect_targets_path_and_query_never_reach_the_log() {
+        // F144 (secrecy-12): at debug a failed http attempt is logged; the
+        // hop it names keeps its origin only.
+        use kage_core::ssrf::{RedirectDenied, SsrfDenial};
+        let denied = HttpError::RedirectDenied(RedirectDenied {
+            hop: 1,
+            location: "http://192.0.2.1/cb?token=secret-value".to_owned(),
+            reason: SsrfDenial::Scheme("ftp".to_owned()),
+        });
+        let too_many = HttpError::TooManyRedirects {
+            max: 10,
+            location: "https://shop.kage.test:8443/next?tok=secret-value".to_owned(),
+        };
+        let unparsed = HttpError::RedirectDenied(RedirectDenied {
+            hop: 2,
+            location: "http://[::1/x?token=secret-value".to_owned(),
+            reason: SsrfDenial::InvalidUrl("http://[::1/x?token=secret-value".to_owned()),
+        });
+        let hop = HttpError::HopExitUnavailable {
+            url: "https://other.kage.test/a/b?token=secret-value".to_owned(),
+            reason: "its exit cannot carry traffic now".to_owned(),
+        };
+        let lines: Vec<String> = [&denied, &too_many, &unparsed, &hop]
+            .into_iter()
+            .map(super::loggable)
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                "redirect hop 1 to http://192.0.2.1 denied: scheme \"ftp\" is not allowed, only http and https are",
+                "more than 10 redirects; the last one pointed at https://shop.kage.test:8443",
+                "redirect hop 2 to a location without a host denied: the location is not a valid URL",
+                "the redirect to https://other.kage.test was not followed: its exit cannot carry traffic now",
+            ]
+        );
+        for (error, line) in [&denied, &too_many, &unparsed, &hop]
+            .into_iter()
+            .zip(&lines)
+        {
+            assert!(error.to_string().contains("secret-value"));
+            assert!(
+                !line.contains("secret-value") && !line.contains("/cb"),
+                "{line}"
+            );
+        }
+        assert_eq!(
+            super::loggable(&HttpError::Request("reset")),
+            HttpError::Request("reset").to_string()
+        );
+    }
 
     /// The real path of F108: a forwarder on loopback in front of one
     /// proxy per persona, its meter, and `whose_failure`.

@@ -10,7 +10,6 @@
 //! | `kage_queue_depth` | `kind` | attempts waiting, by `sync` and `job` |
 //! | `kage_scheduler_in_flight` | `render` | attempts in flight |
 //! | `kage_scheduler_refusals_total` | `reason` | requests answered without an attempt |
-//! | `kage_breaker_open` | `domain` | 1 while a domain is paused |
 //! | `kage_policy_breaker_threshold` | `domain` | the blocks per hour that pause a domain under its policy, set at each attempt there |
 //! | `kage_bandwidth_bytes_total` | `direction`, `egress` | bytes through the forwarder, by the exit they left through (`pool`, `host`) |
 //! | `kage_bandwidth_budget_ratio` | | the share of the bandwidth cap that is used |
@@ -22,6 +21,10 @@
 //! A domain is a label of unbounded cardinality in principle; in practice
 //! it is the set of sites the owner's projects fetch. A level is its
 //! number, `0` to `3` (spec §25).
+//!
+//! `kage_breaker_open{domain}` is not recorded here: the API reads it from
+//! the stored breakers at every scrape (F126), so that it survives a restart
+//! and comes down when a pause ends.
 
 use std::time::Duration;
 
@@ -159,15 +162,6 @@ pub fn breaker_threshold(domain: &str, threshold: u32) {
         .set(f64::from(threshold));
 }
 
-/// A domain's breaker opened or closed.
-pub fn breaker(domain: &str, open: bool) {
-    metrics::gauge!("kage_breaker_open", "domain" => domain.to_owned()).set(if open {
-        1.0
-    } else {
-        0.0
-    });
-}
-
 /// Bytes passed through the forwarder since the last report, through
 /// one exit.
 pub fn bandwidth(egress: Exit, up: u64, down: u64) {
@@ -249,8 +243,6 @@ mod tests {
         super::queue(2, 40);
         super::in_flight(6, 20);
         super::refused(Refusal::DomainPaused);
-        super::breaker("example.org", true);
-        super::breaker("example.org", false);
         super::bandwidth(Exit::Pool, 1200, 98_000);
         super::bandwidth(Exit::Host, 0, 0);
         super::budget(0.41);

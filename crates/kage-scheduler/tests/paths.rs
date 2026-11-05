@@ -1128,6 +1128,106 @@ async fn a_suspected_outage_of_the_pool_holds_its_dead_proxies_and_work_waits_it
     lab.shut_down().await;
 }
 
+#[tokio::test]
+async fn under_a_suspected_outage_level_0_waits_for_its_sites_exit() {
+    // F193 (the review of #50): a site's plain exit at level 0 is held by a
+    // suspected outage as a persona's proxy is (F169). The fetch is told to
+    // ask again, the forwarder relays nothing through the held exit, and
+    // when the exit answers again level 0 leaves through it, never through
+    // another address.
+    let mut lab = Lab::start(5, 149, FAST).await;
+    serve(&lab, "/plain", page("The shop")).await;
+    // The site's exit is its scout's proxy, chosen at its first page.
+    let first = lab
+        .pipeline
+        .fetch(at(Level::Plain, "/plain"))
+        .await
+        .unwrap();
+    assert_eq!(first.outcome, Outcome::Ok, "{:?}", first.reason);
+    let site = kage_crawl::site::of_host(SITE);
+    let scout = persona_of(&lab, lab.backend.scout(&site).await.unwrap().unwrap());
+    let exit = lab.backend.plain_exit(scout.id).await.unwrap();
+    assert_eq!(exit, Some(scout.proxy_id));
+
+    let failed = ProbeReport {
+        at: lab.now(),
+        exit: Err(HealthFailure::Unreachable),
+        leak: None,
+        geo: None,
+    };
+    for persona in &lab.personas {
+        lab.pool
+            .record_probe(persona.proxy_id, &failed)
+            .await
+            .unwrap();
+    }
+    let live = lab.pool.live().await.unwrap();
+    assert!(kage_proxy::outage_suspected(&live));
+    assert!(live.iter().all(|proxy| proxy.state.is_usable()));
+    assert_eq!(lab.backend.plain_exit(scout.id).await.unwrap(), None);
+
+    // Level 0 waits, with a time to ask again, and nothing goes out.
+    let waiting = lab
+        .pipeline
+        .fetch(at(Level::Plain, "/plain"))
+        .await
+        .unwrap();
+    assert_eq!(waiting.outcome, Outcome::ProviderError);
+    assert_eq!(waiting.reason.as_deref(), Some("plain_exit_unavailable"));
+    assert!(waiting.retry_at.is_some());
+    assert_eq!(waiting.attempts, []);
+    assert_eq!(lab.received("/plain").await.len(), 1);
+    // The forwarder relays nothing through the held exit either.
+    let route = kage_scheduler::PlainRoute::Pool(scout.proxy_id);
+    let head = plain_tunnel(&lab, route).await;
+    assert!(head.starts_with("HTTP/1.1 403 "), "{head}");
+
+    // The exit answers again; the guard still holds over the four others,
+    // and level 0 leaves through its own exit.
+    lab.probe_ok(scout.proxy_id, 0).await;
+    assert!(kage_proxy::outage_suspected(
+        &lab.pool.live().await.unwrap()
+    ));
+    let served = lab
+        .pipeline
+        .fetch(at(Level::Plain, "/plain"))
+        .await
+        .unwrap();
+    assert_eq!(served.outcome, Outcome::Ok, "{:?}", served.reason);
+    assert_eq!(lab.received("/plain").await.len(), 2);
+    assert_eq!(lab.proxy_of(&scout).plain().len(), 2);
+    let head = plain_tunnel(&lab, route).await;
+    assert!(head.starts_with("HTTP/1.1 200 "), "{head}");
+    lab.shut_down().await;
+}
+
+/// Asks the forwarder for a tunnel as a plain client of `route`; the head
+/// of the answer.
+async fn plain_tunnel(lab: &Lab, route: kage_scheduler::PlainRoute) -> String {
+    let mut stream = TcpStream::connect(lab.forwarder.local_addr())
+        .await
+        .unwrap();
+    let credential = basic(&route.username(), &lab.tokens.plain_token(route));
+    stream
+        .write_all(
+            format!(
+                "CONNECT {SITE}:80 HTTP/1.1\r\nHost: {SITE}:80\r\nProxy-Authorization: {credential}\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut answer = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    while !answer.windows(4).any(|window| window == b"\r\n\r\n") {
+        match tokio::time::timeout(Duration::from_secs(3), stream.read(&mut chunk)).await {
+            Ok(Ok(read)) if read > 0 => answer.extend_from_slice(&chunk[..read]),
+            _ => break,
+        }
+    }
+    String::from_utf8_lossy(&answer).into_owned()
+}
+
 /// Asks the forwarder for a tunnel as a persona; the head of the answer.
 async fn tunnel_as(lab: &Lab, persona: PersonaId) -> String {
     let mut stream = TcpStream::connect(lab.forwarder.local_addr())

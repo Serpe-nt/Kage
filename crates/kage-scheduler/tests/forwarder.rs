@@ -1510,3 +1510,100 @@ fn the_settings_come_from_the_configuration() {
     config.security.resolve_on_host = true;
     assert!(ForwarderSettings::from_config(&config).resolve_names);
 }
+
+/// A resolver for proxies given by name: one name never answers, as a
+/// stopped container's name did in the QA world, and another is found.
+#[derive(Debug, Default)]
+struct ProxyNames {
+    asked: Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl HopResolver for ProxyNames {
+    async fn resolve(&self, host: &str) -> Result<Vec<IpAddr>, String> {
+        self.asked.lock().unwrap().push(host.to_owned());
+        if host == "stopped-proxy.kage.test" {
+            std::future::pending::<()>().await;
+        }
+        Ok(vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+    }
+}
+
+/// F159: an attempt through a proxy nobody answers for fails within
+/// seconds. The lookup of a proxy's name is bounded (five seconds), and a
+/// proxy that could not be reached is refused at once for a short while,
+/// so that the tunnel a browser asks for again at once costs nothing; a
+/// proxy found by its name is relayed through as before.
+#[tokio::test]
+async fn a_proxy_that_cannot_be_reached_fails_within_seconds_and_once() {
+    let names = Arc::new(ProxyNames::default());
+    let mut rig = Rig::start(ForwarderSettings {
+        resolver: Arc::<ProxyNames>::clone(&names),
+        ..settings()
+    })
+    .await;
+    let shop = shop().await;
+    rig.provider.route("shop.kage.test:443", *shop.address());
+    let mut stopped = rig.provider.endpoint();
+    stopped.host = "stopped-proxy.kage.test".to_owned();
+    rig.table.set(id(1), Ok(stopped));
+
+    // The first try waits for the lookup's bound, not for ever.
+    let started = std::time::Instant::now();
+    let mut raw = TcpStream::connect(rig.forwarder.local_addr())
+        .await
+        .unwrap();
+    raw.write_all(
+        format!(
+            "CONNECT shop.kage.test:443 HTTP/1.1\r\nHost: shop.kage.test:443\r\nProxy-Authorization: {}\r\n\r\n",
+            rig.credential(id(1))
+        )
+        .as_bytes(),
+    )
+    .await
+    .unwrap();
+    let mut answer = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    while !answer.windows(4).any(|window| window == b"\r\n\r\n") {
+        let read = tokio::time::timeout(Duration::from_secs(10), raw.read(&mut chunk))
+            .await
+            .expect("an answer within ten seconds")
+            .unwrap();
+        if read == 0 {
+            break;
+        }
+        answer.extend_from_slice(&chunk[..read]);
+    }
+    let took = started.elapsed();
+    let head = String::from_utf8_lossy(&answer).into_owned();
+    assert!(head.starts_with("HTTP/1.1 403 "), "{head}");
+    assert!(
+        took >= Duration::from_millis(4500) && took < Duration::from_secs(8),
+        "{took:?}"
+    );
+
+    // The tunnel asked for again at once is refused at once, with no
+    // second lookup.
+    let started = std::time::Instant::now();
+    let (_client, head) = rig.tunnel(id(1), "shop.kage.test:443").await;
+    assert!(head.starts_with("HTTP/1.1 403 "), "{head}");
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(names.asked.lock().unwrap().len(), 1);
+    assert_eq!(rig.provider.seen().len(), 0);
+
+    // A proxy found by its name is relayed through.
+    let mut by_name = rig.provider.endpoint();
+    by_name.host = "proxy.kage.test".to_owned();
+    rig.table.set(id(2), Ok(by_name));
+    let (_client, head) = rig.tunnel(id(2), "shop.kage.test:443").await;
+    assert_eq!(head, "HTTP/1.1 200 Connection Established\r\n\r\n");
+    assert_eq!(
+        *names.asked.lock().unwrap(),
+        ["stopped-proxy.kage.test", "proxy.kage.test"]
+    );
+    rig.stop().await;
+}

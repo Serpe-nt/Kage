@@ -9,10 +9,11 @@
 //!   `kage_attempts_total`, `kage_attempt_duration_seconds`,
 //!   `kage_proxy_state`, `kage_scheduler_wait_seconds`, `kage_queue_depth`,
 //!   `kage_scheduler_in_flight`, `kage_scheduler_refusals_total`,
-//!   `kage_breaker_open`, `kage_bandwidth_bytes_total`,
+//!   `kage_bandwidth_bytes_total`,
 //!   `kage_bandwidth_budget_ratio`, `kage_replacements_total`;
 //! - what is read from the store when a scrape arrives:
-//!   `kage_persona_state{state}` and `kage_selftest_score{persona,engine}`;
+//!   `kage_persona_state{state}`, `kage_selftest_score{persona,engine}`,
+//!   the job gauges and `kage_breaker_open{domain}` (F126);
 //! - the API's own: `kage_api_requests_total{route,method,status}` (the
 //!   route is the pattern, the method one HTTP defines or `other`),
 //!   `kage_api_request_duration_seconds{route,method}`,
@@ -124,10 +125,11 @@ const CRAWL_FRONTIER_REASONS: [&str; 3] = ["already_read", "ssrf_denied", "robot
 /// The values of `kage_crawl_duplicates_total{kind}`.
 const CRAWL_DUPLICATE_KINDS: [&str; 2] = ["exact", "near"];
 
-/// The codes a request is refused with before its handler runs
-/// (`kage_api_refusals_total{code}`): the key, its scope, its limits, the
-/// head of the request (its headers, its target) and a body that says it is
-/// too large.
+/// The codes a request is refused with for its key, its scope, its limits,
+/// the head of the request (its headers, its target) or a body that says
+/// it is too large (`kage_api_refusals_total{code}`): counted before the
+/// handler runs, except `scope_missing`, which the handler counts when it
+/// asks for its scope (F182).
 const REFUSAL_CODES: [ErrorCode; 10] = [
     ErrorCode::MissingKey,
     ErrorCode::InvalidKey,

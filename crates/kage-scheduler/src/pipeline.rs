@@ -567,6 +567,10 @@ pub struct Pipeline {
 
 /// Counts an attempt and writes its line in the log. `page_of_visit` is
 /// `None` for a plain client's attempt, which belongs to no visit.
+///
+/// The line is also an event of the attempt's span and leaves with the
+/// trace: it holds no seed (spec §20, F182). The attempt's seed is kept
+/// with the attempt (`attempts.seed`), where a replay reads it.
 fn note(
     attempt: &Attempt,
     level: Level,
@@ -601,7 +605,6 @@ fn note(
         status = attempt.status,
         total_ms = attempt.timing.total_ms,
         page_of_visit,
-        seed = attempt.seed.as_ref().map(tracing::field::display),
         "attempt"
     );
 }
@@ -1466,7 +1469,13 @@ impl Pipeline {
         };
         backend.set_site_exit(site, proxy, self.now()).await?;
         tracing::info!(site, %proxy, "a site has a plain exit of its own");
-        Ok(Some(Some(proxy)))
+        // Drawn by its state; whether it carries traffic now is the
+        // recorded exit's own answer (a suspected outage holds it, F193).
+        let usable = backend
+            .site_exit(site)
+            .await?
+            .is_some_and(|(_, usable)| usable);
+        Ok(Some(usable.then_some(proxy)))
     }
 
     /// How a run ends whose last attempt was cut: a fetch for a job

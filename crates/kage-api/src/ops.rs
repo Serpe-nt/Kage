@@ -234,7 +234,32 @@ async fn stored_gauges(state: &ApiState) -> String {
         &samples,
     ));
     text.push_str(&job_gauges(state).await);
+    text.push_str(&breaker_gauges(state).await);
     text
+}
+
+/// `kage_breaker_open{domain}`, as the store has the breakers at this
+/// moment (F126): 1 while a domain's pause runs, 0 for a breaker stored
+/// open whose pause has run out and that waits for its trial. Read at the
+/// scrape, it survives a restart and comes down when the pause ends, not
+/// when some later request closes the breaker.
+async fn breaker_gauges(state: &ApiState) -> String {
+    let Ok(breakers) = state.store().domain_breakers().list_open().await else {
+        return String::new();
+    };
+    let now = state.clock().now();
+    let samples: Vec<(Vec<(&str, &str)>, f64)> = breakers
+        .iter()
+        .map(|breaker| {
+            let paused = if breaker.is_open(now) { 1.0 } else { 0.0 };
+            (vec![("domain", breaker.domain.as_str())], paused)
+        })
+        .collect();
+    gauge_family(
+        "kage_breaker_open",
+        "1 while a domain is paused by its breaker",
+        &samples,
+    )
 }
 
 /// The queues of the job worker and of the webhook sender, as the store
