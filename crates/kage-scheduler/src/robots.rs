@@ -183,10 +183,29 @@ pub enum Answer {
     Unreachable,
 }
 
+/// The text of a `robots.txt` as the site sent it: UTF-8 as RFC 9309 has
+/// it, or the encoding its byte order mark names (a file saved as UTF-16
+/// has one; a UTF-8 one is dropped), with a byte that is no UTF-8 replaced
+/// and every NUL left out (F171). A NUL is no character of a rule, and a
+/// file saved as UTF-16 without a mark has one in every other byte: left
+/// out, its ASCII reads as the site wrote it. The text a cache row keeps
+/// can then be stored as text, which a NUL cannot.
+pub fn robots_text(bytes: &[u8]) -> String {
+    let text = match encoding_rs::Encoding::for_bom(bytes) {
+        Some((encoding, length)) => encoding.decode_without_bom_handling(&bytes[length..]).0,
+        None => String::from_utf8_lossy(bytes),
+    };
+    if text.contains('\0') {
+        text.replace('\0', "")
+    } else {
+        text.into_owned()
+    }
+}
+
 impl Answer {
     /// What an attempt for a `robots.txt` came to. `body` is the body of
-    /// the main response as the site sent it; what a file has beyond
-    /// `max_bytes` is left out.
+    /// the main response as the site sent it, read by [`robots_text`];
+    /// what a file has beyond `max_bytes` is left out.
     pub fn of(outcome: Outcome, status: Option<u16>, body: Option<&[u8]>, max_bytes: u64) -> Self {
         if outcome.is_block() {
             return Self::Unreachable;
@@ -198,7 +217,7 @@ impl Answer {
                 // Cut at the byte: a character that is cut in two is
                 // replaced, and the line it stands in is the last one.
                 let kept = &body[..body.len().min(most)];
-                Self::File(String::from_utf8_lossy(kept).into_owned())
+                Self::File(robots_text(kept))
             }
             Some(400..=499) => Self::Missing,
             _ => Self::Unreachable,
@@ -675,6 +694,55 @@ mod tests {
             Answer::of(Outcome::Ok, Some(200), Some("é".as_bytes()), 1),
             Answer::File("\u{fffd}".to_owned())
         );
+    }
+
+    /// QA round two's http-01 (F171): what a site sends is data. A NUL in
+    /// a rule, and a file saved as UTF-16 with or without its mark, read as
+    /// the site wrote them; the row keeps no NUL, so it can be stored, and
+    /// the file is asked for once per `robots.ttl`, never on every fetch.
+    #[test]
+    fn a_files_nul_bytes_and_utf16_are_read_as_data() {
+        let rules = "User-agent: *\nDisallow: /secret\nDisallow: /nope\n";
+        let expected = Answer::File(rules.to_owned());
+        let of = |body: &[u8]| Answer::of(Outcome::Ok, Some(200), Some(body), 1024);
+        assert_eq!(
+            of(b"User-agent: *\nDisallow: /secret\0\nDisallow: /nope\n"),
+            expected
+        );
+        let low_first: Vec<u8> = rules.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let high_first: Vec<u8> = rules.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        let mut marked_low_first = vec![0xff, 0xfe];
+        marked_low_first.extend_from_slice(&low_first);
+        let mut marked_high_first = vec![0xfe, 0xff];
+        marked_high_first.extend_from_slice(&high_first);
+        let mut marked_utf8 = vec![0xef, 0xbb, 0xbf];
+        marked_utf8.extend_from_slice(rules.as_bytes());
+        for body in [
+            &low_first,
+            &high_first,
+            &marked_low_first,
+            &marked_high_first,
+            &marked_utf8,
+        ] {
+            assert_eq!(of(body), expected, "{body:?}");
+        }
+        let Answer::File(text) = of(&marked_low_first) else {
+            panic!("no file");
+        };
+        let agents = ["kage".to_owned()];
+        let verdict = Known::of(&entry_of(
+            "http://other.qa.test:8091",
+            "qa.test",
+            &Answer::File(text.clone()),
+            Some(200),
+            at(),
+            &settings(),
+        ))
+        .verdict(&agents, &url("http://other.qa.test:8091/secret/x"))
+        .unwrap();
+        assert!(!verdict.allowed, "{text:?}");
+        // No byte the store cannot keep as text.
+        assert!(!text.contains('\0'));
     }
 
     #[test]

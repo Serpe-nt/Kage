@@ -171,7 +171,8 @@ impl Frame {
 
 struct Writer<'a> {
     mode: Mode,
-    base: &'a Url,
+    /// Where an address written in the page leads.
+    resolve: &'a dyn Fn(&str) -> Option<Url>,
     dropped: &'a Dropped,
     stack: Vec<Frame>,
     /// For every open element, whether it has a frame of its own.
@@ -280,7 +281,7 @@ impl Writer<'_> {
 
     /// Where an address in the page leads, when that is a web address.
     fn address(&self, written: &str) -> Option<String> {
-        let url = self.base.join(written.trim()).ok()?;
+        let url = (self.resolve)(written.trim())?;
         matches!(url.scheme(), "http" | "https").then(|| url.to_string())
     }
 
@@ -706,10 +707,22 @@ fn blocky(root: NodeRef<'_>, dropped: &Dropped) -> HashSet<NodeId> {
 
 /// Writes the content of a page in one mode. Addresses in it are resolved
 /// against `base`.
+#[cfg(test)]
 pub(crate) fn render(content: &Content<'_>, base: &Url, mode: Mode) -> Rendered {
+    render_with(content, &|href| base.join(href).ok(), mode)
+}
+
+/// Writes the content of a page in one mode. Addresses in it are resolved
+/// by `resolve`: as the document resolves them, against its base and with
+/// a query in its encoding (F161).
+pub(crate) fn render_with(
+    content: &Content<'_>,
+    resolve: &dyn Fn(&str) -> Option<Url>,
+    mode: Mode,
+) -> Rendered {
     let mut writer = Writer {
         mode,
-        base,
+        resolve,
         dropped: &content.dropped,
         stack: vec![Frame::new(Kind::Container, mode)],
         framed: Vec::new(),

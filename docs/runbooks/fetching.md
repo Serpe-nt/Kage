@@ -109,6 +109,23 @@ answer, which the forwarder cannot tell from the site's own: a browser
 shows its own page for it and the attempt is `navigation_failed` (with
 the `status` Firefox saw, `null` on Chrome), nobody's block.
 
+What ends a page inside a tunnel the proxy opened is the site's (F170):
+a certificate the client refuses, a handshake the site breaks off, and a
+site's own `407` over `https`, which Firefox reports as a proxy error and
+Chrome refuses as a failed navigation. The forwarder notes every tunnel it
+opens; an attempt the client named `proxy_failed` whose own tunnel was
+open is `navigation_failed` (a browser's page) or `connection_failed` (the
+http path), with a server error's courtesy, and the pool is not told. At
+level 0 a site's `407` over `https` is `ok` with the status, like any
+`4xx` other than `403` and `429`.
+
+A page's text is read as a browser reads it (spec §9, F160, F172): its
+`<meta charset>` as Chrome's tokenizer finds it (never one written inside a
+script) and late in a long head, and an undeclared page in the legacy
+encoding a browser's detector names. An undeclared UTF-8 page reads as
+the mojibake both browsers show: a site that relies on UTF-8 detection
+gets what a person sees at levels 2 and 3, at level 0 as well.
+
 ## Stopping the server
 
 `docker compose stop kage` (or a `SIGTERM`) does three things at once:

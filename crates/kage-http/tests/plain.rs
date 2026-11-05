@@ -814,3 +814,63 @@ async fn a_hop_to_another_site_leaves_from_that_sites_own_exit_or_not_at_all() {
         .unwrap();
     assert!(targets(&world.proxy).contains(&"http://other.kage.test/land".to_owned()));
 }
+
+/// A site's certificate the client does not trust is the site's answer:
+/// the proxy opened the tunnel and the site's TLS was refused, so the error
+/// is `Tls`, never the proxy's `Connect` (F170, QA round two's tls-01),
+/// for the plain client and the persona's alike. The operator's trust
+/// anchor (`http.ca_file`, F191) makes the same site readable.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_certificate_the_client_refuses_is_the_sites_answer_and_a_trust_anchor_admits_it() {
+    let world = World::start().await;
+    let untrusting = ClientFactory::in_memory(kage_http::HttpSettings::default());
+    let refused = untrusting
+        .plain(&world.proxy.endpoint(), AGENT)
+        .unwrap()
+        .fetch(&get(TestEcho::url("/").as_str()))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            refused,
+            HttpError::Tls("the site's certificate was refused")
+        ),
+        "{refused:?}"
+    );
+    assert!(!refused.is_proxy_failure());
+    assert_eq!(
+        refused.to_string(),
+        "the TLS handshake with the target failed: the site's certificate was refused"
+    );
+    let persona = untrusting
+        .client(
+            &common::spec("chrome_149", kage_core::domain::ClaimedOs::Windows),
+            &world.proxy.endpoint(),
+        )
+        .await
+        .unwrap();
+    let refused = persona
+        .fetch(&kage_http::FetchSpec::operator_get(TestEcho::h1_url("/")))
+        .await
+        .unwrap_err();
+    assert!(matches!(refused, HttpError::Tls(_)), "{refused:?}");
+    // The proxy did its part both times.
+    assert_eq!(world.proxy.tunnels().len(), 2);
+
+    // With the authority as an anchor, the same site answers.
+    let fetched = world
+        .client()
+        .fetch(&get(TestEcho::url("/").as_str()))
+        .await
+        .unwrap();
+    assert_eq!(fetched.status, 200);
+
+    // A tunnel the proxy will not open stays the proxy's.
+    world.proxy.set_up(false);
+    let down = world
+        .client()
+        .fetch(&get(TestEcho::url("/").as_str()))
+        .await
+        .unwrap_err();
+    assert!(down.is_proxy_failure(), "{down:?}");
+}

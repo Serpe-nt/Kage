@@ -28,6 +28,8 @@
 //! is read on the 2 MiB stack of a worker thread like any other (F97).
 
 use ego_tree::iter::Edge;
+use encoding_rs::Encoding;
+use kage_core::urlnorm::join_in;
 use scraper::node::Node;
 use scraper::{ElementRef, Html};
 use url::Url;
@@ -161,6 +163,7 @@ impl Inherited {
 
 struct Reader<'a> {
     base: &'a Url,
+    encoding: &'static Encoding,
     page: Page,
 }
 
@@ -222,8 +225,9 @@ impl Reader<'_> {
             return;
         }
         // What a browser does with the attribute: white space around it is
-        // not part of the address.
-        let Ok(url) = self.base.join(href.trim()) else {
+        // not part of the address, and its query is written in the
+        // document's encoding (F161).
+        let Some(url) = join_in(self.base, href.trim(), self.encoding) else {
             return;
         };
         if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
@@ -251,14 +255,14 @@ impl Reader<'_> {
 /// The address relative links of a document resolve against: its first
 /// `<base href>` when that is an `http` or `https` address, else the address
 /// the document was loaded from.
-fn base_of(document: &Html, loaded_from: &Url) -> Url {
+fn base_of(document: &Html, loaded_from: &Url, encoding: &'static Encoding) -> Url {
     document
         .tree
         .nodes()
         .filter_map(ElementRef::wrap)
         .find(|element| element.value().name() == "base" && element.value().attr("href").is_some())
         .and_then(|element| element.value().attr("href"))
-        .and_then(|href| loaded_from.join(href.trim()).ok())
+        .and_then(|href| join_in(loaded_from, href.trim(), encoding))
         .filter(|base| matches!(base.scheme(), "http" | "https"))
         .unwrap_or_else(|| loaded_from.clone())
 }
@@ -270,6 +274,7 @@ pub struct Document {
     tree: Html,
     loaded_from: Url,
     base: Url,
+    encoding: &'static Encoding,
 }
 
 impl Document {
@@ -280,13 +285,36 @@ impl Document {
     /// `<base href>`. Nothing here fails: markup that is no HTML at all is
     /// a page without links, and what it holds is its text.
     pub fn parse(html: &str, loaded_from: &Url) -> Self {
+        Self::parse_in(html, loaded_from, encoding_rs::UTF_8)
+    }
+
+    /// Parses a page that was written in `encoding` (the one its bytes
+    /// were decoded from, `html` being the text): a link's query is
+    /// written in that encoding, as a browser writes it (F161). A tree a
+    /// browser serialized has no bytes of its own and is
+    /// [`Document::parse`]d.
+    pub fn parse_in(html: &str, loaded_from: &Url, encoding: &'static Encoding) -> Self {
         let tree = Html::parse_document(html);
-        let base = base_of(&tree, loaded_from);
+        let base = base_of(&tree, loaded_from, encoding);
         Self {
             tree,
             loaded_from: loaded_from.clone(),
             base,
+            encoding,
         }
+    }
+
+    /// The encoding the page was written in; UTF-8 for a tree a browser
+    /// serialized.
+    pub const fn encoding(&self) -> &'static Encoding {
+        self.encoding
+    }
+
+    /// Where an address written in the page leads: resolved against its
+    /// base, its query written in the page's encoding (F161). `None` when
+    /// it is no URL.
+    pub fn resolve(&self, href: &str) -> Option<Url> {
+        join_in(&self.base, href.trim(), self.encoding)
     }
 
     /// The tree of the page.
@@ -310,6 +338,7 @@ impl Document {
     pub fn page(&self) -> Page {
         let mut reader = Reader {
             base: &self.base,
+            encoding: self.encoding,
             page: Page::default(),
         };
         let root = self.tree.root_element();

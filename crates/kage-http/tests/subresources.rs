@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::{TestEcho, TestProxy, factory, spec};
+use common::{ScriptedResolver, TestEcho, TestProxy, factory, spec};
 use kage_core::config::SubresourceScope;
 use kage_core::domain::ClaimedOs;
 use kage_core::seed::Seed;
@@ -410,4 +410,82 @@ async fn only_a_page_fetched_with_get_has_assets() {
     let first = client.fetch(&unseeded).await.unwrap().subresources.unwrap();
     let second = client.fetch(&unseeded).await.unwrap().subresources.unwrap();
     assert_ne!(first.seed, second.seed);
+}
+
+/// A page in a legacy encoding names its assets in it: the markup is read
+/// as decoded in the page's encoding, and an asset's query is written in
+/// that encoding as a browser writes it, its path in UTF-8 (F161). Under
+/// `resolve_on_host` an asset whose name points into a denied range is
+/// refused before it is asked for, as the page's own hops are (F148).
+#[tokio::test(flavor = "multi_thread")]
+async fn assets_are_read_from_the_decoded_page_and_resolved_before_they_are_asked_for() {
+    let world = World::start().await;
+    let mut legacy = b"<!doctype html><html><head><meta charset=windows-1252>\
+        <script src=\"/js/f\xfcr.js?q=f\xfcr\"></script>\
+        <link rel=stylesheet href=\"http://static.site.kage.test/css/a.css\">\
+        <link rel=icon href=\"/i.png\"></head><body><p>"
+        .to_vec();
+    legacy.extend_from_slice(b"Gr\xfc\xdfe</p></body></html>");
+    serve(
+        &world.site,
+        "/legacy",
+        ResponseTemplate::new(200).set_body_raw(legacy, "text/html"),
+    )
+    .await;
+    serve(
+        &world.site,
+        "/js/f%C3%BCr.js",
+        asset("var f;", "text/javascript"),
+    )
+    .await;
+    serve(&world.site, "/css/a.css", asset("p{}", "text/css")).await;
+    serve(&world.site, "/i.png", asset("png", "image/png")).await;
+    let resolver = ScriptedResolver::new();
+    resolver.answer("static.site.kage.test", &["10.0.0.7"]);
+    let factory = factory(&world.echo).with_resolver(resolver.clone());
+    let client = world.client(&factory, "chrome_149");
+
+    let fetched = client.fetch(&page_with_assets("/legacy")).await.unwrap();
+    let report = fetched.subresources.unwrap();
+    let urls: Vec<String> = report
+        .assets
+        .iter()
+        .map(|asset| asset.url.to_string())
+        .collect();
+    assert_eq!(
+        urls,
+        [
+            "http://site.kage.test/js/f%C3%BCr.js?q=f%FCr",
+            "http://static.site.kage.test/css/a.css",
+            "http://site.kage.test/i.png",
+        ]
+    );
+    assert_eq!(report.assets[0].status, Some(200));
+    let refused = &report.assets[1];
+    assert_eq!(refused.status, None);
+    assert!(
+        refused
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("10.0.0.7")),
+        "{refused:?}"
+    );
+    assert_eq!(report.assets[2].status, Some(200));
+    assert!(
+        resolver
+            .asked()
+            .contains(&"static.site.kage.test".to_owned())
+    );
+
+    // The site saw the script asked for with its query in windows-1252, and
+    // never the stylesheet whose name points into a private network.
+    let received = world.site.received_requests().await.unwrap();
+    let asked: Vec<String> = received
+        .iter()
+        .map(|request| match request.url.query() {
+            Some(query) => format!("{}?{query}", request.url.path()),
+            None => request.url.path().to_owned(),
+        })
+        .collect();
+    assert_eq!(asked, ["/legacy", "/js/f%C3%BCr.js?q=f%FCr", "/i.png"]);
 }

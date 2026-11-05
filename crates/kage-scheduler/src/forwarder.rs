@@ -541,6 +541,38 @@ struct MeterState {
     /// When each caller's tunnel to each target was last refused by its
     /// proxy, and with which status (F189).
     refused: HashMap<Unrelayed, (Instant, u16)>,
+    /// The tunnels of each caller to each target the proxy (or the
+    /// forwarder, with no upstream) opened: how many are open now, and when
+    /// one was last opened or closed. What came through them was the
+    /// site's (F170).
+    relayed: HashMap<Unrelayed, Relayed>,
+}
+
+/// The tunnels of one caller to one target ([`Meter::open_tunnel`]).
+#[derive(Debug, Clone, Copy)]
+struct Relayed {
+    /// How many are open now.
+    open: usize,
+    /// When one was last opened or closed.
+    last: Instant,
+}
+
+/// A tunnel the forwarder holds open for a caller to a target, from the
+/// moment its proxy said yes until it closes ([`Meter::open_tunnel`]).
+#[derive(Debug)]
+pub struct OpenTunnel<'a> {
+    meter: &'a Meter,
+    key: Unrelayed,
+}
+
+impl Drop for OpenTunnel<'_> {
+    fn drop(&mut self) {
+        let mut state = self.meter.state();
+        if let Some(relayed) = state.relayed.get_mut(&self.key) {
+            relayed.open = relayed.open.saturating_sub(1);
+            relayed.last = Instant::now();
+        }
+    }
 }
 
 /// Counts what passes, per persona and per domain being fetched.
@@ -671,6 +703,48 @@ impl Meter {
         state
             .refused
             .insert((caller, host.to_ascii_lowercase(), port), (now, status));
+    }
+
+    /// Notes that a tunnel of a caller to `host`:`port` was opened (the
+    /// proxy said yes, or, with no upstream, the forwarder reached the
+    /// target itself) and holds it as open until the guard is dropped.
+    /// Whatever ends a page of that target inside such a tunnel (a
+    /// certificate the browser refuses, a site's own `407`) was the site's
+    /// answer, not the proxy's failure (F170). A browser keeps a tunnel
+    /// open from one page to the next, so one opened before an attempt
+    /// counts for it while it is open.
+    pub fn open_tunnel(&self, caller: Caller, host: &str, port: u16) -> OpenTunnel<'_> {
+        let now = Instant::now();
+        let key = (caller, host.to_ascii_lowercase(), port);
+        let mut state = self.state();
+        state.relayed.retain(|_, relayed| {
+            relayed.open > 0 || now.duration_since(relayed.last) < UNRELAYED_KEPT
+        });
+        let relayed = state
+            .relayed
+            .entry(key.clone())
+            .or_insert(Relayed { open: 0, last: now });
+        relayed.open += 1;
+        relayed.last = now;
+        OpenTunnel { meter: self, key }
+    }
+
+    /// Whether a tunnel of `caller` to one of `targets` (host and port)
+    /// was open at `since` or later: one is open now, or one was opened or
+    /// closed since then.
+    pub fn relayed_since<'a>(
+        &self,
+        caller: Caller,
+        targets: impl IntoIterator<Item = (&'a str, u16)>,
+        since: Instant,
+    ) -> bool {
+        let state = self.state();
+        targets.into_iter().any(|(host, port)| {
+            state
+                .relayed
+                .get(&(caller, host.to_ascii_lowercase(), port))
+                .is_some_and(|relayed| relayed.open > 0 || relayed.last >= since)
+        })
     }
 
     /// The status with which the proxy refused a tunnel of `caller` to one
@@ -1391,7 +1465,15 @@ impl Forwarder {
 
         if head.is_connect() {
             let tunnelled = self
-                .tunnel(client, &mut server, &head, buffer, &payer, &upstream)
+                .tunnel(
+                    client,
+                    &mut server,
+                    &head,
+                    buffer,
+                    &payer,
+                    &upstream,
+                    (caller, &host, port),
+                )
                 .await;
             self.note_tunnel(&tunnelled, caller, (&host, port), upstream.id);
             tunnelled
@@ -1482,6 +1564,7 @@ impl Forwarder {
         let failed = |error: std::io::Error| Refused::Unreached(error.to_string());
         client.write_all(answer).await.map_err(failed)?;
         self.relayed.fetch_add(1, Ordering::Relaxed);
+        let _open = self.meter.open_tunnel(caller, host, port);
         if !buffer.is_empty() {
             server.write_all(&buffer).await.map_err(failed)?;
             self.meter.add_for(payer, buffer.len() as u64, 0);
@@ -1637,6 +1720,9 @@ impl Forwarder {
     /// A `CONNECT`: asks the proxy for the tunnel and relays both ways.
     /// `Refused::Upstream` only when the proxy itself failed: it could not
     /// be written to, did not answer, or refused the credential (`407`).
+    /// A tunnel the proxy opened is noted for `caller` and its target
+    /// (`Meter::note_relayed`).
+    #[allow(clippy::too_many_arguments)] // One tunnel, who asked for it and where it goes.
     async fn tunnel(
         &self,
         client: &mut TcpStream,
@@ -1645,6 +1731,7 @@ impl Forwarder {
         early: Vec<u8>,
         payer: &Payer,
         upstream: &ProxyEndpoint,
+        (caller, host, port): (Caller, &str, u16),
     ) -> Result<(), Refused> {
         let request = head.rewritten(upstream);
         let failed = |error: std::io::Error| Refused::Upstream(error.to_string());
@@ -1673,6 +1760,7 @@ impl Forwarder {
             return Err(refused);
         }
         self.relayed.fetch_add(1, Ordering::Relaxed);
+        let _open = self.meter.open_tunnel(caller, host, port);
         if !early.is_empty() {
             server.write_all(&early).await.map_err(gone)?;
             self.meter.add_for(payer, early.len() as u64, 0);
@@ -2366,6 +2454,45 @@ mod tests {
         tokio::time::advance(super::UNRELAYED_KEPT).await;
         meter.note_refused(Caller::Persona(other), "other.kage.test", 443, 451);
         assert_eq!(meter.state().refused.len(), 1);
+    }
+
+    /// QA round two's tls-03 (F170): a tunnel the proxy opened counts for
+    /// an attempt that began after it while it stays open (a browser keeps
+    /// it from one page to the next), and for one that began before it
+    /// closed; never for another caller or another target.
+    #[tokio::test(start_paused = true)]
+    async fn the_meter_says_whose_tunnel_was_open_and_when() {
+        let meter = Meter::default();
+        let (one, other) = (PersonaId::new(), PersonaId::new());
+        let site = [("shop.kage.test", 443)];
+        let before = tokio::time::Instant::now();
+        tokio::time::advance(std::time::Duration::from_secs(1)).await;
+        assert!(!meter.relayed_since(Caller::Persona(one), site, before));
+
+        let open = meter.open_tunnel(Caller::Persona(one), "Shop.Kage.Test", 443);
+        let second = meter.open_tunnel(Caller::Persona(one), "shop.kage.test", 443);
+        tokio::time::advance(std::time::Duration::from_secs(60)).await;
+        let later = tokio::time::Instant::now();
+        // Open since before the attempt began: it counts while it is open.
+        assert!(meter.relayed_since(Caller::Persona(one), site, later));
+        assert!(!meter.relayed_since(Caller::Persona(other), site, later));
+        assert!(!meter.relayed_since(Caller::Persona(one), [("shop.kage.test", 80)], later));
+        drop(second);
+        assert!(meter.relayed_since(Caller::Persona(one), site, later));
+        drop(open);
+        // Closed now: it counts for an attempt that began before it closed,
+        // not for one that begins afterwards.
+        assert!(meter.relayed_since(Caller::Persona(one), site, later));
+        tokio::time::advance(std::time::Duration::from_secs(1)).await;
+        let after = tokio::time::Instant::now();
+        assert!(!meter.relayed_since(Caller::Persona(one), site, after));
+        // A closed one older than any attempt is forgotten at the next open;
+        // an open one never is.
+        let held = meter.open_tunnel(Caller::Persona(other), "cdn.kage.test", 443);
+        tokio::time::advance(super::UNRELAYED_KEPT).await;
+        let _new = meter.open_tunnel(Caller::Persona(other), "other.kage.test", 443);
+        assert_eq!(meter.state().relayed.len(), 2);
+        drop(held);
     }
 
     #[test]

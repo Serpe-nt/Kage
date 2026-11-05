@@ -483,7 +483,47 @@ const shiftJisPage = () =>
     Buffer.from(`</h1><p>${LEGACY_WORDS}</p></article></main></body></html>`),
   ]);
 
+/**
+ * The decoding edges of F160, F161 and F172: a windows-1252 page whose
+ * script holds a `<meta charset=utf-8>` before its own `<meta>`; one whose
+ * `<meta>` comes after a head of more than 1024 bytes; a page in UTF-8 that
+ * declares nothing, which both browsers read as windows-1252; one in
+ * Shift_JIS that declares nothing, which a browser's detector names; and a
+ * Latin-1 link whose query a browser writes in Latin-1.
+ */
+const LONG_SCRIPT = `<script>${'var x = 1;\n'.repeat(150)}</script>`;
+const scriptedPage = () =>
+  latin1Page('<script>var t = "<meta charset=utf-8>";</script><meta charset="windows-1252">');
+const lateMetaPage = () => latin1Page(`${LONG_SCRIPT}<meta charset="iso-8859-1">`);
+const undeclaredUtf8Page = () =>
+  Buffer.from(
+    `<!doctype html><html lang="de"><head><title>Café</title></head><body><main><article>` +
+      `<h1>Café Müller</h1><p>Straße München ${LEGACY_WORDS}</p></article></main></body></html>`,
+    'utf8',
+  );
+const undeclaredShiftJisPage = () =>
+  Buffer.concat([
+    Buffer.from('<!doctype html><html lang="ja"><head><title>'),
+    SHIFT_JIS_TITLE,
+    Buffer.from('</title></head><body><main><article><h1>'),
+    SHIFT_JIS_TITLE,
+    Buffer.from('</h1><p>'),
+    Buffer.concat(Array.from({ length: 40 }, () => SHIFT_JIS_TITLE)),
+    Buffer.from(` ${LEGACY_WORDS}</p></article></main></body></html>`),
+  ]);
+const queryPage = () =>
+  Buffer.from(
+    `<!doctype html><html lang="de"><head><meta charset="iso-8859-1"><title>Suche</title></head><body><main><article>` +
+      `<h1>Suche</h1><p>${LEGACY_WORDS}</p><p><a href="/legacy/suche?q=für">für</a></p></article></main></body></html>`,
+    'latin1',
+  );
+
 const routes = {
+  '/legacy/scripted': (_req, res) => send(res, 200, 'text/html', scriptedPage()),
+  '/legacy/late-meta': (_req, res) => send(res, 200, 'text/html', lateMetaPage()),
+  '/legacy/undeclared-utf8': (_req, res) => send(res, 200, 'text/html', undeclaredUtf8Page()),
+  '/legacy/undeclared-sjis': (_req, res) => send(res, 200, 'text/html', undeclaredShiftJisPage()),
+  '/legacy/query': (_req, res) => send(res, 200, 'text/html', queryPage()),
   '/legacy/latin1': (_req, res) => send(res, 200, 'text/html; charset=iso-8859-1', latin1Page('')),
   '/legacy/latin1-meta': (_req, res) => send(res, 200, 'text/html', latin1Page('<meta charset="iso-8859-1">')),
   '/legacy/f%C3%BCr': (_req, res) => html(res, page('Für', `<main><article><h1>Für</h1><p>${LEGACY_WORDS}</p></article></main>`)),

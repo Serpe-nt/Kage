@@ -38,6 +38,10 @@ wreq-util = { version = "=0.2.0" }
 # names it only for the hook that decides the order and casing of request
 # headers at serialization time; it moves with wreq.
 wreq-proto = { version = "=0.2.6" }
+# The TLS library under wreq, at the version wreq 0.16.1 resolves. kage-http
+# names it only to tell a refused handshake from a failed connection: wreq
+# reports both as a connect error (F170). It moves with wreq.
+btls = { version = "=0.5.6" }
 
 # --- Runtime, HTTP server, OpenAPI ----------------------------------------
 tokio = { version = "=1.53.3", default-features = false }
@@ -125,6 +129,10 @@ psl = { version = "=2.1.239" }
 # does, by its BOM, its Content-Type, its <meta> and the fallback (F100). It
 # was in the lockfile already, behind serde-saphyr.
 encoding_rs = { version = "=0.8.42" }
+# The character encoding detector of Firefox, by the author of encoding_rs: an
+# undeclared page in a legacy encoding is read as a browser guesses it, never
+# as UTF-8 (F160, F172). Pure Rust; brings nothing the lockfile lacks.
+chardetng = { version = "=1.0.0", default-features = false }
 
 # The fingerprint echo (kage-http) terminates TLS with rustls on ring, the
 # stack sqlx already links. Never the aws-lc-rs provider: that is one more C

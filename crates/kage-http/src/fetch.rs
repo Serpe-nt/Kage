@@ -215,14 +215,24 @@ impl Fetched {
     }
 
     /// The body as text, read in the encoding a browser would take for it
-    /// ([`crate::charset::decode`]: its byte order mark, the `charset` of
-    /// its `Content-Type`, its `<meta>`, the fallback). Bytes that are not
-    /// valid in that encoding are replaced. Until F100 every body was read
-    /// as UTF-8.
+    /// ([`crate::charset::decode_from`]: its byte order mark, the `charset`
+    /// of its `Content-Type`, its `<meta>`, the detector's guess for the
+    /// site). Bytes that are not valid in that encoding are replaced. Until
+    /// F100 every body was read as UTF-8.
     pub fn text(&self) -> String {
-        crate::charset::decode(self.header("content-type"), &self.body)
-            .text
-            .into_owned()
+        self.decoded().0
+    }
+
+    /// The body as text ([`Fetched::text`]) and the encoding it was read
+    /// in: the document's encoding, in which a link's query is written
+    /// (F161).
+    pub fn decoded(&self) -> (String, &'static encoding_rs::Encoding) {
+        let decoded = crate::charset::decode_from(
+            Some(&self.final_url),
+            self.header("content-type"),
+            &self.body,
+        );
+        (decoded.text.into_owned(), decoded.encoding)
     }
 }
 

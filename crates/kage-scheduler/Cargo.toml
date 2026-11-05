@@ -35,6 +35,9 @@ async-trait = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
+# The encoding a level 0 document was read in, which its links' queries are
+# written in (F161).
+encoding_rs = { workspace = true }
 # The token a persona's clients present to the forwarder.
 hmac = { workspace = true }
 http = { workspace = true }

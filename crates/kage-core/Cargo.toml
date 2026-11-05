@@ -16,6 +16,9 @@ workspace = true
 chrono = { workspace = true }
 # A persona's local day and its waking hours (personas, pacing counters).
 chrono-tz = { workspace = true }
+# A link's query is written in the encoding of the document that names it
+# (`urlnorm::join_in`, F161).
+encoding_rs = { workspace = true }
 # KAGE__SECTION__KEY layering over kage.yaml; `parse-value` reads an
 # environment value as figment's own grammar.
 figment = { workspace = true, features = ["parse-value"] }

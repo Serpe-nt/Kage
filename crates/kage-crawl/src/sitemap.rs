@@ -14,6 +14,9 @@
 //! what a gzipped file unpacks to is capped before it is unpacked, and no
 //! more entries are read than the limit says.
 
+use std::borrow::Cow;
+
+use encoding_rs::Encoding;
 use std::io::Read as _;
 
 use chrono::{DateTime, NaiveDate, Utc};
@@ -312,14 +315,92 @@ fn parse_text(text: &str, limits: Limits) -> Collected {
     collected
 }
 
-/// Reads a sitemap from the body it was fetched as.
+/// The `charset` a `Content-Type` names, when it names one the Encoding
+/// Standard knows.
+fn charset_of(content_type: &str) -> Option<&'static Encoding> {
+    content_type.split(';').skip(1).find_map(|parameter| {
+        let (name, value) = parameter.split_once('=')?;
+        if !name.trim().eq_ignore_ascii_case("charset") {
+            return None;
+        }
+        Encoding::for_label(value.trim().trim_matches('"').as_bytes())
+    })
+}
+
+/// The `encoding` an XML declaration at the start of `bytes` names, when
+/// it names one the Encoding Standard knows; a UTF-16 label in a document
+/// that is ASCII to its declaration means UTF-8.
+fn declared(bytes: &[u8]) -> Option<&'static Encoding> {
+    let start = bytes.trim_ascii_start();
+    if !start.starts_with(b"<?xml") {
+        return None;
+    }
+    let end = start.windows(2).position(|pair| pair == b"?>")?;
+    let declaration = &start[..end];
+    let at = declaration
+        .windows(8)
+        .position(|word| word == b"encoding")?
+        + 8;
+    let rest = declaration[at..]
+        .trim_ascii_start()
+        .strip_prefix(b"=")?
+        .trim_ascii_start();
+    let quote = *rest
+        .first()
+        .filter(|&&byte| byte == b'"' || byte == b'\'')?;
+    let close = rest[1..].iter().position(|&byte| byte == quote)?;
+    let encoding = Encoding::for_label(&rest[1..=close])?;
+    Some(
+        if encoding == encoding_rs::UTF_16LE || encoding == encoding_rs::UTF_16BE {
+            encoding_rs::UTF_8
+        } else {
+            encoding
+        },
+    )
+}
+
+/// A sitemap's bytes as text, in the encoding it is written in (F172): a
+/// byte order mark, else the `charset` of its `Content-Type` (not for a
+/// gzipped file, whose header speaks of the archive), else the encoding of
+/// its XML declaration, else UTF-8, which the sitemaps protocol requires.
+/// A byte that is no character of that encoding is replaced.
+fn text_of<'a>(bytes: &'a [u8], content_type: Option<&str>) -> Cow<'a, str> {
+    if let Some((encoding, length)) = Encoding::for_bom(bytes) {
+        return encoding.decode_without_bom_handling(&bytes[length..]).0;
+    }
+    let encoding = content_type
+        .and_then(charset_of)
+        .or_else(|| declared(bytes))
+        .unwrap_or(encoding_rs::UTF_8);
+    encoding.decode_without_bom_handling(bytes).0
+}
+
+/// Reads a sitemap from the body it was fetched as, as UTF-8 unless its
+/// XML declaration says otherwise ([`parse_typed`] with no
+/// `Content-Type`).
+///
+/// # Errors
+///
+/// As [`parse_typed`].
+pub fn parse(body: &[u8], limits: Limits) -> Result<Sitemap, SitemapError> {
+    parse_typed(body, None, limits)
+}
+
+/// Reads a sitemap from the body it was fetched as and the `Content-Type`
+/// it was served with: its text is read in the encoding it is written in,
+/// so that an address it names in a legacy encoding is the one it names
+/// (F172).
 ///
 /// # Errors
 ///
 /// [`SitemapError`] when the body is too large, cannot be unpacked, or is
 /// no sitemap. A sitemap whose entries are all unusable is no error: it is
 /// a sitemap without entries.
-pub fn parse(body: &[u8], limits: Limits) -> Result<Sitemap, SitemapError> {
+pub fn parse_typed(
+    body: &[u8],
+    content_type: Option<&str>,
+    limits: Limits,
+) -> Result<Sitemap, SitemapError> {
     let gzipped = body.starts_with(&GZIP);
     let unpacked;
     let bytes = if gzipped {
@@ -333,7 +414,7 @@ pub fn parse(body: &[u8], limits: Limits) -> Result<Sitemap, SitemapError> {
         }
         body
     };
-    let text = String::from_utf8_lossy(bytes);
+    let text = text_of(bytes, content_type.filter(|_| !gzipped));
     // A byte order mark is no part of the text.
     let text = text.trim_start_matches('\u{feff}').trim_start();
     if text.is_empty() {
@@ -361,7 +442,7 @@ mod tests {
     use flate2::Compression;
     use flate2::write::GzEncoder;
 
-    use super::{Kind, Limits, SitemapError, parse, parse_lastmod};
+    use super::{Kind, Limits, SitemapError, parse, parse_lastmod, parse_typed};
 
     fn gzip(text: &str) -> Vec<u8> {
         let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
@@ -451,6 +532,73 @@ mod tests {
             Some(Utc.with_ymd_and_hms(2026, 10, 1, 0, 0, 0).unwrap())
         );
         assert_eq!(sitemap.invalid, 0);
+    }
+
+    /// QA round two's http-04 (F172): a sitemap in a declared legacy
+    /// encoding names the address it names, by its XML declaration, its
+    /// `Content-Type` or its byte order mark; one that declares nothing is
+    /// UTF-8, as the protocol has it.
+    #[test]
+    fn a_sitemap_is_read_in_the_encoding_it_declares() {
+        let latin = |declaration: &str| {
+            let mut body = format!(
+                "{declaration}<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\"><url><loc>http://other.qa.test:8091/ID/caf"
+            )
+            .into_bytes();
+            body.push(0xe9);
+            body.extend_from_slice(b"</loc></url></urlset>");
+            body
+        };
+        let named = "http://other.qa.test:8091/ID/caf%C3%A9";
+        let declared = latin("<?xml version=\"1.0\" encoding=\"iso-8859-1\"?>");
+        for content_type in [Some("text/xml; charset=iso-8859-1"), Some("text/xml"), None] {
+            let sitemap = parse_typed(&declared, content_type, Limits::default()).unwrap();
+            assert_eq!(sitemap.entries[0].url.as_str(), named, "{content_type:?}");
+        }
+        assert_eq!(
+            parse(&declared, Limits::default()).unwrap().entries[0]
+                .url
+                .as_str(),
+            named
+        );
+        // The header alone.
+        let bare = latin("");
+        let sitemap = parse_typed(
+            &bare,
+            Some("application/xml; charset=\"windows-1252\""),
+            Limits::default(),
+        )
+        .unwrap();
+        assert_eq!(sitemap.entries[0].url.as_str(), named);
+        // Nothing declared: UTF-8, the byte replaced, never another address.
+        let sitemap = parse_typed(&bare, Some("text/xml"), Limits::default()).unwrap();
+        assert_eq!(
+            sitemap.entries[0].url.as_str(),
+            "http://other.qa.test:8091/ID/caf%EF%BF%BD"
+        );
+        // A byte order mark wins: UTF-16 with its mark.
+        let text = "<urlset><url><loc>http://other.qa.test:8091/ID/café</loc></url></urlset>";
+        let mut utf16 = vec![0xff, 0xfe];
+        utf16.extend(text.encode_utf16().flat_map(u16::to_le_bytes));
+        let sitemap = parse_typed(
+            &utf16,
+            Some("text/xml; charset=iso-8859-1"),
+            Limits::default(),
+        )
+        .unwrap();
+        assert_eq!(sitemap.entries[0].url.as_str(), named);
+        // A gzipped file's header speaks of the archive: its declaration
+        // decides.
+        let mut packed = GzEncoder::new(Vec::new(), Compression::default());
+        packed.write_all(&declared).unwrap();
+        let packed = packed.finish().unwrap();
+        let sitemap = parse_typed(
+            &packed,
+            Some("application/gzip; charset=utf-8"),
+            Limits::default(),
+        )
+        .unwrap();
+        assert_eq!(sitemap.entries[0].url.as_str(), named);
     }
 
     #[test]

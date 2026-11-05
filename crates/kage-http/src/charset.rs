@@ -1,11 +1,7 @@
 //! How the http path reads a body as text (spec §9, F100): by the
 //! character encoding a browser would take for it, as the Encoding Standard
-//! and the HTML standard decide it, so that levels 0 and 1 read what levels
-//! 2 and 3 read in a browser, for a page that says what it is written in.
-//! Two cases still read otherwise (spec §9): a `<meta>` past the first
-//! [`PRESCAN_BYTES`], which a browser's tree builder may still honour, and a
-//! page in another legacy encoding that declares nothing, which a browser's
-//! detector may name and this module reads as windows-1252.
+//! and the browsers decide it, so that levels 0 and 1 read what levels 2
+//! and 3 read in a browser (F160, F172).
 //!
 //! In order, the first that answers:
 //!
@@ -15,12 +11,22 @@
 //!    Standard label (`latin1`, `iso-8859-1` and `us-ascii` are all
 //!    windows-1252, `shift_jis` and `sjis` are `Shift_JIS`);
 //! 3. for an HTML document (or a body that does not say what it is), the
-//!    `<meta charset>` or `<meta http-equiv="content-type">` of its first
-//!    1024 bytes, found by the standard's prescan; for an XML document, the
-//!    `encoding` of its XML declaration;
-//! 4. the fallback: UTF-8 when the bytes are UTF-8 (as Chrome's detector
-//!    finds), else windows-1252, the standard's fallback for the locales of
-//!    every country the personas live in (and for most others).
+//!    `<meta charset>` or `<meta http-equiv="content-type">` that Chrome's
+//!    scan for it finds ([`prescan`]): the markup is read as its tokenizer
+//!    reads it, so that a `<meta>` written inside a script, a style, a
+//!    title or a comment is none (F172), and the scan goes on past the
+//!    first [`PRESCAN_BYTES`] for as long as the document's head lasts, as
+//!    a browser honours a late `<meta>` there (F160); a `<meta>` inside
+//!    `<noscript>` counts, as in Chrome (Firefox's scan runs with scripting
+//!    on and skips it); for an XML document, the `encoding` of its XML
+//!    declaration;
+//! 4. what a browser's detector guesses for the bytes ([`detect`]), never
+//!    UTF-8: neither Chrome nor Firefox takes an undeclared page from the
+//!    web for UTF-8, so that no author comes to rely on it, and both read
+//!    one as windows-1252 or as the legacy encoding its bytes look like
+//!    (`Shift_JIS`, GBK, EUC-KR, windows-1251 and the others, F160). An
+//!    undeclared UTF-8 page therefore reads as mojibake, as it does in both
+//!    browsers (F172). An XML document that declares nothing is UTF-8.
 //!
 //! JSON is UTF-8 unless a byte order mark says otherwise (RFC 8259). Bytes
 //! that are not valid in the chosen encoding are replaced, as a browser
@@ -28,11 +34,17 @@
 
 use std::borrow::Cow;
 
+use chardetng::{EncodingDetector, Iso2022JpDetection, Utf8Detection};
 use encoding_rs::{Encoding, UTF_8, UTF_16BE, UTF_16LE, WINDOWS_1252, X_USER_DEFINED};
+use url::Url;
 
-/// How many bytes of a document the `<meta>` prescan reads, as the HTML
-/// standard has it.
+/// How many bytes of a document the `<meta>` scan always reads, as the HTML
+/// standard's prescan and Chrome's scan have it. Past them the scan goes on
+/// only while the document's head lasts.
 pub const PRESCAN_BYTES: usize = 1024;
+
+/// How many bytes of an undeclared body the detector looks at.
+pub const DETECTOR_BYTES: usize = 1024 * 1024;
 
 /// What decided the encoding of a body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,10 +57,11 @@ pub enum DecidedBy {
     Meta,
     /// The XML declaration.
     XmlDeclaration,
-    /// Nothing was declared: the bytes are UTF-8, or the body is JSON.
+    /// The body is JSON, or XML that declares nothing: UTF-8.
     Utf8,
-    /// Nothing was declared and the bytes are not UTF-8: windows-1252.
-    Fallback,
+    /// Nothing was declared: what a browser's detector guesses for the
+    /// bytes, never UTF-8.
+    Detected,
 }
 
 /// A body read as text.
@@ -140,8 +153,21 @@ pub fn charset_of(content_type: &str) -> Option<&'static Encoding> {
 
 /// Reads a body as text by the encoding a browser would take for it (see
 /// the module's documentation). `content_type` is the response's
-/// `Content-Type`, when it had one.
+/// `Content-Type`, when it had one. [`decode_from`] with no address: the
+/// detector guesses as for a `.com` site.
 pub fn decode<'a>(content_type: Option<&str>, body: &'a [u8]) -> Decoded<'a> {
+    decode_from(None, content_type, body)
+}
+
+/// Reads a body that was loaded from `url` as text by the encoding a
+/// browser would take for it (see the module's documentation). The address
+/// matters only to an undeclared body: its top-level domain is the
+/// detector's hint, as it is a browser's.
+pub fn decode_from<'a>(
+    url: Option<&Url>,
+    content_type: Option<&str>,
+    body: &'a [u8],
+) -> Decoded<'a> {
     if let Some((encoding, length)) = Encoding::for_bom(body) {
         return read(&body[length..], encoding, DecidedBy::Bom);
     }
@@ -160,18 +186,51 @@ pub fn decode<'a>(content_type: Option<&str>, body: &'a [u8]) -> Decoded<'a> {
     if let Some((encoding, by)) = declared {
         return read(body, encoding, by);
     }
-    if kind == Kind::Xml || std::str::from_utf8(body).is_ok() {
+    if kind == Kind::Xml {
         return read(body, UTF_8, DecidedBy::Utf8);
     }
-    read(body, WINDOWS_1252, DecidedBy::Fallback)
+    read(body, detect(url, body), DecidedBy::Detected)
+}
+
+/// What a browser's detector guesses an undeclared body loaded from `url`
+/// is written in: Firefox's own detector (chardetng, which Chrome's agrees
+/// with on the legacy encodings of the web), told the site's top-level
+/// domain and never allowed to answer UTF-8 or ISO-2022-JP, as a browser
+/// never is for a page from the web. A body of ASCII alone is
+/// windows-1252, which reads it as it is.
+pub fn detect(url: Option<&Url>, body: &[u8]) -> &'static Encoding {
+    let mut detector = EncodingDetector::new(Iso2022JpDetection::Deny);
+    detector.feed(&body[..body.len().min(DETECTOR_BYTES)], true);
+    let tld = top_level_domain(url);
+    detector.guess(tld.as_deref().map(str::as_bytes), Utf8Detection::Deny)
+}
+
+/// The last label of a URL's host name, in the form the detector takes:
+/// lower-case ASCII (an internationalized one in its Punycode form), no
+/// dot. `None` for an address, and for a label the detector would refuse.
+fn top_level_domain(url: Option<&Url>) -> Option<String> {
+    let host = url?.domain()?.trim_end_matches('.');
+    let label = host.rsplit('.').next()?.to_ascii_lowercase();
+    let usable = !label.is_empty()
+        && label
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+    usable.then_some(label)
 }
 
 /// A body as text where it is text: decoded when its `Content-Type` says it
 /// is text, or says nothing and the body starts as markup does or with a
 /// byte order mark (what a browser's MIME sniffing takes for a page); as it
 /// is when it is UTF-8 whatever it says; `None` otherwise, so that bytes of
-/// no declared type are not shown as windows-1252.
+/// no declared type are not shown as windows-1252. [`text_of_from`] with no
+/// address.
 pub fn text_of(content_type: Option<&str>, body: &[u8]) -> Option<String> {
+    text_of_from(None, content_type, body)
+}
+
+/// [`text_of`] for a body loaded from `url`, whose top-level domain is the
+/// detector's hint for an undeclared body ([`decode_from`]).
+pub fn text_of_from(url: Option<&Url>, content_type: Option<&str>, body: &[u8]) -> Option<String> {
     let typed = content_type.is_some_and(|value| !essence(Some(value)).is_empty());
     let text = if typed {
         is_text(content_type)
@@ -179,7 +238,7 @@ pub fn text_of(content_type: Option<&str>, body: &[u8]) -> Option<String> {
         Encoding::for_bom(body).is_some() || sniffs_as_markup(body)
     };
     if text {
-        return Some(decode(content_type, body).text.into_owned());
+        return Some(decode_from(url, content_type, body).text.into_owned());
     }
     std::str::from_utf8(body).ok().map(str::to_owned)
 }
@@ -266,84 +325,278 @@ fn find(bytes: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
         .map(|found| from + found)
 }
 
-/// The HTML standard's prescan of a byte stream for its encoding: the
-/// first `<meta>` among the first [`PRESCAN_BYTES`] bytes that declares
-/// one, outside comments.
-pub fn prescan(body: &[u8]) -> Option<&'static Encoding> {
-    let bytes = &body[..body.len().min(PRESCAN_BYTES)];
-    let mut at = 0;
+/// The elements a document's head may hold before Chrome's scan takes the
+/// head for ended: any other start tag, and any end tag but theirs, ends
+/// it (`<html>` and `<head>` start tags do not).
+const HEAD_ELEMENTS: [&[u8]; 8] = [
+    b"script",
+    b"noscript",
+    b"style",
+    b"link",
+    b"meta",
+    b"object",
+    b"title",
+    b"base",
+];
+
+/// The elements whose content the tokenizer reads as text, not markup, as
+/// Chrome's scan sets it after their start tag: RCDATA, RAWTEXT, script
+/// data and plain text (`<noscript>` and `<noembed>` are markup there: the
+/// scan runs with scripting and plugins off).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TextOf {
+    /// `<title>`, `<textarea>`: text up to their end tag.
+    RcData,
+    /// `<style>`, `<xmp>`, `<iframe>`, `<noframes>`: text up to their end
+    /// tag.
+    RawText,
+    /// `<script>`: script data, with its escaped states.
+    Script,
+    /// `<plaintext>`: text to the end of the document.
+    PlainText,
+}
+
+fn text_of_element(name: &[u8]) -> Option<TextOf> {
+    match name {
+        b"title" | b"textarea" => Some(TextOf::RcData),
+        b"style" | b"xmp" | b"iframe" | b"noframes" => Some(TextOf::RawText),
+        b"script" => Some(TextOf::Script),
+        b"plaintext" => Some(TextOf::PlainText),
+        _ => None,
+    }
+}
+
+/// Whether `bytes` at `at` hold the end tag `</name` the tokenizer takes
+/// for one that closes a text element: the name, then white space, `/` or
+/// `>`.
+fn is_end_tag(bytes: &[u8], at: usize, name: &[u8]) -> bool {
+    bytes.get(at) == Some(&b'<')
+        && bytes.get(at + 1) == Some(&b'/')
+        && starts_with_at(bytes, at + 2, name)
+        && bytes
+            .get(at + 2 + name.len())
+            .is_some_and(|&next| is_space(next) || next == b'/' || next == b'>')
+}
+
+/// Where the text of an RCDATA or RAWTEXT element that starts at `at` ends:
+/// the `<` of its end tag; `None` when the document ends first.
+fn raw_text_end(bytes: &[u8], mut at: usize, name: &[u8]) -> Option<usize> {
     while at < bytes.len() {
-        if bytes[at..].starts_with(b"<!--") {
-            // To the `>` of the first `-->` after `<!`.
-            at = find(bytes, at + 2, b"-->").map_or(bytes.len(), |end| end + 3);
-        } else if starts_with_at(bytes, at, b"<meta")
-            && bytes
-                .get(at + 5)
-                .is_some_and(|&next| is_space(next) || next == b'/')
-        {
-            at += 5;
-            if let Some(encoding) = meta(bytes, &mut at) {
-                return Some(as_declared_in_markup(encoding));
+        if is_end_tag(bytes, at, name) {
+            return Some(at);
+        }
+        at += 1;
+    }
+    None
+}
+
+/// Where the text of a `<script>` that starts at `at` ends: the `<` of the
+/// `</script>` that closes it, read through the tokenizer's escaped states
+/// (`<!--` inside a script, and a `<script>` inside that, whose
+/// `</script>` does not end the outer one); `None` when the document ends
+/// first.
+fn script_end(bytes: &[u8], mut at: usize) -> Option<usize> {
+    #[derive(PartialEq, Eq)]
+    enum State {
+        Data,
+        Escaped,
+        DoubleEscaped,
+    }
+    let mut state = State::Data;
+    while at < bytes.len() {
+        let here = &bytes[at..];
+        match state {
+            State::Data if here.starts_with(b"<!--") => {
+                state = State::Escaped;
+                at += 4;
+                continue;
             }
-        } else if bytes[at] == b'<'
-            && (bytes.get(at + 1).is_some_and(u8::is_ascii_alphabetic)
-                || (bytes.get(at + 1) == Some(&b'/')
-                    && bytes.get(at + 2).is_some_and(u8::is_ascii_alphabetic)))
-        {
-            // Another tag: past its name and its attributes.
-            while at < bytes.len() && !is_space(bytes[at]) && bytes[at] != b'>' {
+            State::Escaped | State::DoubleEscaped if here.starts_with(b"-->") => {
+                state = State::Data;
+                at += 3;
+                continue;
+            }
+            State::Data | State::Escaped if is_end_tag(bytes, at, b"script") => return Some(at),
+            State::DoubleEscaped if is_end_tag(bytes, at, b"script") => {
+                state = State::Escaped;
+                at += 8;
+                continue;
+            }
+            State::Escaped
+                if here.first() == Some(&b'<')
+                    && starts_with_at(bytes, at + 1, b"script")
+                    && bytes
+                        .get(at + 7)
+                        .is_some_and(|&next| is_space(next) || next == b'/' || next == b'>') =>
+            {
+                state = State::DoubleEscaped;
+                at += 7;
+                continue;
+            }
+            _ => {}
+        }
+        at += 1;
+    }
+    None
+}
+
+/// Where a comment that starts at `at` (its `<!--`) ends, past its `-->`:
+/// `<!-->` and `<!--->` end where they start, and `--!>` ends one too, as
+/// the tokenizer reads them; `None` when the document ends first.
+fn comment_end(bytes: &[u8], at: usize) -> Option<usize> {
+    let body = at + 4;
+    if bytes.get(body) == Some(&b'>') {
+        return Some(body + 1);
+    }
+    if bytes.get(body..body + 2) == Some(b"->") {
+        return Some(body + 2);
+    }
+    let close = find(bytes, body, b"-->").map(|end| end + 3);
+    let bang = find(bytes, body, b"--!>").map(|end| end + 4);
+    match (close, bang) {
+        (Some(close), Some(bang)) => Some(close.min(bang)),
+        (close, bang) => close.or(bang),
+    }
+}
+
+/// The name of a tag that starts at `at` (its first letter), lower case,
+/// and the position after it.
+fn tag_name(bytes: &[u8], mut at: usize) -> (Vec<u8>, usize) {
+    let mut name = Vec::new();
+    while let Some(&byte) = bytes.get(at) {
+        if is_space(byte) || byte == b'/' || byte == b'>' {
+            break;
+        }
+        name.push(byte.to_ascii_lowercase());
+        at += 1;
+    }
+    (name, at)
+}
+
+/// The encoding a document declares in its markup, found as Chrome finds
+/// it (its `HTMLMetaCharsetParser`): the markup is read token by token as
+/// the HTML tokenizer reads it, so that what stands in a comment, in a
+/// script, a style, a title or a text area, or inside another tag's
+/// attribute is no `<meta>` (F172); the first `<meta>` that declares an
+/// encoding the Encoding Standard knows counts; and the scan stops once it
+/// has read [`PRESCAN_BYTES`] bytes and the document's head has ended (a
+/// start tag, or an end tag, of an element a head does not hold), so that
+/// a `<meta>` past the first 1024 bytes still counts while the head lasts
+/// (F160). A tag the bytes end inside declares nothing.
+pub fn prescan(body: &[u8]) -> Option<&'static Encoding> {
+    let bytes = body;
+    let mut at = 0;
+    let mut in_head = true;
+    while at < bytes.len() {
+        // Between two tokens: the scan's end, as Chrome checks it.
+        if !in_head && at >= PRESCAN_BYTES {
+            return None;
+        }
+        if bytes[at] != b'<' {
+            // Text, up to the next tag.
+            at = find(bytes, at, b"<").unwrap_or(bytes.len());
+            continue;
+        }
+        let next = bytes.get(at + 1).copied();
+        match next {
+            Some(b'!') if bytes[at..].starts_with(b"<!--") => {
+                at = comment_end(bytes, at)?;
+            }
+            Some(b'!' | b'?') => {
+                // A doctype or a bogus comment: to its `>`.
+                at = find(bytes, at, b">")? + 1;
+            }
+            Some(b'/') => match bytes.get(at + 2) {
+                Some(letter) if letter.is_ascii_alphabetic() => {
+                    let (name, after) = tag_name(bytes, at + 2);
+                    at = after;
+                    while attribute(bytes, &mut at).is_some() {}
+                    if at >= bytes.len() {
+                        return None;
+                    }
+                    at += 1;
+                    if !HEAD_ELEMENTS.contains(&name.as_slice()) {
+                        in_head = false;
+                    }
+                }
+                Some(b'>') => at += 3,
+                Some(_) => at = find(bytes, at, b">")? + 1,
+                None => return None,
+            },
+            Some(letter) if letter.is_ascii_alphabetic() => {
+                let (name, after) = tag_name(bytes, at + 1);
+                at = after;
+                if name == b"meta" {
+                    if let Some(encoding) = meta(bytes, &mut at) {
+                        return Some(encoding);
+                    }
+                } else {
+                    while attribute(bytes, &mut at).is_some() {}
+                }
+                if at >= bytes.len() {
+                    return None;
+                }
                 at += 1;
+                let allowed =
+                    HEAD_ELEMENTS.contains(&name.as_slice()) || name == b"html" || name == b"head";
+                if !allowed {
+                    in_head = false;
+                }
+                at = match text_of_element(&name) {
+                    None => at,
+                    Some(TextOf::RcData | TextOf::RawText) => raw_text_end(bytes, at, &name)?,
+                    Some(TextOf::Script) => script_end(bytes, at)?,
+                    Some(TextOf::PlainText) => return None,
+                };
             }
-            while attribute(bytes, &mut at).is_some() {}
-        } else if starts_with_at(bytes, at, b"<!")
-            || starts_with_at(bytes, at, b"</")
-            || starts_with_at(bytes, at, b"<?")
-        {
-            at = find(bytes, at, b">").map_or(bytes.len(), |end| end + 1);
-        } else {
-            at += 1;
+            // A `<` that opens nothing is text.
+            _ => at += 1,
         }
     }
     None
 }
 
-/// The attributes of one `<meta>`, `at` just after its name: the encoding
-/// it declares, when it declares one.
+/// The attributes of one `<meta>`, `at` just after its name, read as
+/// Chrome reads them: a repeated attribute is dropped, and the first
+/// `charset` or `content` that names an encoding decides, `content` only
+/// with `http-equiv="content-type"`. The encoding it declares, when it
+/// declares one the Encoding Standard knows.
 fn meta(bytes: &[u8], at: &mut usize) -> Option<&'static Encoding> {
     let mut seen: Vec<Vec<u8>> = Vec::new();
     let mut got_pragma = false;
-    let mut need_pragma: Option<bool> = None;
-    let mut charset: Option<&'static Encoding> = None;
+    // The label and whether it came from `content` (and needs the pragma).
+    let mut declared: Option<(Vec<u8>, bool)> = None;
     while let Some((name, value)) = attribute(bytes, at) {
         if seen.contains(&name) {
             continue;
         }
         match name.as_slice() {
-            b"http-equiv" => got_pragma |= value.eq_ignore_ascii_case(b"content-type"),
-            b"content" if charset.is_none() => {
-                if let Some(encoding) = charset_in_content(&value) {
-                    charset = Some(encoding);
-                    need_pragma = Some(true);
+            b"http-equiv" => got_pragma |= value.trim_ascii().eq_ignore_ascii_case(b"content-type"),
+            b"charset" if declared.is_none() => {
+                let label = value.trim_ascii();
+                if !label.is_empty() {
+                    declared = Some((label.to_vec(), false));
                 }
             }
-            b"charset" => {
-                charset = Encoding::for_label(&value);
-                need_pragma = Some(false);
+            b"content" if declared.is_none() => {
+                if let Some(label) = charset_in_content(&value) {
+                    declared = Some((label.to_vec(), true));
+                }
             }
             _ => {}
         }
         seen.push(name);
     }
-    // A tag the bytes end inside declares nothing: the standard aborts
-    // there, and a browser ignores an unfinished tag.
+    // A tag the bytes end inside declares nothing: a browser ignores an
+    // unfinished tag.
     if *at >= bytes.len() {
         return None;
     }
-    match need_pragma {
-        Some(true) if !got_pragma => None,
-        Some(_) => charset,
-        None => None,
+    let (label, needs_pragma) = declared?;
+    if needs_pragma && !got_pragma {
+        return None;
     }
+    Encoding::for_label(&label).map(as_declared_in_markup)
 }
 
 /// The standard's "get an attribute": the next attribute of a tag, its
@@ -411,8 +664,9 @@ fn attribute(bytes: &[u8], at: &mut usize) -> Option<(Vec<u8>, Vec<u8>)> {
 }
 
 /// The standard's "extract a character encoding from a meta element": the
-/// encoding a `content` value such as `text/html; charset=shift_jis` names.
-fn charset_in_content(content: &[u8]) -> Option<&'static Encoding> {
+/// label a `content` value such as `text/html; charset=shift_jis` names,
+/// when it names one.
+fn charset_in_content(content: &[u8]) -> Option<&[u8]> {
     let mut at = 0;
     loop {
         let found = content
@@ -446,7 +700,7 @@ fn charset_in_content(content: &[u8]) -> Option<&'static Encoding> {
         }
         None => return None,
     };
-    Encoding::for_label(value)
+    (!value.is_empty()).then_some(value)
 }
 
 /// The `encoding` of an XML declaration at the start of a document.
@@ -468,9 +722,16 @@ fn xml_declaration(body: &[u8]) -> Option<&'static Encoding> {
 
 #[cfg(test)]
 mod tests {
-    use encoding_rs::{EUC_JP, SHIFT_JIS, UTF_8, UTF_16LE, WINDOWS_1252};
+    use encoding_rs::{
+        EUC_JP, EUC_KR, Encoding, GBK, KOI8_R, SHIFT_JIS, UTF_8, UTF_16LE, WINDOWS_1251,
+        WINDOWS_1252,
+    };
+    use url::Url;
 
-    use super::{DecidedBy, charset_of, decode, is_text, prescan, text_of};
+    use super::{
+        DecidedBy, charset_of, decode, decode_from, detect, is_text, prescan, text_of,
+        text_of_from, top_level_domain,
+    };
 
     /// "Café Müller, Straße" in ISO-8859-1.
     const LATIN1: &[u8] = b"Caf\xe9 M\xfcller, Stra\xdfe";
@@ -594,16 +855,23 @@ mod tests {
     }
 
     #[test]
-    fn without_a_declaration_utf8_is_sniffed_and_windows_1252_is_the_fallback() {
-        let body = page("", "Café 日本語".as_bytes());
+    fn without_a_declaration_the_detector_guesses_and_never_utf8() {
+        // An undeclared UTF-8 page reads as both browsers read it: as
+        // windows-1252, mojibake and all (F172, http-05).
+        let body = page("", "Café Müller".as_bytes());
         let read = decode(Some("text/html"), &body);
-        assert_eq!((read.encoding, read.by), (UTF_8, DecidedBy::Utf8));
-        assert!(read.text.contains("<p>Café 日本語</p>"));
+        assert_eq!(
+            (read.encoding, read.by),
+            (WINDOWS_1252, DecidedBy::Detected)
+        );
+        assert!(read.text.contains("<title>CafÃ© MÃ¼ller</title>"));
+        let body = page("", "日本語のテキスト".as_bytes());
+        assert_ne!(decode(Some("text/html"), &body).encoding, UTF_8);
         let body = page("", LATIN1);
         let read = decode(None, &body);
         assert_eq!(
             (read.encoding, read.by),
-            (WINDOWS_1252, DecidedBy::Fallback)
+            (WINDOWS_1252, DecidedBy::Detected)
         );
         assert!(read.text.contains("<p>Café Müller, Straße</p>"));
         // windows-1252's own letters (an em dash, curly quotes).
@@ -613,9 +881,12 @@ mod tests {
 
     #[test]
     fn the_prescan_keeps_to_the_standards_rules() {
-        // A meta in a comment, or after the first 1024 bytes, says nothing.
+        // A meta in a comment says nothing; one after the first 1024 bytes
+        // counts while the head lasts (F160), not after it.
         assert_eq!(prescan(b"<!-- <meta charset=shift_jis> --><p>x"), None);
         let late = format!("{}<meta charset=shift_jis>", " ".repeat(1024));
+        assert_eq!(prescan(late.as_bytes()), Some(SHIFT_JIS));
+        let late = format!("<p>{}<meta charset=shift_jis>", " ".repeat(1024));
         assert_eq!(prescan(late.as_bytes()), None);
         let early = format!("{}<meta charset=shift_jis>", " ".repeat(990));
         assert_eq!(prescan(early.as_bytes()), Some(SHIFT_JIS));
@@ -665,13 +936,16 @@ mod tests {
         ] {
             assert_eq!(prescan(cut.as_bytes()), None, "{cut}");
         }
-        let mut long = vec![b' '; 1000];
+        // Past 1024 bytes and past the head, nothing counts: the scan ends
+        // at the first token that starts after both, as Chrome checks
+        // between tokens; a tag that starts before byte 1024 is read whole.
+        let mut long = b"<body>".to_vec();
+        long.resize(1023, b' ');
         long.extend_from_slice(b"<meta charset=shift_jis>");
-        assert_eq!(long.len(), 1024);
         assert_eq!(prescan(&long), Some(SHIFT_JIS));
-        long.insert(0, b' ');
+        long.insert(6, b' ');
         assert_eq!(prescan(&long), None);
-        assert_eq!(decode(Some("text/html"), &long).by, DecidedBy::Utf8);
+        assert_eq!(decode(Some("text/html"), &long).by, DecidedBy::Detected);
         assert_eq!(
             prescan(b"<p>x</p><!--><meta charset=euc-jp><!-- --><meta charset=shift_jis>"),
             Some(EUC_JP)
@@ -851,5 +1125,203 @@ mod tests {
         assert_eq!(charset_of("text/html"), None);
         assert_eq!(charset_of("text/html; charset="), None);
         assert_eq!(charset_of("text/html; q=1; charset=sjis"), Some(SHIFT_JIS));
+    }
+
+    /// Chrome's scan reads the markup as the tokenizer does: a `<meta>` in
+    /// a script's, a style's or a title's text is none (F172, http-06), and
+    /// `<noscript>` is markup, the scan running with scripting off.
+    #[test]
+    fn a_meta_in_the_text_of_a_script_a_style_or_a_title_is_none() {
+        assert_eq!(
+            prescan(
+                b"<script>var t = \"<meta charset=utf-8>\";</script><meta charset=windows-1252>"
+            ),
+            Some(WINDOWS_1252)
+        );
+        assert_eq!(
+            prescan(
+                b"<head><script>document.write('<meta charset=koi8-r>')</script><title>x</title>"
+            ),
+            None
+        );
+        for (open, close, name) in [
+            ("<style>", "</style>", "style"),
+            ("<title>", "</title>", "title"),
+            ("<textarea>", "</textarea>", "textarea"),
+            ("<xmp>", "</xmp>", "xmp"),
+            ("<iframe>", "</iframe >", "iframe"),
+            ("<noframes>", "</NOFRAMES>", "noframes"),
+            ("<script type=text/template>", "</script/>", "script"),
+        ] {
+            let page = format!("{open}<meta charset=koi8-r>{close}<meta charset=shift_jis>");
+            assert_eq!(prescan(page.as_bytes()), Some(SHIFT_JIS), "{open}");
+            // An end tag that only begins like the element's is text.
+            let page = format!("{open}</{name}x><meta charset=koi8-r>");
+            assert_eq!(prescan(page.as_bytes()), None, "{open}");
+        }
+        assert_eq!(
+            prescan(b"<noscript><meta charset=koi8-r></noscript>"),
+            Some(KOI8_R)
+        );
+        // Everything after <plaintext> is text.
+        assert_eq!(prescan(b"<plaintext><meta charset=koi8-r>"), None);
+        // A script's escaped states: inside <!--, a <script> nests, and its
+        // </script> does not end the outer one.
+        assert_eq!(
+            prescan(
+                b"<script><!--<script></script><meta charset=koi8-r></script><meta charset=shift_jis>"
+            ),
+            Some(SHIFT_JIS)
+        );
+        assert_eq!(
+            prescan(b"<script><!-- x --><meta charset=koi8-r></script><meta charset=euc-jp>"),
+            Some(EUC_JP)
+        );
+        assert_eq!(
+            prescan(b"<script><!--</script><meta charset=euc-jp>"),
+            Some(EUC_JP)
+        );
+        // Comments end as the tokenizer ends them.
+        assert_eq!(prescan(b"<!---><meta charset=euc-jp>"), Some(EUC_JP));
+        assert_eq!(prescan(b"<!-- x --!><meta charset=euc-jp>"), Some(EUC_JP));
+        assert_eq!(
+            prescan(b"<!-- x --!> --><meta charset=euc-jp>"),
+            Some(EUC_JP)
+        );
+        // A text element the document ends inside declares nothing after it.
+        for open in ["<script>", "<style>", "<title>", "<!-- "] {
+            assert_eq!(
+                prescan(format!("{open}<meta charset=euc-jp>").as_bytes()),
+                None
+            );
+        }
+        // A start tag's name ends at white space, `/` or `>`.
+        assert_eq!(prescan(b"<meta/charset=euc-jp>"), Some(EUC_JP));
+        assert_eq!(prescan(b"</>x<meta charset=euc-jp>"), Some(EUC_JP));
+        assert_eq!(prescan(b"</"), None);
+        assert_eq!(prescan(b"< meta charset=euc-jp>"), None);
+    }
+
+    /// The scan goes on past 1024 bytes while the document's head lasts, as
+    /// Chrome's does and as Firefox honours a late `<meta>` (F160): what
+    /// ends the head is a start tag of an element a head does not hold, or
+    /// an end tag but of the head's own elements.
+    #[test]
+    fn a_late_meta_counts_while_the_head_lasts() {
+        let script = format!("<script>{}</script>", "var x = 1;\n".repeat(200));
+        let page = format!(
+            "<!doctype html><html><head><title>t</title>{script}<link rel=stylesheet href=a.css><meta charset=shift_jis>"
+        );
+        assert!(page.len() > 2000);
+        assert_eq!(prescan(page.as_bytes()), Some(SHIFT_JIS));
+        for ends in ["<body>", "<div>", "</head>", "</html>", "<p>"] {
+            let page = format!("<head>{script}{ends}<meta charset=shift_jis>");
+            assert_eq!(prescan(page.as_bytes()), None, "{ends}");
+        }
+        for stays in [
+            "</title>",
+            "</script>",
+            "<base href=/>",
+            "<object>",
+            "<noscript>",
+            "<html>",
+            "<head>",
+        ] {
+            let page = format!("<head>{script}{stays}<meta charset=shift_jis>");
+            assert_eq!(prescan(page.as_bytes()), Some(SHIFT_JIS), "{stays}");
+        }
+        // Inside the first 1024 bytes the head's end changes nothing.
+        assert_eq!(
+            prescan(b"<html><body><p>x</p><meta charset=shift_jis>"),
+            Some(SHIFT_JIS)
+        );
+    }
+
+    fn written(encoding: &'static Encoding, text: &str) -> Vec<u8> {
+        let (bytes, _, unmappable) = encoding.encode(text);
+        assert!(!unmappable, "{}", encoding.name());
+        page("", &bytes)
+    }
+
+    /// An undeclared page in a legacy encoding reads as a browser's
+    /// detector names it (F160), and the site's top-level domain is its
+    /// hint.
+    #[test]
+    fn an_undeclared_legacy_page_is_named_as_a_browser_names_it() {
+        for (encoding, text) in [
+            (
+                SHIFT_JIS,
+                "日本語のテキストです。これは文字コードを判定するための文章で、ひらがなとカタカナと漢字が入っています。",
+            ),
+            (
+                EUC_KR,
+                "한국어 텍스트입니다. 이것은 문자 인코딩을 판별하기 위한 문장이며 한글이 많이 들어 있습니다.",
+            ),
+            (
+                GBK,
+                "这是一段中文文本。我们用它来检测字符编码，其中包含许多常用的汉字和标点符号。",
+            ),
+            (
+                WINDOWS_1251,
+                "Съешь же ещё этих мягких французских булок, да выпей чаю. Это русский текст для проверки.",
+            ),
+        ] {
+            let body = written(encoding, &text.repeat(3));
+            let read = decode(Some("text/html"), &body);
+            assert_eq!(
+                (read.encoding, read.by),
+                (encoding, DecidedBy::Detected),
+                "{}",
+                encoding.name()
+            );
+            assert!(read.text.contains(text), "{}", encoding.name());
+            assert!(!read.malformed, "{}", encoding.name());
+        }
+        // The fixture site's undeclared page (tests/e2e/fetch.sh): 日本語 again
+        // and again among ASCII, from a top-level domain the detector does
+        // not know.
+        let mut fixture = b"<!doctype html><html lang=\"ja\"><head><title>".to_vec();
+        fixture.extend_from_slice(SJIS);
+        fixture.extend_from_slice(b"</title></head><body><main><article><h1>");
+        fixture.extend_from_slice(SJIS);
+        fixture.extend_from_slice(b"</h1><p>");
+        fixture.extend_from_slice(&SJIS.repeat(40));
+        fixture.extend_from_slice(" wort".repeat(120).as_bytes());
+        fixture.extend_from_slice(b"</p></article></main></body></html>");
+        let url = Url::parse("http://fixture.kage.test:8088/legacy/undeclared-sjis").unwrap();
+        let read = decode_from(Some(&url), Some("text/html"), &fixture);
+        assert_eq!((read.encoding, read.by), (SHIFT_JIS, DecidedBy::Detected));
+        assert!(read.text.contains("<title>日本語</title>"));
+        // ASCII alone is windows-1252, which reads it as it is.
+        assert_eq!(detect(None, b"<p>plain words</p>"), WINDOWS_1252);
+        let url = Url::parse("http://shop.example.jp/").unwrap();
+        let read = decode_from(Some(&url), Some("text/plain"), b"plain");
+        assert_eq!(
+            (read.text.as_ref(), read.by),
+            ("plain", DecidedBy::Detected)
+        );
+        // The hint is the site's: the same bytes are Shift_JIS from a
+        // Japanese site, windows-1252 from a German one, as in Firefox.
+        assert_eq!(
+            text_of_from(Some(&url), Some("text/html"), "Café".as_bytes()).as_deref(),
+            Some("Cafﾃｩ")
+        );
+        let url = Url::parse("http://shop.example.de/").unwrap();
+        assert_eq!(
+            text_of_from(Some(&url), Some("text/html"), "Café".as_bytes()).as_deref(),
+            Some("CafÃ©")
+        );
+    }
+
+    #[test]
+    fn the_detectors_hint_is_the_hosts_last_label_or_none() {
+        let tld = |url: &str| top_level_domain(Some(&Url::parse(url).unwrap()));
+        assert_eq!(tld("https://shop.example.co.jp/x").as_deref(), Some("jp"));
+        assert_eq!(tld("https://SHOP.Example.DE./").as_deref(), Some("de"));
+        assert_eq!(tld("https://пример.рф/").as_deref(), Some("xn--p1ai"));
+        assert_eq!(tld("http://192.0.2.1/"), None);
+        assert_eq!(tld("http://[2001:db8::1]/"), None);
+        assert_eq!(tld("http://localhost/").as_deref(), Some("localhost"));
+        assert_eq!(top_level_domain(None), None);
     }
 }

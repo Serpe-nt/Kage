@@ -30,6 +30,51 @@ use url::Url;
 
 use crate::macros::string_enum;
 
+/// `href` resolved against `base` as a browser resolves it in a document
+/// written in `encoding` (the URL standard's parser with an encoding): the
+/// characters of a query are written in the document's output encoding
+/// (UTF-8 for a UTF-16 document) and then percent-encoded, a character that
+/// encoding cannot write as `%26%23`, its number and `%3B` (`&#…;`); the
+/// path and everything else in UTF-8, as always. A link in a page written in
+/// windows-1252 that says `?q=für` asks for `?q=f%FCr`, as both browsers
+/// ask (F161). `None` when `href` is no URL.
+pub fn join_in(base: &Url, href: &str, encoding: &'static encoding_rs::Encoding) -> Option<Url> {
+    let encoding = encoding.output_encoding();
+    if encoding == encoding_rs::UTF_8 {
+        return base.join(href).ok();
+    }
+    let encode: &dyn Fn(&str) -> std::borrow::Cow<'_, [u8]> =
+        &|text| std::borrow::Cow::Owned(encode_query(text, encoding));
+    Url::options()
+        .base_url(Some(base))
+        .encoding_override(Some(encode))
+        .parse(href)
+        .ok()
+}
+
+/// The bytes of a query in `encoding`, a character it cannot write as the
+/// URL standard writes it: `%26%23`, its number in base ten, `%3B`. The
+/// parser percent-encodes the rest and leaves a `%` as it is.
+fn encode_query(text: &str, encoding: &'static encoding_rs::Encoding) -> Vec<u8> {
+    let mut encoder = encoding.new_encoder();
+    let mut out = Vec::with_capacity(text.len() * 2);
+    let mut rest = text;
+    let mut buffer = [0_u8; 1024];
+    loop {
+        let (result, read, written) =
+            encoder.encode_from_utf8_without_replacement(rest, &mut buffer, true);
+        out.extend_from_slice(&buffer[..written]);
+        rest = &rest[read..];
+        match result {
+            encoding_rs::EncoderResult::InputEmpty => return out,
+            encoding_rs::EncoderResult::OutputFull => {}
+            encoding_rs::EncoderResult::Unmappable(character) => {
+                out.extend_from_slice(format!("%26%23{}%3B", u32::from(character)).as_bytes());
+            }
+        }
+    }
+}
+
 string_enum! {
     /// What to do with a trailing slash on a path other than `/`.
     pub enum TrailingSlash {
@@ -321,7 +366,7 @@ mod properties;
 mod tests {
     use url::Url;
 
-    use super::{NormalizeOptions, TrailingSlash, UrlKey, normalize, request_url};
+    use super::{NormalizeOptions, TrailingSlash, UrlKey, join_in, normalize, request_url};
     use crate::macros::test_support::assert_string_enum;
 
     fn key_with(text: &str, options: &NormalizeOptions) -> String {
@@ -801,6 +846,48 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<UrlKey>("\"https://example.org/a?b=1\"").unwrap(),
             key
+        );
+    }
+
+    /// A link resolved in a document of a legacy encoding (F161): its query
+    /// in that encoding, a character it lacks as `%26%23…%3B`, the path and
+    /// a fragment in UTF-8, a UTF-16 document's query in UTF-8, as the URL
+    /// standard and both browsers write them.
+    #[test]
+    fn a_links_query_is_written_in_its_documents_encoding() {
+        let base = Url::parse("http://shop.example/dir/page?x=1").unwrap();
+        let joined = |href: &str, encoding| join_in(&base, href, encoding).unwrap().to_string();
+        assert_eq!(
+            joined("f\u{fc}r?q=f\u{fc}r#f\u{fc}r", encoding_rs::WINDOWS_1252),
+            "http://shop.example/dir/f%C3%BCr?q=f%FCr#f%C3%BCr"
+        );
+        assert_eq!(
+            joined("/s?q=\u{65e5}\u{672c}&r=\u{20ac}", encoding_rs::SHIFT_JIS),
+            "http://shop.example/s?q=%93%FA%96{&r=%26%238364%3B"
+        );
+        assert_eq!(
+            joined("?q=\u{65e5}a\u{672c}", encoding_rs::WINDOWS_1252),
+            "http://shop.example/dir/page?q=%26%2326085%3Ba%26%2326412%3B"
+        );
+        for encoding in [
+            encoding_rs::UTF_8,
+            encoding_rs::UTF_16LE,
+            encoding_rs::UTF_16BE,
+        ] {
+            assert_eq!(
+                joined("/s?q=f\u{fc}r", encoding),
+                "http://shop.example/s?q=f%C3%BCr",
+                "{}",
+                encoding.name()
+            );
+        }
+        // A long query fills the encoder's buffer more than once.
+        let long = "\u{e9}".repeat(3000);
+        let url = join_in(&base, &format!("/s?q={long}"), encoding_rs::WINDOWS_1252).unwrap();
+        assert_eq!(url.query().unwrap(), format!("q={}", "%E9".repeat(3000)));
+        assert_eq!(
+            join_in(&base, "http://[::1", encoding_rs::WINDOWS_1252),
+            None
         );
     }
 }

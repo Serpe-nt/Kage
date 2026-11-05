@@ -111,6 +111,15 @@ pub struct HttpConfig {
     /// What subresource emulation fetches.
     #[serde(default)]
     pub subresources: SubresourcesConfig,
+    /// A PEM file with certificate authorities the http path trusts in
+    /// addition to the public ones (F191): the persona's clients, the plain
+    /// client of level 0 and the proxy provider's API client add them to
+    /// their roots, so that level 0 reaches a site under a private
+    /// authority (an intranet's, a test world's). None by default. Never an
+    /// authority of a public CA's that someone else may hold the key of: a
+    /// root added here is trusted for every name.
+    #[serde(default)]
+    pub ca_file: Option<PathBuf>,
 }
 
 const fn default_http_timeout() -> HumanDuration {
@@ -148,6 +157,7 @@ impl Default for HttpConfig {
             session_cookie_idle: default_session_cookie_idle(),
             fetch_subresources: false,
             subresources: SubresourcesConfig::default(),
+            ca_file: None,
         }
     }
 }

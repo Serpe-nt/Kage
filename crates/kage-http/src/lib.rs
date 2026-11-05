@@ -63,11 +63,35 @@ pub use subresources::SubresourceReport;
 /// Name of this crate as recorded in its manifest.
 pub const CRATE_NAME: &str = env!("CARGO_PKG_NAME");
 
+/// The operator's own certificate authorities for the http path
+/// (`http.ca_file`, F191), as PEM, when the configuration names a file:
+/// [`ClientFactory::with_trust_anchor`] takes them, and the proxy
+/// provider's API client adds them to its roots.
+///
+/// # Errors
+///
+/// A message that names the key when the file cannot be read or holds no
+/// valid PEM certificate.
+pub fn trust_anchor(config: &kage_core::config::HttpConfig) -> Result<Option<Vec<u8>>, String> {
+    let Some(path) = &config.ca_file else {
+        return Ok(None);
+    };
+    let pem = std::fs::read(path)
+        .map_err(|error| format!("http.ca_file: cannot read {}: {error}", path.display()))?;
+    client::public_roots_and(&[&pem]).map_err(|_| {
+        format!(
+            "http.ca_file: {} holds no valid PEM certificate",
+            path.display()
+        )
+    })?;
+    Ok(Some(pem))
+}
+
 /// Checks the parts of the configuration only this crate can judge: that
 /// a browser major configured for an engine has an emulation profile (an
 /// engine upgrade must not switch the http path off unnoticed), and that
-/// the certificate authority of the operator's echo can be read.
-/// `kage config check` calls it.
+/// the certificate authorities of the operator's echo and of the http path
+/// can be read. `kage config check` calls it.
 ///
 /// # Errors
 ///
@@ -77,6 +101,7 @@ pub fn check_config(config: &kage_core::config::Config) -> Result<(), String> {
         config.engines.chromium.browser_major,
         config.engines.firefox.browser_major,
     )?;
+    trust_anchor(&config.http)?;
     if let Some(path) = &config.selftest.http.echo_ca_file {
         let pem = std::fs::read(path).map_err(|error| {
             format!(
@@ -162,7 +187,7 @@ pub fn describe(config: &kage_core::config::Config) -> serde_json::Value {
 mod tests {
     use kage_core::config::Config;
 
-    use super::{CRATE_NAME, check_config, describe, level_one_available};
+    use super::{CRATE_NAME, check_config, describe, level_one_available, trust_anchor};
 
     fn config(extra: &[(&str, &str)]) -> Config {
         let mut pairs = vec![
@@ -305,5 +330,40 @@ mod tests {
         let error = check_config(&broken).unwrap_err();
         std::fs::remove_file(&file).unwrap();
         assert!(error.contains("holds no valid PEM certificate"), "{error}");
+    }
+
+    /// `http.ca_file` (F191): none by default; a file that cannot be read
+    /// or holds no certificate is refused by `kage config check` and by
+    /// the server at its start; a readable one is handed over as it is.
+    #[test]
+    fn the_http_paths_certificate_authority_is_none_or_readable_pem() {
+        assert_eq!(trust_anchor(&config(&[]).http), Ok(None));
+        let missing = config(&[("KAGE__HTTP__CA_FILE", "/nonexistent/kage-ca.pem")]);
+        let error = check_config(&missing).unwrap_err();
+        assert!(error.starts_with("http.ca_file: cannot read"), "{error}");
+
+        let file = std::env::temp_dir().join(format!("kage-http-ca-{}.pem", std::process::id()));
+        std::fs::write(
+            &file,
+            "no certificate here
+",
+        )
+        .unwrap();
+        let broken = config(&[("KAGE__HTTP__CA_FILE", file.to_str().unwrap())]);
+        let error = trust_anchor(&broken.http).unwrap_err();
+        assert!(error.contains("holds no valid PEM certificate"), "{error}");
+
+        let ca = rcgen::CertificateParams::new(Vec::<String>::new())
+            .unwrap()
+            .self_signed(&rcgen::KeyPair::generate().unwrap())
+            .unwrap()
+            .pem();
+        std::fs::write(&file, &ca).unwrap();
+        let good = config(&[("KAGE__HTTP__CA_FILE", file.to_str().unwrap())]);
+        let read = trust_anchor(&good.http);
+        let checked = check_config(&good);
+        std::fs::remove_file(&file).unwrap();
+        assert_eq!(read, Ok(Some(ca.into_bytes())));
+        assert_eq!(checked, Ok(()));
     }
 }

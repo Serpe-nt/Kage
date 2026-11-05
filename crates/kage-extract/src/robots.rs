@@ -14,7 +14,13 @@
 //! - `*` in a pattern stands for any run of characters, `$` at its end for
 //!   the end of the address;
 //! - an `Allow` for `…/index.html` also allows the directory itself;
-//! - an address no rule matches is allowed.
+//! - an address no rule matches is allowed;
+//! - a percent-escape of an unreserved character (a letter, a digit, `-`,
+//!   `.`, `_`, `~`) is that character, in the rule and in the address
+//!   alike, as RFC 9309 §2.2.2 has it (`/%70rivate` is `/private`); an
+//!   escape of anything else stays an escape (`/a%2Fb` is not `/a/b`).
+//!   Here Kage follows the RFC and not Google's matcher, which compares
+//!   escapes as written (F179).
 //!
 //! Both the parser and the matcher are this module's own. The `robotstxt`
 //! crate, a port of Google's library that the workspace pinned for this,
@@ -58,8 +64,32 @@ pub const MAX_CRAWL_DELAY: f64 = 31_622_400.0;
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Rule {
     allow: bool,
-    /// The pattern, percent-escapes in upper case.
+    /// The pattern, an escape of an unreserved character decoded and the
+    /// other percent-escapes in upper case.
     pattern: String,
+}
+
+/// The character a percent-escape of the two hex digits `high` and `low`
+/// stands for, when it is an unreserved one (RFC 3986 §2.3: a letter, a
+/// digit, `-`, `.`, `_`, `~`): RFC 9309 §2.2.2 compares such an escape
+/// decoded (F179). `None` for any other octet, whose escape stays one.
+fn unreserved(high: u8, low: u8) -> Option<char> {
+    let value = |digit: u8| char::from(digit).to_digit(16);
+    let byte = u8::try_from(value(high)? * 16 + value(low)?).ok()?;
+    (byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~'))
+        .then_some(char::from(byte))
+}
+
+/// A percent-escape as it is compared: the unreserved character it stands
+/// for, else the escape with its digits in upper case.
+fn push_escape(out: &mut String, high: u8, low: u8) {
+    if let Some(character) = unreserved(high, low) {
+        out.push(character);
+    } else {
+        out.push('%');
+        out.push(char::from(high.to_ascii_uppercase()));
+        out.push(char::from(low.to_ascii_uppercase()));
+    }
 }
 
 impl Rule {
@@ -167,8 +197,9 @@ fn key_value(line: &str) -> Option<(&str, &str)> {
     (!key.is_empty()).then_some((key, value))
 }
 
-/// A pattern as it is matched: what is not ASCII percent-encoded, and the
-/// percent-escapes it has in upper case.
+/// A pattern as it is matched: what is not ASCII percent-encoded, an
+/// escape of an unreserved character decoded (F179), the other
+/// percent-escapes in upper case.
 fn escape_pattern(value: &str) -> String {
     let bytes = value.as_bytes();
     let mut out = String::with_capacity(value.len());
@@ -180,9 +211,7 @@ fn escape_pattern(value: &str) -> String {
             && bytes[index + 1].is_ascii_hexdigit()
             && bytes[index + 2].is_ascii_hexdigit()
         {
-            out.push('%');
-            out.push(char::from(bytes[index + 1].to_ascii_uppercase()));
-            out.push(char::from(bytes[index + 2].to_ascii_uppercase()));
+            push_escape(&mut out, bytes[index + 1], bytes[index + 2]);
             index += 3;
         } else if byte >= 0x80 {
             out.push('%');
@@ -341,6 +370,7 @@ fn index_pattern(pattern: &str) -> Option<String> {
 }
 
 /// The part of an address a rule is matched against: its path and query,
+/// an escape of an unreserved character decoded (F179), the other
 /// percent-escapes in upper case.
 fn path_of(url: &Url) -> String {
     let path = &url[Position::BeforePath..Position::AfterQuery];
@@ -349,7 +379,7 @@ fn path_of(url: &Url) -> String {
     } else {
         format!("/{path}")
     };
-    // `%2f` and `%2F` are one character to a rule.
+    // `%2f` and `%2F` are one character to a rule, and `%70` is `p`.
     let bytes = path.as_bytes();
     let mut out = String::with_capacity(path.len());
     let mut index = 0;
@@ -359,9 +389,7 @@ fn path_of(url: &Url) -> String {
             && bytes[index + 1].is_ascii_hexdigit()
             && bytes[index + 2].is_ascii_hexdigit();
         if escaped {
-            out.push('%');
-            out.push(char::from(bytes[index + 1].to_ascii_uppercase()));
-            out.push(char::from(bytes[index + 2].to_ascii_uppercase()));
+            push_escape(&mut out, bytes[index + 1], bytes[index + 2]);
             index += 3;
         } else {
             // Not an escape: the character as it is, whatever its length.
@@ -749,6 +777,74 @@ mod tests {
         );
         let htm = "User-agent: *\nDisallow: /\nAllow: /index.htm\n";
         assert!(allowed(htm, "/") && !allowed(htm, "/x"));
+    }
+
+    /// QA round two's http-03 (F179): an escape of an unreserved character
+    /// is that character in the rule and in the address, as RFC 9309
+    /// §2.2.2 says; an escape of a reserved one is not, and `*` or `$`
+    /// written as an escape is no wildcard.
+    #[test]
+    fn an_escaped_unreserved_character_is_that_character_on_both_sides() {
+        let body = "User-agent: *\nDisallow: /h03-private\nDisallow: /h03-%62az\nDisallow: /foo/bar/%62%61%7A\nDisallow: /a%2Fb\nDisallow: /star%2A\n";
+        for path in [
+            "/h03-private",
+            "/h03-%70rivate",
+            "/h03-%70rivate/more",
+            "/h03-baz",
+            "/h03-%62az",
+            "/h03-%62%61%7a",
+            "/foo/bar/baz",
+            "/%66oo/bar/baz/x",
+            "/a%2Fb",
+            "/a%2fb/c",
+            "/star%2A",
+        ] {
+            assert!(!allowed(body, path), "{path} is disallowed");
+        }
+        for path in [
+            "/a/b",
+            "/starx",
+            "/h03-%50rivate",
+            "/h03-%70RIVATE",
+            "/h03-bar",
+        ] {
+            assert!(allowed(body, path), "{path} is allowed");
+        }
+        assert_eq!(
+            decide(body, "/h03-%70rivate").matched_rule.as_deref(),
+            Some("Disallow: /h03-private")
+        );
+        assert_eq!(
+            decide(body, "/h03-baz").matched_rule.as_deref(),
+            Some("Disallow: /h03-baz")
+        );
+        for (high, low, decoded) in [
+            (b'7', b'0', Some('p')),
+            (b'4', b'1', Some('A')),
+            (b'3', b'9', Some('9')),
+            (b'2', b'd', Some('-')),
+            (b'2', b'E', Some('.')),
+            (b'5', b'f', Some('_')),
+            (b'7', b'e', Some('~')),
+            (b'2', b'f', None),
+            (b'2', b'a', None),
+            (b'2', b'4', None),
+            (b'2', b'0', None),
+            (b'c', b'3', None),
+            (b'4', b'0', None),
+            (b'5', b'b', None),
+            (b'6', b'0', None),
+            (b'7', b'b', None),
+        ] {
+            assert_eq!(
+                super::unreserved(high, low),
+                decoded,
+                "%{}{}",
+                high as char,
+                low as char
+            );
+        }
+        assert_eq!(path_of(&url("/%70%2f%7E?q=%2d%41%e9")), "/p%2F~?q=-A%E9");
     }
 
     #[test]

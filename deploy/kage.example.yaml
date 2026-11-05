@@ -250,6 +250,12 @@ http:
     max_concurrent: 6
     max_bytes_each: 2000000
     max_bytes_total: 8000000
+  # PEM file of certificate authorities the http path (levels 0 and 1) and
+  # the proxy provider's API client trust besides the public ones: for
+  # sites under a private authority of your own. Never a public
+  # authority's root someone else holds the key of: a root here is trusted
+  # for every name (docs/runbooks/levels-and-egress.md). null: none.
+  ca_file: null
 
 selftest:
   # The fingerprint self-test of the http path (spec §7.4): JA4, the HTTP/2

@@ -111,9 +111,12 @@ pub enum HttpError {
     /// No connection could be made through the proxy.
     #[error("cannot connect through the proxy: {0}")]
     Connect(&'static str),
-    /// The TLS handshake with the target failed.
-    #[error("the TLS handshake with the target failed")]
-    Tls,
+    /// The TLS handshake with the target failed: the site's certificate
+    /// was refused, or the site broke the handshake off. The proxy did its
+    /// part, so this is the site's answer (`connection_failed`), never the
+    /// proxy's (F170).
+    #[error("the TLS handshake with the target failed: {0}")]
+    Tls(&'static str),
     /// The request failed after the connection was made.
     #[error("the request failed: {0}")]
     Request(&'static str),
@@ -175,6 +178,48 @@ fn is_proxy_auth(error: &wreq::Error) -> bool {
     false
 }
 
+/// What a TLS library error the handshake ended with says, in words, when
+/// the site's TLS ended it: a protocol error of BoringSSL's, as opposed to a
+/// connection that broke off under it.
+fn handshake_refusal(stack: &btls::error::ErrorStack) -> &'static str {
+    let reason = stack
+        .errors()
+        .first()
+        .and_then(btls::error::Error::reason)
+        .unwrap_or_default();
+    if reason.contains("CERTIFICATE_VERIFY_FAILED") {
+        "the site's certificate was refused"
+    } else if reason.contains("ALERT") {
+        "the site broke the handshake off with an alert"
+    } else {
+        "the handshake could not be agreed on"
+    }
+}
+
+/// Whether the TLS handshake with the target failed by the rules of TLS
+/// (a certificate refused, an alert, nothing in common), and why. wreq
+/// reports such a handshake as a connect error, like a tunnel the proxy
+/// never opened (F170): only the error of the TLS library deep in the
+/// chain tells the two apart. A handshake whose connection broke off (the
+/// library saw an I/O error or an early end) is no TLS answer and stays a
+/// connect error.
+fn tls_refusal(error: &wreq::Error) -> Option<&'static str> {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(error);
+    while let Some(cause) = source {
+        if let Some(stack) = cause
+            .downcast_ref::<btls::ssl::Error>()
+            .and_then(btls::ssl::Error::ssl_error)
+        {
+            return Some(handshake_refusal(stack));
+        }
+        if let Some(stack) = cause.downcast_ref::<btls::error::ErrorStack>() {
+            return Some(handshake_refusal(stack));
+        }
+        source = cause.source();
+    }
+    None
+}
+
 /// Turns a wreq error into ours. The text of a wreq error can hold the
 /// proxy's address, so only its kind is kept.
 pub(crate) fn from_wreq(error: &wreq::Error, stage: Stage, after: Duration) -> HttpError {
@@ -187,11 +232,13 @@ pub(crate) fn from_wreq(error: &wreq::Error, stage: Stage, after: Duration) -> H
     if error.is_proxy_connect() {
         return HttpError::Connect("the proxy did not open the tunnel");
     }
+    if let Some(why) = tls_refusal(error) {
+        return HttpError::Tls(why);
+    }
     if error.is_tls() {
-        return HttpError::Tls;
+        return HttpError::Tls("the TLS client could not be set up");
     }
     if error.is_connect() {
-        // A failed handshake surfaces as a connection error too.
         return HttpError::Connect("the connection could not be established");
     }
     if error.is_connection_reset() {
@@ -235,7 +282,11 @@ mod tests {
 
         assert!(HttpError::ProxyAuth.is_proxy_failure());
         assert!(HttpError::Connect("x").is_proxy_failure());
-        assert!(!HttpError::Tls.is_proxy_failure());
+        assert!(!HttpError::Tls("x").is_proxy_failure());
+        assert_eq!(
+            HttpError::Tls("the site's certificate was refused").to_string(),
+            "the TLS handshake with the target failed: the site's certificate was refused"
+        );
         assert_eq!(Stage::Connecting.as_str(), "connecting");
         assert_eq!(
             Stage::WaitingForResponse.as_str(),

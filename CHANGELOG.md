@@ -377,6 +377,77 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the Chromium persona's ninth page waited past the fetch's 180 s wall
   time and was answered 202. Its three sites are read at the pace of a
   test (`pacing: fast`), as the other scripts' sites are.
+- **A certificate level 0 refuses, and a site's own `407` over `https`,
+  are the site's answer** (F170; QA round two's tls-01, tls-03). wreq
+  reports a refused handshake as a connection error, so a site whose
+  certificate the plain client refused (expired, the wrong name, an
+  authority it does not trust) was `proxy_failed` ("cannot connect through
+  the proxy"): the proxy was blamed and probed, the site was asked again
+  with every retry, and a `robots.txt` behind it was unavailable for a
+  minute instead of an hour. kage-http now tells a TLS answer from a
+  failed connection by the TLS library's own error: `connection_failed`
+  with a server error's courtesy, and the self-test says the handshake
+  failed. The forwarder notes every tunnel it opens, and an attempt the
+  client named a failed proxy whose own tunnel was open is the site's:
+  Firefox's proxy error for a site's `407` inside TLS is
+  `navigation_failed`, as Chrome names the same page (spec §9, §14).
+- **A `robots.txt` with a NUL byte, or saved as UTF-16, is read and kept
+  once** (F171; QA round two's http-01). Its text went to Postgres as it
+  came, which refused the NUL, so every level 0 fetch of the origin was
+  `500 internal` and asked the site for the file again, and a level 2
+  fetch `robots_unavailable`. The file is now read as UTF-8 or in the
+  encoding its byte order mark names, with a NUL left out, so a file saved
+  as UTF-16 with or without its mark reads as the site wrote it (spec §14).
+- **Level 0 reads a page's encoding as the browsers do** (F172, F160; QA
+  round two's http-06, http-05). A `<meta charset>` written inside an
+  inline script was taken for the page's, so a windows-1252 page read as
+  UTF-8, with replacement characters in its text and links no page names;
+  a `<meta>` past the first 1024 bytes of a long head was not seen; an
+  undeclared page in Shift_JIS, GBK, EUC-KR or another legacy encoding was
+  read as windows-1252, and an undeclared UTF-8 page as UTF-8 where both
+  browsers show mojibake. The scan for a `<meta>` now reads the markup as
+  Chrome's does, token by token (scripts, styles, titles, comments are
+  text), and on while the head lasts; an undeclared page goes to
+  Firefox's own detector (chardetng 1.0.0, pinned), never allowed to
+  answer UTF-8, with the site's top-level domain as its hint (spec §9).
+- **A sitemap in a declared legacy encoding names the addresses it names**
+  (F172; QA round two's http-04). The sitemap reader took every file for
+  UTF-8, so `/caf\xE9` in an ISO-8859-1 file became `/caf%EF%BF%BD`; it
+  now reads the file in the encoding of its byte order mark, its
+  `Content-Type` or its XML declaration, else UTF-8 (spec §9, §13).
+- **A link's query is written in its page's encoding, and the subresource
+  emulation reads the page it fetched as decoded** (F161). At level 0 a
+  link `?q=für` on a windows-1252 page asked for `?q=f%C3%BCr` where a
+  browser asks for `?q=f%FCr`; the query is now encoded in the document's
+  encoding as the URL standard has it, by the crawl's links, the
+  extraction's and the assets of level 1, and the assets are read from the
+  decoded page instead of its bytes as UTF-8 (spec §9).
+- **Level 1's subresource emulation resolves an asset's name before it
+  asks for it under `security.resolve_on_host`** (F148), as the page's own
+  redirect hops are since F98: an asset whose name points into a denied
+  range is refused and never asked for (spec §9, §19).
+
+- **A robots.txt rule matches a path written with escaped unreserved
+  characters** (F179; QA round two's http-03). Rules were compared with
+  percent-escapes as written, as Google's matcher does, so under
+  `robots: enforce` `/%70rivate` was read although `Disallow: /private`
+  refuses it, and a rule written `/%62az` did not protect `/baz`. An escape
+  of an unreserved character (a letter, a digit, `-`, `.`, `_`, `~`) is
+  now that character in the rule and in the address, as RFC 9309 §2.2.2
+  says; an escape of anything else (`%2F`) stays one (spec §14).
+
+### Added
+
+- **An operator trust anchor for the http path: `http.ca_file`** (F191). A
+  PEM file of certificate authorities, none by default, that the persona's
+  http clients, the plain client of level 0 and the proxy provider's API
+  client trust besides the public ones, so that level 0 reaches a site
+  under a private authority. It is for an authority of the operator's own,
+  never a public one's root someone else holds the key of
+  (`docs/runbooks/levels-and-egress.md`). `kage config check` and the
+  server's start refuse a file that cannot be read or holds no
+  certificate. QA round two's TLS world tests level 0 over `https` with it
+  (`tests/qa/infra/tls/level0.sh`).
 
 ## [2.0.2] - 2026-11-04
 

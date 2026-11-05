@@ -118,7 +118,17 @@ pub(crate) async fn bodies(
             // The document a browser serialized is UTF-8; the body is read
             // in the encoding a browser would take for it (F100).
             Ok(Some((_, bytes))) if kind == ArtifactKind::DomHtml => String::from_utf8(bytes).ok(),
-            Ok(Some((_, bytes))) => kage_http::charset::text_of(content_type_of(record), &bytes),
+            // The page's address is the detector's hint for an undeclared
+            // body, as on the fresh answer (F160).
+            Ok(Some((_, bytes))) => kage_http::charset::text_of_from(
+                record
+                    .final_url
+                    .as_deref()
+                    .and_then(|url| url::Url::parse(url).ok())
+                    .as_ref(),
+                content_type_of(record),
+                &bytes,
+            ),
             // Expired, or its blob is gone: the result is still a result.
             Ok(None) | Err(ArtifactError::Missing { .. }) => None,
             Err(error) => return Err(ApiError::internal(&error)),
