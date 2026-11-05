@@ -3,8 +3,11 @@
 //! From the outside in:
 //!
 //! 1. [`observe`]: the request gets its id (`X-Request-Id` on every
-//!    answer, the `request_id` of every problem), a request target that is
-//!    too long is refused, and the answer is counted (spec §20).
+//!    answer, the `request_id` of every problem); a head over the limits
+//!    of spec §19 (`431`, `414`) and a body that says it is too large
+//!    (`413`) are refused; an error that a layer below answered in plain
+//!    text becomes a problem; and the answer is counted (spec §20), by its
+//!    route's pattern and a method HTTP defines.
 //! 2. [`authenticate`]: the limit of the whole API, then the key: its
 //!    token is read, its row found, the secret compared, and the key's own
 //!    limits applied. Every refusal here is counted by its code.
@@ -23,11 +26,12 @@ use std::time::{Duration, Instant};
 
 use axum::Extension;
 use axum::extract::{FromRequestParts, MatchedPath, Request};
-use axum::http::header::{AUTHORIZATION, HeaderName, HeaderValue};
+use axum::http::header::{AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, HeaderName, HeaderValue};
 use axum::http::request::Parts;
-use axum::http::{Method, StatusCode};
+use axum::http::{HeaderMap, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use kage_core::config::ServerConfig;
 use kage_core::domain::{ApiKey, AuditActor, AuditEvent, AuditOutcome, Scope};
 use kage_core::ids::{AuditEventId, RequestId};
 use serde_json::{Value, json};
@@ -100,6 +104,131 @@ fn route_of(request: &Request) -> String {
         .map_or_else(|| "unmatched".to_owned(), |path| path.as_str().to_owned())
 }
 
+/// The method as a metric's label and a span's field: one of the methods
+/// HTTP defines, `other` for the rest. A client chooses the method, so a
+/// label that took it as it came would grow by whatever it sent (F131).
+pub(crate) fn method_label(method: &Method) -> &'static str {
+    match *method {
+        Method::GET => "GET",
+        Method::HEAD => "HEAD",
+        Method::POST => "POST",
+        Method::PUT => "PUT",
+        Method::DELETE => "DELETE",
+        Method::PATCH => "PATCH",
+        Method::OPTIONS => "OPTIONS",
+        Method::CONNECT => "CONNECT",
+        Method::TRACE => "TRACE",
+        _ => "other",
+    }
+}
+
+/// The bytes of a request's headers as they came: every name and value,
+/// with its colon, space and line end.
+fn header_bytes(headers: &HeaderMap) -> usize {
+    headers
+        .iter()
+        .map(|(name, value)| name.as_str().len() + value.len() + 4)
+        .sum()
+}
+
+/// What a request is refused with before anything else looks at it: a head
+/// over the limits of spec §19, a target too long, a body that says it is
+/// too large (on every endpoint, whether it reads a body or not).
+fn refused_at_the_door(request: &Request, server: &ServerConfig) -> Option<ApiError> {
+    let limit = |value: u32| usize::try_from(value).unwrap_or(usize::MAX);
+    let headers = request.headers();
+    if headers.len() > limit(server.max_headers) {
+        return Some(ApiError::new(
+            ErrorCode::HeadersTooLarge,
+            format!("the request has more than {} headers", server.max_headers),
+        ));
+    }
+    if header_bytes(headers) > limit(server.max_header_bytes) {
+        return Some(ApiError::new(
+            ErrorCode::HeadersTooLarge,
+            format!(
+                "the request's headers are longer than {} bytes",
+                server.max_header_bytes
+            ),
+        ));
+    }
+    let target = request
+        .uri()
+        .path_and_query()
+        .map_or(0, |target| target.as_str().len());
+    if target > limit(server.max_uri_bytes) {
+        return Some(ApiError::new(
+            ErrorCode::UriTooLong,
+            format!(
+                "the request target is longer than {} bytes",
+                server.max_uri_bytes
+            ),
+        ));
+    }
+    let declared = headers
+        .get(CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok());
+    if declared.is_some_and(|length| length > server.max_body_bytes) {
+        return Some(ApiError::new(
+            ErrorCode::PayloadTooLarge,
+            "the body of the request is larger than server.max_body_bytes",
+        ));
+    }
+    None
+}
+
+/// The code of an answer that a layer below the API made in plain text:
+/// axum's refusal of a path it cannot read (`%ff`), of a body, of a
+/// method. `None` for a status no code of the API has.
+const fn code_for(status: StatusCode) -> Option<ErrorCode> {
+    Some(match status {
+        StatusCode::BAD_REQUEST => ErrorCode::InvalidRequest,
+        StatusCode::NOT_FOUND => ErrorCode::NotFound,
+        StatusCode::METHOD_NOT_ALLOWED => ErrorCode::MethodNotAllowed,
+        StatusCode::REQUEST_TIMEOUT => ErrorCode::RequestTimeout,
+        StatusCode::PAYLOAD_TOO_LARGE => ErrorCode::PayloadTooLarge,
+        StatusCode::URI_TOO_LONG => ErrorCode::UriTooLong,
+        StatusCode::UNSUPPORTED_MEDIA_TYPE => ErrorCode::UnsupportedMediaType,
+        StatusCode::UNPROCESSABLE_ENTITY => ErrorCode::ValidationFailed,
+        StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE => ErrorCode::HeadersTooLarge,
+        StatusCode::SERVICE_UNAVAILABLE => ErrorCode::Unavailable,
+        StatusCode::INTERNAL_SERVER_ERROR => ErrorCode::Internal,
+        _ => return None,
+    })
+}
+
+/// Most bytes of a plain-text refusal that are read to say what it was.
+const PLAIN_REFUSAL_BYTES: usize = 4096;
+
+/// An error answer that is no problem document, as one: every error of the
+/// API is a problem with a stable code (spec §16.1), whatever made it.
+async fn as_problem(response: Response) -> Response {
+    let status = response.status();
+    let Some(code) = code_for(status) else {
+        return response;
+    };
+    let plain = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_none_or(|value| value.starts_with("text/plain"));
+    if !plain || response.extensions().get::<Carried>().is_some() {
+        return response;
+    }
+    let text = axum::body::to_bytes(response.into_body(), PLAIN_REFUSAL_BYTES)
+        .await
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes.to_vec()).ok())
+        .map(|text| text.trim().to_owned())
+        .filter(|text| !text.is_empty())
+        .unwrap_or_else(|| code.title().to_owned());
+    if code == ErrorCode::Internal {
+        return ApiError::internal(&text).into_response();
+    }
+    ApiError::new(code, text).into_response()
+}
+
 /// The outermost layer; see the module documentation.
 pub(crate) async fn observe(
     Extension(state): Extension<ApiState>,
@@ -108,7 +237,7 @@ pub(crate) async fn observe(
 ) -> Response {
     let id = RequestId::new();
     let started = Instant::now();
-    let method = request.method().clone();
+    let method = method_label(request.method());
     let route = route_of(&request);
     // The trace of the request (spec §20): its route as the pattern, never
     // the path a client sent, and the key once it is known.
@@ -127,21 +256,14 @@ pub(crate) async fn observe(
         .extensions_mut()
         .insert(BodyDeadline(state.config().server.body_read_timeout.get()));
 
-    let limit = usize::try_from(state.config().server.max_uri_bytes).unwrap_or(usize::MAX);
-    let target = request
-        .uri()
-        .path_and_query()
-        .map_or(0, |target| target.as_str().len());
     crate::metrics::in_flight(1.0);
-    let mut response = if target > limit {
-        crate::metrics::refusal(ErrorCode::UriTooLong.as_str());
-        ApiError::new(
-            ErrorCode::UriTooLong,
-            format!("the request target is longer than {limit} bytes"),
-        )
-        .into_response()
+    let refused = refused_at_the_door(&request, &state.config().server);
+    let mut response = if let Some(error) = refused {
+        crate::metrics::refusal(error.code().as_str());
+        error.into_response()
     } else {
-        next.run(request).instrument(span.clone()).await
+        let response = next.run(request).instrument(span.clone()).await;
+        as_problem(response).await
     };
     crate::metrics::in_flight(-1.0);
     let status = response.status();
@@ -160,7 +282,7 @@ pub(crate) async fn observe(
     }
     crate::metrics::request(
         &route,
-        method.as_str(),
+        method,
         response.status().as_u16(),
         started.elapsed(),
     );
@@ -244,7 +366,10 @@ pub(crate) async fn authenticate(
         key: Arc::new(key),
         request: id,
     });
+    // What a stopping server waits for before it closes its listener.
+    let counted = state.enter();
     let response = next.run(request).await;
+    drop(counted);
     // The key's request is no longer in flight once its answer has a head.
     drop(admitted);
     response
@@ -348,27 +473,60 @@ pub(crate) async fn audit(
         .extensions()
         .get::<Carried>()
         .map(|Carried(error)| error.code().as_str());
-    let event = AuditEvent {
-        id: AuditEventId::new(),
-        at: state.clock().now(),
-        actor: AuditActor::ApiKey(caller.key.id),
-        action: action_of(&method, &route),
-        target: note.target.or_else(|| target_of(&route, &path)),
+    let written = record(
+        &state,
+        &caller,
+        action_of(&method, &route),
+        note.target.or_else(|| target_of(&route, &path)),
         outcome,
-        details: json!({
+        json!({
             "request_id": caller.request,
             "path": path,
             "status": status.as_u16(),
             "code": code,
             "result": note.details,
         }),
-    };
-    if let Err(error) = state.store().audit_events().insert(&event).await {
+    )
+    .await;
+    match written {
+        Ok(()) => response,
         // An admin action that leaves no trace is not answered as done.
-        tracing::error!(%error, action = event.action, "an audit event could not be written");
-        return ApiError::internal(&error).into_response();
+        Err(error) => error.into_response(),
     }
-    response
+}
+
+/// Writes one event of the audit trail for the caller's key.
+///
+/// # Errors
+///
+/// `internal` when the event cannot be written: an action that leaves no
+/// trace is not answered as done.
+pub(crate) async fn record(
+    state: &ApiState,
+    caller: &Caller,
+    action: String,
+    target: Option<String>,
+    outcome: AuditOutcome,
+    details: Value,
+) -> ApiResult<()> {
+    let event = AuditEvent {
+        id: AuditEventId::new(),
+        at: state.clock().now(),
+        actor: AuditActor::ApiKey(caller.key.id),
+        action,
+        target,
+        outcome,
+        details,
+    };
+    state
+        .store()
+        .audit_events()
+        .insert(&event)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, action = event.action, "an audit event could not be written");
+            ApiError::internal(&error)
+        })
 }
 
 #[cfg(test)]
@@ -381,7 +539,7 @@ mod tests {
     use kage_core::domain::{ApiKey, KeyLimits, Scope};
     use kage_core::ids::{ApiKeyId, RequestId};
 
-    use super::{AuditNote, Caller, action_of, target_of};
+    use super::{AuditNote, Caller, action_of, method_label, target_of};
     use crate::error::ErrorCode;
 
     fn caller(scopes: &[Scope], disabled: bool) -> Caller {
@@ -508,6 +666,22 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn the_method_label_is_one_http_defines_or_other() {
+        // F131 (secrecy-04): a client chooses the method; the label must
+        // not grow with what it sends.
+        for (method, label) in [
+            (Method::GET, "GET"),
+            (Method::POST, "POST"),
+            (Method::DELETE, "DELETE"),
+            (Method::OPTIONS, "OPTIONS"),
+            (Method::from_bytes(b"QAS04X1").unwrap(), "other"),
+            (Method::from_bytes(&[b'L'; 4000]).unwrap(), "other"),
+        ] {
+            assert_eq!(method_label(&method), label);
+        }
     }
 
     #[test]

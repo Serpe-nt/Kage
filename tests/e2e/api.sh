@@ -26,7 +26,12 @@
 #     that runs in the server in the persona's own browser, a key revoked;
 #   - a request no persona can serve under the reloaded policy, answered
 #     as a result without an attempt;
-#   - an audit row for every admin call, and the series of `/metrics`;
+#   - an audit row for every admin call, a refusal at `/metrics` and
+#     `/docs` included, and the series of `/metrics`, whose `method` is
+#     bounded;
+#   - a body read by one set of rules on every endpoint, the self-test's
+#     included: a NUL, a member given twice, a null for a name, a `+json`
+#     type, a path that cannot be read (F112 to F115, F134, F136);
 #   - `kage selftest browser --proxy` reading its pages through kage on the
 #     shipped network layout, and a run that could read none of them
 #     ending as inconclusive with a failing exit (F105);
@@ -137,6 +142,15 @@ call() {
         arguments+=(--header 'Content-Type: application/json' --data "${data}")
     fi
     status="$(curl "${arguments[@]}" "${base}${path}")"
+    body="$(cat "${scratch}/body")"
+    headers="$(tr -d '\r' < "${scratch}/headers")"
+}
+# raw_call <method> <path> <token> <content type> <body>: one request with
+# a body of that media type, sent as written. Leaves what call leaves.
+raw_call() {
+    status="$(curl --silent --show-error --max-time 60 --request "$1" \
+        --dump-header "${scratch}/headers" --output "${scratch}/body" --write-out '%{http_code}' \
+        --header "Authorization: Bearer $3" --header "Content-Type: $4" --data "$5" "${base}$2")"
     body="$(cat "${scratch}/body")"
     headers="$(tr -d '\r' < "${scratch}/headers")"
 }
@@ -274,6 +288,11 @@ call POST /v1/fetch "${admin}" '{"url":"http://fixture.kage.test:8088/","level":
 problem 403 scope_missing "admin implies no other scope"
 call POST /v1/sessions "${reader}" '{}'
 problem 403 scope_missing "a key without the sessions scope"
+# A refusal at /metrics and /docs is on the audit trail (F135, checked below).
+call GET /metrics "${client}"
+problem 403 scope_missing "/metrics for a key without the admin scope"
+call GET /docs/ "${client}"
+problem 403 scope_missing "Swagger UI for a key without the admin scope"
 echo "    401 missing_key, 401 invalid_key, 403 scope_missing"
 
 echo "==> a page of the fixture site through POST /v1/fetch at level 3, in the browser of a persona of each engine, by the generated TypeScript client"
@@ -381,6 +400,24 @@ call POST /v1/fetch "${client}" '{"url":"http://fixture.kage.test:8088/","level"
 problem 422 validation_failed "a field the API does not take"
 echo "    level_required, ssrf_denied twice, header_denied, session_needs_persona, level_kind_conflict, validation_failed twice"
 
+echo "==> a body is read by one set of rules: a NUL, a member given twice, a null for a name, a +json type (F112, F115, F134)"
+call POST /v1/fetch "${client}" '{"url":"http://fixture.kage.test:8088/k\u0000","level":0}'
+problem 422 validation_failed "a NUL in the URL"
+check "the refusal names the member, and nothing of the value" "${body}" "d.field === 'url' && d.detail.includes('NUL')"
+call POST /v1/fetch "${client}" '{"url":"http://fixture.kage.test:8088/","level":0,"robots":null}'
+problem 422 validation_failed "a null for an enumerated member"
+check "the refusal names the member" "${body}" "d.field === 'robots'"
+call POST /v1/fetch "${client}" '{"url":"http://fixture.kage.test:8088/","url":"http://fixture.kage.test:8088/x","level":0}'
+problem 422 validation_failed "a member given twice"
+check "the refusal names the member" "${body}" "d.field === 'url' && d.detail.includes('twice')"
+raw_call POST /v1/fetch "${client}" 'application/vnd.x+json' '{"url":"http://fixture.kage.test:8088/","level":0}'
+problem 415 unsupported_media_type "a +json media type"
+call GET /v1/results/%ff "${client}"
+problem 400 invalid_request "a path parameter that cannot be read"
+call GET '/v1/policies/domains/*.fixture.kage.test' "${client}"
+problem 422 validation_failed "a wildcard is no host name (F136)"
+echo "    validation_failed naming url, robots and url; 415 for +json; 400 for %ff; 422 for a wildcard"
+
 echo "==> level 1 is refused before anything is fetched: no persona of this release has an http profile"
 call POST /v1/fetch "${client}" '{"url":"http://fixture.kage.test:8088/landing","level":1}'
 problem 422 level_unavailable "level 1 while no browser major has a verified http profile"
@@ -444,6 +481,13 @@ conflicts="$("${compose[@]}" logs --no-color browser-chromium 2> /dev/null | gre
 [ "${conflicts}" -eq 0 ] || fail "the self-test met context_conflict ${conflicts} times"
 echo "    $(value "${body}" "'browser: ' + d.browser.verdict + ' with a score of ' + d.browser.score + '; http: ' + d.http.verdict + '; the persona is ' + d.persona.state")"
 
+echo "==> the self-test reads its body as every other endpoint does (F113)"
+raw_call POST "/v1/admin/personas/${target}/selftest" "${admin}" 'text/plain' '{}'
+problem 415 unsupported_media_type "a self-test's body of another type"
+raw_call POST "/v1/admin/personas/${target}/selftest" "${admin}" 'application/json' '{'
+problem 400 invalid_request "a self-test's body that is no JSON"
+echo "    415 and 400, before anything is tested"
+
 echo "==> a key is rotated and revoked: the old token is dead at once"
 call POST "/v1/admin/keys/${reader_id}/rotate" "${admin}"
 expect 200 "POST /v1/admin/keys/{id}/rotate"
@@ -473,6 +517,10 @@ for action in admin.key.create admin.persona.list admin.persona.show admin.proxy
 done
 check "the refused admin call is there as denied" "${trail}" \
     "d.events.some((e) => e.action === 'admin.persona.list' && e.outcome === 'denied' && e.api_key_id === '${client_id}')"
+for action in admin.metrics.read admin.docs.read; do
+    check "the refusal at ${action} is there as denied (F135)" "${trail}" \
+        "d.events.some((e) => e.action === '${action}' && e.outcome === 'denied' && e.api_key_id === '${client_id}')"
+done
 check "what the command line did is there too" "${trail}" \
     "d.events.some((e) => e.action === 'key.create' && e.actor === 'cli') && d.events.some((e) => e.action === 'key.revoke' && e.actor === 'cli' && e.target === '${client_id}')"
 check "no token and no hash is in the trail" "${trail}" \
@@ -483,6 +531,8 @@ by_action="$(psql "SELECT action || '=' || count(*) FROM audit_events GROUP BY a
 echo "    ${rows} rows of the operator's key; by action: ${by_action}"
 
 echo "==> /metrics: the series of the specification, for a key with the admin scope"
+# A method a client makes up is counted as `other`, never as itself (F131).
+curl --silent --output /dev/null --request QAS04X1 "${base}/nosuch" || true
 call GET /metrics "${auditor}"
 expect 200 "GET /metrics"
 # Kept in a file: `grep --quiet` on a pipe ends the writer with SIGPIPE at
@@ -507,6 +557,11 @@ fi
 awk '/^kage_bandwidth_bytes_total\{/ && /direction="down"/ && /egress="pool"/ { found = 1 } END { exit !found }' "${metrics}" \
     || fail "the bytes through the pool are not counted by their exit: $(grep '^kage_bandwidth_bytes_total' "${metrics}" | head -5)"
 grep --quiet '^sidecar_contexts_open{.*engine="firefox"' "${metrics}" || fail "the firefox sidecar's series are missing"
+if grep --quiet 'QAS04X1' "${metrics}"; then
+    fail "a made-up method is a label of /metrics: $(grep 'QAS04X1' "${metrics}" | head -3)"
+fi
+grep --quiet '^kage_api_requests_total{.*method="other"' "${metrics}" \
+    || fail "the made-up method is not counted as other: $(grep '^kage_api_requests_total' "${metrics}" | head -5)"
 families="$(grep --count '^# TYPE ' "${metrics}")"
 call GET /metrics
 problem 401 missing_key "/metrics without a key"

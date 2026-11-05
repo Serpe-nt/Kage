@@ -1914,6 +1914,14 @@ async fn a_request_whose_job_ended_without_it_is_answered_with_what_ended_it() {
     assert_eq!(result.json()["outcome"], "provider_error");
     assert_eq!(result.json()["reason"], "cancelled");
     assert_eq!(result.json()["id"], request);
+    // F155: the job's list of items says the same of the item, where it
+    // said null.
+    let items = api.job_items(&token, &id).await;
+    let listed = &items[0]["result"];
+    assert_eq!(listed["outcome"], "provider_error", "{}", items[0]);
+    assert_eq!(listed["reason"], "cancelled", "{}", items[0]);
+    assert_eq!(listed["id"], result.json()["id"]);
+    assert_eq!(listed["created_at"], result.json()["created_at"]);
     work.stop().await;
     api.shut_down().await;
 }

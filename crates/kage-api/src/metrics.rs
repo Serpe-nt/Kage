@@ -13,7 +13,8 @@
 //!   `kage_bandwidth_budget_ratio`, `kage_replacements_total`;
 //! - what is read from the store when a scrape arrives:
 //!   `kage_persona_state{state}` and `kage_selftest_score{persona,engine}`;
-//! - the API's own: `kage_api_requests_total{route,method,status}`,
+//! - the API's own: `kage_api_requests_total{route,method,status}` (the
+//!   route is the pattern, the method one HTTP defines or `other`),
 //!   `kage_api_request_duration_seconds{route,method}`,
 //!   `kage_api_requests_in_flight`, `kage_api_refusals_total{code}`;
 //! - the sidecars' series (`sidecar_contexts_open`,
@@ -124,14 +125,17 @@ const CRAWL_FRONTIER_REASONS: [&str; 3] = ["already_read", "ssrf_denied", "robot
 const CRAWL_DUPLICATE_KINDS: [&str; 2] = ["exact", "near"];
 
 /// The codes a request is refused with before its handler runs
-/// (`kage_api_refusals_total{code}`): the key, its scope, its limits, and
-/// the length of the request target.
-const REFUSAL_CODES: [ErrorCode; 8] = [
+/// (`kage_api_refusals_total{code}`): the key, its scope, its limits, the
+/// head of the request (its headers, its target) and a body that says it is
+/// too large.
+const REFUSAL_CODES: [ErrorCode; 10] = [
     ErrorCode::MissingKey,
     ErrorCode::InvalidKey,
     ErrorCode::KeyDisabled,
     ErrorCode::ScopeMissing,
     ErrorCode::UriTooLong,
+    ErrorCode::HeadersTooLarge,
+    ErrorCode::PayloadTooLarge,
     ErrorCode::RateLimited,
     ErrorCode::ConcurrencyLimited,
     ErrorCode::BudgetExhausted,
@@ -452,7 +456,7 @@ mod tests {
             // Six reasons of the scope, three of the frontier.
             ("kage_crawl_skipped_total", 9),
             ("kage_crawl_duplicates_total", 2),
-            ("kage_api_refusals_total", 8),
+            ("kage_api_refusals_total", 10),
             ("kage_scheduler_refusals_total", 7),
             // Up and down, through the pool and the host.
             ("kage_bandwidth_bytes_total", 4),

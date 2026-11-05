@@ -352,12 +352,8 @@ async fn plan_seeds(crawl: &CrawlJob, checks: Checks<'_>) -> ApiResult<PlannedCr
     let mut planned = Vec::with_capacity(rules.seeds.len());
     for (index, seed) in rules.seeds.iter().enumerate() {
         let input = page_request(crawl.defaults.as_ref(), seed, crawl.session_id.as_deref());
-        let request: FetchRequest = serde_json::from_value(input).map_err(|error| {
-            at(
-                ApiError::new(ErrorCode::ValidationFailed, error.to_string()),
-                index,
-            )
-        })?;
+        let request: FetchRequest =
+            crate::extract::typed_value(input).map_err(|error| at(error, index))?;
         let mut one = plan(&request, &checks.policies.pacing).map_err(|error| at(error, index))?;
         // A page of a crawl is a visit every time; what it read fills the
         // cache when its defaults name a lifetime.

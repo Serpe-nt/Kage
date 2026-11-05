@@ -38,6 +38,7 @@ use crate::fetch::request::{FetchRequest, Include, Included};
 use crate::fetch::result::{
     Bodies, FetchAccepted, FetchResult, Viewer, from_stored, parse_artifact,
 };
+use crate::shared::Binary;
 use crate::state::ApiState;
 
 /// How long a fetch may be "running" before its result is given up on: the
@@ -136,8 +137,9 @@ pub(crate) async fn bodies(
 /// be stored. The worker ends such a request with the item; this answers
 /// one it could not (a server that was killed between the two, or a
 /// request of a release before F109). Its id is the item's, so that every
-/// read names the same result.
-fn ended_with(item: &JobItem, request: RequestId) -> Option<FetchRecord> {
+/// read names the same result: this endpoint's and the job's list of items
+/// (F155).
+pub(crate) fn ended_with(item: &JobItem, request: RequestId) -> Option<FetchRecord> {
     if !item.state.is_terminal() || item.state == JobItemState::Succeeded {
         return None;
     }
@@ -172,8 +174,9 @@ fn ended_with(item: &JobItem, request: RequestId) -> Option<FetchRecord> {
 /// `200` with the result once the fetch has ended; `202` while it runs.
 /// A request whose job ended without it (cancelled, expired, interrupted)
 /// has ended too: `200` with what ended it.
-/// What only the synchronous answer has (`pacing`, `behavior`, `console`,
-/// `side_effects`) is null here.
+/// What the visit did (`pacing`, `behavior`, `console`, `side_effects`) is
+/// kept with the result and said here as the synchronous answer said it
+/// (F36); `console` when the request asked for it.
 #[utoipa::path(
     get,
     path = "/v1/results/{id}",
@@ -354,7 +357,7 @@ async fn owned_artifact(state: &ApiState, caller: &Caller, id: ArtifactId) -> Ap
     operation_id = "get_artifact",
     params(("id" = String, Path, description = "The artifact's id, as a result names it (`art_...`).")),
     responses(
-        (status = 200, description = "The artifact's bytes, in its own media type.", body = Vec<u8>, content_type = "application/octet-stream"),
+        (status = 200, description = "The artifact's bytes, in its own media type (`Content-Type`): an HTML document, a body as the site sent it, a WebP, PNG or JPEG image, a PDF. Read it as bytes, not as JSON.", body = inline(Binary), content_type = "*/*"),
         (status = 404, description = "`artifact_not_found`: no such artifact of this key, or it expired.", body = Problem, content_type = "application/problem+json"),
     ),
     security(("api_key" = ["fetch"]))

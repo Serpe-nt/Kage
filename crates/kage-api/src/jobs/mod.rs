@@ -15,7 +15,10 @@
 //! day: the same request again is answered with that job, another request
 //! under the same key is a mistake (`idempotency_key_reused`).
 //!
-//! A job belongs to the key that made it; another key's job is not there.
+//! A job belongs to the key that made it; another key's job is not there,
+//! but for a key with the `admin` scope: an operator reads and cancels any
+//! key's job. Every such read or cancel of another key's job, and every
+//! cancel, is on the audit trail with both keys' ids (spec §16.3, F117).
 //!
 //! - [`request`]: what a job may be, and its checks.
 //! - [`worker`]: what claims jobs and works them.
@@ -40,7 +43,7 @@ use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, KeyInit, Mac};
 use kage_core::domain::{
-    Job, JobItem, JobItemState, JobKind, JobOrigin, JobState, Level, Scope, SessionId,
+    AuditOutcome, Job, JobItem, JobItemState, JobKind, JobOrigin, JobState, Level, Scope, SessionId,
 };
 use kage_core::ids::{JobId, JobItemId};
 use kage_store::repo::Created;
@@ -51,8 +54,8 @@ use utoipa::IntoParams;
 
 use self::crawl::plan_crawl;
 use self::request::{
-    Checks, JobRequest, MAX_IDEMPOTENCY_KEY, PlannedWebhook, canonical, plan_batch, plan_flow,
-    plan_webhook, stored_spec,
+    Checks, JobRequest, MAX_IDEMPOTENCY_KEY, PlannedWebhook, canonical, parse_job, plan_batch,
+    plan_flow, plan_webhook, stored_spec,
 };
 use self::view::{DeliveryView, JobItemView, JobItemsPage, JobView};
 use crate::auth::Caller;
@@ -116,6 +119,36 @@ fn job_not_found() -> ApiError {
     )
 }
 
+/// What a call on a job leaves on the audit trail: every cancel, and every
+/// read of another key's job by an operator (F117). The event's key is the
+/// caller's, `owner_key` the job's.
+async fn audited(
+    state: &ApiState,
+    caller: &Caller,
+    job: &Job,
+    action: &str,
+    path: &str,
+) -> ApiResult<()> {
+    let foreign = job.api_key_id != caller.key.id;
+    if !foreign && action != "job.cancel" {
+        return Ok(());
+    }
+    crate::auth::record(
+        state,
+        caller,
+        action.to_owned(),
+        Some(job.id.to_string()),
+        AuditOutcome::Success,
+        json!({
+            "request_id": caller.request,
+            "path": path,
+            "owner_key": job.api_key_id,
+            "another_keys": foreign,
+        }),
+    )
+    .await
+}
+
 /// The job with this id, when the caller may read it.
 async fn owned_job(state: &ApiState, caller: &Caller, id: &str) -> ApiResult<Job> {
     let id = id.parse::<JobId>().map_err(|_| job_not_found())?;
@@ -126,7 +159,8 @@ async fn owned_job(state: &ApiState, caller: &Caller, id: &str) -> ApiResult<Job
         .await
         .map_err(|error| ApiError::internal(&error))?
         .ok_or_else(job_not_found)?;
-    // Another key's job is not there, as far as this key can tell.
+    // Another key's job is not there, as far as this key can tell; an
+    // operator's key reads every job, and the trail says so.
     if job.api_key_id == caller.key.id || caller.has(Scope::Admin) {
         Ok(job)
     } else {
@@ -317,8 +351,7 @@ pub(crate) async fn create(
             "no proxy pool is configured, or the server is stopping: no job is accepted",
         ));
     }
-    let request: JobRequest = serde_json::from_value(body.clone())
-        .map_err(|error| ApiError::new(ErrorCode::ValidationFailed, error.to_string()))?;
+    let request: JobRequest = parse_job(&body)?;
 
     // The same key again is answered before anything is checked twice.
     let key = idempotency_key(&headers)?;
@@ -515,7 +548,16 @@ pub(crate) async fn show(
 ) -> ApiResult<Json<JobView>> {
     caller.require(Scope::Jobs)?;
     let job = owned_job(&state, &caller, &id).await?;
-    Ok(Json(view_of(&state, &job).await?))
+    let view = view_of(&state, &job).await?;
+    audited(
+        &state,
+        &caller,
+        &job,
+        "job.show",
+        &format!("/v1/jobs/{}", job.id),
+    )
+    .await?;
+    Ok(Json(view))
 }
 
 /// Which items of a job to read.
@@ -545,12 +587,14 @@ async fn result_of(
         return Ok(None);
     };
     let store = state.store();
-    let Some(record) = store
+    let kept = store
         .results()
         .get_by_request(request)
         .await
-        .map_err(|error| ApiError::internal(&error))?
-    else {
+        .map_err(|error| ApiError::internal(&error))?;
+    // An item that ended without its page has ended with what ended it, as
+    // `GET /v1/results/{id}` answers for its request (F109, F155).
+    let Some(record) = kept.or_else(|| crate::results::ended_with(item, request)) else {
         return Ok(None);
     };
     let attempts = store
@@ -620,6 +664,14 @@ pub(crate) async fn items(
                 .map_err(|_| ApiError::field("cursor", "the next_cursor of the page before"))
         })
         .transpose()?;
+    audited(
+        &state,
+        &caller,
+        &job,
+        "job.items",
+        &format!("/v1/jobs/{}/items", job.id),
+    )
+    .await?;
     let limit = query.limit.unwrap_or(DEFAULT_ITEMS_PAGE);
     if !(1..=MAX_ITEMS_PAGE).contains(&limit) {
         return Err(ApiError::field(
@@ -694,6 +746,16 @@ pub(crate) async fn cancel(
         .map_err(|error| ApiError::internal(&error))?
         .ok_or_else(job_not_found)?;
     state.jobs().nudge(job.id);
+    // Every cancel is on the trail, the owner's own included: it stops
+    // work that somebody asked for.
+    audited(
+        &state,
+        &caller,
+        &job,
+        "job.cancel",
+        &format!("/v1/jobs/{}/cancel", job.id),
+    )
+    .await?;
     Ok(Json(view_of(&state, &job).await?))
 }
 

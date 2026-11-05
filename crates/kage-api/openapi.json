@@ -29,6 +29,15 @@
                 }
               }
             }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
           }
         }
       }
@@ -70,6 +79,24 @@
                 }
               }
             }
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         },
         "security": [
@@ -98,6 +125,15 @@
                 }
               }
             }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
           },
           "503": {
             "description": "Kage cannot fetch now; `checks` says why.",
@@ -151,6 +187,30 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         },
         "security": [
@@ -179,6 +239,30 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         },
         "security": [
@@ -216,6 +300,27 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
           "422": {
             "description": "The name, the scopes or a limit is not acceptable.",
             "content": {
@@ -225,6 +330,15 @@
                 }
               }
             }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         },
         "security": [
@@ -266,6 +380,15 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "404": {
             "description": "`key_not_found`.",
             "content": {
@@ -275,6 +398,24 @@
                 }
               }
             }
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         },
         "security": [
@@ -316,6 +457,15 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "404": {
             "description": "`key_not_found`.",
             "content": {
@@ -326,6 +476,9 @@
               }
             }
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
             "description": "`conflict`: the key is disabled.",
             "content": {
@@ -335,6 +488,21 @@
                 }
               }
             }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         },
         "security": [
@@ -383,6 +551,30 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         },
         "security": [
@@ -433,6 +625,15 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "404": {
             "description": "`persona_not_found`.",
             "content": {
@@ -442,6 +643,24 @@
                 }
               }
             }
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         },
         "security": [
@@ -483,6 +702,15 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "404": {
             "description": "`persona_not_found`.",
             "content": {
@@ -493,6 +721,9 @@
               }
             }
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
             "description": "`conflict`: the persona is retired, or its proxy cannot carry traffic.",
             "content": {
@@ -502,6 +733,21 @@
                 }
               }
             }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         },
         "security": [
@@ -543,6 +789,15 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "404": {
             "description": "`persona_not_found`.",
             "content": {
@@ -552,6 +807,24 @@
                 }
               }
             }
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         },
         "security": [
@@ -605,6 +878,15 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "404": {
             "description": "`persona_not_found`.",
             "content": {
@@ -615,6 +897,9 @@
               }
             }
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
             "description": "`conflict`: the persona is retired, held by other work, or its proxy cannot carry traffic.",
             "content": {
@@ -624,6 +909,27 @@
                 }
               }
             }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         },
         "security": [
@@ -653,6 +959,21 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
           "422": {
             "description": "`validation_failed`: a policy file is invalid; the last good policies stay in force.",
             "content": {
@@ -662,6 +983,15 @@
                 }
               }
             }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         },
         "security": [
@@ -690,6 +1020,30 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         },
         "security": [
@@ -729,6 +1083,30 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         },
         "security": [
@@ -770,6 +1148,15 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "404": {
             "description": "`proxy_not_found`.",
             "content": {
@@ -789,6 +1176,21 @@
                 }
               }
             }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         },
         "security": [
@@ -830,6 +1232,15 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "404": {
             "description": "`proxy_not_found`.",
             "content": {
@@ -840,6 +1251,9 @@
               }
             }
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
             "description": "`conflict`: no provider is configured.",
             "content": {
@@ -849,6 +1263,21 @@
                 }
               }
             }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         },
         "security": [
@@ -888,6 +1317,15 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "404": {
             "description": "`key_not_found`.",
             "content": {
@@ -898,6 +1336,18 @@
               }
             }
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
           "422": {
             "description": "`before` lies in the future.",
             "content": {
@@ -907,6 +1357,15 @@
                 }
               }
             }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         },
         "security": [
@@ -947,6 +1406,18 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
             "description": "`no_matching_persona`: nobody else may ask the site (every other persona that may read it is needed to read it, read it lately, or is not ready); the site keeps the scout it has.",
             "content": {
@@ -957,6 +1428,12 @@
               }
             }
           },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
           "422": {
             "description": "`validation_failed`: what was named is no host.",
             "content": {
@@ -966,6 +1443,15 @@
                 }
               }
             }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           },
           "503": {
             "description": "`unavailable`: no proxy pool is configured.",
@@ -1008,19 +1494,25 @@
         ],
         "responses": {
           "200": {
-            "description": "The artifact's bytes, in its own media type.",
+            "description": "The artifact's bytes, in its own media type (`Content-Type`): an HTML document, a body as the site sent it, a WebP, PNG or JPEG image, a PDF. Read it as bytes, not as JSON.",
             "content": {
-              "application/octet-stream": {
+              "*/*": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "type": "integer",
-                    "format": "int32",
-                    "minimum": 0
-                  }
+                  "type": "string",
+                  "format": "binary",
+                  "description": "The bytes as they were kept, in the media type `Content-Type` names."
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           },
           "404": {
             "description": "`artifact_not_found`: no such artifact of this key, or it expired.",
@@ -1031,6 +1523,24 @@
                 }
               }
             }
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         },
         "security": [
@@ -1137,6 +1647,9 @@
               }
             }
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
             "description": "`session_persona_conflict`.",
             "content": {
@@ -1146,6 +1659,15 @@
                 }
               }
             }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "422": {
             "description": "The request cannot be made as asked; `code` says why.",
@@ -1166,6 +1688,12 @@
                 }
               }
             }
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           },
           "503": {
             "description": "Nothing can be fetched: no proxy pool, or the server stops.",
@@ -1296,6 +1824,9 @@
               }
             }
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
             "description": "`idempotency_key_reused`, `session_persona_conflict`.",
             "content": {
@@ -1305,6 +1836,15 @@
                 }
               }
             }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "422": {
             "description": "The job cannot be accepted as asked; `code` says why, `item` (a batch's item, a crawl's seed) or `step` which part.",
@@ -1325,6 +1865,12 @@
                 }
               }
             }
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           },
           "503": {
             "description": "Nothing can be fetched: no proxy pool, or the server stops.",
@@ -1376,6 +1922,15 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "404": {
             "description": "`job_not_found`: no such job of this key.",
             "content": {
@@ -1385,6 +1940,24 @@
                 }
               }
             }
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         },
         "security": [
@@ -1427,6 +2000,15 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "404": {
             "description": "`job_not_found`.",
             "content": {
@@ -1436,6 +2018,24 @@
                 }
               }
             }
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         },
         "security": [
@@ -1508,6 +2108,15 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "404": {
             "description": "`job_not_found`.",
             "content": {
@@ -1518,6 +2127,15 @@
               }
             }
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
           "422": {
             "description": "The cursor or the limit is not one.",
             "content": {
@@ -1527,6 +2145,15 @@
                 }
               }
             }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         },
         "security": [
@@ -1568,6 +2195,24 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
           "422": {
             "description": "Not a host name.",
             "content": {
@@ -1577,6 +2222,15 @@
                 }
               }
             }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         },
         "security": [
@@ -1594,7 +2248,7 @@
           "fetch"
         ],
         "summary": "The result of a fetch, by the request's id.",
-        "description": "`200` with the result once the fetch has ended; `202` while it runs.\nA request whose job ended without it (cancelled, expired, interrupted)\nhas ended too: `200` with what ended it.\nWhat only the synchronous answer has (`pacing`, `behavior`, `console`,\n`side_effects`) is null here.",
+        "description": "`200` with the result once the fetch has ended; `202` while it runs.\nA request whose job ended without it (cancelled, expired, interrupted)\nhas ended too: `200` with what ended it.\nWhat the visit did (`pacing`, `behavior`, `console`, `side_effects`) is\nkept with the result and said here as the synchronous answer said it\n(F36); `console` when the request asked for it.",
         "operationId": "get_result",
         "parameters": [
           {
@@ -1639,6 +2293,15 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "404": {
             "description": "`result_not_found`: no such request of this key, or it expired.",
             "content": {
@@ -1648,6 +2311,24 @@
                 }
               }
             }
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         },
         "security": [
@@ -1698,6 +2379,18 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
           "409": {
             "description": "`no_matching_persona`, or `session_persona_conflict` for an open session whose persona the request excludes.",
             "content": {
@@ -1708,6 +2401,15 @@
               }
             }
           },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
           "422": {
             "description": "The id or a hint is not well formed.",
             "content": {
@@ -1717,6 +2419,15 @@
                 }
               }
             }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         },
         "security": [
@@ -1757,6 +2468,15 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "404": {
             "description": "`session_not_found`: never opened, or ended.",
             "content": {
@@ -1766,6 +2486,24 @@
                 }
               }
             }
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         },
         "security": [
@@ -1797,6 +2535,15 @@
           "204": {
             "description": "The session ended."
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "404": {
             "description": "`session_not_found`.",
             "content": {
@@ -1806,6 +2553,24 @@
                 }
               }
             }
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "414": {
+            "$ref": "#/components/responses/UriTooLong"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeadersTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
           }
         },
         "security": [
@@ -3130,6 +3895,7 @@
           "conflict",
           "payload_too_large",
           "uri_too_long",
+          "headers_too_large",
           "unsupported_media_type",
           "request_timeout",
           "unavailable",
@@ -4901,6 +5667,7 @@
             ],
             "format": "int32",
             "description": "Pages per day (UTC); no budget when left out.",
+            "maximum": 100000,
             "minimum": 1
           },
           "max_concurrent": {
@@ -4910,6 +5677,7 @@
             ],
             "format": "int32",
             "description": "Requests in flight at once; 4 when left out.",
+            "maximum": 100000,
             "minimum": 1
           },
           "name": {
@@ -4925,6 +5693,7 @@
             ],
             "format": "int32",
             "description": "Requests per minute; 60 when left out.",
+            "maximum": 100000,
             "minimum": 1
           },
           "scopes": {
@@ -5532,7 +6301,7 @@
           },
           "policy": {
             "$ref": "#/components/schemas/FreeForm",
-            "description": "Every field of the policy as it resolves for the host: `host`,\n`matched` (the entry that applies), `inherits`, `min_level`,\n`countries`, `engines`, `pacing`, `pacing_locked`, `robots`,\n`referer_strategy`, `active_hours`, `min_dwell`, `behavior_locked`,\n`retries`, `breaker_threshold`, `breaker_pause`, `cooldowns`."
+            "description": "Every field of the policy as it resolves for the host: `host`,\n`matched` (the entry that applies), `inherits`, `min_level`,\n`countries`, `engines`, `pacing`, `pacing_locked`, `robots`, `cache` (as it\nholds under the configuration's `cache.max_ttl`),\n`referer_strategy`, `active_hours`, `min_dwell`, `behavior_locked`,\n`retries`, `breaker_threshold`, `breaker_pause`, `cooldowns`."
           }
         }
       },
@@ -6810,6 +7579,135 @@
               "$ref": "#/components/schemas/FreeForm"
             },
             "description": "The responses that matched the request's filter: each with `url`,\n`method`, `kind` (`xhr` or `fetch`), `status`, `content_type`,\n`bytes`, `truncated`, and its body as `body` (text, when it is at\nmost 256 kB) or as `body_artifact` (an artifact's id)."
+          }
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "`invalid_request`: the body is not well-formed JSON, or a path parameter cannot be read (an escape that is no UTF-8).",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "`scope_missing`: the key lacks a scope this operation needs; `scope` names it.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "HeadersTooLarge": {
+        "description": "`headers_too_large`: more headers than `server.max_headers`, or longer than `server.max_header_bytes`. A head beyond twice those limits is cut off by the HTTP layer itself: an empty `431` without `X-Request-Id`.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "InternalError": {
+        "description": "`internal`: something failed inside Kage, the store most likely; the log has the cause under the request id.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "PayloadTooLarge": {
+        "description": "`payload_too_large`: the body is larger than `server.max_body_bytes`, or its `Content-Length` says so, on every operation.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "RequestTimeout": {
+        "description": "`request_timeout`: the body did not arrive within `server.body_read_timeout`, or the answer was not ready within `server.request_timeout`.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "TooManyRequests": {
+        "description": "`rate_limited`, `concurrency_limited` or `budget_exhausted`: a limit of the key or of the API; `Retry-After` and `retry_after_s` say how long to wait.",
+        "headers": {
+          "Retry-After": {
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "Seconds to wait before asking again."
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "`missing_key`, `invalid_key` or `key_disabled`: the request carries no valid API key.",
+        "headers": {
+          "WWW-Authenticate": {
+            "schema": {
+              "type": "string"
+            },
+            "description": "`Bearer realm=\"kage\"`."
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "UnprocessableEntity": {
+        "description": "`validation_failed`, or another code of a request that cannot be made as asked: `field` names the member (a member given twice and a NUL character in a string included).",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "UnsupportedMediaType": {
+        "description": "`unsupported_media_type`: a body is sent as `application/json`, and as no other type (a `+json` type included).",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "UriTooLong": {
+        "description": "`uri_too_long`: the request target is longer than `server.max_uri_bytes`.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
           }
         }
       }
