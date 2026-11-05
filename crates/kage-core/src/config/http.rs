@@ -365,6 +365,12 @@ fn validate_browser_selftest(browser: &BrowserSelftestConfig) -> Result<(), Stri
                 return Err(format!("{key}: the id {id:?} is used twice"));
             }
             match url::Url::parse(&page.url) {
+                Ok(url) if !url.username().is_empty() || url.password().is_some() => {
+                    // The URL is not repeated: it holds a password.
+                    return Err(format!(
+                        "{key}: the page {id:?} must not carry credentials in its URL"
+                    ));
+                }
                 Ok(url) if matches!(url.scheme(), "http" | "https") && url.host_str().is_some() => {
                 }
                 _ => return Err(format!("{key}: {:?} is not an http(s) URL", page.url)),

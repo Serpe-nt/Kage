@@ -103,6 +103,22 @@ impl CachePolicy {
         self.max_ttl.map_or(bound, |own| own.get().min(bound))
     }
 
+    /// The policy as it holds under the configuration's bound: what the
+    /// policy preview shows (F136). `max_ttl` is the longest a result is
+    /// served for, the bound when the policy names none; `ttl` is never
+    /// longer.
+    #[must_use]
+    pub fn bounded(self, bound: Duration) -> Self {
+        let longest = self.longest(bound);
+        Self {
+            shared: self.shared,
+            max_ttl: Some(HumanDuration::from(longest)),
+            ttl: self
+                .ttl
+                .map(|ttl| HumanDuration::from(ttl.get().min(longest))),
+        }
+    }
+
     /// For how long a request is served from the cache and fills it:
     /// what it asks for (`Some(0)` is never), else the policy's `ttl`,
     /// else never. `Err` with the bound when it asks for longer than the
@@ -713,6 +729,42 @@ impl DomainPolicies {
         Ok(())
     }
 
+    /// Checks every cache lifetime the file names against the
+    /// configuration's `cache.max_ttl`, which bounds every site's: a longer
+    /// one would hold for no longer than the bound, and say otherwise in the
+    /// policy preview (F136).
+    ///
+    /// # Errors
+    ///
+    /// Fails with [`PolicyError::InvalidField`] for the first that is
+    /// longer.
+    pub fn check_cache_bound(&self, bound: Duration) -> Result<(), PolicyError> {
+        let entries = std::iter::once(("defaults", &self.defaults)).chain(
+            self.domains
+                .iter()
+                .map(|(host, rule)| (host.as_str(), rule)),
+        );
+        for (scope, rule) in entries {
+            let Some(cache) = &rule.cache else {
+                continue;
+            };
+            for (field, value) in [("cache.max_ttl", cache.max_ttl), ("cache.ttl", cache.ttl)] {
+                if let Some(value) = value.filter(|value| value.get() > bound) {
+                    return Err(PolicyError::InvalidField {
+                        scope: scope.to_owned(),
+                        field,
+                        reason: format!(
+                            "{value} is longer than the configuration's cache.max_ttl ({}), \
+                             which bounds every site's; write at most that",
+                            HumanDuration::from(bound)
+                        ),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// The `defaults` block as written.
     pub const fn defaults(&self) -> &DomainRule {
         &self.defaults
@@ -845,6 +897,26 @@ pub fn normalize_host(host: &str) -> Option<String> {
         url::Host::Ipv4(address) => Some(address.to_string()),
         url::Host::Ipv6(address) => Some(format!("[{address}]")),
     }
+}
+
+/// Whether a name is a host name as DNS and a browser have it: labels of
+/// letters, digits and hyphens (an internationalized name in its ASCII
+/// form), none empty, none longer than 63 characters, at most 253 in all.
+/// A wildcard is none: `*.example.org` is compared as it is written and
+/// matches nothing (F136).
+pub fn is_host_name(name: &str) -> bool {
+    let name = name.strip_suffix('.').unwrap_or(name);
+    !name.is_empty()
+        && name.len() <= 253
+        && name.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
 }
 
 fn normalize_domain_key(key: &str) -> Result<String, PolicyError> {

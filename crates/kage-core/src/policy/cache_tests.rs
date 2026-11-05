@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use super::{CachePolicy, DomainPolicies, PolicyError, RobotsMode};
+use super::{CachePolicy, DomainPolicies, PolicyError, RobotsMode, is_host_name};
 use crate::duration::HumanDuration;
 
 const DAY: Duration = Duration::from_hours(24);
@@ -118,4 +118,68 @@ fn how_long_a_request_is_served_from_the_cache() {
     assert_eq!(short.ttl_for(Some(secs(300)), DAY), Ok(Some(secs(300))));
     assert_eq!(short.ttl_for(Some(secs(301)), DAY), Err(secs(300)));
     assert_eq!(open.longest(DAY), DAY);
+}
+
+#[test]
+fn a_host_name_is_labels_and_no_wildcard() {
+    for good in [
+        "example.org",
+        "a-b.example.org.",
+        "xn--bcher-kva.example",
+        "localhost",
+        "10.0.0.1",
+    ] {
+        assert!(is_host_name(good), "{good}");
+    }
+    let long = "a".repeat(64);
+    for bad in [
+        "",
+        "*",
+        "*.example.org",
+        "a..b",
+        "-a.org",
+        "a-.org",
+        "a b.org",
+        long.as_str(),
+    ] {
+        assert!(!is_host_name(bad), "{bad}");
+    }
+}
+
+#[test]
+fn a_cache_lifetime_longer_than_the_configurations_bound_is_refused_and_the_preview_holds_to_it() {
+    // F136 (extract-11): the configuration's bound is a day.
+    let day = DAY;
+    for written in ["cache: { max_ttl: 30d }", "cache: { ttl: 30d }"] {
+        let policies =
+            DomainPolicies::from_yaml(&format!("domains:\n  example.org:\n    {written}\n"))
+                .unwrap();
+        let error = policies.check_cache_bound(day).unwrap_err().to_string();
+        assert!(
+            error.contains("example.org") && error.contains("cache."),
+            "{error}"
+        );
+        assert!(error.contains("longer than the configuration"), "{error}");
+    }
+    let defaults = DomainPolicies::from_yaml("defaults:\n  cache: { max_ttl: 2d }\n").unwrap();
+    assert!(defaults.check_cache_bound(day).is_err());
+    let within = DomainPolicies::from_yaml(
+        "domains:\n  example.org:\n    cache: { max_ttl: 1d, ttl: 2h }\n",
+    )
+    .unwrap();
+    within.check_cache_bound(day).unwrap();
+
+    // What the preview says is what holds.
+    let resolved = within
+        .resolve("example.org")
+        .cache
+        .bounded(Duration::from_hours(1));
+    assert_eq!(resolved.max_ttl, Some(HumanDuration::from_hours(1)));
+    assert_eq!(resolved.ttl, Some(HumanDuration::from_hours(1)));
+    let unset = DomainPolicies::default()
+        .resolve("example.org")
+        .cache
+        .bounded(day);
+    assert_eq!(unset.max_ttl, Some(HumanDuration::from_hours(24)));
+    assert_eq!(unset.ttl, None);
 }

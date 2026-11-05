@@ -45,6 +45,9 @@ pub(crate) fn check(
 ) -> anyhow::Result<()> {
     let config = load(file, env)?;
     let policies = PolicySet::load(&config.policies.dir).context("policies are invalid")?;
+    policies
+        .check_cache_bound(&config.policies.dir, config.cache.max_ttl.get())
+        .context("policies are invalid")?;
     // What only the proxy crate can judge, such as whether the probe's
     // emulation profile exists in this build.
     kage_proxy::check_config(&config)

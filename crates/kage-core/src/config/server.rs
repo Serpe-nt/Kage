@@ -241,22 +241,37 @@ pub(super) fn validate(server: &ServerConfig) -> Result<(), String> {
         );
     }
     for origin in &server.cors_allowed_origins {
-        let valid = url::Url::parse(origin).is_ok_and(|url| {
-            matches!(url.scheme(), "http" | "https")
-                && url.host_str().is_some()
-                && url.path() == "/"
-                && url.query().is_none()
-                && url.fragment().is_none()
-                && !origin.ends_with('/')
-        });
-        if !valid {
-            return Err(format!(
-                "server.cors_allowed_origins: {origin:?} is not an origin such as \
-                 https://console.example.org (a scheme, a host, an optional port, nothing else)"
-            ));
+        if !is_origin(origin) || origin.ends_with('/') {
+            // The origin is not repeated: it may hold a password.
+            return Err(
+                "server.cors_allowed_origins: an entry is not an origin such as \
+                 https://console.example.org (a scheme, a host, an optional port, nothing else: \
+                 no credentials, no path, no wildcard; a browser sends no other)"
+                    .to_owned(),
+            );
         }
     }
     Ok(())
+}
+
+/// Whether a text is an origin as a browser sends it in `Origin`: `http`
+/// or `https`, a host (a name or an address) and an optional port, and
+/// nothing else: no credentials, no path, no query, no fragment.
+pub(crate) fn is_origin(origin: &str) -> bool {
+    url::Url::parse(origin).is_ok_and(|url| {
+        let host = match url.host() {
+            Some(url::Host::Domain(name)) => crate::policy::is_host_name(name),
+            Some(url::Host::Ipv4(_) | url::Host::Ipv6(_)) => true,
+            None => false,
+        };
+        matches!(url.scheme(), "http" | "https")
+            && host
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.path() == "/"
+            && url.query().is_none()
+            && url.fragment().is_none()
+    })
 }
 
 #[cfg(test)]
@@ -335,7 +350,16 @@ mod tests {
 
         assert_eq!(with("https://console.example.org"), Ok(()));
         assert_eq!(with("http://localhost:5173"), Ok(()));
+        assert_eq!(with("http://127.0.0.1:5173"), Ok(()));
         for bad in [
+            // A wildcard is compared as it is written, and so matches no
+            // origin a browser sends (F136).
+            "https://*.example.invalid",
+            "https://a.*.example.invalid",
+            // Credentials are no part of an origin, and are not repeated
+            // in the refusal (F133).
+            "https://user:secret-password@console.example.org",
+            "https://user@console.example.org",
             "*",
             "console.example.org",
             "https://console.example.org/",
@@ -345,6 +369,7 @@ mod tests {
         ] {
             let error = with(bad).unwrap_err();
             assert!(error.starts_with("server.cors_allowed_origins"), "{error}");
+            assert!(!error.contains("secret-password"), "{error}");
         }
     }
 

@@ -918,8 +918,10 @@ pub(super) fn validate(
     }
 
     let health = &proxies.health;
-    if health.interval.get() < second {
-        return fail("proxies.health.interval must be at least 1s");
+    // At most a day: a longer wait would overflow the date of the next
+    // probe (F137), and a proxy nobody looks at for a day is not watched.
+    if health.interval.get() < second || health.interval.get() > Duration::from_hours(24) {
+        return fail("proxies.health.interval must be between 1s and 1d");
     }
     if !(0.0..=0.9).contains(&health.jitter) {
         return fail("proxies.health.jitter must be between 0 and 0.9");
