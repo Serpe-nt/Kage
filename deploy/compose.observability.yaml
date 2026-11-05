@@ -64,11 +64,13 @@ services:
     pids_limit: 128
 
   # The trace backend: OTLP over HTTP in on 4318, the query API and UI on
-  # 16686 (through Grafana). Runs as 10001; Badger keeps seven days.
+  # 16686 (through Grafana). Runs as 10001; Badger keeps seven days. 2.20.0,
+  # the last release with the v1 search Grafana's Jaeger data source sends
+  # (2.21.0 removed it; F176, docs/versions.md).
   jaeger:
     <<: *hardening
     profiles: [observability]
-    image: jaegertracing/jaeger:2.22.0@sha256:836b967b5abcf1f7758066aa6b348619267a2f1459f72d472840570f9bd88a17
+    image: jaegertracing/jaeger:2.20.0@sha256:46a886260e04002d8f45e213fc39063fa11a50446048fdaa64786fc0840cb9f8
     command: ["--config", "/etc/jaeger/config.yaml"]
     volumes:
       - ./otel/jaeger.yaml:/etc/jaeger/config.yaml:ro
@@ -129,10 +131,6 @@ services:
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
       GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
       GF_NEWS_NEWS_FEED_ENABLED: "false"
-      # Jaeger 2.22 answers only its v3 API for searches and services (the
-      # v1 /api/services and /api/traces?service= are gone); the Jaeger data
-      # source asks the v1 paths unless this is on.
-      GF_FEATURE_TOGGLES_ENABLE: jaegerEnableGrpcEndpoint
     # Each bundled data source plugin is a process of its own with a socket
     # under /tmp; with a read-only /tmp none of them starts.
     tmpfs: [/tmp]

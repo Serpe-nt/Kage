@@ -101,6 +101,9 @@ services:
     environment:
       <<: *kage-secrets
       KAGE__SERVER__BIND: 0.0.0.0:8080
+      # Kage's log level, as tracing's filter reads it (info, debug,
+      # kage_scheduler=debug, ...; docs/runbooks/observability.md).
+      RUST_LOG: ${RUST_LOG:-info}
       # The major of the Chrome that the browser-chromium image bundles
       # (CHROME_VERSION in deploy/docker/sidecar.Dockerfile). The stack
       # smoke test fails when the two disagree.
@@ -178,6 +181,8 @@ services:
         ENGINE: chromium
     environment:
       ENGINE: chromium
+      # The sidecar's log level (trace, debug, info, warn, error).
+      LOG_LEVEL: ${LOG_LEVEL:-info}
       # The shared secret of kage and its sidecars (X-Kage-Sidecar-Token):
       # the same value kage gets as KAGE__SIDECAR__TOKEN.
       SIDECAR_TOKEN: ${KAGE_SIDECAR_TOKEN:?run 'just setup' to create deploy/.env}
@@ -225,6 +230,7 @@ services:
         ENGINE: firefox
     environment:
       ENGINE: firefox
+      LOG_LEVEL: ${LOG_LEVEL:-info}
       SIDECAR_TOKEN: ${KAGE_SIDECAR_TOKEN:?run 'just setup' to create deploy/.env}
       # The same limits and switches as browser-chromium, from the same
       # variables. There is no cross-OS switch and no GL mode here: Camoufox
