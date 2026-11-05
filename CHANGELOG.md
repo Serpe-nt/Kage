@@ -167,6 +167,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   instead of holding a CI job until it is cancelled. Shown with the
   stack's clock moved by libfaketime, at 02:00 UTC and across 00:00 UTC
   (`docs/runbooks/repo.md`).
+- The parity test of the mouse and keyboard measured a button's hold
+  between when the page's listeners ran, and a page still busy after its
+  load runs them late, by different amounts for the press and the
+  release: a button held for 102 ms read as 5 ms on a loaded machine
+  (F81). It is measured on the events' own `timeStamp`, which read 102 to
+  108 ms in every run. The Chromium parity test of a paced flow counted
+  the unpaced hand's mouse moves before 2200 ms from the recorder's start,
+  which a loaded machine fails by drawing the page late and by telling it
+  of a path in as few events as it drew frames; it is counted from the
+  page's second frame, and the path is the one the hand reports.
 
 ## [2.0.2] - 2026-11-04
 

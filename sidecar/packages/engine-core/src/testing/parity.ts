@@ -2246,6 +2246,11 @@ export function defineParitySuite(subject: ParitySubject): void {
       expect(statistics.pointerTypes).toEqual(['mouse']);
       expect(report.field).toBe(text);
       expect(report.choice).toBe('three');
+      measured('the buttons of the clicks', {
+        presses: report.events
+          .filter((event) => event.type === 'mousedown' || event.type === 'mouseup')
+          .map((event) => [event.type, event.target, event.t, event.stamp ?? null]),
+      });
       measured('a select by the hand and the keyboard', {
         events: report.events
           .filter((event) => event.target === 'choice' && event.type !== 'mousemove')
@@ -2626,13 +2631,27 @@ export function defineParitySuite(subject: ParitySubject): void {
           .map((event) => [event.t, event.x, event.y]),
       });
       // On its way at once, and there long before the paced one has set out
-      // once the page was there to see.
+      // once the page was there to see: counted from the page's second
+      // frame, as the paced dwell is from the page's load.
       expect(drawnAt).toBeGreaterThanOrEqual(0);
       const clickedAt = hasty.find((event) => event.type === 'click')?.t ?? Number.NaN;
       expect(clickedAt - drawnAt).toBeLessThan(floor);
+      // And on its way in that time: the page saw the pointer move after it
+      // was drawn and before the click, along the path the hand reports.
+      // This counted the page's mouse moves before 2200 ms from the
+      // recorder's start (more than 5), which a loaded machine fails twice
+      // over: it draws the page late (the second frame at up to 2.5 s,
+      // measured) and tells it of a path in as few events as it drew
+      // frames meanwhile (1 to 18 for the same path of about 0.9 s,
+      // measured; the page is plain http, so it cannot ask for the
+      // positions of each event). How a path looks to a page is the input
+      // test's, and the paced flow above shows the page a path at rest.
       expect(
-        hasty.filter((event) => event.type === 'mousemove' && event.t < floor).length,
-      ).toBeGreaterThan(5);
+        hasty.some(
+          (event) => event.type === 'mousemove' && event.t >= drawnAt && event.t <= clickedAt,
+        ),
+      ).toBe(true);
+      expect(bare.final.behavior?.positions).toBeGreaterThan(5);
     });
 
     it('goes back to a page the browser kept, by the driver and by the keyboard, and captures that page', async () => {
