@@ -23,6 +23,14 @@ ignore = [
     { id = "RUSTSEC-2026-0391", reason = "zstd 0.13.3 under wreq-util 0.2.0 makes a fresh read decoder per TLS certificate, never a context reused through with_context; review by 2026-12-31 or with wreq-util on zstd 0.14 (F91)" },
     { id = "RUSTSEC-2026-0398", reason = "zstd 0.13.3 under wreq-util 0.2.0 has no seekable feature, where the flaw is; review by 2026-12-31 or with wreq-util on zstd 0.14 (F91)" },
     { id = "RUSTSEC-2026-0403", reason = "wreq-util 0.2.0 decompresses TLS certificates with zstd's read decoder, which the advisory names as not affected; review by 2026-12-31 or with wreq-util on zstd 0.14 (F91)" },
+    # `astral-tokio-tar` 0.6.4 comes only with testcontainers 0.27.3, a
+    # dev-dependency of the test suites (kage, kage-api, kage-http,
+    # kage-persona, kage-proxy, kage-scheduler, kage-store): it packs and
+    # unpacks the archives Docker's API exchanges with a test container,
+    # and no shipped binary links it. The advisory is "unmaintained", no
+    # flaw; testcontainers 0.28.0, the newest, still requires it. Review
+    # by 2026-12-31, or drop it with the first testcontainers without it.
+    { id = "RUSTSEC-2026-0440", reason = "astral-tokio-tar 0.6.4 is unmaintained (Astral ended it on 2026-11-03), not vulnerable; it comes only with testcontainers, a dev-dependency of the test suites that is never in a shipped binary, and testcontainers 0.28.0, the newest, still requires it; review by 2026-12-31 or with the first testcontainers without it" },
 ]
 
 [licenses]

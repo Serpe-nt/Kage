@@ -273,6 +273,13 @@ it.
   not have, and -0403 names the read decoder as not affected. The response
   decoders behind wreq (tower-http) are on the fixed `zstd` 0.14.3 and
   `zstd-safe` 8.2.0. Follow-up F91 drops the ignore.
+- **RUSTSEC-2026-0440 (`astral-tokio-tar` 0.6.4, unmaintained)** is
+  ignored in `deny.toml` and `.cargo/audit.toml` until 2026-12-31 or the
+  first `testcontainers` without it, whichever comes first. Astral ended
+  the crate's maintenance on 2026-11-03; the advisory names no flaw. It
+  comes only with `testcontainers` 0.27.3, a dev-dependency of the test
+  suites, and no shipped binary links it; `testcontainers` 0.28.0, the
+  newest, still requires it.
 - **The stand-in self-tests of a proxy**: no longer an exception since
   2.0.2. `kage selftest browser --proxy` hands its browser a forwarder of
   the command's own under the stand-in's credential, and `kage selftest

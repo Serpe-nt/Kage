@@ -18,4 +18,10 @@ ignore = [
     "RUSTSEC-2026-0391",
     "RUSTSEC-2026-0398",
     "RUSTSEC-2026-0403",
+    # `astral-tokio-tar` 0.6.4 is unmaintained since 2026-11-03, no flaw;
+    # it comes only with testcontainers 0.27.3, a dev-dependency of the
+    # test suites that no shipped binary links, and testcontainers 0.28.0,
+    # the newest, still requires it. Review by 2026-12-31, or drop it with
+    # the first testcontainers without it.
+    "RUSTSEC-2026-0440",
 ]
