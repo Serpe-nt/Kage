@@ -130,6 +130,7 @@ RUN --mount=type=cache,id=kage-camoufox,target=/var/cache/kage,sharing=locked \
             fonts-droid-fallback fonts-liberation fonts-liberation-sans-narrow fonts-noto-color-emoji \
             fonts-noto-mono fonts-opensymbol fonts-quicksand fonts-symbola fonts-urw-base35" \
         && apt-get update \
+        && apt-get upgrade --yes --no-install-recommends \
         && apt-get install --yes --no-install-recommends ca-certificates curl \
         && curl --fail --silent --show-error --location --retry 3 --output /tmp/chrome.deb \
             "https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_${CHROME_VERSION}-1_amd64.deb" \
@@ -160,6 +161,7 @@ RUN --mount=type=cache,id=kage-camoufox,target=/var/cache/kage,sharing=locked \
         && build="${CAMOUFOX_VERSION}-${CAMOUFOX_RELEASE}" \
         && archive="/var/cache/kage/camoufox-${build}-lin.x86_64.zip" \
         && apt-get update \
+        && apt-get upgrade --yes --no-install-recommends \
         && apt-get install --yes --no-install-recommends ca-certificates curl unzip \
         && if ! echo "${CAMOUFOX_SHA256}  ${archive}" | sha256sum --check --strict --status 2> /dev/null; then \
             curl --fail --silent --show-error --location --retry 3 --output "${archive}" \

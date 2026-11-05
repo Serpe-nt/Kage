@@ -8,6 +8,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The engine images take Debian's security updates at build.** On
+  2026-11-05 Trivy refused both engine images for CVE-2026-109518 in
+  `apt` 3.0.3 (fixed in 3.0.4) while the pinned base image, and the
+  newest build of its tag, still carried it. The runtime stage of
+  `sidecar.Dockerfile` now runs `apt-get upgrade` after its
+  `apt-get update` for both engines, so a rebuild carries the
+  distribution's security updates for the base layer as it already took
+  the current point release of the packages it installs; nothing
+  fingerprint-critical moves.
+
 - **After a block the retry leaves from another /24 and another
   autonomous system whoever is ready first** (F168; QA round two's
   pool-01). Each persona waits its own pause before a retry, at its own
