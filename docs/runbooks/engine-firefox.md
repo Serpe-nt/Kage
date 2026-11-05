@@ -406,8 +406,10 @@ never fires `load` on it. The engine looks at `document.documentURI`
 once an error answer to the document arrived and ends the navigation as
 soon as it is Firefox's page: `navigation_failed` with the `status` Firefox
 saw, nothing of its page kept, at once rather than at `timeout_ms`
-(spec §10.2, F189). Before 2.0.3 such a page was kept as the document and
-judged the site's `forbidden`.
+(spec §10.2, F189). Over plain `http://` that is nobody's block (the
+proxy may have answered); over `https` the status is the site's verdict, an
+empty `403` its `forbidden`. Before 2.0.3 such a page was kept as the
+document and judged the site's `forbidden` whatever the scheme.
 
 ## Settings
 

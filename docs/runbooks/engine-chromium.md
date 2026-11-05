@@ -378,8 +378,9 @@ An error answer with an empty body (an empty `403`, as a provider's proxy
 refuses a plain `http://` target) fails the load at once
 (`ERR_HTTP_RESPONSE_CODE_FAILURE`) and Chrome shows its `chrome-error://`
 page, which names nothing of the answer: `navigation_failed`, `status:
-null`, nothing kept, nobody's block (spec §10.2, F189; Firefox reports the
-status it saw). A `CONNECT` the proxy refuses is `ERR_TUNNEL_CONNECTION_FAILED`,
+null`, nothing kept, nobody's block (spec §10.2, F189). Firefox reports the
+status it saw, which over `https` is the site's verdict; Chrome's page
+names none, so over `https` it books nothing either (a follow-up). A `CONNECT` the proxy refuses is `ERR_TUNNEL_CONNECTION_FAILED`,
 which Kage reports as the proxy's refusal (`proxy_refused`) when the
 forwarder saw it.
 
