@@ -605,6 +605,52 @@ async fn an_unreachable_proxy_is_degraded_then_parked_and_comes_back() {
     assert_eq!(back.failing_since, None);
 }
 
+/// F129 (sched-06): an operator's probes of a proxy in backoff are looks,
+/// not cycles. Eight probes in a row of a dead proxy put it in backoff
+/// once, with one cycle on its count and the end the first backoff drew;
+/// when it answers again, the next look ends the backoff at once.
+#[tokio::test]
+async fn an_operators_probes_add_no_backoff_cycle() {
+    let net = net(&[(2, "DE"), (3, "DE")]).await;
+    for exit in 2..=3 {
+        net.echo.set_geo(loopback(exit), GeoFixture::berlin());
+    }
+    net.checker.check_now(None).await.unwrap();
+    net.proxies[0].set_up(false);
+
+    let mut seen = Vec::new();
+    for _ in 0..8 {
+        let proxy = net.check(0).await;
+        seen.push((proxy.state, proxy.backoff_count, proxy.backoff_until));
+    }
+    let parked = net.stored(0).await;
+    assert_eq!(parked.state, ProxyState::Backoff);
+    assert_eq!(parked.backoff_count, 1);
+    let until = parked.backoff_until.unwrap();
+    // The third probe of the row opened the backoff; none after it moved
+    // its count or its end.
+    assert_eq!(
+        seen[2..],
+        vec![(ProxyState::Backoff, 1, Some(until)); 6][..],
+        "{seen:?}"
+    );
+    assert!(until <= start() + chrono::Duration::minutes(2), "{until}");
+    // Every look is recorded: the latest one failed just now.
+    let health = parked.last_health.as_ref().unwrap();
+    assert!(!health.reachable);
+    assert_eq!(health.checked_at, start());
+
+    // It answers again: the operator's next look ends the backoff, and
+    // nothing is left of it.
+    net.proxies[0].set_up(true);
+    net.clock.advance(chrono::Duration::seconds(30));
+    let back = net.check(0).await;
+    assert_eq!(back.state, ProxyState::Healthy);
+    assert_eq!(back.backoff_count, 0);
+    assert_eq!(back.backoff_until, None);
+    assert_eq!(back.consecutive_failures, 0);
+}
+
 #[tokio::test]
 async fn a_failure_counts_only_when_a_second_echo_fails_too() {
     let net = net(&[(2, "DE"), (3, "DE")]).await;

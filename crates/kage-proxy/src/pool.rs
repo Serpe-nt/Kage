@@ -1025,13 +1025,25 @@ impl Pool {
     /// proxies that leave by one address carries nothing (decision D6).
     /// The host's own rows share the host's address by design and are
     /// never compared.
+    ///
+    /// Only a latest probe that read an address counts (F177): one whose
+    /// latest probe failed (down, in backoff) leaves by no address now, and
+    /// the address it kept from its last good probe may be another proxy's
+    /// today (a restarted container, a provider's reassignment). Comparing
+    /// with that stale address would mark the proxy that has it now, and
+    /// retire its persona for good.
     fn shared_exit(live: &[Proxy], id: ProxyId, report: &ProbeReport) -> Option<ProxyId> {
         let exit = report.exit.as_ref().ok()?.ip;
         let this = live.iter().find(|proxy| proxy.id == id)?;
         live.iter()
             .filter(|other| other.id != id && other.provider != ProxyProviderKind::Host)
             .filter(|other| {
-                other.last_health.as_ref().and_then(|health| health.exit_ip) == Some(exit)
+                other
+                    .last_health
+                    .as_ref()
+                    .filter(|health| health.reachable)
+                    .and_then(|health| health.exit_ip)
+                    == Some(exit)
             })
             .filter(|other| (other.created_at, other.id) < (this.created_at, this.id))
             .min_by_key(|other| (other.created_at, other.id))
@@ -1069,6 +1081,10 @@ impl Pool {
             .proxies()
             .modify_noting(id, |proxy| {
                 let mut effects = machine::mark_shared_exit(proxy, report, shared);
+                // A probe of a proxy still in backoff (an operator's look,
+                // F129) ends the backoff when it passes; one that fails is
+                // only recorded: the cycle is the backoff's, not the look's.
+                effects.extend(machine::end_backoff_on_pass(proxy, report));
                 effects.extend(machine::apply_probe(proxy, report, outage, jitter, &rules));
                 let records = self.records(proxy, &effects, cause);
                 ((proxy.clone(), effects), records)
@@ -1388,11 +1404,14 @@ impl Pool {
             Err(error) if error.is_conflict() => return Ok(()),
             Err(error) => return Err(error.into()),
         }
+        // A proxy's address is the operator's and a log may be public (the
+        // nightly's on GitHub, F153): by its id at INFO, its address at DEBUG.
         tracing::info!(
-            proxy = %id, host = %proxy.host, port = proxy.port,
+            proxy = %id,
             country = proxy.country.map(|country| country.to_string()),
             "proxy added to the pool"
         );
+        tracing::debug!(proxy = %id, host = %proxy.host, port = proxy.port, "the added proxy's address");
         self.publish(PoolEvent::Added { proxy: id });
         report.added.push(id);
         Ok(())
@@ -1501,7 +1520,8 @@ impl Pool {
         if retired != Some(true) {
             return Ok(());
         }
-        tracing::warn!(proxy = %proxy.id, host = %proxy.host, reason, "proxy retired");
+        tracing::warn!(proxy = %proxy.id, reason, "proxy retired");
+        tracing::debug!(proxy = %proxy.id, host = %proxy.host, port = proxy.port, "the retired proxy's address");
         self.publish(PoolEvent::StateChanged {
             proxy: proxy.id,
             from,
@@ -1723,10 +1743,8 @@ impl Pool {
         }
 
         metrics::counter!("kage_replacements_total", "reason" => reason.as_str()).increment(1);
-        tracing::warn!(
-            proxy = %id, host = %proxy.host, reason = reason.as_str(),
-            "requesting a proxy replacement"
-        );
+        tracing::warn!(proxy = %id, reason = reason.as_str(), "requesting a proxy replacement");
+        tracing::debug!(proxy = %id, host = %proxy.host, port = proxy.port, "the address to be replaced");
         self.publish(PoolEvent::StateChanged {
             proxy: id,
             from: proxy.state,
@@ -1934,7 +1952,7 @@ impl Pool {
                     })
                     .await?;
                 if done == Some(true) {
-                    tracing::warn!(proxy = %proxy.id, host = %proxy.host, "proxy replaced by the provider");
+                    tracing::warn!(proxy = %proxy.id, "proxy replaced by the provider");
                     self.publish(PoolEvent::StateChanged {
                         proxy: proxy.id,
                         from: ProxyState::Replacing,
