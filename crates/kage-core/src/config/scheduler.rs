@@ -16,6 +16,17 @@ use crate::seed::Seed;
 /// The longest one attempt may ever take (spec §8.4).
 pub const MAX_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// The shortest time an attempt in a browser (level 2 and 3) may be given
+/// (spec §16.4): the page has to load, an interstitial has to be given its
+/// time, and the persona has to stay at least as long as the policy's
+/// shortest dwell. A shorter budget would cut the behavior down to a bare
+/// load.
+pub const MIN_BROWSER_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// The shortest time an attempt on the http path (level 0 and 1) may be
+/// given (spec §16.4).
+pub const MIN_HTTP_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(1);
+
 /// Most attempts of either kind the scheduler may be told to run at once.
 pub const MAX_INFLIGHT: u32 = 1000;
 

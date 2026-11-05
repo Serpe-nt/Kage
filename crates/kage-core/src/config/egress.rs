@@ -205,6 +205,12 @@ pub(super) fn validate(egress: &EgressConfig) -> Result<(), String> {
         ));
     }
     for name in &direct.private_names {
+        if name.contains('*') {
+            return Err(format!(
+                "egress.direct.private_names: {name:?} is a wildcard, and the list holds exact \
+                 names: it would match nothing. Name every host"
+            ));
+        }
         // A scheme and a port bring a colon, and so does an IPv6 address,
         // which the host parser would take; a path is no host to it.
         if name.contains(':')

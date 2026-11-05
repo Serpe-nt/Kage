@@ -414,6 +414,9 @@ pub fn warmup_url(template: &str, language: &str) -> Option<url::Url> {
 /// Checks the two sections; returns the first problem as a message that
 /// names the key. `allow_cross_os_claims` is
 /// `engines.chromium.allow_cross_os_claims`.
+/// The most days a persona's retention and archive delay may be: ten years.
+pub(super) const MAX_PERSONA_DAYS: u32 = 3650;
+
 pub(super) fn validate(
     personas: &PersonasConfig,
     sessions: &SessionsConfig,
@@ -426,8 +429,17 @@ pub(super) fn validate(
         return fail("personas.dir must not be empty");
     }
     mix::validate(&personas.mix, allow_cross_os_claims).map_err(|error| error.to_string())?;
-    if personas.retention_days == 0 {
-        return fail("personas.retention_days must be at least 1");
+    // A bound the program can count with: beyond it a date would overflow
+    // and the persona manager's sweep would end (F137).
+    if personas.retention_days == 0 || personas.retention_days > MAX_PERSONA_DAYS {
+        return Err(format!(
+            "personas.retention_days must be between 1 and {MAX_PERSONA_DAYS}"
+        ));
+    }
+    if personas.archive_after.get() > Duration::from_secs(u64::from(MAX_PERSONA_DAYS) * 86_400) {
+        return Err(format!(
+            "personas.archive_after must be at most {MAX_PERSONA_DAYS}d"
+        ));
     }
     if personas.upgrade_backup_days == 0 {
         return fail("personas.upgrade_backup_days must be at least 1");

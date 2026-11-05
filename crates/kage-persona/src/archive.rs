@@ -63,8 +63,13 @@ impl PersonaManager {
     pub async fn archive_due(&self) -> Result<(u32, u32), PersonaError> {
         let now = self.now();
         let root = self.config.personas.dir.clone();
+        // A span too long for a date reaches back before anything was
+        // retired: nothing is due, and nothing panics (F137).
         let since = |span: std::time::Duration| {
-            chrono::Duration::from_std(span).map_or(now, |span| now - span)
+            chrono::Duration::from_std(span)
+                .ok()
+                .and_then(|span| now.checked_sub_signed(span))
+                .unwrap_or(chrono::DateTime::<chrono::Utc>::MIN_UTC)
         };
 
         let mut archived = 0;

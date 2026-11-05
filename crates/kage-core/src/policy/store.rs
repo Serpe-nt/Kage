@@ -126,6 +126,22 @@ impl PolicySet {
         })
     }
 
+    /// Checks the set against the configuration's `cache.max_ttl`
+    /// ([`DomainPolicies::check_cache_bound`]). `dir` is only used to name
+    /// the file in the error.
+    ///
+    /// # Errors
+    ///
+    /// Fails when `domains.yaml` names a longer cache lifetime.
+    pub fn check_cache_bound(&self, dir: &Path, bound: Duration) -> Result<(), PolicyLoadError> {
+        self.domains
+            .check_cache_bound(bound)
+            .map_err(|source| PolicyLoadError::Domains {
+                path: dir.join(DOMAINS_FILE),
+                source,
+            })
+    }
+
     /// Reads and validates the three files in `dir`.
     ///
     /// # Errors
@@ -151,6 +167,7 @@ pub struct PolicyStore {
     dir: PathBuf,
     current: RwLock<Arc<PolicySet>>,
     alerts: Arc<dyn AlertSink>,
+    cache_bound: Option<Duration>,
 }
 
 impl std::fmt::Debug for PolicyStore {
@@ -178,7 +195,30 @@ impl PolicyStore {
             dir,
             current: RwLock::new(Arc::new(set)),
             alerts,
+            cache_bound: None,
         })
+    }
+
+    /// The same store, held to the configuration's `cache.max_ttl`: the
+    /// policies in force and every reload are refused when they name a
+    /// longer cache lifetime (F136).
+    ///
+    /// # Errors
+    ///
+    /// Fails when the policies in force name a longer one.
+    pub fn with_cache_bound(mut self, bound: Duration) -> Result<Self, PolicyLoadError> {
+        self.current().check_cache_bound(&self.dir, bound)?;
+        self.cache_bound = Some(bound);
+        Ok(self)
+    }
+
+    /// Reads the directory and checks it as this store checks a reload.
+    fn read(&self) -> Result<PolicySet, PolicyLoadError> {
+        let set = PolicySet::load(&self.dir)?;
+        if let Some(bound) = self.cache_bound {
+            set.check_cache_bound(&self.dir, bound)?;
+        }
+        Ok(set)
     }
 
     /// The directory the policy files are read from.
@@ -199,7 +239,7 @@ impl PolicyStore {
     ///
     /// Fails when the directory does not load; nothing changes in that case.
     pub fn reload(&self) -> Result<Arc<PolicySet>, PolicyLoadError> {
-        match PolicySet::load(&self.dir) {
+        match self.read() {
             Ok(set) => {
                 let set = Arc::new(set);
                 *self.current.write().unwrap_or_else(PoisonError::into_inner) = Arc::clone(&set);

@@ -295,16 +295,7 @@ pub(super) fn validate(jobs: &JobsConfig, webhooks: &WebhooksConfig) -> Result<(
         ("webhooks.private_origins", &webhooks.private_origins),
     ] {
         for origin in origins {
-            let exact = Url::parse(origin).ok().filter(|url| {
-                matches!(url.scheme(), "http" | "https")
-                    && url.host_str().is_some()
-                    && url.path() == "/"
-                    && url.query().is_none()
-                    && url.fragment().is_none()
-                    && url.username().is_empty()
-                    && url.password().is_none()
-            });
-            if exact.is_none() {
+            if !super::server::is_origin(origin) {
                 return Err(format!(
                     "{key}: {origin:?} is not an origin (scheme://host[:port], nothing else)"
                 ));

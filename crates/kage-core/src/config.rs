@@ -40,6 +40,9 @@ mod scheduler;
 mod server;
 mod telemetry;
 
+#[cfg(test)]
+mod loader_tests;
+
 pub use crawl::{
     CrawlConfig, DEFAULT_SKIPPED_EXTENSIONS, MAX_BACK_LIMIT, MAX_CRAWL_DEPTH, MAX_CRAWL_SEEDS,
     MAX_NEAR_DUPLICATE_BITS,
@@ -72,8 +75,9 @@ pub use proxies::{
 };
 pub use scheduler::{
     BandwidthConfig, BrowserConfig, ClockRange, DepthRange, ForwarderConfig, MAX_ATTEMPT_TIMEOUT,
-    MAX_INFLIGHT, MAX_PATIENCE, MIN_PATIENCE, PatienceConfig, PauseConfig, PersonaDayConfig,
-    SchedulerConfig, ServerErrorsConfig,
+    MAX_INFLIGHT, MAX_PATIENCE, MIN_BROWSER_ATTEMPT_TIMEOUT, MIN_HTTP_ATTEMPT_TIMEOUT,
+    MIN_PATIENCE, PatienceConfig, PauseConfig, PersonaDayConfig, SchedulerConfig,
+    ServerErrorsConfig,
 };
 pub use server::{
     MAX_API_BODY_BYTES, MAX_HEADER_BYTES, MIN_HEADER_BYTES, SecurityConfig, ServerConfig,
@@ -487,7 +491,11 @@ impl Config {
         file: Option<&Path>,
         env: impl IntoIterator<Item = (String, String)>,
     ) -> Result<Self, ConfigError> {
-        let mut figment = Figment::new();
+        // The defaults are the first layer, so that a member of an object
+        // can be set alone, by the file or by the environment, and the
+        // others keep their default (F132). No key of the configuration is
+        // a map, so an object that is merged is always a struct's.
+        let mut figment = Figment::from(figment::providers::Serialized::defaults(defaults()?));
 
         if let Some(path) = file {
             let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
@@ -530,9 +538,18 @@ impl Config {
                 continue;
             }
             let key = env_key(&name)?;
-            let value: figment::value::Value = match value.parse() {
-                Ok(value) => value,
-                Err(infallible) => match infallible {},
+            // `null` is what it is in the file: no value, which switches
+            // off what an optional key does (F137).
+            let value: figment::value::Value = if value.trim() == NULL {
+                figment::value::Value::Empty(
+                    figment::value::Tag::Default,
+                    figment::value::Empty::None,
+                )
+            } else {
+                match value.parse() {
+                    Ok(value) => value,
+                    Err(infallible) => match infallible {},
+                }
             };
             figment = figment.merge((key, value));
         }
@@ -579,8 +596,13 @@ impl Config {
         if !(database_url.starts_with("postgres://") || database_url.starts_with("postgresql://")) {
             return invalid("database.url must start with postgres:// or postgresql://");
         }
-        if self.database.max_connections == 0 {
-            return invalid("database.max_connections must be at least 1");
+        database_parameters(database_url)?;
+        if self.database.max_connections == 0
+            || self.database.max_connections > MAX_DATABASE_CONNECTIONS
+        {
+            return Err(ConfigError::Invalid(format!(
+                "database.max_connections must be between 1 and {MAX_DATABASE_CONNECTIONS}"
+            )));
         }
         if self.database.connect_timeout.get().is_zero() {
             return invalid("database.connect_timeout must be longer than zero");
@@ -601,15 +623,7 @@ impl Config {
             ("sidecar.chromium_url", &self.sidecar.chromium_url),
             ("sidecar.firefox_url", &self.sidecar.firefox_url),
         ] {
-            let plain_http = url::Url::parse(value).is_ok_and(|url| {
-                url.scheme() == "http" && url.host_str().is_some() && url.path() == "/"
-            });
-            if !plain_http {
-                return Err(ConfigError::Invalid(format!(
-                    "{key} must be an http:// URL without a path: a sidecar listens on the \
-                     compose network only"
-                )));
-            }
+            sidecar_url(key, value)?;
         }
         if self.sidecar.connect_timeout.get().is_zero() {
             return invalid("sidecar.connect_timeout must be longer than zero");
@@ -649,6 +663,7 @@ impl Config {
         crawl::validate(&self.crawl).map_err(ConfigError::Invalid)?;
         telemetry::validate(&self.telemetry).map_err(ConfigError::Invalid)?;
         egress::validate(&self.egress).map_err(ConfigError::Invalid)?;
+        self.host_engines()?;
         extract::validate(
             self.extract,
             &self.robots,
@@ -668,6 +683,31 @@ impl Config {
             _ => {}
         }
         Ok(())
+    }
+
+    /// The engines of the host personas are among the mix's: they are drawn
+    /// from it, and an engine it lacks could never be given one (F137).
+    fn host_engines(&self) -> Result<(), ConfigError> {
+        if self.egress.mode != EgressMode::Direct {
+            return Ok(());
+        }
+        let Some(engines) = &self.egress.direct.engines else {
+            return Ok(());
+        };
+        match engines.iter().find(|engine| {
+            !self
+                .personas
+                .mix
+                .iter()
+                .any(|entry| entry.engine == **engine)
+        }) {
+            Some(missing) => Err(ConfigError::Invalid(format!(
+                "egress.direct.engines names {}, which personas.mix does not: the host \
+                 personas are drawn from the mix, so none could ever be made",
+                missing.as_str()
+            ))),
+            None => Ok(()),
+        }
     }
 
     /// The proxy provider in force. `auto` resolves to Webshare when its API
@@ -695,6 +735,110 @@ impl Config {
         // Serializing plain structs into a JSON value cannot fail.
         serde_json::to_value(self).unwrap_or(serde_json::Value::Null)
     }
+}
+
+/// What an environment variable says to set a key to nothing, as `null`
+/// in the file does.
+const NULL: &str = "null";
+
+/// Most connections the database pool may be given: far beyond what a
+/// Postgres serves by default (100), short of what the process can hold.
+pub const MAX_DATABASE_CONNECTIONS: u32 = 1000;
+
+/// The parameters of a database URL the Postgres driver reads (sqlx
+/// 0.9.0, `PgConnectOptions::parse_from_url`); `options[...]` besides.
+const DATABASE_PARAMETERS: [&str; 18] = [
+    "sslmode",
+    "ssl-mode",
+    "sslrootcert",
+    "ssl-root-cert",
+    "ssl-ca",
+    "sslcert",
+    "ssl-cert",
+    "sslkey",
+    "ssl-key",
+    "statement-cache-capacity",
+    "host",
+    "hostaddr",
+    "port",
+    "dbname",
+    "user",
+    "password",
+    "application_name",
+    "options",
+];
+
+/// A sidecar's URL: plain http on the compose network, without a path and
+/// without credentials (F133). The URL is not repeated in a refusal: it
+/// would show the password.
+fn sidecar_url(key: &str, value: &str) -> Result<(), ConfigError> {
+    let parsed = url::Url::parse(value).ok();
+    if parsed
+        .as_ref()
+        .is_some_and(|url| !url.username().is_empty() || url.password().is_some())
+    {
+        return Err(ConfigError::Invalid(format!(
+            "{key} must not carry credentials: the sidecar takes its token from sidecar.token"
+        )));
+    }
+    let plain_http = parsed
+        .is_some_and(|url| url.scheme() == "http" && url.host_str().is_some() && url.path() == "/");
+    if !plain_http {
+        return Err(ConfigError::Invalid(format!(
+            "{key} must be an http:// URL without a path: a sidecar listens on the compose \
+             network only"
+        )));
+    }
+    Ok(())
+}
+
+/// Refuses a parameter of the database URL that the driver does not read:
+/// it would ignore it and log its value, a password that was put under a
+/// misspelt name included (F133). The refusal names the parameter, never
+/// its value.
+fn database_parameters(database_url: &str) -> Result<(), ConfigError> {
+    let Ok(url) = url::Url::parse(database_url) else {
+        // The driver says what is wrong with it, without its value.
+        return Ok(());
+    };
+    for (name, _) in url.query_pairs() {
+        let known = DATABASE_PARAMETERS.contains(&name.as_ref())
+            || (name.starts_with("options[") && name.ends_with(']'));
+        if !known {
+            let shown: String = name.chars().take(40).collect();
+            return Err(ConfigError::Invalid(format!(
+                "database.url: the parameter {shown:?} is not one the Postgres driver reads \
+                 ({}, options[...]); it would be ignored and its value written to the log",
+                DATABASE_PARAMETERS.join(", ")
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The defaults of every key, as the first layer of the configuration: the
+/// configuration with stand-ins for the secrets it requires, without the
+/// secrets.
+fn defaults() -> Result<serde_json::Value, ConfigError> {
+    let stand_in = Figment::new()
+        .merge(("database.url", "postgres://defaults"))
+        .merge(("sidecar.token", "defaults"))
+        .merge(("secrets.master_key", "0".repeat(MASTER_KEY_BYTES * 2)));
+    let config: Config = stand_in
+        .extract()
+        .map_err(|error| ConfigError::Invalid(crate::yaml::explain(error)))?;
+    let mut tree = serde_json::to_value(&config)
+        .map_err(|error| ConfigError::Invalid(format!("the defaults do not serialize: {error}")))?;
+    for secret in SECRETS {
+        if let Some((section, key)) = secret.key.split_once('.')
+            && let Some(section) = tree
+                .get_mut(section)
+                .and_then(serde_json::Value::as_object_mut)
+        {
+            section.remove(key);
+        }
+    }
+    Ok(tree)
 }
 
 /// `KAGE__SECTION__KEY` to `section.key`.
