@@ -730,6 +730,14 @@ async fn a_flows_later_site_with_one_seat_waits_for_another_personas_visit_to_en
     lab.policies.reload().unwrap();
     let (reader, other) = (lab.personas[0].id, lab.personas[1].id);
 
+    // The visit lasts `visit_idle` from the moment the planner gave the
+    // reader its page, which is before the attempt's own `started_at` by
+    // however long the attempt took to begin (on a slow runner 0.1 s more
+    // for the reader than for the flow: "the flow began 2.9 s after the
+    // reader's page", on #57). Before the page was asked for is no later
+    // than that moment, so the flow begins three seconds after it at the
+    // earliest.
+    let asked_at = chrono::Utc::now();
     let read = lab
         .pipeline
         .fetch(FetchOrder {
@@ -756,11 +764,13 @@ async fn a_flows_later_site_with_one_seat_waits_for_another_personas_visit_to_en
     assert_eq!(report.outcome, Outcome::Ok, "{:?}", report.reason);
     assert_eq!(report.attempts[0].persona_id, Some(other));
     // Not before the reader's visit was over: three seconds after its page
-    // began, with nothing more asked of it.
+    // was given, with nothing more asked of it. A flow that did not wait
+    // would begin as soon as the reader's page was read, well within that.
     let began = report.attempts[0].started_at;
     assert!(
-        began - read_at >= chrono::Duration::seconds(3),
-        "the flow began {} after the reader's page",
+        began - asked_at >= chrono::Duration::seconds(3),
+        "the flow began {} after the reader's page was asked for ({} after it began)",
+        began - asked_at,
         began - read_at
     );
     lab.shut_down().await;
