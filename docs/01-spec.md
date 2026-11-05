@@ -927,7 +927,14 @@ an empty error answer with its own page (§10.2), the attempt is
 browser saw (Firefox) or none (Chrome), and is nobody's block: no
 cooldown, no breaker count, and like any failed navigation it counts
 toward the server-error pause; an empty error answer is judged as an
-answer only where it was read (the http path, a level 0 client). Circuit breaker
+answer only where it was read (the http path, a level 0 client). That
+holds where the answer came over plain `http:` (the page's `final_url`,
+the document whose status is kept). Over `https` only the site answers
+inside the tunnel, so the status Firefox saw stays the site's verdict:
+a WAF's empty `403` is `forbidden`, as before F189. Chrome's page names
+no status there, so nothing is judged and nothing booked (as before; a
+follow-up may take the status from the debugger's `Network.responseReceived`,
+which the engine already listens to). Circuit breaker
 per domain: if `block_count_1h` over all personas ≥
 `policy.breaker_threshold` (default 5), the domain is `paused` for
 `policy.breaker_pause` (default 30 min); requests return `provider_error`
@@ -1181,8 +1188,9 @@ answer to the document arrived) instead of at `timeout_ms`, and the page
 result is `navigation_failed` with nothing of the browser's page and no
 headers kept; its `status` is the one the browser saw where the error page
 names that very document (Firefox), else `null` (Chrome). A flow's `goto`
-fails its step there the same way. Whose answer it was is unknown, so it is
-nobody's block (§8.3, F189).
+fails its step there the same way. Over plain `http://` whose answer it was
+is unknown, so it is nobody's block; over `https` the status the browser saw
+is the site's verdict (§8.3, F189).
 
 Captures must not change what the page experiences. Bodies come from
 network events, never from request interception; the DOM is read in an

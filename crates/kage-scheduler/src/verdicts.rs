@@ -390,36 +390,58 @@ impl Verdicts {
     /// The verdict on a page a browser loaded, or failed to load.
     pub fn judge_page(&self, page: &PageResult) -> Classification {
         let seen = observe_page(page).map(|observation| self.classify(&observation));
-        match (page_failure(page), seen) {
-            // A page that hung after it answered may be a wall that never
-            // finishes: what was seen decides when it is a block. A soft
-            // block is judged by what a page says, so a page of which
-            // nothing was read (a file the browser saved, a page that
-            // stopped answering, F103) is none: the persona that asked for
-            // it was not turned away. Nor is an error answer the browser
-            // replaced with its own page (F189): its status is all that is
-            // known of it, and an empty error answer over plain http may be
-            // the proxy's as well as the site's, so it is nobody's block.
-            (Some(failure), Some(seen))
-                if seen.outcome.is_block()
-                    && !(read_nothing(page)
-                        && (seen.outcome == Outcome::SoftBlock
-                            || failure.reason == "navigation_failed")) =>
-            {
-                seen
-            }
-            (Some(failure), _) => unanswered(failure.outcome, failure.reason),
-            (None, Some(seen)) => seen,
-            (None, None) => unanswered(Outcome::ProviderError, "no_response"),
-        }
+        judged(page, seen)
     }
+}
+
+/// What a browser's page came to, given what the classifier saw of it.
+fn judged(page: &PageResult, seen: Option<Classification>) -> Classification {
+    match (page_failure(page), seen) {
+        // A page that hung after it answered may be a wall that never
+        // finishes: what was seen decides when it is a block, unless the
+        // block is nobody's.
+        (Some(failure), Some(seen))
+            if seen.outcome.is_block() && !nobodys_block(page, &failure, &seen) =>
+        {
+            seen
+        }
+        (Some(failure), _) => unanswered(failure.outcome, failure.reason),
+        (None, Some(seen)) => seen,
+        (None, None) => unanswered(Outcome::ProviderError, "no_response"),
+    }
+}
+
+/// Whether a block the classifier saw on a page that failed is nobody's.
+///
+/// A soft block is judged by what a page says, so a page of which nothing
+/// was read (a file the browser saved, a page that stopped answering, F103)
+/// is none: the persona that asked for it was not turned away. Nor is an
+/// error answer the browser replaced with its own page (a failed
+/// navigation of which nothing was read) where that answer came over plain
+/// `http://` (F189): there a proxy that will not carry a target answers in
+/// the site's place, and an empty error answer may be the proxy's as well
+/// as the site's. Inside a tunnel only the site answers, so over `https`
+/// the status the browser saw stays the site's verdict (an empty `403` of a
+/// WAF is the site's `forbidden`).
+fn nobodys_block(page: &PageResult, failure: &Failure, seen: &Classification) -> bool {
+    read_nothing(page)
+        && (seen.outcome == Outcome::SoftBlock
+            || (failure.reason == "navigation_failed" && answered_over_plain_http(page)))
+}
+
+/// Whether the address the page's status belongs to is plain `http:`. That
+/// is the page's `final_url`: where the tab was sent, which for an answer
+/// the browser replaced with its own page is the very document whose
+/// status the result reports (the engine keeps a status only then).
+fn answered_over_plain_http(page: &PageResult) -> bool {
+    url::Url::parse(&page.final_url).is_ok_and(|url| url.scheme() == "http")
 }
 
 #[cfg(test)]
 mod tests {
     use kage_browser::contract::{EXAMPLES_JSON, NavigationError, NavigationErrorCode, PageResult};
     use kage_core::domain::{Header, Render};
-    use kage_core::outcome::Outcome;
+    use kage_core::outcome::{CooldownClass, Outcome};
     use kage_core::schedule::politeness::Courtesy;
 
     use super::{
@@ -653,5 +675,65 @@ mod tests {
         ] {
             assert_eq!(courtesy_of(answered, Some(200)), Courtesy::Answered);
         }
+    }
+
+    #[test]
+    fn an_error_answer_the_browser_replaced_is_the_sites_over_https_and_nobodys_over_plain_http() {
+        let shipped = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../policies");
+        let policies = kage_core::policy::PolicySet::load(&shipped).unwrap();
+        // The page Firefox gives for an empty `403` it replaced with its
+        // own: the status it saw, nothing read (F189).
+        let replaced = |at: &str| {
+            let mut page = page();
+            page.final_url = at.to_owned();
+            page.status = Some(403);
+            page.title = None;
+            page.dom_html = None;
+            page.raw_body = None;
+            page.headers = Vec::new();
+            page.error = Some(NavigationError {
+                code: NavigationErrorCode::NavigationFailed,
+                message: format!(
+                    "the browser could not load {at}: it answered with 403 and shows its own error page"
+                ),
+                net_error: None,
+            });
+            let seen = observe_page(&page).map(|seen| policies.signatures.classify(&seen));
+            assert_eq!(
+                seen.as_ref().map(|seen| seen.outcome),
+                Some(Outcome::Forbidden),
+                "{at}: the classifier sees the status"
+            );
+            super::judged(&page, seen)
+        };
+
+        // Inside a tunnel only the site answers: a WAF's empty `403` is the
+        // site's `forbidden`, as it was before F189.
+        let walled = replaced("https://shop.kage.test/a");
+        assert_eq!(walled.outcome, Outcome::Forbidden);
+        // Over plain http a proxy that will not carry the target answers in
+        // the site's place: the failed navigation, nobody's block.
+        let refused = replaced("http://shop.kage.test/a");
+        assert_eq!(refused.outcome, Outcome::ProviderError);
+        assert_eq!(
+            refused.evidence,
+            vec!["failure:navigation_failed".to_owned()]
+        );
+        assert_eq!(refused.cooldown, CooldownClass::None);
+        // Chrome's page there names no status, and nothing is seen to judge.
+        let mut chrome = page();
+        chrome.final_url = "https://shop.kage.test/a".to_owned();
+        chrome.status = None;
+        chrome.title = None;
+        chrome.dom_html = None;
+        chrome.raw_body = None;
+        chrome.headers = Vec::new();
+        chrome.error = Some(NavigationError {
+            code: NavigationErrorCode::NavigationFailed,
+            message: "net::ERR_HTTP_RESPONSE_CODE_FAILURE".to_owned(),
+            net_error: Some("ERR_HTTP_RESPONSE_CODE_FAILURE".to_owned()),
+        });
+        let seen = observe_page(&chrome).map(|seen| policies.signatures.classify(&seen));
+        assert_eq!(super::judged(&chrome, seen).outcome, Outcome::ProviderError);
     }
 }

@@ -133,7 +133,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   keep nothing of it, and report `navigation_failed` with the status the
   browser saw (Firefox) or none (Chrome): an empty error answer over plain
   http may be the proxy's as well as the site's, so it is nobody's block
-  (spec §10.2). A tunnel the proxy refuses with a `4xx` other than `407`
+  (spec §10.2). Over `https` only the site answers, so the status Firefox
+  saw stays the site's verdict (a WAF's empty `403` is `forbidden`). A tunnel the proxy refuses with a `4xx` other than `407`
   (a provider's `403` to the `CONNECT`), which both engines reported as a
   failed proxy, now ends `provider_error` with the new reason
   `proxy_refused`, not retried: nothing against the site and nothing
