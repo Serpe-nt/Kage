@@ -1,5 +1,8 @@
 import type { RedirectHop } from '@kage/contract';
 
+/** A proxy's request for credentials, which is no answer of the site. */
+const PROXY_CHALLENGE = 407;
+
 /** The most redirects of one document request that are kept. */
 const MAX_HOPS = 50;
 
@@ -20,11 +23,22 @@ export interface AnswerSeen {
   readonly headers: Readonly<Record<string, string>>;
 }
 
-/** An answer with a document (`Network.responseReceived`). */
+/** An answer with a document (`Network.responseReceived`): the response the tab shows. */
 export interface DocumentAnswered {
   readonly requestId: string;
   readonly type?: string;
-  readonly response: { readonly status: number };
+  readonly response: {
+    readonly url: string;
+    readonly status: number;
+    /** One value per name; Chrome joins repeated lines with a line feed. */
+    readonly headers: Readonly<Record<string, string>>;
+  };
+}
+
+/** A document's response as the tab shows it. */
+export interface ShownAnswer {
+  readonly status: number;
+  readonly headers: { name: string; value: string }[];
 }
 
 interface Latest {
@@ -35,6 +49,19 @@ interface Latest {
   readonly answers: { status: number; location: string }[];
   /** Whether a document came of it. */
   answered: boolean;
+  /** The status of the latest answer the network gave it (`Network.responseReceivedExtraInfo`). */
+  wireStatus: number | null;
+  /** The response the tab shows, as the debugger announced it with the document. */
+  shown: DocumentAnswered['response'] | null;
+}
+
+const withoutFragment = (url: string) => url.split('#')[0] ?? '';
+
+/** A header object of the debugger as header lines, a line per value. */
+function headerLines(headers: Readonly<Record<string, string>>): { name: string; value: string }[] {
+  return Object.entries(headers).flatMap(([name, joined]) =>
+    joined.split('\n').map((value) => ({ name, value })),
+  );
 }
 
 /**
@@ -79,13 +106,21 @@ export class DocumentRequests {
       urls: [event.request.url],
       answers: [],
       answered: false,
+      wireStatus: null,
+      shown: null,
     };
   }
 
   seen(event: AnswerSeen): void {
     const latest = this.latest;
     const status = event.statusCode ?? 0;
-    if (latest?.id !== event.requestId || status < 300 || status > 399) {
+    // A proxy's `407` asks for the persona's credentials: no answer of the
+    // site, and the browser answers it and asks again.
+    if (latest?.id !== event.requestId || status === PROXY_CHALLENGE) {
+      return;
+    }
+    latest.wireStatus = status === 0 ? null : status;
+    if (status < 300 || status > 399) {
       return;
     }
     const location = Object.entries(event.headers).find(
@@ -98,9 +133,50 @@ export class DocumentRequests {
 
   answered(event: DocumentAnswered): void {
     const latest = this.latest;
-    if (latest?.id === event.requestId && event.type === 'Document') {
+    if (
+      latest?.id === event.requestId &&
+      event.type === 'Document' &&
+      event.response.status !== PROXY_CHALLENGE
+    ) {
       latest.answered = true;
+      latest.shown = event.response;
     }
+  }
+
+  /**
+   * The head the tab shows for the document at `url`, where Chrome
+   * revalidated a page it kept and the network answered `304` (F178): the
+   * kept response, updated by the 304's fields, as the debugger announced
+   * it with the document. The driver gives the wire's header lines and
+   * the kept status there. `null` for any other document.
+   */
+  revalidated(url: string): ShownAnswer | null {
+    const shown = this.latest?.shown ?? null;
+    if (
+      shown === null ||
+      this.latest?.wireStatus !== 304 ||
+      shown.status === 304 ||
+      withoutFragment(shown.url) !== withoutFragment(url)
+    ) {
+      return null;
+    }
+    return { status: shown.status, headers: headerLines(shown.headers) };
+  }
+
+  /**
+   * The status of the error answer the latest document request got at
+   * `url`, its last address (F204): Chrome shows its own page in place of
+   * an empty error answer and tells its driver only that the load failed.
+   * `null` when the request is another, or its answer was no error.
+   */
+  replacedStatus(url: string): number | null {
+    const latest = this.latest;
+    const last = latest?.urls[latest.urls.length - 1];
+    if (latest === null || last === undefined || withoutFragment(last) !== withoutFragment(url)) {
+      return null;
+    }
+    const status = latest.shown?.status ?? latest.wireStatus ?? 0;
+    return status >= 400 ? status : null;
   }
 
   /**

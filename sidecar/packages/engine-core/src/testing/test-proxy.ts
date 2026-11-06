@@ -25,6 +25,12 @@ export interface TestProxy {
   stop(): Promise<void>;
 }
 
+/**
+ * The host whose plain `http://` requests the test proxy closes without an
+ * answer, as Kage's forwarder closes a plain request it refuses (F200).
+ */
+export const REFUSED_HOST = 'refused.kage.test';
+
 /** Where the test proxy sends what it relays. */
 export interface TestProxyRoutes {
   /**
@@ -72,6 +78,12 @@ export async function startTestProxy(routes: TestProxyRoutes): Promise<TestProxy
     });
     if (!authorized) {
       response.writeHead(407, { 'proxy-authenticate': 'Basic realm="kage-test"' }).end();
+      return;
+    }
+    if (url.hostname === REFUSED_HOST) {
+      // Kage's forwarder refuses a plain request to an address the guard
+      // refuses this way: the connection closes, and no answer comes (F200).
+      request.socket.destroy();
       return;
     }
     // The header lines as the browser wrote them, in its order and

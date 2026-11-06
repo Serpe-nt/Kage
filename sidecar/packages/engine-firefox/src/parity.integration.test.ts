@@ -70,6 +70,8 @@ function olderDocument(document: FingerprintDocument): FingerprintDocument {
 }
 
 defineParitySuite({
+  // Its driver gives only the wire's `304` of a revalidated page (F178).
+  keptHeadsFile: 'kept-heads.json',
   name: 'firefox',
   // A Camoufox persona claims Windows or macOS (spec §6.1); Windows is the
   // larger share and the claim the plan asks to be proven.

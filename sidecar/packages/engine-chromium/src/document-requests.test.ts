@@ -51,7 +51,11 @@ describe('the main frame’s document requests as the debugger saw them (F167)',
     requests.seen(seen('C', 302, '/ok'));
     requests.requested(asked('C', 'http://site.test/ok', true));
     requests.seen(seen('C', 200));
-    requests.answered({ requestId: 'C', type: 'Document', response: { status: 200 } });
+    requests.answered({
+      requestId: 'C',
+      type: 'Document',
+      response: { url: 'http://site.test/ok', status: 200, headers: {} },
+    });
     expect(requests.unanswered()).toEqual([]);
 
     // An iframe's document, a script, and a new navigation of the tab.
@@ -62,7 +66,11 @@ describe('the main frame’s document requests as the debugger saw them (F167)',
     requests.requested(asked('F', 'http://site.test/next'));
     requests.seen(seen('F', 302));
     requests.seen(seen('other', 302, 'file:///x'));
-    requests.answered({ requestId: 'other', type: 'Document', response: { status: 200 } });
+    requests.answered({
+      requestId: 'other',
+      type: 'Document',
+      response: { url: 'http://site.test/ok', status: 200, headers: {} },
+    });
     expect(requests.unanswered()).toEqual([]);
   });
 
@@ -86,5 +94,75 @@ describe('the main frame’s document requests as the debugger saw them (F167)',
     const hops = requests.unanswered();
     expect(hops).toHaveLength(50);
     expect(hops[49]).toEqual({ url: 'http://site.test/49', status: 302, location: '/50' });
+  });
+});
+
+describe('the response the tab shows, as the debugger announced it (F178, F204)', () => {
+  const answered = (
+    requestId: string,
+    url: string,
+    status: number,
+    headers: Record<string, string>,
+  ) => ({
+    requestId,
+    type: 'Document',
+    response: { url, status, headers },
+  });
+
+  it('is the kept page Chrome shows where the network answered 304', () => {
+    const requests = new DocumentRequests(MAIN);
+    requests.requested(asked('K', 'http://site.test/kept#top'));
+    requests.seen(seen('K', 304));
+    requests.answered(
+      answered('K', 'http://site.test/kept', 200, {
+        'Content-Type': 'text/html',
+        ETag: '"v1"',
+        'X-Twice': 'one\ntwo',
+      }),
+    );
+    expect(requests.revalidated('http://site.test/kept')).toEqual({
+      status: 200,
+      headers: [
+        { name: 'Content-Type', value: 'text/html' },
+        { name: 'ETag', value: '"v1"' },
+        { name: 'X-Twice', value: 'one' },
+        { name: 'X-Twice', value: 'two' },
+      ],
+    });
+    // Another address, or a page the network answered in full: the driver's own.
+    expect(requests.revalidated('http://site.test/other')).toBeNull();
+    requests.requested(asked('L', 'http://site.test/full'));
+    requests.seen(seen('L', 200));
+    requests.answered(answered('L', 'http://site.test/full', 200, { ETag: '"v2"' }));
+    expect(requests.revalidated('http://site.test/full')).toBeNull();
+    expect(new DocumentRequests(MAIN).revalidated('http://site.test/full')).toBeNull();
+  });
+
+  it('says the status of an error answer Chrome replaced with its own page, at the address it answered', () => {
+    const requests = new DocumentRequests(MAIN);
+    expect(requests.replacedStatus('http://site.test/x')).toBeNull();
+    // Heard on the wire only.
+    requests.requested(asked('M', 'http://site.test/walled'));
+    requests.seen(seen('M', 403));
+    expect(requests.replacedStatus('http://site.test/walled#f')).toBe(403);
+    expect(requests.replacedStatus('http://site.test/other')).toBeNull();
+    // Announced with a document too, after a redirect.
+    requests.requested(asked('N', 'http://site.test/a'));
+    requests.seen(seen('N', 302, '/b'));
+    requests.requested(asked('N', 'http://site.test/b', true));
+    requests.answered(answered('N', 'http://site.test/b', 451, {}));
+    expect(requests.replacedStatus('http://site.test/b')).toBe(451);
+    expect(requests.replacedStatus('http://site.test/a')).toBeNull();
+    // An answer that is no error, or none at all.
+    requests.requested(asked('O', 'http://site.test/fine'));
+    requests.seen(seen('O', 200));
+    expect(requests.replacedStatus('http://site.test/fine')).toBeNull();
+    requests.requested(asked('P', 'http://site.test/silent'));
+    expect(requests.replacedStatus('http://site.test/silent')).toBeNull();
+    // A proxy's 407 asks for the persona's credentials: no answer of the site.
+    requests.requested(asked('Q', 'http://site.test/behind'));
+    requests.seen(seen('Q', 407));
+    requests.answered(answered('Q', 'http://site.test/behind', 407, {}));
+    expect(requests.replacedStatus('http://site.test/behind')).toBeNull();
   });
 });

@@ -190,6 +190,30 @@ every open. Its integration test (`engine.integration.test.ts`, "fails for
 a Windows claim: its workers still say Linux") pins what that achieves and
 what it does not. Leave it off unless the target is known not to look.
 
+A tab a page opens (a `target=_blank` link) gets no override either
+(F203, documented, not fixed; the test "lets a tab a page of an injected
+persona opens ask as the browser really is" measures it): its first
+request leaves before the driver reports the tab, and so before the
+engine can prepare it as it prepares its own tabs. Two ways round it were
+tried for 2.0.3 and are closed with the pinned driver. Attaching first:
+the engine's own browser-level debugger session can hold every new tab at
+its start (`Target.setAutoAttach` with `waitForDebuggerOnStart`; Chrome
+starts no navigation of the tab until every session that holds it lets it
+go, and no request left), but the override must then be sent to the held
+tab, and Chrome allows only flat sessions for a browser-level auto-attach
+("Only flatten protocol is supported"), which patchright's `CDPSession`
+cannot send through; a non-flat `Target.attachToTarget` session is
+refused for `Target.sendMessageToTarget` ("No session with given id").
+The driver's `userAgent` option would do it and is ruled out (ADR 0009).
+Closing it before it asks: a held tab closed (at once, seconds later, or
+only with the context) leaves the driver's own preparation of it rejected
+and unhandled, because patchright-core 1.63.0's `CRPage` constructor
+calls `this._networkManager.setRequestInterception(true)` without awaiting
+it (`lib/coreBundle.js:39370`) and the held tab's renderer never answers;
+an unhandled rejection ends the sidecar process. (A page's own
+`window.open()` and `close()` does not trip it.) A `pnpm patch` of the
+driver, or a fix upstream, would make the second way possible.
+
 ## Checking a persona: the self-test
 
 `POST /v1/contexts/{id}/selftest` loads pages in the persona's own context
@@ -377,10 +401,25 @@ named in the result's `side_effects`:
 An error answer with an empty body (an empty `403`, as a provider's proxy
 refuses a plain `http://` target) fails the load at once
 (`ERR_HTTP_RESPONSE_CODE_FAILURE`) and Chrome shows its `chrome-error://`
-page, which names nothing of the answer: `navigation_failed`, `status:
-null`, nothing kept, nobody's block (spec §10.2, F189). Firefox reports the
-status it saw, which over `https` is the site's verdict; Chrome's page
-names none, so over `https` it books nothing either (a follow-up). A `CONNECT` the proxy refuses is `ERR_TUNNEL_CONNECTION_FAILED`,
+page, which names nothing of the answer. Its debugger heard it: the
+engine's `DocumentRequests` keeps the main frame's latest document
+request with the status of its answer (`Network.responseReceivedExtraInfo`,
+and `Network.responseReceived` where Chrome announced a document), and
+the result is `navigation_failed` with that `status` where it was the
+answer to the address the tab was sent to, nothing kept (spec §10.2,
+F189, F204). Over plain `http://` that is nobody's block; over `https`
+the status is the site's verdict, as on Firefox. Before 2.0.3 Chrome's
+result said `status: null` and booked nothing over `https`.
+
+A page Chrome revalidates (answered `304`) shows the page it kept. The
+driver reports the kept status (`200`) and the wire's header lines, the
+304's few fields without `Content-Type`; the debugger's
+`Network.responseReceived` announces the kept head brought up to date by
+the 304's fields. Where the wire's status of the main frame's latest
+document request was `304` and the announced one is not, the result has
+the announced status and head (F178), as the Firefox engine reports such a
+page from the heads it keeps. Every other page keeps the driver's lines,
+which are the wire's as sent. A `CONNECT` the proxy refuses is `ERR_TUNNEL_CONNECTION_FAILED`,
 which Kage reports as the proxy's refusal (`proxy_refused`) when the
 forwarder saw it.
 

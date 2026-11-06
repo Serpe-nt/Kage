@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -13,6 +13,7 @@ import type {
 import {
   DisplayPool,
   EngineError,
+  KeptHeads,
   majorOfVersion,
   parseFingerprint,
   summarize,
@@ -48,6 +49,8 @@ export interface ProfilePaths {
   readonly fontconfig: string;
   /** Where the browser writes a printed page. */
   readonly pdf: string;
+  /** The heads of the pages the browser keeps, as the engine noted them (F178). */
+  readonly keptHeads: string;
 }
 
 /**
@@ -64,6 +67,7 @@ export function profilePaths(profileDir: string): ProfilePaths {
     home,
     fontconfig: path.join(home, 'fontconfig'),
     pdf: path.join(home, 'print', 'page.pdf'),
+    keptHeads: path.join(profileDir, 'kept-heads.json'),
   };
 }
 
@@ -212,6 +216,8 @@ export class FirefoxEngine implements Engine {
       const context: EngineContext = new FirefoxContext({
         context: browser,
         page,
+        keptHeads: KeptHeads.parse(await readFile(paths.keptHeads, 'utf8').catch(() => null)),
+        keptHeadsPath: paths.keptHeads,
         browserVersion: this.host.version,
         applied,
         personaSeed: document.seed,

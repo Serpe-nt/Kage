@@ -30,6 +30,7 @@ import {
   drawWebgl,
   firefoxUiLocale,
   firefoxUserAgentOf,
+  joinedHeaders,
   generateFingerprint,
   generatedOf,
   generatorId,
@@ -832,6 +833,7 @@ describe('the engine before it launches anything', () => {
       home: '/var/lib/kage/personas/p1/home',
       fontconfig: '/var/lib/kage/personas/p1/home/fontconfig',
       pdf: '/var/lib/kage/personas/p1/home/print/page.pdf',
+      keptHeads: '/var/lib/kage/personas/p1/kept-heads.json',
     });
   });
 
@@ -1062,5 +1064,32 @@ describe('classifyNavigationError', () => {
       code: 'navigation_failed',
       message: 'odd',
     });
+  });
+});
+
+describe('joinedHeaders (F190)', () => {
+  it('makes the pieces the driver split at commas one field line again', () => {
+    // As playwright-core 1.62.1 hands Firefox's head over: every value split at its commas.
+    const split = [
+      { name: 'Content-Type', value: 'text/html; charset=utf-8' },
+      { name: 'Last-Modified', value: 'Tue' },
+      { name: 'Last-Modified', value: '03 Nov 2026 20:00:00 GMT' },
+      { name: 'x-list', value: 'one' },
+      { name: 'X-List', value: 'two' },
+      { name: 'x-list', value: 'three' },
+      { name: 'Set-Cookie', value: 'a=1; Expires=Wed' },
+      { name: 'Set-Cookie', value: 'b=2' },
+      { name: 'ETag', value: '"v1"' },
+    ];
+    expect(joinedHeaders(split)).toEqual([
+      { name: 'Content-Type', value: 'text/html; charset=utf-8' },
+      { name: 'Last-Modified', value: 'Tue, 03 Nov 2026 20:00:00 GMT' },
+      { name: 'x-list', value: 'one, two, three' },
+      // Firefox's own lines: the driver split them at line feeds, not commas.
+      { name: 'Set-Cookie', value: 'a=1; Expires=Wed' },
+      { name: 'Set-Cookie', value: 'b=2' },
+      { name: 'ETag', value: '"v1"' },
+    ]);
+    expect(joinedHeaders([])).toEqual([]);
   });
 });

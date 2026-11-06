@@ -4,7 +4,7 @@ import { FirefoxEngine } from './engine.js';
 import { DEFAULT_CAMOUFOX_DIR, detectHost } from './host.js';
 
 export { CAMOUFOX_WRAPPER, FirefoxEngine, profilePaths, type ProfilePaths } from './engine.js';
-export { FirefoxContext, classifyNavigationError } from './context.js';
+export { FirefoxContext, classifyNavigationError, joinedHeaders } from './context.js';
 export * from './fingerprint.js';
 export * from './fontconfig.js';
 export * from './host.js';
