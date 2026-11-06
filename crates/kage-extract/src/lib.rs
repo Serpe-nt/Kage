@@ -47,6 +47,18 @@ pub struct Heading {
     pub id: Option<String>,
 }
 
+/// Why what was extracted is not the whole document (F122, F147).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Truncated {
+    /// The body was cut at `max_body_bytes` (spec §9): the document is
+    /// its first part.
+    MaxBodyBytes,
+    /// The parse stopped at its time (F147): the document is what was
+    /// parsed until then.
+    ParseTime,
+}
+
 /// A link of a page that a reader can see.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Link {
@@ -139,6 +151,42 @@ pub struct Extract {
     /// has fewer words than the configured number. On the http path that
     /// is a page scripts would have filled, or a wall.
     pub thin_content: bool,
+    /// Why this is not the whole document, when it is not: its body was
+    /// cut, or its parse stopped at its time. `None` for a whole one.
+    #[serde(default)]
+    pub truncated: Option<Truncated>,
+}
+
+impl Extract {
+    /// Leaves out of the links what the browser that rendered the page
+    /// reports a reader cannot see (F123, D48): what a style sheet hides
+    /// only a browser knows. `seen` is every link of the browser's
+    /// document, where it leads and whether a reader sees it. A link is
+    /// kept as often as the browser saw its address shown; an address the
+    /// browser did not list is kept, for the markup did not hide it.
+    pub fn leave_out_unseen<'a>(&mut self, seen: impl IntoIterator<Item = (&'a str, bool)>) {
+        let Some(links) = self.links.as_mut() else {
+            return;
+        };
+        let mut shown: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for (url, visible) in seen {
+            let Ok(url) = url::Url::parse(url) else {
+                continue;
+            };
+            let count = shown.entry(url.into()).or_insert(0);
+            if visible {
+                *count += 1;
+            }
+        }
+        links.retain(|link| match shown.get_mut(&link.url) {
+            None => true,
+            Some(0) => false,
+            Some(left) => {
+                *left -= 1;
+                true
+            }
+        });
+    }
 }
 
 fn found(content: &content::Content<'_>, document: &Document, markdown: bool) -> MainContent {
@@ -212,6 +260,7 @@ pub fn extract(document: &Document, options: &Options) -> Extract {
         markdown: options.markdown.then_some(main.markdown),
         word_count: u64::try_from(word_count).unwrap_or(u64::MAX),
         thin_content: word_count < options.thin_words,
+        truncated: document.cut().then_some(Truncated::ParseTime),
     }
 }
 
@@ -219,7 +268,7 @@ pub fn extract(document: &Document, options: &Options) -> Extract {
 mod tests {
     use url::Url;
 
-    use super::{CRATE_NAME, Document, Options, extract, main_content};
+    use super::{CRATE_NAME, Document, Options, Truncated, extract, main_content};
 
     fn document(html: &str) -> Document {
         Document::parse(
@@ -384,5 +433,71 @@ mod tests {
         assert!(shell.thin_content);
         assert_eq!(shell.title.as_deref(), Some("App"));
         assert_eq!(main_content(&document("")).text, "");
+    }
+    /// QA round one's extract-06 (F123): a link the browser reports hidden
+    /// (a style sheet's `display: none`) is left out of `links`, as the
+    /// crawl leaves it out; the same address shown elsewhere stays as often
+    /// as it is shown, and one the browser did not list stays.
+    #[test]
+    fn what_the_browser_reports_hidden_is_no_link() {
+        let html = r#"<html><body><article><p>Read <a href="/shown">shown</a> and <a class="x" href="/classhid">this</a>,
+            <a href="/twice">once</a> <a class="x" href="/twice">twice</a>, <a href="/unlisted">unlisted</a>.</p></article></body></html>"#;
+        let mut extracted = extract(&document(html), &Options::default());
+        extracted.leave_out_unseen([
+            ("https://www.shop.example/shown", true),
+            ("https://www.shop.example/classhid", false),
+            ("https://www.shop.example/twice", true),
+            ("https://www.shop.example/twice", false),
+            ("not a url", false),
+        ]);
+        let left: Vec<&str> = extracted
+            .links
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|link| link.url.as_str())
+            .collect();
+        assert_eq!(
+            left,
+            [
+                "https://www.shop.example/shown",
+                "https://www.shop.example/twice",
+                "https://www.shop.example/unlisted"
+            ]
+        );
+        // Without links asked for there is nothing to leave out.
+        let mut lean = extract(
+            &document(html),
+            &Options {
+                links: false,
+                ..Options::default()
+            },
+        );
+        lean.leave_out_unseen([("https://www.shop.example/shown", false)]);
+        assert_eq!(lean.links, None);
+    }
+
+    /// F147: a document whose parse stopped at its time says so; a whole
+    /// one says nothing, and a stored extraction from before the member
+    /// reads as whole.
+    #[test]
+    fn an_extraction_of_a_cut_parse_says_so() {
+        let base = Url::parse("https://www.shop.example/").unwrap();
+        let whole = extract(&document(&article(6)), &Options::default());
+        assert_eq!(whole.truncated, None);
+        let cut = Document::parse_within(
+            &article(6),
+            &base,
+            encoding_rs::UTF_8,
+            std::time::Duration::ZERO,
+        );
+        let extracted = extract(&cut, &Options::default());
+        assert_eq!(extracted.truncated, Some(Truncated::ParseTime));
+        let json = serde_json::to_value(&extracted).unwrap();
+        assert_eq!(json["truncated"], "parse_time");
+        let mut old = serde_json::to_value(&whole).unwrap();
+        old.as_object_mut().unwrap().remove("truncated");
+        let read: super::Extract = serde_json::from_value(old).unwrap();
+        assert_eq!(read.truncated, None);
     }
 }

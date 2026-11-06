@@ -69,6 +69,7 @@ function result(over: Partial<FetchResult>): FetchResult {
     side_effects: [],
     timing: { total_ms: 12 },
     attempts: [],
+    truncated: false,
     cached: false,
     created_at: '2026-10-11T12:00:00Z',
     ...over,
@@ -91,6 +92,7 @@ function extract(over: Partial<Extract>): Extract {
     markdown: '# The budget\n\nThe council met.',
     word_count: 3,
     thin_content: true,
+    truncated: null,
     ...over,
   };
 }
@@ -230,6 +232,7 @@ describe('the generated client', () => {
                     engine: null,
                     exit: 'pool',
                     reason: null,
+                    truncated: false,
                   },
                 ],
               }),

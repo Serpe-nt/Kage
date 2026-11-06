@@ -179,7 +179,10 @@ impl ArtifactStore {
     /// stored: what a result served from the cache points at (spec §15).
     /// The content is not written again; the new artifact is another
     /// request's, with its own retention deadline, `now` plus the
-    /// configured retention. `None` when the artifact is gone.
+    /// configured retention. `None` when the artifact is gone: its row,
+    /// or its blob from the disk (a volume restored without it, an
+    /// operator's cleanup), so that a result served from the cache never
+    /// points at a body nobody can read (F124).
     ///
     /// # Errors
     ///
@@ -201,6 +204,15 @@ impl ArtifactStore {
             .await?
         {
             transaction.rollback().await.map_err(StoreError::from)?;
+            return Ok(None);
+        }
+        let blob = self.blob_path(&found.content_hash, found.encoding);
+        let looked_at = blob.clone();
+        let on_disk =
+            run_blocking(move || looked_at.try_exists().map_err(io_error(&looked_at))).await?;
+        if !on_disk {
+            transaction.rollback().await.map_err(StoreError::from)?;
+            tracing::warn!(artifact = %source, path = %blob.display(), "a stored body is gone from the disk");
             return Ok(None);
         }
         let artifact = Artifact {

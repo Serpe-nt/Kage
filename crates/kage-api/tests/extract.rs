@@ -1223,3 +1223,211 @@ async fn a_browsers_body_reads_the_same_in_the_answer_and_in_the_stored_result()
     }
     api.shut_down().await;
 }
+
+/// QA round one's extract-04 (F122), extract-08 (F124) and round two's
+/// http-08 (F180), through the plain client of level 0: a body cut at
+/// `max_body_bytes` says so in the answer, its attempt, its extraction and
+/// its stored result, and is not put into the cache; a cache hit whose body
+/// is gone from the disk is a miss and a visit, which fills the entry again;
+/// bytes of no type that are no text get no extraction, as they get no
+/// `raw_body`.
+#[tokio::test]
+async fn the_answer_says_what_it_read_of_a_page_and_the_cache_keeps_only_whole_ones() {
+    // Level 0 leaves through the site's plain exit: a scout of its own.
+    let mut api = Api::start(3, 155, BROWSER_FAST).await;
+    let token = api.key(&[Scope::Fetch]).await;
+    let words = (0..300)
+        .map(|n| format!("word{n}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let page = format!(
+        "<!doctype html><html><head><title>Big</title></head><body><article><p>{words}</p>\
+         <p>THEVERYEND</p></article></body></html>"
+    );
+    serve(&api, "/big", "text/html; charset=utf-8", page.clone()).await;
+    let cut = json!({
+        "url": Api::url("/big"),
+        "level": 0,
+        "include": ["raw", "extract"],
+        "max_body_bytes": 1000,
+        "cache_ttl_s": 600,
+    });
+    let first = api.post(&token, "/v1/fetch", &cut).await;
+    assert_eq!(first.status, StatusCode::OK, "{:?}", first.json());
+    let first = first.json();
+    assert_eq!(first["outcome"], "ok", "{first}");
+    assert_eq!(first["truncated"], true);
+    assert_eq!(first["attempts"][0]["truncated"], true);
+    assert_eq!(first["raw_body"].as_str().unwrap().len(), 1000);
+    assert_eq!(first["extract"]["truncated"], "max_body_bytes");
+    assert!(
+        !first["extract"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("THEVERYEND")
+    );
+    // Read later, the stored result says the same.
+    let stored = api
+        .get(
+            &token,
+            &format!("/v1/results/{}", first["id"].as_str().unwrap()),
+        )
+        .await
+        .json();
+    assert_eq!(
+        (&stored["truncated"], &stored["attempts"][0]["truncated"]),
+        (&json!(true), &json!(true))
+    );
+    assert_eq!(stored["extract"]["truncated"], "max_body_bytes");
+    // Half a page is not served again: the same request is a visit.
+    let again = api.post(&token, "/v1/fetch", &cut).await.json();
+    assert_eq!(again["cached"], false);
+    assert_eq!(asked_over_http(&api).await, ["/big", "/big"]);
+    assert_eq!(count(&api, "response_cache").await, 0);
+
+    // The whole page says nothing of the kind, and is kept.
+    let whole = json!({
+        "url": Api::url("/big"),
+        "level": 0,
+        "include": ["raw", "extract"],
+        "cache_ttl_s": 600,
+    });
+    let kept = api.post(&token, "/v1/fetch", &whole).await.json();
+    assert_eq!(kept["truncated"], false);
+    assert_eq!(kept["attempts"][0]["truncated"], false);
+    assert_eq!(kept["extract"]["truncated"], Value::Null);
+    assert!(
+        kept["extract"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("THEVERYEND")
+    );
+    assert_eq!(count(&api, "response_cache").await, 1);
+    let hit = api.post(&token, "/v1/fetch", &whole).await.json();
+    assert_eq!(hit["cached"], true);
+    assert_eq!(hit["raw_body"], kept["raw_body"]);
+    assert_eq!(asked_over_http(&api).await.len(), 3);
+
+    // The body leaves the disk (a volume restored without it): the next
+    // request is a miss and a visit, never `cached: true` without the body
+    // it asked for, and the visit fills the entry again.
+    let reference = kept["artifacts"]["raw_body"].as_str().unwrap();
+    // The API's spelling: a prefix and the UUID without dashes.
+    let simple = reference.rsplit('_').next().unwrap();
+    let id = kage_core::ids::ArtifactId::from_uuid(uuid::Uuid::try_parse(simple).unwrap());
+    let artifact = api.artifacts.get(id).await.unwrap().unwrap();
+    std::fs::remove_file(
+        api.artifacts
+            .blob_path(&artifact.content_hash, artifact.encoding),
+    )
+    .unwrap();
+    let missed = api.post(&token, "/v1/fetch", &whole).await.json();
+    assert_eq!(missed["cached"], false);
+    assert_eq!(missed["raw_body"], kept["raw_body"]);
+    assert_eq!(asked_over_http(&api).await.len(), 4);
+    let refilled = api.post(&token, "/v1/fetch", &whole).await.json();
+    assert_eq!(refilled["cached"], true);
+    assert_eq!(refilled["raw_body"], kept["raw_body"]);
+    assert_eq!(asked_over_http(&api).await.len(), 4);
+
+    // Bytes of no type that are no text: no `raw_body`, and no extraction.
+    Mock::given(method("GET"))
+        .and(path("/bin"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_bytes(vec![0x00, 0x01, 0xfe, 0xe9, 0x10, 0x80]),
+        )
+        .mount(&api.lab.site)
+        .await;
+    let binary = api
+        .post(
+            &token,
+            "/v1/fetch",
+            &json!({ "url": Api::url("/bin"), "level": 0, "include": ["raw", "headers", "extract"] }),
+        )
+        .await
+        .json();
+    assert_eq!(binary["outcome"], "ok");
+    assert!(
+        binary["headers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|header| header["name"] != "content-type"),
+        "{binary}"
+    );
+    assert_eq!(
+        (&binary["raw_body"], &binary["extract"]),
+        (&Value::Null, &Value::Null)
+    );
+    // Text of no type is a page, as it is a `raw_body`.
+    Mock::given(method("GET"))
+        .and(path("/untyped"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(page.clone().into_bytes()))
+        .mount(&api.lab.site)
+        .await;
+    let untyped = api
+        .post(
+            &token,
+            "/v1/fetch",
+            &json!({ "url": Api::url("/untyped"), "level": 0, "include": ["raw", "extract"] }),
+        )
+        .await
+        .json();
+    assert_eq!(untyped["extract"]["title"], "Big", "{untyped}");
+    api.shut_down().await;
+}
+
+/// QA round one's extract-06 (F123): at levels 2 and 3 the links an
+/// extraction lists are those the browser shows; one a style sheet hides
+/// is left out, as a crawl leaves it out. The browser is asked for them.
+#[tokio::test]
+async fn an_extraction_in_a_browser_lists_the_links_a_reader_sees() {
+    let mut api = Api::start(1, 155, BROWSER_FAST).await;
+    let token = api.key(&[Scope::Fetch]).await;
+    let html = article("Hidden", &["/shown", "/classhid"]);
+    api.lab.chromium.with(|sidecar| {
+        sidecar.pages.insert(
+            Api::url("/hidden"),
+            json!({
+                "title": "Hidden",
+                "dom_html": html,
+                "links": [
+                    { "url": Api::url("/"), "text": "Home", "rel": [], "visible": true, "furniture": true },
+                    { "url": Api::url("/shown"), "text": "the page at /shown", "rel": [], "visible": true, "furniture": false },
+                    { "url": Api::url("/classhid"), "text": "the page at /classhid", "rel": [], "visible": false, "furniture": false },
+                ],
+            }),
+        );
+    });
+    let asked = json!({
+        "url": Api::url("/hidden"),
+        "level": 3,
+        "include": ["extract"],
+        "behavior": { "scroll_depth": 0, "dwell_ms": 1000 },
+    });
+    let result = api.post(&token, "/v1/fetch", &asked).await.json();
+    assert_eq!(result["outcome"], "ok", "{result}");
+    let links: Vec<&str> = result["extract"]["links"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|link| link["url"].as_str())
+        .collect();
+    assert_eq!(links, [Api::url("/"), Api::url("/shown")]);
+    let navigation = api
+        .lab
+        .chromium
+        .with(|sidecar| sidecar.navigated.last().cloned().unwrap());
+    assert_eq!(navigation["capture"]["links"], true);
+    // A request that does not want the links does not ask for them.
+    let mut lean = asked.clone();
+    lean["extract"] = json!({ "links": false });
+    let result = api.post(&token, "/v1/fetch", &lean).await.json();
+    assert_eq!(result["extract"]["links"], Value::Null);
+    let navigation = api
+        .lab
+        .chromium
+        .with(|sidecar| sidecar.navigated.last().cloned().unwrap());
+    assert_eq!(navigation["capture"]["links"], Value::Null);
+    api.shut_down().await;
+}

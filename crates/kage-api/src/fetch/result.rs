@@ -221,6 +221,9 @@ pub(crate) struct AttemptView {
     /// own plain exit could not carry traffic: the hop was not asked for).
     #[schema(required = true)]
     pub(crate) reason: Option<String>,
+    /// Whether the body of its response was cut at `max_body_bytes`
+    /// (spec §9).
+    pub(crate) truncated: bool,
     /// The seed its behavior and pauses were drawn from. Admin keys only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) seed: Option<String>,
@@ -477,6 +480,11 @@ pub(crate) struct FetchResult {
     /// too. Null when the body is not text: `artifacts.raw_body` has its
     /// bytes, always.
     pub(crate) raw_body: Option<String>,
+    /// Whether the body of the main response was cut at `max_body_bytes`
+    /// (the request's, or `http.max_body_bytes` of the configuration):
+    /// `raw_body`, `dom_html`, the stored bodies and `extract` hold its
+    /// first part. Such a result is not put into the cache.
+    pub(crate) truncated: bool,
     /// What the page says; with `include: ["extract"]`. Null for a fetch
     /// that did not get its page and for a response that is no HTML
     /// document.
@@ -579,6 +587,19 @@ pub(crate) struct LinkView {
     pub(crate) same_site: bool,
 }
 
+/// Why an extraction is not of the whole document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum TruncatedField {
+    /// The body was cut at `max_body_bytes`: the document is its first
+    /// part.
+    MaxBodyBytes,
+    /// The parse of the page stopped at its time (ten seconds; a page
+    /// nested hundreds of thousands of elements deep): the document is what
+    /// was parsed until then.
+    ParseTime,
+}
+
 /// What a page says (spec §14): read from the document the visit captured,
 /// never by a second request.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -632,6 +653,14 @@ pub(crate) struct ExtractView {
     /// (80 unless configured): the document gave a reader next to nothing.
     /// On the http path that usually means scripts or a wall.
     pub(crate) thin_content: bool,
+    /// Why this is not the whole document, when it is not: `max_body_bytes`
+    /// (the body was cut at the limit) or `parse_time` (the parse stopped
+    /// at its time). Null for a whole one. Read what such a result says of
+    /// the page as said of its first part: `thin_content` and
+    /// `word_count` count what was read.
+    #[serde(default)]
+    #[schema(required = true)]
+    pub(crate) truncated: Option<TruncatedField>,
 }
 
 /// What was extracted, as the API returns it; null for what was stored in
@@ -719,6 +748,7 @@ impl Viewer<'_> {
             engine: attempt.engine.map(Into::into),
             exit: attempt.exit.map(Into::into),
             reason: attempt.reason.clone(),
+            truncated: attempt.truncated,
             seed: attempt
                 .seed
                 .filter(|_| self.admin)
@@ -939,6 +969,7 @@ pub(crate) fn from_report(
             .then(|| headers_of(&report.headers)),
         dom_html: bodies.dom_html.filter(|_| include.has(Include::Dom)),
         raw_body: bodies.raw_body.filter(|_| wants_raw),
+        truncated: last.is_some_and(kage_scheduler::AttemptOutput::body_cut),
         extract: extract_of(report.extract.as_ref()).filter(|_| include.has(Include::Extract)),
         xhr: xhr_of(report.xhr.as_ref()),
         console: visit.console,
@@ -976,7 +1007,13 @@ pub(crate) fn from_stored(
     viewer: &Viewer<'_>,
 ) -> FetchResult {
     let last = attempts.last();
-    let on_http = last.is_some_and(|attempt| attempt.render == Render::Http);
+    // A result served from the cache has no attempts of its own: its level
+    // says which path got the page, as the attempt does for the one that
+    // filled it.
+    let on_http = last.map_or_else(
+        || level.is_some_and(|level| level.render() == Render::Http),
+        |attempt| attempt.render == Render::Http,
+    );
     let wants_raw = include.has(Include::Raw) || (include.has(Include::Dom) && on_http);
     let visit = visit_of(&record.visit, attempts, include, viewer);
     FetchResult {
@@ -994,6 +1031,7 @@ pub(crate) fn from_stored(
             .then(|| headers_of(&record.headers)),
         dom_html: bodies.dom_html.filter(|_| include.has(Include::Dom)),
         raw_body: bodies.raw_body.filter(|_| wants_raw),
+        truncated: record.truncated,
         extract: extract_of(record.extract.as_ref()).filter(|_| include.has(Include::Extract)),
         xhr: xhr_of(record.xhr.as_ref()),
         console: visit.console,

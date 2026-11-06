@@ -22,7 +22,10 @@
 //! what a site repeats on every page). What the markup hides is never
 //! content, as it is never text of the page. And a page without a
 //! candidate has no content: Readability then takes the whole body, which
-//! on the shell of a script-driven page is its "Loading…".
+//! on the shell of a script-driven page is its "Loading…". Unless the page
+//! has a `<main>`: where the rules find less than a few sentences, the
+//! `<main>` is the content whatever it holds, a table, a list or short
+//! paragraphs (F141, the owner's amendment of D48).
 
 use std::collections::HashMap;
 
@@ -887,8 +890,49 @@ impl<'a> PartOf<'_, 'a> {
     }
 }
 
+/// The text of a block while it is short enough to be a label of
+/// [`FILLER`]: carried up as the block is cleaned, so that no block's text is
+/// read a second time (a chain of nested blocks with little text would
+/// otherwise be read once per level, F147).
+#[derive(Debug, Clone, Default)]
+struct Said {
+    text: String,
+    /// The text is longer than any label.
+    long: bool,
+}
+
+/// No label of [`FILLER`] is longer than this, in bytes.
+const MAX_LABEL_BYTES: usize = 32;
+
+impl Said {
+    fn push(&mut self, text: &str) {
+        if self.long {
+            return;
+        }
+        kage_crawl::html::push_text(&mut self.text, text);
+        if self.text.len() > MAX_LABEL_BYTES {
+            self.long = true;
+            self.text.clear();
+        }
+    }
+
+    fn take(&mut self, child: &Self) {
+        if child.long {
+            self.long = true;
+            self.text.clear();
+        } else {
+            self.push(&child.text);
+        }
+    }
+
+    /// The text, when it is short enough to be a label.
+    fn short(&self) -> Option<&str> {
+        (!self.long).then_some(self.text.as_str())
+    }
+}
+
 /// What a block of the content holds, counted as it is cleaned.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 struct Held {
     chars: usize,
     linked: f64,
@@ -906,6 +950,9 @@ struct Held {
     /// Elements directly in it, and those of them that hold more than one.
     children: usize,
     crowded_children: usize,
+    /// Its text, every word under it, what the cleaning takes out included,
+    /// while it is short.
+    said: Said,
 }
 
 impl Held {
@@ -921,6 +968,7 @@ impl Held {
         self.list_chars += child.list_chars;
         self.textish = self.textish || child.textish;
         self.data_table = self.data_table || child.data_table;
+        self.said.take(&child.said);
     }
 }
 
@@ -990,11 +1038,9 @@ fn is_share(names: &str) -> bool {
 
 /// Whether a block of the content is taken out for what it holds.
 fn judged_out(
-    node: NodeRef<'_>,
     element: &scraper::node::Element,
     held: &Held,
     in_figure: bool,
-    dropped: &Dropped,
     rules: Rules,
 ) -> bool {
     let name = element.name();
@@ -1014,8 +1060,10 @@ fn judged_out(
         }
     };
     let is_list = matches!(name, "ul" | "ol") || ratio(held.list_chars) > 0.9;
-    if held.chars < 40 {
-        let said = text_under(node, dropped).to_lowercase();
+    if held.chars < 40
+        && let Some(said) = held.said.short()
+    {
+        let said = said.to_lowercase();
         let said = said.trim_end_matches(['.', '…']).trim();
         if FILLER.contains(&said) {
             return true;
@@ -1085,6 +1133,7 @@ fn clean(
             } else if let (Some(text), Some(top)) = (as_text(node), held.last_mut()) {
                 top.chars += chars_of(text);
                 top.commas += commas_in(text);
+                top.said.push(text);
             }
         }
         Step::Close(node) => {
@@ -1135,9 +1184,14 @@ fn clean(
                 || (rules.clean
                     && JUDGED.contains(&name)
                     && !protected
-                    && judged_out(node, element, &own, in_figure > 0, &before, rules));
+                    && judged_out(element, &own, in_figure > 0, rules));
             if out {
                 dropped.insert(node.id());
+                // What it said is still said under its parent, as a reader
+                // of the parent's text would have read it before.
+                if let Some(parent) = held.last_mut() {
+                    parent.said.take(&own.said);
+                }
                 // An input that goes still counts against the form it
                 // stood in.
                 if let (Some(parent), "input") = (held.last_mut(), name) {
@@ -1186,13 +1240,62 @@ fn pass(root: NodeRef<'_>, rules: Rules) -> Content<'_> {
     Content { parts, dropped }
 }
 
+/// The first `<main>` under `root` that a reader sees: not hidden, and not
+/// in what the markup calls furniture.
+fn main_element(root: NodeRef<'_>) -> Option<NodeRef<'_>> {
+    let mut found = None;
+    // Depth under an element that is no place for the content.
+    let mut under = 0_usize;
+    walk(root, &Dropped::new(), |step| match step {
+        Step::Open(node) => {
+            let Some(element) = as_element(node) else {
+                return;
+            };
+            if under > 0 || unseen(element) || is_furniture(element) {
+                under += 1;
+            } else if found.is_none() && element.name() == "main" {
+                found = Some(node);
+            }
+        }
+        Step::Close(node) => {
+            if as_element(node).is_some() && under > 0 {
+                under -= 1;
+            }
+        }
+    });
+    found
+}
+
+/// A `<main>` as the content, whatever it holds: without what the markup
+/// hides, the furniture in it and its bylines, and not cleaned, for a
+/// table or a list of links is what such a page is.
+fn whole(main: NodeRef<'_>) -> Content<'_> {
+    let dropped = strip(
+        main,
+        Rules {
+            strip_unlikely: false,
+            weigh_names: false,
+            clean: false,
+        },
+    );
+    Content {
+        parts: vec![main],
+        dropped,
+    }
+}
+
 /// Finds the main content of the page under `root`.
 ///
 /// A pass that finds too little is made again without the rule for
 /// unlikely names, then without the weight of names, then without the
 /// cleaning; of passes that all found too little, the one that found the
-/// most stands. A page nobody would call an article (a listing, a shell
-/// that scripts fill) has what content the rules find, which may be none.
+/// most stands. When that is still less than a few sentences and the page
+/// has a `<main>` that holds more, the `<main>` is the content, whatever it
+/// holds (the owner's decision on F141, an amendment of D48: a page of a
+/// table, a list or short paragraphs in its `<main>` has no paragraph to
+/// give points, and its markup says where its content is). A page nobody
+/// would call an article (a listing, a shell that scripts fill) with no
+/// `<main>` has what content the rules find, which may be none.
 pub(crate) fn find(root: NodeRef<'_>) -> Content<'_> {
     let attempts = [
         (true, true, true),
@@ -1218,7 +1321,11 @@ pub(crate) fn find(root: NodeRef<'_>) -> Content<'_> {
             best = Some((chars, content));
         }
     }
-    best.map(|(_, content)| content).unwrap_or_default()
+    let (chars, found) = best.unwrap_or_default();
+    match main_element(root).map(whole) {
+        Some(main) if main.chars() > chars => main,
+        _ => found,
+    }
 }
 
 #[cfg(test)]

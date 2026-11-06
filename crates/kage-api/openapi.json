@@ -2634,7 +2634,8 @@
           "persona",
           "engine",
           "exit",
-          "reason"
+          "reason",
+          "truncated"
         ],
         "properties": {
           "engine": {
@@ -2708,6 +2709,10 @@
             "format": "int64",
             "description": "How long it took, in milliseconds.",
             "minimum": 0
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "Whether the body of its response was cut at `max_body_bytes`\n(spec §9)."
           }
         }
       },
@@ -3987,7 +3992,8 @@
           "headings",
           "text",
           "word_count",
-          "thin_content"
+          "thin_content",
+          "truncated"
         ],
         "properties": {
           "canonical": {
@@ -4106,6 +4112,17 @@
               "null"
             ],
             "description": "The document's `<title>`."
+          },
+          "truncated": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TruncatedField",
+                "description": "Why this is not the whole document, when it is not: `max_body_bytes`\n(the body was cut at the limit) or `parse_time` (the parse stopped\nat its time). Null for a whole one. Read what such a result says of\nthe page as said of its first part: `thin_content` and\n`word_count` count what was read."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "twitter": {
             "type": "object",
@@ -4399,6 +4416,7 @@
           "state",
           "outcome",
           "redirects",
+          "truncated",
           "artifacts",
           "side_effects",
           "timing",
@@ -4620,6 +4638,10 @@
           "timing": {
             "$ref": "#/components/schemas/TimingView",
             "description": "Time per phase of the last attempt."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "Whether the body of the main response was cut at `max_body_bytes`\n(the request's, or `http.max_body_bytes` of the configuration):\n`raw_body`, `dom_html`, the stored bodies and `extract` hold its\nfirst part. Such a result is not put into the cache."
           },
           "xhr": {
             "oneOf": [
@@ -7338,6 +7360,14 @@
             "minimum": 0
           }
         }
+      },
+      "TruncatedField": {
+        "type": "string",
+        "description": "Why an extraction is not of the whole document.",
+        "enum": [
+          "max_body_bytes",
+          "parse_time"
+        ]
       },
       "TypeStep": {
         "type": "object",

@@ -53,6 +53,50 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   leaves before the driver reports the tab, and the pinned driver offers
   no way to reach the tab sooner; spec §10.5 and the Chromium runbook say
   what was measured. The default `inject: none` is not affected.
+- **A body cut at `max_body_bytes` says so, and half a page is not kept
+  (F122).** The result and its attempt carry `truncated` at every level
+  (a browser's document cut at the limit counts), the extraction says
+  `truncated: "max_body_bytes"`, and such a result is not put into the
+  response cache. Before, the cut page was `outcome: ok` with nothing that
+  said so, extracted as if whole, called not thin and cached (QA round
+  one, extract-04). Migration 0020 keeps the flag with attempts and
+  results.
+- **The parse of a page is bounded in time (F147).** html5ever's parse
+  grows with the square of the nesting; the page is now fed in slices and
+  a parse that has taken ten seconds stops there, with
+  `extract.truncated: "parse_time"`. Before, a page of a few hundred
+  kilobytes nested two hundred thousand deep held a thread for minutes.
+- **The markdown of nested quotes and lists grows with the page (F173).**
+  Quotes and lists nested past sixteen are written as the blocks they
+  hold, and no block is copied once per level of nesting. Before, 4000
+  nested blockquotes made 32 M characters in 22 s (QA round two,
+  http-07).
+- **Markdown says what the page says (F142).** `~` and an `&` that would
+  read as an entity are escaped, a parenthesis in a link's address is
+  escaped, and a `|` in code in a table's cell is escaped; before, a
+  paragraph of `~~~` opened a fence that ran to the end, `)` ended a link
+  early and `&amp;amp;` read as `&` (extract-10).
+- **Artifacts honour a client's refusal of gzip (F142).** `GET
+  /v1/artifacts/{id}` reads `Accept-Encoding` by RFC 9110: a weight of 0 in
+  any spelling refuses, and `gzip` named wins over `*`; before,
+  `gzip;q=0.000` and `gzip;q=0, *` got gzip (extract-09).
+- **A `<main>` is the content of its page whatever it holds (F141, the
+  owner's decision of 2026-11-05).** Where the rules find less than a few
+  sentences, the page's `<main>` is its content: a table of prices, a
+  list, a poem. Before, such a page had `word_count: 0` and
+  `thin_content: true` (extract-05).
+- **`extract.links` at levels 2 and 3 leaves out what the browser shows
+  nobody (F123).** The browser is asked for its links with whether each is
+  shown, and a link a style sheet hides is left out, as the crawl leaves it
+  out (extract-06).
+- **A cache hit whose body is gone is a miss (F124).** An entry whose
+  stored body is gone from the artifacts volume is a visit that fills the
+  entry again; before, it answered `cached: true` with `raw_body: null`
+  for as long as the entry lived (extract-08). A cached level 0 hit asked
+  only for `dom` now carries its `raw_body`, as the fresh answer does.
+- **Bytes of no type that are no text get no `extract` (F180).** The
+  sniffing that keeps `raw_body` null decides; before, such a body had an
+  empty extraction with `thin_content: true` (QA round two, http-08).
 
 ## [2.0.3] - 2026-11-06
 

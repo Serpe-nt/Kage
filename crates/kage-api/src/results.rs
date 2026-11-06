@@ -161,6 +161,7 @@ pub(crate) fn ended_with(item: &JobItem, request: RequestId) -> Option<FetchReco
         headers: Vec::new(),
         final_url: None,
         redirects: Vec::new(),
+        truncated: false,
         extract: None,
         reading: None,
         xhr: None,
@@ -276,22 +277,59 @@ pub(crate) async fn result(
     Ok(Json(result).into_response())
 }
 
-/// Whether a client takes a gzip body.
+/// The weight of a qvalue (RFC 9110 §12.4.2): `0` to `1` with up to
+/// three decimals, in thousandths; `None` for one that is no qvalue.
+fn qvalue(written: &str) -> Option<u16> {
+    let (whole, fraction) = written.split_once('.').unwrap_or((written, ""));
+    if fraction.len() > 3 || !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let thousandths = format!("{fraction:0<3}").parse::<u16>().ok()?;
+    match whole {
+        "0" => Some(thousandths),
+        "1" if thousandths == 0 => Some(1000),
+        _ => None,
+    }
+}
+
+/// Whether a client takes a gzip body (RFC 9110 §12.5.3): the weight of
+/// `gzip` (or `x-gzip`) when the client names it, else that of `*`;
+/// a weight of 0 in any of its spellings refuses it, and a client that
+/// names neither does not take it. An element whose weight is no qvalue
+/// says nothing.
 fn accepts_gzip(headers: &HeaderMap) -> bool {
-    headers
+    let (mut named, mut any): (Option<u16>, Option<u16>) = (None, None);
+    for coding in headers
         .get_all(ACCEPT_ENCODING)
         .iter()
         .filter_map(|value| value.to_str().ok())
         .flat_map(|value| value.split(','))
-        .any(|coding| {
-            let mut parts = coding.split(';');
-            let name = parts.next().unwrap_or_default().trim();
-            let refused = parts.any(|parameter| {
-                let parameter = parameter.trim().to_ascii_lowercase();
-                parameter == "q=0" || parameter == "q=0.0" || parameter == "q=0.00"
-            });
-            (name.eq_ignore_ascii_case("gzip") || name == "*") && !refused
-        })
+    {
+        let mut parts = coding.split(';');
+        let name = parts.next().unwrap_or_default().trim();
+        let mut weight = Some(1000);
+        for parameter in parts {
+            let Some((key, value)) = parameter.split_once('=') else {
+                continue;
+            };
+            if key.trim().eq_ignore_ascii_case("q") {
+                weight = qvalue(value.trim());
+            }
+        }
+        let Some(weight) = weight else {
+            continue;
+        };
+        let slot = if name.eq_ignore_ascii_case("gzip") || name.eq_ignore_ascii_case("x-gzip") {
+            &mut named
+        } else if name == "*" {
+            &mut any
+        } else {
+            continue;
+        };
+        // Of two elements for one coding the higher weight stands.
+        *slot = Some(slot.map_or(weight, |known| known.max(weight)));
+    }
+    named.or(any).is_some_and(|weight| weight > 0)
 }
 
 /// A file as a stream of chunks, read as the client takes them.
@@ -422,7 +460,7 @@ mod tests {
     use http_body_util::BodyExt;
     use tokio::io::AsyncWriteExt;
 
-    use super::{CHUNK_BYTES, accepts_gzip, stream_file};
+    use super::{CHUNK_BYTES, accepts_gzip, qvalue, stream_file};
 
     #[test]
     fn gzip_is_sent_only_to_a_client_that_takes_it() {
@@ -438,6 +476,34 @@ mod tests {
         assert!(!with("br, deflate"));
         assert!(!with("gzip;q=0"));
         assert!(!with("identity"));
+        // QA round one's extract-09 (F142): a weight of 0 in any of its
+        // spellings refuses, and the named coding wins over `*`.
+        for refused in [
+            "gzip;q=0.000",
+            "gzip; Q=0.00",
+            "gzip;q=0, *",
+            "*, gzip;q=0",
+            "*;q=0",
+        ] {
+            assert!(!with(refused), "{refused}");
+        }
+        for taken in [
+            "gzip;q=0.001",
+            "gzip;q=1.000",
+            "x-gzip",
+            "*;q=0.5, br",
+            "gzip;q=0, gzip;q=0.5",
+        ] {
+            assert!(with(taken), "{taken}");
+        }
+        // A weight that is no qvalue says nothing.
+        assert!(!with("gzip;q=2"));
+        assert!(!with("gzip;q=0.0001"));
+        assert!(with("gzip;q=x, *"));
+        assert_eq!(
+            (qvalue("1"), qvalue("0.5"), qvalue("0."), qvalue("1.001")),
+            (Some(1000), Some(500), Some(0), None)
+        );
         assert!(!accepts_gzip(&HeaderMap::new()));
     }
 

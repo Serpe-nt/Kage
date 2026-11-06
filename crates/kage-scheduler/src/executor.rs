@@ -563,6 +563,21 @@ impl AttemptOutput {
         }
     }
 
+    /// Whether the body of the response was cut at `max_body_bytes`
+    /// (spec §9, F122): the document the browser serialized, or the body
+    /// it or the http path read.
+    pub fn body_cut(&self) -> bool {
+        match self.page.as_deref() {
+            Some(page) => {
+                page.dom_truncated || page.raw_body.as_ref().is_some_and(|body| body.truncated)
+            }
+            None => self
+                .fetched
+                .as_deref()
+                .is_some_and(|fetched| fetched.truncated),
+        }
+    }
+
     /// The same failure, but one no other persona would change.
     #[must_use]
     pub fn finally(mut self) -> Self {

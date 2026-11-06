@@ -7,7 +7,7 @@ use encoding_rs::Encoding;
 use kage_core::domain::Header;
 use kage_core::outcome::Outcome;
 use kage_crawl::html::Page;
-use kage_extract::{Document, Options};
+use kage_extract::{Document, Options, Truncated};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -26,6 +26,10 @@ pub(super) struct Reading {
     pub extract: Option<serde_json::Value>,
     /// Whether the extraction found next to nothing.
     pub thin: bool,
+    /// Whether the document read was not the whole page: its body was cut
+    /// at `max_body_bytes` (F122), or its parse stopped at its time
+    /// (F147). Such a page is not put into the cache.
+    pub cut: bool,
 }
 
 impl Reading {
@@ -134,43 +138,121 @@ pub(super) fn is_html(headers: &[Header]) -> bool {
     mime.is_empty() || mime == "text/html" || mime == "application/xhtml+xml"
 }
 
+/// Whether a response is a document extraction reads: it says it is HTML,
+/// or it says nothing and its body is text by the sniffing that decides
+/// whether a body is shown as `raw_body` (F180). A body a browser showed
+/// without bringing its bytes is taken for the page it showed.
+pub(super) fn is_document(output: &AttemptOutput) -> bool {
+    if !is_html(&output.headers) {
+        return false;
+    }
+    let typed = output.headers.iter().any(|header| {
+        header.name.eq_ignore_ascii_case("content-type")
+            && !header
+                .value
+                .split(';')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .is_empty()
+    });
+    typed
+        || output
+            .sent_body()
+            .is_none_or(|body| kage_http::charset::untyped_is_text(&body))
+}
+
+/// A document an attempt captured.
+#[derive(Debug)]
+pub(super) struct Captured {
+    /// Its text.
+    pub text: String,
+    /// The encoding it was written in.
+    pub encoding: &'static Encoding,
+    /// Whether it was cut at `max_body_bytes` (F122).
+    pub cut: bool,
+}
+
 /// The document an attempt captured and the encoding it was written in:
 /// the tree as the browser had it after the page settled (UTF-8, the
 /// browser resolved what it wrote), else the body the http path fetched,
 /// decoded as a browser decodes it, in the encoding a link's query is
-/// written in (F161).
-fn document_of(output: &AttemptOutput) -> Option<(String, &'static Encoding)> {
+/// written in (F161); and whether it was cut at `max_body_bytes`.
+pub(super) fn document_of(output: &AttemptOutput) -> Option<Captured> {
     output
         .page
         .as_ref()
-        .and_then(|page| page.dom_html.clone())
-        .map(|dom| (dom, encoding_rs::UTF_8))
-        .or_else(|| output.fetched.as_ref().map(|fetched| fetched.decoded()))
+        .and_then(|page| {
+            page.dom_html.clone().map(|dom| Captured {
+                text: dom,
+                encoding: encoding_rs::UTF_8,
+                cut: page.dom_truncated,
+            })
+        })
+        .or_else(|| {
+            output.fetched.as_ref().map(|fetched| {
+                let (text, encoding) = fetched.decoded();
+                Captured {
+                    text,
+                    encoding,
+                    cut: fetched.truncated,
+                }
+            })
+        })
 }
 
-/// Parses a document written in `encoding` once and reads from it what is
-/// asked for. Off the async threads: a large page takes milliseconds.
+/// The links of the browser's document with whether a reader sees each;
+/// `None` when the attempt brought none (F123).
+pub(super) fn seen_links(output: &AttemptOutput) -> Option<Vec<(String, bool)>> {
+    output
+        .page
+        .as_ref()
+        .and_then(|page| page.links.as_ref())
+        .map(|links| {
+            links
+                .iter()
+                .map(|link| (link.url.clone(), link.visible))
+                .collect()
+        })
+}
+
+/// Parses a document once and reads from it what is asked for. Off the
+/// async threads: a large page takes milliseconds, and its parse is bounded
+/// in time (F147). The links of an extraction leave out what the browser
+/// reports a reader cannot see, when it was asked (`seen`, F123).
 pub(super) async fn read_document(
-    (document, encoding): (String, &'static Encoding),
+    captured: Captured,
     loaded_from: Url,
     page: bool,
     options: Option<Options>,
+    seen: Option<Vec<(String, bool)>>,
 ) -> Reading {
     let started = std::time::Instant::now();
     let read = tokio::task::spawn_blocking(move || {
-        let document = Document::parse_in(&document, &loaded_from, encoding);
+        let document = Document::parse_in(&captured.text, &loaded_from, captured.encoding);
         let page = page.then(|| document.page());
-        let extract = options.map(|options| kage_extract::extract(&document, &options));
-        (page, extract)
+        let extract = options.map(|options| {
+            let mut extract = kage_extract::extract(&document, &options);
+            if let Some(seen) = &seen {
+                extract
+                    .leave_out_unseen(seen.iter().map(|(url, visible)| (url.as_str(), *visible)));
+            }
+            if captured.cut {
+                extract.truncated = Some(Truncated::MaxBodyBytes);
+            }
+            extract
+        });
+        (page, extract, captured.cut || document.cut())
     })
     .await;
     metrics::extracted(started.elapsed());
     match read {
-        Ok((page, extract)) => Reading {
+        Ok((page, extract, cut)) => Reading {
             page,
             crawl: None,
             thin: extract.as_ref().is_some_and(|extract| extract.thin_content),
             extract: extract.and_then(|extract| serde_json::to_value(extract).ok()),
+            cut,
         },
         Err(error) => {
             tracing::warn!(%error, "a page's document could not be read");
@@ -194,7 +276,7 @@ impl Pipeline {
         };
         let options = order
             .extract
-            .filter(|_| outcome.is_success() && is_html(&last.headers));
+            .filter(|_| outcome.is_success() && is_document(last));
         if !order.read_page && options.is_none() {
             return Reading::default();
         }
@@ -206,7 +288,11 @@ impl Pipeline {
             .as_deref()
             .and_then(|url| Url::parse(url).ok())
             .unwrap_or_else(|| order.url.clone());
-        let mut reading = read_document(document, loaded_from, order.read_page, options).await;
+        let seen = options
+            .filter(|options| options.links)
+            .and_then(|_| seen_links(last));
+        let mut reading =
+            read_document(document, loaded_from, order.read_page, options, seen).await;
         // What a crawl takes from a page it got, to be stored with the
         // page's result.
         reading.crawl = (order.read_page && outcome.is_success())
@@ -227,8 +313,17 @@ mod tests {
     use kage_core::schedule::politeness::Courtesy;
     use kage_http::Fetched;
 
-    use super::{document_of, is_html, read_document};
+    use super::{Captured, document_of, is_document, is_html, read_document};
     use crate::executor::AttemptOutput;
+
+    /// A document of the browser's, whole.
+    fn whole(text: String) -> Captured {
+        Captured {
+            text,
+            encoding: UTF_8,
+            cut: false,
+        }
+    }
 
     fn typed(value: &str) -> Vec<Header> {
         vec![
@@ -277,14 +372,15 @@ mod tests {
         );
         let base = Url::parse("https://example.org/a/page").unwrap();
 
-        let nothing = read_document((html.clone(), UTF_8), base.clone(), false, None).await;
+        let nothing = read_document(whole(html.clone()), base.clone(), false, None, None).await;
         assert!(nothing.page.is_none() && nothing.extract.is_none() && !nothing.thin);
 
         let both = read_document(
-            (html.clone(), UTF_8),
+            whole(html.clone()),
             base.clone(),
             true,
             Some(Options::default()),
+            None,
         )
         .await;
         let page = both.page.unwrap();
@@ -317,7 +413,7 @@ mod tests {
             ..Options::default()
         };
         let shell = "<html><body><div id=\"root\">Loading</div></body></html>".to_owned();
-        let thin = read_document((shell, UTF_8), base, false, Some(lean)).await;
+        let thin = read_document(whole(shell), base, false, Some(lean), None).await;
         assert!(thin.page.is_none() && thin.thin);
         let extract = thin.extract.unwrap();
         assert_eq!(extract["thin_content"], true);
@@ -348,10 +444,11 @@ mod tests {
                 "<div>".repeat(depth)
             );
             let read = runtime.block_on(read_document(
-                (html, UTF_8),
+                whole(html),
                 base.clone(),
                 true,
                 Some(Options::default()),
+                None,
             ));
             let page = read.page.unwrap();
             assert_eq!(page.title, "Deep", "{depth}");
@@ -403,10 +500,15 @@ mod tests {
         body.extend_from_slice(b"<a href=\"/f\xfcr\">f\xfcr</a> <a href=\"/s?q=f\xfcr\">s</a></p></article></body></html>");
         let output = fetched("text/html", &body);
         let document = document_of(&output).unwrap();
-        assert!(document.0.contains("<title>Café</title>"), "{}", document.0);
-        assert_eq!(document.1, encoding_rs::WINDOWS_1252);
+        assert!(
+            document.text.contains("<title>Café</title>"),
+            "{}",
+            document.text
+        );
+        assert_eq!(document.encoding, encoding_rs::WINDOWS_1252);
+        assert!(!document.cut);
         let base = Url::parse("http://latin.kage.test/page").unwrap();
-        let read = read_document(document, base, true, Some(Options::default())).await;
+        let read = read_document(document, base, true, Some(Options::default()), None).await;
         let page = read.page.unwrap();
         assert_eq!(page.title, "Café");
         // A path is UTF-8; a query is written in the page's encoding, as a
@@ -442,5 +544,101 @@ mod tests {
         );
         let nothing = AttemptOutput::failed(Outcome::Timeout, "timeout", Courtesy::NotTheSite);
         assert_eq!(nothing.sent_body(), None);
+    }
+    /// QA round one's extract-04 (F122): a body cut at `max_body_bytes`
+    /// says so in what is read from it, and a reading of it is cut, which
+    /// keeps it out of the cache.
+    #[tokio::test]
+    async fn a_document_cut_at_its_limit_says_so() {
+        let words = "word ".repeat(300);
+        let body = format!("<!doctype html><title>Big</title><article><p>{words}</p>");
+        let mut output = fetched("text/html", body.as_bytes());
+        if let Some(fetched) = output.fetched.as_mut() {
+            fetched.truncated = true;
+        }
+        let document = document_of(&output).unwrap();
+        assert!(document.cut);
+        let base = Url::parse("http://latin.kage.test/page").unwrap();
+        let read =
+            read_document(document, base.clone(), true, Some(Options::default()), None).await;
+        assert!(read.cut);
+        let extract = read.extract.unwrap();
+        assert_eq!(extract["truncated"], "max_body_bytes");
+        assert_eq!(extract["thin_content"], false);
+        // A whole one says nothing of the kind.
+        let whole_read =
+            read_document(whole(body), base, false, Some(Options::default()), None).await;
+        assert!(!whole_read.cut);
+        assert!(whole_read.extract.unwrap()["truncated"].is_null());
+    }
+
+    /// QA round two's http-08 (F180): a body of no type is a document when
+    /// it is text by the sniffing that shows it as `raw_body`, and bytes
+    /// that are no text get no extraction, as they get no `raw_body`.
+    #[test]
+    fn a_body_of_no_type_is_a_document_only_when_it_is_text() {
+        let untyped = |body: &[u8]| {
+            let mut output = fetched("text/html", body);
+            if let Some(fetched) = output.fetched.as_mut() {
+                fetched.headers.clear();
+            }
+            output.headers = Vec::new();
+            output
+        };
+        assert!(!is_document(&untyped(&[
+            0x00, 0x01, 0xfe, 0xe9, 0x10, 0x80
+        ])));
+        assert!(is_document(&untyped(b"<p>a page</p>")));
+        assert!(is_document(&untyped("plain text, UTF-8 ✓".as_bytes())));
+        assert!(is_document(&untyped(b"\xef\xbb\xbfwith a byte order mark")));
+        // An empty type is no type.
+        let mut empty = untyped(&[0x00, 0x80]);
+        empty.headers = typed(" ; charset=utf-8");
+        assert!(!is_document(&empty));
+        // A declared type decides, whatever the bytes.
+        let mut declared = untyped(&[0x00, 0x80]);
+        declared.headers = typed("text/html");
+        assert!(is_document(&declared));
+        declared.headers = typed("image/png");
+        assert!(!is_document(&declared));
+        // A page a browser showed without its bytes is the page it showed.
+        let browser = AttemptOutput::failed(Outcome::Ok, "test", Courtesy::Answered);
+        assert!(is_document(&browser));
+    }
+
+    /// QA round one's extract-06 (F123): the links of an extraction leave
+    /// out what the browser reports a reader cannot see.
+    #[tokio::test]
+    async fn the_links_of_an_extraction_are_those_the_browser_shows() {
+        let html = "<html><body><article><p>Read <a href=\"/shown\">shown</a> and \
+                    <a class=\"x\" href=\"/classhid\">this</a>.</p></article></body></html>"
+            .to_owned();
+        let base = Url::parse("http://other.qa.test/page").unwrap();
+        let seen = vec![
+            ("http://other.qa.test/shown".to_owned(), true),
+            ("http://other.qa.test/classhid".to_owned(), false),
+        ];
+        let read = read_document(
+            whole(html.clone()),
+            base.clone(),
+            false,
+            Some(Options::default()),
+            Some(seen),
+        )
+        .await;
+        let extract = read.extract.unwrap();
+        let links: Vec<&str> = extract["links"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|link| link["url"].as_str())
+            .collect();
+        assert_eq!(links, ["http://other.qa.test/shown"]);
+        // Without the browser's word, the markup's stands.
+        let markup = read_document(whole(html), base, false, Some(Options::default()), None).await;
+        assert_eq!(
+            markup.extract.unwrap()["links"].as_array().unwrap().len(),
+            2
+        );
     }
 }

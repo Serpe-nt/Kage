@@ -677,6 +677,11 @@ export interface components {
              * @description How long it took, in milliseconds.
              */
             total_ms: number;
+            /**
+             * @description Whether the body of its response was cut at `max_body_bytes`
+             *     (spec §9).
+             */
+            truncated: boolean;
         };
         /** @description A page of the audit trail. */
         AuditPage: {
@@ -1487,6 +1492,7 @@ export interface components {
             thin_content: boolean;
             /** @description The document's `<title>`. */
             title?: string | null;
+            truncated: components["schemas"]["TruncatedField"] | null;
             /** @description The Twitter card properties, by name. */
             twitter: {
                 [key: string]: string[];
@@ -1775,6 +1781,13 @@ export interface components {
             status?: number | null;
             /** @description Time per phase of the last attempt. */
             timing: components["schemas"]["TimingView"];
+            /**
+             * @description Whether the body of the main response was cut at `max_body_bytes`
+             *     (the request's, or `http.max_body_bytes` of the configuration):
+             *     `raw_body`, `dom_html`, the stored bodies and `extract` hold its
+             *     first part. Such a result is not put into the cache.
+             */
+            truncated: boolean;
             xhr?: components["schemas"]["XhrView"] | null;
         };
         /** @description What a flow may change of how its persona behaves. */
@@ -3042,6 +3055,11 @@ export interface components {
              */
             ttfb_ms?: number | null;
         };
+        /**
+         * @description Why an extraction is not of the whole document.
+         * @enum {string}
+         */
+        TruncatedField: "max_body_bytes" | "parse_time";
         /** @description Type text into an element. */
         TypeStep: {
             /** @description See `click`. */
