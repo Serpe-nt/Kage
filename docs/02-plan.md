@@ -1077,7 +1077,11 @@ merged branches on GitHub.
   `ssrf_denied`. The forwarder resolves every name it relays under the
   setting, and the after-the-fact check of a navigation's chain resolves
   names as the http path's hops do since F98; first of the round two
-  fixes.
+  fixes. The G1 part is fixed by [Serpe-nt/Kage#51](https://github.com/Serpe-nt/Kage/pull/51) (2026-11-05): under the setting
+  the forwarder looks up every name it relays (one lookup per name, a
+  failed one never kept) and refuses a denied or unresolvable one before
+  the proxy is asked, and a navigation's chain and a flow's pages are
+  checked by address after the fact; G3, G5, L2, L3 and V1 stay open.
 - **F58 (CI):** the report-only mutants job reaches 78 of 2375 mutants
   in its 30 min on a runner; run the mutants of the pull request's diff
   (`cargo mutants --in-diff`) or a weekly job on a larger runner. The
@@ -1503,9 +1507,9 @@ before the tag.
   INFO line on stdout before the table.
 - **F67 stands** (after 2.0.0): pipeline refusals in
   `kage_scheduler_refusals_total`.
-- **F80:** `setxkbmap`'s 10 s timeout on a loaded runner (a longer
+- **F80 (fixed by [Serpe-nt/Kage#61](https://github.com/Serpe-nt/Kage/pull/61)):** `setxkbmap`'s 10 s timeout on a loaded runner (a longer
   timeout or one retry for the layout step).
-- **F81:** a Firefox parity test read a button hold of 19 ms on a loaded
+- **F81 (fixed by [Serpe-nt/Kage#56](https://github.com/Serpe-nt/Kage/pull/56)):** a Firefox parity test read a button hold of 19 ms on a loaded
   runner.
 - **F82 (fixed by [Serpe-nt/Kage#31](https://github.com/Serpe-nt/Kage/pull/31)):**
   the `fast-uri` override to 3.1.9 / 4.2.3 in the sidecar and
@@ -1521,7 +1525,12 @@ before the tag.
   with neither `dom_html` nor `raw_body` should say so, not look blank.
 - **F91:** drop the three `zstd` 0.13 ignores (RUSTSEC-2026-0391, -0398,
   -0403) with the first `wreq-util` on `zstd` 0.14, or review them by
-  2026-12-31.
+  2026-12-31. Since 2026-11-05 `cargo-deny` also warns of nine "unsound"
+  advisories of the same `zstd-safe` 7.3.0 (RUSTSEC-2026-0395 to -0402,
+  -0405, -0406), which do not fail the gate: review whether any reaches the
+  read decoder `wreq-util` uses. And RUSTSEC-2026-0440 (`astral-tokio-tar`
+  unmaintained, test-only through `testcontainers`) is accepted until
+  2026-12-31 or the first `testcontainers` without it ([Serpe-nt/Kage#54](https://github.com/Serpe-nt/Kage/pull/54)).
 - **F92 (fixed by [Serpe-nt/Kage#25](https://github.com/Serpe-nt/Kage/pull/25)):**
   the README's CI badge read "failing" while `ci-ok` was green, because
   the report-only mutants job reached its 30-minute cap and
@@ -1652,16 +1661,16 @@ order of severity (the report's "Proposed plan items" names the rows):
   expiries; today each expiry shows a proxy `degraded` for one scrape and
   the rule's `for: 10m` starts again, so it never fired in 18 minutes
   with every proxy down (secrecy-02).
-- **F112:** a NUL in a string is refused at the API with 422 naming the
+- **F112 (fixed by [Serpe-nt/Kage#58](https://github.com/Serpe-nt/Kage/pull/58)):** a NUL in a string is refused at the API with 422 naming the
   field, not `500 internal` with the body in Postgres' log (api-02,
   secrecy-10).
-- **F113:** `POST /v1/admin/personas/{id}/selftest` reads its body under
+- **F113 (fixed by [Serpe-nt/Kage#58](https://github.com/Serpe-nt/Kage/pull/58)):** `POST /v1/admin/personas/{id}/selftest` reads its body under
   the rules of §19 like the other routes: 408, 413 as a problem, 415,
   400 (api-03).
-- **F114:** the OpenAPI document names every status an operation answers
+- **F114 (fixed by [Serpe-nt/Kage#58](https://github.com/Serpe-nt/Kage/pull/58)):** the OpenAPI document names every status an operation answers
   (401, 403, 429, 400, 408, 413, 415, 422, 500) and a binary schema for
   `GET /v1/artifacts/{id}` (api-05, docs-02).
-- **F115:** a parse refusal is 422 and names its field and step, a null
+- **F115 (fixed by [Serpe-nt/Kage#58](https://github.com/Serpe-nt/Kage/pull/58)):** a parse refusal is 422 and names its field and step, a null
   or a wrong type for an enumerated field included (api-06, api-07,
   jobs-08).
 - **F116:** a verdict needs a document to judge, with F86: a successful
@@ -1669,7 +1678,7 @@ order of severity (the report's "Proposed plan items" names the rows):
   content is in frames and an empty 200 with no type get one outcome at
   every level, and none of them is a block (api-08, jobs-02, policy-08,
   policy-09, extract-07).
-- **F117:** decide what a key with `admin` and `jobs` reads and cancels
+- **F117 (fixed by [Serpe-nt/Kage#58](https://github.com/Serpe-nt/Kage/pull/58)):** decide what a key with `admin` and `jobs` reads and cancels
   of another key's jobs, write it into §16.3, and put a cancel on the
   audit trail (auth-02).
 - **F118:** a crawl takes links from HTML only (crawl-01).
@@ -1677,7 +1686,7 @@ order of severity (the report's "Proposed plan items" names the rows):
   disallowed prefix (crawl-05; D46).
 - **F120:** a link answered with a file to save ends the item with one
   request, the reader stays and the tab is not forgotten (crawl-06).
-- **F121:** `/readyz` answers `503 stopping` for as long as the server
+- **F121 (fixed by [Serpe-nt/Kage#58](https://github.com/Serpe-nt/Kage/pull/58)):** `/readyz` answers `503 stopping` for as long as the server
   stops, or the runbook and §16.1 say the listener goes at the signal
   (jobs-04, api-16).
 - **F122:** a body cut at `max_body_bytes` says so, and the half page is
@@ -1689,34 +1698,34 @@ order of severity (the report's "Proposed plan items" names the rows):
   `cached: true` with `raw_body: null` (extract-08).
 - **F125:** every signature rule has a status or text bound, so a long
   article quoting a vendor's text is not a block (policy-02).
-- **F126:** after a breaker's pause level 0 goes on without waiting for
+- **F126 (fixed by [Serpe-nt/Kage#59](https://github.com/Serpe-nt/Kage/pull/59)):** after a breaker's pause level 0 goes on without waiting for
   a browser request, and `kage_breaker_open` is read from the store at
   the scrape (policy-03, secrecy-03).
 - **F127:** an empty `domains.yaml` changes nothing on a reload, like
   the two other files (policy-04; §17).
 - **F128:** a client that hangs up leaves the queue, and
   `kage_api_requests_in_flight` comes down (sched-02, sched-03).
-- **F129:** one backoff cycle per backoff, whatever an operator probes
+- **F129 (fixed by [Serpe-nt/Kage#59](https://github.com/Serpe-nt/Kage/pull/59)):** one backoff cycle per backoff, whatever an operator probes
   (sched-06; §7.3).
 - **F130:** a page that waits for a persona says `paused`, with its
   reason and until when (sched-08; §8.4).
-- **F131:** a bounded `method` label on the API metrics (secrecy-04).
-- **F132:** every nested key can be overridden alone by the environment
+- **F131 (fixed by [Serpe-nt/Kage#58](https://github.com/Serpe-nt/Kage/pull/58)):** a bounded `method` label on the API metrics (secrecy-04).
+- **F132 (fixed by [Serpe-nt/Kage#58](https://github.com/Serpe-nt/Kage/pull/58)):** every nested key can be overridden alone by the environment
   (cli-01).
-- **F133:** a password in a URL is refused or redacted on every road:
+- **F133 (fixed by [Serpe-nt/Kage#58](https://github.com/Serpe-nt/Kage/pull/58)):** a password in a URL is refused or redacted on every road:
   `kage fetch`, `config check`'s four URL keys, the database URL's
   unknown parameters (cli-03, cli-06, cli-08).
-- **F134:** the API's small conformance items: `created_at` equal in the
+- **F134 (fixed by [Serpe-nt/Kage#58](https://github.com/Serpe-nt/Kage/pull/58)):** the API's small conformance items: `created_at` equal in the
   answer and the read-back, `%ff` in a path as a problem, the HTTP
   layer's 431 and 400, 414 for a long target, a body on an endpoint that
   takes none, duplicate keys in a job, `+json` media types,
   `daily_page_budget`'s maximum (api-09 to api-15, auth-01).
-- **F135:** the audit trail's gaps: `/metrics` and `/docs` refusals, and
+- **F135 (fixed by [Serpe-nt/Kage#58](https://github.com/Serpe-nt/Kage/pull/58)):** the audit trail's gaps: `/metrics` and `/docs` refusals, and
   a CLI mutation whose audit event fails (auth-04, auth-06).
-- **F136:** what the loaders take and cannot mean: a wildcard CORS
+- **F136 (fixed by [Serpe-nt/Kage#58](https://github.com/Serpe-nt/Kage/pull/58)):** what the loaders take and cannot mean: a wildcard CORS
   origin, a wildcard in `private_names`, a TTL over the bound, a preview
   of what is no host name (auth-05, cli-12, extract-11, policy-06).
-- **F137:** the CLI and compose edges: a bare relative
+- **F137 (fixed by [Serpe-nt/Kage#58](https://github.com/Serpe-nt/Kage/pull/58)):** the CLI and compose edges: a bare relative
   `KAGE_STATIC_LIST_FILE`, `dev-secrets.sh` on a last line with no
   newline, values the check takes that `serve` panics on,
   `egress.direct.engines` outside the mix, `--output` to an unwritable
@@ -1731,7 +1740,7 @@ order of severity (the report's "Proposed plan items" names the rows):
   says which, `webhook.deliveries` per attempt or the text says per
   event, a `wait_for` cut by its timeout is no success (jobs-09,
   jobs-10, jobs-11).
-- **F141 (the owner's question):** is a `<main>` of only a table, a
+- **F141 (the owner's decision of 2026-11-05: a `<main>` is content whatever it holds):** is a `<main>` of only a table, a
   list or short paragraphs content? D48 says a page without a candidate
   has none; an ADR, or a sentence in §14 and the runbook (extract-05).
 - **F142:** artifacts honour a client's refusal of gzip, and markdown
@@ -1740,7 +1749,7 @@ order of severity (the report's "Proposed plan items" names the rows):
   metrics' `vendor` is who blocked, `referer_strategy: search_engine` is
   refused or the result says typed, a 407 keeps its status (policy-07,
   policy-10, policy-11).
-- **F144:** observability's small items: `engine` on the sidecars' event
+- **F144 (fixed by [Serpe-nt/Kage#59](https://github.com/Serpe-nt/Kage/pull/59)):** observability's small items: `engine` on the sidecars' event
   loop series, `span_id` in sidecar lines, the sidecar log shape, §20's
   list of families, `RUST_LOG` and `LOG_LEVEL` through compose, a
   redirect target's query at debug (secrecy-06 to secrecy-09,
@@ -1775,7 +1784,7 @@ order of severity (the report's "Proposed plan items" names the rows):
   `http.max_body_bytes` can hold hours of one blocking thread; a depth or
   a time budget with a typed outcome, and the result saying so (found by
   the F97 session).
-- **F148 (medium):** under `resolve_on_host` the subresource emulation of
+- **F148 (medium, fixed by [Serpe-nt/Kage#60](https://github.com/Serpe-nt/Kage/pull/60)):** under `resolve_on_host` the subresource emulation of
   level 1 resolves an asset's name before asking for it, as the redirect
   hops are since F98; today an asset's URL is judged by `check_url`
   alone, like a browser's own requests (found by the F98 session; the
@@ -1790,12 +1799,12 @@ order of severity (the report's "Proposed plan items" names the rows):
   later do not export, and its one call is off the advisory's path
   (`docs/versions.md`, the client's table); move it when a release of
   the core without minimatch 5 is within the generator's range.
-- **F150 (medium):** the sidecars' own counters (`sidecar_flows_total`,
+- **F150 (medium, fixed by [Serpe-nt/Kage#59](https://github.com/Serpe-nt/Kage/pull/59)):** the sidecars' own counters (`sidecar_flows_total`,
   `sidecar_context_opens_total`, `sidecar_browser_recycles_total`, read
   by panels only) exist from zero for the label values known at start,
   as Kage's do since F110; today each is born with its first event, which
   `increase()` never counts (found by the F110 session).
-- **F151 (high):** `KagePoolUnavailable` fires when a pool of four or
+- **F151 (high, fixed by [Serpe-nt/Kage#50](https://github.com/Serpe-nt/Kage/pull/50)):** `KagePoolUnavailable` fires when a pool of four or
   more dies whole: the outage guard of §7.3 freezes every proxy's state
   while more than half fail their latest probe, so such a pool stays
   `healthy` by state and the alert cannot fire, a mechanism apart from
@@ -1807,11 +1816,11 @@ order of severity (the report's "Proposed plan items" names the rows):
   says which; today one proxy fails the night: the nightly of 2026-11-02
   ended on "the proxy did not open the tunnel" through one proxy for both
   profiles, a minute after proxy-health read every proxy ok.
-- **F153 (medium):** the nightly's log on GitHub prints the pool's proxy
+- **F153 (medium, fixed by [Serpe-nt/Kage#59](https://github.com/Serpe-nt/Kage/pull/59)):** the nightly's log on GitHub prints the pool's proxy
   hosts and ports at INFO: redact them as the credentials are, since the
   log is public and the proxies are the operator's (seen in the nightly of
   2026-11-02).
-- **F154 (high):** the end-to-end suite ends on a run that spans 00:00
+- **F154 (high, fixed by [Serpe-nt/Kage#56](https://github.com/Serpe-nt/Kage/pull/56)):** the end-to-end suite ends on a run that spans 00:00
   UTC: today a gate whose field suite (`tests/field/field.sh`) is under
   way at midnight UTC never ends, on the owner's machine and on GitHub's
   runners (the rerun of [Serpe-nt/Kage#39](https://github.com/Serpe-nt/Kage/pull/39) reached the stage at 00:08 UTC on
@@ -1824,7 +1833,7 @@ order of severity (the report's "Proposed plan items" names the rows):
   site's day, bound the suite, and say so in the CI runbook; until then
   no gate, rerun or merge whose end-to-end stage runs between 22:00 and
   01:15 UTC.
-- **F155 (medium):** `GET /v1/jobs/{id}/items` shows the result of an
+- **F155 (medium, fixed by [Serpe-nt/Kage#58](https://github.com/Serpe-nt/Kage/pull/58)):** `GET /v1/jobs/{id}/items` shows the result of an
   item that ended without its page, as `GET /v1/results/{id}` answers
   `200` with what ended it since F109; today the list shows `null`
   (the review of [Serpe-nt/Kage#42](https://github.com/Serpe-nt/Kage/pull/42)).
@@ -1837,16 +1846,16 @@ order of severity (the report's "Proposed plan items" names the rows):
   `running`, as it ends a batch's (requeued by the runner) and a flow's
   (`end_flow`) since F109; a crawl's were not looked at (the F109
   session).
-- **F158 (low):** the doc comment of `GET /v1/results/{id}` says
+- **F158 (low, fixed by [Serpe-nt/Kage#58](https://github.com/Serpe-nt/Kage/pull/58)):** the doc comment of `GET /v1/results/{id}` says
   `pacing`, `behavior`, `console` and `side_effects` are null where
   spec §16.5 says they are kept with the result (F36): one of the two is
   out of date (the F109 session).
-- **F159 (medium):** an attempt through a proxy nobody listens on fails
+- **F159 (medium, fixed by [Serpe-nt/Kage#59](https://github.com/Serpe-nt/Kage/pull/59)):** an attempt through a proxy nobody listens on fails
   within seconds: in the QA world the forwarder's connect to a stopped
   proxy took 40 s (`proxies.connect_timeout`, or the name lookup of a
   stopped container), and every attempt through a dead proxy costs that
   long before it is `proxy_failed` (the F108 session).
-- **F160 (medium):** level 0 reads the two kinds of page it still reads
+- **F160 (medium, fixed by [Serpe-nt/Kage#60](https://github.com/Serpe-nt/Kage/pull/60)):** level 0 reads the two kinds of page it still reads
   otherwise than levels 2 and 3 (spec §9, F100): a `<meta charset>` past
   the first 1024 bytes, which a browser's tree builder still honours
   while its guess is tentative (Chrome scans on in the head, Firefox
@@ -1854,7 +1863,7 @@ order of severity (the report's "Proposed plan items" names the rows):
   encoding, which Chrome's detector names (Shift_JIS, GBK and others)
   and level 0 reads as windows-1252: a scan on through the head and a
   detector (the review of [Serpe-nt/Kage#43](https://github.com/Serpe-nt/Kage/pull/43)).
-- **F161 (low):** the two known differences of spec §9: a link's query
+- **F161 (low, fixed by [Serpe-nt/Kage#60](https://github.com/Serpe-nt/Kage/pull/60)):** the two known differences of spec §9: a link's query
   written in a legacy encoding is encoded as UTF-8 where a browser uses
   the document's encoding, and the subresource emulation of level 1
   reads an asset's URL from the HTML bytes as UTF-8 (the F100 session).
@@ -1870,7 +1879,7 @@ order of severity (the report's "Proposed plan items" names the rows):
   the robots check of a later `goto` reads `policies().current()` at
   gate time while `course.legs` holds the policy as of `begin` (the
   review of [Serpe-nt/Kage#44](https://github.com/Serpe-nt/Kage/pull/44)).
-- **F164 (low):** the reading room's hand sometimes does not reach a link
+- **F164 (low, fixed by [Serpe-nt/Kage#57](https://github.com/Serpe-nt/Kage/pull/57)):** the reading room's hand sometimes does not reach a link
   already in view: in `tests/e2e/crawl.sh` the link on `/leave/` was
   typed instead of clicked (`element_not_reachable` after two attempts,
   `Human.reveal` giving up when a flick no longer moves `scrollY`) in
@@ -1879,7 +1888,7 @@ order of severity (the report's "Proposed plan items" names the rows):
   reading room, 2026-11-04); find why a reveal flicks for an element in
   view and what the hand does when the page cannot scroll further (the
   round B browser session, 2026-11-03).
-- **F165 (low):** the executor's test
+- **F165 (low, fixed by [Serpe-nt/Kage#55](https://github.com/Serpe-nt/Kage/pull/55)):** the executor's test
   `only_a_proxy_that_failed_the_attempts_own_page_is_blamed` (F108,
   [Serpe-nt/Kage#42](https://github.com/Serpe-nt/Kage/pull/42)) failed once in a targeted run of the round B browser session
   and passed twenty-five times after: `dead_proxy()` frees a port and
@@ -1921,43 +1930,43 @@ questions are decided: F57 is critical and goes first; F191 is wanted.
 The findings as plan items, in the order of severity (the report's
 "Proposed plan items" names the rows):
 
-- **F166 (high):** a level 0 redirect to another site leaves through that
+- **F166 (high, fixed by [Serpe-nt/Kage#51](https://github.com/Serpe-nt/Kage/pull/51)):** a level 0 redirect to another site leaves through that
   site's own plain exit, or is refused with a typed reason; today the hop
   is followed from the first site's exit, so the second site sees
   `kage/<version>` from an address that read it as a person, against
   §25 and D50 (http-02).
-- **F167 (high):** F102 for schemes and for a Firefox meta refresh under
+- **F167 (high, fixed by [Serpe-nt/Kage#51](https://github.com/Serpe-nt/Kage/pull/51)):** F102 for schemes and for a Firefox meta refresh under
   `direct`: a browser's redirect to `file:`, `data:`, `ftp:` or
   `javascript:` is `ssrf_denied` in both engines, never
   `provider_error`, and a meta refresh to a name the forwarder refuses
   is `ssrf_denied`, never `soft_block` with the browser's own page kept
   and a block booked (ssrf-06, ssrf-02).
-- **F168 (high):** the retry after a block keeps §8.2's rule, never the
+- **F168 (high, fixed by [Serpe-nt/Kage#50](https://github.com/Serpe-nt/Kage/pull/50)):** the retry after a block keeps §8.2's rule, never the
   blocked persona's /24 and minus two for its ASN while another persona
   is eligible; today each persona's own retry pause decides who is ready
   first and the score only orders the ready (pool-01).
-- **F169 (high):** F107 for a pool of four or more: a suspected pool
+- **F169 (high, fixed by [Serpe-nt/Kage#50](https://github.com/Serpe-nt/Kage/pull/50)):** F107 for a pool of four or more: a suspected pool
   outage pauses jobs and answers `no_persona` with `retry_at` as backoff
   does; today the outage guard freezes the counters, no proxy reaches
   `backoff`, and a batch fails `proxy_failed` within half a minute
   (pool-02; with F151).
-- **F170 (medium):** a certificate level 0 refuses, and a site's own
+- **F170 (medium, fixed by [Serpe-nt/Kage#60](https://github.com/Serpe-nt/Kage/pull/60)):** a certificate level 0 refuses, and a site's own
   `407` over `https`, are the site's answer (`connection_failed`), not
   `proxy_failed`: wreq reports a refused handshake as a connect error,
   so `HttpError::Tls` is never produced, the proxies stay blamed and a
   robots file is `robots_unavailable` for a minute instead of an hour
   (tls-01, tls-03).
-- **F171 (medium):** a site's NUL bytes (a UTF-16 `robots.txt`) are read
+- **F171 (medium, fixed by [Serpe-nt/Kage#60](https://github.com/Serpe-nt/Kage/pull/60)):** a site's NUL bytes (a UTF-16 `robots.txt`) are read
   or refused as data and cached once, never `500 internal` on every
   fetch of the origin (http-01).
-- **F172 (medium):** level 0 decoding edges: a `<meta charset>` inside an
+- **F172 (medium, fixed by [Serpe-nt/Kage#60](https://github.com/Serpe-nt/Kage/pull/60)):** level 0 decoding edges: a `<meta charset>` inside an
   inline script is not the page's, an undeclared UTF-8 page reads as the
   browsers read it, a sitemap in a declared legacy encoding is read in it
   (http-06, http-05, http-04).
 - **F173 (medium):** the markdown of nested quotes and lists grows
   linearly in size and time; today 4000 nested blockquotes make 32 M
   characters in 18 s and 6000 take 105 s on one core (http-07).
-- **F174 (medium, the owner's question):** two servers on one database:
+- **F174 (medium, the owner's decision of 2026-11-05: refuse a second server at start; ADR 0005 stands and §16.6 stops promising a take-over by another server):** two servers on one database:
   refused at start, or supported with a lost context closed or the
   attempt retried, never an item `running` with nothing in flight after
   a lease moved; ADR 0005 and §16.6 say different things and one must
@@ -1965,16 +1974,16 @@ The findings as plan items, in the order of severity (the report's
 - **F175 (medium):** a flow's cancel stops at the step under way, or the
   cancel's documents say a flow cannot be stopped; today the flow runs to
   its last step and the job ends `succeeded` (pool-04).
-- **F176 (medium):** Grafana's trace search by service works on the
+- **F176 (medium, fixed by [Serpe-nt/Kage#59](https://github.com/Serpe-nt/Kage/pull/59)):** Grafana's trace search by service works on the
   pinned Jaeger: its data source asks the removed v1 search and gets
   `404` (timers-01).
-- **F177 (medium):** a shared exit is judged against live proxies' latest
+- **F177 (medium, fixed by [Serpe-nt/Kage#59](https://github.com/Serpe-nt/Kage/pull/59)):** a shared exit is judged against live proxies' latest
   probes only; today a proxy that comes back on an address a dead proxy
   once had is `exit_shared_with` that proxy by its stale address and its
   persona is retired for good (timers-04).
 - **F178 (low):** a revalidated page (`304`) has one `status` and the shown
   response's headers in both engines (tls-02).
-- **F179 (low):** robots.txt and percent-encoding: RFC 9309's decoding of
+- **F179 (low, fixed by [Serpe-nt/Kage#60](https://github.com/Serpe-nt/Kage/pull/60)):** robots.txt and percent-encoding: RFC 9309's decoding of
   unreserved characters or Google's matcher, decided and written
   (http-03).
 - **F180 (low):** a binary body with no type gets no `extract`, as it gets
@@ -1983,39 +1992,134 @@ The findings as plan items, in the order of severity (the report's
   `private_names` with `resolve_on_host` under `direct`, a hop's trailing
   dot, and one outcome for one redirect too many at every level (ssrf-03,
   ssrf-05, ssrf-07).
-- **F182 (low):** no seed in a span event (§20), and
+- **F182 (low, fixed by [Serpe-nt/Kage#59](https://github.com/Serpe-nt/Kage/pull/59)):** no seed in a span event (§20), and
   `kage_api_refusals_total{code="scope_missing"}` counts the 403 it
   names (timers-03, timers-02).
 - **F183 (low):** the Firefox runbook's WebRTC row: Camoufox gathers no
   candidate at all (ssrf-04).
-- **F184 (high):** a tab a flow's click opens is the flow's and ends with
+- **F184 (high, fixed by [Serpe-nt/Kage#55](https://github.com/Serpe-nt/Kage/pull/55)):** a tab a flow's click opens is the flow's and ends with
   it; later steps act on the flow's page or fail; today the persona's
   later clicks and typed text land in the new tab while every step
   reports `ok`, and the tab outlives the flow across other keys'
   requests (flows-02; with F96 and the security review).
-- **F185 (high):** F105 for `kage selftest browser --persona` and
+- **F185 (high, fixed by [Serpe-nt/Kage#55](https://github.com/Serpe-nt/Kage/pull/55)):** F105 for `kage selftest browser --persona` and
   `kage persona selftest`: a run that read no page exits non-zero, and
   the hint names options that exist (flows-04).
 - **F186 (medium):** a flow's result carries the robots verdict of the
   address it ended on, not the first site's (flows-01).
 - **F187 (medium):** a fetch redirected to another site's wall books the
   block to the site that showed it, as a flow does since F101 (flows-03).
-- **F188 (high):** a flow's later site keeps its `domain_concurrency`
+- **F188 (high, fixed by [Serpe-nt/Kage#50](https://github.com/Serpe-nt/Kage/pull/50)):** a flow's later site keeps its `domain_concurrency`
   against open visits, not only pages in flight: today F101's hold
   counts pages in flight (`site_hold`), and the flow reads the site from
   a second address while a visitor's visit is open (left-01).
-- **F189 (high):** F108 for Firefox: a proxy's refusal of a target (a
+- **F189 (high, fixed by [Serpe-nt/Kage#55](https://github.com/Serpe-nt/Kage/pull/55)):** F108 for Firefox: a proxy's refusal of a target (a
   `403` to its CONNECT) is never the site's `forbidden`; nothing booked,
   no browser page kept, one answer in both engines (left-02).
 - **F190 (medium):** Firefox's result headers are the field lines as
   sent, not split at commas: today `Last-Modified` comes as two values
   (left-03).
-- **F191 (medium, the owner's word of 2026-11-04):** an operator trust
+- **F191 (medium, the owner's word of 2026-11-04, fixed by [Serpe-nt/Kage#60](https://github.com/Serpe-nt/Kage/pull/60)):** an operator trust
   anchor for the http path and the provider client (a CA file in the
   configuration, none by default), so that level 0 reaches a site under
   a private CA and the QA world can test level 0 over `https` and a
   provider stand-in over `https`; the self-test's `echo_ca_file` reaches
   the self-test's clients alone today.
+
+The fixes of round C (2026-11-05 and 06, on the owner's standing approval
+of 2026-11-05 to merge reviewed, green pull requests) found these; F192
+and F193 are fixed already:
+
+- **F192 (high, fixed by [Serpe-nt/Kage#55](https://github.com/Serpe-nt/Kage/pull/55)):** a
+  page that moves itself away (a meta refresh of `0`, a script) while the
+  persona's hand reads it to scroll ends where it went, never
+  `sidecar_error`: on Firefox the read failed with "Execution context was
+  destroyed" and escaped the navigation as a 500 (found on
+  [Serpe-nt/Kage#53](https://github.com/Serpe-nt/Kage/pull/53)'s CI in
+  `tests/e2e/direct.sh`; a race, in production too).
+- **F193 (high, fixed by [Serpe-nt/Kage#59](https://github.com/Serpe-nt/Kage/pull/59)):** a
+  site's plain exit at level 0 is held by the outage guard like a persona's
+  proxy (F169): under a suspected outage a level 0 job waits
+  (`plain_exit_unavailable` with `retry_at`) instead of meeting dead exits
+  (the review of
+  [Serpe-nt/Kage#50](https://github.com/Serpe-nt/Kage/pull/50)).
+- **F194 (low):** `kage-proxy/src/health/mod.rs` adds a span to a date with
+  `+`, which panics on overflow in a library crate: `checked_add_signed` or
+  a saturating helper; unreachable since
+  [Serpe-nt/Kage#58](https://github.com/Serpe-nt/Kage/pull/58) bounds
+  `proxies.health.interval` to a day (the round C API session).
+- **F195 (medium):** `KagePoolUnavailable` counts a proxy marked
+  `exit_shared_with` as usable (`degraded`) though it carries nothing (the
+  round C pool session).
+- **F196 (medium):** tracing-opentelemetry exports every event written
+  inside a span as a span event: a guard, so that §20's rule (no seed, path,
+  address or token in a span) does not depend on each call site (the round C
+  pool session).
+- **F197 (low):** F159's rest: a proxy that drops the SYN still costs
+  `forwarder.connect_timeout` (20 s) once before the 15 s of immediate
+  refusals (the round C pool session).
+- **F198 (low):** `tests/qa/stack.sh` is mode 100644 in git, and `stack.sh
+  fast` calls `"$0"`, which fails when the harness runs it through `bash`
+  (the round C pool session).
+- **F199 (low):** revisit the Jaeger 2.20.0 pin of
+  [Serpe-nt/Kage#59](https://github.com/Serpe-nt/Kage/pull/59) (F176) when
+  Grafana's Jaeger data source searches through the v3 API
+  (grafana/grafana-jaeger-datasource#87), and before Jaeger drops its v1
+  trace-by-id (jaegertracing/jaeger#10003).
+- **F200 (medium):** the guard check's Firefox `script` and `form` roads
+  take the whole `timeout_ms` (60 s) before ending `ssrf_denied`, where the
+  other roads end in 0.2 to 6 s (the round two browser session).
+- **F201 (low):** a result's `title` comes from the look at the page before
+  the behaviour, so a page that moves itself during the dwell keeps its old
+  title (F192's path looks again; the general case does not).
+- **F202 (medium, fingerprint-critical, a pull request of its own):** `planTyping`
+  holds a key 35 to 160 ms while the next press may come 60 ms later, so a
+  doubled letter is pressed again while still held and the X display drops
+  the second press (`hello` arrived as `helo` once in Firefox).
+- **F203 (low):** under Chromium's `inject: window` a tab a page opens gets
+  no user-agent override or injection (its first request leaves before the
+  driver attaches); the default `inject: none` is unaffected (F184's
+  session).
+- **F204 (low):** Chrome names no status for an empty error answer it
+  replaced with its own page, so an `https` site's empty `403` is booked on
+  Firefox (F189's review) but not on Chrome: take the status from the
+  debugger's `Network.responseReceived`, which `DocumentRequests` already
+  hears.
+- **F205 (low, considered):** relay plain `http://` through a `CONNECT`
+  tunnel to the provider, so that a proxy's refusal of a target is always
+  certain (F189's consult, option C); a change of how all plain traffic
+  leaves.
+- **F206 (low):** `kage-persona`'s test
+  `the_manager_follows_the_pool_until_it_is_told_to_stop` asserts the
+  directory right after waiting for the store's row; find whether the
+  store-then-directory gap can leave a request without the persona of a
+  proxy that has one in production, and wait for the directory in the test.
+- **F207 (low):** the `rust` job's `setup-rust` step stalled to the job's
+  45-minute timeout once (run 42081090157 on
+  [Serpe-nt/Kage#55](https://github.com/Serpe-nt/Kage/pull/55)): a timeout
+  on the step, and a cache restore that cannot hang.
+- **F208 (low):** the webhook client logs a receiver's refused certificate
+  as `connect`; it could tell a refused handshake from a failed connection
+  as level 0 does since F170 (the round C http session).
+- **F209 (medium):** F90 at level 0 over `https`: a `304` to the scout drops
+  the kept file for an hour; reachable since F191 (the round C http
+  session).
+- **F210 (low):** the health probe takes any `407` as the proxy's credential
+  refused, also one an `https` echo's own server sent (the round C http
+  session).
+- **F211 (low):** a `407` from Kage's own forwarder for a bad persona
+  credential carries no caller, so a page whose next connection it refused
+  would count as the site's; the forwarder could note such refusals by the
+  credential's persona (the round C http session).
+- **F212 (low):** Chrome decodes character references in a `<meta>`
+  attribute (`charset=&quot;...`); level 0's scan does not (rare; the round
+  C http session).
+- **F213 (low):** `Fetched::decoded()` is computed twice for a page with the
+  subresource emulation on; a cache of the decoded text would spare one
+  decode (the round C http session).
+- **F214 (low, fixed by [Serpe-nt/Kage#58](https://github.com/Serpe-nt/Kage/pull/58)):** `kage-persona`'s
+  archive sweep took a span too long for a date as `now` and so found
+  everything due; found and fixed in passing by the round C API session.
 
 ---
 
@@ -2047,7 +2151,20 @@ its own on the PR workflow, with the owner's word for every merge:
    F57 first, then the nine high items by area (the forwarder and the
    guard F167, F166; the scheduler and the pool F168, F169, F188; the
    browsers and the sidecar F184, F185, F189), then the medium and low
-   ones, each a pull request of its own.
+   ones, each a pull request of its own. Round C (2026-11-05 and 06):
+   the nine high items by [Serpe-nt/Kage#50](https://github.com/Serpe-nt/Kage/pull/50), [Serpe-nt/Kage#51](https://github.com/Serpe-nt/Kage/pull/51) and [Serpe-nt/Kage#55](https://github.com/Serpe-nt/Kage/pull/55) (with F165 and F192);
+   two upstream advisories of the day by [Serpe-nt/Kage#53](https://github.com/Serpe-nt/Kage/pull/53) (Trivy's CVE-2026-109518 in
+   `apt`, the engine images take Debian's security updates at build) and
+   [Serpe-nt/Kage#54](https://github.com/Serpe-nt/Kage/pull/54) (RUSTSEC-2026-0440 accepted, F91); the suite that passes at any
+   hour by [Serpe-nt/Kage#56](https://github.com/Serpe-nt/Kage/pull/56) (F154, F81), [Serpe-nt/Kage#57](https://github.com/Serpe-nt/Kage/pull/57) (F164) and [Serpe-nt/Kage#61](https://github.com/Serpe-nt/Kage/pull/61) (F80 and three
+   load-sensitive tests); round one's API, keys, CLI and config items by
+   [Serpe-nt/Kage#58](https://github.com/Serpe-nt/Kage/pull/58), the pool's and observability's by [Serpe-nt/Kage#59](https://github.com/Serpe-nt/Kage/pull/59) (with F193), level 0's
+   by [Serpe-nt/Kage#60](https://github.com/Serpe-nt/Kage/pull/60). Left: round one's scheduler and jobs items (F128, F130,
+   F139, F140, F156, F157, F162, F163, F174 as decided, F175, F186, F187),
+   extraction and the crawl (F116, F118 to F120, F122 to F125, F141 as
+   decided, F142, F143, F147, F173, F180), the browsers' follow-ups (F138,
+   F178, F183, F190, F200 to F204), the document sweep F145, F181, F194 to
+   F199 and F205 to F213; then QA round three.
 3. **What the field campaign found, the stealth items first:** F89 (the
    behaviour engine answers a consent dialog by hand before its first
    scroll, reject non-essential by default or accept where a site's policy
