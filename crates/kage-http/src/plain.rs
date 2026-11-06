@@ -565,8 +565,7 @@ impl PlainClient {
                 }
                 Ok(Ok(response)) => response,
             };
-        if url.scheme() == "http" && response.status() == StatusCode::PROXY_AUTHENTICATION_REQUIRED
-        {
+        if crate::fetch::proxy_asked(url, response.status(), response.headers()) {
             return Err(HttpError::ProxyAuth);
         }
         Ok(crate::fetch::Incoming {

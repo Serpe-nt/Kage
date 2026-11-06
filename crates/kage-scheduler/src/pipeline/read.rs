@@ -79,9 +79,11 @@ pub struct ReadLink {
 }
 
 /// What a crawl takes from the last attempt of a fetch that got its page
-/// and from the tree its document was parsed into.
-fn crawl_reading(last: &AttemptOutput, page: Option<&Page>) -> CrawlReading {
-    let seen = last.page.as_ref().and_then(|seen| {
+/// and from the tree its document was parsed into. A response that is no
+/// HTML document gives no links and no text, whatever a browser made of
+/// it (F118).
+fn crawl_reading(last: &AttemptOutput, page: Option<&Page>, document: bool) -> CrawlReading {
+    let seen = last.page.as_ref().filter(|_| document).and_then(|seen| {
         seen.links
             .as_ref()
             .map(|links| (links, seen.links_truncated))
@@ -274,13 +276,20 @@ impl Pipeline {
         let Some(last) = last else {
             return Reading::default();
         };
-        let options = order
-            .extract
-            .filter(|_| outcome.is_success() && is_document(last));
-        if !order.read_page && options.is_none() {
-            return Reading::default();
+        let document = is_document(last);
+        let options = order.extract.filter(|_| outcome.is_success() && document);
+        // A crawl reads a page's links and text from its markup only when
+        // it is a document: the escaped quotes of a JSON body or the text of
+        // a plain file are no links (F118).
+        let read_page = order.read_page && document;
+        if !read_page && options.is_none() {
+            return Reading {
+                crawl: (order.read_page && outcome.is_success())
+                    .then(|| crawl_reading(last, None, false)),
+                ..Reading::default()
+            };
         }
-        let Some(document) = document_of(last) else {
+        let Some(captured) = document_of(last) else {
             return Reading::default();
         };
         let loaded_from = last
@@ -291,12 +300,11 @@ impl Pipeline {
         let seen = options
             .filter(|options| options.links)
             .and_then(|_| seen_links(last));
-        let mut reading =
-            read_document(document, loaded_from, order.read_page, options, seen).await;
+        let mut reading = read_document(captured, loaded_from, read_page, options, seen).await;
         // What a crawl takes from a page it got, to be stored with the
         // page's result.
         reading.crawl = (order.read_page && outcome.is_success())
-            .then(|| crawl_reading(last, reading.page.as_ref()));
+            .then(|| crawl_reading(last, reading.page.as_ref(), read_page));
         reading
     }
 }

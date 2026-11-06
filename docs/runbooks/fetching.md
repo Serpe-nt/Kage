@@ -83,6 +83,16 @@ The outcome is `provider_error` and the reason says why:
 | `plain_exit_unavailable` | Level 0 under the pool: the site's one plain exit (one of the pool's own plain exits, else its scout's proxy) cannot carry traffic now, or nobody may scout the site. Nothing is sent from another address; `retry_at` says when to ask again, and a job's page waits. | [levels-and-egress.md](levels-and-egress.md#under-the-pool-egressmode-proxies). |
 | `shutting_down` | The server is stopping: the request waited for a persona when the signal came, and nothing was asked of the site. | Ask again when it is back. |
 
+A result that is `ok` can carry one reason: `download`, a page the
+browser answered by saving a file (a link to a file, or a typed address
+answered with `Content-Disposition: attachment`). The site answered;
+there is no page and nothing to extract, nobody else asks for it, and a
+crawl's reader stays on the page the link stands on. A `204` is `ok`
+with its status at every level, and so is the answer to a `HEAD`: nothing
+is judged of a document there is none of, and neither is ever a block.
+`aborted` is a page the browser broke off for another reason (a page that
+closed, an entry that found no link).
+
 An attempt can end with a reason too, when it was not the site that
 ended it: `proxy_failed`, `proxy_refused`, `forwarder_refused`,
 `too_many_redirects`, `timeout`, and `interrupted`. `proxy_failed`

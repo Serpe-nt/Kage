@@ -70,7 +70,11 @@ How to read it:
 The dashboard **Kage · blocks and breakers** (observability profile,
 [observability.md](observability.md)) has, per domain, the blocks of the
 last hour against what the policy allows, the block rate, and who
-blocked. Two alerts go with it:
+blocked: the `vendor` label of `kage_requests_total` and
+`kage_attempts_total` is the result's `block.vendor` (`generic` for a
+bare 403 or 429, `none` for what was no block), never a vendor whose
+marker a page carried (F143: an origin's own 403 behind Cloudflare's
+`server` header counted as Cloudflare's). Two alerts go with it:
 
 - **KageBlockRateAboveThreshold**: a domain was blocked as often in the
   last hour as its `breaker_threshold` allows. The breaker opens at that
@@ -123,7 +127,11 @@ What to do, in this order:
 
 A vendor's wall that comes back as `ok` or as `generic` gets a signature
 in `policies/block-signatures.yaml` (the file says how a rule is
-written). Keep a sanitized copy of the page as a fixture in
+written). Every rule that blocks is bounded on every way it matches: a
+status other than 200, `visible_text: { max_chars }`, a header or an
+interstitial the browser saw; a pattern in the body alone matches an
+article that quotes the vendor's page (F125), and the classifier's tests
+fail on a shipped rule that is not bounded. Keep a sanitized copy of the page as a fixture in
 `tests/fixtures/blocks/` with no personal data in it; the classifier's
 tests read every fixture there. A rule may not say `escalate`: since 2.0
 nothing moves a request to another level, and a file with the key is

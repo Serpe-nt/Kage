@@ -1,0 +1,18 @@
+synthetic: true
+source: >-
+  Hand-written negative case (QA round one, extract-07; F116). A page whose
+  content is in a frame: the top document renders no text of its own, and
+  a reader reads the frame. At every level the same: no block.
+observation:
+  render: browser
+  status: 200
+  url: https://library.harbour.example/reading/
+  headers:
+    - { name: content-type, value: "text/html; charset=utf-8" }
+  browser:
+    script_hosts: []
+    iframe_hosts: ["library.harbour.example"]
+  body: |
+    <!doctype html><html><head><title>F</title></head><body><iframe src="/reading/a" width="800" height="600"></iframe></body></html>
+expect:
+  outcome: ok

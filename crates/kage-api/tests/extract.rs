@@ -1431,3 +1431,221 @@ async fn an_extraction_in_a_browser_lists_the_links_a_reader_sees() {
     assert_eq!(navigation["capture"]["links"], Value::Null);
     api.shut_down().await;
 }
+
+/// QA round one's crawl-01 (F118) and crawl-05 (F119), through the plain
+/// client of level 0: a crawl takes links from HTML only, never from the
+/// escaped quotes of a JSON body, a plain file or an XML file, which a
+/// browser shows as text; and where the site's robots.txt is enforced, a
+/// sitemap the file disallows is not asked for, whether a `Sitemap:` line
+/// names it or it is the guess, and `crawl.sitemaps` says why.
+#[tokio::test]
+async fn a_crawl_takes_links_from_html_only_and_asks_for_no_sitemap_the_file_disallows() {
+    let mut api = Api::start_with(3, 155, ENFORCED, quick).await;
+    let token = api.key(&[Scope::Jobs, Scope::Crawl, Scope::Fetch]).await;
+    let file = format!(
+        "User-agent: *\nDisallow: /maps/hidden\nSitemap: {}\nSitemap: {}\n",
+        Api::url("/maps/hidden.xml"),
+        Api::url("/maps/pages.xml")
+    );
+    serve(&api, "/robots.txt", "text/plain", file).await;
+    let urlset = |paths: &[&str]| {
+        let urls: String = paths
+            .iter()
+            .map(|path| format!("<url><loc>{}</loc></url>", Api::url(path)))
+            .collect::<Vec<_>>()
+            .concat();
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+             <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">{urls}</urlset>"
+        )
+    };
+    serve(
+        &api,
+        "/maps/pages.xml",
+        "application/xml",
+        urlset(&["/only"]),
+    )
+    .await;
+    serve(
+        &api,
+        "/maps/hidden.xml",
+        "application/xml",
+        urlset(&["/secret"]),
+    )
+    .await;
+    serve(
+        &api,
+        "/",
+        "text/html; charset=utf-8",
+        article("Home", &["/json", "/txt", "/xml"]),
+    )
+    .await;
+    serve(
+        &api,
+        "/json",
+        "application/json",
+        format!(r#"{{"html":"<a href=\"{}\">x</a>"}}"#, "/fromjson"),
+    )
+    .await;
+    serve(
+        &api,
+        "/txt",
+        "text/plain",
+        "<a href=\"/fromtxt\">x</a> and words",
+    )
+    .await;
+    serve(
+        &api,
+        "/xml",
+        "application/xml",
+        "<?xml version=\"1.0\"?><doc><a href=\"/fromxml\">x</a></doc>",
+    )
+    .await;
+    for page in ["/only", "/secret", "/fromjson", "/fromtxt", "/fromxml"] {
+        serve(&api, page, "text/html; charset=utf-8", article("Page", &[])).await;
+    }
+
+    let body = json!({
+        "type": "crawl",
+        "seeds": [Api::url("/")],
+        "use_sitemaps": true,
+        "max_depth": 2,
+        "defaults": { "level": 0 },
+    });
+    let reply = api.post(&token, "/v1/jobs", &body).await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.json());
+    let id = reply.json()["id"].as_str().unwrap().to_owned();
+    let work = api.work();
+    let done = api.job_until(&token, &id, ended).await;
+    assert_eq!(done["state"], "succeeded", "{done}");
+
+    let asked = asked_over_http(&api).await;
+    // The file, the sitemap it names and allows; never the one it
+    // disallows, nor the page only that one names.
+    assert_eq!(asked[..2], ["/robots.txt", "/maps/pages.xml"], "{asked:?}");
+    let mut pages: Vec<&str> = asked[2..].iter().map(String::as_str).collect();
+    pages.sort_unstable();
+    assert_eq!(pages, ["/", "/json", "/only", "/txt", "/xml"], "{asked:?}");
+    assert_eq!(
+        done["crawl"]["sitemaps"],
+        json!([
+            { "site": "kage.test", "url": Api::url("/robots.txt"), "state": "read", "urls": 2 },
+            { "site": "kage.test", "url": Api::url("/maps/hidden.xml"), "state": "robots_denied", "urls": 0 },
+            { "site": "kage.test", "url": Api::url("/maps/pages.xml"), "state": "read", "urls": 1 },
+        ])
+    );
+    // The files were read and gave no links.
+    for item in api.job_items(&token, &id).await {
+        let at = item["url"]
+            .as_str()
+            .unwrap()
+            .trim_start_matches(&Api::url(""));
+        if matches!(at, "/json" | "/txt" | "/xml") {
+            assert_eq!(item["state"], "succeeded", "{item}");
+            assert_eq!(item["crawl"]["links"]["found"], 0, "{item}");
+        }
+    }
+    work.stop().await;
+    api.shut_down().await;
+}
+
+/// QA round one's api-08, policy-08 and policy-09 (F116), through the
+/// plain client of level 0: a successful HEAD, a 204 and an empty 200 of no
+/// type are answers, never a block.
+#[tokio::test]
+async fn an_answer_that_has_no_document_is_no_block() {
+    let mut api = Api::start(3, 155, BROWSER_FAST).await;
+    let token = api.key(&[Scope::Fetch]).await;
+    Mock::given(path("/page"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw("<html><body>A page with words.</body></html>", "text/html"),
+        )
+        .mount(&api.lab.site)
+        .await;
+    Mock::given(path("/nothing"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&api.lab.site)
+        .await;
+    Mock::given(path("/empty"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&api.lab.site)
+        .await;
+    let fetch = |path: &str, method: &str| json!({ "url": Api::url(path), "level": 0, "method": method, "max_retries": 0 });
+    for (path, method, status) in [
+        ("/page", "HEAD", 200),
+        ("/nothing", "GET", 204),
+        ("/empty", "GET", 200),
+    ] {
+        let result = api
+            .post(&token, "/v1/fetch", &fetch(path, method))
+            .await
+            .json();
+        assert_eq!(
+            (&result["outcome"], &result["status"], &result["block"]),
+            (&json!("ok"), &json!(status), &Value::Null),
+            "{method} {path}: {result}"
+        );
+    }
+    // An empty HTML page is still the empty page it was.
+    Mock::given(path("/blank"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("", "text/html"))
+        .mount(&api.lab.site)
+        .await;
+    let blank = api
+        .post(&token, "/v1/fetch", &fetch("/blank", "GET"))
+        .await
+        .json();
+    assert_eq!(blank["outcome"], "soft_block", "{blank}");
+    api.shut_down().await;
+}
+
+/// QA round one's policy-08 and extract-07 (F116), in a browser: a 204,
+/// which Chrome breaks off as `aborted` and leaves the tab on what it
+/// showed, and a page whose content is in a frame are answers, never a
+/// failure and never a block; nothing of the document the tab still shows
+/// is returned for the 204.
+#[tokio::test]
+async fn in_a_browser_no_content_and_a_page_of_frames_are_answers() {
+    let mut api = Api::start(1, 155, BROWSER_FAST).await;
+    let token = api.key(&[Scope::Fetch]).await;
+    api.lab.chromium.with(|sidecar| {
+        sidecar.pages.insert(
+            Api::url("/nothing"),
+            json!({
+                "status": 204,
+                "headers": [],
+                "error": { "code": "aborted", "message": "net::ERR_ABORTED", "net_error": null },
+                "dom_html": "<html><head></head><body>the page before</body></html>",
+            }),
+        );
+        sidecar.pages.insert(
+            Api::url("/frames"),
+            json!({
+                "headers": [{ "name": "content-type", "value": "text/html" }],
+                "dom_html": "<html><head><title>F</title></head><body><iframe src=\"/a\" width=\"800\" height=\"600\"></iframe></body></html>",
+            }),
+        );
+    });
+    let ask = |path: &str| {
+        json!({
+            "url": Api::url(path), "level": 3, "max_retries": 0, "include": ["dom"],
+            "behavior": { "scroll_depth": 0, "dwell_ms": 1000 },
+        })
+    };
+    let nothing = api.post(&token, "/v1/fetch", &ask("/nothing")).await.json();
+    assert_eq!(
+        (&nothing["outcome"], &nothing["status"], &nothing["reason"]),
+        (&json!("ok"), &json!(204), &Value::Null),
+        "{nothing}"
+    );
+    assert_eq!(nothing["dom_html"], Value::Null, "{nothing}");
+    assert_eq!(nothing["attempts"].as_array().unwrap().len(), 1);
+    let frames = api.post(&token, "/v1/fetch", &ask("/frames")).await.json();
+    assert_eq!(
+        (&frames["outcome"], &frames["block"]),
+        (&json!("ok"), &Value::Null),
+        "{frames}"
+    );
+    api.shut_down().await;
+}

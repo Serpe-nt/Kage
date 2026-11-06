@@ -966,9 +966,34 @@ impl Crawl {
         }
     }
 
+    /// Whether the site's `robots.txt`, enforced, disallows a sitemap: the
+    /// guess `/sitemap.xml`, or a file a `Sitemap:` line or an index names
+    /// alike. It is then not asked for, and listed `robots_denied` (F119).
+    /// The file is known by then: it is read before any sitemap.
+    async fn robots_denies(
+        &mut self,
+        runner: &Runner,
+        url: &Url,
+        file: &str,
+    ) -> Result<bool, WorkError> {
+        let peek = runner
+            .work
+            .engine
+            .pipeline
+            .robots_peek(url, self.robots)
+            .await?;
+        if !matches!(peek, Peek::Denied(_)) {
+            return Ok(false);
+        }
+        self.note_sitemap(file, "robots_denied", 0);
+        self.persist(runner).await?;
+        Ok(true)
+    }
+
     /// Sends a scout for the next sitemap of every site that has one
     /// waiting and nobody reading. Returns whether one could not start
     /// because every place in the scheduler is taken.
+    #[allow(clippy::too_many_lines)] // Every file a crawl asks for, one check after the other.
     async fn start_sitemaps(
         &mut self,
         runner: &Runner,
@@ -1014,6 +1039,9 @@ impl Crawl {
                         read,
                     }
                 });
+                continue;
+            }
+            if self.robots_denies(runner, &url, &file).await? {
                 continue;
             }
             // The site's scout: whoever asked for its robots.txt or a
@@ -1421,18 +1449,24 @@ impl Crawl {
             // Another persona has another tab.
             slot.tab.clear();
         }
+        // A link the browser answered by saving a file: the site answered,
+        // and the tab still shows the page the link stands on (F120).
+        let file = read && report.reason.as_deref() == Some("download");
         let view = if read {
             let reached = reached_of(report);
             // What the tab holds now: a click on a page it went back to
-            // dropped what came after that page.
-            if !matches!(reached.0, ReachedField::Typed)
+            // dropped what came after that page; a file leaves the tab on
+            // that page.
+            if (file || !matches!(reached.0, ReachedField::Typed))
                 && let Some(at) = flight
                     .from
                     .and_then(|from| slot.tab.iter().rposition(|held| *held == from))
             {
                 slot.tab.truncate(at + 1);
             }
-            slot.tab.push(seq);
+            if !file {
+                slot.tab.push(seq);
+            }
             if slot.tab.len() > back_limit.saturating_add(1) {
                 let extra = slot.tab.len() - back_limit.saturating_add(1);
                 slot.tab.drain(..extra);
@@ -1453,15 +1487,18 @@ impl Crawl {
             if recorded.is_none() {
                 self.frontier.record_failed(entry);
             }
-            self.kept.progress.reached.count(reached.0);
-            metrics::counter!("kage_crawl_pages_total", "reached" => reached.0.as_str())
-                .increment(1);
+            // A file is no page reached: it is counted as none.
+            if !file {
+                self.kept.progress.reached.count(reached.0);
+                metrics::counter!("kage_crawl_pages_total", "reached" => reached.0.as_str())
+                    .increment(1);
+            }
             let scroll = report
                 .last
                 .as_ref()
                 .and_then(|last| last.page.as_deref())
                 .and_then(scroll_of);
-            self.view(entry, Some(reached), recorded.as_ref(), scroll)
+            self.view(entry, (!file).then_some(reached), recorded.as_ref(), scroll)
         } else {
             // The browser left a wall or the page did not come: whatever
             // the tab held is not relied on.

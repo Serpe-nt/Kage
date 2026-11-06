@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use super::{Observation, SignatureSet};
+use super::{Observation, SignatureSet, unbounded_rules};
 use crate::outcome::{BlockType, CooldownClass, Outcome, Vendor};
 
 const FIXTURE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/blocks");
@@ -488,6 +488,7 @@ fn a_page_whose_head_outgrows_a_mebibyte_is_judged_by_its_body() {
         }],
         cookies: Vec::new(),
         body,
+        document: true,
         browser: Some(super::BrowserSignals::default()),
     };
 
@@ -505,5 +506,35 @@ fn a_page_whose_head_outgrows_a_mebibyte_is_judged_by_its_body() {
     assert_eq!(
         cut.block.as_ref().map(|block| block.block_type.as_str()),
         Some("blank_page")
+    );
+}
+
+/// QA round one's policy-02 (F125): every rule that blocks is bounded on
+/// every way it matches (a status other than 200, a bound on the text or
+/// the body, a header, an interstitial), so that a long ordinary page that
+/// quotes a vendor's block page is no block; and a rule that is not bounded
+/// is found.
+#[test]
+fn every_rule_that_blocks_is_bounded() {
+    let shipped = std::fs::read_to_string(SIGNATURES).unwrap();
+    assert_eq!(unbounded_rules(&shipped), Vec::<String>::new());
+    let unbounded = "version: 1\nrules:\n\
+        - { id: quoted, vendor: f5_shape, type: request_rejected, outcome: forbidden, confidence: 0.9, \
+            when: { body: 'rejected' } }\n\
+        - { id: any-of, vendor: akamai, type: bot_manager_challenge, outcome: challenge_failed, confidence: 0.9, \
+            when: { any: [ { status: 403 }, { body: 'x' } ] } }\n\
+        - { id: twohundred, vendor: datadome, type: captcha, outcome: captcha, confidence: 0.9, \
+            when: { all: [ { status: [403, 200] }, { body: 'x' } ] } }\n\
+        - { id: negated, vendor: generic, type: blank_page, outcome: soft_block, confidence: 0.6, \
+            when: { all: [ { not: { visible_text: { min_chars: 1 } } }, { body: 'x' } ] } }\n\
+        - { id: status, vendor: generic, type: http_403, outcome: forbidden, confidence: 0.6, \
+            when: { status: 403 } }\n\
+        - { id: text, vendor: generic, type: blank_page, outcome: soft_block, confidence: 0.6, \
+            when: { all: [ { body: 'x' }, { visible_text: { max_chars: 10 } } ] } }\n\
+        - { id: passed, vendor: generic, type: blank_page, outcome: challenge_passed, confidence: 0.6, \
+            when: { body: 'x' } }\n";
+    assert_eq!(
+        unbounded_rules(unbounded),
+        ["quoted", "any-of", "twohundred", "negated"]
     );
 }

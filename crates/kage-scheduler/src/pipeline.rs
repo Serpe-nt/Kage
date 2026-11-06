@@ -75,6 +75,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use kage_browser::contract::{CaptureOptions, FlowAction, PageResult, Wait};
+use kage_core::classifier::Classification;
 use kage_core::config::{Config, MAX_ATTEMPT_TIMEOUT};
 use kage_core::domain::{
     ArtifactRef, Attempt, CountryCode, Engine, Exit, FetchRecord, Header, Level, Persona,
@@ -643,6 +644,18 @@ pub struct Pipeline {
     flights: Arc<Flights>,
 }
 
+/// Who blocked an attempt, as its result says (`block.vendor`): the
+/// `vendor` of the metrics and of the span. Empty for an attempt that was
+/// no block: a vendor whose markers a good page carries did not block it,
+/// nor does a vendor fronting a site block an origin's own 403 (F143).
+fn blocked_by(classification: &Classification) -> &str {
+    classification
+        .block
+        .as_ref()
+        .filter(|_| classification.outcome.is_block())
+        .map_or("", |block| block.vendor.as_str())
+}
+
 /// Counts an attempt and writes its line in the log. `page_of_visit` is
 /// `None` for a plain client's attempt, which belongs to no visit.
 ///
@@ -656,11 +669,7 @@ fn note(
     page_of_visit: Option<u32>,
     output: &AttemptOutput,
 ) {
-    let vendor = output
-        .classification
-        .vendors
-        .first()
-        .map_or("", |vendor| vendor.as_str());
+    let vendor = blocked_by(&output.classification);
     metrics::attempt(
         domain,
         level,
@@ -1999,8 +2008,9 @@ impl Pipeline {
         let finished_at = self.now();
         let outcome = output.outcome();
         span.record("outcome", outcome.as_str());
-        if let Some(vendor) = output.classification.vendors.first() {
-            span.record("vendor", vendor.as_str());
+        let vendor = blocked_by(&output.classification);
+        if !vendor.is_empty() {
+            span.record("vendor", vendor);
         }
         metrics::breaker_threshold(&course.domain, dispatch.breaker.threshold);
         let verdict = AttemptVerdict::of(&output.classification);
@@ -2130,8 +2140,9 @@ impl Pipeline {
         let finished_at = self.now();
         let outcome = output.outcome();
         span.record("outcome", outcome.as_str());
-        if let Some(vendor) = output.classification.vendors.first() {
-            span.record("vendor", vendor.as_str());
+        let vendor = blocked_by(&output.classification);
+        if !vendor.is_empty() {
+            span.record("vendor", vendor);
         }
         let ruling = course
             .progress
@@ -2329,11 +2340,10 @@ impl Pipeline {
                 .filter_map(|attempt| attempt.persona_id);
             self.follow_up(call, readers);
         }
-        let first_vendor = last
+        let vendor = last
             .as_ref()
-            .and_then(|last| last.classification.vendors.first())
-            .map_or("", |vendor| vendor.as_str());
-        metrics::request(&course.domain, course.order.level, outcome, first_vendor);
+            .map_or("", |last| blocked_by(&last.classification));
+        metrics::request(&course.domain, course.order.level, outcome, vendor);
         Ok(FetchReport {
             request: course.request.id,
             result: record.id,

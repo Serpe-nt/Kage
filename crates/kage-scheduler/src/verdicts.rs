@@ -103,18 +103,23 @@ pub fn observe_page(page: &PageResult) -> Option<Observation> {
             value: header.value.clone(),
         })
         .collect();
-    let body = page
+    // A page captured without its document (a flow's screenshot) has
+    // nothing to judge, nor has an answer of no content (F86, F116). A 304
+    // is no such answer here: the tab shows the page the browser kept
+    // (F178), a document like any other.
+    let captured = page
         .dom_html
         .clone()
-        .or_else(|| page.raw_body.as_ref().map(|body| body.data.clone()))
-        .unwrap_or_default();
+        .or_else(|| page.raw_body.as_ref().map(|body| body.data.clone()));
+    let document = captured.is_some() && !matches!(status, 204 | 205);
     Some(Observation {
         render: Render::Browser,
         status,
         url: page.final_url.clone(),
         cookies: cookies_set(&headers),
         headers,
-        body,
+        body: captured.unwrap_or_default(),
+        document,
         browser: Some(BrowserSignals {
             script_hosts: page.challenge.script_hosts.clone(),
             iframe_hosts: page.challenge.iframe_hosts.clone(),
@@ -137,8 +142,69 @@ pub struct Failure {
     pub courtesy: Courtesy,
 }
 
-/// Why a page did not arrive, when it did not.
+/// What a navigation the site answered without a page to show came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoDocument {
+    /// No content (204, 205): the browser stays on the page it showed. The
+    /// site answered, as it answers a level 0 fetch (F116).
+    Empty,
+    /// A file to save: the browser saved it and showed nothing, from a
+    /// typed address (`Content-Disposition: attachment`) or from a click
+    /// that led to no page (spec §10; F120).
+    File,
+}
+
+/// Whether a navigation the browser broke off was the site's answer that
+/// holds no page: no content, or a file to save. Such an answer is no
+/// failure of the persona or of its path, and another persona would get
+/// the same.
+pub fn no_document(page: &PageResult) -> Option<NoDocument> {
+    let aborted = page
+        .error
+        .as_ref()
+        .is_some_and(|error| error.code == NavigationErrorCode::Aborted);
+    if !aborted {
+        return None;
+    }
+    if matches!(page.status, Some(204 | 205)) {
+        return Some(NoDocument::Empty);
+    }
+    let attachment = page.headers.iter().any(|header| {
+        header.name.eq_ignore_ascii_case("content-disposition")
+            && header
+                .value
+                .trim_start()
+                .get(..10)
+                .is_some_and(|start| start.eq_ignore_ascii_case("attachment"))
+    });
+    // A load the browser turned into a download says so, in the driver's
+    // words (a typed address, F120).
+    let said = page.error.as_ref().is_some_and(|error| {
+        error
+            .message
+            .to_ascii_lowercase()
+            .contains("download is starting")
+    });
+    // The sidecar's signature of a click the browser answered by saving a
+    // file: no status, no entry report, the click made (`NoPage`).
+    let clicked_to_nothing = page.status.is_none()
+        && page
+            .behavior
+            .as_ref()
+            .is_some_and(|behavior| behavior.clicks >= 1 && behavior.entry.is_none());
+    // A typed address answered with a file says so by its answer, whatever
+    // document the tab still shows from before (and Firefox may hand over
+    // the file's bytes: they are the file's). A click says so only by the
+    // sidecar's signature, with nothing read.
+    (attachment || said || (clicked_to_nothing && read_nothing(page))).then_some(NoDocument::File)
+}
+
+/// Why a page did not arrive, when it did not. An answer that holds no
+/// page ([`no_document`]) is none: the site answered.
 pub fn page_failure(page: &PageResult) -> Option<Failure> {
+    if no_document(page).is_some() {
+        return None;
+    }
     let error = page.error.as_ref()?;
     Some(match error.code {
         NavigationErrorCode::Timeout => Failure {
@@ -158,7 +224,8 @@ pub fn page_failure(page: &PageResult) -> Option<Failure> {
             reason: "navigation_failed",
             courtesy: Courtesy::ServerError,
         },
-        // A download, a closed page, an entry that found no link.
+        // A closed page, an entry that found no link (a download and no
+        // content are `no_document`'s).
         NavigationErrorCode::Aborted => Failure {
             outcome: Outcome::ProviderError,
             reason: "aborted",
@@ -375,8 +442,25 @@ impl Verdicts {
     }
 }
 
+/// What a page that holds no document came to: the site's answer, which
+/// no other persona would change. `ok`, never a block.
+fn no_page(kind: NoDocument) -> Classification {
+    let mut classification = unanswered(
+        Outcome::Ok,
+        match kind {
+            NoDocument::Empty => "no_content",
+            NoDocument::File => "download",
+        },
+    );
+    classification.retryable = false;
+    classification
+}
+
 /// What a browser's page came to, given what the classifier saw of it.
 fn judged(page: &PageResult, seen: Option<Classification>) -> Classification {
+    if let Some(kind) = no_document(page) {
+        return no_page(kind);
+    }
     match (page_failure(page), seen) {
         // A page that hung after it answered may be a wall that never
         // finishes: what was seen decides when it is a block, unless the
@@ -425,7 +509,10 @@ mod tests {
     use kage_core::outcome::{CooldownClass, Outcome};
     use kage_core::schedule::politeness::Courtesy;
 
-    use super::{cookies_set, courtesy_of, observe_page, page_failure, read_nothing, unanswered};
+    use super::{
+        NoDocument, cookies_set, courtesy_of, judged, no_document, observe_page, page_failure,
+        read_nothing, unanswered,
+    };
 
     fn page() -> PageResult {
         let examples: serde_json::Value = serde_json::from_str(EXAMPLES_JSON).unwrap();
@@ -594,6 +681,115 @@ mod tests {
         assert!(!read_nothing(&shown));
     }
 
+    /// QA round one's policy-08, crawl-06, jobs-02 and extract-07 (F116,
+    /// F120, F86): an answer that holds no page (no content, a file the
+    /// browser saved) is the site's and no failure, which no other persona
+    /// would change; a capture without its document and an answer that has
+    /// none are judged on nothing.
+    #[test]
+    fn an_answer_that_holds_no_page_is_the_sites_and_no_failure() {
+        let aborted = |status: Option<i64>| {
+            let mut page = page();
+            page.error = Some(NavigationError {
+                code: NavigationErrorCode::Aborted,
+                message: "net::ERR_ABORTED".to_owned(),
+                net_error: None,
+            });
+            page.status = status;
+            page
+        };
+        // No content: whatever the tab still shows.
+        for status in [204, 205] {
+            let empty = aborted(Some(status));
+            assert_eq!(no_document(&empty), Some(NoDocument::Empty), "{status}");
+            assert_eq!(page_failure(&empty), None, "{status}");
+            let verdict = judged(&empty, None);
+            assert_eq!(verdict.outcome, Outcome::Ok, "{status}");
+            assert!(!verdict.retryable, "{status}");
+            assert_eq!(verdict.evidence, ["failure:no_content"]);
+        }
+        // A file to save from a typed address: the answer said so.
+        let mut typed = aborted(Some(200));
+        typed.dom_html = None;
+        typed.raw_body = None;
+        typed.headers = vec![kage_browser::contract::Header {
+            name: "Content-Disposition".to_owned(),
+            value: "Attachment; filename=\"x.bin\"".to_owned(),
+        }];
+        assert_eq!(no_document(&typed), Some(NoDocument::File));
+        // A typed address the browser turned into a download, which says so
+        // in the driver's words and nothing else: no status, no headers.
+        let mut starting = aborted(None);
+        starting.dom_html = None;
+        starting.raw_body = None;
+        if let Some(error) = starting.error.as_mut() {
+            error.message = "page.goto: Download is starting".to_owned();
+        }
+        if let Some(behavior) = starting.behavior.as_mut() {
+            behavior.clicks = 0;
+        }
+        assert_eq!(no_document(&starting), Some(NoDocument::File));
+        // A click the browser answered by saving a file: the sidecar's
+        // signature, no status and no entry report after a click.
+        let mut clicked = aborted(None);
+        clicked.dom_html = None;
+        clicked.raw_body = None;
+        if let Some(behavior) = clicked.behavior.as_mut() {
+            behavior.entry = None;
+            behavior.clicks = 1;
+        }
+        assert_eq!(no_document(&clicked), Some(NoDocument::File));
+        assert_eq!(page_failure(&clicked), None);
+        let verdict = judged(&clicked, None);
+        assert_eq!((verdict.outcome, verdict.retryable), (Outcome::Ok, false));
+        assert_eq!(verdict.evidence, ["failure:download"]);
+        // A typed file whose tab still shows the page before, and one whose
+        // bytes the browser handed over (Firefox): files all the same.
+        let mut stale = typed.clone();
+        stale.dom_html = Some("<html><body>the page before</body></html>".to_owned());
+        assert_eq!(no_document(&stale), Some(NoDocument::File));
+        stale.raw_body = page().raw_body.or_else(|| {
+            serde_json::from_value(serde_json::json!({
+                "data": "H4sI", "encoding": "base64", "bytes": 3, "truncated": false,
+            }))
+            .ok()
+        });
+        assert_eq!(no_document(&stale), Some(NoDocument::File));
+        // Anything else broken off stays a failure: an entry that found no
+        // link (its report says so), a click of which a page was read, a
+        // page that closed with a status.
+        let mut entered = clicked.clone();
+        entered.behavior = page().behavior;
+        assert_eq!(no_document(&entered), None);
+        let mut read = clicked.clone();
+        read.dom_html = Some("<html></html>".to_owned());
+        assert_eq!(no_document(&read), None);
+        assert_eq!(no_document(&aborted(Some(200))), None);
+        assert_eq!(
+            page_failure(&aborted(Some(200))).map(|failure| failure.reason),
+            Some("aborted")
+        );
+        let mut loaded = page();
+        loaded.status = Some(204);
+        assert_eq!(no_document(&loaded), None);
+
+        // What the classifier looks at: a capture without the document has
+        // none, nor has an answer of no content, and a page has one.
+        let mut capture = page();
+        capture.dom_html = None;
+        capture.raw_body = None;
+        assert!(!observe_page(&capture).unwrap().document);
+        let mut nothing_new = page();
+        nothing_new.dom_html = Some("<html><body>the page before</body></html>".to_owned());
+        nothing_new.status = Some(205);
+        assert!(!observe_page(&nothing_new).unwrap().document);
+        // A 304 shows the page the browser kept: a document (F178).
+        nothing_new.status = Some(304);
+        assert!(observe_page(&nothing_new).unwrap().document);
+        nothing_new.status = Some(200);
+        assert!(observe_page(&nothing_new).unwrap().document);
+    }
+
     #[test]
     fn an_unanswered_attempt_keeps_the_hints_of_its_outcome() {
         let timeout = unanswered(Outcome::Timeout, "timeout");
@@ -670,7 +866,7 @@ mod tests {
                 Some(Outcome::Forbidden),
                 "{at}: the classifier sees the status"
             );
-            super::judged(&page, seen)
+            judged(&page, seen)
         };
 
         // Inside a tunnel only the site answers: a WAF's empty `403` is the
@@ -701,6 +897,6 @@ mod tests {
             net_error: Some("ERR_HTTP_RESPONSE_CODE_FAILURE".to_owned()),
         });
         let seen = observe_page(&chrome).map(|seen| policies.signatures.classify(&seen));
-        assert_eq!(super::judged(&chrome, seen).outcome, Outcome::ProviderError);
+        assert_eq!(judged(&chrome, seen).outcome, Outcome::ProviderError);
     }
 }

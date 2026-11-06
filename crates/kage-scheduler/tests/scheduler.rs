@@ -467,7 +467,8 @@ async fn what_a_warm_up_visit_found_is_settled_like_any_attempt() {
 /// Follow-up F85: a warm-up visit is judged on the document it captured,
 /// as any page a browser reads. A page that shows nothing is still a soft
 /// block; the same page without its document, as every visit came back
-/// before 2.0.0, read as an empty body.
+/// before 2.0.0, is judged on nothing (F86, F116): no document is no empty
+/// one.
 #[tokio::test(start_paused = true)]
 async fn a_warm_up_visit_is_judged_on_the_document_it_captured() {
     let mut world = World::new(3, DEFAULT_DOMAINS);
@@ -518,8 +519,9 @@ async fn a_warm_up_visit_is_judged_on_the_document_it_captured() {
     assert_eq!(state.last_outcome, Some(Outcome::SoftBlock));
     assert_eq!(state.block_count_24h, 1);
 
-    // The read page without its document: what every warm-up visit was
-    // judged on before the fix.
+    // The read page without its document, what every warm-up visit was
+    // judged on before F85: before F86 an empty body, a soft block; now
+    // nothing is judged of what was not captured.
     let mut bare = html(page(200));
     bare.dom_html = None;
     bare.raw_body = None;
@@ -528,7 +530,7 @@ async fn a_warm_up_visit_is_judged_on_the_document_it_captured() {
         .judge(&persona(2, true), "shop.example", Ok(&bare))
         .await
         .unwrap();
-    assert_eq!(judged.outcome, Outcome::SoftBlock);
+    assert_eq!(judged.outcome, Outcome::Ok);
     world.shut_down().await;
 }
 

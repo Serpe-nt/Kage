@@ -467,8 +467,10 @@ pub(crate) struct SitemapView {
     /// scout's browser cannot show what it is: a gzipped file in Chrome,
     /// or no sitemap at all), `failed` (the request did not get through),
     /// `no_scout` (no persona but the site's reader could have asked: it
-    /// was not asked for), or `not_read` (the crawl ended first, or the
-    /// site has more files than `crawl.max_sitemaps`).
+    /// was not asked for), `robots_denied` (the site's `robots.txt`
+    /// disallows it under `enforce`: it was not asked for), or `not_read`
+    /// (the crawl ended first, or the site has more files than
+    /// `crawl.max_sitemaps`).
     #[schema(example = "read")]
     pub(crate) state: String,
     /// The addresses it named that the crawl took in.

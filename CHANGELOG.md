@@ -164,6 +164,50 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   down again: such a press waits until 15 to 45 ms after the release.
   Holds are drawn as before and every other interval too; over 3000 plans
   the mean interval moved from 147.2 to 147.7 ms (spec §10.4).
+- **A verdict needs a document to judge (F116, F86).** A successful
+  `HEAD`, a `204` or `205` (which a browser breaks off as `aborted`), a
+  flow's screenshot or PDF captured without the document, a page whose
+  content is in frames and an empty 200 of no type are answers at every
+  level, never a block: the classifier's body rules judge nothing where
+  there is no document, `soft-blank-page` leaves a page of frames alone and
+  `soft-empty-body` asks for HTML. Before, a HEAD was `soft_block`, a flow's
+  screenshot of a good page `soft_block`, a 204 at level 2 `provider_error`
+  and a page of frames cooled its persona for hours (api-08, jobs-02,
+  policy-08, policy-09, extract-07).
+- **A crawl takes links from HTML only (F118).** A JSON, XML or plain-text
+  answer gives no links: before, level 0 read the escaped quotes of a JSON
+  body as an attribute's and asked the site for an address no page named
+  (crawl-01).
+- **`enforce` covers the sitemaps a crawl would ask for (F119).** A sitemap
+  the site's `robots.txt` disallows, the guess `/sitemap.xml` or a file a
+  `Sitemap:` line names, is not asked for and is listed `robots_denied`
+  (crawl-05).
+- **A link answered with a file is one request (F120).** The site's
+  answer, `ok` with the reason `download`: no other persona types it, the
+  reader stays, and the next page is clicked from the tab, which still
+  shows the page the link stands on. A typed address answered with a file
+  is the same. Before, every persona of the site asked for the file in turn
+  and the item failed (crawl-06).
+- **A click on a file ends at once in Chromium (F120).** The sidecar ends a
+  click, or a typed load, the moment the browser begins to save a file
+  (the driver's `download` event, and in Chromium the main frame's answer
+  with `Content-Disposition: attachment`, since Chrome holds a plain
+  `http` download for the person and its driver hears of none). Before,
+  Chrome's driver reported the file's answer like a page's and the click
+  waited for a `load` that never comes until the request's budget ran out,
+  60 s by default, on every release since entries click (engine-chromium
+  runbook).
+- **Every block signature is bounded (F125).** The six rules that matched a
+  marker in the body alone need a status other than 200 or next to no
+  text, so a long article that quotes a vendor's block page is no block;
+  a classifier test holds every shipped rule to it, with fixtures of the
+  quoted pages (policy-02).
+- **What a result and a label say of a block or a visit (F143).** The
+  `vendor` label of `kage_requests_total` and `kage_attempts_total` is the
+  result's `block.vendor` (policy-07); `referer_strategy: search_engine`,
+  which no results page can serve yet, is a typed visit that says `direct`
+  (policy-10); a site's own 407 over plain http (no `Proxy-Authenticate`) is
+  `ok` with its status at levels 0 and 1, not `proxy_failed` (policy-11).
 
 ### Security
 
