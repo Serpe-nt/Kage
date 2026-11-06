@@ -57,6 +57,22 @@ const NEIGHBOURS: Readonly<Record<string, string>> = {
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
 /**
+ * Milliseconds between a key going up and the same key going down again,
+ * where the next character is on the key still held (F202): the finger
+ * lifts it and presses again. Even after the longest hold (160 ms) the
+ * second press stays inside the spec's 220 ms between two presses.
+ */
+const REPRESS_MS: readonly [number, number] = [15, 45];
+
+/**
+ * The key a character is typed on, as far as the planner can tell: a
+ * letter and its capital share one; other characters are told apart by
+ * what they are, since the planner knows the levels of a key, not where
+ * it lies.
+ */
+const physicalKey = (key: string) => (key.length === 1 ? key.toLowerCase() : key);
+
+/**
  * Plans the keys of a text: when each goes down and up.
  *
  * Every interval between two key presses lies inside the spec's 60 to
@@ -66,6 +82,13 @@ const clamp = (value: number, min: number, max: number) => Math.max(min, Math.mi
  * neighbouring characters that need them. With `typos`, a letter is now
  * and then replaced by a neighbouring key, noticed after a moment, deleted
  * with `Backspace` and typed again.
+ *
+ * A key is up before it goes down again (F202): where the next character
+ * is on the key still held (a doubled letter), its press waits until a
+ * moment after the release, as a finger must lift the key first. A key
+ * pressed while it is down sends nothing on a real keyboard, and the X
+ * display drops such a press too. Only those presses move, and the moment
+ * is drawn only for them, so a plan without one is the plan it was.
  */
 export function planTyping(
   text: string,
@@ -82,6 +105,8 @@ export function planTyping(
   let typos = 0;
   // A modifier never changes before the previous key is down, or that key would get it.
   let lastPress = 0;
+  // When each key last goes up (F202).
+  const upAt = new Map<string, number>();
 
   const interval = () =>
     clamp(
@@ -106,12 +131,18 @@ export function planTyping(
     held[name] = wanted;
   };
   const stroke = (key: string) => {
+    const physical = physicalKey(key);
+    const up = upAt.get(physical);
+    if (up !== undefined && now <= up) {
+      now = up + random.uniform(REPRESS_MS[0], REPRESS_MS[1]);
+    }
     const levels = levelsOf(key);
     modifier('shift', 'Shift', levels.shift);
     modifier('altGr', 'AltGraph', levels.altGr);
     emit(now, 'down', key);
     const release = now + hold();
     emit(release, 'up', key);
+    upAt.set(physical, release);
     lastPress = now;
     return release;
   };

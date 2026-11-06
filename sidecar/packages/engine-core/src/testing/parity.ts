@@ -2252,6 +2252,48 @@ export function defineParitySuite(subject: ParitySubject): void {
       expect(reached / scrollable).toBeLessThan(0.6);
     });
 
+    it('types a doubled letter as two presses the page hears, the key up between them (F202)', async () => {
+      // Words with doubled letters, and a capital on the key just pressed.
+      // A key pressed while it is down sends nothing, and the display
+      // dropped such a press: `hello` arrived as `helo` before 2.0.3.
+      const text = 'hello bookkeeper Mississippi aaa Lloyd';
+      const run = await withContext('doubled', (context) =>
+        flow(context, {
+          behavior: { seed: SEEDS.first, typos: false },
+          timeout_ms: 200_000,
+          actions: [
+            { action: 'goto', url: named('/input/') },
+            { action: 'wait_for', selector: 'body[data-ready]' },
+            { action: 'click', selector: '#field' },
+            { action: 'type', selector: '#field', text },
+            { action: 'wait_for', ms: 300 },
+            { action: 'extract', capture: DOM },
+          ],
+        }),
+      );
+      expect(run.steps.every((step) => step.ok)).toBe(true);
+      const report = inputReportOf(run.steps.at(-1)?.capture?.dom_html ?? null);
+      expect(report.field).toBe(text);
+      // Every press is heard, and every one after the key came up.
+      const keys = report.events.filter(
+        (event) =>
+          (event.type === 'keydown' || event.type === 'keyup') &&
+          event.key !== 'Shift' &&
+          event.key !== undefined,
+      );
+      expect(keys.filter((event) => event.type === 'keydown')).toHaveLength(text.length);
+      const down = new Set<string>();
+      for (const event of keys) {
+        const code = event.code ?? '';
+        if (event.type === 'keydown') {
+          expect(down.has(code), `${event.key ?? ''} at ${event.t}`).toBe(false);
+          down.add(code);
+        } else {
+          down.delete(code);
+        }
+      }
+    });
+
     it('clicks, types and selects through the mouse and keyboard of its display', async () => {
       const text = 'Zürich y@web';
       const run = await withContext('flow-human', (context) =>
@@ -2373,9 +2415,8 @@ export function defineParitySuite(subject: ParitySubject): void {
             { action: 'click', selector: '#blank' },
             { action: 'wait_for', ms: 2500 },
             { action: 'click', selector: '#q' },
-            // Five keys, none twice: the hand presses a letter again while it
-            // may still hold it, and the display drops such a press.
-            { action: 'type', selector: '#q', text: 'world' },
+            // The round's text: its doubled letter is two presses since F202.
+            { action: 'type', selector: '#q', text: 'hello' },
           ],
         });
         const at = Date.now();
@@ -2413,11 +2454,11 @@ export function defineParitySuite(subject: ParitySubject): void {
       });
       // Every key and every press reached the flow's page; the tab heard none.
       expect(heard('opener', 'keydown').map((entry) => entry['key'])).toEqual([
-        'w',
-        'o',
-        'r',
+        'h',
+        'e',
         'l',
-        'd',
+        'l',
+        'o',
       ]);
       expect(heard('opener', 'mousedown').length).toBeGreaterThanOrEqual(3);
       expect(heard('opened', 'keydown')).toEqual([]);

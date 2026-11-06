@@ -533,7 +533,7 @@ alive() {
 opened_note=''
 for engine in chromium firefox; do
     got "http://fixture:8088/__kage/reset" > /dev/null
-    call POST /v1/jobs "${client}" "{\"type\":\"flow\",\"level\":3,\"max_retries\":0,\"persona\":{\"engines\":[\"${engine}\"]},\"behavior\":{\"dwell_ms\":500},\"timeout_ms\":120000,\"actions\":[{\"action\":\"goto\",\"url\":\"${site}/opener/?${engine}\"},{\"action\":\"wait_for\",\"selector\":\"body[data-ready]\"},{\"action\":\"click\",\"selector\":\"#blank\"},{\"action\":\"wait_for\",\"ms\":2500},{\"action\":\"click\",\"selector\":\"#q\"},{\"action\":\"type\",\"selector\":\"#q\",\"text\":\"world\"}]}"
+    call POST /v1/jobs "${client}" "{\"type\":\"flow\",\"level\":3,\"max_retries\":0,\"persona\":{\"engines\":[\"${engine}\"]},\"behavior\":{\"dwell_ms\":500},\"timeout_ms\":120000,\"actions\":[{\"action\":\"goto\",\"url\":\"${site}/opener/?${engine}\"},{\"action\":\"wait_for\",\"selector\":\"body[data-ready]\"},{\"action\":\"click\",\"selector\":\"#blank\"},{\"action\":\"wait_for\",\"ms\":2500},{\"action\":\"click\",\"selector\":\"#q\"},{\"action\":\"type\",\"selector\":\"#q\",\"text\":\"hello\"}]}"
     expect 201 "a flow whose page opens a tab (${engine})"
     opener="$(value "${body}" "d.id")"
     wait_flow "${opener}"
@@ -546,7 +546,7 @@ for engine in chromium firefox; do
     before="$(alive)"
     reports="$(got "http://fixture:8088/__kage/reports")"
     check "the flow's page heard the five keys and the presses, the tab none (${engine})" "${reports}" \
-        "d.filter((r) => r.page === 'opener' && r.who === 'opener' && r.type === 'keydown').map((r) => r.key).join('') === 'world' && d.filter((r) => r.page === 'opener' && r.who === 'opener' && r.type === 'mousedown').length >= 3 && !d.some((r) => r.page === 'opener' && r.who === 'opened' && r.type !== 'alive')"
+        "d.filter((r) => r.page === 'opener' && r.who === 'opener' && r.type === 'keydown').map((r) => r.key).join('') === 'hello' && d.filter((r) => r.page === 'opener' && r.who === 'opener' && r.type === 'mousedown').length >= 3 && !d.some((r) => r.page === 'opener' && r.who === 'opened' && r.type !== 'alive')"
     [ "${before}" -gt 0 ] || fail "the tab never ran on ${engine}: the link opened none"
     sleep 3
     [ "$(alive)" = "${before}" ] || fail "the tab ran on after its flow ended on ${engine}"
