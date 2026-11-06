@@ -403,20 +403,34 @@ async fn migrate_then_serve_and_survive_a_policy_file_turning_invalid() {
 
     // Now it starts and answers.
     let address = format!("127.0.0.1:{}", free_port());
-    let _server = Server(
-        kage(&env)
-            .args(["serve", "--bind", &address])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap(),
-    );
+    let start = || {
+        Server(
+            kage(&env)
+                .args(["serve", "--bind", &address])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        )
+    };
+    let server = start();
     let healthy = || {
         run(kage(&[]).args(["healthcheck", "--addr", &address]))
             .status
             .success()
     };
     eventually("the server answers /healthz", healthy);
+
+    // A second server on the same database refuses to start and says why:
+    // Kage is single-instance (ADR 0005, F174, pool-03).
+    let second = run(kage(&env).args(["serve", "--bind", &format!("127.0.0.1:{}", free_port())]));
+    assert_eq!(second.status.code(), Some(1));
+    assert!(
+        text(&second.stderr).contains("another kage server is running on this database"),
+        "{}",
+        text(&second.stderr)
+    );
+    assert!(healthy(), "the first server stopped answering");
 
     // A policy file turns invalid while the server runs: it keeps serving,
     // and the alert is stored as a health event.
@@ -471,4 +485,35 @@ async fn migrate_then_serve_and_survive_a_policy_file_turning_invalid() {
         .await
         .unwrap();
     assert_eq!(artifact_rows, 0);
+
+    // A server that is killed lets the database go with its connection: the
+    // next one starts at once, with nothing to wait out.
+    drop(server);
+    std::fs::copy(
+        shipped_policies().join("domains.yaml"),
+        policies.join("domains.yaml"),
+    )
+    .unwrap();
+    let log = dir.path().join("again.log");
+    let again = format!("127.0.0.1:{}", free_port());
+    let _again = Server(
+        kage(&env)
+            .args(["serve", "--bind", &again])
+            .stdout(Stdio::null())
+            .stderr(std::fs::File::create(&log).unwrap())
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !run(kage(&[]).args(["healthcheck", "--addr", &again]))
+        .status
+        .success()
+    {
+        assert!(
+            Instant::now() < deadline,
+            "a server started after a kill does not answer: {}",
+            std::fs::read_to_string(&log).unwrap_or_default()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }

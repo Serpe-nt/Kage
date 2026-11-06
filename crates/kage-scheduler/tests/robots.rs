@@ -15,7 +15,7 @@ mod common;
 use std::time::Duration;
 
 use chrono::Duration as Span;
-use common::{DEFAULT_DOMAINS, World, blocked, file, id, server_error};
+use common::{DEFAULT_DOMAINS, World, blocked, file, id, page_with, server_error};
 use kage_browser::contract::FlowAction;
 use kage_core::domain::{Header, Level, Render, RobotsVerdict, Timing};
 use kage_core::ids::{PersonaId, RequestId};
@@ -1255,7 +1255,12 @@ async fn every_goto_of_a_flow_meets_the_file_of_its_own_address() {
     assert_eq!(pages, []);
 
     // A flow whose every address the files allow runs, in one attempt, by
-    // a persona that is the scout of none of its sites.
+    // a persona that is the scout of none of its sites. It ends on the
+    // later site.
+    world.script.then(page_with(
+        "https://enforced.example/open",
+        &serde_json::json!({}),
+    ));
     let allowed_flow = world
         .pipeline
         .fetch(flow_through(&[
@@ -1277,11 +1282,37 @@ async fn every_goto_of_a_flow_meets_the_file_of_its_own_address() {
         attempt.persona_id,
         world.backend.scout_of("enforced.example")
     );
-    // The flow's own page reports what its own address is told; the later
-    // site's file was asked for once.
-    assert_eq!(allowed_flow.robots, Some(UNASKED));
+    // Its result reports the verdict of the address it ended on, under
+    // that site's policy, with its `Crawl-delay`; not the first site's,
+    // whose file nobody asks for (F186, flows-01). The later site's file
+    // was asked for once.
+    assert_eq!(allowed_flow.robots, Some(allowed(Some(30.0))));
     let (files, pages) = asked(&world);
     assert_eq!(files.len(), 1);
     assert_eq!(pages.len(), 1);
+
+    // A flow a click took to what the later site's file disallows (a
+    // click is no `goto`, and nothing stopped it): its result never says
+    // the address is allowed.
+    world.script.then(page_with(
+        "https://enforced.example/private/clicked",
+        &serde_json::json!({}),
+    ));
+    let clicked = world
+        .pipeline
+        .fetch(flow_through(&["https://free.example/start"]))
+        .await
+        .unwrap();
+    assert_eq!(clicked.outcome, Outcome::Ok, "{:?}", clicked.reason);
+    let verdict = clicked.robots.unwrap();
+    assert!(verdict.fetched && !verdict.allowed, "{verdict:?}");
+    assert_eq!(verdict.matched_rule.as_deref(), Some("Disallow: /private"));
+    // One that ended where it began reports its own address's.
+    let stayed = world
+        .pipeline
+        .fetch(flow_through(&["https://free.example/start"]))
+        .await
+        .unwrap();
+    assert_eq!(stayed.robots, Some(UNASKED));
     world.shut_down().await;
 }

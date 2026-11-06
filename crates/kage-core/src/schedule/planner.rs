@@ -189,6 +189,10 @@ pub struct PersonaView {
     pub timezone: String,
     /// Whether it is active, warmed up, and its proxy can carry traffic.
     pub ready: bool,
+    /// When one that is not ready may be again, when that is known: the
+    /// end of its proxy's backoff (F156). `None` when it is ready, or when
+    /// nobody knows (a warm-up, a proxy held by a suspected outage).
+    pub ready_at: Option<DateTime<Utc>>,
     /// Whether it has an http path.
     pub http: bool,
     /// Where its address sits.
@@ -1148,11 +1152,10 @@ impl Planner {
         let possible = self.possible(now, queued, (facts, legs));
         if possible.is_empty() {
             // Nobody ready now: an outage of the pool says nothing about
-            // the request, and it is worth asking again (F107). Nobody at
-            // all: it never will be.
-            let again = self
-                .could_serve_once_ready(work)
-                .then(|| now + UNREADY_RECHECK);
+            // the request, and it is worth asking again (F107): when the
+            // first backoff of a proxy that keeps one ends, or a minute on
+            // when nobody knows (F156). Nobody at all: it never will be.
+            let again = self.ready_again(work, now);
             return Looked::Refuse(Refusal::NoPersona, again);
         }
         let ready = |one: &Possible<'_>| one.at.is_some_and(|at| at <= now);
@@ -1216,6 +1219,21 @@ impl Planner {
             _ => possible.to_vec(),
         };
         let possible = keep_off_blocked_subnets(work, possible, now);
+
+        // Nobody it may have could start within its patience (a cooling,
+        // the daily cap, the night, a long break): it is told when the
+        // first of them can, instead of waiting in the queue for that
+        // (spec §16.6, F130). A visit that ends first leaves room for
+        // nobody who could start sooner. Only a wait that is known is too
+        // long: one who could start now but is making an attempt is waited
+        // for, as below (follow-up F54).
+        if let Some(limit) = work.give_up_at
+            && let Some(soonest) = possible.iter().map(|one| one.after).min()
+            && soonest > now
+            && soonest > limit
+        {
+            return Looked::Refuse(Refusal::NoPersona, Some(soonest));
+        }
 
         // A persona that is visiting takes the work when its slot is open.
         let visitor = possible
@@ -1355,21 +1373,33 @@ impl Planner {
         self.next_free_start.filter(|at| *at > now)
     }
 
-    /// Whether a persona that may take the work exists, though none is
-    /// ready now: what keeps it is a state of the moment (its proxy in
-    /// backoff, a cooling, a warm-up), not the request.
-    fn could_serve_once_ready(&self, work: &Work) -> bool {
-        self.personas.values().any(|view| {
-            !view.ready
-                && work.pin.is_none_or(|pin| pin == view.id)
-                && !work.exclude.contains(&view.id)
-                && work.engines.contains(&view.engine)
-                && (work.render == Render::Browser || view.http)
-                && work.countries.as_ref().is_none_or(|countries| {
-                    view.country
-                        .is_some_and(|country| countries.contains(&country))
-                })
-        })
+    /// When the work is worth looking at again, when a persona that may
+    /// take it exists though none is ready now: what keeps it is a state of
+    /// the moment (its proxy in backoff, a cooling, a warm-up), not the
+    /// request. The earliest moment one of them is known to be ready
+    /// again, the end of its proxy's backoff, else [`UNREADY_RECHECK`] from
+    /// now (F156: a backoff may last an hour, and the work was looked at
+    /// every minute of it). `None` when nobody could ever take it.
+    fn ready_again(&self, work: &Work, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        self.personas
+            .values()
+            .filter(|view| {
+                !view.ready
+                    && work.pin.is_none_or(|pin| pin == view.id)
+                    && !work.exclude.contains(&view.id)
+                    && work.engines.contains(&view.engine)
+                    && (work.render == Render::Browser || view.http)
+                    && work.countries.as_ref().is_none_or(|countries| {
+                        view.country
+                            .is_some_and(|country| countries.contains(&country))
+                    })
+            })
+            .map(|view| {
+                view.ready_at
+                    .filter(|at| *at > now)
+                    .unwrap_or(now + UNREADY_RECHECK)
+            })
+            .min()
     }
 
     /// Waits until `until`, unless the request would rather be refused
@@ -1959,6 +1989,42 @@ impl Planner {
     /// Reports that an attempt ended at `now`. `false` for a grant the
     /// planner does not hold: it is reported once.
     pub fn complete(&mut self, grant: GrantId, now: DateTime<Utc>, completion: Completion) -> bool {
+        self.complete_on(grant, now, completion, None)
+    }
+
+    /// [`Self::complete`] of an attempt whose end another site than its
+    /// domain showed (`shown_by`, F101): a flow that ended on a later site,
+    /// a fetch redirected to another site (F187). What the end says about
+    /// a site's health (`completion.courtesy`: its server errors, or that
+    /// it did not answer in time) is that site's, so that its own pause
+    /// after server errors sees them (F162); the domain served what was
+    /// asked of it there and is told nothing. The persona's visit of the
+    /// domain was not turned away there.
+    pub fn complete_on(
+        &mut self,
+        grant: GrantId,
+        now: DateTime<Utc>,
+        completion: Completion,
+        shown_by: Option<&str>,
+    ) -> bool {
+        if !self.grants.contains_key(&grant) {
+            return false;
+        }
+        let completion = match shown_by {
+            Some(site) => {
+                self.domains
+                    .entry(site.to_owned())
+                    .or_default()
+                    .errors
+                    .record(completion.courtesy, now, &self.rules.server_errors);
+                Completion {
+                    courtesy: Courtesy::NotTheSite,
+                    blocked: false,
+                    proxy_failed: completion.proxy_failed,
+                }
+            }
+            None => completion,
+        };
         let Some(grant) = self.grants.remove(&grant) else {
             return false;
         };

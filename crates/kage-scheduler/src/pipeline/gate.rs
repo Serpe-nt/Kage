@@ -5,7 +5,6 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -17,7 +16,7 @@ use kage_core::schedule::politeness::Courtesy;
 use kage_core::schedule::queue::Priority;
 use url::Url;
 
-use super::{Course, Deferred, FetchOrder, FetchReport, Pipeline, Ran, Stop, stopped};
+use super::{Course, Deferred, FetchOrder, FetchReport, Overflow, Pipeline, Ran, Stop, stopped};
 use crate::SchedulerError;
 use crate::executor::{Arrival, AttemptOutput};
 use crate::metrics;
@@ -144,7 +143,7 @@ pub(super) struct Call {
     /// then a job's too, deferred by what only says "not now" and given
     /// back at a stop, as the fetch is.
     job: bool,
-    overflowed: Option<Arc<AtomicBool>>,
+    overflowed: Option<Overflow>,
 }
 
 /// What came of a [`Call`].
@@ -413,6 +412,11 @@ impl Pipeline {
             }),
             Ran::Finished(report) => self.keep_answer(call, scout, &report).await?,
         };
+        // The scout's request of a caller that hung up ended with the
+        // caller's (F128): the file was not had, and the caller stopped.
+        if stop.is_some_and(|stop| *stop.borrow()) && !matches!(asked, Asked::Known(_)) {
+            return Ok(Asked::Stopped);
+        }
         // A scout that is not ready (its proxy in backoff) is told
         // `no_persona` with a moment to ask again (F107); for the file it
         // is a scout nobody knows the return of, as it was before: the
@@ -590,18 +594,7 @@ impl Pipeline {
                 course.robots = Some(robots::unasked());
                 course.policy.robots
             }
-            Some(url) => {
-                let host = url
-                    .host_str()
-                    .map(str::to_ascii_lowercase)
-                    .unwrap_or_default();
-                self.verdicts
-                    .policies()
-                    .current()
-                    .domains
-                    .resolve(&host)
-                    .robots
-            }
+            Some(url) => self.robots_policy_of(course, url),
         };
         let mode = match robots::mode(robots_policy, course.order.robots) {
             Ok(mode) => mode,
@@ -716,6 +709,65 @@ impl Pipeline {
         } else {
             Gate::Denied(None)
         })
+    }
+
+    /// The `robots` mode of the policy an address of a request is judged
+    /// under: the policy of the site it belongs to as the request holds it
+    /// since it began (a later site of a flow, F101, or its own domain),
+    /// so that the robots check and the rest of the request read one
+    /// policy (F163); the policy in force for a site the request does not
+    /// know.
+    fn robots_policy_of(&self, course: &Course, url: &Url) -> RobotsMode {
+        let host = url
+            .host_str()
+            .map(|host| host.trim_end_matches('.').to_ascii_lowercase())
+            .unwrap_or_default();
+        if host == course.domain {
+            return course.policy.robots;
+        }
+        course
+            .legs
+            .iter()
+            .find(|leg| leg.domain == host)
+            .map_or_else(
+                || {
+                    self.verdicts
+                        .policies()
+                        .current()
+                        .domains
+                        .resolve(&host)
+                        .robots
+                },
+                |leg| leg.policy.robots,
+            )
+    }
+
+    /// What a flow's result reports of `robots.txt` when the flow ended on
+    /// another address than its own (F186): the verdict of the address it
+    /// ended on, as a fetch of that address would report it, under the
+    /// policy of its site. What is known of that site's file is read;
+    /// nothing is asked of anybody. A file nothing is known of yet, or one
+    /// that could not be had, is reported as not fetched.
+    pub(super) async fn robots_at_end(
+        &self,
+        course: &Course,
+        ended: &Url,
+    ) -> Result<RobotsVerdict, SchedulerError> {
+        let policy = self.robots_policy_of(course, ended);
+        if !matches!(
+            robots::mode(policy, course.order.robots),
+            Ok(RobotsMode::Enforce | RobotsMode::Report)
+        ) {
+            return Ok(robots::unasked());
+        }
+        let Some(origin) = robots::origin_of(ended) else {
+            return Ok(robots::unasked());
+        };
+        Ok(self
+            .robots_fresh(&origin)
+            .await?
+            .and_then(|known| known.verdict(&self.robots.agents, ended))
+            .unwrap_or_else(robots::unasked))
     }
 
     /// What a crawl is told about an address before it makes it a page of

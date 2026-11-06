@@ -1150,6 +1150,12 @@ async fn a_crawl_waits_out_what_holds_its_site_and_ends_at_its_deadline() {
     assert_eq!(paused["items"]["failed"], 1);
     assert_eq!(paused["crawl"]["failed"], 1);
     assert_eq!(paused["crawl"]["ended"], Value::Null);
+    // The page after the wall waits for the site: it is not being read,
+    // and it was asked of nobody (F139, crawl-08: `fetching: 1` and a page
+    // of `pages` for as long as it waited).
+    assert_eq!(paused["crawl"]["fetching"], 0, "{paused}");
+    assert_eq!(paused["crawl"]["pages"], 2, "{paused}");
+    assert_eq!(paused["crawl"]["waiting"], 1, "{paused}");
     let seen = asked(&api).await;
     assert_eq!(seen, ["/", "/wall", "/wall"]);
     // The page after the wall was asked of nobody.
@@ -1174,6 +1180,141 @@ async fn a_crawl_waits_out_what_holds_its_site_and_ends_at_its_deadline() {
         assert_eq!(last["state"], "failed", "{last}");
         assert_eq!(last["error"], "expired: domain_paused");
     }
+    work.stop().await;
+    api.shut_down().await;
+}
+
+#[tokio::test]
+async fn a_link_no_request_can_be_made_for_is_skipped_and_costs_no_page() {
+    // F139 (crawl-07): two links of 9 000 characters and then a page. The
+    // long ones failed `invalid_url`, each took a page of `max_pages`
+    // without a request, and the page after them was never read.
+    let mut api = Api::start_with(2, 149, FAST, quick).await;
+    let long = |name: &str| -> &'static str {
+        Box::leak(format!("/l-{name}-{}", "x".repeat(9000)).into_boxed_str())
+    };
+    serve(
+        &api,
+        &[
+            leaf("/", &[long("one"), long("two"), "/real"]),
+            leaf("/real", &[]),
+        ],
+        Duration::ZERO,
+    )
+    .await;
+    let token = api.key(&[Scope::Jobs, Scope::Crawl]).await;
+    let reply = api
+        .post(
+            &token,
+            "/v1/jobs",
+            &json!({
+                "type": "crawl", "seeds": [Api::url("/")], "max_pages": 3, "max_depth": 1,
+                "defaults": { "level": 1 },
+            }),
+        )
+        .await;
+    let id = reply.json()["id"].as_str().unwrap().to_owned();
+    let work = api.work();
+    let done = api.job_until(&token, &id, ended).await;
+    assert_eq!(done["state"], "succeeded", "{done}");
+    assert_eq!(done["crawl"]["skipped"]["invalid_url"], 2, "{done}");
+    assert_eq!(done["crawl"]["pages"], 2, "{done}");
+    assert_eq!(done["crawl"]["failed"], 0, "{done}");
+    assert_eq!(done["crawl"]["ended"], "completed", "{done}");
+    assert_eq!(asked(&api).await, ["/", "/real"]);
+    let items = api.job_items(&token, &id).await;
+    assert_eq!(paths(&items), ["/", "/real"]);
+    work.stop().await;
+    api.shut_down().await;
+}
+
+#[tokio::test]
+async fn a_cancel_ends_the_pages_a_dead_worker_left_running() {
+    // F157: a crawl whose worker died while a page of it was `running`
+    // in the scheduler (here the page after a wall, waiting for the
+    // site). The cancel that comes before anybody took the crawl up ends
+    // that page and its request `cancelled`, as it ends a batch's and a
+    // flow's since F109.
+    let rules = "defaults: { pacing: fast, active_hours: ignore, retries: 1, \
+                 breaker_threshold: 2, breaker_pause: 30m }\ndomains: {}\n";
+    let mut api = Api::start_with(3, 149, rules, quick).await;
+    serve(&api, &[leaf("/", &["/wall", "/after"])], Duration::ZERO).await;
+    Mock::given(method("GET"))
+        .and(path("/wall"))
+        .respond_with(
+            ResponseTemplate::new(403)
+                .insert_header("server", "cloudflare")
+                .insert_header("cf-ray", "8f1-FRA")
+                .set_body_raw(
+                    "<html><head><title>Attention Required! | Cloudflare</title></head><body>\
+                     <h1>Sorry, you have been blocked</h1><p>Cloudflare Ray ID: 8f1</p></body></html>",
+                    "text/html; charset=utf-8",
+                ),
+        )
+        .mount(&api.lab.site)
+        .await;
+    let token = api.key(&[Scope::Fetch, Scope::Jobs, Scope::Crawl]).await;
+    let body = json!({
+        "type": "crawl", "seeds": [Api::url("/")], "defaults": { "level": 1 },
+    });
+    let id = api.post(&token, "/v1/jobs", &body).await.json()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let work = api.work();
+    api.job_until(&token, &id, |job| job["state"] == "paused")
+        .await;
+    work.stop().await;
+    let items = api.job_items(&token, &id).await;
+    let after = items
+        .iter()
+        .find(|item| path_of(item) == "/after")
+        .expect("the page after the wall was begun")
+        .clone();
+    let request = after["request_id"].as_str().unwrap().to_owned();
+
+    // What a worker that died leaves: the page `running` in its hands,
+    // the job held by it and its lease run out.
+    let pool = api.lab.store().pool();
+    sqlx::query(
+        "UPDATE job_items SET state = 'running', not_before = NULL WHERE request_id = $1::uuid",
+    )
+    .bind(&request)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE jobs SET state = 'running', paused_until = NULL, paused_reason = NULL, \
+         worker = gen_random_uuid(), lease_until = now() - interval '1 second' \
+         WHERE id = $1::uuid",
+    )
+    .bind(&id)
+    .execute(pool)
+    .await
+    .unwrap();
+    api.call(
+        Method::POST,
+        &format!("/v1/jobs/{id}/cancel"),
+        Some(&token),
+        None,
+    )
+    .await;
+
+    let work = api.work();
+    let done = api.job_until(&token, &id, ended).await;
+    assert_eq!(done["state"], "cancelled", "{done}");
+    assert_eq!(done["items"]["pending"], 0, "{done}");
+    assert_eq!(done["crawl"]["fetching"], 0, "{done}");
+    let items = api.job_items(&token, &id).await;
+    let after = items.iter().find(|item| path_of(item) == "/after").unwrap();
+    assert_eq!(after["state"], "cancelled", "{after}");
+    assert_eq!(after["error"], "cancelled", "{after}");
+    let result = api.get(&token, &format!("/v1/results/{request}")).await;
+    assert_eq!(result.status, StatusCode::OK, "{:?}", result.json());
+    assert_eq!(result.json()["outcome"], "provider_error");
+    assert_eq!(result.json()["reason"], "cancelled");
+    // The page was asked of nobody.
+    assert!(!asked(&api).await.iter().any(|seen| seen == "/after"));
     work.stop().await;
     api.shut_down().await;
 }

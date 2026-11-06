@@ -1975,7 +1975,7 @@
           "jobs"
         ],
         "summary": "Stop a job.",
-        "description": "What waits is cancelled at once; an item that waits for its persona is\ntaken out of the queue; a page that is being fetched at this moment is\nfinished, so at most one more item per visitor ends after the cancel.\nThe answer is the job as it stands; it is `cancelled` once what was\nunder way is over. A job that has ended is answered as it ended.",
+        "description": "What waits is cancelled at once; an item that waits for its persona is\ntaken out of the queue; a page that is being fetched at this moment is\nfinished, so at most one more item per visitor ends after the cancel.\nA flow stops at the step under way: the step is finished and no other\nbegins; its items are `cancelled`. The answer is the job as it stands;\nit is `cancelled` once what was under way is over. A job that has\nended is answered as it ended.",
         "operationId": "cancel_job",
         "parameters": [
           {
@@ -3724,7 +3724,7 @@
           "fetching": {
             "type": "integer",
             "format": "int64",
-            "description": "Pages being read now.",
+            "description": "Pages being read now: in the scheduler for their visitor or being\nfetched.",
             "minimum": 0
           },
           "max_depth": {
@@ -3748,7 +3748,7 @@
           "pages": {
             "type": "integer",
             "format": "int32",
-            "description": "Pages asked of the sites so far: what `max_pages` counts.",
+            "description": "Pages asked of the sites so far: what `max_pages` counts. A page\nthat waits for its site or its visitor is counted once it goes to\nthe scheduler again.",
             "minimum": 0
           },
           "reached": {
@@ -3764,19 +3764,19 @@
           },
           "skipped": {
             "$ref": "#/components/schemas/FreeForm",
-            "description": "Addresses the crawl knows and does not read, by reason: `off_site`,\n`too_deep`, `denied`, `not_allowed`, `not_a_page` (a file),\n`hidden` (no reader can see the link), `already_read` (another\naddress redirected there), `ssrf_denied`, `robots_denied` (the\nsite's `robots.txt` disallows it and its policy keeps to the file)."
+            "description": "Addresses the crawl knows and does not read, by reason: `off_site`,\n`too_deep`, `denied`, `not_allowed`, `not_a_page` (a file),\n`hidden` (no reader can see the link), `already_read` (another\naddress redirected there), `ssrf_denied`, `robots_denied` (the\nsite's `robots.txt` disallows it and its policy keeps to the file),\n`invalid_url` (no request can be made for it: longer than 8192\nbytes)."
           },
           "waiting": {
             "type": "integer",
             "format": "int64",
-            "description": "Of them, pages that wait to be read.",
+            "description": "Of them, pages that wait to be read: a page the crawl began and\nthat waits for its site or its visitor included.",
             "minimum": 0
           }
         }
       },
       "DeliveryView": {
         "type": "object",
-        "description": "One event on its way to the job's webhook.",
+        "description": "One event on its way to the job's webhook: one row per event, with how\nmany attempts it took and what the last one came to. Every attempt is\nkept in the store.",
         "required": [
           "id",
           "type",
@@ -5162,7 +5162,7 @@
       },
       "GotoStep": {
         "type": "object",
-        "description": "Load a page. The first step of every flow.",
+        "description": "Load a page. The first step of every flow. The browser loads it as an\naddress typed: there is no `human` to choose.",
         "required": [
           "url"
         ],
@@ -7406,7 +7406,7 @@
       },
       "WaitForStep": {
         "type": "object",
-        "description": "Wait for one condition: exactly one of the four is given.",
+        "description": "Wait for one condition: exactly one of the four is given. A step that\nonly reads: there is no `human` to choose.",
         "properties": {
           "ms": {
             "type": [
@@ -7414,7 +7414,7 @@
               "null"
             ],
             "format": "int64",
-            "description": "For this long, in milliseconds.",
+            "description": "For this long, in milliseconds. The step succeeds only when all of\nit was waited: a wait longer than the step's `timeout_ms`, or than\nwhat is left of the flow's `timeout_ms`, fails the step at once.",
             "maximum": 120000,
             "minimum": 0
           },

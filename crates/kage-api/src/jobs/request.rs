@@ -179,7 +179,8 @@ pub(crate) struct BatchJob {
     pub(crate) webhook: Option<WebhookField>,
 }
 
-/// Load a page. The first step of every flow.
+/// Load a page. The first step of every flow. The browser loads it as an
+/// address typed: there is no `human` to choose.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GotoStep {
@@ -262,7 +263,8 @@ pub(crate) struct ScrollStep {
     pub(crate) timeout_ms: Option<u64>,
 }
 
-/// Wait for one condition: exactly one of the four is given.
+/// Wait for one condition: exactly one of the four is given. A step that
+/// only reads: there is no `human` to choose.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct WaitForStep {
@@ -278,7 +280,9 @@ pub(crate) struct WaitForStep {
     /// Until no request ran for half a second.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) network_idle: Option<bool>,
-    /// For this long, in milliseconds.
+    /// For this long, in milliseconds. The step succeeds only when all of
+    /// it was waited: a wait longer than the step's `timeout_ms`, or than
+    /// what is left of the flow's `timeout_ms`, fails the step at once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(maximum = 120_000)]
     pub(crate) ms: Option<u64>,

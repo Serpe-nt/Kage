@@ -115,9 +115,17 @@ impl Grant {
     }
 
     /// Reports how the attempt ended.
-    pub fn complete(mut self, completion: Completion) {
+    pub fn complete(self, completion: Completion) {
+        self.complete_on(completion, None);
+    }
+
+    /// Reports how the attempt ended, when another site than its domain
+    /// showed the end (`shown_by`): what the end says about a site's
+    /// health is that site's (F162).
+    pub fn complete_on(mut self, completion: Completion, shown_by: Option<&str>) {
         self.reported = true;
-        self.scheduler.complete(self.dispatch.grant, completion);
+        self.scheduler
+            .complete_on(self.dispatch.grant, completion, shown_by);
     }
 }
 
@@ -337,8 +345,14 @@ impl Scheduler {
     }
 
     fn complete(&self, grant: GrantId, completion: Completion) {
+        self.complete_on(grant, completion, None);
+    }
+
+    fn complete_on(&self, grant: GrantId, completion: Completion, shown_by: Option<&str>) {
         let now = self.clock.now();
-        self.inner().planner.complete(grant, now, completion);
+        self.inner()
+            .planner
+            .complete_on(grant, now, completion, shown_by);
         self.poke.notify_one();
     }
 

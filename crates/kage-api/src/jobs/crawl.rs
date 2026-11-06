@@ -542,9 +542,11 @@ pub(crate) struct CrawlView {
     /// Addresses the crawl knows: its seeds, what sitemaps named and what
     /// pages linked to, each once however often and however spelled.
     pub(crate) discovered: u64,
-    /// Of them, pages that wait to be read.
+    /// Of them, pages that wait to be read: a page the crawl began and
+    /// that waits for its site or its visitor included.
     pub(crate) waiting: u64,
-    /// Pages being read now.
+    /// Pages being read now: in the scheduler for their visitor or being
+    /// fetched.
     pub(crate) fetching: u64,
     /// Pages read.
     pub(crate) fetched: u64,
@@ -556,7 +558,9 @@ pub(crate) struct CrawlView {
     /// `too_deep`, `denied`, `not_allowed`, `not_a_page` (a file),
     /// `hidden` (no reader can see the link), `already_read` (another
     /// address redirected there), `ssrf_denied`, `robots_denied` (the
-    /// site's `robots.txt` disallows it and its policy keeps to the file).
+    /// site's `robots.txt` disallows it and its policy keeps to the file),
+    /// `invalid_url` (no request can be made for it: longer than 8192
+    /// bytes).
     #[schema(value_type = FreeForm, example = json!({ "too_deep": 12, "hidden": 1 }))]
     pub(crate) skipped: BTreeMap<String, u64>,
     /// Addresses found after the crawl knew `crawl.max_frontier` of them:
@@ -568,7 +572,9 @@ pub(crate) struct CrawlView {
     pub(crate) near_duplicates: u64,
     /// The depth of the deepest page read.
     pub(crate) depth_reached: u32,
-    /// Pages asked of the sites so far: what `max_pages` counts.
+    /// Pages asked of the sites so far: what `max_pages` counts. A page
+    /// that waits for its site or its visitor is counted once it goes to
+    /// the scheduler again.
     pub(crate) pages: u32,
     /// The most pages the crawl asks for.
     pub(crate) max_pages: u32,
@@ -586,11 +592,14 @@ pub(crate) struct CrawlView {
 }
 
 impl CrawlView {
-    /// Takes the counters of the frontier as it stands.
-    pub(crate) fn count(&mut self, counts: &Counts) {
+    /// Takes the counters of the frontier as it stands. `again` pages the
+    /// crawl began wait to go into the scheduler again: they are waiting,
+    /// not being read, and not asked of a site yet (F139).
+    pub(crate) fn count(&mut self, counts: &Counts, again: u64) {
+        let again = again.min(counts.reading);
         self.discovered = counts.discovered;
-        self.waiting = counts.waiting;
-        self.fetching = counts.reading;
+        self.waiting = counts.waiting + again;
+        self.fetching = counts.reading - again;
         self.fetched = counts.read;
         self.failed = counts.failed;
         self.skipped = counts
@@ -602,7 +611,9 @@ impl CrawlView {
         self.duplicates = counts.duplicates;
         self.near_duplicates = counts.near_duplicates;
         self.depth_reached = counts.depth_reached;
-        self.pages = counts.begun;
+        self.pages = counts
+            .begun
+            .saturating_sub(u32::try_from(again).unwrap_or(u32::MAX));
     }
 }
 

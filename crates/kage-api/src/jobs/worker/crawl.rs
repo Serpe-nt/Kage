@@ -498,7 +498,13 @@ impl Crawl {
                     .increment(count - before);
             }
         }
-        self.kept.progress.count(&counts);
+        // A page that waits to go into the scheduler again (its site or its
+        // visitor holds it) is not being read, and nothing was asked of the
+        // site for it yet (F139).
+        let again = self.again.values().map(VecDeque::len).sum::<usize>();
+        self.kept
+            .progress
+            .count(&counts, u64::try_from(again).unwrap_or(u64::MAX));
         self.kept.progress.max_pages = self.rules.limits.max_pages;
         self.kept.progress.max_depth = self.rules.scope.max_depth();
         let kept = serde_json::to_value(&self.kept).unwrap_or(Value::Null);
@@ -768,6 +774,15 @@ impl Crawl {
             };
             // The address as the page whose link is followed has it.
             let url = pick.url.clone();
+            // An address no request can be made for is no page of the
+            // crawl: no item, no page of the budget, counted as skipped
+            // (F139: it failed `invalid_url` and took a page of
+            // `max_pages` without one request).
+            if url.as_str().len() > crate::fetch::request::MAX_URL_BYTES {
+                self.frontier.unrequestable(pick.entry);
+                self.persist(runner).await?;
+                continue;
+            }
             if guard(&url, ssrf, runner.work.state.resolver())
                 .await
                 .is_err()
@@ -1061,11 +1076,11 @@ impl Crawl {
             self.scouting.insert(site.clone());
             self.held.remove(&site);
             let work = runner.work.clone();
-            let stop = runner.stop.subscribe();
+            let signals = (runner.stop.subscribe(), None);
             set.spawn(async move {
                 let _place = place;
                 let end = match work.spend_page().await {
-                    Ok(()) => work.fetch(RequestId::new(), order, None, stop).await,
+                    Ok(()) => work.fetch(RequestId::new(), order, None, signals).await,
                     Err(end) => end,
                 };
                 Back::Sitemap {

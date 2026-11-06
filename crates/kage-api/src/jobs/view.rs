@@ -133,7 +133,9 @@ pub(crate) struct PausedView {
     pub(crate) until: Option<DateTime<Utc>>,
 }
 
-/// One event on its way to the job's webhook.
+/// One event on its way to the job's webhook: one row per event, with how
+/// many attempts it took and what the last one came to. Every attempt is
+/// kept in the store.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub(crate) struct DeliveryView {
     /// The event's id, which the receiver sees as `X-Kage-Delivery`.

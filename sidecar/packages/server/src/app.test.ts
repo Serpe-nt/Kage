@@ -13,7 +13,7 @@ import {
   type PageResult,
 } from '@kage/contract';
 import { EngineError, createStubEngine } from '@kage/engine-core';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   FLOW_SLACK_MS,
@@ -356,6 +356,48 @@ describe('operations on a context', () => {
     expect(
       (await post(app, `/v1/contexts/${id}/navigate`, exampleOf('NavigateRequest'))).statusCode,
     ).toBe(200);
+  });
+
+  it('tells a flow whose caller hung up to stop before its next step (F175)', async () => {
+    const { app, engine } = await start();
+    const id = await open(app);
+    let told: AbortSignal | undefined;
+    engine.onFlow = (env) => {
+      told = env.signal;
+      // The engine's executor stops before its next step; here the flow
+      // ends when it is told to.
+      return new Promise<void>((resolve) => {
+        env.signal?.addEventListener('abort', () => {
+          resolve();
+        });
+      });
+    };
+    const address = await app.server.listen({ port: 0, host: '127.0.0.1' });
+    const caller = new AbortController();
+    const answer = await fetch(`${address}/v1/contexts/${id}/flow`, {
+      method: 'POST',
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      body: JSON.stringify(exampleOf('FlowRequest')),
+      signal: caller.signal,
+    });
+    expect(answer.status).toBe(200);
+    await vi.waitFor(() => {
+      expect(told).toBeDefined();
+    });
+    expect(told?.aborted).toBe(false);
+    // Kage's cancel of the flow's job hangs up.
+    caller.abort();
+    await vi.waitFor(() => {
+      expect(told?.aborted).toBe(true);
+    });
+    // A flow its caller waited for to the end is never told to stop.
+    engine.onFlow = (env) => {
+      told = env.signal;
+      return Promise.resolve();
+    };
+    const whole = await post(app, `/v1/contexts/${id}/flow`, exampleOf('FlowRequest'));
+    expect(whole.statusCode).toBe(200);
+    expect(told?.aborted).toBe(false);
   });
 
   it('streams a flow as one line of JSON per event, after validating it', async () => {

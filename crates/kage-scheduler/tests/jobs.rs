@@ -656,13 +656,18 @@ async fn a_cancel_reaches_a_fetch_carried_on_as_a_job_while_it_waits() {
     let Synchronous::Overflowed(running) = world.pipeline.fetch_sync(behind).await.unwrap() else {
         panic!("it waits for the persona past the wall time");
     };
-    assert_eq!(world.scheduler.depth(Priority::Sync), 1);
+    // It waits as a job's from now on: no synchronous request's place
+    // before the jobs (F130).
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert_eq!(world.scheduler.depth(Priority::Sync), 0);
+    assert_eq!(world.scheduler.depth(Priority::Job), 1);
     let request = running.request;
 
     running.canceller().cancel();
     let stopped = running.wait().await.unwrap();
     assert!(matches!(stopped, JobFetch::Stopped), "{stopped:?}");
     assert_eq!(world.scheduler.depth(Priority::Sync), 0);
+    assert_eq!(world.scheduler.depth(Priority::Job), 0);
     assert_eq!(world.script.urls(), ["https://slow.example/a"]);
     // Nothing is concluded: the job ends the request with its item.
     assert!(
@@ -673,5 +678,124 @@ async fn a_cancel_reaches_a_fetch_carried_on_as_a_job_while_it_waits() {
             .all(|record| record.request_id != request)
     );
     holder.abort();
+    world.shut_down().await;
+}
+
+/// A synchronous fetch at level 2 of `url`.
+fn sync_page(url: &str) -> FetchOrder {
+    FetchOrder {
+        level: Level::Human,
+        ..FetchOrder::get(Url::parse(url).unwrap(), Priority::Sync)
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_synchronous_fetch_whose_caller_hangs_up_leaves_the_queue() {
+    // F128 (sched-02): one persona, busy with a long page. A second fetch
+    // waits for it, and its caller hangs up within the wall time: the
+    // work leaves the queue at once, nothing is asked of the site for it,
+    // and its request ends `cancelled`. It used to be asked for long
+    // after its client had gone, past the key's `max_concurrent`.
+    let mut world = World::with(1, false, DEFAULT_DOMAINS, &[]);
+    world.script.takes(Duration::from_secs(60));
+    let holder = {
+        let pipeline = world.pipeline.clone();
+        tokio::spawn(async move { pipeline.fetch(sync_page("https://slow.example/a")).await })
+    };
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let behind = world
+        .pipeline
+        .fetch_sync(sync_page("https://slow.example/b"));
+    // The caller gives up after ten seconds: the future is dropped.
+    assert!(
+        tokio::time::timeout(Duration::from_secs(10), behind)
+            .await
+            .is_err()
+    );
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert_eq!(world.scheduler.depth(Priority::Sync), 0);
+    assert_eq!(world.scheduler.depth(Priority::Job), 0);
+    let ended: Vec<_> = world
+        .backend
+        .records()
+        .into_iter()
+        .filter(|record| record.reason.as_deref() == Some("cancelled"))
+        .collect();
+    assert_eq!(ended.len(), 1, "{ended:?}");
+    assert_eq!(ended[0].outcome, Outcome::ProviderError);
+    assert!(
+        world
+            .backend
+            .attempts()
+            .iter()
+            .all(|attempt| attempt.request_id != ended[0].request_id)
+    );
+
+    // The page under way is finished, and nothing follows it.
+    let first = holder.await.unwrap().unwrap();
+    assert_eq!(first.outcome, Outcome::Ok);
+    tokio::time::sleep(Duration::from_mins(5)).await;
+    assert_eq!(world.script.urls(), ["https://slow.example/a"]);
+
+    // A caller that hangs up while its page is being fetched does not cut
+    // it: the page ends with what the site said.
+    world.script.takes(Duration::from_secs(30));
+    let reading = world
+        .pipeline
+        .fetch_sync(sync_page("https://slow.example/c"));
+    assert!(
+        tokio::time::timeout(Duration::from_secs(10), reading)
+            .await
+            .is_err()
+    );
+    tokio::time::sleep(Duration::from_mins(1)).await;
+    assert_eq!(
+        world.script.urls(),
+        ["https://slow.example/a", "https://slow.example/c"]
+    );
+    let kept = world
+        .backend
+        .records()
+        .into_iter()
+        .filter(|record| record.outcome == Outcome::Ok)
+        .count();
+    assert_eq!(kept, 2);
+    world.shut_down().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_carried_fetch_nobody_can_serve_within_a_jobs_patience_is_told_when() {
+    // F130 (sched-08): every persona cools on the site for two hours. A
+    // synchronous fetch waits its wall time and is carried on as a job;
+    // as a job's page it is told when somebody can read it, so that its
+    // job says `paused` with the reason and the moment, instead of
+    // `running` for as long as it waits.
+    let mut world = World::with(2, false, DEFAULT_DOMAINS, &[]);
+    let back = world.now() + Span::hours(2);
+    for number in 0..2 {
+        world
+            .backend
+            .with_domain_state(common::id(number), "cool.example", |state| {
+                state.cooldown_until = Some(back);
+            });
+    }
+    let Synchronous::Overflowed(running) = world
+        .pipeline
+        .fetch_sync(sync_page("https://cool.example/a"))
+        .await
+        .unwrap()
+    else {
+        panic!("nobody can read it within the wall time");
+    };
+    let waiting = tokio::time::timeout(Duration::from_secs(60), running.wait())
+        .await
+        .expect("a carried fetch is told when instead of waiting for hours")
+        .unwrap();
+    let waiting = deferred(waiting);
+    assert_eq!(waiting.reason, Refusal::NoPersona);
+    assert_eq!(waiting.retry_at, Some(back));
+    assert_eq!(world.scheduler.depth(Priority::Sync), 0);
+    assert_eq!(world.scheduler.depth(Priority::Job), 0);
+    assert_eq!(world.script.urls(), Vec::<String>::new());
     world.shut_down().await;
 }

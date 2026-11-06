@@ -260,7 +260,9 @@ pub(crate) async fn observe(
         .extensions_mut()
         .insert(BodyDeadline(state.config().server.body_read_timeout.get()));
 
-    crate::metrics::in_flight(1.0);
+    // Out of flight when the answer is made, and also when the client
+    // hangs up first and this future is dropped (F128).
+    let in_flight = crate::metrics::InFlight::begin();
     let refused = refused_at_the_door(&request, &state.config().server);
     let mut response = if let Some(error) = refused {
         crate::metrics::refusal(error.code().as_str());
@@ -269,7 +271,7 @@ pub(crate) async fn observe(
         let response = next.run(request).instrument(span.clone()).await;
         as_problem(response).await
     };
-    crate::metrics::in_flight(-1.0);
+    drop(in_flight);
     let status = response.status();
     span.record("status", status.as_u16());
     if status.is_server_error() {
