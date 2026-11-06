@@ -6,8 +6,6 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [2.0.3] - 2026-11-06
-
 ### Fixed
 
 - **One server per database (F174).** Kage is single-instance (ADR 0005):
@@ -74,6 +72,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   site (F187),** as a flow does since F101: the persona cools there and
   that site's breaker counts it; the site that only redirected is left as
   it was (QA round two, flows-03).
+
+## [2.0.3] - 2026-11-06
+
+### Fixed
+
 - **A proxy that comes back on an address a dead proxy once had keeps its
   persona (F177).** The shared-exit check compares a probe with the
   latest probes of the other live proxies that read an address; a proxy
