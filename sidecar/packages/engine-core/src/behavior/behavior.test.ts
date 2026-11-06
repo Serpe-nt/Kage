@@ -325,6 +325,43 @@ describe('typing', () => {
     expect(plan.actions.filter((action) => action.key === 'AltGraph')).toHaveLength(2);
   });
 
+  it('lets a key go before it goes down again: a doubled letter is two presses (F202)', () => {
+    // A key pressed while it is down sends nothing on a real keyboard, and
+    // the X display drops such a press: `hello` arrived as `helo`.
+    const doubled = 'Hello, Mississippi! Lloyd paid 2000 for aaa';
+    for (const each of SEEDS) {
+      const hand = motorProfile(each);
+      for (const typos of [false, true]) {
+        const plan = planTyping(doubled, usLayout, hand, stream('doubled', each), { typos });
+        const down = new Map<string, number>();
+        const typed: string[] = [];
+        for (const action of plan.actions) {
+          if (action.key === 'Shift' || action.key === 'AltGraph') {
+            continue;
+          }
+          // A letter and its capital are one key.
+          const key = action.key.toLowerCase();
+          const held = down.get(key) ?? 0;
+          if (action.action === 'down') {
+            expect(held, `${action.key} at ${action.t} ms`).toBe(0);
+            if (action.key === 'Backspace') {
+              typed.pop();
+            } else {
+              typed.push(action.key);
+            }
+          }
+          down.set(key, held + (action.action === 'down' ? 1 : -1));
+        }
+        expect(typed.join('')).toBe(doubled);
+        // The second press waits for the first to come up, and stays a typist's.
+        for (const interval of keyIntervals(plan.actions)) {
+          expect(interval).toBeGreaterThanOrEqual(HUMAN_BOUNDS.keyIntervalMs[0] - 0.11);
+          expect(interval).toBeLessThanOrEqual(HUMAN_BOUNDS.keyIntervalMs[1] + 0.11);
+        }
+      }
+    }
+  });
+
   it('makes a typo now and then when asked, notices it, and takes it back', () => {
     const clumsy = { ...profile, typing: { ...profile.typing, typoRate: 0.2 } };
     const plan = planTyping(text.repeat(3), usLayout, clumsy, stream('typos'), { typos: true });

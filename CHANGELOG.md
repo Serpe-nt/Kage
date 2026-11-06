@@ -123,6 +123,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unattested. Each image is now pushed by digest only, and a `tags` job
   tags both once both were scanned, signed and attested, and checks that
   every tag names the signed digest.
+- **A doubled letter is typed as two presses (F202).** The behaviour
+  engine held a key 35 to 160 ms while the next press could come 60 ms
+  later, so the second press of a doubled letter came while the key was
+  still down, and the X display dropped it: `hello` arrived as `helo`
+  (about one same-key repeat in fourteen). A key is now up before it goes
+  down again: such a press waits until 15 to 45 ms after the release.
+  Holds are drawn as before and every other interval too; over 3000 plans
+  the mean interval moved from 147.2 to 147.7 ms (spec §10.4).
 
 ## [2.0.4] - 2026-11-07
 
