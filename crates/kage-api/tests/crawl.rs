@@ -1318,3 +1318,96 @@ async fn a_cancel_ends_the_pages_a_dead_worker_left_running() {
     work.stop().await;
     api.shut_down().await;
 }
+
+/// QA round one's crawl-06 (F120): a link the browser answers by saving a
+/// file ends its item with one request, by the reader, as the site's
+/// answer: no other persona types it, the reader stays the reader, and the
+/// next page is clicked from the tab, which still shows the page the link
+/// stands on.
+#[tokio::test]
+async fn a_link_answered_with_a_file_is_one_request_and_the_tab_stays() {
+    let mut api = Api::start_with(3, 149, BROWSER_FAST, quick).await;
+    let site = vec![leaf("/", &["/bin", "/after"]), leaf("/after", &[])];
+    show(&api, &site);
+    api.lab.chromium.with(|sidecar| {
+        // The sidecar's report of a click the browser answered by saving a
+        // file (its parity tests pin it): aborted, no status, no document,
+        // the click made and no entry report.
+        sidecar.pages.insert(
+            Api::url("/bin"),
+            json!({
+                "error": {
+                    "code": "aborted",
+                    "message": "the link led to no page: a download is starting, or the answer held no document",
+                    "net_error": null,
+                },
+                "status": null, "title": null, "headers": [], "dom_html": null, "raw_body": null,
+                "links": null,
+                "behavior": {
+                    "seed": "5f1c0e9a7b3d2468", "profile_id": "3451761c17e3a615", "entry": null, "dwell_ms": 0, "moves": 1,
+                    "positions": 10, "overshoots": 0, "clicks": 1, "notches": 0, "keys": 0,
+                    "typos": 0, "wanders": 0, "patience_ms": null, "scroll_reached": null,
+                    "scroll_ended_by": null,
+                },
+            }),
+        );
+    });
+    let token = api.key(&[Scope::Jobs, Scope::Crawl, Scope::Fetch]).await;
+    let body = json!({
+        "type": "crawl", "seeds": [Api::url("/")], "max_depth": 1, "defaults": { "level": 3 },
+    });
+    let reply = api.post(&token, "/v1/jobs", &body).await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.json());
+    let id = reply.json()["id"].as_str().unwrap().to_owned();
+    let work = api.work();
+    let done = api.job_until(&token, &id, ended).await;
+    assert_eq!(done["state"], "succeeded", "{done}");
+
+    let items = api.job_items(&token, &id).await;
+    assert_eq!(paths(&items), ["/", "/bin", "/after"]);
+    let file = items.iter().find(|item| path_of(item) == "/bin").unwrap();
+    assert_eq!(
+        (&file["state"], &file["outcome"], &file["error"]),
+        (&json!("succeeded"), &json!("ok"), &Value::Null),
+        "{file}"
+    );
+    let result = api
+        .get(
+            &token,
+            &format!("/v1/results/{}", file["request_id"].as_str().unwrap()),
+        )
+        .await
+        .json();
+    assert_eq!(result["reason"], "download", "{result}");
+    assert_eq!(result["attempts"].as_array().unwrap().len(), 1, "{result}");
+    // One request for the file, by the reader; no other persona typed it.
+    let navigations = api.lab.chromium.with(|sidecar| sidecar.navigated.clone());
+    let to_file: Vec<&Value> = navigations
+        .iter()
+        .filter(|asked| asked["url"] == Api::url("/bin"))
+        .collect();
+    assert_eq!(to_file.len(), 1, "{to_file:?}");
+    let reader = personas_of(&api, items[0]["request_id"].as_str().unwrap()).await;
+    assert_eq!(
+        personas_of(&api, file["request_id"].as_str().unwrap()).await,
+        reader
+    );
+    // The page after it is clicked from the page the tab still shows (the
+    // lab's browser keeps the file as an entry of its tab, where a real one
+    // stays on the page: it goes back one), never typed.
+    let after = items.iter().find(|item| path_of(item) == "/after").unwrap();
+    assert_ne!(after["crawl"]["reached"], "typed", "{after}");
+    let asked_after = navigations
+        .iter()
+        .find(|asked| asked["url"] == Api::url("/after"))
+        .unwrap();
+    assert_eq!(asked_after["behavior"]["entry"]["strategy"], "link");
+    assert_eq!(asked_after["behavior"]["entry"]["from_url"], Api::url("/"));
+    assert_eq!(
+        personas_of(&api, after["request_id"].as_str().unwrap()).await,
+        reader
+    );
+    assert_eq!(done["crawl"]["reached"]["typed"], 1, "{done}");
+    work.stop().await;
+    api.shut_down().await;
+}

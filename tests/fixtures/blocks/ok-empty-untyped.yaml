@@ -1,0 +1,13 @@
+synthetic: true
+source: >-
+  Hand-written negative case (policy-09; F116). A 200 with no body and no
+  Content-Type: a browser shows an empty document, as it shows any empty
+  file, and level 0 reads it alike: the site's answer, no block.
+observation:
+  render: http
+  status: 200
+  url: https://api.harbour.example/ping
+  headers: []
+  body: ""
+expect:
+  outcome: ok

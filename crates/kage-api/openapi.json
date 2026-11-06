@@ -7198,7 +7198,7 @@
           },
           "state": {
             "type": "string",
-            "description": "`waiting`, `read` (a list of pages), `index` (a list of sitemaps),\n`missing` (the site has none there), `sitemap_unreadable` (the\nscout's browser cannot show what it is: a gzipped file in Chrome,\nor no sitemap at all), `failed` (the request did not get through),\n`no_scout` (no persona but the site's reader could have asked: it\nwas not asked for), or `not_read` (the crawl ended first, or the\nsite has more files than `crawl.max_sitemaps`).",
+            "description": "`waiting`, `read` (a list of pages), `index` (a list of sitemaps),\n`missing` (the site has none there), `sitemap_unreadable` (the\nscout's browser cannot show what it is: a gzipped file in Chrome,\nor no sitemap at all), `failed` (the request did not get through),\n`no_scout` (no persona but the site's reader could have asked: it\nwas not asked for), `robots_denied` (the site's `robots.txt`\ndisallows it under `enforce`: it was not asked for), or `not_read`\n(the crawl ended first, or the site has more files than\n`crawl.max_sitemaps`).",
             "example": "read"
           },
           "url": {

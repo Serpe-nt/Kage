@@ -144,6 +144,23 @@ export class DocumentRequests {
   }
 
   /**
+   * Whether an answer to the main frame's document request is a file to
+   * save (`Content-Disposition: attachment`): the tab shows no page of it.
+   * Over plain `http` Chrome holds such a download for the person to allow
+   * and the driver hears of no download at all, so this answer is all that
+   * says the link led to a file (F120).
+   */
+  savesFile(event: DocumentAnswered): boolean {
+    if (this.latest?.id !== event.requestId || event.type !== 'Document') {
+      return false;
+    }
+    return Object.entries(event.response.headers).some(
+      ([name, value]) =>
+        name.toLowerCase() === 'content-disposition' && /^\s*attachment\b/i.test(value),
+    );
+  }
+
+  /**
    * The head the tab shows for the document at `url`, where Chrome
    * revalidated a page it kept and the network answered `304` (F178): the
    * kept response, updated by the 304's fields, as the debugger announced

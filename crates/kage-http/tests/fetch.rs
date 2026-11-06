@@ -1266,6 +1266,25 @@ async fn failures_of_the_proxy_the_tunnel_and_the_clock_are_told_apart() {
     // The password is in no message.
     assert!(!error.to_string().contains("wrong"));
 
+    // QA round one's policy-11 (F143): a site's own 407 over plain http,
+    // through a proxy that takes the login, is the site's answer: it has
+    // no Proxy-Authenticate, which a proxy that asks sends. It keeps its
+    // status, and nothing is said of the proxy.
+    page(
+        &world.site,
+        "/says-407",
+        ResponseTemplate::new(407)
+            .set_body_string("<html><body>A page that says 407</body></html>"),
+    )
+    .await;
+    let right = factory.ephemeral(&chrome, &world.proxy.endpoint()).unwrap();
+    let fetched = right
+        .fetch(&get("http://site.kage.test/says-407"))
+        .await
+        .unwrap();
+    assert_eq!(fetched.status, 407);
+    assert!(fetched.text().contains("A page that says 407"));
+
     // A target the proxy cannot reach: the tunnel is refused; a plain
     // request gets the proxy's own answer.
     let client = world.chrome();

@@ -341,6 +341,17 @@ strategies are described in `engine-firefox.md` and hold for both engines.
 On chromium a wheel notch scrolls 120 px, and two notches within one frame
 reach a page as one wheel event of twice the size.
 
+A link (or a typed address) answered with a file to save is no page, and
+the sidecar ends the click the moment Chrome begins to save it (F120): the
+driver reports the file's answer like a page's, and the click used to wait
+for a `load` that a download never fires, until the request's budget ran
+out (60 s by default). Over plain `http` Chrome holds the download for the
+person to allow and the driver hears of no download at all; the debugger's
+answer for the main frame (`Content-Disposition: attachment`) says it was a
+file there. The result is `ok` with the reason `download` (fetching.md).
+Nothing is cancelled: the browser saves the file as it would for a person,
+and it goes with the context.
+
 ## A page that stops the engine
 
 A page can stop answering the reads of the engine: its script never yields,

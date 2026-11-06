@@ -1,0 +1,18 @@
+synthetic: true
+source: >-
+  Hand-written negative case (jobs-02; F86, F116). A flow's screenshot of
+  an ordinary page: captured without the document, so nothing is judged
+  of what was not read.
+observation:
+  render: browser
+  status: 200
+  url: https://www.harbour.example/timetable
+  headers:
+    - { name: content-type, value: "text/html; charset=utf-8" }
+  document: false
+  browser:
+    script_hosts: []
+    iframe_hosts: []
+  body: ""
+expect:
+  outcome: ok

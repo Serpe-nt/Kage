@@ -128,9 +128,44 @@ pub struct Observation {
     /// http path.
     #[serde(default)]
     pub body: String,
+    /// Whether the answer has a document to judge. False for one that has
+    /// none whatever its status says: on the http path the answer to a
+    /// `HEAD` and a 204, 205 or 304 ([`without_document`]); in a browser a
+    /// 204 or 205 and a capture made without the document (a flow's
+    /// screenshot), while a 304 shows the page the browser kept. The rules
+    /// that read the body (`body`,
+    /// `body_bytes`, `visible_text`) judge nothing then: an absent
+    /// document is no empty one (F86, F116). True unless said.
+    #[serde(default = "has_document")]
+    pub document: bool,
     /// Browser signals; `None` on the http path.
     #[serde(default)]
     pub browser: Option<BrowserSignals>,
+}
+
+const fn has_document() -> bool {
+    true
+}
+
+/// Whether a status is one whose answer has no document whatever is sent
+/// with it: 204 No Content, 205 Reset Content, 304 Not Modified (RFC 9110
+/// §15.3.5, §15.3.6, §15.4.5). A browser shows nothing new for it.
+pub const fn without_document(status: u16) -> bool {
+    matches!(status, 204 | 205 | 304)
+}
+
+/// The rules of a signature file that block and are not bounded (F125),
+/// by id.
+#[cfg(test)]
+fn unbounded_rules(text: &str) -> Vec<String> {
+    let file: SignatureFile = crate::yaml::from_str(text).unwrap_or_else(|error| {
+        panic!("the signature file does not parse: {error}");
+    });
+    file.rules
+        .into_iter()
+        .filter(|rule| rule.outcome.is_block() && !bounded(&rule.when))
+        .map(|rule| rule.id)
+        .collect()
 }
 
 /// The classifier's verdict on one observation.
@@ -518,9 +553,11 @@ impl Condition {
                 }
                 found.is_some()
             }
-            Self::Body(pattern) => record(pattern.is_match(context.body), evidence, || {
-                format!("body:/{}/", pattern.source)
-            }),
+            Self::Body(pattern) => record(
+                context.observation.document && pattern.is_match(context.body),
+                evidence,
+                || format!("body:/{}/", pattern.source),
+            ),
             Self::Url(pattern) => {
                 record(pattern.is_match(&context.observation.url), evidence, || {
                     format!("url:/{}/", pattern.source)
@@ -547,16 +584,19 @@ impl Condition {
             Self::VisibleText(bounds) => {
                 let chars = context.visible_chars();
                 record(
-                    within(chars, bounds.min_chars, bounds.max_chars),
+                    context.observation.document
+                        && within(chars, bounds.min_chars, bounds.max_chars),
                     evidence,
                     || format!("visible_text_chars:{chars}"),
                 )
             }
             Self::BodyBytes(bounds) => {
                 let bytes = context.observation.body.len();
-                record(within(bytes, bounds.min, bounds.max), evidence, || {
-                    format!("body_bytes:{bytes}")
-                })
+                record(
+                    context.observation.document && within(bytes, bounds.min, bounds.max),
+                    evidence,
+                    || format!("body_bytes:{bytes}"),
+                )
             }
             Self::Render(render) => record(context.observation.render == *render, evidence, || {
                 format!("render:{render}")
@@ -602,6 +642,43 @@ fn check_bounds(name: &str, min: Option<usize>, max: Option<usize>) -> Result<()
             "`{name}`: minimum {min} is greater than maximum {max}"
         )),
         _ => Ok(()),
+    }
+}
+
+/// Whether a condition holds only where an ordinary page cannot hold it by
+/// what it says (F125): a status other than 200, a bound on the text left
+/// to read (`visible_text: { max_chars }`) or on the body
+/// (`body_bytes: { max }`), a header the site's front sets, or an
+/// interstitial the browser saw. A pattern in the body alone is none: a
+/// long article that quotes a vendor's block page holds it. `all` is
+/// bounded by any of its conditions, `any` by all of them, `not` by none.
+/// The shipped file is held to it by a test; an operator's own rules are
+/// the operator's.
+#[cfg(test)]
+fn bounded(condition: &ConditionSpec) -> bool {
+    match condition {
+        ConditionSpec::All(conditions) => conditions.iter().any(bounded),
+        ConditionSpec::Any(conditions) => conditions.iter().all(bounded),
+        ConditionSpec::Status(items) => {
+            let blocking =
+                |item: &StatusItem| status_range(item).is_ok_and(|range| !range.contains(&200));
+            match items {
+                OneOrMany::One(item) => blocking(item),
+                OneOrMany::Many(items) => items.iter().all(blocking),
+            }
+        }
+        ConditionSpec::VisibleText(bounds) => bounds.max_chars.is_some(),
+        ConditionSpec::BodyBytes(bounds) => bounds.max.is_some(),
+        ConditionSpec::Header(_)
+        | ConditionSpec::InterstitialText(_)
+        | ConditionSpec::Interstitial(_) => true,
+        ConditionSpec::Not(_)
+        | ConditionSpec::Cookie(_)
+        | ConditionSpec::Body(_)
+        | ConditionSpec::Url(_)
+        | ConditionSpec::ScriptHost(_)
+        | ConditionSpec::IframeHost(_)
+        | ConditionSpec::Render(_) => false,
     }
 }
 
@@ -1073,6 +1150,7 @@ hints:
             headers: Vec::new(),
             cookies: Vec::new(),
             body: body.to_owned(),
+            document: true,
             browser: None,
         }
     }

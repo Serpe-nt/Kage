@@ -66,7 +66,7 @@ use kage_browser::contract::{
 };
 use kage_browser::ssrf::DeniedHop;
 use kage_browser::{Navigation, navigation_bound, ssrf};
-use kage_core::classifier::{Classification, Observation};
+use kage_core::classifier::{Classification, Observation, without_document};
 use kage_core::config::{BrowserConfig, Config};
 use kage_core::domain::{Exit, Header, Level, Persona, Render, Timing};
 use kage_core::ids::{PersonaId, ProxyId, RequestId};
@@ -85,7 +85,9 @@ use kage_persona::{PersonaError, PersonaManager, Via};
 use url::Url;
 
 use crate::forwarder::{Caller, Denial, Denials, ForwarderEgress, Meter, PlainRoute};
-use crate::verdicts::{Verdicts, cookies_set, courtesy_of, page_failure, unanswered};
+use crate::verdicts::{
+    NoDocument, Verdicts, cookies_set, courtesy_of, no_document, page_failure, unanswered,
+};
 
 /// A scripted flow a browser attempt runs in place of loading one page
 /// (spec §10.5).
@@ -752,9 +754,10 @@ pub fn behavior_for(
     let dwell = wish
         .and_then(|wish| wish.dwell)
         .map(|median| draw_dwell(median, policy.min_dwell.get(), seed));
-    let referer_strategy = wish
-        .and_then(|wish| wish.referer_strategy)
-        .unwrap_or(policy.referer_strategy);
+    let referer_strategy = arrives_as(
+        wish.and_then(|wish| wish.referer_strategy)
+            .unwrap_or(policy.referer_strategy),
+    );
     let patience = browser.patience.draw(pace, seed);
     let options = BehaviorOptions {
         dwell: Some(if dwell.is_some() {
@@ -769,8 +772,6 @@ pub fn behavior_for(
             max_backs: None,
             strategy: match referer_strategy {
                 RefererStrategy::None => EntryStrategy::None,
-                // A search entry needs a results URL built from a
-                // template, and none is configured: a typed navigation.
                 RefererStrategy::Direct | RefererStrategy::SearchEngine => EntryStrategy::Direct,
             },
         }),
@@ -790,6 +791,18 @@ pub fn behavior_for(
         seed: *seed,
     };
     (options, applied)
+}
+
+/// How a visit arrives under the strategy a policy or a request names. A
+/// search entry needs a results page built from a template, and none can be
+/// configured yet (`policies/domains.yaml`): the visit is typed, and what
+/// applied says so, never `search_engine` for a visit no results page led
+/// to (F143).
+const fn arrives_as(strategy: RefererStrategy) -> RefererStrategy {
+    match strategy {
+        RefererStrategy::SearchEngine => RefererStrategy::Direct,
+        other => other,
+    }
 }
 
 /// The entry of a navigation that arrives from a page the persona has been
@@ -1499,6 +1512,7 @@ impl PathExecutor {
             headers: fetched.headers.clone(),
             cookies: cookies_set(&fetched.headers),
             body: fetched.text(),
+            document: job.method != http::Method::HEAD && !without_document(fetched.status),
             browser: None,
         });
         if classification.outcome.is_success()
@@ -1606,7 +1620,7 @@ impl PathExecutor {
         let mut reached = Reached::Typed;
         if !job.starts_visit
             && !has_referer
-            && job.policy.referer_strategy == RefererStrategy::Direct
+            && arrives_as(job.policy.referer_strategy) == RefererStrategy::Direct
         {
             // A later page of a visit arrives from a page before it: the
             // one that holds the link to it when the attempt names one,
@@ -1655,6 +1669,7 @@ impl PathExecutor {
             headers: fetched.headers.clone(),
             cookies: cookies_set(&fetched.headers),
             body: fetched.text(),
+            document: job.method != http::Method::HEAD && !without_document(fetched.status),
             browser: None,
         });
         if classification.outcome.is_success() {
@@ -1900,7 +1915,7 @@ impl PathExecutor {
                 .await
                 .map(|(page, behavior)| (page, behavior, FlowRun::default())),
         };
-        let (page, behavior, flow) = match loaded {
+        let (mut page, behavior, flow) = match loaded {
             Ok(loaded) => loaded,
             // The browser is in a state nobody knows, or was somewhere it
             // must not be: it is closed.
@@ -1910,12 +1925,29 @@ impl PathExecutor {
             }
         };
 
+        // An answer that holds no page (no content, a file the browser
+        // saved) is the site's: the document the tab still shows is not
+        // its, and nothing of it is kept or read (F116, F120).
+        let without_page = no_document(&page);
+        if without_page.is_some() {
+            page.dom_html = None;
+            page.links = None;
+            page.links_truncated = false;
+        }
+        // The bytes a browser handed over of a file it saved are the file's
+        // (Firefox: a gzipped sitemap is read from them); a 204's are none.
+        if without_page == Some(NoDocument::Empty) {
+            page.raw_body = None;
+        }
         let failure = page_failure(&page);
         let mut classification = self.verdicts.judge_page(&page);
         let mut reason = failure
             .as_ref()
             .filter(|_| !classification.outcome.is_block())
             .map(|failure| failure.reason.to_owned());
+        if without_page == Some(NoDocument::File) {
+            reason = Some("download".to_owned());
+        }
         let status = page.status.and_then(|status| u16::try_from(status).ok());
         let mut courtesy = match &failure {
             Some(failure) if !classification.outcome.is_block() => failure.courtesy,
@@ -2807,6 +2839,29 @@ mod tests {
             Duration::from_millis(slack_ms) + Duration::from_secs(5) <= super::BROWSER_GRACE,
             "the sidecar bounds a flow {slack_ms} ms past its budget, Kage waits {:?}",
             super::BROWSER_GRACE
+        );
+    }
+
+    /// QA round one's policy-10 (F143): a policy that names the search
+    /// engine strategy, which no results page can serve yet, gets a typed
+    /// visit, and what applied says `direct`, never `search_engine`.
+    #[test]
+    fn a_search_entry_that_cannot_be_made_is_typed_and_says_so() {
+        let browser = BrowserConfig::default();
+        let seed = Seed::from_u64(5);
+        let searched = policy("domains:\n  example.org: { referer_strategy: search_engine }\n");
+        assert_eq!(searched.referer_strategy, RefererStrategy::SearchEngine);
+        let (behavior, applied) = behavior_for(&searched, &browser, &seed, 1.0, None);
+        assert_eq!(behavior.entry.unwrap().strategy, EntryStrategy::Direct);
+        assert_eq!(applied.referer_strategy, RefererStrategy::Direct);
+        // The other strategies are what they say.
+        assert_eq!(
+            super::arrives_as(RefererStrategy::None),
+            RefererStrategy::None
+        );
+        assert_eq!(
+            super::arrives_as(RefererStrategy::Direct),
+            RefererStrategy::Direct
         );
     }
 

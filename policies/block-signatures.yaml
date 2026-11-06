@@ -39,6 +39,14 @@
 #   - A captcha widget blocks only when it is the page (almost no other text).
 #   - A soft block (status 200) needs an empty body, or little visible text
 #     together with a marker.
+#   - Every rule that blocks is bounded on every way it matches (F125): a
+#     status that is no 2xx, `visible_text: { max_chars }`, `body_bytes:
+#     { max }`, a header, or an interstitial the browser saw. A marker in the
+#     body alone is not: a long article that quotes a vendor's block page
+#     holds it. A test of this file fails when a rule is not.
+#   - A soft block judges a document: an answer that has none (a HEAD, a
+#     204, 205 or 304, a capture without the document) matches no `body`,
+#     `body_bytes` or `visible_text` condition (F116).
 #
 # Priorities: 90 explicit vendor header, 80-85 vendor page, 60 captcha wall,
 # 30 soft blocks, 10 status alone.
@@ -165,11 +173,15 @@ rules:
     outcome: challenge_failed
     confidence: 0.9
     priority: 85
-    description: Bot Manager's interstitial challenge page.
+    description: Bot Manager's interstitial challenge page, which says next to nothing.
     when:
-      any:
-        - body: 'id="sec-if-cpt-container"'
-        - body: '/_sec/cp_challenge/'
+      all:
+        - any:
+            - body: 'id="sec-if-cpt-container"'
+            - body: '/_sec/cp_challenge/'
+        - any:
+            - status: "400-599"
+            - visible_text: { max_chars: 500 }
 
   # --- DataDome ------------------------------------------------------------
   - id: datadome-hard-block
@@ -183,6 +195,9 @@ rules:
       all:
         - body: 'captcha-delivery\.com'
         - body: '[''"]t[''"]\s*:\s*[''"]bv[''"]'
+        - any:
+            - status: "400-599"
+            - visible_text: { max_chars: 600 }
 
   - id: datadome-interstitial
     vendor: datadome
@@ -195,6 +210,9 @@ rules:
       all:
         - body: 'captcha-delivery\.com'
         - body: '[''"]rt[''"]\s*:\s*[''"]i[''"]'
+        - any:
+            - status: "400-599"
+            - visible_text: { max_chars: 600 }
 
   - id: datadome-captcha
     vendor: datadome
@@ -212,6 +230,11 @@ rules:
                 - body: '[''"]rt[''"]\s*:\s*[''"]c[''"]'
             - body: '"url"\s*:\s*"https://geo\.captcha-delivery\.com/captcha/'
             - iframe_host: '(^|\.)captcha-delivery\.com$'
+        # A 200 is the captcha only when it is the page: the JSON answer or
+        # the wall says next to nothing.
+        - any:
+            - status: 403
+            - visible_text: { max_chars: 600 }
 
   # --- HUMAN (PerimeterX) --------------------------------------------------
   - id: human-press-and-hold
@@ -230,6 +253,11 @@ rules:
                 - body: 'id="px-captcha"'
                 - body: '"blockScript"\s*:'
                 - body: 'Access to this page has been denied'
+            # The block page says next to nothing; a shop that runs the
+            # sensor and sells a "Press & Hold" switch says a great deal.
+            - any:
+                - status: "400-599"
+                - visible_text: { max_chars: 600 }
         - interstitial_text: '(?i)press (&amp;|&|and) hold'
 
   # --- Kasada --------------------------------------------------------------
@@ -310,11 +338,12 @@ rules:
     outcome: forbidden
     confidence: 0.9
     priority: 85
-    description: BIG-IP ASM's block page with a support id.
+    description: BIG-IP ASM's block page with a support id, served with a 200 and next to no text.
     when:
       all:
         - body: 'The requested URL was rejected\. Please consult with your administrator'
         - body: '(?i)support id'
+        - visible_text: { max_chars: 400 }
 
   - id: f5-tspd-challenge
     vendor: f5_shape
@@ -366,14 +395,15 @@ rules:
     outcome: soft_block
     confidence: 0.7
     priority: 30
-    description: A response with no body at all that is HTML or declares no type.
+    description: >-
+      An HTML response with no body at all. One that declares no type is
+      no page a browser would call blank (it shows an empty document, as it
+      shows any empty file), and is the site's answer at every level (F116).
     when:
       all:
         - status: 200
         - body_bytes: { max: 0 }
-        - any:
-            - header: { name: content-type, regex: '(?i)text/html' }
-            - not: { header: content-type }
+        - header: { name: content-type, regex: '(?i)text/html' }
 
   - id: soft-js-required
     vendor: generic
@@ -403,13 +433,17 @@ rules:
     outcome: soft_block
     confidence: 0.6
     priority: 25
-    description: An HTML page that renders no text at all.
+    description: >-
+      An HTML page that renders no text at all. A page whose content is in
+      frames renders theirs: the frames' text is no text of the top
+      document, and a reader reads it (F116).
     when:
       all:
         - status: 200
         - header: { name: content-type, regex: '(?i)text/html' }
         - body_bytes: { min: 1 }
         - visible_text: { max_chars: 0 }
+        - not: { body: '(?i)<(iframe|frame|frameset)\b' }
 
   - id: soft-login-wall
     vendor: generic
