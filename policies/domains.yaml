@@ -92,7 +92,8 @@
 # The search_engine strategy needs a results URL for every visit. Kage will
 # build it from a template and a query when it schedules the visit (M7, M8);
 # the sidecar only ever gets the finished URL. No template is enabled, and
-# the key below does not exist yet. It is here to show what one looks like:
+# the key below does not exist yet: until it does, search_engine is a typed
+# visit, and a result says `direct`, what applied (F143). It is here to show what one looks like:
 #
 #   search_template: "https://duckduckgo.com/?q={query}"
 #

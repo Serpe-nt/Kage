@@ -649,7 +649,7 @@ scope besides `jobs`.
 | `max_pages` | 100 | Pages asked of the sites, a failed one included; at most `jobs.max_items`. |
 | `same_site_only` | true | A site is a registrable domain: `shop.example.org` and `www.example.org` are one. |
 | `use_sitemaps` | false | See below: a sitemap request is a tell. |
-| `defaults` | | What every page is fetched with: `level` (required), `include`, `pacing`, `behavior`, `persona`, … Not `url`, `session_id`, `method`, `body`, `request_kind`. At level 0 every page is typed, its links are read from the markup, and `robots.txt` and sitemaps are asked for by the plain client from the site's plain exit. |
+| `defaults` | | What every page is fetched with: `level` (required), `include`, `pacing`, `behavior`, `persona`, … Not `url`, `session_id`, `method`, `body`, `request_kind`. At level 0 every page is typed, its links are read from the markup of an HTML page (a JSON, XML or plain-text answer gives none, at any level), and `robots.txt` and sitemaps are asked for by the plain client from the site's plain exit. |
 | `visitors` | 1 | Personas that read one site at a time; at most the `domain_concurrency` of the pacing in force, refused beyond, and refused at level 0. |
 | `session_id` | | An open session: its persona reads every page. |
 
@@ -740,6 +740,8 @@ linked from nowhere, not as a habit.
   `enforce`, above), the crawl reads that file first, by the same scout,
   and takes the sitemaps it names in place of the guess `/sitemap.xml`.
   The file is listed with the sitemaps (`state: "read"`, or `missing`).
+  Under `enforce` a sitemap the file disallows is not asked for, the
+  guess or a named one: it is listed as `robots_denied`.
 - A scout the site turned away is not waited for: the files it could not
   ask for are `no_scout`, and the crawl reads on.
 

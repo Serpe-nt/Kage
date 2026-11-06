@@ -236,6 +236,17 @@ impl Fetched {
     }
 }
 
+/// Whether the answer to a plain `http://` request is the proxy's: a 407
+/// with the `Proxy-Authenticate` a proxy that asks for credentials sends
+/// (RFC 9110 §15.5.8, §11.7.1). A 407 without it is the site's own answer,
+/// returned as `ok` with its status like any other 4xx (spec §8.3; QA round
+/// one's policy-11, F143). Through a tunnel only the site answers.
+pub(crate) fn proxy_asked(url: &Url, status: StatusCode, headers: &http::HeaderMap) -> bool {
+    url.scheme() == "http"
+        && status == StatusCode::PROXY_AUTHENTICATION_REQUIRED
+        && headers.contains_key(http::header::PROXY_AUTHENTICATE)
+}
+
 /// The URLs of a fetch, hop by hop, with the checks its guard asks for.
 pub(crate) enum Trail {
     Guarded(RedirectChain),
@@ -904,8 +915,7 @@ impl HttpClient {
             };
         // A plain request goes to the proxy itself, which answers 407 when
         // it does not accept the login.
-        if url.scheme() == "http" && response.status() == StatusCode::PROXY_AUTHENTICATION_REQUIRED
-        {
+        if proxy_asked(url, response.status(), response.headers()) {
             return Err(HttpError::ProxyAuth);
         }
         Ok(Incoming {

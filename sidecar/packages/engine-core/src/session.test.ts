@@ -305,6 +305,16 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
         if (url.includes('fail')) {
           return Promise.reject(new Error('net::ERR_NAME_NOT_RESOLVED'));
         }
+        if (url.includes('saves-file')) {
+          // Chrome over plain http: the answer is a file it holds for the
+          // person, the driver says a download began, and the load never
+          // ends (F120).
+          emit('request', answer(url).request());
+          setTimeout(() => {
+            emit('download', { url: () => url });
+          }, 50);
+          return never;
+        }
         if (url.includes('ffrefused')) {
           // Firefox: the answer is seen, its own page shown, no `load`.
           const refusal = answer(url, 403);
@@ -570,6 +580,17 @@ describe('the tab a request runs in (F96)', () => {
     }
     return { steps, final };
   };
+
+  it('ends a load the browser turns into a download at once, in the driver’s words (F120)', async () => {
+    const { session: on } = session();
+    const began = Date.now();
+    const saved = await navigate(on, site('/saves-file'), { timeout_ms: 30_000 });
+    // The engines read the driver's words as `aborted`; Kage reads them as
+    // a file the site answered with.
+    expect(saved.error?.message).toContain('Download is starting');
+    expect(saved).toMatchObject({ dom_html: null, raw_body: null });
+    expect(Date.now() - began).toBeLessThan(5_000);
+  });
 
   it('starts every flow in a fresh tab: back at its start goes nowhere, on the second flow as on the first', async () => {
     const { session: on, driven, tabs } = session();

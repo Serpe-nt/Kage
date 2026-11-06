@@ -166,3 +166,33 @@ describe('the response the tab shows, as the debugger announced it (F178, F204)'
     expect(requests.replacedStatus('http://site.test/behind')).toBeNull();
   });
 });
+
+describe('a file the main frame was answered with (F120)', () => {
+  const answered = (requestId: string, headers: Record<string, string>, type = 'Document') => ({
+    requestId,
+    type,
+    response: { url: 'http://site.test/bin', status: 200, headers },
+  });
+
+  it('is the main frame’s document answered with an attachment, whatever the spelling', () => {
+    const requests = new DocumentRequests(MAIN);
+    requests.requested(asked('F', 'http://site.test/bin'));
+    expect(
+      requests.savesFile(answered('F', { 'Content-Disposition': 'Attachment; filename="x.bin"' })),
+    ).toBe(true);
+    expect(requests.savesFile(answered('F', { 'content-disposition': ' attachment' }))).toBe(true);
+  });
+
+  it('is never a page shown inline, another request, or another frame’s', () => {
+    const requests = new DocumentRequests(MAIN);
+    requests.requested(asked('P', 'http://site.test/page'));
+    expect(requests.savesFile(answered('P', { 'content-disposition': 'inline' }))).toBe(false);
+    expect(requests.savesFile(answered('P', {}))).toBe(false);
+    expect(requests.savesFile(answered('X', { 'content-disposition': 'attachment' }))).toBe(false);
+    expect(
+      requests.savesFile(answered('P', { 'content-disposition': 'attachment' }, 'Script')),
+    ).toBe(false);
+    requests.requested(asked('I', 'http://site.test/frame', false, 'FRAME'));
+    expect(requests.savesFile(answered('I', { 'content-disposition': 'attachment' }))).toBe(false);
+  });
+});

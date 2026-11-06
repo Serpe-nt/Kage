@@ -105,3 +105,11 @@ and must stay `ok`.
 | `ok-json-api.yaml` | synthetic | a short JSON body |
 | `ok-short-page.yaml` | synthetic | a short HTML page with no marker |
 | `ok-404.yaml` | synthetic | a 404, which is returned as it is |
+| `ok-article-quoting-f5-rejected.yaml` | synthetic | a long forum post that quotes BIG-IP ASM's block page (F125) |
+| `ok-article-quoting-akamai-challenge.yaml` | synthetic | a long post whose code sample names Bot Manager's challenge (F125) |
+| `ok-article-quoting-datadome.yaml` | synthetic | a long post whose code samples hold DataDome's response objects (F125) |
+| `ok-shop-press-and-hold-switch.yaml` | synthetic | HUMAN's sensor and a product called "Press & Hold" on a shop's page (F125) |
+| `ok-frames-page.yaml` | synthetic | a page whose content is in a frame: no blank page (F116) |
+| `ok-empty-untyped.yaml` | synthetic | an empty 200 of no type, read alike at every level (F116) |
+| `ok-head-without-document.yaml` | synthetic | the answer to a HEAD: no document to judge (F116) |
+| `ok-capture-without-document.yaml` | synthetic | a flow's screenshot, captured without the document (F86, F116) |

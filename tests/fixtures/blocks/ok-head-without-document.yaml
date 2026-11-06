@@ -1,0 +1,15 @@
+synthetic: true
+source: >-
+  Hand-written negative case (api-08; F116). The answer to a HEAD: a 200
+  that says it is HTML and has no body by definition. There is no document
+  to judge.
+observation:
+  render: http
+  status: 200
+  url: https://www.harbour.example/timetable
+  headers:
+    - { name: content-type, value: "text/html; charset=utf-8" }
+  document: false
+  body: ""
+expect:
+  outcome: ok

@@ -176,6 +176,16 @@ export interface DriverPage {
   on(event: 'request', listener: (request: DriverRequest) => void): unknown;
   on(event: 'response', listener: (response: DriverResponse) => void): unknown;
   on(event: 'domcontentloaded' | 'load' | 'crash', listener: () => void): unknown;
+  on(event: 'download', listener: (download: DriverDownload) => void): unknown;
+}
+
+/**
+ * A file the browser began to save in place of showing a page. The session
+ * only counts it: the browser saves it as it would for a person, and it
+ * goes with the context.
+ */
+export interface DriverDownload {
+  url(): string;
 }
 
 /**
@@ -1027,6 +1037,13 @@ export class PageSession {
    */
   private documentsAsked = 0;
   /**
+   * How many files the browser began to save from this tab. A click whose
+   * answer is a file asks for a document that never comes in Chrome (the
+   * driver does not always report the download's response as a page's):
+   * the download itself says the click led to no page (F120).
+   */
+  private downloads = 0;
+  /**
    * The addresses of the documents this tab was answered with, as
    * {@link plainAddress} writes them, the latest last: what the tab can
    * hold at all. Kept short; a page from long ago is out of reach anyway.
@@ -1191,6 +1208,11 @@ export class PageSession {
     page.on('response', (response) => {
       if (live()) {
         this.onResponse(response);
+      }
+    });
+    page.on('download', () => {
+      if (live()) {
+        this.downloads += 1;
       }
     });
     page.on('domcontentloaded', () => {
@@ -1403,6 +1425,7 @@ export class PageSession {
     options: { waitUntil: LoadState; timeout: number },
   ): Promise<DriverResponse | null | typeof SHOWS_ERROR_PAGE> {
     const page = this.page;
+    const downloads = this.downloads;
     const going = page.goto(url, options);
     let ended = false;
     const done = () => {
@@ -1414,6 +1437,13 @@ export class PageSession {
     const watching = async (): Promise<typeof SHOWS_ERROR_PAGE> => {
       while (!settled()) {
         await sleep(ERROR_PAGE_LOOK_MS);
+        if (!settled() && this.downloads !== downloads) {
+          // The address answered with a file the browser saves: no page
+          // will come, and Chrome holds a plain `http` download for the
+          // person without ending the load (F120). The driver's own words
+          // for a load that turns into a download.
+          throw new Error('page.goto: Download is starting');
+        }
         if (settled() || page !== this.page || !this.mayShowErrorPage()) {
           continue;
         }
@@ -1835,6 +1865,7 @@ export class PageSession {
     until: WaitUntil,
     deadline: number,
     idle: () => boolean = () => false,
+    saving: () => boolean = () => false,
   ) {
     const limit = Math.min(deadline, Date.now() + CLICK_NAVIGATION_MS);
     while (this.document.response === previous || this.document.response === null) {
@@ -1845,7 +1876,28 @@ export class PageSession {
     }
     const state = WAIT_UNTIL[until];
     if (state !== 'commit') {
-      await this.page.waitForLoadState(state, { timeout: Math.max(1, deadline - Date.now()) });
+      // The driver reports the answer of a download like a page's, and a
+      // download fires no `load`: a file the browser began to save ends the
+      // wait (F120; Chrome waited out the request's budget).
+      let loaded = false;
+      const load = this.page
+        .waitForLoadState(state, { timeout: Math.max(1, deadline - Date.now()) })
+        .finally(() => {
+          loaded = true;
+        });
+      // Read anew at every look: the load ends while the look waits.
+      const ended = (): boolean => loaded;
+      const file = (async () => {
+        while (!ended() && !saving()) {
+          await sleep(40);
+        }
+      })();
+      await Promise.race([load, file]);
+      if (saving()) {
+        load.catch(() => undefined);
+        return false;
+      }
+      await load;
     }
     return true;
   }
@@ -1960,17 +2012,21 @@ export class PageSession {
       this.freshOnNavigation = 'never';
       return null;
     }
+    const downloads = this.downloads;
     await human.pressButton();
     const clicked = Date.now();
     // A click is watched for a moment whatever the budget says: whether it
     // asked for a document decides between a link that leads nowhere and a
-    // page that is late.
+    // page that is late. A file the browser began to save ends the watch at
+    // once: no page will come (F120).
     const limit = Math.max(deadline, clicked + SOFT_NAVIGATION_MS);
+    const saving = () => this.downloads !== downloads;
     const idle = () =>
-      Date.now() > clicked + SOFT_NAVIGATION_MS &&
-      this.documentsAsked === asked &&
-      this.page.url() !== before;
-    const arrived = await this.afterClick(previous, until, limit, idle).finally(() => {
+      saving() ||
+      (Date.now() > clicked + SOFT_NAVIGATION_MS &&
+        this.documentsAsked === asked &&
+        this.page.url() !== before);
+    const arrived = await this.afterClick(previous, until, limit, idle, saving).finally(() => {
       if (this.document.response !== null && this.document.response !== previous) {
         // Times of the result count from the click: that is when the
         // target was asked for. Also for a page that came and did not
@@ -1979,6 +2035,11 @@ export class PageSession {
       }
     });
     if (!arrived) {
+      if (saving()) {
+        // The answer was a file: the page that was open stays.
+        this.document = newDocument();
+        throw new NoPage();
+      }
       if (this.documentsAsked !== asked) {
         throw this.notCome('the page the link leads to did not answer in time');
       }

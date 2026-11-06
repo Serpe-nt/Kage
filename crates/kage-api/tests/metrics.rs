@@ -94,6 +94,35 @@ async fn metrics_expose_the_series_of_the_specification() {
     )
     .await;
     assert_eq!(plain.json()["outcome"], "ok", "{:?}", plain.json());
+    // An origin's own bare 403 behind Cloudflare's server header (QA round
+    // one's policy-07, F143): the result says `generic`, and so does the
+    // label, not the vendor whose marker the answer carries.
+    Mock::given(method("GET"))
+        .and(path("/origin-403"))
+        .respond_with(
+            ResponseTemplate::new(403)
+                .insert_header("server", "cloudflare")
+                .insert_header("content-type", "text/html")
+                .set_body_string("<html><body><p>No.</p></body></html>"),
+        )
+        .mount(&api.lab.site)
+        .await;
+    let refused = send(
+        Method::POST,
+        "/v1/fetch",
+        Some(&fetch),
+        Some(json!({ "url": Api::url("/origin-403"), "level": 0, "max_retries": 0 })),
+    )
+    .await;
+    assert_eq!(
+        (
+            &refused.json()["outcome"],
+            &refused.json()["block"]["vendor"]
+        ),
+        (&json!("forbidden"), &json!("generic")),
+        "{:?}",
+        refused.json()
+    );
     let page = send(
         Method::POST,
         "/v1/fetch",
@@ -156,11 +185,14 @@ async fn metrics_expose_the_series_of_the_specification() {
         Mock::given(method("GET"))
             .and(path(at))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header("content-type", "text/html; charset=utf-8")
-                    .set_body_string(format!(
+                // A page the site says is HTML: `set_body_string` would say
+                // text/plain, which a crawl takes no links from (F118).
+                ResponseTemplate::new(200).set_body_raw(
+                    format!(
                         "<html><body><main><p>{words}</p></main><nav>{links}</nav></body></html>"
-                    )),
+                    ),
+                    "text/html; charset=utf-8",
+                ),
             )
             .mount(&api.lab.site)
             .await;
@@ -334,6 +366,25 @@ async fn metrics_expose_the_series_of_the_specification() {
                 .lines()
                 .any(|line| line.starts_with(series) && line.contains("render=")),
             "{series} has a render label:\n{text}"
+        );
+    }
+    for series in ["kage_requests_total", "kage_attempts_total"] {
+        expect(
+            &text,
+            series,
+            &[
+                site,
+                "level=\"0\"",
+                "outcome=\"forbidden\"",
+                "vendor=\"generic\"",
+            ],
+        );
+        assert!(
+            !text.lines().any(|line| line.starts_with(series)
+                && line.contains("outcome=\"forbidden\"")
+                && line.contains(site)
+                && line.contains("vendor=\"cloudflare\"")),
+            "{series} blames Cloudflare for an origin's 403:\n{text}"
         );
     }
     expect(

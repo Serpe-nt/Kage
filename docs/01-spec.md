@@ -910,8 +910,12 @@ status). Three 5xx or timeouts in a row from one domain pause it for 30 s,
 doubling to 10 min, with no cooldown and no breaker count. An attempt that
 failed before the site had a say counts nothing toward that row and ends
 none: a proxy that could not be reached, did not answer, refused the
-provider's credential (`407`) or may not be used is `provider_error` with
-the reason `proxy_failed`, retried on another persona. A browser's plain
+provider's credential (`407` with the `Proxy-Authenticate` a proxy that
+asks sends, RFC 9110 §15.5.8) or may not be used is `provider_error` with
+the reason `proxy_failed`, retried on another persona. A `407` of a plain
+`http://` page without that header is the site's own answer, `ok` with
+its status like any other 4xx (F143; levels 0 and 1, where Kage reads the
+answer itself). A browser's plain
 `http://` request that the forwarder had to close for want of the
 persona's proxy fails in the browser as if the site did not answer
 (`navigation_failed`, a timeout); the forwarder notes each connection whose
@@ -1229,7 +1233,14 @@ cannot make Kage read a file of its own host into a result, since it does
 not know the content of Kage's environment or secrets (security review
 S1). A navigation that fails is a page result too, with a typed `error`
 (`timeout`, `navigation_failed`, `proxy_failed`, `aborted`) and whatever
-was captured until then.
+was captured until then. A navigation the browser broke off because the
+site's answer holds no page is no failure (F116, F120): a `204` or `205`
+(the tab stays on what it showed, and nothing of that is returned) is
+`ok` with its status, as at level 0; a file the browser saved and showed
+nothing of (a typed address answered with `Content-Disposition:
+attachment`, or a click with no entry report and no status) is `ok` with
+the reason `download` and no page. Neither is tried again by another
+persona, and the persona keeps visiting.
 
 A browser shows a page of its own in place of an error answer with an
 empty body (an empty `403`, as a provider's proxy refuses a plain
@@ -1507,6 +1518,9 @@ persona's seed and the request's seed, which the result records.
   `Referer`. `link` loads a page to start from and clicks its link to the
   target; `search_engine` clicks the first result that leads to the
   target's host on a results URL that Kage builds from a policy template.
+  No template can be configured yet: a policy or a request that names
+  `search_engine` gets a typed visit, and `behavior.referer_strategy`
+  says `direct`, what applied (F143).
   A `Referer` is never forged: it is what the browser sends for the click.
   Without a link or result the outcome says so and nothing else is loaded,
   unless the request asks for the fallback to a typed navigation. No
@@ -1525,7 +1539,13 @@ persona's seed and the request's seed, which the result records.
   clicked on one of them), and not clicked when the pointer comes to rest
   on something that lies over it. The times of the result count from the
   click. A click the browser answers by saving a file is no page: the
-  result is `aborted` with no entry report, and nothing is typed after it.
+  sidecar ends the click the moment the browser begins to save it (the
+  driver's `download` event; in Chromium also the main frame's answer
+  with `Content-Disposition: attachment`, which Chrome holds for the
+  person over plain `http` without a download event), reports `aborted`
+  with no entry report, nothing is typed after it, and the result is `ok`
+  with the reason `download` (F120). A typed load that turns into a
+  download ends the same way.
   A page that answers the click itself (`history.pushState`, a
   client-routed site) asks for no document: the wait for one ends about
   1.5 s after the click, the outcome is `link_not_found`, and with
@@ -2051,6 +2071,16 @@ and orders nothing. Where no persona but the reader could ask (`no_scout`)
 nobody asks, and a scout the site turned away is not waited for through
 its cooldown: the crawl reads on without the file.
 
+A crawl takes links and text from a page that is an HTML document only:
+its `Content-Type` says HTML, or it says nothing and the body is text by
+the sniffing of §9. A JSON, XML or plain-text body gives no links, at any
+level (F118: at level 0 the escaped quotes of a JSON body were read as an
+attribute's and an address was made up). A link the browser answers by
+saving a file is a page that was read and holds no links (its result is
+`ok`, reason `download`), counted as reached by none of the ways: its
+reader stays the site's reader, and its tab still shows the page the link
+stands on, from which the next page is clicked (F120).
+
 **robots.txt.** Where the policy of a seed's site has its `robots.txt`
 asked for (`report` or `enforce`, §14) and the crawl reads sitemaps, the
 file is read first, by the same scout, and listed with the sitemaps: the
@@ -2058,7 +2088,10 @@ file is read first, by the same scout, and listed with the sitemaps: the
 `/sitemap.xml`, which is asked for only when the file names none or
 there is no file. Where a site's file is enforced, an address the file is
 known to disallow never becomes a page of the crawl: no item, no request,
-no page of the budget, counted as `skipped.robots_denied`. The first page
+no page of the budget, counted as `skipped.robots_denied`. Nor is a
+sitemap the file disallows asked for: the guess `/sitemap.xml`, a file a
+`Sitemap:` line or an index names alike; it is listed with the state
+`robots_denied` (F119; D46). The first page
 of an origin whose file is not known yet waits for it in the pipeline
 like any fetch, and a file that cannot be had holds the site
 (`robots_unavailable`). Every page's result carries the verdict. A crawl's

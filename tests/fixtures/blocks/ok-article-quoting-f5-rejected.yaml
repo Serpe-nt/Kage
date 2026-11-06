@@ -1,0 +1,28 @@
+synthetic: true
+source: >-
+  Hand-written negative case (QA round one, policy-02; F125). A forum post
+  of forty sentences that quotes BIG-IP ASM's block page: the quote is
+  text of the page, not the vendor's answer.
+observation:
+  render: browser
+  status: 200
+  url: https://forum.harbour.example/t/why-was-my-request-rejected/4411
+  headers:
+    - { name: content-type, value: "text/html; charset=utf-8" }
+  body: |
+    <html lang="en"><head><meta charset="utf-8"><title>Why was my request rejected?</title></head>
+    <body><main><h1>Why was my request rejected?</h1>
+    <p>The ferry left the harbour a little after seven, and the gulls followed it out past the breakwater. By the time the fog lifted the island was a grey line on the water, with the lighthouse at its northern end. Most of the passengers stayed below, where the coffee was hot and the windows had steamed over. A few of us stood at the rail anyway, because the crossing is short and the light changes every minute.</p>
+    <p>The captain, who has made the trip for twenty years, still slows down where the seals come up to look. On the island the road climbs from the quay to the old school, which is now a library open three days a week. The librarian keeps a ledger of every book borrowed since the doors reopened, written in a careful hand. In the afternoon we walked the cliff path to the bay on the far side, where the sand is almost white.</p>
+    <p>There is a bench there that somebody built from driftwood, with a view of the rocks and the open sea. We ate our sandwiches on it and watched a fishing boat work its way along the line of buoys. The ferry left the harbour a little after seven, and the gulls followed it out past the breakwater. By the time the fog lifted the island was a grey line on the water, with the lighthouse at its northern end.</p>
+    <p>Most of the passengers stayed below, where the coffee was hot and the windows had steamed over. A few of us stood at the rail anyway, because the crossing is short and the light changes every minute. The captain, who has made the trip for twenty years, still slows down where the seals come up to look. On the island the road climbs from the quay to the old school, which is now a library open three days a week.</p>
+    <blockquote><p>The requested URL was rejected. Please consult with your administrator.</p><p>Your support ID is: 1234567890123456789</p></blockquote>
+    <p>The librarian keeps a ledger of every book borrowed since the doors reopened, written in a careful hand. In the afternoon we walked the cliff path to the bay on the far side, where the sand is almost white. There is a bench there that somebody built from driftwood, with a view of the rocks and the open sea. We ate our sandwiches on it and watched a fishing boat work its way along the line of buoys.</p>
+    <p>The ferry left the harbour a little after seven, and the gulls followed it out past the breakwater. By the time the fog lifted the island was a grey line on the water, with the lighthouse at its northern end. Most of the passengers stayed below, where the coffee was hot and the windows had steamed over. A few of us stood at the rail anyway, because the crossing is short and the light changes every minute.</p>
+    <p>The captain, who has made the trip for twenty years, still slows down where the seals come up to look. On the island the road climbs from the quay to the old school, which is now a library open three days a week. The librarian keeps a ledger of every book borrowed since the doors reopened, written in a careful hand. In the afternoon we walked the cliff path to the bay on the far side, where the sand is almost white.</p>
+    <p>There is a bench there that somebody built from driftwood, with a view of the rocks and the open sea. We ate our sandwiches on it and watched a fishing boat work its way along the line of buoys. The ferry left the harbour a little after seven, and the gulls followed it out past the breakwater. By the time the fog lifted the island was a grey line on the water, with the lighthouse at its northern end.</p>
+    <p>Most of the passengers stayed below, where the coffee was hot and the windows had steamed over. A few of us stood at the rail anyway, because the crossing is short and the light changes every minute. The captain, who has made the trip for twenty years, still slows down where the seals come up to look. On the island the road climbs from the quay to the old school, which is now a library open three days a week.</p>
+    <p>The librarian keeps a ledger of every book borrowed since the doors reopened, written in a careful hand. In the afternoon we walked the cliff path to the bay on the far side, where the sand is almost white. There is a bench there that somebody built from driftwood, with a view of the rocks and the open sea. We ate our sandwiches on it and watched a fishing boat work its way along the line of buoys.</p>
+    </main></body></html>
+expect:
+  outcome: ok

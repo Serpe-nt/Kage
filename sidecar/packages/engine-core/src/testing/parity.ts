@@ -1455,6 +1455,9 @@ export function defineParitySuite(subject: ParitySubject): void {
           final_url: secure('/download?from=odd'),
         });
         expect(file.result.behavior).toMatchObject({ clicks: 1, entry: null });
+        // The download ends the click at once, whatever the driver reports
+        // of its response; Chrome waited out the budget before (F120).
+        expect(file.took).toBeLessThan(15_000);
         expect(await askedFor('/download')).toEqual(['/download?from=odd']);
         expect(headerOf(await lastRequest('/download?from=odd'), 'referer')).toBe(odd('file'));
         expect(pressesOf(await left('file')).at(-1)).toEqual(['click', true, 'file']);
@@ -2074,6 +2077,9 @@ export function defineParitySuite(subject: ParitySubject): void {
           final_url: secure('/download?from=odd'),
         });
         expect(file.result.behavior).toMatchObject({ clicks: 1, entry: null });
+        // The download ends the click at once, whatever the driver reports
+        // of its response; Chrome waited out the budget before (F120).
+        expect(file.took).toBeLessThan(15_000);
         expect(await askedFor('/download')).toEqual(['/download?from=odd']);
         expect(headerOf(await lastRequest('/download?from=odd'), 'referer')).toBe(odd('file'));
         expect(pressesOf(await left('file')).at(-1)).toEqual(['click', true, 'file']);

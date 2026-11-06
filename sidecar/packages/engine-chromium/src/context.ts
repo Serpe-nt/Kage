@@ -26,6 +26,7 @@ import {
   X11Input,
   toBrowserCookieParam,
   type BrowserCookie,
+  type DriverDownload,
   type DriverPage,
   type DriverResponse,
   type DriverTab,
@@ -219,6 +220,9 @@ export class ChromiumContext implements EngineContext, SessionDriver {
     // answered with, which Chrome does not all hand the driver (F167).
     const requests = new DocumentRequests();
     this.requests = requests;
+    // Who listens for a file the browser saves: the driver's own event, and
+    // the answer the debugger saw where the driver hears of none (F120).
+    const saving = new Set<(download: DriverDownload) => void>();
     tab.session
       .send('Page.getFrameTree')
       .then((tree) => {
@@ -233,6 +237,11 @@ export class ChromiumContext implements EngineContext, SessionDriver {
     });
     tab.session.on('Network.responseReceived', (event) => {
       requests.answered(event);
+      if (requests.savesFile(event)) {
+        for (const listener of saving) {
+          listener({ url: () => event.response.url });
+        }
+      }
       if (event.type === 'Document' && event.response.protocol !== undefined) {
         if (this.protocols.size > 200) {
           this.protocols.clear();
@@ -240,7 +249,17 @@ export class ChromiumContext implements EngineContext, SessionDriver {
         this.protocols.set(event.response.url, event.response.protocol);
       }
     });
-    return pageWithReader(tab.page, tab.reader, () => entryBefore(tab.session));
+    const page = pageWithReader(tab.page, tab.reader, () => entryBefore(tab.session));
+    const on = ((event: string, listener: (value: never) => void) => {
+      if (event === 'download') {
+        saving.add(listener as (download: DriverDownload) => void);
+      }
+      return (page.on as (event: string, listener: (value: never) => void) => unknown)(
+        event,
+        listener,
+      );
+    }) as DriverPage['on'];
+    return { ...page, on };
   }
 
   /**
