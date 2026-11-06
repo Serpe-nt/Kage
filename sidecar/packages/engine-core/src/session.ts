@@ -248,6 +248,30 @@ export interface SessionDriver {
    * redirect leaves it out.
    */
   unansweredRedirects?(): RedirectHop[];
+  /**
+   * The status and header lines of a document's response as the tab shows
+   * it, where the driver's own say otherwise: Firefox's driver splits every
+   * header value at its commas (F190), and a page the browser revalidated
+   * is the stored response it shows, not the wire's `304` (F178). `null`
+   * where the driver's are right; an engine whose driver always is leaves
+   * it out.
+   */
+  shownHead?(response: DriverResponse): Promise<ShownHead | null>;
+  /**
+   * The status of the error answer the main frame's latest document
+   * request got at `url`, where the browser replaced it with its own page
+   * and its driver names no response for it (Chrome, F204); `null` when no
+   * such answer is known. An engine whose driver keeps the response leaves
+   * it out.
+   */
+  replacedStatus?(url: string): number | null;
+}
+
+/** The head of a response as the tab shows it (see {@link SessionDriver.shownHead}). */
+export interface ShownHead {
+  readonly status: number;
+  /** The header lines in order, names as the browser gives them. */
+  readonly headers: readonly { readonly name: string; readonly value: string }[];
 }
 
 /** What a session is made of. */
@@ -1368,9 +1392,11 @@ export class PageSession {
    * Firefox does so for an error status with an empty body (a proxy's
    * refusal of a plain `http://` target among them) and never fires
    * `load` on its page, so the wait would last to its timeout (F189);
-   * Chrome fails the load at once. The look is the document's URI, read
-   * only once an error answer arrived, and never counts against the page
-   * as a read that went unanswered.
+   * Chrome fails the load at once. So it is where the page sent the tab
+   * on before its `load` and nothing answered there (F200). The look is
+   * the document's URI, read only once either happened
+   * ({@link PageSession.mayShowErrorPage}), and never counts against the
+   * page as a read that went unanswered.
    */
   private async load(
     url: string,
@@ -1388,8 +1414,7 @@ export class PageSession {
     const watching = async (): Promise<typeof SHOWS_ERROR_PAGE> => {
       while (!settled()) {
         await sleep(ERROR_PAGE_LOOK_MS);
-        const status = this.document.response?.status() ?? 0;
-        if (settled() || page !== this.page || status < 400) {
+        if (settled() || page !== this.page || !this.mayShowErrorPage()) {
           continue;
         }
         const looked = page.evaluate<string>(READ_DOCUMENT_URI);
@@ -1402,6 +1427,38 @@ export class PageSession {
       return new Promise<never>(() => undefined);
     };
     return Promise.race([going, watching()]);
+  }
+
+  /**
+   * Whether the tab may by now show the browser's own page in place of the
+   * document a load waits for: an error answer arrived (F189), or the page
+   * that answered sent the tab on before its `load` (a script or a form
+   * that submits itself), and the request for where it went may have
+   * failed without an answer. Firefox fires no `load` for its page there
+   * either, so the wait would last to its timeout (F200).
+   */
+  private mayShowErrorPage(): boolean {
+    const response = this.document.response;
+    if (response === null) {
+      return false;
+    }
+    if (response.status() >= 400) {
+      return true;
+    }
+    const sentTo = this.document.sentTo;
+    return (
+      redirectTarget(response) === null &&
+      sentTo !== null &&
+      withoutFragment(sentTo) !== withoutFragment(response.url())
+    );
+  }
+
+  /** What a load that ended on the browser's own page says of it (F189, F200). */
+  private shownErrorPage(url: string): string {
+    const response = this.document.response;
+    return response !== null && response.status() >= 400
+      ? `the browser could not load ${url}: it answered with an error and shows its own error page`
+      : `the browser could not load ${this.document.sentTo ?? url}, where the page sent the tab: it shows its own error page`;
   }
 
   // --- the document a flow is on (follow-up F21) --------------------------
@@ -2158,15 +2215,18 @@ export class PageSession {
     // the very document it names (Firefox, for an error status with an
     // empty body), the answer's status is what the browser saw, and the
     // result says so; nothing else of the answer or the page is kept
-    // (F189). Chrome's error page names nothing, and its status stays
-    // unknown.
+    // (F189). Chrome's error page names nothing and its driver no
+    // response: its debugger heard the answer, and says its status where
+    // it was the answer to the address the tab was sent to (F204).
     const replacedStatus =
       seenResponse !== null &&
       errorTarget !== null &&
       withoutFragment(errorTarget) === loadedAt &&
       seenResponse.status() >= 400
         ? seenResponse.status()
-        : null;
+        : failedThere
+          ? (driver.replacedStatus?.(sentTo ?? url) ?? null)
+          : null;
     // A page the browser brought back from before the flow is a document
     // too, though nothing is known of the response it once came with.
     const loaded =
@@ -2191,10 +2251,17 @@ export class PageSession {
             () => null,
           )
         : null;
+    // The head the tab shows, where the driver's says otherwise (F178, F190).
+    const shownHead =
+      response === null || driver.shownHead === undefined
+        ? null
+        : await this.answer(driver.shownHead(response)).catch(() => null);
     const headers =
       response === null
         ? []
-        : toHeaders(await this.answer(response.headersArray()).catch(() => []));
+        : toHeaders(
+            shownHead?.headers ?? (await this.answer(response.headersArray()).catch(() => [])),
+          );
     const seen = await this.redirects(failedThere ? seenResponse : response);
     const redirects = seen.length === 0 && unanswered.length > 0 ? unanswered : seen;
     const xhr = new XhrCollector(options.xhr);
@@ -2246,7 +2313,7 @@ export class PageSession {
     return {
       url,
       final_url: failedThere || refusedTo !== null ? (sentTo ?? url) : loaded ? shown : url,
-      status: response?.status() ?? replacedStatus,
+      status: shownHead?.status ?? response?.status() ?? replacedStatus,
       http_version:
         response === null || unanswering !== null
           ? null
@@ -2277,7 +2344,9 @@ export class PageSession {
       // there, however long the wait for it lasted: the timeout of a load
       // that never fired is no answer of the site's (F189).
       error:
-        (replacedStatus !== null && extra.error?.code !== 'navigation_failed'
+        (replacedStatus !== null &&
+        extra.error?.code !== 'navigation_failed' &&
+        extra.error?.code !== 'proxy_failed'
           ? {
               code: 'navigation_failed' as const,
               message: `the browser could not load ${sentTo ?? url}: it answered with ${replacedStatus} and shows its own error page`,
@@ -2378,7 +2447,7 @@ export class PageSession {
         if (arrived === SHOWS_ERROR_PAGE) {
           error = {
             code: 'navigation_failed',
-            message: `the browser could not load ${request.url}: it answered with an error and shows its own error page`,
+            message: this.shownErrorPage(request.url),
             net_error: null,
           };
         } else if (arrived?.status() === 407) {
@@ -2474,12 +2543,18 @@ export class PageSession {
           // As after a click: until the new document is answered and has
           // loaded as the request asks, or nothing answers in the moment.
           const limit = Math.min(deadline - CAPTURE_RESERVE_MS, Date.now() + MOVED_SETTLE_MS);
+          // What the tab shows then is what the result describes (below).
           await this.afterClick(loadedWith, request.wait.until, limit).catch(() => false);
-          // What the tab shows now is what the result describes.
-          observation = await this.observe();
         } else if (!(thrown instanceof PageUnanswering)) {
           throw thrown;
         }
+      }
+      if (error === null && (acting !== null || dwelled > 0) && this.unanswering === null) {
+        // The page the result describes is the one the tab shows at the
+        // capture: one that moved itself on during the persona's reading
+        // or rest has another title by now (F201). What the challenge wait
+        // saw stays its own.
+        observation = await this.observe().catch(() => observation);
       }
       await Promise.race([Promise.allSettled(this.document.bodies), sleep(BODY_WAIT_MS)]);
     }
@@ -2596,9 +2671,7 @@ export class PageSession {
           throw new Error(`${error.code}: ${error.message}`, { cause: thrown });
         }
         if (arrived === SHOWS_ERROR_PAGE) {
-          throw new Error(
-            `navigation_failed: the browser could not load ${url}: it answered with an error and shows its own error page`,
-          );
+          throw new Error(`navigation_failed: ${this.shownErrorPage(url)}`);
         }
       },
       back: async (timeout, by) => {

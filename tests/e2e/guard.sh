@@ -12,7 +12,8 @@
 #     refresh, a script or a self-submitting form, in both engines:
 #     ssrf_denied at the first attempt, nothing of a page kept, and the
 #     private page never asked for: the forwarder looked the name up and
-#     refused it before any proxy was asked (F57);
+#     refused it before any proxy was asked (F57); every road ends at the
+#     refusal, not at the fetch's timeout (F200);
 #   - a flow whose click leads there: the same;
 #   - a redirect to `file:`, `data:`, `ftp:` or `javascript:` in both
 #     engines: ssrf_denied at the first attempt, nothing kept (F167);
@@ -160,7 +161,11 @@ for engine in chromium firefox; do
     for road in redirect meta script form; do
         fetched "{\"url\":\"${PUBLIC}/guard/${road}?to=${encoded}\",\"level\":2,\"persona\":{\"engines\":[\"${engine}\"]},\"include\":[\"dom\"],\"timeout_ms\":60000}"
         check "${engine}, ${road}: the guard's refusal at the hop" "${body}" "${DENIED}"
-        echo "    ${engine} ${road}: $(value "${body}" "d.outcome + ' at ' + d.final_url")"
+        # At the refusal, not at the timeout: a script or a form sent the
+        # Firefox tab on before its load, and Firefox fires no load on its
+        # own page there (F200; it took the whole 60 s before 2.0.3).
+        check "${engine}, ${road}: ended at the refusal" "${body}" "d.attempts[0].total_ms < 15000"
+        echo "    ${engine} ${road}: $(value "${body}" "d.outcome + ' at ' + d.final_url + ' in ' + d.attempts[0].total_ms + ' ms'")"
     done
 done
 call POST /v1/jobs "${token}" "{\"type\":\"flow\",\"level\":3,\"behavior\":{\"dwell_ms\":500},\"timeout_ms\":120000,\"actions\":[{\"action\":\"goto\",\"url\":\"${PUBLIC}/guard/link?to=${encoded}\"},{\"action\":\"click\",\"selector\":\"a.next\"}]}"

@@ -940,17 +940,16 @@ same way, an error status with an empty body that the forwarder passes on
 as it came; Kage cannot tell whose it was. Where a browser replaced such
 an empty error answer with its own page (§10.2), the attempt is
 `provider_error` with the reason `navigation_failed`, keeps the status the
-browser saw (Firefox) or none (Chrome), and is nobody's block: no
+browser saw (in both engines since F204), and is nobody's block: no
 cooldown, no breaker count, and like any failed navigation it counts
 toward the server-error pause; an empty error answer is judged as an
 answer only where it was read (the http path, a level 0 client). That
 holds where the answer came over plain `http:` (the page's `final_url`,
 the document whose status is kept). Over `https` only the site answers
-inside the tunnel, so the status Firefox saw stays the site's verdict:
-a WAF's empty `403` is `forbidden`, as before F189. Chrome's page names
-no status there, so nothing is judged and nothing booked (as before; a
-follow-up may take the status from the debugger's `Network.responseReceived`,
-which the engine already listens to). Circuit breaker
+inside the tunnel, so the status the browser saw stays the site's verdict:
+a WAF's empty `403` is `forbidden`, as before F189, in both engines.
+Before 2.0.3 Chrome's result named no status there, so nothing was judged
+and nothing booked on Chrome (F204). Circuit breaker
 per domain: if `block_count_1h` over all personas ≥
 `policy.breaker_threshold` (default 5), the domain is `paused` for
 `policy.breaker_pause` (default 30 min); requests return `provider_error`
@@ -1234,15 +1233,26 @@ A browser shows a page of its own in place of an error answer with an
 empty body (an empty `403`, as a provider's proxy refuses a plain
 `http://` target it will not carry, or as a site may answer). Chrome
 fails the load at once (`ERR_HTTP_RESPONSE_CODE_FAILURE`) and its
-`chrome-error://` page names nothing of the answer; Firefox has seen the
-answer, shows `about:neterror?e=httpErrorPage` under the address and never
+`chrome-error://` page names nothing of the answer, which only its
+debugger heard (`Network.responseReceivedExtraInfo`, and
+`Network.responseReceived` where it announced a document); Firefox has
+seen the answer, shows `about:neterror?e=httpErrorPage` under the address and never
 fires `load`. The engine ends the navigation as soon as the tab's document
 is the browser's page (it looks at `document.documentURI` once an error
 answer to the document arrived) instead of at `timeout_ms`, and the page
 result is `navigation_failed` with nothing of the browser's page and no
-headers kept; its `status` is the one the browser saw where the error page
-names that very document (Firefox), else `null` (Chrome). A flow's `goto`
-fails its step there the same way. Over plain `http://` whose answer it was
+headers kept; its `status` is the one the browser saw: where Firefox's
+error page names that very document, and where Chrome's debugger heard
+the error answer of the main frame's latest document request at the
+address the tab was sent to (F204; before 2.0.3 Chrome's was `null`),
+else `null`. A flow's `goto` fails its step there the same way. So does
+a load whose page sent the tab on before its `load` (a script, a form
+that submits itself) to an address where nothing answered, as Kage's
+forwarder closes a plain request it refuses: Firefox shows its own page
+there and fires no `load` either, and the engine looks at the document
+once the tab was sent on from a page that answered, so the navigation
+ends there in a fraction of a second, `navigation_failed` where the tab
+was sent; before 2.0.3 it ended only at `timeout_ms` (F200). Over plain `http://` whose answer it was
 is unknown, so it is nobody's block; over `https` the status the browser saw
 is the site's verdict (§8.3, F189).
 
@@ -1637,9 +1647,20 @@ persona's later clicks and typed text went into it while every step said
 `ok` on the flow's page, the text reached another site where the link
 pointed there, and the tab ran on across other keys' requests until the
 persona's context closed (QA round two, flows-02). A Chromium persona with
-`inject: window` gets no override in such a tab (its first request leaves
-before the driver can attach to it); the default `inject: none` shows the
-same browser in every tab.
+`inject: window` gets no override in such a tab (F203, documented, not
+fixed): the tab asks for its first page before the driver reports it, so
+before the engine can give it the `User-Agent` override and the script,
+and it asks as the browser really is. The pinned driver closes both ways
+round it (measured for 2.0.3): the engine's own debugger session can hold
+a new tab at its start, but the driver's API sends nothing to a tab
+before it reports it (Chrome allows only flat sessions there, and the
+driver's `CDPSession` reaches no flat child session), and a tab held and
+closed leaves the driver's own preparation of it rejected and unhandled
+(patchright-core 1.63.0's `CRPage` calls `setRequestInterception(true)`
+without awaiting it), which would end the sidecar. `inject: window` is
+only for cross-OS claims, off by default and failing the coherence
+self-test already (ADR 0009); the default `inject: none` shows the same
+browser in every tab.
 
 **A flow in Kage** is one browser attempt of one persona under one grant
 of the scheduler (`POST /v1/jobs` with `type: flow`, §16.6). It starts
@@ -1747,12 +1768,22 @@ is to scroll or wander, and the read fails because its document went away
 closed", on a page that asked for a new document or changed its address
 meanwhile). That ends the behavior of the navigation there, never the
 request: the tab is given up to 3 s to have its new document answered and
-loaded as the request's `wait.until` asks, the page is looked at again,
-and the capture says where the tab went as for any page that moved (a
+loaded as the request's `wait.until` asks, the page is looked at again
+(as after every dwell, below), and the capture says where the tab went as for any page that moved (a
 refused name is `ssrf_denied`, an address nothing answers
 `navigation_failed`). The behavior report counts what the hand did
 before. Any other failure of such a read fails as it did; a flow's step
 that meets one fails as before, with the driver's message.
+
+**The page a result names (F201).** The page is looked at once it has
+loaded, for the challenge wait (§12), and again after the persona's
+behavior and dwell, where the capture is taken: the result's `title` (and
+the challenge's script and frame hosts) are those of the page the tab
+shows then, as its `final_url`, `status` and `dom_html` are. Before
+2.0.3 the title came from the first look, so a page that moved itself on
+during the dwell (a meta refresh after a second) kept its old title beside
+the new page's address and document; whether a challenge was shown and
+resolved is still the challenge wait's.
 
 ---
 
@@ -2562,6 +2593,29 @@ As built (the OpenAPI document is the contract):
   may repeat). The values of `Set-Cookie` are `[redacted]`, with the
   cookie's name and attributes kept, unless `security.expose_set_cookie`
   is on: a session a persona holds with a site is not a caller's to take.
+  A value is a field line as the site sent it, commas and all (a date's,
+  a list's): the http path and Chrome give each line as sent; Firefox
+  holds repeated lines of one name as one value joined with `, `, as its
+  driver gives them, and its driver's split at commas is undone, so a
+  comma the site wrote without a space after it comes back with one
+  (F190; before 2.0.3 Firefox's values came split at every comma).
+- `status` and `headers` of a browser's page are those of the response the
+  tab shows. For a page the browser revalidated (it asked with its
+  validators and was answered `304 Not Modified`) that is the page it
+  kept: its status, and its head brought up to date by the 304's fields
+  (RFC 9111 §3.2), in both engines (F178). Chrome's debugger announces it
+  so. Firefox's driver gives only the wire's `304`, so the Firefox engine
+  keeps the head of every page its browser answered with a validator
+  (`ETag`, `Last-Modified`), without `Set-Cookie` and the fields of one
+  connection, in the persona's profile (`kept-heads.json`, beside the
+  browser's own cache that holds the same head; the 300 pages answered
+  last, none answered more than 30 days ago; read when the context opens,
+  written whole when it closes, never through a page, never sent
+  anywhere). A Firefox page whose head is not kept (the file was lost, or
+  the page was kept before 2.0.3) is the wire's `304` with its own
+  fields: a status Kage cannot know is not guessed. Before 2.0.3 Chrome
+  said `200` with the 304's fields, no `Content-Type` among them, and
+  Firefox `304`.
 - `dom_html` and `raw_body` are inline when `include` asks; the http path
   (levels 0 and 1) has no document, so `dom` is refused there
   (`level_include_conflict`) and its body is `raw_body`.
@@ -3122,7 +3176,23 @@ are gzip-compressed on disk.
   before any request to it left; the check after the fact holds where its
   lookup and the forwarder's disagree.
   The request to such a hop has left through the proxy by then; that is the
-  limit of a check that does not intercept requests. WebRTC sends no UDP
+  limit of a check that does not intercept requests. So is what the hop's
+  page stored in the browser (F138): a hop the forwarder passed and the
+  check after the fact refused (a URL with a user name and password, which
+  the browser sends as credentials and the forwarder never sees; a public
+  address by number where `security.allow_ip_targets` is off; a name
+  whose lookups disagree) was loaded and its page ran, and a cookie it
+  set or `localStorage` it wrote stays in the persona's profile with the
+  origin that wrote it, as any site's state does, and goes back to that
+  origin on the persona's next visit there. "Nothing read from it is
+  returned or kept" is Kage's word for the result and the store; the
+  browser's own state is not cleaned, by design: the state belongs to an
+  origin the browser did reach (an address the forwarder refused never
+  answered and left nothing), it is read by nobody but that origin, and
+  deleting a site's cookies from a persona's profile would end the
+  persona's standing with a site it may visit in good faith, a tell of
+  its own; Firefox could not delete an origin's storage without loading
+  a page of it either. WebRTC sends no UDP
   outside the proxy. A page the browser could not load is reported where
   the tab was sent (the main frame's last request, or the `Location` of a
   redirect it did not get beyond), never as Chrome's

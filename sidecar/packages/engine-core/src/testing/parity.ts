@@ -10,7 +10,7 @@
  */
 import dgram from 'node:dgram';
 import { appendFileSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { networkInterfaces, tmpdir, userInfo } from 'node:os';
 import path from 'node:path';
 
@@ -52,7 +52,7 @@ import {
   touched,
   type LeaveReport,
 } from './recorder.js';
-import { startTestProxy, type TestProxy } from './test-proxy.js';
+import { REFUSED_HOST, startTestProxy, type TestProxy } from './test-proxy.js';
 
 /** An engine as the parity suite runs it, and what is meant to differ. */
 export interface ParitySubject {
@@ -96,6 +96,14 @@ export interface ParitySubject {
    * that the test notices when it changes.
    */
   readonly thirdPartyStoragePartitioned: boolean;
+  /**
+   * The file in a persona's profile directory where the engine keeps the
+   * heads of the pages its browser keeps, for a page the browser
+   * revalidates (Firefox, whose driver gives only the wire's `304`; F178).
+   * Absent for an engine whose debugger names the page the tab shows
+   * (Chromium).
+   */
+  readonly keptHeadsFile?: string;
 }
 
 /** Values of the probe's window that a fingerprint document fixes; a field left out is not compared. */
@@ -954,9 +962,10 @@ export function defineParitySuite(subject: ParitySubject): void {
         const report = (await site.reports()).find((entry) => entry['page'] === 'webrtc') as
           { candidates: string[] } | undefined;
         // No packet left the browser for the STUN server, and no candidate
-        // came from asking one.
+        // was gathered at all: not from asking one, and no host candidate,
+        // not even as a `.local` name (F183).
         expect(packets).toEqual([]);
-        expect(report?.candidates.filter((kind) => kind !== 'host')).toEqual([]);
+        expect(report?.candidates).toEqual([]);
       } finally {
         listener.close();
       }
@@ -1016,10 +1025,122 @@ export function defineParitySuite(subject: ParitySubject): void {
           raw_body: null,
         });
         expect(replaced.error?.code).toBe('navigation_failed');
-        // Firefox saw the answer before it replaced it; Chrome's page
-        // names nothing of it.
-        expect(replaced.status).toBe(subject.name === 'firefox' ? 403 : null);
+        // Both browsers saw the answer before they replaced it: Firefox's
+        // driver says its status, Chrome's debugger (F204).
+        expect(replaced.status).toBe(403);
       });
+    });
+
+    it('ends at once where a page sent the tab on before its load and nothing answered there (F200)', async () => {
+      await withContext('sent-on', async (context) => {
+        // How Kage's forwarder refuses a plain request to an address the
+        // guard refuses: the connection closes, no answer comes. A script
+        // or a form that sends the tab there before the page's `load`
+        // leaves Firefox on its own page, which fires no `load` either.
+        const refused = `http://${REFUSED_HOST}/secret`;
+        for (const road of ['script', 'form']) {
+          const started = Date.now();
+          const sent = await go(
+            context,
+            named(`/guard/${road}?to=${encodeURIComponent(refused)}`),
+            {
+              capture: DOM,
+              timeout_ms: 20_000,
+            },
+          );
+          expect(Date.now() - started, road).toBeLessThan(8_000);
+          expect(sent, road).toMatchObject({
+            final_url: refused,
+            status: null,
+            dom_html: null,
+            title: null,
+          });
+          expect(sent.error?.code, road).toBe('navigation_failed');
+        }
+      });
+    });
+
+    it('names the page the tab shows at the capture, though the page moved itself on while it was read (F201)', async () => {
+      const visits: Partial<NavigateRequest>[] = [
+        { dwell_ms: 3000 },
+        {
+          dwell_ms: 3000,
+          behavior: { seed: SEEDS.first, mode: 'still', entry: { strategy: 'direct' } },
+        },
+        { dwell_ms: 3000, behavior: { seed: SEEDS.first, wander: true } },
+      ];
+      await withContext('moved-later', async (context) => {
+        for (const [index, visit] of visits.entries()) {
+          // A meta refresh one second in: during the rest, after the look
+          // that waits for a challenge.
+          const moved = await go(
+            context,
+            named(`/moves-later?s=1&to=${encodeURIComponent(named('/landing'))}`),
+            { capture: DOM, ...visit },
+          );
+          expect(moved, `visit ${index}`).toMatchObject({
+            final_url: named('/landing'),
+            status: 200,
+            title: 'Landing',
+            error: null,
+          });
+          expect(moved.dom_html, `visit ${index}`).toContain('id="landing"');
+        }
+      });
+    });
+
+    it('reports a header as the line the site sent, the commas of a date and a list inside it (F190)', async () => {
+      const result = await withContext('commas', (context) =>
+        go(context, named('/headers/commas')),
+      );
+      const values = (name: string) =>
+        result.headers.filter((header) => header.name === name).map((header) => header.value);
+      expect(values('last-modified')).toEqual(['Tue, 03 Nov 2026 20:00:00 GMT']);
+      expect(values('x-fixture-list')).toEqual(['one, two, three']);
+      expect(values('date')).toHaveLength(1);
+      expect(values('date')[0]).toMatch(/^[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} /);
+    });
+
+    it('reports a page the browser revalidated as the page it shows: the kept status and head (F178)', async () => {
+      await site.reset();
+      const address = named('/cached/revalidated?id=parity');
+      const value = (result: PageResult, name: string) =>
+        result.headers.find((header) => header.name === name)?.value ?? null;
+      // The persona comes back in another context, as on another day: the
+      // browser asks again with its validators, the site answers `304`,
+      // and the tab shows the page it kept.
+      const first = await withContext('revalidated', (context) => go(context, address));
+      const again = await withContext('revalidated', (context) =>
+        go(context, address, { capture: DOM }),
+      );
+      const asked = (await site.requests()).filter(
+        (request) => request.path === '/cached/revalidated?id=parity',
+      );
+      expect(asked).toHaveLength(2);
+      expect(headerOf(asked[1], 'if-none-match')).toBe('"v1"');
+      expect(again.dom_html).toContain('id="kept"');
+      // One answer for the one page, in both engines: the status and the
+      // head of the response the tab shows, the kept one brought up to
+      // date by the 304's fields.
+      for (const [index, result] of [first, again].entries()) {
+        expect(result.status, `visit ${index}`).toBe(200);
+        expect(value(result, 'content-type'), `visit ${index}`).toBe('text/html; charset=utf-8');
+        expect(value(result, 'x-fixture'), `visit ${index}`).toBe('kept');
+        expect(value(result, 'etag'), `visit ${index}`).toBe('"v1"');
+      }
+      expect(value(again, 'set-cookie')).toBeNull();
+      if (subject.keptHeadsFile !== undefined) {
+        // Where the engine has lost what it kept, the wire's `304` and its
+        // own fields: a status it cannot know is never made up.
+        await rm(path.join(root, 'personas', 'personas', 'revalidated', subject.keptHeadsFile));
+        const unknown = await withContext('revalidated', (context) =>
+          go(context, address, { capture: DOM }),
+        );
+        expect(unknown.status).toBe(304);
+        expect(value(unknown, 'content-type')).toBeNull();
+        expect(value(unknown, 'etag')).toBe('"v1"');
+        expect(unknown.dom_html).toContain('id="kept"');
+      }
     });
 
     it('lets a page that moves itself away under the persona’s hand end where it went (F192)', async () => {

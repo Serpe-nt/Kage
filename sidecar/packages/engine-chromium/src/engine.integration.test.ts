@@ -16,6 +16,7 @@ import path from 'node:path';
 
 import type {
   CaptureOptions,
+  FlowEvent,
   NavigateRequest,
   OpenContextRequest,
   PageResult,
@@ -769,6 +770,60 @@ describe('coherence (spec §6.2)', () => {
 
     // The same document gives the same script on the next open.
     expect((await run()).applied.script_sha256).toBe(applied.script_sha256);
+  });
+
+  // A known gap, measured (F203, documented, not fixed): a tab a page of a
+  // persona with `inject: window` opens asks for its first page before the
+  // driver reports it, so before the engine can give it the override, and
+  // the pinned driver offers no way to reach it sooner (spec §10.5, the
+  // runbook). The test asserts what happens, so that a fix shows here.
+  it('lets a tab a page of an injected persona opens ask as the browser really is (F203, a known gap)', async () => {
+    const windows = (
+      await crossOsEngine.generatePersona({
+        seed: SEED,
+        claimed_os: 'windows',
+        languages: LANGUAGES,
+        screen: SCREEN,
+      })
+    ).fingerprint as FingerprintDocument;
+    await site.reset();
+    const run = await withContext(
+      'windows-tabs',
+      async (context) => {
+        const events: FlowEvent[] = [];
+        await context.flow(
+          {
+            capture: NO_CAPTURE,
+            behavior: { seed: SEED, typos: false },
+            timeout_ms: 120_000,
+            actions: [
+              { action: 'goto', url: named('/opener/') },
+              { action: 'wait_for', selector: 'body[data-ready]' },
+              { action: 'click', selector: '#blank' },
+              { action: 'wait_for', ms: 2500 },
+              { action: 'click', selector: '#q' },
+            ],
+          },
+          env,
+          (event) => events.push(event),
+        );
+        return events;
+      },
+      { engine: crossOsEngine, document: windows },
+    );
+    const asked = (await site.requests()).filter((request) => request.path.startsWith('/opener'));
+    const steps = run.filter((event) => event.type === 'step');
+    // The flow's page asked as the persona's claimed browser; the tab its
+    // link opened asked as the browser really is.
+    expect(asked.map((request) => request.path)).toEqual(['/opener/', '/opener/new']);
+    expect(headerOf(asked[0], 'user-agent')).toContain('Windows NT 10.0');
+    expect(headerOf(asked[1], 'user-agent')).toContain('Linux');
+    expect(headerOf(asked[1], 'user-agent')).not.toContain('Windows');
+    expect(steps.flatMap((step) => step.opened_tabs ?? [])).toEqual([named('/opener/new')]);
+    expect(steps.map((step) => [step.action, step.ok, step.error])).toEqual(
+      ['goto', 'wait_for', 'click', 'wait_for', 'click'].map((action) => [action, true, null]),
+    );
+    expect(run.find((event) => event.type === 'final')?.result.final_url).toBe(named('/opener/'));
   });
 
   it('refuses another operating system while such claims are off', async () => {

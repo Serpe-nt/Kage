@@ -32,7 +32,7 @@ profile and an authenticated proxy. No script of Kage's runs in any page.
 | WebGPU (`navigator.gpu`) | present on Windows claims and on macOS claims whose graphics card is Apple's, as in Firefox 156; `requestAdapter()` answers null, as on a machine whose GPU Firefox blocks |
 | storage of a cross-site frame | partitioned, as in a stock Firefox (`network.cookie.cookieBehavior` 5; the 152 build had 4, which showed a frame its site's first-party cookies and storage) |
 | cookies, storage, history | the persona's profile directory |
-| WebRTC | host candidates as names (`<uuid>.local`), nothing from a STUN server: no packet leaves outside the proxy |
+| WebRTC | no candidate at all: gathering completes with none, not even a host candidate as a `.local` name, and the offer's only address is `0.0.0.0`; nothing from a STUN server, no packet leaves outside the proxy (measured in QA round two, ssrf-04, and held by the parity suite in both engines since F183) |
 
 What stays the image's whatever the persona claims, recorded in the
 fingerprint as `host_bound`: pixels are drawn by Mesa (`webgl_rendering`)
@@ -390,6 +390,7 @@ baseline M5 recorded on 2026-10-09, which it replaces):
 |---|---|---|
 | DOM, title, text, storage | read in the driver's isolated world | nothing: a read grants no user activation |
 | raw body, headers, redirects, XHR and fetch bodies | network events | nothing |
+| the head of a page the browser keeps | the document's answer as the driver reports it, noted in the persona's profile (`kept-heads.json`) | nothing: the engine reads and writes the file, never the page |
 | console | the page's `console.*` calls and uncaught errors, reported by the browser to its driver | nothing (the probe's console check stays at zero) |
 | screenshot, viewport or full page | drawn from the browser side | nothing, also for a full page |
 | screenshot as WebP | Firefox encodes PNG and JPEG only: a PNG is written and the artifact says `image/png` | nothing |
@@ -410,6 +411,46 @@ saw, nothing of its page kept, at once rather than at `timeout_ms`
 proxy may have answered); over `https` the status is the site's verdict, an
 empty `403` its `forbidden`. Before 2.0.3 such a page was kept as the
 document and judged the site's `forbidden` whatever the scheme.
+
+Firefox shows its own page, and fires no `load`, also where a page sent
+the tab on before its own `load` (a script setting `location`, a form
+that submits itself) to an address where nothing answered, as Kage's
+forwarder closes a plain request to an address it refuses. The engine
+looks at the document once the tab was sent on from a page that answered,
+and ends there: `navigation_failed` where the tab was sent, in a
+fraction of a second. Before 2.0.3 the guard's end-to-end check saw the
+`script` and `form` roads take the whole `timeout_ms` (60 s) to end
+`ssrf_denied` (F200).
+
+Headers. Firefox holds one value per header name, repeated lines joined
+with `, ` (`Set-Cookie` lines with a line feed), and its driver
+(playwright-core 1.62.1, `parseMultivalueHeaders`) splits every value at
+its commas and trims each piece, keeping no copy as received: a date came
+as two headers (`Tue` and `03 Nov 2026 20:00:00 GMT`), a list as one
+per item. The engine joins consecutive pieces of one name again with
+`, `, which gives the value as sent wherever a comma was followed by one
+space (dates and most lists); `a,b` comes back as `a, b`, which the
+driver's pieces no longer tell apart (F190).
+
+A page Firefox revalidates (it asks with `If-None-Match` or
+`If-Modified-Since` and is answered `304`) shows the page it kept, but
+Juggler reports only the wire's `304` and its few fields: it sends one
+response event per request, at `http-on-examine-response`, and drops the
+later `http-on-examine-merged-response` (Camoufox 156's
+`modules/juggler/NetworkObserver.js`, `_sentOnResponse`). So the engine
+keeps the head of every document its browser was answered with a
+validator, in `kept-heads.json` of the persona's profile directory (next
+to `user-data`, not inside it): the status and every field but
+`Set-Cookie`, `Set-Cookie2` and the fields of one connection, the 300
+pages answered last, none answered more than 30 days ago (Firefox drops a
+cached page by the room its cache needs, not by age, and a page left a
+month is rarely still there; where it is, a dropped head costs only the
+wire's `304`). It is read when the context opens and written whole (to a
+new file, then renamed) when it closes. A `304` is reported as the kept
+status with the kept head brought up to date by the 304's fields (RFC 9111
+§3.2), as Chrome's debugger reports it; a `304` whose head is not kept is
+reported as it came (F178). The file holds what the browser's own cache
+entry holds; it goes with the profile when a persona is retired.
 
 ## Settings
 

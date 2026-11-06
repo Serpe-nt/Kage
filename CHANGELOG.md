@@ -6,6 +6,54 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Firefox's result headers are the lines the site sent (F190).** Its
+  driver split every value at its commas, so `Date` and `Last-Modified`
+  came as two headers each (`Tue` and `03 Nov 2026 ... GMT`) and a list as
+  one header per item; the pieces are one line again, as Chrome reports
+  them (QA round two, left-03). A comma the site wrote without a space
+  after it comes back with one: the driver no longer tells the two apart
+  (spec §16.5).
+- **A page a browser revalidated is reported as the page it shows, in both
+  engines (F178).** Chrome reported `200` with the 304's few headers, no
+  `Content-Type` among them; Firefox reported `304`. Both now report the
+  kept page's status and its head brought up to date by the 304's fields:
+  Chrome as its debugger announced it, Firefox from the heads the engine
+  keeps in the persona's profile (`kept-heads.json`, at most 300 pages, 30
+  days, no `Set-Cookie`). A Firefox page whose head is not kept is the
+  wire's `304` with its own fields, never a guess (tls-02; spec §16.5).
+- **Chrome says the status of an empty error answer it replaced with its
+  own page (F204)**, from its debugger, as Firefox does since F189: an
+  `https` site's empty `403` is the site's `forbidden` on Chrome too, and
+  over plain `http` nobody's block in both engines (spec §8.3, §10.2).
+- **A page that sends the tab on before its `load` to an address nothing
+  answers ends at once on Firefox (F200).** A script or a form that sent
+  the tab to an address the forwarder refused left Firefox on its own
+  page, which fires no `load`, and the fetch ended only at its
+  `timeout_ms` (60 s in the guard's end-to-end check, where every other
+  road ends in under 6 s); it now ends there in a fraction of a second,
+  `navigation_failed` where the tab was sent, so `ssrf_denied` (§19).
+- **A result's `title` is the page the tab shows at the capture (F201).**
+  It was the look at the page before the dwell, so a page that moved
+  itself on while the persona read it kept its old title beside the new
+  page's address and document; the page is looked at again after the
+  dwell (spec §10.4).
+- **The Firefox runbook says what a page sees of WebRTC: no candidate at
+  all (F183)**, not host candidates as `.local` names; the parity suite
+  now holds both engines to it (ssrf-04).
+- **What a refused hop leaves in the browser is said (F138).** A hop the
+  forwarder passed and the check after the fact refused (a URL with a user
+  name, a public address by number) was loaded by the browser, and what
+  its page stored (a cookie, `localStorage`) stays in the persona's
+  profile with the origin that wrote it, as any site's state does;
+  nothing of it is returned or kept by Kage. Spec §19 says so (ssrf-06).
+- **A tab a page opens under Chromium's `inject: window` asks as the
+  browser really is (F203, documented, not fixed).** Its first request
+  leaves before the driver reports the tab, and the pinned driver offers
+  no way to reach the tab sooner; spec §10.5 and the Chromium runbook say
+  what was measured. The default `inject: none` is not affected.
+
 ## [2.0.3] - 2026-11-06
 
 ### Fixed
@@ -437,7 +485,6 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   of an unreserved character (a letter, a digit, `-`, `.`, `_`, `~`) is
   now that character in the rule and in the address, as RFC 9309 §2.2.2
   says; an escape of anything else (`%2F`) stays one (spec §14).
-
 ### Added
 
 - **An operator trust anchor for the http path: `http.ca_file`** (F191). A
