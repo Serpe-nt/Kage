@@ -1106,6 +1106,13 @@ enum Refused {
 /// How many refusals are kept per caller: the latest of them.
 const DENIALS_KEPT: usize = 32;
 
+/// How long the refusals of a caller are kept after its latest: longer
+/// than any attempt lasts (a flow's budget of 5 minutes and its margins),
+/// so that every attempt that could still ask has its own. A caller
+/// refused nothing for that long is forgotten (F163: a persona that
+/// retired kept its queue for the life of the process).
+pub const DENIALS_FORGOTTEN: Duration = Duration::from_mins(15);
+
 /// One target the forwarder refused by the SSRF guard (F102).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Denial {
@@ -1131,7 +1138,14 @@ pub struct Denial {
 #[derive(Debug, Default)]
 pub struct Denials {
     next: AtomicU64,
-    kept: Mutex<HashMap<Caller, VecDeque<Denial>>>,
+    kept: Mutex<HashMap<Caller, Refusals>>,
+}
+
+/// The refusals kept for one caller, and when the latest came.
+#[derive(Debug)]
+struct Refusals {
+    latest: Instant,
+    list: VecDeque<Denial>,
 }
 
 impl Denials {
@@ -1143,8 +1157,17 @@ impl Denials {
     /// Records a refusal of `host` for `caller`.
     pub fn record(&self, caller: Caller, host: &str, reason: &str) {
         let seq = self.next.fetch_add(1, Ordering::SeqCst);
+        let now = Instant::now();
         let mut kept = self.kept.lock().unwrap_or_else(PoisonError::into_inner);
-        let list = kept.entry(caller).or_default();
+        // Who was refused nothing for long has nothing an attempt still
+        // asks for: the map holds the callers of the last minutes only.
+        kept.retain(|_, refusals| now.duration_since(refusals.latest) < DENIALS_FORGOTTEN);
+        let refusals = kept.entry(caller).or_insert_with(|| Refusals {
+            latest: now,
+            list: VecDeque::new(),
+        });
+        refusals.latest = now;
+        let list = &mut refusals.list;
         if list.len() >= DENIALS_KEPT {
             list.pop_front();
         }
@@ -1155,10 +1178,19 @@ impl Denials {
         });
     }
 
+    /// How many callers have refusals kept.
+    pub fn callers(&self) -> usize {
+        self.kept
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len()
+    }
+
     /// The first refusal for `caller` since `mark` of one of `hosts`.
     pub fn since(&self, caller: Caller, mark: u64, hosts: &[String]) -> Option<Denial> {
         let kept = self.kept.lock().unwrap_or_else(PoisonError::into_inner);
         kept.get(&caller)?
+            .list
             .iter()
             .find(|denial| {
                 denial.seq >= mark
@@ -2154,8 +2186,8 @@ mod tests {
     use kage_core::secret::Secret;
 
     use super::{
-        Body, Caller, Counted, Head, Meter, Payer, PlainRoute, Refused, RouteRefusal, Tokens,
-        base64_decode, base64_encode, target_of,
+        Body, Caller, Counted, DENIALS_FORGOTTEN, Denials, Head, Meter, Payer, PlainRoute, Refused,
+        RouteRefusal, Tokens, base64_decode, base64_encode, target_of,
     };
 
     fn head(text: &str) -> Head {
@@ -2585,5 +2617,29 @@ mod tests {
                 "unavailable"
             ]
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_caller_refused_nothing_for_long_is_forgotten() {
+        // F163: the queue of a caller (a persona that retired, a plain
+        // exit that went) was kept for the life of the process.
+        let denials = Denials::default();
+        let gone = Caller::Persona(PersonaId::new());
+        let here = Caller::Persona(PersonaId::new());
+        let hosts = vec!["hidden.example".to_owned()];
+        let mark = denials.mark();
+        denials.record(gone, "hidden.example", "refused");
+        assert_eq!(denials.callers(), 1);
+        // Within the time an attempt may still ask, it is kept.
+        tokio::time::advance(DENIALS_FORGOTTEN / 2).await;
+        denials.record(here, "hidden.example", "refused");
+        assert_eq!(denials.callers(), 2);
+        assert!(denials.since(gone, mark, &hosts).is_some());
+        // Past it, the next refusal of anybody forgets it.
+        tokio::time::advance(DENIALS_FORGOTTEN / 2).await;
+        denials.record(here, "hidden.example", "refused");
+        assert_eq!(denials.callers(), 1);
+        assert_eq!(denials.since(gone, mark, &hosts), None);
+        assert!(denials.since(here, mark, &hosts).is_some());
     }
 }

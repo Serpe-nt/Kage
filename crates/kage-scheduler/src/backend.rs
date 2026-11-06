@@ -16,7 +16,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use kage_core::domain::{
-    Attempt, Exit, FetchRecord, Persona, PersonaState, Proxy, ProxyProviderKind, RequestRecord,
+    Attempt, Exit, FetchRecord, Persona, PersonaState, Proxy, ProxyProviderKind, ProxyState,
+    RequestRecord,
 };
 use kage_core::ids::{ApiKeyId, PersonaId, ProxyId};
 use kage_core::outcome::Outcome;
@@ -214,6 +215,12 @@ pub fn view_of(persona: &Persona, proxy: Option<&Proxy>, outage: bool) -> Person
         country: persona.country,
         timezone: persona.timezone.clone(),
         ready: persona.is_ready() && usable,
+        // A persona that waits only for its proxy's backoff to end is
+        // looked at again then, not every minute (F156).
+        ready_at: proxy
+            .filter(|_| persona.is_ready() && !usable)
+            .filter(|proxy| proxy.state == ProxyState::Backoff)
+            .and_then(|proxy| proxy.backoff_until),
         http: http_spec(persona).is_ok(),
         network: Network::of(proxy.and_then(exit_address), asn),
     }

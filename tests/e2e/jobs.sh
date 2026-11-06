@@ -31,7 +31,11 @@
 #     to that site, not to the flow's first one;
 #   - a flow whose page opens a tab (F184), in each engine: the persona's
 #     later click and keys reach the flow's page and not the tab, the step
-#     names the tab, and the tab runs no more once the flow has ended.
+#     names the tab, and the tab runs no more once the flow has ended;
+#   - a flow cancelled during a wait: it stops at the step under way and
+#     none of its later pages is asked for (F175);
+#   - a second server on the same database: refused at start, and it says
+#     why (F174).
 #
 # The batch, the flows and the cancel are run by a TypeScript client that
 # was generated from the API's OpenAPI document (tests/api-client).
@@ -553,5 +557,51 @@ for engine in chromium firefox; do
     opened_note="${opened_note} ${engine}: named by ${steps}, ${before} beats while open, none after;"
 done
 echo "   ${opened_note}"
+
+echo "==> a flow's cancel stops it at the step under way: no later page is asked for (F175)"
+# The round's flow (pool-04): a page, a wait of 15 s, a page, a wait, a
+# page. The cancel comes during the first wait; the sidecar finishes that
+# step and begins no other.
+got "http://fixture:8088/__kage/reset" > /dev/null
+call POST /v1/jobs "${client}" "{\"type\":\"flow\",\"level\":2,\"max_retries\":0,\"timeout_ms\":120000,\"actions\":[{\"action\":\"goto\",\"url\":\"${site}/landing?f175-a\"},{\"action\":\"wait_for\",\"ms\":15000},{\"action\":\"goto\",\"url\":\"${site}/landing?f175-b\"},{\"action\":\"wait_for\",\"ms\":5000},{\"action\":\"goto\",\"url\":\"${site}/landing?f175-c\"}]}"
+expect 201 "a flow of three pages with waits between them"
+stopping="$(value "${body}" "d.id")"
+asked_first=false
+for _ in $(seq 1 90); do
+    seen="$(got "http://fixture:8088/__kage/requests")"
+    asked_first="$(value "${seen}" "d.some((r) => r.path.includes('f175-a'))")"
+    [ "${asked_first}" = true ] && break
+    sleep 1
+done
+[ "${asked_first}" = true ] || fail "the flow's first page was never asked for"
+sleep 2
+call POST "/v1/jobs/${stopping}/cancel" "${client}"
+expect 200 "the cancel of the flow"
+wait_flow "${stopping}"
+[ "${state}" = cancelled ] || fail "the cancelled flow ended ${state}"
+call GET "/v1/jobs/${stopping}/items" "${client}"
+check "every item of the cancelled flow is cancelled" "${body}" \
+    "d.items.length > 0 && d.items.every((i) => i.state === 'cancelled')"
+# Past the end of the wait that was under way, and of the next page's.
+sleep 20
+seen="$(got "http://fixture:8088/__kage/requests")"
+check "no later page of the cancelled flow was asked for" "${seen}" \
+    "d.some((r) => r.path.includes('f175-a')) && !d.some((r) => r.path.includes('f175-b') || r.path.includes('f175-c'))"
+echo "    flow ${stopping}: cancelled during its first wait, its later pages never asked for"
+
+echo "==> a second server on the same database refuses to start and says why (F174)"
+if second="$("${compose[@]}" run --rm --no-deps -T kage serve 2>&1)"; then
+    fail "a second server started on the same database: ${second}"
+fi
+case "${second}" in
+    *"another kage server is running on this database"*) ;;
+    *) fail "the second server did not say why it stopped: ${second}" ;;
+esac
+expect_ready() {
+    call GET /readyz
+    expect 200 "/readyz of the first server, after the second was refused"
+}
+expect_ready
+echo "    refused: another kage server is running on this database; the first still ready"
 
 echo "jobs test passed"

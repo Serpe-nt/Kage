@@ -869,7 +869,10 @@ for, however many synchronous requests wait for it (F106). Work that
 nobody could take because no persona that may take it is ready now (every
 proxy in backoff or held by a suspected outage of the pool, §7.3, F169; a
 persona cooling or not warmed up) is refused
-`no_persona` with `retry_at` a minute on, and a job waits it out (F107);
+`no_persona` with `retry_at`, and a job waits it out (F107): the moment the
+first backoff of such a persona's proxy ends, else a minute on when nobody
+knows (a warm-up, a proxy held by a suspected outage). A backoff can last
+an hour, and a job was looked at every minute of it (F156);
 work no persona could ever take is refused without one. A persona whose
 attempt failed at its proxy leaves its visit and, for 5 minutes or until
 an attempt of it is answered, is set aside for another persona that could
@@ -981,14 +984,22 @@ request is carried on as a job and `202` returned with the job id: a batch
 of one item under the request's own id (`origin: sync_overflow`), held by
 the server that accepted the fetch while it runs. From then on the fetch
 waits where a job waits (a paused site, a persona that sleeps, the
-bandwidth term) instead of ending with an error, and a server that stops
+bandwidth term) instead of ending with an error: its work in the
+scheduler's queue is a job's (its priority and the five minutes a job's
+page waits there for its persona), so that when nobody may read it within
+that time its job is `paused` with the reason and the moment (F130), and a
+server that stops
 gives the job back: after a restart the job worker takes the request up
 again under the same id, with the attempts that were made in its record
 and counted against its retries. The result is at `GET /v1/results/{id}`
 either way (F35). The job's cancel reaches the fetch at once: what waits
 for a persona is taken out of the scheduler's queue and the request ends
 `provider_error` with the reason `cancelled`; an attempt under way is
-finished (F109).
+finished (F109). A caller that hangs up within the wall time does the
+same to its fetch: what waits for a persona or its site leaves the queue,
+and the request ends `provider_error` with the reason `cancelled`; the
+page that is being fetched is finished and kept (F128). Nothing is asked of
+a site for a fetch nobody waits for.
 
 ---
 
@@ -1540,8 +1551,16 @@ persona's seed and the request's seed, which the result records.
 `goto`, `click`, `type`, `press`, `scroll`, `wait_for` (selector | url |
 network_idle | ms), `select`, `hover`, `back`, `extract` (capture point),
 `screenshot`, `pdf`, `assert` (selector exists | text contains). Every
-action has an optional `human: true|false` (default true) and `timeout_ms`.
-Each step reports success, duration and a capture when requested. A human
+action has an optional `timeout_ms`. The actions a person does with the
+mouse and the keys (`click`, `hover`, `type`, `press`, `scroll`, `select`,
+`back`) have an optional `human: true|false` (default true); `goto` (an
+address typed or a page loaded by the browser, nothing a client can
+choose) and the five that only read (`wait_for`, `assert`, `extract`,
+`screenshot`, `pdf`) have none, and refuse it (jobs-09).
+Each step reports success, duration and a capture when requested. A
+`wait_for` of `ms` succeeds only when it waited all of it: a wait longer
+than the step's time (its `timeout_ms`, or what is left of the flow's
+budget) fails the step at once and says so (jobs-11). A human
 `scroll` goes on as long as its step has time, less two seconds for the
 flick that is under way: a page too long for the step is scrolled as far as
 that and the step succeeds (a longer `timeout_ms` scrolls further). A human
@@ -1668,7 +1687,12 @@ before it, has `driver_input: true`. A wall met inside a flow is judged as
 a wall and booked to the site that showed it: the persona cools down there,
 that site's breaker counts it, its window is closed, and another persona
 runs the script again from its first step inside the retry budget; the
-flow's first site is booked the page it served. A later site's trial the
+flow's first site is booked the page it served. So is what a flow's
+end says of a site's health: a `goto` to a later site that timed out or
+found no server answering is that site's, and its own pause after server
+errors holds the next flow that goes there (F162). A fetch redirected to
+another site's wall is booked the same way, to the site that showed it
+(F187). A later site's trial the
 flow took ends with the attempt whatever site the flow ended on: a flow
 that came to what it asked for closes that site's breaker, since the site
 answered every page it was asked for; one that ended otherwise gives the
@@ -2025,7 +2049,9 @@ file is read first, by the same scout, and listed with the sitemaps: the
 `/sitemap.xml`, which is asked for only when the file names none or
 there is no file. Where a site's file is enforced, an address the file is
 known to disallow never becomes a page of the crawl: no item, no request,
-no page of the budget, counted as `skipped.robots_denied`. The first page
+no page of the budget, counted as `skipped.robots_denied`. So is an address
+no request can be made for (longer than the 8192 bytes a request may
+name): `skipped.invalid_url`, never an item that fails (F139). The first page
 of an origin whose file is not known yet waits for it in the pipeline
 like any fetch, and a file that cannot be had holds the site
 (`robots_unavailable`). Every page's result carries the verdict. A crawl's
@@ -2181,7 +2207,10 @@ never fetch what the file disallows, keep to its `Crawl-delay`).
   where the two agree (the longest match, `Allow` on a tie, `*` and `$`; the group
   of `*`, and before it any group that names a token of `robots.agents`,
   `["kage"]`, so that a site owner can address Kage):
-  `{ fetched, allowed, matched_rule, crawl_delay }` on every result. The
+  `{ fetched, allowed, matched_rule, crawl_delay }` on every result: of the
+  address that was asked for, and for a flow of the address it ended on,
+  under its own site's policy, from what is known of that site's file
+  (nothing is asked for it; F186). The
   parser and the matcher are Kage's; the `robotstxt` crate (a port of
   Google's parser) is the test oracle only, because it fails on a long
   line with characters of more than one byte, loses the first line of a
@@ -2356,7 +2385,8 @@ it.
 
 Per-key limits: requests per minute (a token bucket; default 60),
 requests in flight (default 4; a fetch that outlasts the wall time gives
-its slot back with its `202`), and an optional daily page budget (every
+its slot back with its `202`, and so does one whose client hangs up, which
+leaves the queue with it, §8.4, F128), and an optional daily page budget (every
 fetch a key starts is a page, whatever came of it; counted per UTC day
 from the stored requests, so a restart forgets nothing). The API as a
 whole has `server.requests_per_minute` (600), counted before a key is
@@ -2671,13 +2701,15 @@ never wakes a sleeper and has the priority of a job.
 **An item that cannot be attempted now is not failed.** A paused site, a
 visitor that sleeps or is on a break, the bandwidth term, the key's daily
 page budget, a pool with no persona ready (every proxy in backoff:
-`no_persona`, asked again a minute later, F107): the item goes back into
+`no_persona`, asked again when the first backoff ends, F107, F156): the
+item goes back into
 the queue with the time to come back,
 its site is left alone until then, and a job whose every remaining item
 waits is `paused` in the store (`paused.reason`, `paused.until`) and in
 nobody's hands until that time. An item waits in the scheduler for its
 visitor for up to five minutes and is told to come back only when nobody
-it may have could start in that time: a visitor in the middle of a page
+it may have could start in that time (a cooling, the daily cap, the
+night, whatever room the site has for a visit; F130): a visitor in the middle of a page
 counts from its slot (the end of the page and the rest after it are not
 known before the page ends), and one that an earlier page waits for counts
 too. A site left alone for want of a persona (`no_persona`) is asked again
@@ -2696,19 +2728,33 @@ A step's item says whether it ran and succeeded, how long it took and how
 much of that was pacing; a step that captured the page (`extract`,
 `screenshot`, `pdf`) names a result of its own, read, kept and deleted
 like any other; the last item is the flow's own request with its attempts.
-Steps after one that failed are `failed` with `not_run`.
+Steps after one that failed are `failed` with `not_run`. A cancel stops a
+flow at the step under way (F175): Kage hangs up on the sidecar, which
+finishes that step and begins no other, so that at most the page the step
+was reading is asked for after the cancel; the flow's items are
+`cancelled`, its request ends `provider_error` with the reason `cancelled`
+and the cut attempt in its record, and the job is `cancelled`. The steps it
+ran are not reported: the sidecar's answer was not read to its end. A
+server that stops cuts no flow: a flow under way is waited for like any
+page (F39).
 
 **The worker.** Jobs are claimed with `SELECT ... FOR UPDATE SKIP LOCKED`
 under a lease (`jobs.lease`, renewed while the job is worked), at most
 `jobs.max_running` at once and `jobs.max_items_in_flight` items of all
-jobs in the scheduler. A job whose worker stopped is claimed again when
-its lease ran out, by the same server after a restart or by another one,
-and goes on where its items stand. An item names the request that carries
+jobs in the scheduler. Kage is single-instance (ADR 0005): a server holds
+a Postgres advisory lock on its database for its whole life, on a
+connection of its own, and a second server on the same database refuses to
+start and says so; one that lost its connection and finds the lock taken
+by another stops (F174). A job whose worker stopped is claimed again when
+its lease ran out, by the server started after it, and goes on where its
+items stand: Postgres lets the lock go with the session of a server that
+was killed, so the next one starts at once. An item names the request that carries
 it out before that request is written, so a request is never begun twice.
 A cancel is read with every renewal of the lease and at once on the server
 that works the job: what waits is cancelled, an item that waits for its
 persona is taken out of the scheduler's queue, and an attempt that is
-under way is finished, never cut. A job that nobody works when it is
+under way is finished, never cut, but a flow's, which stops at the step
+under way (F175). A job that nobody works when it is
 cancelled (queued behind `jobs.max_running`, paused, or its worker gone)
 is claimed at once for its cancel, past `jobs.max_running`: nothing of it
 is fetched any more. An item that ends without its page (cancelled,
@@ -2775,9 +2821,12 @@ a `Retry-After` is honoured up to an hour; `410` ends the retries; 10 s
 per attempt. One delivery is in flight per receiver, and while a
 receiver's last attempt failed its other events wait behind the next probe
 without spending attempts of their own. A `job.progress` that still waits
-when a newer event of its job is queued is dropped (`superseded`). Every
-attempt is a row of the delivery log (`webhook.deliveries` on the job),
-and what waits survives a restart.
+when a newer event of its job is queued is dropped (`superseded`). The
+delivery log on the job (`webhook.deliveries`) has one row per event: its
+state, how many attempts it took, and the status, the error and the time
+of its last attempt; every attempt is a row of the store
+(`webhook_attempts`), which the log reads (jobs-10). What waits survives a
+restart.
 
 **Retention.** A finished job, its items, their requests, results and
 artifacts are deleted `jobs.retention_days` (14) after it ended; a result

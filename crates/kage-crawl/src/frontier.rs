@@ -101,6 +101,9 @@ pub enum Left {
     /// The site's `robots.txt` disallows it and the site's policy keeps
     /// to the file (spec §14): it is never asked for.
     Robots,
+    /// No request can be made for it: an address longer than a request
+    /// may name (F139). It is never asked for.
+    InvalidUrl,
 }
 
 impl Left {
@@ -111,6 +114,7 @@ impl Left {
             Self::AlreadyRead => "already_read",
             Self::Guard => "ssrf_denied",
             Self::Robots => "robots_denied",
+            Self::InvalidUrl => "invalid_url",
         }
     }
 
@@ -124,6 +128,9 @@ impl Left {
         }
         if name == "robots_denied" {
             return Some(Self::Robots);
+        }
+        if name == "invalid_url" {
+            return Some(Self::InvalidUrl);
         }
         Skip::ALL
             .into_iter()
@@ -633,6 +640,14 @@ impl Frontier {
     /// whether it was waiting.
     pub fn disallow(&mut self, id: EntryId) -> bool {
         self.leave(id, Left::Robots)
+    }
+
+    /// Leaves out a page that waits and no request can be made for (its
+    /// address is longer than a request may name, F139): it is never
+    /// asked for and does not count against `max_pages`. Returns whether
+    /// it was waiting.
+    pub fn unrequestable(&mut self, id: EntryId) -> bool {
+        self.leave(id, Left::InvalidUrl)
     }
 
     fn leave(&mut self, id: EntryId, why: Left) -> bool {

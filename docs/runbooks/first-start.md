@@ -85,6 +85,12 @@ reverse proxy that terminates TLS in front of it
 ([api.md](api.md#where-it-listens)). `/readyz` says `ready` once the
 database answers, a sidecar is up and a persona is ready.
 
+One server per database: Kage is single-instance (ADR 0005). A second
+`kage serve` on the same database exits at once with "another kage server
+is running on this database" (F174); stop the first, and the second
+starts, taking up the jobs the first held once their leases run out. A
+server that was killed holds nothing: the next one starts at once.
+
 The pool and the personas build themselves: within a few minutes every
 proxy is health-checked and gets a persona (under `direct`, the host's
 persona is made once a lookup has placed the host), which then warms up

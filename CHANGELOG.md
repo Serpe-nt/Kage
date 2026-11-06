@@ -10,6 +10,70 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **One server per database (F174).** Kage is single-instance (ADR 0005):
+  a server holds a Postgres advisory lock on its database for its life, on
+  a connection of its own, and a second `kage serve` on the same database
+  exits at once with "another kage server is running on this database".
+  A server killed and started again starts at once (Postgres lets the lock
+  go with the session); one that lost its connection takes the lock again,
+  or stops when another took it meanwhile. Spec §16.6 no longer promises a
+  take-over by another server: a job's lease moves to the server started
+  after the one that stopped (QA round two, pool-03: a job taken over by a
+  second server hung `running` for good).
+- **A client that hangs up leaves the queue (F128).** A synchronous fetch
+  whose caller goes away within the wall time is taken out of the
+  scheduler's queue: nothing is asked of the site for it, and its request
+  ends `provider_error` with the reason `cancelled`; a page that was being
+  fetched is finished. `kage_api_requests_in_flight` comes down for such a
+  request; it only ever rose (QA round one, sched-02, sched-03).
+- **A page that waits for a persona says so (F130).** A fetch carried on
+  as a job waits in the scheduler as a job's page (its priority, five
+  minutes for its persona) and is then told when to come back, so its job
+  is `paused` with the reason and the moment instead of `running`,
+  `paused: null`. A job nobody may serve within its patience (the daily
+  cap, a cooling, the night) is told when even while the site has no room
+  for another visit; it waited in the queue for the visits to end (QA
+  round one, sched-08).
+- **Crawl counters (F139).** A link no request can be made for (longer than
+  8192 bytes) is `skipped.invalid_url`: no item, no page of `max_pages`;
+  it failed `invalid_url` and took a page without a request, and the page
+  after it was never read. A page that waits for its site or its visitor is
+  `waiting`, not `fetching`, and is not in `pages` until it is asked for
+  again (QA round one, crawl-07, crawl-08).
+- **Flow and webhook words (F140).** A `wait_for` of `ms` longer than what
+  its step may take fails the step instead of succeeding after the
+  shorter time (jobs-11). The spec says which actions take `human` (the
+  seven a person does with the mouse and keys; jobs-09), and that
+  `webhook.deliveries` has one row per event with its last attempt, every
+  attempt being kept in the store (jobs-10).
+- **A job paused for the pool's return looks again when a backoff ends
+  (F156).** Work nobody is ready for is told to come back when the first
+  backoff of a proxy that keeps a persona that could serve it ends, not
+  every minute of a backoff that can last an hour.
+- **A crawl's page a dead worker left running ends with a cancel (F157).**
+  Pinned by a regression test: the resume path ends such a page and its
+  request `cancelled`, as for a batch and a flow since F109.
+- **A flow's later site is booked its own server errors (F162).** What a
+  flow's end says of a site's health (a timeout, a server error) is booked
+  to the later site that showed it, whose own pause then holds the next
+  flow that goes there; the first site is not paused for it.
+- **Three nits of F101 and F102 (F163).** `verdicts::saved_not_shown`,
+  which only tests used, is gone; `forwarder::Denials` forgets a caller
+  refused nothing for 15 minutes; a later `goto`'s robots check reads the
+  policy the request holds since it began.
+- **A flow's cancel stops it at the step under way (F175).** Kage hangs up
+  on the sidecar, which finishes the step and begins no other; the flow's
+  items are `cancelled` and the job `cancelled`. A flow used to run to its
+  last step after a cancel and end `succeeded` (QA round two, pool-04). A
+  server that stops still waits for a flow under way.
+- **A flow's result carries the robots verdict of where it ended (F186).**
+  Not its first site's: a page on a later site reports that site's file,
+  with its `Crawl-delay`, and a click to an address the file disallows
+  never says `allowed: true` (QA round two, flows-01).
+- **A fetch redirected to another site's wall books the block to that
+  site (F187),** as a flow does since F101: the persona cools there and
+  that site's breaker counts it; the site that only redirected is left as
+  it was (QA round two, flows-03).
 - **A proxy that comes back on an address a dead proxy once had keeps its
   persona (F177).** The shared-exit check compares a probe with the
   latest probes of the other live proxies that read an address; a proxy

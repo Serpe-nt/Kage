@@ -16,6 +16,11 @@
 //! network. The metrics exporter is installed here, once per process:
 //! everything the pool, the scheduler and the forwarder recorded through
 //! the `metrics` facade since M2 is scraped from now on.
+//!
+//! Kage is single-instance (ADR 0005, F174): a server holds the database's
+//! server lock (`kage_store::ServerLock`) for its life, and a second server
+//! on the same database refuses to start and says so. A server whose lock
+//! was taken by another while its own connection was lost stops.
 
 use std::future::Future;
 use std::net::SocketAddr;
@@ -35,7 +40,7 @@ use kage_core::policy::PolicyStore;
 use kage_persona::PersonaProbeClients;
 use kage_proxy::health::{Endpoints, HostIp};
 use kage_proxy::{HealthChecker, Pool, SystemClock};
-use kage_store::{ArtifactStore, Store};
+use kage_store::{ArtifactStore, ServerLock, Store};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
@@ -50,6 +55,15 @@ const ORPHAN_GRACE: Duration = Duration::from_hours(1);
 /// How often the proxy pool ends backoffs that ran out and follows
 /// replacements in flight.
 const POOL_TICK: Duration = Duration::from_secs(10);
+
+/// How often a server looks whether it still holds its database's lock.
+const LOCK_LOOK_EVERY: Duration = Duration::from_secs(15);
+
+/// What a server that finds another one on its database is told.
+const ANOTHER_SERVER: &str = "another kage server is running on this database: it holds the \
+     lock every server holds for its life. Kage is single-instance (ADR 0005): stop the other \
+     server first. A job the other server held is taken up by this one once it starts, when \
+     the job's lease has run out";
 
 /// What the fetch engine is made of, once it runs.
 struct Started {
@@ -68,6 +82,13 @@ pub(crate) async fn run(config: Config, bind: Option<SocketAddr>) -> anyhow::Res
         .await
         .context("cannot read the migration state")?;
     migrate::ensure_clean(&status)?;
+    // One server per database, before anything is started (F174).
+    let lock = ServerLock::take(store.pool())
+        .await
+        .context("cannot take the database's server lock")?
+        .ok_or_else(|| anyhow::anyhow!(ANOTHER_SERVER))?;
+    let (lost, lock_lost) = watch::channel(false);
+    let keeper = tokio::spawn(keep_the_lock(store.clone(), lock, lost));
 
     let (alerts, recorder) = alerts::recorder(store.clone());
     let policies = Arc::new(
@@ -115,6 +136,7 @@ pub(crate) async fn run(config: Config, bind: Option<SocketAddr>) -> anyhow::Res
         Err(error) => {
             retention.abort();
             recorder.abort();
+            keeper.abort();
             store.close().await;
             return Err(error);
         }
@@ -127,7 +149,7 @@ pub(crate) async fn run(config: Config, bind: Option<SocketAddr>) -> anyhow::Res
         artifacts,
         policies,
         started.engine.as_ref(),
-        metrics,
+        (metrics, lock_lost),
     )
     .await;
 
@@ -141,8 +163,46 @@ pub(crate) async fn run(config: Config, bind: Option<SocketAddr>) -> anyhow::Res
     }
     retention.abort();
     recorder.abort();
+    // Last: the lock goes with its connection.
+    keeper.abort();
     store.close().await;
     served
+}
+
+/// Looks every [`LOCK_LOOK_EVERY`] whether the server still holds its
+/// database's lock. A lock whose connection was lost (Postgres restarted,
+/// the network broke) is taken again; when another server took it in the
+/// meantime, `lost` says so and this server stops. Aborting the task drops
+/// the lock, and Postgres lets it go with its connection.
+async fn keep_the_lock(store: Store, mut lock: ServerLock, lost: watch::Sender<bool>) {
+    let mut ticker = tokio::time::interval(LOCK_LOOK_EVERY);
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    ticker.tick().await;
+    loop {
+        ticker.tick().await;
+        if matches!(lock.held().await, Ok(true)) {
+            continue;
+        }
+        match ServerLock::take(store.pool()).await {
+            Ok(Some(again)) => {
+                tracing::warn!(
+                    "the database's server lock was lost with its connection and is held again"
+                );
+                lock = again;
+            }
+            Ok(None) => {
+                tracing::error!(
+                    "another kage server took this database's lock while this server's \
+                     connection was lost: this server stops (ADR 0005)"
+                );
+                let _ = lost.send(true);
+                return;
+            }
+            Err(error) => {
+                tracing::warn!(%error, "the database's server lock cannot be looked at; it is looked at again shortly");
+            }
+        }
+    }
 }
 
 /// Builds the API over what was started and serves it until a signal.
@@ -153,7 +213,7 @@ async fn serve_api(
     artifacts: ArtifactStore,
     policies: Arc<PolicyStore>,
     engine: Option<&(Engine, Arc<HealthChecker>)>,
-    metrics: Option<MetricsHandle>,
+    (metrics, lock_lost): (Option<MetricsHandle>, watch::Receiver<bool>),
 ) -> anyhow::Result<()> {
     let state = ApiState::new(ApiParts {
         config: Arc::new(config.clone()),
@@ -219,8 +279,12 @@ async fn serve_api(
         wait_for(closed),
     ));
 
+    let mut taken = false;
     tokio::select! {
         () = shutdown_signal() => {}
+        // Another server holds the database now: this one stops as at a
+        // signal, and says why (F174).
+        () = wait_for(lock_lost) => taken = true,
         // The listener gave up by itself: nothing is left to wait for.
         ended = &mut api => {
             let _ = stop.send(true);
@@ -264,6 +328,9 @@ async fn serve_api(
         let _ = server.await;
     }
     upkeep.abort();
+    if taken {
+        anyhow::bail!(ANOTHER_SERVER);
+    }
     served
 }
 

@@ -494,8 +494,10 @@ export interface paths {
          * @description What waits is cancelled at once; an item that waits for its persona is
          *     taken out of the queue; a page that is being fetched at this moment is
          *     finished, so at most one more item per visitor ends after the cancel.
-         *     The answer is the job as it stands; it is `cancelled` once what was
-         *     under way is over. A job that has ended is answered as it ended.
+         *     A flow stops at the step under way: the step is finished and no other
+         *     begins; its items are `cancelled`. The answer is the job as it stands;
+         *     it is `cancelled` once what was under way is over. A job that has
+         *     ended is answered as it ended.
          */
         post: operations["cancel_job"];
         delete?: never;
@@ -1293,7 +1295,8 @@ export interface components {
             fetched: number;
             /**
              * Format: int64
-             * @description Pages being read now.
+             * @description Pages being read now: in the scheduler for their visitor or being
+             *     fetched.
              */
             fetching: number;
             /**
@@ -1313,7 +1316,9 @@ export interface components {
             near_duplicates: number;
             /**
              * Format: int32
-             * @description Pages asked of the sites so far: what `max_pages` counts.
+             * @description Pages asked of the sites so far: what `max_pages` counts. A page
+             *     that waits for its site or its visitor is counted once it goes to
+             *     the scheduler again.
              */
             pages: number;
             /** @description How the pages were reached. */
@@ -1325,16 +1330,23 @@ export interface components {
              *     `too_deep`, `denied`, `not_allowed`, `not_a_page` (a file),
              *     `hidden` (no reader can see the link), `already_read` (another
              *     address redirected there), `ssrf_denied`, `robots_denied` (the
-             *     site's `robots.txt` disallows it and its policy keeps to the file).
+             *     site's `robots.txt` disallows it and its policy keeps to the file),
+             *     `invalid_url` (no request can be made for it: longer than 8192
+             *     bytes).
              */
             skipped: components["schemas"]["FreeForm"];
             /**
              * Format: int64
-             * @description Of them, pages that wait to be read.
+             * @description Of them, pages that wait to be read: a page the crawl began and
+             *     that waits for its site or its visitor included.
              */
             waiting: number;
         };
-        /** @description One event on its way to the job's webhook. */
+        /**
+         * @description One event on its way to the job's webhook: one row per event, with how
+         *     many attempts it took and what the last one came to. Every attempt is
+         *     kept in the store.
+         */
         DeliveryView: {
             /**
              * Format: int32
@@ -1936,7 +1948,10 @@ export interface components {
         FreeForm: {
             [key: string]: unknown;
         };
-        /** @description Load a page. The first step of every flow. */
+        /**
+         * @description Load a page. The first step of every flow. The browser loads it as an
+         *     address typed: there is no `human` to choose.
+         */
         GotoStep: {
             /**
              * Format: int64
@@ -3068,11 +3083,16 @@ export interface components {
             /** @description The lifecycle point. */
             until?: components["schemas"]["WaitUntilField"];
         };
-        /** @description Wait for one condition: exactly one of the four is given. */
+        /**
+         * @description Wait for one condition: exactly one of the four is given. A step that
+         *     only reads: there is no `human` to choose.
+         */
         WaitForStep: {
             /**
              * Format: int64
-             * @description For this long, in milliseconds.
+             * @description For this long, in milliseconds. The step succeeds only when all of
+             *     it was waited: a wait longer than the step's `timeout_ms`, or than
+             *     what is left of the flow's `timeout_ms`, fails the step at once.
              */
             ms?: number | null;
             /** @description Until no request ran for half a second. */

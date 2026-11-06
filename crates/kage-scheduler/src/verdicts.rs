@@ -177,18 +177,6 @@ pub fn read_nothing(page: &PageResult) -> bool {
     page.error.is_some() && page.dom_html.is_none() && page.raw_body.is_none()
 }
 
-/// Whether a navigation ended because the browser saved what came instead
-/// of showing it (a gzipped sitemap, any download) and nothing of it was
-/// kept: there is no page to judge, and what would be judged in its place
-/// is an empty document the site never sent.
-pub fn saved_not_shown(page: &PageResult) -> bool {
-    page.error
-        .as_ref()
-        .is_some_and(|error| error.code == NavigationErrorCode::Aborted)
-        && page.dom_html.is_none()
-        && page.raw_body.is_none()
-}
-
 /// What an answer says about the site's health.
 pub const fn courtesy_of(outcome: Outcome, status: Option<u16>) -> Courtesy {
     match (outcome, status) {
@@ -437,10 +425,7 @@ mod tests {
     use kage_core::outcome::{CooldownClass, Outcome};
     use kage_core::schedule::politeness::Courtesy;
 
-    use super::{
-        cookies_set, courtesy_of, observe_page, page_failure, read_nothing, saved_not_shown,
-        unanswered,
-    };
+    use super::{cookies_set, courtesy_of, observe_page, page_failure, read_nothing, unanswered};
 
     fn page() -> PageResult {
         let examples: serde_json::Value = serde_json::from_str(EXAMPLES_JSON).unwrap();
@@ -576,9 +561,9 @@ mod tests {
             page.raw_body = None;
             page
         };
-        // Saved, nothing kept: no page.
+        // Saved, nothing kept: no page (a download; F163: the check of its
+        // own that only this test used is `read_nothing`'s case).
         let saved = aborted(NavigationErrorCode::Aborted);
-        assert!(saved_not_shown(&saved));
         // The bytes were handed over all the same (Firefox): there is
         // something to look at.
         let mut handed = saved.clone();
@@ -588,22 +573,10 @@ mod tests {
             }))
             .ok()
         });
-        assert!(!saved_not_shown(&handed));
         let mut shown = saved.clone();
         shown.dom_html = Some("<html></html>".to_owned());
-        assert!(!saved_not_shown(&shown));
-        // A page that hung or did not come is another matter, and so is
-        // one that loaded.
-        for code in [
-            NavigationErrorCode::Timeout,
-            NavigationErrorCode::NavigationFailed,
-            NavigationErrorCode::ProxyFailed,
-        ] {
-            assert!(!saved_not_shown(&aborted(code)), "{code:?}");
-        }
         let mut loaded = saved;
         loaded.error = None;
-        assert!(!saved_not_shown(&loaded));
 
         // Read nothing: every failure of which no document and no body came
         // (F103: a page that stopped answering keeps its status 200), and

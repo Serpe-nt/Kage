@@ -17,10 +17,12 @@ mod artifact_store;
 mod convert;
 mod error;
 pub mod repo;
+mod server_lock;
 mod store;
 
 pub use artifact_store::{ArtifactError, ArtifactStore, NewArtifact, SweepReport};
 pub use error::StoreError;
+pub use server_lock::{KEEPALIVES, SERVER_LOCK, ServerLock};
 pub use store::{MigrationState, MigrationStatus, Store};
 
 /// Name of this crate as recorded in its manifest.
