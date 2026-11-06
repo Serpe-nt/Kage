@@ -34,6 +34,7 @@ import {
   type OperationEnv,
   type Point,
   type SessionDriver,
+  type ShownHead,
 } from '@kage/engine-core';
 import type { BrowserContext, CDPSession, Page } from 'patchright';
 
@@ -283,6 +284,20 @@ export class ChromiumContext implements EngineContext, SessionDriver {
 
   unansweredRedirects(): RedirectHop[] {
     return this.requests.unanswered();
+  }
+
+  /**
+   * The kept page Chrome shows where it revalidated it and the network
+   * answered `304`: its status and head as the debugger announced them
+   * (F178). The driver's header lines are the wire's, as the field lines
+   * were sent, for every other document.
+   */
+  shownHead(response: DriverResponse): Promise<ShownHead | null> {
+    return Promise.resolve(this.requests.revalidated(response.url()));
+  }
+
+  replacedStatus(url: string): number | null {
+    return this.requests.replacedStatus(url);
   }
 
   /**

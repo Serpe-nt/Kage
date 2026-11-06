@@ -713,7 +713,8 @@ mod tests {
             vec!["failure:navigation_failed".to_owned()]
         );
         assert_eq!(refused.cooldown, CooldownClass::None);
-        // Chrome's page there names no status, and nothing is seen to judge.
+        // Where nobody heard the status (Chrome's page before F204, or an
+        // answer its debugger missed), nothing is seen to judge.
         let mut chrome = page();
         chrome.final_url = "https://shop.kage.test/a".to_owned();
         chrome.status = None;

@@ -191,7 +191,15 @@ interface Tabs {
  * (F103). One with `refreshes=<address>` loads, and its meta refresh
  * sends the tab there while the hand reads where the page is: the read
  * fails as Firefox's does (F192). One with `readbreaks=<message>` loads,
- * and the hand's look at where the page is fails with that message.
+ * and the hand's look at where the page is fails with that message. One
+ * with `ffsends=<address>` is answered, and its script sends the tab there
+ * before its `load`, where nothing answers: Firefox shows its own page
+ * under that address and the load never ends (F200). One with
+ * `later=<address>` loads, and 150 ms later moves itself there, where a
+ * page with another title loads (F201). One with `revalidated` in it is
+ * answered `304`, and the driver names the kept page's head (F178); one
+ * with `chrome403` in it gets an empty `403` Chrome replaces with its own
+ * page, which only the driver's debugger saw (F204).
  * Each tab keeps a history as Chrome keeps it: the blank page it began
  * with stays an entry, every navigation adds one, and the browser's own way
  * back moves to the entry before without asking anyone for it.
@@ -248,6 +256,8 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
     // The page's meta refresh, and a look of the hand's that fails (F192).
     let refreshTo: string | null = null;
     let readFailure: string | null = null;
+    // The title of the document the tab shows.
+    let title = 'A page';
     const never = new Promise<never>(() => undefined);
     const reading = <T>(value: T): Promise<T> => (stuck ? never : Promise.resolve(value));
     const mainFrame = { url: () => address };
@@ -277,7 +287,7 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
     };
     const page: DriverPage = {
       url: () => address,
-      title: () => reading('A page'),
+      title: () => reading(title),
       content: () => reading('<html><body><p>A page</p></body></html>'),
       mainFrame: () => mainFrame,
       frames: () => [mainFrame],
@@ -285,6 +295,13 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
         driven.loaded.push(url);
         documentUri = null;
         unanswered = [];
+        title = 'A page';
+        if (url.includes('chrome403')) {
+          // Chrome: its own page in place of the answer, which its driver never names.
+          emit('request', answer(url).request());
+          address = 'chrome-error://chromewebdata/';
+          return Promise.reject(new Error('net::ERR_HTTP_RESPONSE_CODE_FAILURE'));
+        }
         if (url.includes('fail')) {
           return Promise.reject(new Error('net::ERR_NAME_NOT_RESOLVED'));
         }
@@ -322,8 +339,29 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
           address = 'chrome-error://chromewebdata/';
           return Promise.reject(new Error('net::ERR_TUNNEL_CONNECTION_FAILED'));
         }
+        const ffsends = sent('ffsends');
+        if (ffsends !== null) {
+          // Firefox: the page is answered, its script sends the tab on
+          // before `load`, nothing answers there, and no `load` comes.
+          const first = answer(url);
+          emit('request', first.request());
+          address = url;
+          history.push(url);
+          emit('response', first);
+          emit('request', answer(ffsends).request());
+          address = ffsends;
+          documentUri = `about:neterror?e=netReset&u=${encodeURIComponent(ffsends)}&c=UTF-8`;
+          return new Promise((_, reject) =>
+            setTimeout(
+              () => {
+                reject(new Error('Timeout exceeded'));
+              },
+              Math.min(options.timeout, 3000),
+            ),
+          );
+        }
         const moves = sent('moves');
-        const response = answer(url);
+        const response = answer(url, url.includes('revalidated') ? 304 : 200);
         emit('request', response.request());
         address = url;
         history.push(url);
@@ -343,6 +381,17 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
         }
         refreshTo = sent('refreshes');
         readFailure = sent('readbreaks');
+        const later = sent('later');
+        if (later !== null) {
+          setTimeout(() => {
+            const there = answer(later);
+            emit('request', there.request());
+            address = later;
+            history.push(later);
+            title = 'Where it went';
+            emit('response', there);
+          }, 150);
+        }
         stuck = url.includes('stuck') || url.includes('crash');
         if (url.includes('crash')) {
           setTimeout(() => {
@@ -472,6 +521,19 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
       return Promise.resolve();
     },
     unansweredRedirects: () => unanswered,
+    shownHead: (response) =>
+      Promise.resolve(
+        response.status() === 304
+          ? {
+              status: 200,
+              headers: [
+                { name: 'Content-Type', value: 'text/html' },
+                { name: 'ETag', value: '"v1"' },
+              ],
+            }
+          : null,
+      ),
+    replacedStatus: (url) => (url.includes('chrome403') ? 403 : null),
     otherTabs: () => tabs.opened.filter((entry) => !entry.closed).map((entry) => entry.tab),
     front: () => {
       tabs.fronts += 1;
@@ -1023,6 +1085,65 @@ describe('a page the browser could not load (F102)', () => {
     expect(moved.status).toBeNull();
   });
 
+  it('ends at once where the page sent the tab on before its load and nothing answered there (F200)', async () => {
+    const on = session();
+    // A script or a form that sends the tab to an address the forwarder
+    // refused: Firefox shows its own page there and fires no `load`.
+    const refused = 'http://m06.m1.test:8091/secret';
+    const start = sending('/s', 'ffsends', refused);
+    const started = Date.now();
+    const result = await on.navigate(
+      { url: start, wait: { until: 'load' }, timeout_ms: 20_000, capture },
+      env,
+    );
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(PageResultSchema.parse(result)).toEqual(result);
+    expect(result).toMatchObject({
+      final_url: refused,
+      status: null,
+      headers: [],
+      title: null,
+      dom_html: null,
+      raw_body: null,
+    });
+    expect(result.error).toMatchObject({ code: 'navigation_failed' });
+    expect(result.error?.message).toContain(
+      `could not load ${refused}, where the page sent the tab`,
+    );
+
+    // A flow's goto fails its step there as well, and names where.
+    const events: FlowEvent[] = [];
+    const flowStarted = Date.now();
+    await on.flow({ actions: [{ action: 'goto', url: start }], capture }, env, (event) =>
+      events.push(event),
+    );
+    expect(Date.now() - flowStarted).toBeLessThan(2_000);
+    const step = events.find((event) => event.type === 'step' && event.action === 'goto');
+    expect(step).toMatchObject({ ok: false });
+    expect(step?.type === 'step' ? step.error : null).toContain(
+      `navigation_failed: the browser could not load ${refused}`,
+    );
+  });
+
+  it('says the status of an empty error answer Chrome replaced with its own page, as its debugger heard it (F204)', async () => {
+    const on = session();
+    const walled = site('/chrome403/x');
+    const result = await navigate(on, walled);
+    expect(PageResultSchema.parse(result)).toEqual(result);
+    expect(result).toMatchObject({
+      final_url: walled,
+      status: 403,
+      headers: [],
+      title: null,
+      dom_html: null,
+      raw_body: null,
+    });
+    expect(result.error).toMatchObject({ code: 'navigation_failed' });
+    // Elsewhere the debugger names nothing, and no status is made up.
+    const failed = await navigate(on, site('/fail/x'));
+    expect(failed.status).toBeNull();
+  });
+
   it('names a redirect the browser refused to follow and told only its debugger of (F167)', async () => {
     const on = session();
     for (const target of ['file:///etc/passwd', 'data:text/html,<b>x</b>', 'javascript:alert(1)']) {
@@ -1139,6 +1260,61 @@ describe('a page the browser could not load (F102)', () => {
       ['back', false, failed(gone)],
     ]);
     expect(back.final?.result).toMatchObject({ final_url: gone, status: null, dom_html: null });
+  });
+});
+
+describe('the page a result describes', () => {
+  const env: OperationEnv = {
+    artifacts: new ArtifactWriter(path.join(tmpdir(), 'kage-described-unused')),
+    defaultArtifactPrefix: 'sidecar/test',
+  };
+  const capture = { dom: true, raw: false, xhr: null, console: false, screenshot: null, pdf: null };
+  const session = () => {
+    const { driver } = scriptedDriver();
+    const parts = { driver, personaSeed: PERSONA_SEED, selftestPages: [], log: silentLog };
+    return new PageSession(parts);
+  };
+
+  it('is the response the tab shows, where the driver says otherwise (F178, F190)', async () => {
+    const on = session();
+    // Answered `304`: the driver names the kept page's status and head.
+    const kept = await on.navigate(
+      { url: site('/revalidated'), wait: { until: 'load' }, capture },
+      env,
+    );
+    expect(PageResultSchema.parse(kept)).toEqual(kept);
+    expect(kept).toMatchObject({
+      status: 200,
+      headers: [
+        { name: 'content-type', value: 'text/html' },
+        { name: 'etag', value: '"v1"' },
+      ],
+    });
+    // Elsewhere the driver's own.
+    const plainPage = await on.navigate({ url: site('/a'), wait: { until: 'load' }, capture }, env);
+    expect(plainPage).toMatchObject({
+      status: 200,
+      headers: [{ name: 'content-type', value: 'text/html' }],
+    });
+  });
+
+  it('is named as it is at the capture, though the page moved itself on during the rest (F201)', async () => {
+    const on = session();
+    const there = site('/there');
+    const address = site(`/here?later=${encodeURIComponent(there)}`);
+    for (const rest of [
+      { dwell_ms: 600 },
+      { dwell_ms: 600, behavior: { seed: REQUEST_SEED, mode: 'still' as const } },
+    ]) {
+      const moved = await on.navigate(
+        { url: address, wait: { until: 'load' }, capture, ...rest },
+        env,
+      );
+      expect(moved).toMatchObject({ final_url: there, title: 'Where it went', error: null });
+    }
+    // Without a rest the page is captured as it was looked at.
+    const at = await on.navigate({ url: address, wait: { until: 'load' }, capture }, env);
+    expect(at).toMatchObject({ title: 'A page' });
   });
 });
 

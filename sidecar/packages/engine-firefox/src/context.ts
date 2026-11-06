@@ -1,4 +1,4 @@
-import { readFile, rm, stat } from 'node:fs/promises';
+import { readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 
 import type {
   AppliedIdentity,
@@ -34,7 +34,9 @@ import {
   type InputDevice,
   type OperationEnv,
   type Point,
+  type KeptHeads,
   type SessionDriver,
+  type ShownHead,
 } from '@kage/engine-core';
 import type { BrowserContext, Page, Response } from 'playwright-core';
 
@@ -87,10 +89,44 @@ export function classifyNavigationError(error: unknown): NavigationError {
   return { code: 'navigation_failed', message, net_error: net };
 }
 
+/**
+ * The header lines of a response as Firefox holds them (F190). Its driver
+ * splits every value at its commas and trims each piece, so a date
+ * (`Tue, 03 Nov 2026 ...`) and a list come as several headers of one name;
+ * Firefox itself holds one value per name, with repeated lines joined by
+ * `, `, and `Set-Cookie` lines joined by a line feed, which the driver
+ * splits there and keeps as lines. Consecutive pieces of one name are made
+ * one value again, joined as Firefox joins them: as sent wherever a comma
+ * was followed by one space, as in a date and most lists; `a,b` comes
+ * back as `a, b`, which the driver no longer tells apart.
+ */
+export function joinedHeaders(
+  split: readonly { name: string; value: string }[],
+): { name: string; value: string }[] {
+  const lines: { name: string; value: string }[] = [];
+  for (const { name, value } of split) {
+    const previous = lines[lines.length - 1];
+    const same = previous?.name.toLowerCase() === name.toLowerCase();
+    if (previous !== undefined && same && name.toLowerCase() !== 'set-cookie') {
+      previous.value = `${previous.value}, ${value}`;
+    } else {
+      lines.push({ name, value });
+    }
+  }
+  return lines;
+}
+
 /** What the engine hands over when a context is open. */
 export interface FirefoxContextParts {
   readonly context: BrowserContext;
   readonly page: Page;
+  /**
+   * The heads of the pages the persona's browser keeps (F178): read from
+   * the profile when the context opened, written back when it closes.
+   */
+  readonly keptHeads: KeptHeads;
+  /** The file in the persona's profile that holds them. */
+  readonly keptHeadsPath: string;
   readonly browserVersion: string;
   readonly applied: AppliedIdentity;
   /** The persona's seed: its motor profile derives from it. */
@@ -149,6 +185,30 @@ export class FirefoxContext implements EngineContext, SessionDriver {
    * somebody listens.
    */
   private listen(page: Page): void {
+    // Every document's answer, for the page the browser will show when it
+    // revalidates it (F178). Read from the driver, never from the page.
+    page.on('response', (response) => {
+      let document = false;
+      try {
+        const asked = response.request();
+        document = asked.isNavigationRequest() && asked.frame() === page.mainFrame();
+      } catch {
+        // A request without a frame (a service worker's) is no document of the tab.
+      }
+      if (document) {
+        response.headersArray().then(
+          (headers) => {
+            this.parts.keptHeads.note(
+              response.url(),
+              response.status(),
+              joinedHeaders(headers),
+              Date.now(),
+            );
+          },
+          () => undefined,
+        );
+      }
+    });
     page.on('console', (message) => {
       this.console.add({
         level: CONSOLE_LEVELS[message.type()] ?? 'info',
@@ -269,6 +329,20 @@ export class FirefoxContext implements EngineContext, SessionDriver {
     throw new EngineError('internal', `Firefox wrote no PDF within ${PRINT_TIMEOUT_MS} ms`);
   }
 
+  /**
+   * A document's status and header lines as the tab shows them: the lines
+   * as Firefox received them, not split at commas (F190); for a `304` the
+   * page the browser kept, brought up to date by the 304's fields, where
+   * its head is kept, and the wire's `304` where it is not (F178).
+   */
+  async shownHead(response: DriverResponse): Promise<ShownHead | null> {
+    const status = response.status();
+    const headers = joinedHeaders(await response.headersArray());
+    const kept =
+      status === 304 ? this.parts.keptHeads.shown(response.url(), headers, Date.now()) : null;
+    return kept ?? { status, headers };
+  }
+
   async protocolOf(response: DriverResponse): Promise<string | null> {
     // The responses the session hands back are the driver's own.
     const version = await (response as Partial<Response>).httpVersion?.().catch(() => null);
@@ -320,6 +394,18 @@ export class FirefoxContext implements EngineContext, SessionDriver {
     return this.pageSession.selftest(request, env);
   }
 
+  /** Writes the kept heads into the profile, whole or not at all (F178). */
+  private async keepHeads(): Promise<void> {
+    const { keptHeadsPath } = this.parts;
+    const next = `${keptHeadsPath}.next`;
+    try {
+      await writeFile(next, this.parts.keptHeads.serialize(Date.now()), { mode: 0o600 });
+      await rename(next, keptHeadsPath);
+    } catch (error) {
+      this.parts.log.warn({ err: error }, 'the heads of the kept pages could not be written');
+    }
+  }
+
   async close(): Promise<void> {
     if (this.closed) {
       return;
@@ -334,6 +420,7 @@ export class FirefoxContext implements EngineContext, SessionDriver {
     } catch (error) {
       this.parts.log.warn({ err: error }, 'closing the browser failed');
     } finally {
+      await this.keepHeads();
       await this.parts.release();
     }
   }

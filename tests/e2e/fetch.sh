@@ -25,8 +25,9 @@
 #     before anything is sent (F100, F104);
 #   - a target the proxies refuse (F189): a plain one, whose empty 403
 #     the browser replaces with its own page, is `navigation_failed` at
-#     once and nobody's block (Firefox reports the 403 it saw); a refused
-#     tunnel is `proxy_refused`, logged with the proxy and the host;
+#     once and nobody's block (both engines report the 403 they saw,
+#     F204); a refused tunnel is `proxy_refused`, logged with the proxy
+#     and the host;
 #   - every byte counted: what Kage wrote to the store is what the proxies
 #     carried for it.
 # It also measures what the forwarder adds to a connection.
@@ -314,10 +315,9 @@ echo "==> a target the proxies refuse is nobody's block, and a refused tunnel is
 # empty 403 to a plain request and a 403 to a CONNECT, as a provider's
 # blocklist answers. Nothing reaches a site.
 for engine in chromium firefox; do
-    case "${engine}" in
-        chromium) seen_status=null ;;
-        firefox) seen_status=403 ;;
-    esac
+    # Both browsers saw the empty 403 they replaced: Firefox's driver says
+    # so, Chrome's debugger (F204).
+    seen_status=403
     fetch_json "http://refused.kage.test:8088/${engine}" --level 2 --engine "${engine}" --timeout 20s --retries 0
     [ "${fetch_status}" -ne 0 ] || fail "a refused plain target was reported as fetched: ${report}"
     # At once, not at the timeout; the browser's own page is no document.

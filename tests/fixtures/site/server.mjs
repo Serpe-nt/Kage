@@ -636,6 +636,32 @@ const routes = {
     res.end();
   },
   '/headers': (req, res) => json(res, { headers: headerPairs(req) }),
+  // A page a browser keeps and asks for again with its validator: the first
+  // answer carries them, every later one that names the `ETag` is a `304`
+  // with the `ETag` alone (F178). `id` gives each test a page of its own.
+  '/cached/revalidated': (req, res) => {
+    if (req.headers['if-none-match'] === '"v1"') {
+      res.writeHead(304, { etag: '"v1"', 'cache-control': 'no-cache' });
+      res.end();
+      return;
+    }
+    html(res, page('Kept', '<h1 id="kept">Kept</h1>'), {
+      etag: '"v1"',
+      'last-modified': 'Tue, 03 Nov 2026 20:00:00 GMT',
+      'cache-control': 'no-cache',
+      'x-fixture': 'kept',
+    });
+  },
+  // Header values that hold commas, as a date and a list do (F190).
+  '/headers/commas': (_req, res) =>
+    html(res, page('Commas', '<h1>Commas</h1>'), {
+      'last-modified': 'Tue, 03 Nov 2026 20:00:00 GMT',
+      'x-fixture-list': 'one, two, three',
+    }),
+  // A page that moves itself on by a meta refresh after `s` seconds, while
+  // the persona still reads it (F201).
+  '/moves-later': (_req, res, url) =>
+    html(res, page('Before the move', '<p>still here</p>', `<meta http-equiv="refresh" content="${Number(url.searchParams.get('s') ?? '1')};url=${attribute(url.searchParams.get('to') ?? '/landing')}">`)),
 
   // The coherence probe (spec §6.2).
   '/probe/': (req, res) =>
