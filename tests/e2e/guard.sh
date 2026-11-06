@@ -32,10 +32,27 @@ export KAGE_WEBSHARE_API_KEY=
 export KAGE_ABUSEIPDB_KEY=
 export KAGE_PERSONAS_WARMUP=false
 
-# The shipped policies, with no persona asleep (policies.sh).
+# The shipped policies, with no persona asleep (policies.sh), and the
+# guard's three sites read at the pace of a test. Under the shipped `human`
+# pacing a persona reads 4 to 14 pages and then breaks for a minute or more
+# (p95 four): the Chromium persona's ninth page of `pub.kage-guard.test`
+# waited past the fetch's wall time of 180 s and was answered 202 (the
+# clean-clone gate of the load flakes' branch, 2026-11-05).
 policies="$(mktemp -d)"
 export KAGE_E2E_POLICIES="${policies}"
 tests/e2e/policies.sh "${policies}"
+sed --in-place 's/^domains: {}$/domains:/' "${policies}/domains.yaml"
+[ "$(grep '^[a-z_]*:' "${policies}/domains.yaml" | tail -n 1)" = 'domains:' ] \
+    || { echo "FAIL: policies/domains.yaml does not end with its domains mapping" >&2; exit 1; }
+cat >> "${policies}/domains.yaml" << 'EOF'
+  # Added by tests/e2e/guard.sh.
+  kage-guard.test:
+    pacing: fast
+  other-guard.test:
+    pacing: fast
+  third-guard.test:
+    pacing: fast
+EOF
 chmod --recursive a+rX "${policies}"
 scratch="$(mktemp -d)"
 

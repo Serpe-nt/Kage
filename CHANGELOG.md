@@ -372,6 +372,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   time it sets for the second, and the test of a flow that waits for a
   site's one visitor (`kage-scheduler`, F188) measured the visit from the
   attempt's start, which comes after the moment the visit counts from.
+- `tests/e2e/guard.sh` read its sites under the shipped `human` pacing, so
+  a persona broke after a burst of 4 to 14 pages for a minute or more, and
+  the Chromium persona's ninth page waited past the fetch's 180 s wall
+  time and was answered 202. Its three sites are read at the pace of a
+  test (`pacing: fast`), as the other scripts' sites are.
 
 ## [2.0.2] - 2026-11-04
 
