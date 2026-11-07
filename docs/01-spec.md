@@ -669,7 +669,8 @@ looks in a row added minutes to the outage and spent M toward replacement.
 Shared exit (decision D6, M15): a probe that reads an exit address an
 older live proxy's last probe also saw marks the later proxy
 (`exit_shared_with`): it is kept `degraded`, carries no persona and no
-level 0, and `proxy_exit_shared` names both until a probe sees an address
+level 0 (`kage_proxy_state` counts it as `backoff`, F195), and
+`proxy_exit_shared` names both until a probe sees an address
 of its own again. A leak, or a probe that read nothing, changes nothing
 of it; the host's own rows are never compared. Only a latest probe that
 read an address counts (F177): an older proxy whose latest probe failed (it
@@ -724,7 +725,7 @@ row without it; never when the list is empty or shorter than half the pool.
 
 | Check | Default interval | Method |
 |---|---|---|
-| Reachability, latency, exit IP | 5 min × U(0.75, 1.25) per proxy from its seed; first probes spread over 2 min after boot; at most 3 in flight; real traffic through a proxy postpones its next probe (`Pool::report_traffic_ok`) | Through-proxy GET of `proxies.health.echo_url`: unset, the provider's own echo (`capabilities().echo`; Webshare's `https://ipv4.webshare.io/`, so no third party sees the pool), else the public echo `https://checkip.amazonaws.com/`, whose operator then sees every proxy address on the probe's schedule (ADR 0013); the operator's own echo (`kage echo serve`, O5) is the private choice. The answer is an address as text, or JSON with it under `ip`, `ip_address`, `ipAddress`, `query`, `origin` or `peer` (Kage's echo), with or without its port. A failed probe is retried once against the confirmation echo (`https://checkip.amazonaws.com/`) before it counts; when that is the echo in force, the retry is a second read on a fresh tunnel. Client from the `ProbeClientFactory` seam: the client of the persona behind the proxy when it has an http path (its profile, `User-Agent`, brand list and languages, on a fresh connection without its cookies), else one wreq-util profile (`proxies.health.profile`, default `chrome_149` on Windows). |
+| Reachability, latency, exit IP | 5 min × U(0.75, 1.25) per proxy from its seed; first probes spread over 2 min after boot; at most 3 in flight; real traffic through a proxy postpones its next probe (`Pool::report_traffic_ok`) | Through-proxy GET of `proxies.health.echo_url`: unset, the provider's own echo (`capabilities().echo`; Webshare's `https://ipv4.webshare.io/`, so no third party sees the pool), else the public echo `https://checkip.amazonaws.com/`, whose operator then sees every proxy address on the probe's schedule (ADR 0013); the operator's own echo (`kage echo serve`, O5) is the private choice. The answer is an address as text, or JSON with it under `ip`, `ip_address`, `ipAddress`, `query`, `origin` or `peer` (Kage's echo), with or without its port. A `407` is the proxy refusing its login (`proxy_auth`) when the proxy answered it: to the `CONNECT` of an `https` echo, or to a plain `http` echo's request; a `407` read inside an `https` tunnel is the echo's own answer and counts as an echo that did not answer (F210). A failed probe is retried once against the confirmation echo (`https://checkip.amazonaws.com/`) before it counts; when that is the echo in force, the retry is a second read on a fresh tunnel. Client from the `ProbeClientFactory` seam: the client of the persona behind the proxy when it has an http path (its profile, `User-Agent`, brand list and languages, on a fresh connection without its cookies), else one wreq-util profile (`proxies.health.profile`, default `chrome_149` on Windows). |
 | Leak | with reachability | Exit IP (from echo) ≠ host public IP; host IP learned at boot by a direct GET of `proxies.health.host_ip_url`, refreshed hourly: unset, the provider's own echo under `egress.mode: proxies`, else `https://api.ipify.org/`, an echo of another operator than the public probe echo's, so nobody outside sees both the host and the pool (always so under `direct`). Leak → `backoff` + `egress_unsafe` (§7.3). |
 | Geo (country, city, ASN, timezone) | first check of a `new` proxy, on exit IP change, and every 24 h jittered | `proxies.health.geo_url` (`https://ipinfo.io/json`) through the proxy (not Cloudflare-fronted); `null` switches it off, and nothing is verified then. The observed record is persisted; a change is a health event. For Webshare the record is authoritative; for a declared row it only verifies the declaration (§6.1). Mismatch with the provider's or the declared country on two consecutive lookups → `degraded` and `proxy_geo_mismatch`, proxy stays usable; for a declared row the alert says what a site with a geo database sees, and the persona keeps its declared identity. Lookup failures are not health failures (retry after an hour). |
 | Fingerprint self-test (http) | per PR in CI over loopback for every mapped profile; on demand (`kage selftest http --proxy --profile`) and two proxies per nightly live run against `selftest.http.third_party_url`; every 24 h × U(0.75, 1.25) per persona from its seed (`selftest.http.interval`; first run 2 to 30 min after generation; `kage selftest http --persona`, `kage persona selftest`), only against the operator's own echo (`selftest.http.echo_url`) and never against a third party on a timer; without an echo of the operator's nothing is scheduled | JA4, HTTP/2 Akamai string, header order, HTTP version and `User-Agent` equal the fixture recorded for the profile. The fingerprint is a function of the pins and the header code, not of the proxy, so the live runs only confirm that a real tunnel changes nothing. |
@@ -871,7 +872,13 @@ level 0.
 Eligible = `active` and warmed (`Persona::is_ready()`), proxy `healthy` or
 `degraded`, not cooling for domain, daily cap not reached, engine ∈
 policy.engines, country ∈ policy.countries (if set), for http:
-`wreq_profile` non-null. A persona already visiting the domain keeps its
+`wreq_profile` non-null. Not cooling for the domain includes the sites a
+fetch of the domain was redirected to: a wall met there is booked to that
+site (§10.5, F187), and for a day after a fetch of the domain last ended
+on such a site (at most eight sites per domain, kept by the planner, not
+across a restart) a persona that cools there is held from the domain as
+well, so that the domain's next page does not send it into the same wall
+(F219); its cap, gap and seats there are not looked at. A persona already visiting the domain keeps its
 work while its visit lasts (§11); the score chooses a new visitor only
 when work waits and fewer than `domain_concurrency` personas are visiting.
 A synchronous request goes past that only for a visitor's break: when
@@ -1120,7 +1127,7 @@ a site for a fetch nobody waits for.
   is always null because the proxy resolves, and a request on a reused
   connection has neither `connect_ms` nor `tls_ms`. The health probe (§7.4)
   uses the same client and records both per proxy.
-- **A body as text** (`kage_http::charset`, F100, F160, F172). The http
+- **A body as text** (`kage_http::charset`, F100, F160, F172, F212). The http
   path reads a body in the encoding a browser takes for it, so that levels
   0 and 1 read what levels 2 and 3 read: a byte order mark first, which
   wins over any declaration; then the `charset` of `Content-Type`, read as
@@ -1159,7 +1166,11 @@ a site for a fetch nobody waits for.
   mark or is UTF-8 (MIME sniffing); `raw_body` is null for other bytes.
   Where the two browsers differ, level 0 follows one of them: a `<meta>`
   inside `<noscript>` counts in Chrome's scan (it runs with scripting off)
-  and not in Firefox's, and level 0 reads as Chrome; Chrome's own detector
+  and not in Firefox's, and level 0 reads as Chrome; Chrome's tokenizer
+  decodes a character reference in a `<meta>` attribute
+  (`charset=&quot;shift_jis&quot;` in a `content` is a quoted label) and
+  the standard's prescan, which Firefox follows, does not: level 0 decodes
+  them as Chrome does (F212); Chrome's own detector
   (CED) is not Firefox's, and where the two would name different encodings
   for an undeclared page level 0 reads it as Firefox does (both measured on
   Chrome 155 and Camoufox 156 in QA round two's world).
@@ -2321,7 +2332,13 @@ never fetch what the file disallows, keep to its `Crawl-delay`).
   `robots.error_ttl` (1 h). An attempt that failed before the site had a
   say (the proxy, the sidecar) is nothing: nothing is kept, and it is
   tried again a minute later. A certificate the client refuses is the
-  site's say (§9, F170): "unreachable" for the hour, not a minute. At most
+  site's say (§9, F170): "unreachable" for the hour, not a minute. A
+  `304 Not Modified` to the scout says the file is what it was: what is
+  kept of the origin (a file, or "no file") stands for another
+  `robots.ttl` from then, with the status it was kept with (F90, F209: a
+  304 was "unreachable" for the hour, and the kept file was dropped); a
+  304 with nothing kept, or only "unreachable", is "unreachable" as
+  before. At most
   `robots.max_bytes` (512 KiB, what Google reads) of a file are read. The
   file is text as RFC 9309 has it, UTF-8, or the encoding its byte order
   mark names (a file saved as UTF-16); a byte that is no UTF-8 is replaced
@@ -2985,7 +3002,10 @@ without spending attempts of their own. A `job.progress` that still waits
 when a newer event of its job is queued is dropped (`superseded`). The
 delivery log on the job (`webhook.deliveries`) has one row per event: its
 state, how many attempts it took, and the status, the error and the time
-of its last attempt; every attempt is a row of the store
+of its last attempt (the error when the receiver did not answer:
+`timeout`, `connect` for a connection that could not be made or broke off,
+`tls` for a handshake the receiver's TLS refused or whose certificate Kage
+refused, F208, `unresolved`, `address_denied`, `transport`); every attempt is a row of the store
 (`webhook_attempts`), which the log reads (jobs-10). What waits survives a
 restart.
 
@@ -3543,7 +3563,10 @@ are gzip-compressed on disk.
   passes, so an outage of the pool reads as no usable proxy through every
   expiry (F111); and while the outage guard of §7.3 holds, one whose latest
   probe failed counts as `backoff` though its counters are frozen, so a
-  pool of four or more that died whole reads the same (F151).
+  pool of four or more that died whole reads the same (F151); and a proxy
+  marked `exit_shared_with` (§7.3), `degraded` by state but carrying
+  nothing, counts as `backoff` while the mark lasts, so a pool whose only
+  answering proxies share an exit reads as no usable proxy (F195).
 - Traces: OTLP over HTTP with protobuf from both processes, to the
   collector `telemetry.otlp_endpoint` names (Kage, through wreq, never
   through a proxy) and `SIDECAR_OTLP_ENDPOINT` (a sidecar); without one
@@ -3559,7 +3582,12 @@ are gzip-compressed on disk.
   No span holds a URL's path or query, an address, a seed, a token, a
   fingerprint or a body, nor does an event of a span: a log line written in
   a span leaves with it, so the attempt's line holds no seed (F182; the
-  seed is kept as `attempts.seed`). Every JSON line of Kage and of a sidecar written
+  seed is kept as `attempts.seed`). This does not rest on each line: the
+  exporter strips every span event to its level, its target and where it
+  was written, under the name `log`, before a span leaves the process, so
+  no message or field of a line is ever sent (F196); the line itself is in
+  the log, with the span's ids. Spans keep their own fields and the error
+  status an `ERROR` line gives them. Every JSON line of Kage and of a sidecar written
   inside a span carries `trace_id` and `span_id`, also when nothing is
   sent.
 - Dashboards (optional profile): overview, per-domain block rate, persona
