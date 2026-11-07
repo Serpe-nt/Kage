@@ -868,6 +868,34 @@ async fn without_the_host_address_probes_run_and_an_alert_says_the_leak_check_ca
     assert_eq!(net.alerts_of(AlertKind::HostIpUnknown), 1);
 }
 
+/// F194: spans as long as a duration can be (no configuration accepts them
+/// since the interval is bounded to a day, but the checker is a library)
+/// hold the next probe at the last date there is instead of panicking.
+#[tokio::test]
+async fn spans_past_the_last_date_wait_forever_instead_of_panicking() {
+    let net = net_with(
+        &[(2, "DE")],
+        HealthSettings {
+            interval: chrono::Duration::MAX,
+            startup_spread: chrono::Duration::MAX,
+            geo_interval: chrono::Duration::MAX,
+            reputation_interval: chrono::Duration::MAX,
+            ..settings()
+        },
+    )
+    .await;
+    net.echo.set_geo(loopback(2), GeoFixture::berlin());
+    let id = net.check(0).await.id;
+    assert_eq!(net.echo.count("/ip"), 1);
+    // Real traffic after the probe asks the schedule for "the last probe
+    // plus three intervals".
+    net.clock.advance(chrono::Duration::minutes(1));
+    net.pool.report_traffic_ok(id);
+    net.clock.advance(chrono::Duration::days(365));
+    assert_eq!(net.checker.tick().await.unwrap(), 0);
+    assert_eq!(net.echo.count("/ip"), 1);
+}
+
 #[tokio::test]
 async fn the_checker_runs_until_it_is_told_to_stop() {
     let net = net_with(

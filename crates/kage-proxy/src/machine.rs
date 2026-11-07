@@ -551,9 +551,14 @@ fn push_state_change(effects: &mut Vec<Effect>, from: ProxyState, to: ProxyState
 /// out and that no probe has passed since (`degraded` with a backoff cycle
 /// on its count), counts as `backoff`: one failed probe sends it back
 /// there, and until a probe says otherwise nothing can be counted on to
-/// leave through it. Every other proxy counts as what it is (F111).
+/// leave through it (F111). A proxy whose exit address an older live
+/// proxy's probe also saw (`exit_shared_with`, §7.3) is kept `degraded` but
+/// carries no persona and no level 0, so it counts as `backoff` too while
+/// the mark lasts (F195). Every other proxy counts as what it is.
 pub fn reported_state(proxy: &Proxy) -> ProxyState {
-    if proxy.state == ProxyState::Degraded && proxy.backoff_count > 0 {
+    if (proxy.state == ProxyState::Degraded && proxy.backoff_count > 0)
+        || (proxy.state.is_usable() && proxy.exit_shared())
+    {
         ProxyState::Backoff
     } else {
         proxy.state

@@ -356,6 +356,7 @@ impl<F: ProbeClientFactory> HttpProber<F> {
             tracing::error!(proxy = %target.id, %error, "a probe endpoint is not a URL");
             HealthFailure::Unreachable
         })?;
+        let tunneled = url.scheme() == "https";
         // An endpoint the operator configured: it is not followed anywhere
         // else, and it may be on this machine.
         let mut spec = FetchSpec::operator_get(url);
@@ -375,12 +376,9 @@ impl<F: ProbeClientFactory> HttpProber<F> {
             );
             failure
         })?;
-        if fetched.status == 407 {
-            return Err(HealthFailure::ProxyAuth);
-        }
-        if !(200..300).contains(&fetched.status) {
+        if let Some(failure) = status_failure(fetched.status, tunneled) {
             tracing::debug!(proxy = %target.id, status = fetched.status, "probe answered with an error status");
-            return Err(HealthFailure::Unreachable);
+            return Err(failure);
         }
         if fetched.truncated {
             return Err(HealthFailure::Unreachable);
@@ -595,21 +593,57 @@ fn split_org(asn: Option<&str>, org: Option<String>) -> (Option<String>, Option<
     }
 }
 
+/// What an answer's status says of the proxy, when it is no success. A
+/// `407` is the proxy refusing the login only when the proxy answered the
+/// request itself (a plain `http` echo, sent to the proxy whole). Through
+/// a tunnel (an `https` echo) the proxy's refusal is its answer to the
+/// `CONNECT`, which the client reports as `HttpError::ProxyAuth` before any
+/// status, so a `407` read inside the tunnel is the echo's own: an echo
+/// that does not answer, never the proxy's credentials (F210).
+fn status_failure(status: u16, tunneled: bool) -> Option<HealthFailure> {
+    match status {
+        200..=299 => None,
+        407 if !tunneled => Some(HealthFailure::ProxyAuth),
+        _ => Some(HealthFailure::Unreachable),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::IpAddr;
     use std::time::Duration;
 
     use kage_core::config::ProxyHealthConfig;
-    use kage_core::domain::{ClaimedOs, ProxyEndpoint};
+    use kage_core::domain::{ClaimedOs, HealthFailure, ProxyEndpoint};
     use kage_core::ids::ProxyId;
     use kage_core::secret::Secret;
     use kage_http::ProfileChoice;
 
     use super::{
         EmulatedClientFactory, GeoPolicy, ProbeClientError, ProbeClientFactory, parse_geo,
-        parse_ip, profile_names, split_org,
+        parse_ip, profile_names, split_org, status_failure,
     };
+
+    #[test]
+    fn a_407_inside_a_tunnel_is_the_echos_answer_not_the_proxys_refusal() {
+        // F210: a plain http echo is asked through the proxy, which answers
+        // a refused login itself; an https echo is behind a tunnel the
+        // proxy already opened.
+        assert_eq!(status_failure(407, false), Some(HealthFailure::ProxyAuth));
+        assert_eq!(status_failure(407, true), Some(HealthFailure::Unreachable));
+        for tunneled in [false, true] {
+            assert_eq!(status_failure(200, tunneled), None);
+            assert_eq!(status_failure(204, tunneled), None);
+            assert_eq!(
+                status_failure(403, tunneled),
+                Some(HealthFailure::Unreachable)
+            );
+            assert_eq!(
+                status_failure(503, tunneled),
+                Some(HealthFailure::Unreachable)
+            );
+        }
+    }
 
     fn ip(text: &str) -> IpAddr {
         text.parse().unwrap()
