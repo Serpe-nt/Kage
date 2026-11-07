@@ -262,6 +262,7 @@ struct AttemptRow {
     finished_at: DateTime<Utc>,
     status: Option<i32>,
     final_url: Option<String>,
+    truncated: bool,
     outcome: String,
     block: Option<serde_json::Value>,
     timing: serde_json::Value,
@@ -287,6 +288,7 @@ impl TryFrom<AttemptRow> for Attempt {
             finished_at: row.finished_at,
             status: to_u16_opt((TABLE, "status"), row.status)?,
             final_url: row.final_url,
+            truncated: row.truncated,
             outcome: parse((TABLE, "outcome"), &row.outcome)?,
             block: from_json_opt((TABLE, "block"), row.block)?,
             timing: from_json((TABLE, "timing"), row.timing)?,
@@ -312,8 +314,9 @@ impl AttemptRepo<'_> {
         sqlx::query!(
             "INSERT INTO attempts (id, request_id, n, persona_id, engine, exit, render, started_at,
                                    finished_at, status, final_url, outcome, block, timing, seed,
-                                   reason, patience_ms)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)",
+                                   reason, patience_ms, truncated)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+                     $18)",
             attempt.id.as_uuid(),
             attempt.request_id.as_uuid(),
             to_i32((TABLE, "n"), attempt.n)?,
@@ -334,6 +337,7 @@ impl AttemptRepo<'_> {
                 .patience_ms
                 .map(|millis| to_i64((TABLE, "patience_ms"), millis))
                 .transpose()?,
+            attempt.truncated,
         )
         .execute(self.pool)
         .await?;
@@ -352,7 +356,8 @@ impl AttemptRepo<'_> {
         sqlx::query_as!(
             AttemptRow,
             "SELECT id, request_id, n, persona_id, engine, exit, render, started_at, finished_at,
-                    status, final_url, outcome, block, timing, seed, reason, patience_ms
+                    status, final_url, truncated, outcome, block, timing, seed, reason,
+                    patience_ms
              FROM attempts WHERE request_id = $1 ORDER BY n",
             request_id.as_uuid(),
         )
@@ -377,6 +382,7 @@ struct ResultRow {
     headers: serde_json::Value,
     final_url: Option<String>,
     redirects: Vec<String>,
+    truncated: bool,
     extract: Option<serde_json::Value>,
     reading: Option<serde_json::Value>,
     xhr: Option<serde_json::Value>,
@@ -404,6 +410,7 @@ impl TryFrom<ResultRow> for FetchRecord {
             headers: from_json((TABLE, "headers"), row.headers)?,
             final_url: row.final_url,
             redirects: row.redirects,
+            truncated: row.truncated,
             extract: row.extract,
             reading: row.reading,
             xhr: row.xhr,
@@ -432,9 +439,9 @@ impl ResultRepo<'_> {
         sqlx::query!(
             "INSERT INTO results (id, request_id, outcome, status, headers, final_url, redirects,
                                   extract, xhr, artifacts, persona, block, robots, cached,
-                                  cached_at, reason, visit, reading, created_at)
+                                  cached_at, reason, visit, reading, created_at, truncated)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
-                     $17, $18, $19)",
+                     $17, $18, $19, $20)",
             record.id.as_uuid(),
             record.request_id.as_uuid(),
             record.outcome.as_str(),
@@ -457,6 +464,7 @@ impl ResultRepo<'_> {
             )?,
             record.reading,
             record.created_at,
+            record.truncated,
         )
         .execute(self.pool)
         .await?;
@@ -471,9 +479,9 @@ impl ResultRepo<'_> {
     pub async fn get(&self, id: ResultId) -> Result<Option<FetchRecord>, StoreError> {
         sqlx::query_as!(
             ResultRow,
-            "SELECT id, request_id, outcome, status, headers, final_url, redirects, extract, xhr,
-                    artifacts, persona, block, robots, cached, cached_at, reason, visit,
-                    reading, created_at
+            "SELECT id, request_id, outcome, status, headers, final_url, redirects, truncated,
+                    extract, xhr, artifacts, persona, block, robots, cached, cached_at, reason,
+                    visit, reading, created_at
              FROM results WHERE id = $1",
             id.as_uuid(),
         )
@@ -511,9 +519,9 @@ impl ResultRepo<'_> {
     ) -> Result<Option<FetchRecord>, StoreError> {
         sqlx::query_as!(
             ResultRow,
-            "SELECT id, request_id, outcome, status, headers, final_url, redirects, extract, xhr,
-                    artifacts, persona, block, robots, cached, cached_at, reason, visit,
-                    reading, created_at
+            "SELECT id, request_id, outcome, status, headers, final_url, redirects, truncated,
+                    extract, xhr, artifacts, persona, block, robots, cached, cached_at, reason,
+                    visit, reading, created_at
              FROM results WHERE request_id = $1",
             request_id.as_uuid(),
         )

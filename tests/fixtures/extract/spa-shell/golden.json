@@ -81,5 +81,6 @@
   "text": "",
   "markdown": "",
   "word_count": 0,
-  "thin_content": true
+  "thin_content": true,
+  "truncated": null
 }

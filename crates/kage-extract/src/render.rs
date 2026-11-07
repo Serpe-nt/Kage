@@ -8,6 +8,14 @@
 //! Nothing here is recursive: every element that is a block or a mark of
 //! its own has a frame on a stack, and a frame that closes hands what it
 //! wrote to the one under it.
+//!
+//! The work and the output grow with the page, not with the square of its
+//! depth (F173): an element that only holds blocks (a `div`, a paragraph)
+//! writes them straight into the block that keeps them, so a block is
+//! moved once however many such elements stand around it; and past
+//! [`MAX_NESTING`] quotes and lists in one another a quote or a list is
+//! written as the blocks it holds, so no line carries more than that many
+//! prefixes and no block is copied more than that many times.
 
 use std::collections::HashSet;
 
@@ -18,6 +26,13 @@ use crate::content::{Content, is_data_table};
 use crate::dom::{
     Dropped, NodeRef, Step, as_element, as_text, heading_level, is_block, unseen, walk,
 };
+
+/// How many quotes and lists in one another are written as such. One
+/// deeper is written as the paragraphs it holds, in the innermost quote or
+/// item that is: a markdown reader shows sixteen levels as well as it
+/// shows a hundred, and a line of a page nested fifty thousand quotes deep
+/// would otherwise carry fifty thousand `> `.
+pub(crate) const MAX_NESTING: usize = 16;
 
 /// What is written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,8 +91,21 @@ enum Kind {
     Link(Option<String>),
 }
 
+impl Kind {
+    const fn is_inline(&self) -> bool {
+        matches!(self, Self::Marked(_) | Self::Code | Self::Link(_))
+    }
+
+    /// Whether a frame of this kind keeps the blocks written in it. A
+    /// container or a paragraph hands them on as they are, so it writes
+    /// them straight into the frame that keeps them.
+    const fn keeps_blocks(&self) -> bool {
+        !self.is_inline() && !matches!(self, Self::Container | Self::Paragraph)
+    }
+}
+
 #[derive(Debug)]
-#[allow(clippy::struct_excessive_bools)] // Four things a writer has to remember, none a state of another.
+#[allow(clippy::struct_excessive_bools)] // Five things a writer has to remember, none a state of another.
 struct Frame {
     kind: Kind,
     /// Blocks that are finished.
@@ -102,6 +130,9 @@ struct Frame {
     /// Whether a paragraph that would read as the start of a markdown
     /// block gets its first characters escaped.
     guarded: bool,
+    /// Whether this is a quote or a list nested past [`MAX_NESTING`],
+    /// written as a container.
+    capped: bool,
 }
 
 impl Frame {
@@ -124,11 +155,12 @@ impl Frame {
             language: None,
             id: None,
             guarded,
+            capped: false,
         }
     }
 
     const fn is_inline(&self) -> bool {
-        matches!(self.kind, Kind::Marked(_) | Kind::Code | Kind::Link(_))
+        self.kind.is_inline()
     }
 
     /// Appends inline text that is already written (words, a link).
@@ -153,22 +185,24 @@ impl Frame {
         self.broke = false;
     }
 
-    /// Ends the paragraph being written, when there is one.
-    fn flush(&mut self) {
+    /// Ends the paragraph being written and returns it, when there is one.
+    fn take_paragraph(&mut self) -> Option<String> {
         let paragraph = self.inline.trim();
-        if !paragraph.is_empty() {
-            self.blocks.push(if self.guarded {
+        let taken = (!paragraph.is_empty()).then(|| {
+            if self.guarded {
                 guard_start(paragraph)
             } else {
                 paragraph.to_owned()
-            });
-        }
+            }
+        });
         self.inline.clear();
         self.space_owed = false;
         self.broke = false;
+        taken
     }
 }
 
+#[allow(clippy::struct_field_names)] // `open_*` are the frames open of a kind.
 struct Writer<'a> {
     mode: Mode,
     /// Where an address written in the page leads.
@@ -182,16 +216,66 @@ struct Writer<'a> {
     in_pre: bool,
     /// The kind of every open `table`: whether it is one of data.
     tables: Vec<bool>,
+    /// The positions on the stack of the frames that keep blocks, the
+    /// root's first: the last is where a block that ends goes.
+    keepers: Vec<usize>,
+    /// The positions of the open lists, rows and tables of data: where an
+    /// item, a cell and a row go.
+    open_lists: Vec<usize>,
+    open_rows: Vec<usize>,
+    open_tables: Vec<usize>,
+    /// How many code spans and cells are open.
+    open_code: usize,
+    open_cells: usize,
+    /// How many quotes and lists are open, and how many of those past
+    /// [`MAX_NESTING`].
+    nesting: usize,
+    capped: usize,
 }
 
-/// Characters that would be read as markdown where they are text.
+/// Characters that would be read as markdown where they are text: the
+/// marks, and an `&` that would read as an entity.
 fn escape(text: &str, out: &mut String) {
-    for c in text.chars() {
-        if matches!(c, '\\' | '`' | '*' | '_' | '[' | ']' | '<' | '>' | '|') {
+    for (at, c) in text.char_indices() {
+        let marked = matches!(
+            c,
+            '\\' | '`' | '*' | '_' | '[' | ']' | '<' | '>' | '|' | '~'
+        );
+        if marked || (c == '&' && names_an_entity(&text[at + c.len_utf8()..])) {
             out.push('\\');
         }
         out.push(c);
     }
+}
+
+/// Whether what follows an `&` reads as the rest of a character
+/// reference: a name or a number, then `;`.
+fn names_an_entity(rest: &str) -> bool {
+    let name = rest
+        .strip_prefix("#x")
+        .or_else(|| rest.strip_prefix("#X"))
+        .or_else(|| rest.strip_prefix('#'))
+        .unwrap_or(rest);
+    let length = name
+        .bytes()
+        .take(33)
+        .take_while(u8::is_ascii_alphanumeric)
+        .count();
+    (1..=32).contains(&length) && name.as_bytes().get(length) == Some(&b';')
+}
+
+/// An address as the destination of a markdown link or image: a
+/// parenthesis or a backslash in it is escaped, so the destination ends
+/// where the address does.
+fn destination(address: &str) -> String {
+    let mut out = String::with_capacity(address.len());
+    for c in address.chars() {
+        if matches!(c, '(' | ')' | '\\') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// A paragraph whose first characters would start a markdown block gets
@@ -225,7 +309,7 @@ fn longest_run(text: &str, of: char) -> usize {
 /// A block with `first` before its first line and `rest` before the
 /// others.
 fn indent(block: &str, first: &str, rest: &str) -> String {
-    let mut out = String::new();
+    let mut out = String::with_capacity(block.len() + first.len());
     for (number, line) in block.lines().enumerate() {
         if number > 0 {
             out.push('\n');
@@ -274,9 +358,88 @@ impl Writer<'_> {
         self.stack.last_mut()
     }
 
-    /// The innermost frame that holds blocks.
-    fn holder(&mut self) -> Option<&mut Frame> {
-        self.stack.iter_mut().rev().find(|frame| !frame.is_inline())
+    /// The position of the innermost frame that holds blocks. Inline
+    /// frames stand above it only while no block is in them, so this looks
+    /// at a few frames at most.
+    fn holder_at(&self) -> Option<usize> {
+        self.stack.iter().rposition(|frame| !frame.is_inline())
+    }
+
+    /// The position of the frame that keeps what the frame at `at` writes:
+    /// itself, or the innermost keeper under it.
+    fn keeper_of(&self, at: usize) -> usize {
+        let below = self.keepers.partition_point(|keeper| *keeper <= at);
+        below
+            .checked_sub(1)
+            .and_then(|index| self.keepers.get(index))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Ends the paragraph the frame at `at` is writing, into the frame
+    /// that keeps its blocks.
+    fn flush_at(&mut self, at: usize) {
+        let Some(paragraph) = self.stack.get_mut(at).and_then(Frame::take_paragraph) else {
+            return;
+        };
+        let keeper = self.keeper_of(at);
+        if let Some(frame) = self.stack.get_mut(keeper) {
+            frame.blocks.push(paragraph);
+        }
+    }
+
+    /// Puts a frame on the stack, and on the lists of what is open.
+    fn push_frame(&mut self, frame: Frame) {
+        let at = self.stack.len();
+        if frame.kind.keeps_blocks() {
+            self.keepers.push(at);
+        }
+        match frame.kind {
+            Kind::List { .. } => self.open_lists.push(at),
+            Kind::Row => self.open_rows.push(at),
+            Kind::Table => self.open_tables.push(at),
+            Kind::Code => self.open_code += 1,
+            Kind::Cell => self.open_cells += 1,
+            _ => {}
+        }
+        if matches!(frame.kind, Kind::Quote | Kind::List { .. }) {
+            self.nesting += 1;
+        }
+        if frame.capped {
+            self.capped += 1;
+        }
+        self.stack.push(frame);
+    }
+
+    /// Takes the top frame off the stack, and off the lists of what is
+    /// open.
+    fn pop_frame(&mut self) -> Option<Frame> {
+        let frame = self.stack.pop()?;
+        let at = self.stack.len();
+        if self.keepers.last() == Some(&at) {
+            self.keepers.pop();
+        }
+        match frame.kind {
+            Kind::List { .. } => {
+                self.open_lists.pop();
+            }
+            Kind::Row => {
+                self.open_rows.pop();
+            }
+            Kind::Table => {
+                self.open_tables.pop();
+            }
+            Kind::Code => self.open_code = self.open_code.saturating_sub(1),
+            Kind::Cell => self.open_cells = self.open_cells.saturating_sub(1),
+            _ => {}
+        }
+        if matches!(frame.kind, Kind::Quote | Kind::List { .. }) {
+            self.nesting = self.nesting.saturating_sub(1);
+        }
+        if frame.capped {
+            self.capped = self.capped.saturating_sub(1);
+        }
+        Some(frame)
     }
 
     /// Where an address in the page leads, when that is a web address.
@@ -311,10 +474,13 @@ impl Writer<'_> {
                 return false;
             }
             "hr" => {
-                if let Some(holder) = self.holder() {
-                    holder.flush();
+                if let Some(holder) = self.holder_at() {
+                    self.flush_at(holder);
                     if mode == Mode::Markdown {
-                        holder.blocks.push("---".to_owned());
+                        let keeper = self.keeper_of(holder);
+                        if let Some(frame) = self.stack.get_mut(keeper) {
+                            frame.blocks.push("---".to_owned());
+                        }
                     }
                 }
                 return false;
@@ -353,13 +519,23 @@ impl Writer<'_> {
                 None => return false,
             },
         };
+        // Past the nesting a writer keeps, a quote or a list is the blocks
+        // it holds, and so is an item of a list that is.
+        let capped = matches!(kind, Kind::Quote | Kind::List { .. }) && self.nesting >= MAX_NESTING;
+        let kind = if capped || (kind == Kind::Item && self.capped > 0) {
+            Kind::Container
+        } else {
+            kind
+        };
         let mut frame = Frame::new(kind, mode);
+        frame.capped = capped;
         if !frame.is_inline()
-            && let Some(top) = self.top().filter(|top| !top.is_inline())
+            && let Some(at) = self.stack.len().checked_sub(1)
+            && self.stack.get(at).is_some_and(|top| !top.is_inline())
         {
             // A block begins: the paragraph being written in what holds it
             // ends.
-            top.flush();
+            self.flush_at(at);
         }
         match frame.kind {
             Kind::List { ordered: true } => {
@@ -376,14 +552,17 @@ impl Writer<'_> {
             }
             _ => {}
         }
-        self.stack.push(frame);
+        self.push_frame(frame);
         true
     }
 
     /// A `<br>`: a line break, and after a second one a new paragraph.
     fn line_break(&mut self) {
         let mode = self.mode;
-        let Some(top) = self.top() else {
+        let Some(at) = self.stack.len().checked_sub(1) else {
+            return;
+        };
+        let Some(top) = self.stack.get_mut(at) else {
             return;
         };
         if top.is_inline() || matches!(top.kind, Kind::Cell | Kind::Heading(_)) {
@@ -392,7 +571,7 @@ impl Writer<'_> {
         }
         if top.broke {
             // The second break of a chain: what was written is a paragraph.
-            top.flush();
+            self.flush_at(at);
             return;
         }
         if top.inline.trim().is_empty() {
@@ -422,7 +601,7 @@ impl Writer<'_> {
         let mut written = String::from("![");
         escape(&alt, &mut written);
         written.push_str("](");
-        written.push_str(&src);
+        written.push_str(&destination(&src));
         written.push(')');
         if let Some(top) = self.top() {
             top.push(&written, false, false);
@@ -431,7 +610,7 @@ impl Writer<'_> {
 
     fn text(&mut self, text: &str) {
         let (mode, in_pre) = (self.mode, self.in_pre);
-        let in_code = self.stack.iter().any(|frame| frame.kind == Kind::Code);
+        let in_code = self.open_code > 0;
         let Some(top) = self.top() else {
             return;
         };
@@ -464,13 +643,25 @@ impl Writer<'_> {
         top.push(&words, led, trailed);
     }
 
-    /// Hands a finished block to whatever holds the element that closed.
+    /// Hands a finished block to the frame that keeps the blocks of what
+    /// is open.
     fn hand_on(&mut self, block: String) {
         if block.is_empty() {
             return;
         }
-        if let Some(holder) = self.holder() {
-            holder.blocks.push(block);
+        let keeper = self.keepers.last().copied().unwrap_or(0);
+        if let Some(frame) = self.stack.get_mut(keeper) {
+            frame.blocks.push(block);
+        }
+    }
+
+    /// Code as it stands in a markdown table's cell: a `|` in it would
+    /// end the cell, in a code span too (GFM), so it is escaped there.
+    fn in_cell(&self, code: &str) -> String {
+        if self.open_cells > 0 {
+            code.replace('|', "\\|")
+        } else {
+            code.to_owned()
         }
     }
 
@@ -481,7 +672,7 @@ impl Writer<'_> {
         if element.name() == "table" {
             self.tables.pop();
         }
-        let Some(mut frame) = self.stack.pop() else {
+        let Some(mut frame) = self.pop_frame() else {
             return;
         };
         let markdown = self.mode == Mode::Markdown;
@@ -494,8 +685,9 @@ impl Writer<'_> {
             let block = if markdown {
                 let fence = "`".repeat(longest_run(code, '`').max(2) + 1);
                 format!(
-                    "{fence}{}\n{code}\n{fence}",
-                    frame.language.as_deref().unwrap_or_default()
+                    "{fence}{}\n{}\n{fence}",
+                    frame.language.as_deref().unwrap_or_default(),
+                    self.in_cell(code)
                 )
             } else {
                 code.to_owned()
@@ -514,9 +706,11 @@ impl Writer<'_> {
                     } else {
                         ""
                     };
-                    format!("{fence}{pad}{inner}{pad}{fence}")
+                    format!("{fence}{pad}{}{pad}{fence}", self.in_cell(inner))
                 }
-                (Kind::Link(Some(address)), true) => format!("[{inner}]({address})"),
+                (Kind::Link(Some(address)), true) => {
+                    format!("[{inner}]({})", destination(address))
+                }
                 _ => inner.to_owned(),
             };
             if let Some(top) = self.top() {
@@ -524,7 +718,15 @@ impl Writer<'_> {
             }
             return;
         }
-        frame.flush();
+        // What the frame was writing ends: in itself when it keeps its
+        // blocks, else in the frame that keeps them.
+        if let Some(paragraph) = frame.take_paragraph() {
+            if frame.kind.keeps_blocks() {
+                frame.blocks.push(paragraph);
+            } else {
+                self.hand_on(paragraph);
+            }
+        }
         let block = self.finish(frame, markdown);
         self.hand_on(block);
     }
@@ -537,10 +739,8 @@ impl Writer<'_> {
         let joined = |blocks: &[String]| blocks.join("\n\n");
         match frame.kind {
             Kind::Container | Kind::Paragraph => {
-                // A container hands its blocks on as they are.
-                if let Some(holder) = self.holder() {
-                    holder.blocks.append(&mut frame.blocks);
-                }
+                // A container wrote its blocks where they are kept as it
+                // went.
                 String::new()
             }
             Kind::Term => {
@@ -603,10 +803,10 @@ impl Writer<'_> {
                     return String::new();
                 }
                 if let Some(list) = self
-                    .stack
-                    .iter_mut()
-                    .rev()
-                    .find(|frame| matches!(frame.kind, Kind::List { .. }))
+                    .open_lists
+                    .last()
+                    .copied()
+                    .and_then(|at| self.stack.get_mut(at))
                 {
                     list.rows.push(blocks);
                     return String::new();
@@ -617,10 +817,10 @@ impl Writer<'_> {
             Kind::Cell => {
                 let cell = frame.blocks.join(" ").replace('\n', " ");
                 if let Some(row) = self
-                    .stack
-                    .iter_mut()
-                    .rev()
-                    .find(|frame| frame.kind == Kind::Row)
+                    .open_rows
+                    .last()
+                    .copied()
+                    .and_then(|at| self.stack.get_mut(at))
                 {
                     row.header = row.header || frame.header;
                     row.blocks.push(cell);
@@ -631,10 +831,10 @@ impl Writer<'_> {
             Kind::Row => {
                 let cells = std::mem::take(&mut frame.blocks);
                 if let Some(table) = self
-                    .stack
-                    .iter_mut()
-                    .rev()
-                    .find(|frame| frame.kind == Kind::Table)
+                    .open_tables
+                    .last()
+                    .copied()
+                    .and_then(|at| self.stack.get_mut(at))
                 {
                     if !cells.is_empty() {
                         table.rows.push(cells);
@@ -729,6 +929,15 @@ pub(crate) fn render_with(
         headings: Vec::new(),
         in_pre: false,
         tables: Vec::new(),
+        // The root keeps what is written.
+        keepers: vec![0],
+        open_lists: Vec::new(),
+        open_rows: Vec::new(),
+        open_tables: Vec::new(),
+        open_code: 0,
+        open_cells: 0,
+        nesting: 0,
+        capped: 0,
     };
     for part in &content.parts {
         let blocky = blocky(*part, &content.dropped);
@@ -756,9 +965,7 @@ pub(crate) fn render_with(
                 }
             }
         });
-        if let Some(root) = writer.stack.first_mut() {
-            root.flush();
-        }
+        writer.flush_at(0);
     }
     let text = writer
         .stack

@@ -405,3 +405,73 @@ fn small_rules() {
     clean(part, &mut dropped, &measures, ALL);
     assert!(dropped.contains(&part.id()));
 }
+
+/// QA round one's extract-05 (F141, the owner's decision): a `<main>` is
+/// the content of its page whatever it holds, a table, a list or short
+/// paragraphs, when the rules find less than a few sentences; what the
+/// markup hides and the furniture in it stay out, and a `<main>` the page
+/// hides is not the page's.
+#[test]
+fn a_main_is_the_content_whatever_it_holds() {
+    let rows = (1..=40)
+        .map(|n| format!("<tr><td>Widget {n}</td><td>{n}.99 EUR</td></tr>"))
+        .collect::<Vec<_>>()
+        .concat();
+    let table = format!(
+        "<body><nav><a href=\"/\">Home</a></nav><main><h1>Prices</h1><table><thead><tr><th>Item</th>\
+         <th>Price</th></tr></thead><tbody>{rows}</tbody></table><aside>Elsewhere</aside></main></body>"
+    );
+    let found = one(&table);
+    assert!(
+        found.starts_with("Prices Item Price Widget 1 1.99 EUR"),
+        "{found}"
+    );
+    assert!(found.ends_with("Widget 40 40.99 EUR"), "{found}");
+    assert!(
+        !found.contains("Home") && !found.contains("Elsewhere"),
+        "{found}"
+    );
+
+    let items = (1..=30)
+        .map(|n| format!("<li><a href=\"/{n}\">Item {n} of the list</a></li>"))
+        .collect::<Vec<_>>()
+        .concat();
+    let list = one(&format!("<body><main><ul>{items}</ul></main></body>"));
+    assert!(
+        list.starts_with("Item 1 of the list") && list.ends_with("Item 30 of the list"),
+        "{list}"
+    );
+
+    let poem = (1..=30)
+        .map(|n| format!("<p>Line {n} is short.</p>"))
+        .collect::<Vec<_>>()
+        .concat();
+    let short = one(&format!(
+        "<body><main><p hidden>Not shown.</p>{poem}</main></body>"
+    ));
+    assert!(
+        short.starts_with("Line 1 is short.") && short.ends_with("Line 30 is short."),
+        "{short}"
+    );
+    assert!(!short.contains("Not shown"), "{short}");
+
+    // Where the rules find the content, they stand: the `<main>` around an
+    // article is not taken whole.
+    let article = format!(
+        "<body><main><div class=\"story\">{}</div><div class=\"related\"><a href=\"/x\">Related one</a></div></main></body>",
+        paragraphs(5)
+    );
+    assert!(!one(&article).contains("Related one"));
+    // A hidden `<main>`, or one in furniture, is not the page's.
+    assert_eq!(
+        content_of("<body><main hidden><p>Old.</p></main></body>"),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        content_of("<body><nav><main><p>Menu.</p></main></nav></body>"),
+        Vec::<String>::new()
+    );
+    // A page without one keeps what the rules find: nothing, for text in no
+    // paragraph.
+    assert_eq!(content_of("<body>Loading</body>"), Vec::<String>::new());
+}

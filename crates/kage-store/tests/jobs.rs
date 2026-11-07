@@ -812,6 +812,7 @@ async fn fetched(
         headers: Vec::new(),
         final_url: None,
         redirects: Vec::new(),
+        truncated: false,
         extract: None,
         xhr: None,
         artifacts: Vec::new(),

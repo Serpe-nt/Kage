@@ -1205,6 +1205,7 @@ async fn a_keys_requests_are_counted_since_a_moment() {
             headers: Vec::new(),
             final_url: None,
             redirects: Vec::new(),
+            truncated: false,
             extract: None,
             xhr: None,
             artifacts: Vec::new(),
@@ -1283,6 +1284,7 @@ async fn requests_attempts_and_results_round_trip() {
         finished_at: started + Duration::milliseconds(840),
         status: Some(403),
         final_url: Some("https://example.org/listing?page=2".to_owned()),
+        truncated: false,
         outcome: Outcome::ChallengeFailed,
         block: Some(block()),
         timing: Timing {
@@ -1399,6 +1401,7 @@ async fn requests_attempts_and_results_round_trip() {
         ],
         final_url: Some("https://example.org/listing?page=2".to_owned()),
         redirects: vec!["http://example.org/listing?page=2".to_owned()],
+        truncated: false,
         extract: Some(serde_json::json!({ "title": "Listing", "thin_content": false })),
         xhr: Some(serde_json::json!([{ "url": "https://example.org/api/items", "status": 200 }])),
         artifacts: vec![ArtifactRef {
@@ -1530,6 +1533,7 @@ async fn requests_attempts_and_results_round_trip() {
         headers: Vec::new(),
         final_url: None,
         redirects: Vec::new(),
+        truncated: false,
         extract: None,
         xhr: None,
         artifacts: Vec::new(),
@@ -2211,6 +2215,7 @@ async fn the_response_cache_serves_an_entry_until_it_expires() {
         headers: Vec::new(),
         final_url: None,
         redirects: Vec::new(),
+        truncated: false,
         extract: None,
         xhr: None,
         artifacts: Vec::new(),
@@ -2890,6 +2895,7 @@ async fn a_level_zero_attempt_names_its_exit_and_no_persona() {
             finished_at: at + Duration::milliseconds(120),
             status: Some(200),
             final_url: Some("https://example.org/".to_owned()),
+            truncated: false,
             outcome: Outcome::Ok,
             block: None,
             timing: Timing {

@@ -1352,18 +1352,18 @@ impl Pipeline {
             Some(archive) => archive.keep(id, capture.keep, &output, now).await,
             None => Archived::default(),
         };
-        let extract = match (&page.dom_html, capture.extract, Url::parse(&page.final_url)) {
+        let extract = match (
+            read::document_of(&output).filter(|_| page.dom_html.is_some()),
+            capture.extract,
+            Url::parse(&page.final_url),
+        ) {
             (Some(document), Some(options), Ok(loaded_from))
-                if outcome.is_success() && read::is_html(&output.headers) =>
+                if outcome.is_success() && read::is_document(&output) =>
             {
-                read::read_document(
-                    (document.clone(), encoding_rs::UTF_8),
-                    loaded_from,
-                    false,
-                    Some(options),
-                )
-                .await
-                .extract
+                let seen = read::seen_links(&output).filter(|_| options.links);
+                read::read_document(document, loaded_from, false, Some(options), seen)
+                    .await
+                    .extract
             }
             _ => None,
         };
@@ -1375,6 +1375,7 @@ impl Pipeline {
             headers,
             final_url: output.final_url.clone(),
             redirects: output.redirects.clone(),
+            truncated: output.body_cut(),
             extract: extract.clone(),
             xhr: archived.xhr,
             artifacts: archived.artifacts.clone(),
@@ -2054,6 +2055,7 @@ impl Pipeline {
             finished_at,
             status: output.status,
             final_url: output.final_url.clone(),
+            truncated: output.body_cut(),
             outcome,
             block: output.classification.block.clone(),
             timing: output.timing,
@@ -2147,6 +2149,7 @@ impl Pipeline {
             finished_at,
             status: output.status,
             final_url: output.final_url.clone(),
+            truncated: output.body_cut(),
             outcome,
             block: output.classification.block.clone(),
             timing: output.timing,
@@ -2301,6 +2304,7 @@ impl Pipeline {
             redirects: last
                 .as_ref()
                 .map_or_else(Vec::new, |last| last.redirects.clone()),
+            truncated: last.as_ref().is_some_and(AttemptOutput::body_cut),
             extract: reading.extract.clone(),
             reading: reading.stored_crawl(),
             xhr: archived.xhr.clone(),
@@ -2315,7 +2319,9 @@ impl Pipeline {
             created_at: self.now(),
         };
         self.backend().finish(&record).await?;
-        self.fill_cache(&course.order, &record, reading.thin).await;
+        // A page read in part is no page to serve again (F122, F147).
+        self.fill_cache(&course.order, &record, reading.thin || reading.cut)
+            .await;
         if let Some(call) = course.robots_due {
             let readers = course
                 .attempts

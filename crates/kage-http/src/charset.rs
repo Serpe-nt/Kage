@@ -243,6 +243,14 @@ pub fn text_of_from(url: Option<&Url>, content_type: Option<&str>, body: &[u8]) 
     std::str::from_utf8(body).ok().map(str::to_owned)
 }
 
+/// Whether a body that declares no type is text, as [`text_of`] reads it:
+/// it has a byte order mark, begins as markup does, or is UTF-8 (MIME
+/// sniffing). Other bytes are no document, and nothing is extracted from
+/// them (F180).
+pub fn untyped_is_text(body: &[u8]) -> bool {
+    Encoding::for_bom(body).is_some() || sniffs_as_markup(body) || std::str::from_utf8(body).is_ok()
+}
+
 /// The tags whose opening, after white space, makes a browser's MIME
 /// sniffing take a body of no declared type for HTML (the MIME Sniffing
 /// standard's HTML patterns).
@@ -730,7 +738,7 @@ mod tests {
 
     use super::{
         DecidedBy, charset_of, decode, decode_from, detect, is_text, prescan, text_of,
-        text_of_from, top_level_domain,
+        text_of_from, top_level_domain, untyped_is_text,
     };
 
     /// "Café Müller, Straße" in ISO-8859-1.
@@ -1323,5 +1331,28 @@ mod tests {
         assert_eq!(tld("http://[2001:db8::1]/"), None);
         assert_eq!(tld("http://localhost/").as_deref(), Some("localhost"));
         assert_eq!(top_level_domain(None), None);
+    }
+    /// F180: a body of no type is text, and so a document extraction may
+    /// read, exactly when [`text_of`] gives it as text.
+    #[test]
+    fn a_body_of_no_type_is_text_when_raw_body_would_show_it() {
+        for body in [
+            b"<!doctype html><p>a page".as_slice(),
+            b"plain words".as_slice(),
+            "UTF-8 \u{2713}".as_bytes(),
+            b"\xef\xbb\xbfa byte order mark".as_slice(),
+            b"\xff\xfeU\x00T\x00F\x00".as_slice(),
+            b"".as_slice(),
+        ] {
+            assert!(untyped_is_text(body), "{body:?}");
+            assert!(text_of(None, body).is_some(), "{body:?}");
+        }
+        for body in [
+            b"\x00\x01\xfe\xe9\x10\x80".as_slice(),
+            b"\x89PNG\r\n\x1a\n\x00".as_slice(),
+        ] {
+            assert!(!untyped_is_text(body), "{body:?}");
+            assert!(text_of(None, body).is_none(), "{body:?}");
+        }
     }
 }

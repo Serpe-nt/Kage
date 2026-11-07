@@ -184,7 +184,16 @@ fn every_request_names_its_level(document: &Value) {
     assert_eq!(
         required(attempt),
         names(&[
-            "n", "render", "outcome", "status", "total_ms", "persona", "engine", "exit", "reason",
+            "n",
+            "render",
+            "outcome",
+            "status",
+            "total_ms",
+            "persona",
+            "engine",
+            "exit",
+            "reason",
+            "truncated",
         ]),
         "{attempt}"
     );

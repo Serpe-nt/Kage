@@ -1003,7 +1003,10 @@ fn capture_of(request: &FetchRequest, include: &Included) -> ApiResult<CaptureOp
         console: include.has(Include::Console),
         // The extraction is read from the document the visit captured.
         dom: include.has(Include::Dom) || include.has(Include::Extract),
-        links: None,
+        // The links an extraction lists are those a reader sees, and what a
+        // style sheet hides only the browser knows (F123): it is asked.
+        links: (include.has(Include::Extract) && request.extract.unwrap_or_default().links)
+            .then_some(true),
         pdf,
         raw: include.has(Include::Raw),
         screenshot,

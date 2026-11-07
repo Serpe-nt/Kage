@@ -26,13 +26,36 @@
 //! the text is a loop over the tree with a stack of what each open element
 //! hands down. A page nested five thousand or fifty thousand elements deep
 //! is read on the 2 MiB stack of a worker thread like any other (F97).
+//!
+//! The parse is bounded in time as the body is in bytes (F147): html5ever's
+//! tree builder looks through every open element for some of the elements
+//! it meets, so its time grows with the square of the nesting, and a page
+//! of a few hundred kilobytes nested two hundred thousand deep would hold a
+//! thread for minutes. The parser is fed the page in slices, and a parse
+//! that has taken [`PARSE_BUDGET`] stops there: the document is what was
+//! parsed until then, and says so ([`Document::cut`]).
+
+use std::time::{Duration, Instant};
 
 use ego_tree::iter::Edge;
 use encoding_rs::Encoding;
+use html5ever::driver::{self, ParseOpts};
+use html5ever::tendril::{StrTendril, TendrilSink};
 use kage_core::urlnorm::join_in;
 use scraper::node::Node;
-use scraper::{ElementRef, Html};
+use scraper::{ElementRef, Html, HtmlTreeSink};
 use url::Url;
+
+/// How long the parse of one page may take. A page of ten megabytes that
+/// nests as pages do is parsed in a fraction of a second, and one nested
+/// fifty thousand elements deep in a few; past this the parse stops and
+/// the document is what was parsed (F147).
+pub const PARSE_BUDGET: Duration = Duration::from_secs(10);
+
+/// How much of a page the parser is fed at a time; the clock is read
+/// between two slices. Small enough that a slice of a page nested two
+/// hundred thousand deep takes a fraction of a second.
+const PARSE_SLICE: usize = 4096;
 
 /// The most links read from one page; a page with more is cut there.
 pub const MAX_LINKS: usize = 5000;
@@ -267,6 +290,32 @@ fn base_of(document: &Html, loaded_from: &Url, encoding: &'static Encoding) -> U
         .unwrap_or_else(|| loaded_from.clone())
 }
 
+/// Parses a page within a time: the tree, and whether the parse stopped
+/// at `budget` before the end of the page.
+fn parse_within(html: &str, budget: Duration) -> (Html, bool) {
+    let started = Instant::now();
+    let mut parser = driver::parse_document(
+        HtmlTreeSink::new(Html::new_document()),
+        ParseOpts::default(),
+    );
+    let mut rest = html;
+    let mut cut = false;
+    while !rest.is_empty() {
+        if started.elapsed() > budget {
+            cut = true;
+            break;
+        }
+        let mut end = rest.len().min(PARSE_SLICE);
+        while !rest.is_char_boundary(end) {
+            end += 1;
+        }
+        let (slice, after) = rest.split_at(end);
+        parser.process(StrTendril::from_slice(slice));
+        rest = after;
+    }
+    (parser.finish(), cut)
+}
+
 /// A page parsed once: the tree a crawl reads its links and its text from,
 /// and the one extraction works on.
 #[derive(Debug, Clone)]
@@ -275,6 +324,7 @@ pub struct Document {
     loaded_from: Url,
     base: Url,
     encoding: &'static Encoding,
+    cut: bool,
 }
 
 impl Document {
@@ -294,14 +344,33 @@ impl Document {
     /// browser serialized has no bytes of its own and is
     /// [`Document::parse`]d.
     pub fn parse_in(html: &str, loaded_from: &Url, encoding: &'static Encoding) -> Self {
-        let tree = Html::parse_document(html);
+        Self::parse_within(html, loaded_from, encoding, PARSE_BUDGET)
+    }
+
+    /// [`Document::parse_in`] with a time of its own for the parse: past
+    /// `budget` the parse stops, and the document is what was parsed until
+    /// then ([`Document::cut`]).
+    pub fn parse_within(
+        html: &str,
+        loaded_from: &Url,
+        encoding: &'static Encoding,
+        budget: Duration,
+    ) -> Self {
+        let (tree, cut) = parse_within(html, budget);
         let base = base_of(&tree, loaded_from, encoding);
         Self {
             tree,
             loaded_from: loaded_from.clone(),
             base,
             encoding,
+            cut,
         }
+    }
+
+    /// Whether the parse stopped at its time before the end of the page
+    /// (F147): the tree holds what came before.
+    pub const fn cut(&self) -> bool {
+        self.cut
     }
 
     /// The encoding the page was written in; UTF-8 for a tree a browser
@@ -366,6 +435,10 @@ pub fn read(html: &str, loaded_from: &Url) -> Page {
 #[cfg(test)]
 mod tests {
     use url::Url;
+
+    use std::time::{Duration, Instant};
+
+    use scraper::Html;
 
     use super::{Document, MAX_LINKS, Page, read};
 
@@ -644,5 +717,58 @@ mod tests {
         let cut = page(r#"<p>before <a href="/kept">kept</a> and <a href="/lo"#);
         assert_eq!(hrefs(&cut), ["https://shop.example/kept"]);
         assert!(cut.text.starts_with("before kept and"));
+    }
+
+    /// F147: a page is parsed in slices and the same tree comes of it as of
+    /// one parse, a character of several bytes on a slice's edge included;
+    /// a parse that has had its time stops, and the document says so.
+    #[test]
+    fn the_parse_is_bounded_in_time_and_says_when_it_stopped() {
+        let loaded_from = Url::parse("https://shop.example/").unwrap();
+        // Long enough for many slices, with characters of two, three and
+        // four bytes everywhere.
+        let paragraphs = (0..2_000)
+            .map(|n| format!("<p>Ünïcødé ✓ 🦀 {n} <a href=\"/p{n}\">p{n}</a></p>"))
+            .collect::<Vec<_>>()
+            .concat();
+        let html =
+            format!("<html><head><title>Slices</title></head><body>{paragraphs}</body></html>");
+        let whole = Document::parse(&html, &loaded_from);
+        assert!(!whole.cut());
+        assert_eq!(whole.tree().html(), Html::parse_document(&html).html());
+        let page = whole.page();
+        assert_eq!(page.title, "Slices");
+        assert_eq!(page.links.len(), 2_000);
+        assert!(page.text.ends_with("Ünïcødé ✓ 🦀 1999 p1999"));
+
+        // No time at all: nothing is parsed but what the parser makes of
+        // nothing, and the document says it was cut.
+        let none = Document::parse_within(&html, &loaded_from, encoding_rs::UTF_8, Duration::ZERO);
+        assert!(none.cut());
+        assert_eq!(none.page().links, Vec::new());
+
+        // The finding's shape: a page nested deep enough that its parse
+        // would take minutes stops within its time, with what came first.
+        let deep = format!(
+            "<title>Deep</title><p>first <a href=\"/first\">link</a></p>{}<p>last</p>",
+            "<div>".repeat(200_000)
+        );
+        let started = Instant::now();
+        let cut = Document::parse_within(
+            &deep,
+            &loaded_from,
+            encoding_rs::UTF_8,
+            Duration::from_millis(300),
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(cut.cut());
+        let page = cut.page();
+        assert_eq!(page.title, "Deep");
+        assert_eq!(hrefs(&page), ["https://shop.example/first"]);
+        assert!(!page.text.contains("last"));
     }
 }

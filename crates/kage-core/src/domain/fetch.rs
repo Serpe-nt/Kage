@@ -99,6 +99,9 @@ pub struct Attempt {
     pub status: Option<u16>,
     /// URL after redirects, if a response arrived.
     pub final_url: Option<String>,
+    /// Whether the body of the response was cut at `max_body_bytes`
+    /// (spec §9, F122).
+    pub truncated: bool,
     /// Classifier verdict.
     pub outcome: Outcome,
     /// Block report when the outcome is a block.
@@ -495,6 +498,10 @@ pub struct FetchRecord {
     pub final_url: Option<String>,
     /// Every URL visited before `final_url`, in order.
     pub redirects: Vec<String>,
+    /// Whether the body of the last response was cut at
+    /// `max_body_bytes` (spec §9, F122): what was kept and read of it is
+    /// its first part.
+    pub truncated: bool,
     /// Extraction output (spec §14), when requested.
     pub extract: Option<serde_json::Value>,
     /// What a crawl took from the page (where it ended, its links, its
@@ -702,6 +709,7 @@ mod tests {
             headers: Vec::new(),
             final_url: Some("https://example.org/".to_owned()),
             redirects: Vec::new(),
+            truncated: false,
             extract: None,
             xhr: None,
             artifacts: vec![
