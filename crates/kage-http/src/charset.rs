@@ -655,7 +655,7 @@ fn attribute(bytes: &[u8], at: &mut usize) -> Option<(Vec<u8>, Vec<u8>)> {
                 if byte == quote {
                     break;
                 }
-                value.push(byte.to_ascii_lowercase());
+                value.push(byte);
             }
         }
         Some(_) => {
@@ -663,12 +663,171 @@ fn attribute(bytes: &[u8], at: &mut usize) -> Option<(Vec<u8>, Vec<u8>)> {
                 if is_space(byte) || byte == b'>' {
                     break;
                 }
-                value.push(byte.to_ascii_lowercase());
+                value.push(byte);
                 *at += 1;
             }
         }
     }
+    // Chrome reads a `<meta>` with its tokenizer, which decodes character
+    // references in a value (F212): `charset=&quot;shift_jis&quot;` in a
+    // `content` is a quoted label.
+    let mut value = unescape(&value);
+    value.make_ascii_lowercase();
     Some((name, value))
+}
+
+/// The named character references whose character is ASCII, the only
+/// ones that can change how a label or a `content` value reads: any other
+/// character makes a label no label, decoded or not. The first eight are
+/// the legacy ones, decoded without their `;` too.
+const ASCII_REFERENCES: [(&[u8], u8); 45] = [
+    (b"amp", b'&'),
+    (b"AMP", b'&'),
+    (b"lt", b'<'),
+    (b"LT", b'<'),
+    (b"gt", b'>'),
+    (b"GT", b'>'),
+    (b"quot", b'"'),
+    (b"QUOT", b'"'),
+    (b"Tab", b'\t'),
+    (b"NewLine", b'\n'),
+    (b"excl", b'!'),
+    (b"num", b'#'),
+    (b"dollar", b'$'),
+    (b"percnt", b'%'),
+    (b"apos", b'\''),
+    (b"lpar", b'('),
+    (b"rpar", b')'),
+    (b"ast", b'*'),
+    (b"midast", b'*'),
+    (b"plus", b'+'),
+    (b"comma", b','),
+    (b"period", b'.'),
+    (b"sol", b'/'),
+    (b"colon", b':'),
+    (b"semi", b';'),
+    (b"equals", b'='),
+    (b"quest", b'?'),
+    (b"commat", b'@'),
+    (b"lsqb", b'['),
+    (b"lbrack", b'['),
+    (b"bsol", b'\\'),
+    (b"rsqb", b']'),
+    (b"rbrack", b']'),
+    (b"Hat", b'^'),
+    (b"lowbar", b'_'),
+    (b"UnderBar", b'_'),
+    (b"grave", b'`'),
+    (b"DiacriticalGrave", b'`'),
+    (b"lcub", b'{'),
+    (b"lbrace", b'{'),
+    (b"verbar", b'|'),
+    (b"vert", b'|'),
+    (b"VerticalLine", b'|'),
+    (b"rcub", b'}'),
+    (b"rbrace", b'}'),
+];
+
+/// How many of [`ASCII_REFERENCES`] are legacy references, which need no
+/// `;`.
+const LEGACY_REFERENCES: usize = 8;
+
+/// An attribute value with its character references decoded as the HTML
+/// tokenizer decodes them in an attribute: numeric ones always, named ones
+/// of [`ASCII_REFERENCES`] when they end with `;`, and a legacy one
+/// without it unless an `=` or a letter or digit follows. A reference to a
+/// character that is not ASCII is written out as UTF-8; a named one this
+/// table does not hold stays as it is, which reads the same (no label).
+fn unescape(raw: &[u8]) -> Vec<u8> {
+    if !raw.contains(&b'&') {
+        return raw.to_vec();
+    }
+    let mut out = Vec::with_capacity(raw.len());
+    let mut at = 0;
+    while at < raw.len() {
+        if raw[at] != b'&' {
+            out.push(raw[at]);
+            at += 1;
+            continue;
+        }
+        if let Some((character, used)) = numeric_reference(&raw[at + 1..]) {
+            let mut buffer = [0; 4];
+            out.extend_from_slice(character.encode_utf8(&mut buffer).as_bytes());
+            at += 1 + used;
+            continue;
+        }
+        if let Some((byte, used)) = named_reference(&raw[at + 1..]) {
+            out.push(byte);
+            at += 1 + used;
+            continue;
+        }
+        out.push(b'&');
+        at += 1;
+    }
+    out
+}
+
+/// A numeric reference after its `&` (`#65;`, `#x41`): the character
+/// and how many bytes it took, `;` included.
+fn numeric_reference(rest: &[u8]) -> Option<(char, usize)> {
+    let rest = rest.strip_prefix(b"#")?;
+    let (radix, start) = match rest.first() {
+        Some(b'x' | b'X') => (16, 1),
+        _ => (10, 0),
+    };
+    let digits = rest[start..]
+        .iter()
+        .take_while(|byte| char::from(**byte).is_digit(radix))
+        .count();
+    if digits == 0 {
+        return None;
+    }
+    let mut value: u32 = 0;
+    for byte in &rest[start..start + digits] {
+        let digit = char::from(*byte).to_digit(radix).unwrap_or_default();
+        value = value.saturating_mul(radix).saturating_add(digit);
+    }
+    let mut used = 1 + start + digits;
+    if rest.get(start + digits) == Some(&b';') {
+        used += 1;
+    }
+    let character = match value {
+        0 => char::REPLACEMENT_CHARACTER,
+        // The C1 range reads as windows-1252 would read the byte.
+        0x80..=0x9f => u8::try_from(value)
+            .ok()
+            .map_or(char::REPLACEMENT_CHARACTER, |byte| {
+                WINDOWS_1252
+                    .decode_without_bom_handling(&[byte])
+                    .0
+                    .chars()
+                    .next()
+                    .unwrap_or(char::REPLACEMENT_CHARACTER)
+            }),
+        _ => char::from_u32(value).unwrap_or(char::REPLACEMENT_CHARACTER),
+    };
+    Some((character, used))
+}
+
+/// A named reference of [`ASCII_REFERENCES`] after its `&`: its
+/// character and how many bytes it took.
+fn named_reference(rest: &[u8]) -> Option<(u8, usize)> {
+    for (index, (name, byte)) in ASCII_REFERENCES.iter().enumerate() {
+        let Some(after) = rest.strip_prefix(*name) else {
+            continue;
+        };
+        if after.first() == Some(&b';') {
+            return Some((*byte, name.len() + 1));
+        }
+        let legacy = index < LEGACY_REFERENCES;
+        let continues = after
+            .first()
+            .is_some_and(|next| *next == b'=' || next.is_ascii_alphanumeric());
+        if legacy && !continues {
+            return Some((*byte, name.len()));
+        }
+    }
+    None
 }
 
 /// The standard's "extract a character encoding from a meta element": the
@@ -1011,6 +1170,56 @@ mod tests {
     /// The edges of a `content` value and of the XML declaration: a value
     /// ends at `;` or white space, the declaration counts only within the
     /// first 1024 bytes, and its `encoding` is quoted or not there at all.
+    /// F212: Chrome reads a `<meta>` with its tokenizer, so a character
+    /// reference in a value is the character it names.
+    #[test]
+    fn a_character_reference_in_a_meta_is_read_as_its_character() {
+        for head in [
+            "<meta http-equiv=content-type content=\"text/html; charset=&quot;shift_jis&quot;\">",
+            "<meta http-equiv=content-type content='text/html; charset=&#34;shift_jis&#34;'>",
+            "<meta http-equiv=content-type content=\"text/html&semi; charset&equals;shift_jis\">",
+            "<meta charset=\"&#x73;hift&#95;jis\">",
+            "<meta charset=\"shift&lowbar;jis\">",
+            "<meta charset=shift_jis&Tab;>",
+        ] {
+            assert_eq!(prescan(head.as_bytes()), Some(SHIFT_JIS), "{head}");
+        }
+        // A legacy reference needs no `;`, unless a letter, a digit or `=`
+        // follows, as in any attribute.
+        assert_eq!(
+            prescan(
+                b"<meta http-equiv=content-type content=\"text/html; charset=&quotkoi8-r&quot\">"
+            ),
+            None
+        );
+        assert_eq!(
+            prescan(b"<meta http-equiv=content-type content=\"text/html; charset=&quot koi8-r\">"),
+            None
+        );
+        assert_eq!(
+            prescan(
+                b"<meta http-equiv=content-type content=\"text/html; charset=&quot;koi8-r&quot\">"
+            ),
+            Some(KOI8_R)
+        );
+        // A reference to what no label holds leaves no label, decoded or not.
+        assert_eq!(prescan(b"<meta charset=\"utf&#x2014;8\">"), None);
+        assert_eq!(prescan(b"<meta charset=\"utf&mdash;8\">"), None);
+        assert_eq!(prescan(b"<meta charset=\"&#0;utf-8\">"), None);
+        // A bare `&` and an unfinished reference are text.
+        assert_eq!(prescan(b"<meta charset=\"windows-1251&\">"), None);
+        assert_eq!(prescan(b"<meta charset=\"windows&#-1251\">"), None);
+        assert_eq!(
+            prescan(b"<meta charset=\"windows&#x2d1251\">"),
+            None,
+            "the hex digits run on"
+        );
+        assert_eq!(
+            prescan(b"<meta charset=\"windows&#45;1251\">"),
+            Some(WINDOWS_1251)
+        );
+    }
+
     #[test]
     fn a_declarations_value_ends_where_the_standard_ends_it() {
         for content in [

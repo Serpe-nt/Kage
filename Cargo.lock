@@ -2224,6 +2224,7 @@ dependencies = [
  "kage-store",
  "metrics",
  "metrics-exporter-prometheus",
+ "rcgen",
  "serde",
  "serde_json",
  "serde_path_to_error",

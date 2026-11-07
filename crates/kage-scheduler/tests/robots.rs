@@ -1071,6 +1071,7 @@ fn plain_file(url: &str, status: u16, body: &str) -> AttemptOutput {
         downgraded: false,
         timing: Timing::default(),
         subresources: None,
+        text_cache: kage_http::TextCache::default(),
     }));
     output
 }
@@ -1167,6 +1168,98 @@ async fn a_robots_txt_a_plain_client_brought_is_kept_as_sent_and_enforced_at_eve
         }
     );
     assert_eq!(world.script.plain_seen().len(), 3);
+    world.shut_down().await;
+}
+
+/// F209 (F90 at level 0, QA round C's tls level 0 check): a `304` to the
+/// scout once the kept file expired keeps the file and its rules for
+/// another day; before, the file was dropped and the site was
+/// `robots_unavailable` for an hour. A 304 with nothing kept tells
+/// nothing: the file cannot be had, as before.
+#[tokio::test(start_paused = true)]
+async fn a_304_to_the_scout_keeps_the_file_it_had_for_another_ttl() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU16, Ordering};
+
+    let mut world = World::new(4, SITES);
+    let answering = Arc::new(AtomicU16::new(200));
+    let status = Arc::clone(&answering);
+    world.script.when_plain(move |job| {
+        (job.url.path() == "/robots.txt").then(|| match status.load(Ordering::SeqCst) {
+            304 => plain_file(job.url.as_str(), 304, ""),
+            code => plain_file(job.url.as_str(), code, RULES),
+        })
+    });
+    let plain = |url: &str| FetchOrder {
+        level: Level::Plain,
+        ..get(url)
+    };
+
+    let first = world
+        .pipeline
+        .fetch(plain("https://enforced.example/private/a"))
+        .await
+        .unwrap();
+    assert_eq!(first.outcome, Outcome::RobotsDenied);
+    let kept = world
+        .backend
+        .robots_entry("https://enforced.example")
+        .unwrap();
+
+    // The kept answer runs out (a day, moved by up to a tenth) and the
+    // site answers the scout 304.
+    tokio::time::advance(Duration::from_hours(27)).await;
+    assert!(world.now() > kept.expires_at);
+    answering.store(304, Ordering::SeqCst);
+    let again = world
+        .pipeline
+        .fetch(plain("https://enforced.example/private/b"))
+        .await
+        .unwrap();
+    assert_eq!(again.outcome, Outcome::RobotsDenied, "{again:?}");
+    assert_eq!(
+        again
+            .robots
+            .as_ref()
+            .and_then(|v| v.matched_rule.as_deref()),
+        Some("Disallow: /private")
+    );
+    let renewed = world
+        .backend
+        .robots_entry("https://enforced.example")
+        .unwrap();
+    assert_eq!(renewed.body.as_deref(), Some(RULES));
+    assert_eq!(renewed.status, Some(200));
+    assert!(!renewed.unreachable);
+    assert_eq!(renewed.fetched_at, world.now());
+    assert!(renewed.expires_at - world.now() > Span::hours(21));
+    let files: Vec<String> = world
+        .script
+        .plain_seen()
+        .iter()
+        .map(|seen| seen.job.url.as_str().to_owned())
+        .collect();
+    assert_eq!(
+        files,
+        [
+            "https://enforced.example/robots.txt",
+            "https://enforced.example/robots.txt"
+        ]
+    );
+
+    // An origin with nothing kept: the 304 is no answer.
+    let unknown = world
+        .pipeline
+        .fetch(plain("https://enforced.example:8443/a"))
+        .await
+        .unwrap();
+    assert_eq!(unknown.reason.as_deref(), Some(ROBOTS_UNAVAILABLE));
+    let none = world
+        .backend
+        .robots_entry("https://enforced.example:8443")
+        .unwrap();
+    assert!(none.unreachable);
+    assert_eq!(none.status, Some(304));
     world.shut_down().await;
 }
 

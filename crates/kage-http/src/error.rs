@@ -220,6 +220,16 @@ fn tls_refusal(error: &wreq::Error) -> Option<&'static str> {
     None
 }
 
+/// Whether a wreq error is a TLS handshake that the other end refused by
+/// the rules of TLS (a certificate refused, an alert, nothing in common),
+/// and why, in words that hold no address; `None` for a connection that
+/// could not be made or broke off. For Kage's own clients that do not go
+/// through the http path (the webhook client, F208), which wreq reports
+/// both ways as a connect error.
+pub fn refused_handshake(error: &wreq::Error) -> Option<&'static str> {
+    tls_refusal(error)
+}
+
 /// Turns a wreq error into ours. The text of a wreq error can hold the
 /// proxy's address, so only its kind is kept.
 pub(crate) fn from_wreq(error: &wreq::Error, stage: Stage, after: Duration) -> HttpError {

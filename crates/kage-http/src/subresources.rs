@@ -712,7 +712,7 @@ impl HttpClient {
         let document = &page.final_url;
         // The markup as the browser reads it: decoded in the document's
         // own encoding, which an asset's query is written in (F161).
-        let (text, encoding) = page.decoded();
+        let (text, encoding) = page.decoded_ref();
         let (assets, icon) = plan(
             document,
             &scan(text.as_bytes()),

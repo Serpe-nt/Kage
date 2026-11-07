@@ -489,6 +489,7 @@ mod tests {
             downgraded: false,
             timing: Timing::default(),
             subresources: None,
+            text_cache: kage_http::TextCache::default(),
         }));
         output
     }

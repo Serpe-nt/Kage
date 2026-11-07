@@ -463,6 +463,7 @@ impl PlainClient {
                 load_ms: None,
                 total_ms: millis(total),
             },
+            text_cache: crate::fetch::TextCache::default(),
             subresources: None,
         })
     }
