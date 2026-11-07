@@ -4,6 +4,11 @@ name: release
 # image, records their digests and creates the GitHub release (spec §21).
 # The digests go into deploy/compose.yaml in a follow-up PR.
 #
+# Each image is pushed by digest only. Its tags (X.Y.Z, X.Y and latest)
+# move in the `tags` job, once every image was scanned, signed and
+# attested: an image any step refused never carries a release's tag (the
+# kage image of v2.0.3 did, because the build pushed its tags first).
+#
 # The tag must be annotated and signed by a key that .github/allowed_signers
 # on main lists (the owner's SSH signing key). Each image is scanned, signed
 # by digest with cosign under this workflow's own identity (keyless, through
@@ -135,8 +140,8 @@ jobs:
           file: ${{ matrix.dockerfile }}
           build-args: |
             ENGINE=${{ matrix.engine }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          # By digest only: the `tags` job tags it after every check.
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           provenance: mode=max
 
@@ -201,9 +206,81 @@ jobs:
           name: release-${{ matrix.name }}
           path: release/
 
+  tags:
+    name: tags ${{ matrix.name }}
+    # Every leg of `images` passed: each image is scanned, signed and
+    # attested by digest before any tag of either moves.
+    needs: [verify, images]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        name: [kage, kage-browser-chromium]
+    env:
+      IMAGE: ghcr.io/${{ needs.verify.outputs.owner }}/${{ matrix.name }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-${{ matrix.name }}
+          path: release
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The same tags as before the split: X.Y.Z, X.Y and latest.
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Tag the signed digest, and check that every tag names it
+        env:
+          NAME: ${{ matrix.name }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          ref="$(cat "release/${NAME}.digest")"
+          digest="${ref#"${IMAGE}@"}"
+          if [ "${ref}" != "${IMAGE}@${digest}" ] || [ "${digest#sha256:}" = "${digest}" ]; then
+            echo "::error::release/${NAME}.digest holds ${ref}, not ${IMAGE}@sha256:..."
+            exit 1
+          fi
+          args=()
+          while IFS= read -r tag; do
+            if [ -n "${tag}" ]; then args+=(--tag "${tag}"); fi
+          done <<< "${TAGS}"
+          if [ "${#args[@]}" -eq 0 ]; then
+            echo "::error::no tag for ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+          # One source and --prefer-index=false: the manifest is pushed as
+          # it is, so a tag names the very digest that was signed.
+          docker buildx imagetools create --prefer-index=false "${args[@]}" "${ref}"
+          echo "### ${NAME}" >> "$GITHUB_STEP_SUMMARY"
+          while IFS= read -r tag; do
+            if [ -z "${tag}" ]; then continue; fi
+            got="$(docker buildx imagetools inspect "${tag}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+            if [ "${got}" != "${digest}" ]; then
+              echo "::error::${tag} names ${got}, not the signed ${digest}"
+              exit 1
+            fi
+            echo "- \`${tag}\` names \`${digest}\`" >> "$GITHUB_STEP_SUMMARY"
+          done <<< "${TAGS}"
+
   publish:
     name: github release
-    needs: [verify, images]
+    needs: [verify, images, tags]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

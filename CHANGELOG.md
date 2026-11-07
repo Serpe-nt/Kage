@@ -116,6 +116,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Bytes of no type that are no text get no `extract` (F180).** The
   sniffing that keeps `raw_body` null decides; before, such a body had an
   empty extraction with `thin_content: true` (QA round two, http-08).
+- **A release image moves no tag until it passed every check.**
+  `release.yaml` pushed each image with its tags (`X.Y.Z`, `X.Y`,
+  `latest`) before Trivy scanned it, so the `kage` image of v2.0.3, which
+  the scan refused, carried `2.0.3`, `2.0` and `latest` unsigned and
+  unattested. Each image is now pushed by digest only, and a `tags` job
+  tags both once both were scanned, signed and attested, and checks that
+  every tag names the signed digest.
 
 ## [2.0.4] - 2026-11-07
 
