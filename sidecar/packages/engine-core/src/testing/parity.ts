@@ -2376,7 +2376,7 @@ export function defineParitySuite(subject: ParitySubject): void {
     it('types a doubled letter as two presses the page hears, the key up between them (F202)', async () => {
       // Words with doubled letters, and a capital on the key just pressed.
       // A key pressed while it is down sends nothing, and the display
-      // dropped such a press: `hello` arrived as `helo` before 2.0.3.
+      // dropped such a press: `hello` arrived as `helo` up to 2.0.4.
       const text = 'hello bookkeeper Mississippi aaa Lloyd';
       const run = await withContext('doubled', (context) =>
         flow(context, {

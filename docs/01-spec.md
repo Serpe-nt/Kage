@@ -951,7 +951,7 @@ holds where the answer came over plain `http:` (the page's `final_url`,
 the document whose status is kept). Over `https` only the site answers
 inside the tunnel, so the status the browser saw stays the site's verdict:
 a WAF's empty `403` is `forbidden`, as before F189, in both engines.
-Before 2.0.3 Chrome's result named no status there, so nothing was judged
+Before 2.0.4 Chrome's result named no status there, so nothing was judged
 and nothing booked on Chrome (F204). Circuit breaker
 per domain: if `block_count_1h` over all personas ≥
 `policy.breaker_threshold` (default 5), the domain is `paused` for
@@ -1257,7 +1257,7 @@ result is `navigation_failed` with nothing of the browser's page and no
 headers kept; its `status` is the one the browser saw: where Firefox's
 error page names that very document, and where Chrome's debugger heard
 the error answer of the main frame's latest document request at the
-address the tab was sent to (F204; before 2.0.3 Chrome's was `null`),
+address the tab was sent to (F204; before 2.0.4 Chrome's was `null`),
 else `null`. A flow's `goto` fails its step there the same way. So does
 a load whose page sent the tab on before its `load` (a script, a form
 that submits itself) to an address where nothing answered, as Kage's
@@ -1265,7 +1265,7 @@ forwarder closes a plain request it refuses: Firefox shows its own page
 there and fires no `load` either, and the engine looks at the document
 once the tab was sent on from a page that answered, so the navigation
 ends there in a fraction of a second, `navigation_failed` where the tab
-was sent; before 2.0.3 it ended only at `timeout_ms` (F200). Over plain `http://` whose answer it was
+was sent; before 2.0.4 it ended only at `timeout_ms` (F200). Over plain `http://` whose answer it was
 is unknown, so it is nobody's block; over `https` the status the browser saw
 is the site's verdict (§8.3, F189).
 
@@ -1515,7 +1515,7 @@ persona's seed and the request's seed, which the result records.
   after its small letter), its press waits until 15 to 45 ms after the
   release, as a finger lifts the key first; a key pressed while it is down
   sends nothing on a real keyboard, and the display dropped such a press
-  before 2.0.3 (`hello` arrived as `helo`, F202). Only those presses move;
+  up to 2.0.4 (`hello` arrived as `helo`, F202). Only those presses move;
   the holds and every other interval are drawn as before.
 - Entry: the first navigation in a context for a new origin SHOULD arrive
   with a plausible `Referer` strategy from policy: `direct`, `search_engine`
@@ -2675,7 +2675,7 @@ As built (the OpenAPI document is the contract):
   holds repeated lines of one name as one value joined with `, `, as its
   driver gives them, and its driver's split at commas is undone, so a
   comma the site wrote without a space after it comes back with one
-  (F190; before 2.0.3 Firefox's values came split at every comma).
+  (F190; before 2.0.4 Firefox's values came split at every comma).
 - `status` and `headers` of a browser's page are those of the response the
   tab shows. For a page the browser revalidated (it asked with its
   validators and was answered `304 Not Modified`) that is the page it
@@ -2689,8 +2689,8 @@ As built (the OpenAPI document is the contract):
   last, none answered more than 30 days ago; read when the context opens,
   written whole when it closes, never through a page, never sent
   anywhere). A Firefox page whose head is not kept (the file was lost, or
-  the page was kept before 2.0.3) is the wire's `304` with its own
-  fields: a status Kage cannot know is not guessed. Before 2.0.3 Chrome
+  the page was kept before 2.0.4) is the wire's `304` with its own
+  fields: a status Kage cannot know is not guessed. Before 2.0.4 Chrome
   said `200` with the 304's fields, no `Content-Type` among them, and
   Firefox `304`.
 - `dom_html` and `raw_body` are inline when `include` asks; the http path
