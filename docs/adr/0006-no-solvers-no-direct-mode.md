@@ -1,6 +1,8 @@
 # ADR 0006: No external CAPTCHA solvers, no manual solving, never a direct connection
 
-Status: accepted, 2026-10-08
+Status: accepted, 2026-10-08. "Never a direct connection" is superseded
+by ADR 0012 (2026-10-19): the operator may choose `egress.mode: direct`.
+No external CAPTCHA solving and no manual solving stand.
 
 ## Context
 

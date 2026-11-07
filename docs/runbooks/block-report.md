@@ -22,7 +22,7 @@ object, and its `attempts` (`GET /v1/results/{id}`, or `kage fetch <url>
   "status": 403,
   "block": {
     "vendor": "cloudflare",
-    "kind": "managed_challenge",
+    "type": "managed_challenge",
     "confidence": 0.95,
     "evidence": ["header:cf-mitigated=challenge", "body:/cdn-cgi/challenge-platform/"]
   },
@@ -38,7 +38,7 @@ object, and its `attempts` (`GET /v1/results/{id}`, or `kage fetch <url>
 |---|---|
 | `outcome` | `rate_limited`, `forbidden`, `captcha`, `challenge_failed` or `soft_block` are blocks; `challenge_passed` is a challenge the browser got through, and is a page. |
 | `block.vendor` | Who blocked, by the signature that matched (`policies/block-signatures.yaml`): `cloudflare`, `akamai`, `datadome`, `human`, `kasada`, `imperva`, `aws_waf`, `f5_shape`, `recaptcha`, `hcaptcha`, or `generic` when nothing named a vendor (a bare 403 or 429). |
-| `block.kind` | The kind of block within the vendor, the signature's `type` (`waf_block`, `rate_limit_1015`, `interstitial`, `captcha`, `press_and_hold`, …). |
+| `block.type` | The kind of block within the vendor, the signature's `type` (`waf_block`, `rate_limit_1015`, `interstitial`, `captcha`, `press_and_hold`, …). |
 | `block.confidence` | How sure the signature is, 0 to 1. The persona's cooldown is scaled by it: a weak attribution (a bare status) cools for the short cooldown. |
 | `block.evidence` | What matched: a header, a cookie, a piece of the body, a status. Nothing the site sent beyond that. |
 | `level` | The level the request was made at ([levels-and-egress.md](levels-and-egress.md)). Every attempt is made at it: nothing escalates, and a block on the http path is never retried in a browser. |
@@ -120,8 +120,11 @@ What to do, in this order:
    may have a burnt address: replace it
    ([proxies.md](proxies.md)).
 4. **Ask whether the site should be fetched at all.** A site that keeps
-   refusing a gentle visitor is saying no. Set its policy's `pacing` to
-   one that never fetches, or stop sending it.
+   refusing a gentle visitor is saying no. Kage reads only what callers
+   ask for: stop sending it (no pacing profile fetches nothing, and level
+   0 takes none). Until the callers stop, a policy with
+   `breaker_threshold: 1` and a long `breaker_pause` pauses the site at
+   its first block.
 
 ## A block Kage does not recognise
 

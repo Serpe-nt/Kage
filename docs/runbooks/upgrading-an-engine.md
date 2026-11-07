@@ -69,8 +69,8 @@ its runbook; this page is what they share and the order to keep.
        FROM health_events WHERE kind = 'persona_browser_upgraded' GROUP BY 1, 2, 3"
   ```
 
-- Roll out by recreating the sidecar of the engine (`docker compose up
-  --detach --wait browser-firefox`) with kage at the release that pins
+- Roll out by recreating the sidecar of the engine (`docker compose --file deploy/compose.yaml
+  up --detach --wait browser-firefox`) with kage at the release that pins
   that browser; kage closes the contexts of that engine and opens them
   again at the next page.
 - **A Firefox major is one-way.** Firefox moves a profile forward at its

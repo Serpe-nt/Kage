@@ -8,7 +8,7 @@ collector is named; the dashboards and alerts come with the
 ## Logs
 
 Kage and both sidecars write one JSON object per line on stdout
-(`docker compose logs`), in one shape (F144): `timestamp` (ISO 8601,
+(`docker compose --file deploy/compose.yaml logs`), in one shape (F144): `timestamp` (ISO 8601,
 UTC), `level` (`INFO`, `WARN`, ...), the text and everything the line
 was written with under `fields` (`fields.message`, `fields.persona`),
 and `trace_id` and `span_id` at the top. Kage's lines add `target` (the
@@ -116,7 +116,7 @@ current and that every metric they name exists):
 | Kage · blocks and breakers | per domain the blocks of the last hour against its breaker threshold, the block rate, breakers open, blocks by vendor (every level; the breaker counts no block of level 0) |
 | Kage · jobs and crawls | jobs and items by state, how jobs end, how a crawl reached its pages, what it skipped |
 | Kage · webhooks | deliveries by result and event, what waits, failures |
-| Kage · bandwidth | the share of the plan's monthly cap used (`bandwidth.cap`, 250 GB unless set), bytes through the forwarder (the host's own connection under `egress.mode: direct` included, which the cap does not count) |
+| Kage · bandwidth | the share of the plan's monthly cap used (`bandwidth.monthly_cap_gb`, 250 GB unless set), bytes through the forwarder (the host's own connection under `egress.mode: direct` included, which the cap does not count) |
 | Kage · cache and robots.txt | the response cache, the `robots.txt` asked for, what it kept from being fetched |
 
 ## Alerts
@@ -127,7 +127,7 @@ them sent somewhere, point an Alertmanager of your own at Prometheus.
 
 | Alert | When | What to do |
 |---|---|---|
-| KageDown (critical) | Prometheus has not scraped Kage for 2 minutes | `docker compose ps`, `docker compose logs kage` |
+| KageDown (critical) | Prometheus has not scraped Kage for 2 minutes | `docker compose --file deploy/compose.yaml ps`, `docker compose --file deploy/compose.yaml logs kage` |
 | KagePoolUnavailable (critical) | no proxy healthy or degraded for 10 minutes; a proxy whose backoff ran out counts as `backoff` until a probe passes, so an outage holds the alert through every expiry, and so does one whose latest probe failed while the outage guard of a pool of four or more holds (F151); under `egress.mode: direct` the pool is idle and publishes nothing, so it stays quiet | [proxies.md](proxies.md) |
 | KageBandwidthBudget (warning) | 80 % of the month's cap used | [fetching.md](fetching.md#the-bandwidth-budget) |
 | KageBreakerOpen (warning) | a domain is paused: `kage_breaker_open` is read from the stored breakers at every scrape, so it holds across a restart and ends with the pause, not with the trial that closes the breaker (F126) | [block-report.md](block-report.md) |

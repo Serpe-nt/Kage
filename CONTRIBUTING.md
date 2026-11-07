@@ -38,6 +38,44 @@ the images and their scan, and the compose end-to-end tests. Nothing
 reaches a real site: live tests (`KAGE_LIVE=1`) run only on the owner's
 word, against the echo and detection pages of the configuration.
 
+### The end-to-end suite in a closed world
+
+Once its images are in, the end-to-end suite needs nothing outside the
+machine: every site it reads is a container of its own world. A gate
+that shows it runs in a development container with a Docker daemon of
+its own (privileged) and an egress rule that drops whatever leaves:
+
+1. With the network still open: `just setup`, `just build-images`, and a
+   pull of every image the suite and the observability profile run
+   besides Kage's own three: each `image:` pinned by digest in
+   `deploy/compose*.yaml` (Postgres, the OpenTelemetry collector, Jaeger,
+   Prometheus, Grafana) and `grafana/k6` from `tests/e2e/load.sh`. An image
+   left out fails its script with a pull error once the rule is on.
+2. Then the rule, with an `NFLOG` rule in front of each `DROP`, so that
+   every dropped packet is captured:
+
+   ```bash
+   iptables -I DOCKER-USER -o eth0 -j DROP
+   iptables -I DOCKER-USER -o eth0 -j NFLOG --nflog-group 5 --nflog-prefix E2E-DROP
+   iptables -I OUTPUT -o eth0 -j DROP
+   iptables -I OUTPUT -o eth0 -j NFLOG --nflog-group 5 --nflog-prefix E2E-DROP
+   tcpdump -U -i nflog:5 -w drops.pcap &
+   ```
+
+   `DOCKER-USER` holds what the nested daemon's containers send, `OUTPUT`
+   what the container's own processes send, the nested daemon among them.
+   Use `NFLOG`, not `LOG`: a nested network namespace logs nothing
+   (`nf_log_all_netns` is off), while `tcpdump -i nflog:5` reads the group.
+3. `just test-e2e`; then stop the capture, take the four rules out, and
+   read every dropped packet (`tcpdump -n -r drops.pcap`). `DOCKER-USER`
+   should count none. In `OUTPUT` expect the nested daemon's own DNS: its
+   embedded resolver asks the container's resolver for names it does not
+   hold (a world's service after its container went, gRPC's
+   `_grpc_config.localhost`, and under `egress.mode: direct` the lookups
+   the forwarder makes for a browser's own background traffic), and the
+   last packets of the image pulls' connections. Anything else is a
+   finding.
+
 Every target on its own (`just` without arguments lists them all):
 
 | Command | What it does |
