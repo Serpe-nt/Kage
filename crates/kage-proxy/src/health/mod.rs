@@ -270,14 +270,17 @@ impl HealthChecker {
         // Never checked, or overdue after a restart: somewhere in the
         // startup spread, so a pool does not wake up as one.
         let spread = || {
-            now + scale(
-                self.settings.startup_spread,
-                self.pool
-                    .unit("probe-start", &[proxy.id.as_uuid().as_bytes()]),
+            later(
+                now,
+                scale(
+                    self.settings.startup_spread,
+                    self.pool
+                        .unit("probe-start", &[proxy.id.as_uuid().as_bytes()]),
+                ),
             )
         };
         let next_probe = last_probe
-            .map(|at| at + self.wait(proxy.id, 0))
+            .map(|at| later(at, self.wait(proxy.id, 0)))
             .filter(|next| *next > now)
             .unwrap_or_else(spread);
         Slot {
@@ -308,8 +311,14 @@ impl HealthChecker {
         if proxy.state != ProxyState::Healthy || traffic <= last {
             return slot.next_probe;
         }
-        let postponed = traffic + self.settings.interval;
-        let ceiling = last + self.settings.interval * LONGEST_POSTPONEMENT;
+        let postponed = later(traffic, self.settings.interval);
+        let ceiling = later(
+            last,
+            self.settings
+                .interval
+                .checked_mul(LONGEST_POSTPONEMENT)
+                .unwrap_or(chrono::Duration::MAX),
+        );
         slot.next_probe.max(postponed.min(ceiling))
     }
 
@@ -396,7 +405,7 @@ impl HealthChecker {
                 .get(&proxy.id)
                 .map_or(0, |slot| slot.probes)
                 .saturating_add(1);
-            let next_probe = at + self.wait(proxy.id, probes);
+            let next_probe = later(at, self.wait(proxy.id, probes));
             let slot = memory.schedule.entry(proxy.id).or_insert(Slot {
                 next_probe,
                 last_probe: None,
@@ -409,7 +418,7 @@ impl HealthChecker {
             slot.last_probe = Some(at);
             slot.probes = probes;
             if geo_failed {
-                slot.geo_retry_at = Some(at + GEO_RETRY);
+                slot.geo_retry_at = Some(later(at, GEO_RETRY));
             } else if report.geo.is_some() {
                 slot.geo_retry_at = None;
             }
@@ -608,9 +617,9 @@ impl HealthChecker {
                 Ok(Err((proxy, error))) => {
                     tracing::error!(%proxy, %error, "cannot probe the proxy");
                     // Not again at the very next pass.
-                    let later = now + self.settings.interval;
+                    let retry = later(now, self.settings.interval);
                     if let Some(slot) = self.memory().schedule.get_mut(&proxy) {
-                        slot.next_probe = slot.next_probe.max(later);
+                        slot.next_probe = slot.next_probe.max(retry);
                     }
                     if let PoolError::Store(error) = error {
                         store_error = Some(error);
@@ -665,18 +674,19 @@ impl HealthChecker {
                         .as_ref()
                         .and_then(|health| health.reputation_checked_at);
                     match looked_up {
-                        Some(at) => at + self.reputation_wait(proxy.id, at),
+                        Some(at) => later(at, self.reputation_wait(proxy.id, at)),
                         // Never looked up: within the first hour, not all
                         // at once.
-                        None => {
-                            now + scale(
+                        None => later(
+                            now,
+                            scale(
                                 self.settings
                                     .reputation_interval
                                     .min(chrono::Duration::hours(1)),
                                 self.pool
                                     .unit("reputation-start", &[proxy.id.as_uuid().as_bytes()]),
-                            )
-                        }
+                            ),
+                        ),
                     }
                 });
                 if due <= now && candidate.is_none_or(|(earliest, _, _)| due < earliest) {
@@ -701,7 +711,7 @@ impl HealthChecker {
                         },
                     )
                     .await?;
-                now + self.reputation_wait(id, now)
+                later(now, self.reputation_wait(id, now))
             }
             Err(error) => {
                 let pause = match &error {
@@ -720,9 +730,9 @@ impl HealthChecker {
                     "reputation lookup failed"
                 );
                 if let Some(pause) = pause {
-                    self.memory().reputation_paused_until = Some(now + pause);
+                    self.memory().reputation_paused_until = Some(later(now, pause));
                 }
-                now + REPUTATION_RETRY
+                later(now, REPUTATION_RETRY)
             }
         };
         if let Some(slot) = self.memory().schedule.get_mut(&id) {
@@ -770,16 +780,39 @@ fn scale(duration: chrono::Duration, factor: f64) -> chrono::Duration {
     // Intervals are far below 2^53 milliseconds.
     #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
     let millis = (duration.num_milliseconds() as f64 * factor) as i64;
-    chrono::Duration::milliseconds(millis)
+    chrono::Duration::try_milliseconds(millis).unwrap_or(chrono::Duration::MAX)
+}
+
+/// `at` plus `span`, held at the latest date there is instead of
+/// overflowing (F194): a configured span far beyond any real one waits
+/// "forever", never panics.
+fn later(at: DateTime<Utc>, span: chrono::Duration) -> DateTime<Utc> {
+    at.checked_add_signed(span)
+        .unwrap_or(DateTime::<Utc>::MAX_UTC)
 }
 
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
+    use chrono::{DateTime, TimeZone, Utc};
     use kage_core::config::Config;
 
-    use super::{HealthSettings, scale};
+    use super::{HealthSettings, later, scale};
+
+    #[test]
+    fn a_span_past_the_last_date_saturates_instead_of_overflowing() {
+        let now = Utc.with_ymd_and_hms(2026, 11, 7, 12, 0, 0).unwrap();
+        assert_eq!(
+            later(now, chrono::Duration::minutes(5)),
+            Utc.with_ymd_and_hms(2026, 11, 7, 12, 5, 0).unwrap()
+        );
+        assert_eq!(later(now, chrono::Duration::MAX), DateTime::<Utc>::MAX_UTC);
+        assert_eq!(
+            later(DateTime::<Utc>::MAX_UTC, chrono::Duration::seconds(1)),
+            DateTime::<Utc>::MAX_UTC
+        );
+    }
 
     #[test]
     fn durations_scale_by_a_factor() {

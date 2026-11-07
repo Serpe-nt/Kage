@@ -473,6 +473,8 @@ fn a_proxy_that_leaves_by_an_older_ones_address_is_degraded_while_it_lasts() {
     );
     assert!(proxy.exit_shared());
     assert!(!proxy.carries_persona());
+    // F195: it carries nothing, so the gauge does not count it as usable.
+    assert_eq!(reported_state(&proxy), ProxyState::Backoff);
     // Still shared: nothing new is said.
     let later = at + Duration::minutes(5);
     assert_eq!(mark_shared_exit(&mut proxy, &ok(later), Some(older)), []);
@@ -488,6 +490,7 @@ fn a_proxy_that_leaves_by_an_older_ones_address_is_degraded_while_it_lasts() {
     apply_probe(&mut proxy, &ok(apart), false, MID, &rules());
     assert_eq!(proxy.state, ProxyState::Healthy);
     assert!(proxy.carries_persona());
+    assert_eq!(reported_state(&proxy), ProxyState::Healthy);
 
     // A proxy never probed gets a record of its own.
     let mut fresh = proxy_fixture();

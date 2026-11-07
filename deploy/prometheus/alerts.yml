@@ -18,6 +18,8 @@ groups:
       # nothing is fetched. A proxy whose backoff ran out counts as backoff
       # until a probe passes (F111), so an outage reads as a flat zero here
       # through every expiry and the ten minutes are never started again.
+      # A proxy that shares an older proxy's exit address carries nothing
+      # and counts as backoff too (F195).
       - alert: KagePoolUnavailable
         expr: sum(kage_proxy_state{state=~"healthy|degraded"}) == 0
         for: 10m
