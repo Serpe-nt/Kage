@@ -13,7 +13,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 
 use chrono::Duration as Span;
-use common::{DEFAULT_DOMAINS, World, blocked, id, persona, server_error, timed_out};
+use common::{DEFAULT_DOMAINS, World, blocked, id, ok, persona, server_error, timed_out};
 use kage_core::alert::AlertKind;
 use kage_core::domain::{BreakerState, Exit, Level, Render, RenderMode};
 use kage_core::ids::ProxyId;
@@ -1433,5 +1433,77 @@ async fn a_flows_later_site_is_booked_its_own_timeouts() {
         onward_at - paused_at >= Span::seconds(29),
         "{onward_at} {paused_at}"
     );
+    world.shut_down().await;
+}
+
+/// QA round three, flows-01 and lock-01: an attempt whose persona's context
+/// ran another operation in its sidecar for as long as it waited asked the
+/// site nothing. It spends no retry (the request has none here), it is no
+/// page of the persona's day on the site, and the persona, a job's visitor
+/// or a session's, takes the next attempt, which is made.
+#[tokio::test(start_paused = true)]
+async fn an_attempt_a_busy_context_refused_is_no_page_and_spends_no_retry() {
+    let mut world = World::new(1, DEFAULT_DOMAINS);
+    world
+        .script
+        .then(AttemptOutput::failed(
+            Outcome::ProviderError,
+            "context_busy",
+            Courtesy::NotTheSite,
+        ))
+        .then(ok());
+    let report = world
+        .pipeline
+        .fetch(FetchOrder {
+            max_retries: Some(0),
+            ..browser("https://shop.example/a")
+        })
+        .await
+        .unwrap();
+    assert_eq!(report.outcome, Outcome::Ok, "{:?}", report.reason);
+    let reasons: Vec<Option<&str>> = report
+        .attempts
+        .iter()
+        .map(|attempt| attempt.reason.as_deref())
+        .collect();
+    assert_eq!(reasons, [Some("context_busy"), None]);
+    assert_eq!(
+        report
+            .attempts
+            .iter()
+            .map(|attempt| attempt.n)
+            .collect::<Vec<_>>(),
+        [1, 2]
+    );
+    let personas: BTreeSet<_> = world
+        .script
+        .seen()
+        .iter()
+        .map(|seen| seen.job.persona.id)
+        .collect();
+    assert_eq!(personas.len(), 1);
+    let persona = *personas.first().unwrap();
+    let state = world.backend.domain_state(persona, "shop.example").unwrap();
+    assert_eq!(state.requests_today, 1);
+    assert_eq!(state.last_outcome, Some(Outcome::Ok));
+
+    // A context that stays busy through every wait: past the bound the
+    // refusals count as failures, and with no retry left the request ends.
+    let busy =
+        || AttemptOutput::failed(Outcome::ProviderError, "context_busy", Courtesy::NotTheSite);
+    for _ in 0..4 {
+        world.script.then(busy());
+    }
+    let report = world
+        .pipeline
+        .fetch(FetchOrder {
+            max_retries: Some(0),
+            ..browser("https://shop.example/b")
+        })
+        .await
+        .unwrap();
+    assert_eq!(report.outcome, Outcome::ProviderError);
+    assert_eq!(report.reason.as_deref(), Some("context_busy"));
+    assert_eq!(report.attempts.len(), 4);
     world.shut_down().await;
 }

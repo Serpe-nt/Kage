@@ -240,6 +240,15 @@ impl PersonaDomainState {
         }
     }
 
+    /// Takes back one request counted on `day`: the attempt it was
+    /// counted for was never made (its context was busy, QA round three,
+    /// flows-01). Nothing when the count is of another day or at zero.
+    pub fn take_back_request(&mut self, day: NaiveDate) {
+        if self.counter_day == Some(day) {
+            self.requests_today = self.requests_today.saturating_sub(1);
+        }
+    }
+
     /// Counts one request at `now`, on `day` of the persona's own time
     /// zone. A request on a new day starts the count again.
     pub fn record_request(&mut self, now: DateTime<Utc>, day: NaiveDate) {
@@ -445,6 +454,24 @@ mod tests {
         assert_eq!(state.requests_on(tomorrow), 1);
         assert_eq!(state.requests_on(today), 0);
         assert_eq!(state.last_request_at, Some(later));
+    }
+
+    #[test]
+    fn a_request_that_was_never_made_is_taken_back_on_its_own_day() {
+        // QA round three, flows-01: an attempt a busy context refused.
+        let today = NaiveDate::from_ymd_opt(2026, 11, 7).unwrap();
+        let tomorrow = today.succ_opt().unwrap();
+        let mut state = PersonaDomainState::new(PersonaId::new(), "example.org");
+        state.record_request(Utc::now(), today);
+        state.record_request(Utc::now(), today);
+        state.take_back_request(today);
+        assert_eq!(state.requests_on(today), 1);
+        // Another day's count, or none, is left alone.
+        state.take_back_request(tomorrow);
+        assert_eq!(state.requests_on(today), 1);
+        state.take_back_request(today);
+        state.take_back_request(today);
+        assert_eq!(state.requests_on(today), 0);
     }
 
     #[test]

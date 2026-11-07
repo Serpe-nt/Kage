@@ -16,7 +16,8 @@ use common::proxy::{PROXY_PASS, PROXY_USER, basic};
 use kage_core::alert::{Alert, AlertKind, AlertSeverity, AlertSink};
 use kage_core::config::DEFAULT_PLAIN_USER_AGENT;
 use kage_core::domain::{
-    BreakerState, Exit, HealthFailure, IDLE_DOMAIN, Level, Persona, ProxyState, Render, SubjectKind,
+    BreakerState, CoolingReason, Exit, HealthFailure, IDLE_DOMAIN, Level, Persona, PersonaState,
+    ProxyState, Render, SubjectKind,
 };
 use kage_core::ids::PersonaId;
 use kage_core::outcome::Outcome;
@@ -1039,6 +1040,103 @@ async fn nothing_is_fetched_while_a_leak_is_on_record() {
     lab.pool.clear_egress_unsafe().await.unwrap();
     let served = lab.pipeline.fetch(http("/page")).await.unwrap();
     assert_eq!(served.outcome, Outcome::Ok, "{:?}", served.reason);
+    lab.shut_down().await;
+}
+
+/// QA round three, flows-02 (F156 on the road it was made for): every proxy
+/// of a pool of three is in backoff, and the persona manager cools each
+/// persona for it (`cooling`, `proxy_backoff`). The view the planner reads
+/// says when each comes back, so work is told the end of the first
+/// backoff; before, a cooling persona had no `ready_at` and every look was
+/// "a minute on".
+#[tokio::test]
+async fn work_that_waits_for_every_proxys_backoff_is_told_when_the_first_one_ends() {
+    let mut lab = Lab::start(3, 149, FAST).await;
+    serve(&lab, "/page", page("The shop")).await;
+    for persona in &lab.personas {
+        let mut at = lab.now();
+        for _ in 0..8 {
+            let after = lab
+                .pool
+                .record_probe(
+                    persona.proxy_id,
+                    &ProbeReport {
+                        at,
+                        exit: Err(HealthFailure::Unreachable),
+                        leak: None,
+                        geo: None,
+                    },
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            if after.state == ProxyState::Backoff {
+                break;
+            }
+            at += chrono::Duration::seconds(30);
+        }
+    }
+    let live = lab.pool.live().await.unwrap();
+    assert!(
+        live.iter().all(|proxy| proxy.state == ProxyState::Backoff),
+        "{:?}",
+        live.iter().map(|proxy| proxy.state).collect::<Vec<_>>()
+    );
+    let first = live
+        .iter()
+        .filter_map(|proxy| proxy.backoff_until)
+        .min()
+        .unwrap();
+    assert!(first > lab.now());
+
+    // The persona manager cools every persona for its proxy's backoff, as
+    // a running server does on the pool's events.
+    for persona in &lab.personas {
+        lab.manager
+            .handle(&kage_proxy::PoolEvent::StateChanged {
+                proxy: persona.proxy_id,
+                from: ProxyState::Degraded,
+                to: ProxyState::Backoff,
+            })
+            .await
+            .unwrap();
+    }
+    for persona in &lab.personas {
+        let stored = lab
+            .store()
+            .personas()
+            .get(persona.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.state, PersonaState::Cooling);
+        assert_eq!(stored.cooling_reason, Some(CoolingReason::ProxyBackoff));
+    }
+    let views = lab.backend.personas().await.unwrap();
+    assert!(views.iter().all(|view| !view.ready), "{views:?}");
+    assert!(
+        views.iter().all(|view| view.ready_at.is_some()),
+        "{views:?}"
+    );
+
+    let refused = lab.pipeline.fetch(http("/page")).await.unwrap();
+    assert_eq!(refused.reason.as_deref(), Some("no_persona"));
+    assert_eq!(refused.retry_at, Some(first));
+    let (_keep, stop) = tokio::sync::watch::channel(false);
+    let job = FetchOrder::get(Lab::url("/page"), Priority::Job);
+    match lab
+        .pipeline
+        .fetch_for_job(kage_core::ids::RequestId::new(), job, None, stop)
+        .await
+        .unwrap()
+    {
+        JobFetch::Deferred(deferred) => {
+            assert_eq!(deferred.reason, Refusal::NoPersona);
+            assert_eq!(deferred.retry_at, Some(first));
+        }
+        other => panic!("deferred, not {other:?}"),
+    }
+    assert_eq!(lab.received("/page").await.len(), 0);
     lab.shut_down().await;
 }
 

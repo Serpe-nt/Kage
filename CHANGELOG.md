@@ -263,6 +263,24 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `tests/qa/*.sh` are executable in git, `stack.sh fast` runs itself
   through `bash`, and `just lint-scripts` (in `just lint` and CI's `node`
   job) refuses a shell script that is not executable in git.
+- **A cancelled flow's persona waits for the step under way (QA round
+  three, flows-01).** A flow's cancel hangs up on the sidecar, which
+  finishes the step it is at on the persona's context (F175); the
+  scheduler gave the persona out at once, and every request it took
+  meanwhile, another key's, a session's, a flow job's or a crawl's, was
+  refused `context_busy`, booked as a failed attempt and counted as a page
+  of the persona's day on the site. The job still ends at once, but the
+  persona takes no other work until its context runs nothing again, at
+  most until the flow's own time is up. An attempt that meets a busy
+  context anyway (a server that was killed left it) waits for it and asks
+  again; one still refused at its bound spends no retry, is no page of
+  the day and gives a breaker's trial back.
+- **A job that waits for its proxies' backoff is told when the first one
+  ends (QA round three, flows-02).** F156 did not hold: a persona whose
+  proxy is in backoff is stored `cooling` (`proxy_backoff`) and had no
+  moment to come back, so a job was still told "a minute on" through a
+  backoff that can last an hour. Such a persona now carries its proxy's
+  `backoff_until`, and `paused.until` is the first one's.
 
 ### Added
 

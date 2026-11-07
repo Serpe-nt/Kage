@@ -261,6 +261,13 @@ pub struct SidecarState {
     pub selftest: Option<Value>,
     /// Whether the container answers its health question.
     pub healthy: bool,
+    /// Until when a context runs the operation it was last asked for,
+    /// whether its caller waited or hung up: a flow is busy for its
+    /// `flow_delay`. Meanwhile every operation on it is refused
+    /// `context_busy`, as the real sidecar refuses a second one (spec
+    /// §10.1); these are counted in `refused_busy`.
+    pub busy_until: HashMap<String, std::time::Instant>,
+    pub refused_busy: Vec<String>,
 }
 
 struct SidecarResponder {
@@ -550,6 +557,9 @@ impl SidecarResponder {
             .set_body_raw(lines.join("\n") + "\n", "application/x-ndjson");
         if let Some(delay) = state.flow_delay {
             answer = answer.set_delay(delay);
+            state
+                .busy_until
+                .insert(context.to_owned(), std::time::Instant::now() + delay);
         }
         answer
     }
@@ -597,6 +607,18 @@ impl Respond for SidecarResponder {
         let known = state.contexts.values().any(|(open, _)| open == context);
         if !known {
             return refusal(404, "context_not_found", "no such context");
+        }
+        if state
+            .busy_until
+            .get(context)
+            .is_some_and(|until| *until > std::time::Instant::now())
+        {
+            state.refused_busy.push(format!("{method} {operation}"));
+            return refusal(
+                409,
+                "context_busy",
+                "the context is running another operation",
+            );
         }
         match (method, operation) {
             ("DELETE", "") => {
@@ -674,6 +696,8 @@ impl MockSidecar {
             flows: Vec::new(),
             next_flows: VecDeque::new(),
             flow_delay: None,
+            busy_until: HashMap::new(),
+            refused_busy: Vec::new(),
             on_flow: None,
             exported: Vec::new(),
             imported: Vec::new(),

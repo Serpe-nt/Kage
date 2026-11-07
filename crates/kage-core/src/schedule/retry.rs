@@ -100,12 +100,21 @@ pub struct Ruling {
     pub penalty: Option<AttemptVerdict>,
 }
 
+/// How many attempts of one request a busy context may refuse before such
+/// a refusal counts like any other failure: a context that stays busy
+/// through the waits of so many attempts is no passing state.
+pub const MAX_UNMADE: u32 = 3;
+
 /// How far a request has come.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RequestProgress {
     level: Level,
     max_attempts: u32,
     attempts: u32,
+    /// Of `attempts`, those that were never made: the persona's context
+    /// was busy with another operation (QA round three, flows-01). They are
+    /// numbered and stored like the others and spend no retry.
+    unmade: u32,
     used: Vec<PersonaId>,
     blocked: Vec<PersonaId>,
 }
@@ -117,6 +126,7 @@ impl RequestProgress {
             level,
             max_attempts: retries.saturating_add(1),
             attempts: 0,
+            unmade: 0,
             used: Vec::new(),
             blocked: Vec::new(),
         }
@@ -127,12 +137,29 @@ impl RequestProgress {
     /// the retry budget, the personas that made them are not asked again,
     /// and the ones that were blocked stay blocked.
     #[must_use]
-    pub fn resumed(
+    pub fn resumed(self, earlier: impl IntoIterator<Item = (Option<PersonaId>, Outcome)>) -> Self {
+        self.resumed_marked(
+            earlier
+                .into_iter()
+                .map(|(persona, outcome)| (persona, outcome, false)),
+        )
+    }
+
+    /// [`Self::resumed`], each earlier attempt marked with whether it was
+    /// never made ([`Self::record_unmade`]): such an attempt is numbered,
+    /// spends no retry (at most [`MAX_UNMADE`] of them) and does not keep
+    /// its persona from the next attempt.
+    #[must_use]
+    pub fn resumed_marked(
         mut self,
-        earlier: impl IntoIterator<Item = (Option<PersonaId>, Outcome)>,
+        earlier: impl IntoIterator<Item = (Option<PersonaId>, Outcome, bool)>,
     ) -> Self {
-        for (persona, outcome) in earlier {
+        for (persona, outcome, unmade) in earlier {
             self.attempts = self.attempts.saturating_add(1);
+            if unmade && self.unmade < MAX_UNMADE {
+                self.unmade = self.unmade.saturating_add(1);
+                continue;
+            }
             let Some(persona) = persona else { continue };
             if !self.used.contains(&persona) {
                 self.used.push(persona);
@@ -146,7 +173,38 @@ impl RequestProgress {
 
     /// Whether another attempt may be made.
     pub const fn attempts_left(&self) -> bool {
-        self.attempts < self.max_attempts
+        self.counted() < self.max_attempts
+    }
+
+    /// The attempts that count toward the retry budget.
+    const fn counted(&self) -> u32 {
+        self.attempts.saturating_sub(self.unmade)
+    }
+
+    /// Records an attempt that was never made: the persona's context in
+    /// its sidecar ran another operation for as long as the attempt waited
+    /// for it, so nothing was asked of the site (QA round three, flows-01,
+    /// lock-01). The persona is still busy: that is a wait, not a failure
+    /// of the request. It is numbered, spends no retry, and leaves the
+    /// persona free to take the next attempt (a job's visitor stays its
+    /// visitor, a session's persona its persona), which waits for the
+    /// context again; past [`MAX_UNMADE`] such attempts it counts as a
+    /// failure that may be retried, as before.
+    pub fn record_unmade(&mut self, persona: PersonaId) -> Ruling {
+        if self.unmade >= MAX_UNMADE {
+            return self.record(Some(persona), AttemptVerdict::plain(Outcome::ProviderError));
+        }
+        self.attempts = self.attempts.saturating_add(1);
+        self.unmade = self.unmade.saturating_add(1);
+        Ruling {
+            step: Step::Retry,
+            penalty: None,
+        }
+    }
+
+    /// How many attempts were never made ([`Self::record_unmade`]).
+    pub const fn unmade(&self) -> u32 {
+        self.unmade
     }
 
     /// The level of the request.
@@ -189,7 +247,7 @@ impl RequestProgress {
                 penalty: None,
             };
         }
-        let left = self.attempts < self.max_attempts;
+        let left = self.counted() < self.max_attempts;
         let blocked = verdict.outcome.is_block();
         let Some(persona) = persona else {
             // A plain client: the site's refusal is its answer.
@@ -282,8 +340,8 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     use super::{
-        AttemptVerdict, CooldownRules, RequestProgress, Ruling, Step, cooldown_for, cooldown_seed,
-        retry_pause,
+        AttemptVerdict, CooldownRules, MAX_UNMADE, RequestProgress, Ruling, Step, cooldown_for,
+        cooldown_seed, retry_pause,
     };
     use crate::classifier::Classification;
     use crate::domain::{Level, Render};
@@ -496,6 +554,56 @@ mod tests {
         let spent =
             RequestProgress::new(Level::Human, 0).resumed([(Some(first), Outcome::Timeout)]);
         assert!(!spent.attempts_left());
+    }
+
+    #[test]
+    fn an_attempt_a_busy_context_refused_spends_no_retry_and_keeps_its_persona() {
+        // QA round three, flows-01 and lock-01: the persona's context ran
+        // another operation; nothing was asked of the site.
+        let busy = PersonaId::new();
+        let mut progress = RequestProgress::new(Level::Human, 0);
+        for made in 1..=MAX_UNMADE {
+            let ruling = progress.record_unmade(busy);
+            assert_eq!(
+                ruling,
+                Ruling {
+                    step: Step::Retry,
+                    penalty: None,
+                }
+            );
+            assert_eq!(progress.attempts(), made);
+            assert_eq!(progress.unmade(), made);
+            assert!(progress.attempts_left());
+            assert_eq!(progress.used(), []);
+        }
+        // Past the bound it is a failure like another: with no retry left
+        // the request ends.
+        let ruling = progress.record_unmade(busy);
+        assert_eq!(ruling.step, Step::Finish);
+        assert_eq!(progress.used(), [busy]);
+        assert!(!progress.attempts_left());
+
+        // The attempt that is made after one that was not is the first.
+        let mut progress = RequestProgress::new(Level::Human, 0);
+        progress.record_unmade(busy);
+        let ruling = progress.record(Some(busy), verdict(Outcome::Timeout));
+        assert_eq!(ruling.step, Step::Finish);
+        assert_eq!(progress.attempts(), 2);
+
+        // Taken up again after a restart: the same.
+        let other = PersonaId::new();
+        let resumed = RequestProgress::new(Level::Human, 1).resumed_marked([
+            (Some(busy), Outcome::ProviderError, true),
+            (Some(other), Outcome::Timeout, false),
+        ]);
+        assert_eq!(resumed.attempts(), 2);
+        assert_eq!(resumed.unmade(), 1);
+        assert_eq!(resumed.used(), [other]);
+        assert!(resumed.attempts_left());
+        let many = RequestProgress::new(Level::Human, 0)
+            .resumed_marked((0..=MAX_UNMADE).map(|_| (Some(busy), Outcome::ProviderError, true)));
+        assert_eq!(many.unmade(), MAX_UNMADE);
+        assert!(!many.attempts_left());
     }
 
     #[test]

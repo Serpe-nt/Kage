@@ -16,8 +16,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use kage_core::domain::{
-    Attempt, Exit, FetchRecord, Persona, PersonaState, Proxy, ProxyProviderKind, ProxyState,
-    RequestRecord,
+    Attempt, CoolingReason, Exit, FetchRecord, Persona, PersonaState, Proxy, ProxyProviderKind,
+    ProxyState, RequestRecord,
 };
 use kage_core::ids::{ApiKeyId, PersonaId, ProxyId};
 use kage_core::outcome::Outcome;
@@ -74,6 +74,16 @@ pub trait Backend: Send + Sync + fmt::Debug {
         persona: PersonaId,
         domain: &str,
         trial: Option<BreakerRules>,
+        at: DateTime<Utc>,
+    ) -> Result<(), SchedulerError>;
+
+    /// Takes back the request [`Self::dispatched`] counted for an attempt
+    /// that was never made (the persona's context was busy, QA round
+    /// three, flows-01): it is no page of the persona's day on the domain.
+    async fn undispatched(
+        &self,
+        persona: PersonaId,
+        domain: &str,
         at: DateTime<Utc>,
     ) -> Result<(), SchedulerError>;
 
@@ -193,6 +203,15 @@ fn exit_address(proxy: &Proxy) -> Option<IpAddr> {
         .or_else(|| proxy.host.parse().ok())
 }
 
+/// Whether a persona would be ready but for its proxy: ready, or warmed up
+/// and cooling only because its proxy is in backoff or being replaced.
+fn waits_for_its_proxy(persona: &Persona) -> bool {
+    persona.is_ready()
+        || (persona.state == PersonaState::Cooling
+            && persona.cooling_reason == Some(CoolingReason::ProxyBackoff)
+            && persona.warmed_at.is_some())
+}
+
 /// A persona as the planner needs it, from its row and its proxy's.
 /// `outage` says that the pool's outage guard holds (spec §7.3): then a
 /// proxy whose latest probe failed carries nothing until a probe of it
@@ -216,9 +235,12 @@ pub fn view_of(persona: &Persona, proxy: Option<&Proxy>, outage: bool) -> Person
         timezone: persona.timezone.clone(),
         ready: persona.is_ready() && usable,
         // A persona that waits only for its proxy's backoff to end is
-        // looked at again then, not every minute (F156).
+        // looked at again then, not every minute (F156): one that is
+        // ready but for its proxy, and one the persona manager cools for
+        // that backoff alone (`cooling`, `proxy_backoff`), which is how
+        // such a persona is stored (QA round three, flows-02).
         ready_at: proxy
-            .filter(|_| persona.is_ready() && !usable)
+            .filter(|_| waits_for_its_proxy(persona) && !usable)
             .filter(|proxy| proxy.state == ProxyState::Backoff)
             .and_then(|proxy| proxy.backoff_until),
         http: http_spec(persona).is_ok(),
@@ -334,6 +356,26 @@ impl Backend for StoreBackend {
         Ok(proxy
             .filter(|proxy| proxy.state.is_usable() && !machine::held_by_outage(proxy, outage))
             .map(|proxy| proxy.id))
+    }
+
+    async fn undispatched(
+        &self,
+        persona: PersonaId,
+        domain: &str,
+        at: DateTime<Utc>,
+    ) -> Result<(), SchedulerError> {
+        let zone = self
+            .store
+            .personas()
+            .get(persona)
+            .await?
+            .map_or_else(|| "UTC".to_owned(), |persona| persona.timezone);
+        let today = place::local_day(at, &zone);
+        self.store
+            .persona_domain_state()
+            .modify(persona, domain, |state| state.take_back_request(today))
+            .await?;
+        Ok(())
     }
 
     async fn dispatched(
