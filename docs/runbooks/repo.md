@@ -366,12 +366,18 @@ KAGE_LIVE=1 KAGE__WEBSHARE__API_KEY=... KAGE__SECRETS__MASTER_KEY=... just test-
 4. `release.yaml` refuses a tag that is lightweight, unsigned, signed by a
    key the list on `main` does not hold, not on `main`, or not the
    workspace version. Then, for `ghcr.io/serpe-nt/kage` and
-   `ghcr.io/serpe-nt/kage-browser-chromium`, it builds and pushes the image,
-   scans it with Trivy, signs it by digest with cosign (keyless: the
-   signature is made under the workflow's own identity, from GitHub's OIDC
-   token, and is recorded in Sigstore's transparency log), and attests its
-   SLSA build provenance and its CycloneDX SBOM to the digest. The GitHub
-   release has each digest and each SBOM.
+   `ghcr.io/serpe-nt/kage-browser-chromium`, it builds the image and pushes
+   it by digest only, scans it with Trivy, signs it by digest with cosign
+   (keyless: the signature is made under the workflow's own identity, from
+   GitHub's OIDC token, and is recorded in Sigstore's transparency log), and
+   attests its SLSA build provenance and its CycloneDX SBOM to the digest.
+   Only when both images passed every step does the `tags` job give each
+   its tags `X.Y.Z`, `X.Y` and `latest`, and check that every tag names
+   the signed digest. The GitHub release has each digest and each SBOM.
+   A release whose image fails a step moves no tag of either image and
+   has no GitHub release; its version tag stays where it is (D52), and
+   the fix ships as the next patch version, as 2.0.3's refused image did
+   in 2.0.4.
 5. Open a follow-up pull request that records the digests in
    `deploy/compose.yaml`.
 
