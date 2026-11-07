@@ -18,12 +18,14 @@
 //! host's own configuration and adds no resolver of Kage's to the build.
 //! It runs on the blocking pool under a deadline.
 
+use std::collections::HashSet;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use kage_core::ssrf::{SsrfDenial, SsrfPolicy, Target, check_resolved, check_url};
+use kage_core::config::{Config, EgressMode};
+use kage_core::ssrf::{SsrfDenial, SsrfPolicy, Target, check_resolved_with, check_url};
 use kage_http::HopResolver;
 use url::Url;
 
@@ -35,6 +37,9 @@ const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct HostResolver {
     timeout: Duration,
     fixed: Option<Arc<dyn HopResolver>>,
+    /// The names that may resolve into the operator's own networks: those of
+    /// `egress.direct.private_names` under `egress.mode: direct` (F181).
+    private_names: Option<Arc<HashSet<String>>>,
 }
 
 impl HostResolver {
@@ -43,7 +48,36 @@ impl HostResolver {
         Self {
             timeout: LOOKUP_TIMEOUT,
             fixed: None,
+            private_names: None,
         }
+    }
+
+    /// The system's resolver for the server and the commands: under
+    /// `egress.mode: direct` a name of `egress.direct.private_names` may
+    /// resolve into the operator's own networks (loopback, RFC 1918, CGNAT,
+    /// unique-local), as the forwarder lets it reach one there, so that the
+    /// guard at acceptance and on every hop judges it as the forwarder does
+    /// (F181, QA round two's ssrf-03). Under `proxies` the list reaches
+    /// nothing.
+    pub fn for_config(config: &Config) -> Self {
+        Self::system().with_private_names(config)
+    }
+
+    /// The same resolver, with the private names of `config` under `direct`.
+    #[must_use]
+    pub fn with_private_names(mut self, config: &Config) -> Self {
+        self.private_names = (config.egress.mode == EgressMode::Direct).then(|| {
+            Arc::new(
+                config
+                    .egress
+                    .direct
+                    .private_names
+                    .iter()
+                    .filter_map(|name| kage_core::policy::normalize_host(name))
+                    .collect(),
+            )
+        });
+        self
     }
 
     /// A resolver that asks `inner` instead of the system: for tests, which
@@ -52,6 +86,7 @@ impl HostResolver {
         Self {
             timeout: LOOKUP_TIMEOUT,
             fixed: Some(inner),
+            private_names: None,
         }
     }
 
@@ -92,7 +127,7 @@ impl HostResolver {
                 Vec::new()
             }
         };
-        check_resolved(target, &addresses)
+        check_resolved_with(target, &addresses, self.may_be_private(name))
     }
 }
 
@@ -100,6 +135,14 @@ impl HostResolver {
 impl HopResolver for HostResolver {
     async fn resolve(&self, host: &str) -> Result<Vec<IpAddr>, String> {
         self.lookup(host).await
+    }
+
+    fn may_be_private(&self, host: &str) -> bool {
+        kage_core::policy::normalize_host(host).is_some_and(|host| {
+            self.private_names
+                .as_ref()
+                .is_some_and(|names| names.contains(&host))
+        })
     }
 }
 
@@ -326,6 +369,67 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(url.host_str(), Some("public.example"));
+    }
+
+    /// F181 (QA round two's ssrf-03): under `egress.mode: direct` with the
+    /// host's lookup on, a name the operator listed in
+    /// `egress.direct.private_names` may resolve into the operator's own
+    /// networks, as the forwarder lets it; never into a metadata or
+    /// link-local address, and under `proxies` the list reaches nothing.
+    #[tokio::test]
+    async fn a_listed_private_name_passes_under_direct_and_only_there() {
+        use kage_core::config::{Config, EgressMode};
+
+        let mut config = Config::load(
+            None,
+            [
+                ("KAGE__DATABASE__URL", "postgres://kage@localhost/kage"),
+                ("KAGE__SIDECAR__TOKEN", "token"),
+                (
+                    "KAGE__SECRETS__MASTER_KEY",
+                    "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+                ),
+            ]
+            .map(|(key, value)| (key.to_owned(), value.to_owned())),
+        )
+        .unwrap();
+        config.egress.direct.private_names =
+            vec!["Intranet.Example.".to_owned(), "mixed.example".to_owned()];
+        let check = |config: &Config, text: &'static str| {
+            let resolver = resolver().with_private_names(config);
+            async move { guard(&url(text), STRICT, Some(&resolver)).await }
+        };
+
+        // Under `proxies` (the default) the list is not looked at.
+        assert!(matches!(
+            check(&config, "https://intranet.example/").await,
+            Err(SsrfDenial::Address {
+                range: DeniedRange::Private,
+                ..
+            })
+        ));
+        config.egress.mode = EgressMode::Direct;
+        assert_eq!(check(&config, "https://intranet.example/").await, Ok(()));
+        assert_eq!(check(&config, "https://INTRANET.example./x").await, Ok(()));
+        // The metadata address stays refused for a listed name.
+        assert!(matches!(
+            check(&config, "https://mixed.example/").await,
+            Err(SsrfDenial::Address {
+                range: DeniedRange::CloudMetadata,
+                ..
+            })
+        ));
+        // A name that is not listed gets nothing of it; nor does a name
+        // that cannot be looked up.
+        let resolver = resolver().with_private_names(&config);
+        assert!(!resolver.may_be_private("public.example"));
+        assert!(resolver.may_be_private("intranet.example"));
+        assert!(!HostResolver::for_config(&config).may_be_private("other.example"));
+        assert!(HostResolver::for_config(&config).may_be_private("intranet.example"));
+        assert_eq!(
+            check(&config, "https://empty.example/").await,
+            Err(SsrfDenial::Unresolved("empty.example".to_owned()))
+        );
     }
 
     #[tokio::test]

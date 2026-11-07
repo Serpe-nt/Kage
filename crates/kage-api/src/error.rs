@@ -95,7 +95,10 @@ error_codes! {
     ValidationFailed => ("validation_failed", UNPROCESSABLE_ENTITY, "A field of the request is not acceptable"),
     /// The URL is not an http or https URL, or is too long.
     InvalidUrl => ("invalid_url", UNPROCESSABLE_ENTITY, "The URL cannot be fetched"),
-    /// The SSRF guard refuses the URL.
+    /// The SSRF guard refuses the URL: a name that never names a public
+    /// site, an address in a denied range, a port the browsers refuse to
+    /// connect to (spec §19), or, under `security.resolve_on_host`, a name
+    /// that resolves into a denied range or to nothing.
     SsrfDenied => ("ssrf_denied", UNPROCESSABLE_ENTITY, "The URL points where Kage does not go"),
     /// A header is one a caller may not set.
     HeaderDenied => ("header_denied", UNPROCESSABLE_ENTITY, "A header cannot be set by a caller"),

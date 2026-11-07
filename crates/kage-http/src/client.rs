@@ -221,6 +221,15 @@ pub trait HopResolver: Send + Sync + fmt::Debug {
     ///
     /// A description of why the name could not be resolved.
     async fn resolve(&self, host: &str) -> Result<Vec<IpAddr>, String>;
+
+    /// Whether `host` (a checked name, lower case, in its normal form) may
+    /// resolve into the operator's own networks: a name of
+    /// `egress.direct.private_names` under `egress.mode: direct` (F181),
+    /// which the forwarder lets reach such an address too. None by default.
+    fn may_be_private(&self, host: &str) -> bool {
+        let _ = host;
+        false
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

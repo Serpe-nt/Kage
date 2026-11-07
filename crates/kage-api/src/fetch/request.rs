@@ -558,7 +558,8 @@ impl Default for ExtractField {
 }))]
 pub(crate) struct FetchRequest {
     /// The page: an `http` or `https` URL of at most 8192 bytes. Hosts
-    /// that name no public site are refused (`ssrf_denied`).
+    /// that name no public site, and the ports the browsers refuse to
+    /// connect to (25, 6667, …: spec §19), are refused (`ssrf_denied`).
     #[schema(max_length = 8192, example = "https://example.org/listing?page=2")]
     pub(crate) url: String,
     /// `GET`, `HEAD` or `POST`. Anything but `GET` needs level 0 or 1.
@@ -746,7 +747,10 @@ pub(crate) fn url_refused(denial: &SsrfDenial) -> ApiError {
         | SsrfDenial::Credentials
         | SsrfDenial::Port
         | SsrfDenial::TooManyRedirects(_) => ErrorCode::InvalidUrl,
-        SsrfDenial::IpLiteral(_)
+        // A port the browsers refuse points at a service that is no web
+        // server (G3): where the URL points, as a denied range is.
+        SsrfDenial::UnsafePort(_)
+        | SsrfDenial::IpLiteral(_)
         | SsrfDenial::Name { .. }
         | SsrfDenial::Address { .. }
         | SsrfDenial::Unresolved(_) => ErrorCode::SsrfDenied,
@@ -1618,6 +1622,7 @@ fast:
             (SsrfDenial::Scheme("ftp".to_owned()), ErrorCode::InvalidUrl),
             (SsrfDenial::Credentials, ErrorCode::InvalidUrl),
             (SsrfDenial::Port, ErrorCode::InvalidUrl),
+            (SsrfDenial::UnsafePort(25), ErrorCode::SsrfDenied),
             (
                 SsrfDenial::IpLiteral("93.184.216.34".parse().unwrap()),
                 ErrorCode::SsrfDenied,

@@ -160,7 +160,7 @@ impl ApiState {
             .config
             .security
             .resolve_on_host
-            .then(HostResolver::system);
+            .then(|| HostResolver::for_config(&parts.config));
         Ok(Self(Arc::new(Inner {
             limits: Limits::new(parts.config.server.requests_per_minute),
             handles: Handles::new(&key),

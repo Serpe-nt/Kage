@@ -60,9 +60,16 @@ impl DeniedHop {
     }
 }
 
-/// Whether two URLs name the same document: equal but for the fragment.
+/// Whether two URLs name the same document: equal but for the fragment and
+/// the one trailing dot of the host, which is the name's own (F104, F181):
+/// the chain keeps a hop's host in its normal form, and the browser may
+/// report the address with the dot.
 fn same_document(a: &Url, b: &Url) -> bool {
-    a.as_str().split('#').next() == b.as_str().split('#').next()
+    let normal = |url: &Url| {
+        let url = kage_core::urlnorm::normal_url(url).unwrap_or_else(|_| url.clone());
+        url.as_str().split('#').next().map(str::to_owned)
+    };
+    normal(a) == normal(b)
 }
 
 /// Checks every URL of a browser navigation against the SSRF guard: the URL

@@ -578,7 +578,7 @@ pub struct ForwarderConfig {
     #[serde(default = "default_forwarder_advertise")]
     pub advertise: String,
     /// Longest the connection to a persona's proxy, and its answer to a
-    /// `CONNECT`, may take.
+    /// `CONNECT`, may take; the connection itself at most 5 s of it (F197).
     #[serde(default = "default_forwarder_connect_timeout")]
     pub connect_timeout: HumanDuration,
     /// A relayed connection on which nothing moved for this long is closed.

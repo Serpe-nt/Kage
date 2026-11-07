@@ -452,6 +452,9 @@ async fn what_the_guard_refuses_is_not_relayed() {
         "kage.internal:443",
         "printer.local:631",
         "shop.kage.test:0",
+        // The ports the browsers refuse (G3).
+        "shop.kage.test:25",
+        "shop.kage.test:6667",
     ];
 
     for authority in denied {
@@ -1140,7 +1143,7 @@ async fn a_route_with_no_upstream_connects_only_to_addresses_it_checked() {
         format!("other.kage.test:{port}"),
         "metadata.kage.test:80".to_owned(),
         "unknown.kage.test:443".to_owned(),
-        "mixed.kage.test:9".to_owned(),
+        "mixed.kage.test:9443".to_owned(),
     ] {
         let (mut client, head) = rig.tunnel_with(&host, &refused).await;
         assert!(head.starts_with("HTTP/1.1 403 "), "{refused}: {head}");
@@ -1604,6 +1607,202 @@ async fn a_proxy_that_cannot_be_reached_fails_within_seconds_and_once() {
     assert_eq!(
         *names.asked.lock().unwrap(),
         ["stopped-proxy.kage.test", "proxy.kage.test"]
+    );
+    rig.stop().await;
+}
+
+/// G5 and F181: the proxy is asked for the target the guard checked, never
+/// for the client's own text: the authority of a tunnel and the URL of a
+/// plain request in the forms the forwarder read and judged, a host's one
+/// trailing dot dropped as the name's own (ssrf-05: the proxy was asked
+/// for `name.:port`, a name it does not relay).
+#[tokio::test]
+async fn the_proxy_is_asked_for_the_target_the_guard_checked() {
+    let mut rig = Rig::start(settings()).await;
+    let shop = shop().await;
+    rig.provider.route("shop.kage.test:443", *shop.address());
+    rig.provider.route("shop.kage.test:80", *shop.address());
+
+    let (_client, head) = rig.tunnel(id(0), "Shop.Kage.Test.:443").await;
+    assert_eq!(head, "HTTP/1.1 200 Connection Established\r\n\r\n");
+    let tunnels = rig.provider.tunnels();
+    assert_eq!(tunnels.len(), 1);
+    assert_eq!(tunnels[0].target, "shop.kage.test:443");
+    assert!(
+        tunnels[0]
+            .head
+            .starts_with("CONNECT shop.kage.test:443 HTTP/1.1\r\n"),
+        "{}",
+        tunnels[0].head
+    );
+
+    let mut client = rig.client().await;
+    client
+        .send(&format!(
+            "GET http://SHOP.kage.test.:80/a/../page#top HTTP/1.1\r\nHost: shop.kage.test.\r\n\
+             Proxy-Authorization: {}\r\nConnection: close\r\n\r\n",
+            rig.credential(id(0))
+        ))
+        .await;
+    let answer = client.rest().await;
+    assert!(answer.starts_with("HTTP/1.1 200 OK"), "{answer}");
+    let plain = rig.provider.plain();
+    assert_eq!(plain.len(), 1);
+    assert_eq!(plain[0].target, "http://shop.kage.test/page");
+    // The header lines go on as the client wrote them.
+    assert!(
+        plain[0]
+            .head
+            .starts_with("GET http://shop.kage.test/page HTTP/1.1\r\nHost: shop.kage.test.\r\n"),
+        "{}",
+        plain[0].head
+    );
+    rig.stop().await;
+}
+
+/// F181 (QA round two's ssrf-05): under `egress.mode: direct` a hop to a
+/// listed private name spelled with its one trailing dot is that name: the
+/// forwarder matches `egress.direct.private_names` without the dot and
+/// reaches it, as it reaches the name without one.
+#[tokio::test]
+async fn a_listed_private_names_trailing_dot_is_the_same_name() {
+    let mut rig = Rig::start(ForwarderSettings {
+        private_names: HashSet::from(["shop.kage.test".to_owned()]),
+        ..settings()
+    })
+    .await;
+    rig.table.set_plain(PlainRoute::Host, Ok(Upstream::Direct));
+    rig.table.set_direct(id(1));
+    let shop = shop().await;
+    let port = shop.address().port();
+    let host = rig.plain_credential(PlainRoute::Host);
+    let mark = rig.forwarder.denials().mark();
+
+    for credential in [host.clone(), rig.credential(id(1))] {
+        let (mut client, head) = rig
+            .tunnel_with(&credential, &format!("shop.kage.test.:{port}"))
+            .await;
+        assert_eq!(head, "HTTP/1.1 200 Connection established\r\n\r\n");
+        client
+            .send("GET /page HTTP/1.1\r\nHost: shop.kage.test\r\nConnection: close\r\n\r\n")
+            .await;
+        assert!(client.rest().await.ends_with("hello from the shop"));
+    }
+    let mut client = rig.client().await;
+    client
+        .send(&format!(
+            "GET http://shop.kage.test.:{port}/page HTTP/1.1\r\nHost: shop.kage.test.:{port}\r\n\
+             Proxy-Authorization: {host}\r\nConnection: close\r\n\r\n"
+        ))
+        .await;
+    let answer = client.rest().await;
+    assert!(answer.ends_with("hello from the shop"), "{answer}");
+    assert_eq!(
+        rig.forwarder.denials().since(
+            Caller::Plain(PlainRoute::Host),
+            mark,
+            &["shop.kage.test".to_owned()]
+        ),
+        None
+    );
+    // A name not listed is still refused, with the dot or without.
+    let (_client, head) = rig
+        .tunnel_with(&host, &format!("other.kage.test.:{port}"))
+        .await;
+    assert_eq!(head, "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n");
+    rig.stop().await;
+}
+
+/// A listener whose accept queue is full and that never accepts: the
+/// kernel drops every further SYN, as a proxy that is gone behind a
+/// firewall does. Linux only: other systems answer a full queue with a
+/// reset.
+#[cfg(target_os = "linux")]
+async fn a_proxy_that_drops_the_syn() -> (SocketAddr, TcpListener, Vec<TcpStream>) {
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let listener = socket.listen(1).unwrap();
+    let address = listener.local_addr().unwrap();
+    let mut held = Vec::new();
+    for _ in 0..16 {
+        match tokio::time::timeout(Duration::from_millis(300), TcpStream::connect(address)).await {
+            Ok(Ok(stream)) => held.push(stream),
+            // The queue is full: this SYN was dropped.
+            _ => return (address, listener, held),
+        }
+    }
+    unreachable!("the accept queue never filled");
+}
+
+/// F197 (F159's rest): a proxy that drops the SYN costs the bound of the
+/// connection to a proxy (`PROXY_CONNECT_TIMEOUT`, 5 s), not the whole
+/// `forwarder.connect_timeout`, and is then refused at once.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_proxy_that_drops_the_syn_fails_within_seconds_and_once() {
+    let mut rig = Rig::start(ForwarderSettings {
+        connect_timeout: Duration::from_secs(20),
+        ..settings()
+    })
+    .await;
+    let (address, _listener, _held) = a_proxy_that_drops_the_syn().await;
+    let mut silent = rig.provider.endpoint();
+    silent.host = address.ip().to_string();
+    silent.port = address.port();
+    rig.table.set(id(1), Ok(silent));
+
+    // The first try waits for the bound; the client's own reads wait
+    // three seconds only.
+    let started = std::time::Instant::now();
+    let mut raw = TcpStream::connect(rig.forwarder.local_addr())
+        .await
+        .unwrap();
+    raw.write_all(
+        format!(
+            "CONNECT shop.kage.test:443 HTTP/1.1\r\nHost: shop.kage.test:443\r\nProxy-Authorization: {}\r\n\r\n",
+            rig.credential(id(1))
+        )
+        .as_bytes(),
+    )
+    .await
+    .unwrap();
+    let mut answer = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    while !answer.windows(4).any(|window| window == b"\r\n\r\n") {
+        let read = tokio::time::timeout(Duration::from_secs(15), raw.read(&mut chunk))
+            .await
+            .expect("an answer within fifteen seconds")
+            .unwrap();
+        if read == 0 {
+            break;
+        }
+        answer.extend_from_slice(&chunk[..read]);
+    }
+    let took = started.elapsed();
+    let head = String::from_utf8_lossy(&answer).into_owned();
+    assert!(head.starts_with("HTTP/1.1 403 "), "{head}");
+    assert_eq!(
+        kage_scheduler::forwarder::PROXY_CONNECT_TIMEOUT,
+        Duration::from_secs(5)
+    );
+    assert!(
+        took >= Duration::from_millis(4500) && took < Duration::from_secs(8),
+        "{took:?}"
+    );
+    // The connection was the proxy's failure, noted for the persona.
+    assert!(rig.forwarder.meter().unrelayed_since(
+        Caller::Persona(id(1)),
+        [("shop.kage.test", 443)],
+        tokio::time::Instant::now() - took,
+    ));
+    // Asked again at once: refused at once.
+    let started = std::time::Instant::now();
+    let (_client, head) = rig.tunnel(id(1), "shop.kage.test:443").await;
+    assert!(head.starts_with("HTTP/1.1 403 "), "{head}");
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
     );
     rig.stop().await;
 }

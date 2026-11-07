@@ -2682,7 +2682,7 @@
               "string",
               "null"
             ],
-            "description": "Why it ended as it did when the site did not say, for example\n`proxy_failed`, `proxy_refused` (the persona's proxy refused the\ntunnel to the target, as a provider that will not carry a site\ndoes: neither the site's answer nor a failure of the proxy), or\n`hop_exit_unavailable` (a level-0 redirect to another site whose\nown plain exit could not carry traffic: the hop was not asked for)."
+            "description": "Why it ended as it did when the site did not say, for example\n`proxy_failed`, `proxy_refused` (the persona's proxy refused the\ntunnel to the target, as a provider that will not carry a site\ndoes: neither the site's answer nor a failure of the proxy),\n`forwarder_refused` (Kage's own forwarder refused the credential\nthe persona's client presented: neither the site's answer nor the\nproxy's), `too_many_redirects` (more redirects than\n`http.max_redirects`, at every level), or\n`hop_exit_unavailable` (a level-0 redirect to another site whose\nown plain exit could not carry traffic: the hop was not asked for)."
           },
           "render": {
             "$ref": "#/components/schemas/RenderTaken",
@@ -2992,7 +2992,7 @@
           },
           "url": {
             "type": "string",
-            "description": "The page: an `http` or `https` URL of at most 8192 bytes. Hosts\nthat name no public site are refused (`ssrf_denied`).",
+            "description": "The page: an `http` or `https` URL of at most 8192 bytes. Hosts\nthat name no public site, and the ports the browsers refuse to\nconnect to (25, 6667, …: spec §19), are refused (`ssrf_denied`).",
             "example": "https://example.org/listing?page=2",
             "maxLength": 8192
           },
@@ -4353,7 +4353,7 @@
           },
           "url": {
             "type": "string",
-            "description": "The page: an `http` or `https` URL of at most 8192 bytes. Hosts\nthat name no public site are refused (`ssrf_denied`).",
+            "description": "The page: an `http` or `https` URL of at most 8192 bytes. Hosts\nthat name no public site, and the ports the browsers refuse to\nconnect to (25, 6667, …: spec §19), are refused (`ssrf_denied`).",
             "example": "https://example.org/listing?page=2",
             "maxLength": 8192
           },
@@ -4580,7 +4580,7 @@
               "string",
               "null"
             ],
-            "description": "Why it ended without the site's verdict, as a stable name:\n`no_persona`, `domain_paused`, `egress_unsafe`,\n`bandwidth_exhausted`, `proxy_failed`, `proxy_refused` (the\npersona's proxy refused the tunnel to the target: nothing was\nasked of the site, and the proxy is not set aside for it),\n`timeout`, `interrupted`\n(the server stopped while the page was being read),\n`hop_exit_unavailable` (a level-0 redirect to another site whose own\nplain exit could not carry traffic now: the hop was not asked for,\nand never from another address) and others."
+            "description": "Why it ended without the site's verdict, as a stable name:\n`no_persona`, `domain_paused`, `egress_unsafe`,\n`bandwidth_exhausted`, `proxy_failed`, `proxy_refused` (the\npersona's proxy refused the tunnel to the target: nothing was\nasked of the site, and the proxy is not set aside for it),\n`forwarder_refused` (Kage's own forwarder refused the credential\nthe persona's client presented), `too_many_redirects` (more\nredirects than `http.max_redirects`, at every level),\n`timeout`, `interrupted`\n(the server stopped while the page was being read),\n`hop_exit_unavailable` (a level-0 redirect to another site whose own\nplain exit could not carry traffic now: the hop was not asked for,\nand never from another address) and others."
           },
           "redirects": {
             "type": "array",

@@ -366,7 +366,8 @@ backoff ──3 cycles and 6 h of failing, or bad reputation──▶ replacing 
   address. Nothing to do but find the cause.
 - An attempt through a proxy that cannot be reached fails within seconds
   (F159): the forwarder looks up a proxy's name within five seconds, connects
-  within `forwarder.connect_timeout`, and refuses a proxy it could not reach
+  within five seconds too (a proxy that drops the SYN, F197; the proxy's
+  answer to a tunnel may take `forwarder.connect_timeout`), and refuses a proxy it could not reach
   at once for fifteen seconds, so that a browser's second try of the tunnel
   costs nothing. The pool's probes are not held by it.
 

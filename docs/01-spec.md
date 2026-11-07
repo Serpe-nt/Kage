@@ -784,7 +784,12 @@ the same after a restart. The forwarder then
 - relays `CONNECT host:port` and absolute-form `http://` requests only,
   and refuses every target the SSRF guard refuses by name or by range
   (loopback, private, link-local, metadata, single-label and local names,
-  port 0, credentials in the URL). A public address by number is relayed:
+  port 0 and the ports the browsers refuse, credentials in the URL). What
+  goes to the proxy is the target the forwarder read and checked, never
+  the client's own text: the authority `host:port` of a tunnel and the URL
+  of a plain request in their parsed forms, a host's one trailing dot
+  dropped as the name's own (the security review's G5, F181); the header
+  lines go on as the client wrote them. A public address by number is relayed:
   whether a request may *name* one is decided where requests are accepted
   (`security.allow_ip_targets`). The operator's own self-test hosts
   (`selftest.browser.pages`, `selftest.http.echo_url`) pass by name and
@@ -798,7 +803,14 @@ the same after a restart. The forwarder then
 A refusal looks like a network that does not answer: a refused tunnel gets
 a bare `403`, a refused plain request is closed without an answer, so no
 page ever reads a response Kage wrote. A missing or wrong credential gets
-`407`, as from any proxy. Health probes do not pass the forwarder: they
+`407`, as from any proxy; a wrong one whose user name names a persona or a
+plain client's exit (an old token, say) is noted by that caller and the
+target's host and port, and logged at `info` with the persona, so that a
+page of it that failed meanwhile is told from the site's failure (§8.3,
+F211). The connection to a proxy takes at most 5 s
+(`PROXY_CONNECT_TIMEOUT`, within `forwarder.connect_timeout`, which bounds
+the proxy's answer to a `CONNECT`); a proxy that could not be reached, its
+name looked up within 5 s, is refused at once for 15 s (F159, F197). Health probes do not pass the forwarder: they
 present the provider's credentials themselves. A CLI command that opens a
 context in its own process (`kage fetch`, `kage persona selftest`, `kage
 selftest http|browser --persona`) binds a forwarder of its own on a free
@@ -935,7 +947,13 @@ refusal, whatever the browser named it (`proxy_failed`, a failed
 navigation, a timeout): `provider_error` with the reason `proxy_refused`,
 not retried, with nothing booked against the site (no cooldown, no
 breaker count, no server-error pause) and nothing against the proxy (no
-setting aside, no report to the pool) (F189). Inside a tunnel
+setting aside, no report to the pool) (F189). An attempt that got no
+answer from the site while Kage's own forwarder refused a credential
+naming its caller (§7.5) for its own page ended at the forwarder:
+`provider_error` with the reason `forwarder_refused`, retried, nothing
+against the site and nothing against the proxy, which was never asked;
+before F211 such a page, with a tunnel of the persona to its target still
+open, counted as the site's. Inside a tunnel
 the site's answer is the site's and the proxy's `4xx` to the `CONNECT`
 is the proxy's. A plain `http://` request has no such line: the proxy
 relays the site's answer, and its own refusal of the target comes back the
@@ -1060,7 +1078,10 @@ a site for a fetch nobody waits for.
 - **Redirects** are followed by kage-http, at most `http.max_redirects`
   (default 10), every hop through the redirect chain of the SSRF guard
   (§19), which names the hop it refuses and records an `https` to `http`
-  downgrade. 301 and 302 turn a POST into a GET, 303 turns everything but a
+  downgrade. One more ends the attempt `provider_error`, reason
+  `too_many_redirects`, not retried, at every level: a browser's chain
+  that the check after the navigation finds too long ends the same way,
+  nothing of it kept (F181). 301 and 302 turn a POST into a GET, 303 turns everything but a
   HEAD into a GET, 307 and 308 repeat the request. Host names are resolved
   by the proxy; under `security.resolve_on_host` (§19) Kage also resolves
   every hop on the host before it is asked for, with the persona's client
@@ -3172,16 +3193,29 @@ are gzip-compressed on disk.
 ## 19. Security
 
 - **SSRF guard.** Every target, every redirect hop, every page a flow
-  visited and every webhook URL is checked: non-http(s) schemes, credentials in the URL, port 0, names
+  visited and every webhook URL is checked: non-http(s) schemes, credentials in the URL, port 0, the
+  ports the browsers refuse to connect to (the union of Chromium's and
+  Firefox's lists, which is the Fetch standard's "bad ports": 21, 22, 25,
+  110, 143, 6000, 6667, … 82 of them, `kage_core::ssrf::UNSAFE_PORTS`; a
+  service there is no web server, and a request could speak to it in
+  another protocol, the security review's G3), names
   that never name a public site (`localhost`, `*.local`, `*.internal`, a
   name of one label, a name with an empty label such as `localhost..` or
-  `127.0.0.1..`, …; one trailing dot is the name's own, §13) and literal
+  `127.0.0.1..`, …; one trailing dot is the name's own, §13, on a
+  redirect hop as on a target, and a hop is asked for and judged without
+  it, F181) and literal
   addresses in loopback, link-local, RFC
   1918, CGNAT, multicast, IPv6 ULA and the cloud metadata ranges are
   denied, as is any literal address unless `security.allow_ip_targets`. A
   denied target is `422 ssrf_denied` (or `invalid_url`) before anything is
   fetched or stored; a denied hop ends the fetch with the outcome
-  `ssrf_denied` and nothing read from it is returned or kept.
+  `ssrf_denied` and nothing read from it is returned or kept. A port the
+  browsers refuse is `422 ssrf_denied` at every level (the browsers refuse
+  it by themselves; Kage refuses it for the http path too, so one URL has
+  one outcome), and a hop to one is `ssrf_denied`. A chain longer than
+  `http.max_redirects` is no target the guard refuses: it ends
+  `provider_error` with the reason `too_many_redirects` at every level,
+  nothing of it kept (F181).
 
   By default Kage looks no name up: the proxy resolves every target, and a
   lookup from the Kage host would show the operator's resolver to the name
@@ -3194,7 +3228,13 @@ are gzip-compressed on disk.
   every name of a browser navigation's chain and of a flow's pages are
   also resolved with the system's resolver, and a name with any address
   in a denied range, or with none, is refused: a name the host cannot
-  look up counts as one with none (F98, F57). Turn it on when the proxies
+  look up counts as one with none (F98, F57). Under `egress.mode: direct`
+  a name of `egress.direct.private_names` may resolve to a private,
+  loopback, CGNAT or unique-local address in this check too, as the
+  forwarder lets it reach one (never link-local, metadata or multicast);
+  until F181 the check refused every such name at acceptance while `kage
+  config check` said it may resolve privately (QA round two, ssrf-03).
+  Turn it on when the proxies
   could reach the operator's own networks (a static list of self-hosted
   proxies; `kage config check` warns about a declared list without it); a
   residential provider's exits cannot. The forwarder looks each name up

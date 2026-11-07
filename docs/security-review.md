@@ -31,11 +31,13 @@ taken over can do.
 ## SSRF, road by road
 
 The guard is `kage_core::ssrf`: scheme `http`/`https`, no credentials in
-the URL, not port 0, no name that never names a public site
+the URL, not port 0 and none of the ports the browsers refuse (`UNSAFE_PORTS`,
+the union of Chromium's and Firefox's lists; since round E, G3), no name that never names a public site
 (`localhost`, `*.local`, `*.internal`, one label, a name with an empty
 label such as `localhost..`, `127.0.0.1..` or `.example.org`, …; until
 F104 the guard dropped one trailing dot and let a second one through on
-every road, QA round one's ssrf-04), no literal address
+every road, QA round one's ssrf-04; one trailing dot is dropped from a
+redirect hop as from a target since round E, F181), no literal address
 in a denied range (loopback, link-local, RFC 1918, CGNAT, multicast, ULA,
 cloud metadata, the reserved and documentation networks, and an IPv4
 address embedded in an IPv6 one), and no literal address at all unless
@@ -118,7 +120,8 @@ pattern, the method one HTTP defines or `other` (F131).
 
 Every persona's traffic, browser and http alike, leaves through kage's
 forwarder: it checks the persona's credential, looks up that persona's
-own proxy and no other, refuses what the guard refuses, adds the
+own proxy and no other, refuses what the guard refuses, relays the target
+as it checked it and never the client's text (G5), adds the
 provider's credentials, counts every byte, and relays nothing while a
 leak is on record or the budget is spent. A refusal looks like a network
 that does not answer. It listens on `0.0.0.0:8899` inside kage's
@@ -200,8 +203,8 @@ and in no release.
 | C1 | low | the provider's and AbuseIPDB's API roots accepted plain `http` to any host, which would send their keys in clear | fixed in `a04983c` |
 | G1 | critical (low until QA round two; F57, raised by the owner on 2026-11-04) | with `resolve_on_host`, a browser's own requests (and the sitemaps and `robots.txt` a scout reads in one) are judged by URL only: a name that resolves into the operator's network passes the forwarder. QA round two (2026-11-03, ssrf-01) measured it under the pool: a public page's 302, meta refresh, script redirect, form, click or submit sends the browser to a name that resolves to a private address, the request reaches it, and the private page comes back `ok` at levels 2 and 3, while the same name asked for directly is `422 ssrf_denied` | resolved in 2.0.3: the forwarder resolves every name it relays under the setting, the chain of a navigation and a flow's pages are resolved after the fact, and `kage config check` warns about a declared list without it (Q6 below) |
 | G2 | info | between the host's lookup and the proxy's own, a name can change its answer | accepted: the proxy resolves where it connects, and only it could close this; with a residential provider the operator's networks are out of the exit's reach |
-| G3 | low | any port but 0 may be asked for: an API consumer can send an HTTP request through an exit to a port that serves something else | follow-up after 1.0: the http path refuses the ports the browsers themselves refuse (their "unsafe ports") |
-| G5 | low | the forwarder checks its own parse of a request's target but relays the target as the client wrote it; a proxy that parses it otherwise could connect elsewhere | follow-up after 1.0: relay the authority that was checked. Low because the `url` crate is stricter than proxies at recognising an address, and names are the proxy's to resolve either way |
+| G3 | low | any port but 0 may be asked for: an API consumer can send an HTTP request through an exit to a port that serves something else | fixed in round E (F57): the guard refuses the 82 ports the browsers refuse (Chromium's `kRestrictedPorts` and Firefox's `gBadPortList`, the Fetch standard's bad ports) on every road, so one URL is `422 ssrf_denied` at every level, a hop to one is `ssrf_denied`, and the forwarder refuses a tunnel to one (`ssrf::the_ports_browsers_refuse_are_refused`, `forwarder::what_the_guard_refuses_is_not_relayed`, `tests/e2e/guard.sh`) |
+| G5 | low | the forwarder checks its own parse of a request's target but relays the target as the client wrote it; a proxy that parses it otherwise could connect elsewhere | fixed in round E (F57): the request target that goes upstream is the one the forwarder parsed and checked, the authority `host:port` of a tunnel and the serialized URL of a plain request, the host in its normal form; only the header lines go on as written (`forwarder::the_target_relayed_is_the_one_checked`, `the_proxy_is_asked_for_the_target_the_guard_checked`) |
 | S2 | info | secrets are environment variables in compose | accepted: `docker inspect` needs root's access anyway; every secret has a `_FILE` form for Docker secrets |
 | S3 | — | no test showed that logs and traces hold no secret | resolved: the redaction audit of the observability end-to-end test |
 | S5 | info | copies of the master key's bytes are not zeroed | accepted: they live as long as the process, which holds the key anyway |
@@ -220,7 +223,7 @@ it.
 
 | ID | Severity | Threat | What holds it |
 |---|---|---|---|
-| E1 | medium | Under `egress.mode: direct` there is no proxy to resolve a name: a target that resolves into the operator's networks would be reached from the host itself | the forwarder's route with no upstream resolves every target, refuses it when any address lies in a denied range (private, loopback, CGNAT and ULA only for a name in `egress.direct.private_names`; link-local, metadata and multicast for every name), connects only to an address it checked, and answers a `CONNECT` itself (`a_route_with_no_upstream_connects_only_to_addresses_it_checked`); `kage config check` warns while private names are listed |
+| E1 | medium | Under `egress.mode: direct` there is no proxy to resolve a name: a target that resolves into the operator's networks would be reached from the host itself | the forwarder's route with no upstream resolves every target, refuses it when any address lies in a denied range (private, loopback, CGNAT and ULA only for a name in `egress.direct.private_names`; link-local, metadata and multicast for every name), connects only to an address it checked, and answers a `CONNECT` itself (`a_route_with_no_upstream_connects_only_to_addresses_it_checked`); `kage config check` warns while private names are listed. Since round E (F181) the guard's host lookup under `security.resolve_on_host` follows the same list, so a listed name is no longer refused at acceptance while the forwarder would reach it, and a name spelled with its one trailing dot is the listed name (`resolve::a_listed_private_name_passes_under_direct_and_only_there`, `forwarder::a_listed_private_names_trailing_dot_is_the_same_name`) |
 | E2 | medium | One installation using the pool and the host's own address for one site by turns: the site sees a visitor move from a residential address to the host's | the mode is one for the whole installation: `proxies` with `egress.plain: host` and `direct` with `plain: pool` are refused at load and by `kage config check`; under `direct` the backend schedules only the host's personas and the routes refuse a pool persona, under `proxies` the host's rows are retired at start and a host persona is refused (`where_requests_leave_from_is_reported_and_a_crossing_is_refused`, `the_hosts_own_rows_are_never_probed_and_take_the_place_the_host_looks_up`) |
 | E3 | low | The host's own rows taken for proxies: probed, counted as a leak, replaced at the provider | they are never probed, never in the leak check, the outage share or the capacity, and refused for replacement; the pool's stops (a leak, the provider's budget) do not hold the host's connection, which uses neither (same test) |
 | E4 | medium | Level 0 sends what its caller gives, `Cookie` and `Authorization` included: a key with the `fetch` scope can make Kage replay the caller's own bearer token to any site the guard allows | accepted as the caller's request with the caller's own credential (consult 1e): the value goes to the request's origin only and is dropped on a redirect to another, is never logged, and the stored request keeps the header's name with `[redacted]`; a job, which keeps its items, refuses it, and a fetch carried on as a job after a restart is not made again without it (`interrupted`) (`a_plain_client_sends_the_callers_own_headers_and_never_keeps_a_credential`, the plain client's tests in kage-http) |
