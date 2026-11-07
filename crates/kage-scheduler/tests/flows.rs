@@ -1051,3 +1051,108 @@ async fn a_flows_cancel_cuts_the_flow_under_way_and_a_stop_of_the_server_does_no
     }
     lab.shut_down().await;
 }
+
+/// QA round three, flows-01: a flow's cancel hangs up on the sidecar, which
+/// finishes the step under way on the persona's context (F175). The job
+/// ends at once, but the persona is given no other work until that context
+/// runs nothing again: the next request for it waits and is made, where it
+/// was refused `context_busy` and booked as a failed attempt.
+#[tokio::test]
+async fn after_a_flows_cancel_its_persona_waits_for_the_step_under_way() {
+    let mut lab = Lab::start(1, 149, BROWSER_FAST).await;
+    let step = std::time::Duration::from_secs(6);
+    lab.chromium.with(|sidecar| sidecar.flow_delay = Some(step));
+    let (_stop, stopping) = tokio::sync::watch::channel(false);
+    let (cancel, cancelled) = tokio::sync::watch::channel(false);
+    let id = RequestId::new();
+    let running = {
+        let pipeline = lab.pipeline.clone();
+        let order = flow(&across());
+        tokio::spawn(async move {
+            pipeline
+                .fetch_flow_for_job(id, order, None, stopping, cancelled)
+                .await
+        })
+    };
+    flows_asked(&lab, 1).await;
+    let asked_at = std::time::Instant::now();
+    cancel.send_replace(true);
+    let fetched = running.await.unwrap().unwrap();
+    assert!(matches!(fetched, JobFetch::Stopped), "{fetched:?}");
+    assert!(asked_at.elapsed() < std::time::Duration::from_secs(3));
+
+    // At once a page for the one persona there is.
+    let page = lab
+        .pipeline
+        .fetch(FetchOrder {
+            level: Level::Human,
+            max_retries: Some(0),
+            ..FetchOrder::get(Lab::url("/after"), Priority::Sync)
+        })
+        .await
+        .unwrap();
+    assert_eq!(page.outcome, Outcome::Ok, "{:?}", page.reason);
+    assert_eq!(page.attempts.len(), 1);
+    assert!(asked_at.elapsed() + std::time::Duration::from_secs(1) >= step);
+    // Only Kage's own look at the context met it busy, never the page.
+    let refused = lab.chromium.with(|sidecar| sidecar.refused_busy.clone());
+    assert_ne!(refused, Vec::<String>::new());
+    assert!(
+        refused
+            .iter()
+            .all(|operation| operation == "POST state/export"),
+        "{refused:?}"
+    );
+    lab.shut_down().await;
+}
+
+/// QA round three, flows-01 and lock-01: a context that runs an operation
+/// Kage did not wait for (a server that was killed left it, or a cut whose
+/// wait ran out) is waited for by the attempt that meets it, and the page
+/// is asked for once it is free.
+#[tokio::test]
+async fn an_attempt_that_meets_a_busy_context_waits_for_it() {
+    let mut lab = Lab::start(1, 149, BROWSER_FAST).await;
+    let first = lab
+        .pipeline
+        .fetch(FetchOrder {
+            level: Level::Human,
+            ..FetchOrder::get(Lab::url("/first"), Priority::Sync)
+        })
+        .await
+        .unwrap();
+    assert_eq!(first.outcome, Outcome::Ok, "{:?}", first.reason);
+    let busy = std::time::Duration::from_secs(4);
+    let since = std::time::Instant::now();
+    lab.chromium.with(|sidecar| {
+        let contexts: Vec<String> = sidecar
+            .contexts
+            .values()
+            .map(|(context, _)| context.clone())
+            .collect();
+        for context in contexts {
+            sidecar.busy_until.insert(context, since + busy);
+        }
+    });
+    let page = lab
+        .pipeline
+        .fetch(FetchOrder {
+            level: Level::Human,
+            max_retries: Some(0),
+            ..FetchOrder::get(Lab::url("/second"), Priority::Sync)
+        })
+        .await
+        .unwrap();
+    assert_eq!(page.outcome, Outcome::Ok, "{:?}", page.reason);
+    assert_eq!(page.attempts.len(), 1);
+    assert!(since.elapsed() >= busy);
+    let refused = lab.chromium.with(|sidecar| sidecar.refused_busy.clone());
+    assert_eq!(refused.first().map(String::as_str), Some("POST navigate"));
+    assert!(
+        refused[1..]
+            .iter()
+            .all(|operation| operation == "POST state/export"),
+        "{refused:?}"
+    );
+    lab.shut_down().await;
+}

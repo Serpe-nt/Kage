@@ -893,7 +893,12 @@ persona cooling or not warmed up) is refused
 `no_persona` with `retry_at`, and a job waits it out (F107): the moment the
 first backoff of such a persona's proxy ends, else a minute on when nobody
 knows (a warm-up, a proxy held by a suspected outage). A backoff can last
-an hour, and a job was looked at every minute of it (F156);
+an hour, and a job was looked at every minute of it (F156). The persona
+manager stores a persona whose proxy is in backoff as `cooling` with
+`proxy_backoff`, and that persona counts as one that waits for the end of
+its proxy's backoff, as a ready persona on such a proxy does (QA round
+three, flows-02: a cooling persona had no such moment, and every look was
+"a minute on" still);
 work no persona could ever take is refused without one. A persona whose
 attempt failed at its proxy leaves its visit and, for 5 minutes or until
 an attempt of it is answered, is set aside for another persona that could
@@ -1243,7 +1248,16 @@ Opening is idempotent per persona: the same request again answers with the
 open context (`reused: true`), a different request for a persona whose
 context is open answers `context_conflict`, one context more than the cap
 answers `context_limit`, and a second operation on a context that is busy
-answers `context_busy`. Requests and responses are validated against the
+answers `context_busy`. For Kage that refusal means "the persona is still
+busy", never a failure of the request (QA round three, flows-01): an
+attempt whose operation is refused so waits for the context to run
+nothing (it asks with `state/export` of an origin no page can be on,
+without storage, once a second) for as long as the operation itself may
+take, and asks again; one that is still refused at that bound asked the
+site nothing, spends no retry, is no page of the persona's day on the
+site, gives a breaker's trial back and leaves the persona to take the
+next attempt, up to three such attempts per request, after which they
+count as failures. Requests and responses are validated against the
 contract in both directions; errors are `{code, message}` with the stable
 codes of the contract.
 
@@ -2923,7 +2937,12 @@ like any other; the last item is the flow's own request with its attempts.
 Steps after one that failed are `failed` with `not_run`. A cancel stops a
 flow at the step under way (F175): Kage hangs up on the sidecar, which
 finishes that step and begins no other, so that at most the page the step
-was reading is asked for after the cancel; the flow's items are
+was reading is asked for after the cancel. The job does not wait for that
+step, but the persona is given no other work until its context runs
+nothing again, at most until the flow's own time is up (QA round three,
+flows-01: the scheduler handed the persona out at once, and every request
+it took meanwhile was refused `context_busy` and booked as a failed
+attempt, a page of the day's cap included); the flow's items are
 `cancelled`, its request ends `provider_error` with the reason `cancelled`
 and the cut attempt in its record, and the job is `cancelled`. The steps it
 ran are not reported: the sidecar's answer was not read to its end. A

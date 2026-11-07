@@ -114,8 +114,8 @@ use crate::SchedulerError;
 use crate::archive::{Archive, Archived, Keep};
 use crate::backend::Backend;
 use crate::executor::{
-    Arrival, AttemptExecutor, AttemptJob, AttemptOutput, BehaviorWish, FlowPlan, PlainJob,
-    SiteExits, default_capture, default_wait,
+    Arrival, AttemptExecutor, AttemptJob, AttemptOutput, BehaviorWish, CONTEXT_BUSY, FlowPlan,
+    PlainJob, SiteExits, default_capture, default_wait,
 };
 use crate::forwarder::PlainRoute;
 use crate::metrics;
@@ -1159,10 +1159,16 @@ impl Pipeline {
         let earlier = earlier.unwrap_or_default();
 
         let retries = order.max_retries.unwrap_or(policy.retries);
-        let progress = RequestProgress::new(order.level, retries).resumed(
-            earlier
-                .iter()
-                .map(|attempt| (attempt.persona_id, attempt.outcome)),
+        // Attempts a busy context refused before the request changed hands
+        // spent no retry, and still do not (QA round three, lock-01).
+        let progress = RequestProgress::new(order.level, retries).resumed_marked(
+            earlier.iter().map(|attempt| {
+                (
+                    attempt.persona_id,
+                    attempt.outcome,
+                    attempt.reason.as_deref() == Some(CONTEXT_BUSY),
+                )
+            }),
         );
         // The networks of the personas that were blocked before the
         // request changed hands are avoided as if it had not.
@@ -1982,28 +1988,36 @@ impl Pipeline {
             vendor = tracing::field::Empty,
         );
         let started_at = self.now();
+        let began = tokio::time::Instant::now();
         let running = self
             .under_way
             .until_cut(self.executor.run(&job).instrument(span.clone()));
         // A flow's job that is cancelled cuts the flow (F175): the sidecar
         // sees its caller hang up, finishes the step it is at, and begins
         // no other.
-        let output = match course
+        let (output, cut) = match course
             .cancel
             .clone()
             .filter(|_| course.order.flow.is_some())
         {
             Some(mut cancel) => tokio::select! {
-                output = running => output,
+                output = running => (output, false),
                 () = stopped(&mut cancel) => {
                     tracing::info!(
                         request = %course.request.id,
                         "a flow's job was cancelled: the flow stops at the step under way"
                     );
-                    AttemptOutput::failed(Outcome::ProviderError, CANCELLED, Courtesy::NotTheSite)
+                    (
+                        AttemptOutput::failed(
+                            Outcome::ProviderError,
+                            CANCELLED,
+                            Courtesy::NotTheSite,
+                        ),
+                        true,
+                    )
                 }
             },
-            None => running.await,
+            None => (running.await, false),
         };
         let finished_at = self.now();
         let outcome = output.outcome();
@@ -2013,22 +2027,50 @@ impl Pipeline {
             span.record("vendor", vendor);
         }
         metrics::breaker_threshold(&course.domain, dispatch.breaker.threshold);
-        let verdict = AttemptVerdict::of(&output.classification);
-        let ruling = course.progress.record(Some(persona.id), verdict);
+        // The persona's context ran another operation for as long as the
+        // attempt waited for it: nothing was asked of the site. That is a
+        // wait, not a failure: it spends no retry, it is no page of the
+        // persona's day on the site, and the breakers' trials go back
+        // (QA round three, flows-01, lock-01).
+        let unmade = output.reason.as_deref() == Some(CONTEXT_BUSY);
+        let ruling = if unmade {
+            course.progress.record_unmade(persona.id)
+        } else {
+            let verdict = AttemptVerdict::of(&output.classification);
+            course.progress.record(Some(persona.id), verdict)
+        };
 
         // What the persona answers for, on the site that showed it: a flow
         // that ended on another site than its first met that site's wall,
         // or read that site's page (F101). The first site served what the
         // flow asked of it there.
         let shown_by = shown_by(course, &output);
-        self.settle_sites(
-            course,
-            &dispatch,
-            &persona,
-            (outcome, &ruling),
-            shown_by.as_deref(),
-        )
-        .await?;
+        if unmade {
+            // Counted as a page when it was dispatched: taken back.
+            self.backend()
+                .undispatched(persona.id, &dispatch.domain, started_at)
+                .await?;
+            for leg in &dispatch.legs {
+                self.backend()
+                    .undispatched(persona.id, &leg.domain, started_at)
+                    .await?;
+                if leg.trial {
+                    self.verdicts.end_trial(&leg.domain, false).await?;
+                }
+            }
+            if dispatch.trial {
+                self.verdicts.end_trial(&course.domain, false).await?;
+            }
+        } else {
+            self.settle_sites(
+                course,
+                &dispatch,
+                &persona,
+                (outcome, &ruling),
+                shown_by.as_deref(),
+            )
+            .await?;
+        }
         if ruling.penalty.is_some() {
             let network = self
                 .backend()
@@ -2042,16 +2084,28 @@ impl Pipeline {
         // What another site answered says nothing of the domain's health,
         // and the persona's visit of the domain was not turned away: it
         // says what it says of the site that showed it (F162).
-        grant.complete_on(
-            Completion {
-                courtesy: output.courtesy,
-                // Its visit is over when it was turned away for good.
-                blocked: ruling.penalty.is_some(),
-                // Or when its proxy failed: the site had no say (F108).
-                proxy_failed: at_the_proxy(output.reason.as_deref()),
-            },
-            shown_by.as_deref(),
-        );
+        let completion = Completion {
+            courtesy: output.courtesy,
+            // Its visit is over when it was turned away for good.
+            blocked: ruling.penalty.is_some(),
+            // Or when its proxy failed: the site had no say (F108).
+            proxy_failed: at_the_proxy(output.reason.as_deref()),
+        };
+        if cut {
+            // The sidecar still finishes the cut step on the persona's
+            // context (spec §16.6): the grant, which keeps the persona from
+            // any other work, goes back once that context runs nothing, at
+            // most when the flow's own time is up; the job does not wait
+            // for it (QA round three, flows-01).
+            let executor = Arc::clone(&self.executor);
+            let settling = job.clone();
+            tokio::spawn(async move {
+                executor.settle(&settling, began).await;
+                grant.complete_on(completion, shown_by.as_deref());
+            });
+        } else {
+            grant.complete_on(completion, shown_by.as_deref());
+        }
 
         let attempt = Attempt {
             id: AttemptId::new(),

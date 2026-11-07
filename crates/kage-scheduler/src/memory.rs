@@ -204,6 +204,28 @@ impl Backend for MemoryBackend {
         Ok(self.state().egress_unsafe)
     }
 
+    async fn undispatched(
+        &self,
+        persona: PersonaId,
+        domain: &str,
+        at: DateTime<Utc>,
+    ) -> Result<(), SchedulerError> {
+        let mut state = self.state();
+        let zone = state.personas.get(&persona).map_or_else(
+            || "UTC".to_owned(),
+            |(persona, ..)| persona.timezone.clone(),
+        );
+        let today = place::local_day(at, &zone);
+        if let Some(counted) = state
+            .facts
+            .get_mut(domain)
+            .and_then(|facts| facts.states.get_mut(&persona))
+        {
+            counted.take_back_request(today);
+        }
+        Ok(())
+    }
+
     async fn dispatched(
         &self,
         persona: PersonaId,

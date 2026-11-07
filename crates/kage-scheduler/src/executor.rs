@@ -61,11 +61,11 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use kage_browser::contract::{
     BehaviorMode, BehaviorOptions, CaptureOptions, DwellMode, Entry, EntryFallback, EntryOutcome,
-    EntryStrategy, FlowAction, FlowBehavior, FlowEvent, FlowPace, FlowRequest, NavigateRequest,
-    PageResult, Wait, WaitUntil,
+    EntryStrategy, ExportStateRequest, FlowAction, FlowBehavior, FlowEvent, FlowPace, FlowRequest,
+    NavigateRequest, PageResult, Wait, WaitUntil,
 };
 use kage_browser::ssrf::DeniedHop;
-use kage_browser::{Navigation, navigation_bound, ssrf};
+use kage_browser::{BrowserError, Navigation, SidecarClient, navigation_bound, ssrf};
 use kage_core::classifier::{Classification, Observation, without_document};
 use kage_core::config::{BrowserConfig, Config};
 use kage_core::domain::{Exit, Header, Level, Persona, Render, Timing};
@@ -615,6 +615,48 @@ pub trait AttemptExecutor: Send + Sync + fmt::Debug {
 
     /// Makes one attempt of a plain client (level 0), as [`Self::run`].
     async fn plain(&self, job: &PlainJob) -> AttemptOutput;
+
+    /// Waits until what a cut attempt left running in the persona's
+    /// browser is over (QA round three, flows-01): a flow's cancel hangs up
+    /// on the sidecar, which finishes the step under way on the persona's
+    /// context (spec §16.6), so the persona is not given other work before
+    /// that context runs nothing again. Bounded by what the flow could
+    /// still take since `began`. An executor with no browser has nothing
+    /// to wait for.
+    async fn settle(&self, job: &AttemptJob, began: tokio::time::Instant) {
+        let _ = (job, began);
+    }
+}
+
+/// How often a context the sidecar called busy is asked again.
+const BUSY_POLL: Duration = Duration::from_secs(1);
+
+/// The origin the probe of a busy context asks the cookies of: one no page
+/// can be on, so that the probe reads nothing of any site and no storage.
+const PROBE_ORIGIN: &str = "https://context-probe.invalid";
+
+/// Waits, at most `bound`, until the context runs no operation in its
+/// sidecar (spec §10.1: one operation at a time, a second one refused
+/// `context_busy`). It asks with `state/export` of [`PROBE_ORIGIN`]
+/// without storage, which reads the browser's cookie list and touches no
+/// page. `true` once the context is free, gone, or the sidecar cannot
+/// say; `false` when it is still busy at the bound.
+async fn context_free(sidecar: &SidecarClient, context: uuid::Uuid, bound: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + bound;
+    let probe = ExportStateRequest {
+        include_storage: Some(false),
+        origin: PROBE_ORIGIN.to_owned(),
+    };
+    loop {
+        match sidecar.export_state(context, &probe).await {
+            Err(error) if error.is_context_busy() => {}
+            _ => return true,
+        }
+        if tokio::time::Instant::now() + BUSY_POLL > deadline {
+            return false;
+        }
+        tokio::time::sleep(BUSY_POLL).await;
+    }
 }
 
 /// The dwell of a still visit (level 2, spec §25): drawn from the
@@ -1308,6 +1350,38 @@ fn whose_failure(
     blame_the_site(output, relayed)
 }
 
+/// The reason of an attempt whose persona's context ran another operation
+/// in its sidecar until the attempt gave up waiting: nothing was asked of
+/// the site, and the pipeline counts it against nothing (QA round three,
+/// flows-01).
+pub const CONTEXT_BUSY: &str = "context_busy";
+
+/// Asks the sidecar for an operation on a context, waited for as long as
+/// `wall`. When the context runs another operation (one a cut attempt left,
+/// or a server's before it was killed), the persona is still busy: that is
+/// waited for, at most `wall`, and the operation asked once more, not taken
+/// for a failure of this request (QA round three, flows-01, lock-01). The
+/// sidecar refuses a busy context before it does anything, so asking again
+/// repeats nothing.
+async fn ask_waiting<T, F, Fut>(
+    sidecar: &SidecarClient,
+    context: uuid::Uuid,
+    wall: Duration,
+    ask: F,
+) -> Result<Result<T, BrowserError>, tokio::time::error::Elapsed>
+where
+    F: Fn() -> Fut,
+    Fut: Future<Output = Result<T, BrowserError>>,
+{
+    let asked = tokio::time::timeout(wall, ask()).await;
+    if matches!(&asked, Ok(Err(error)) if error.is_context_busy())
+        && context_free(sidecar, context, wall).await
+    {
+        return tokio::time::timeout(wall, ask()).await;
+    }
+    asked
+}
+
 /// How a failure of the persona's own plumbing is named.
 fn plumbing(error: &PersonaError) -> (&'static str, bool) {
     match error {
@@ -1319,7 +1393,7 @@ fn plumbing(error: &PersonaError) -> (&'static str, bool) {
         PersonaError::Browser(browser) if browser.is_context_conflict() => {
             ("context_conflict", true)
         }
-        PersonaError::Browser(browser) if browser.is_context_busy() => ("context_busy", true),
+        PersonaError::Browser(browser) if browser.is_context_busy() => (CONTEXT_BUSY, true),
         PersonaError::Browser(browser) if browser.is_at_capacity() => ("context_limit", true),
         PersonaError::Browser(browser) if browser.is_unreachable() => ("sidecar_unreachable", true),
         PersonaError::Browser(_) => ("sidecar_error", true),
@@ -1776,8 +1850,11 @@ impl PathExecutor {
         let (request, behavior) = flow_for(job, plan, &self.browser);
         let sidecar = self.manager.sidecars().of(job.persona.engine);
         let mark = self.denials_mark();
-        let running = sidecar.flow(context, &request);
-        let events = match tokio::time::timeout(job.timeout + BROWSER_GRACE, running).await {
+        let asked = ask_waiting(sidecar, context, job.timeout + BROWSER_GRACE, || {
+            sidecar.flow(context, &request)
+        })
+        .await;
+        let events = match asked {
             Ok(Ok(events)) => events,
             Ok(Err(error)) => {
                 return Err(Box::new(Self::unavailable(&PersonaError::Browser(error))));
@@ -1918,9 +1995,14 @@ impl PathExecutor {
         let (mut page, behavior, flow) = match loaded {
             Ok(loaded) => loaded,
             // The browser is in a state nobody knows, or was somewhere it
-            // must not be: it is closed.
+            // must not be: it is closed. A context that was busy with
+            // another operation all along is that operation's, and stays.
             Err(output) => {
-                lease.close().await;
+                if output.reason.as_deref() == Some(CONTEXT_BUSY) {
+                    lease.keep(false);
+                } else {
+                    lease.close().await;
+                }
                 return *output;
             }
         };
@@ -2032,13 +2114,15 @@ impl PathExecutor {
         let (request, behavior) = navigation_for(job, &self.browser);
         let sidecar = self.manager.sidecars().of(job.persona.engine);
         let mark = self.denials_mark();
-        let navigating =
-            sidecar.navigate_checked(context, &request, self.security, self.max_redirects);
         // The attempt is waited for as long as this page may take: the time
         // to reach it, the patience drawn for it and its dwell. No page is
         // left after a time that is the same for every page.
         let wall = navigation_bound(&request) + NAVIGATION_GRACE;
-        let navigation = match tokio::time::timeout(wall, navigating).await {
+        let asked = ask_waiting(sidecar, context, wall, || {
+            sidecar.navigate_checked(context, &request, self.security, self.max_redirects)
+        })
+        .await;
+        let navigation = match asked {
             Ok(Ok(navigation)) => navigation,
             Ok(Err(error)) => {
                 return Err(Box::new(Self::unavailable(&PersonaError::Browser(error))));
@@ -2114,6 +2198,22 @@ impl AttemptExecutor for PathExecutor {
             PlainRoute::Host => None,
         };
         self.whose(output, (Caller::Plain(job.route), &job.url), proxy, started)
+    }
+
+    async fn settle(&self, job: &AttemptJob, began: tokio::time::Instant) {
+        let Some((context, engine)) = self.manager.contexts().open_context_of(job.persona.id)
+        else {
+            return;
+        };
+        // The sidecar ends the flow within the time Kage would have waited
+        // for it: nothing of it runs past that.
+        let bound = (job.timeout + BROWSER_GRACE).saturating_sub(began.elapsed());
+        if !context_free(self.manager.sidecars().of(engine), context, bound).await {
+            tracing::warn!(
+                persona = %job.persona.id,
+                "the context of a cut flow was still busy when its time ran out"
+            );
+        }
     }
 }
 

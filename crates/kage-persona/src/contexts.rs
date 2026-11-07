@@ -276,6 +276,15 @@ impl Contexts {
         open
     }
 
+    /// The persona's context as far as Kage knows it is open, and the
+    /// engine whose sidecar holds it.
+    pub fn open_context_of(&self, persona: PersonaId) -> Option<(Uuid, Engine)> {
+        self.state()
+            .open
+            .get(&persona)
+            .map(|open| (open.context, open.engine))
+    }
+
     /// How many contexts of an engine are open.
     pub fn open_on(&self, engine: Engine) -> usize {
         self.state()
