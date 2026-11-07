@@ -4543,3 +4543,119 @@ fn a_flows_later_site_is_booked_its_own_server_errors() {
     }
     assert!(planner.server_error_pause("first.test", now).is_some());
 }
+
+/// The persona of the one page of `domain` that `planner` lets go at `now`,
+/// and its grant.
+fn one_page(
+    planner: &mut Planner,
+    facts: &HashMap<String, DomainFacts>,
+    domain: &str,
+    now: DateTime<Utc>,
+) -> Option<(PersonaId, super::GrantId)> {
+    planner.submit(work(domain), now);
+    let decisions = planner.plan(now, facts);
+    dispatched(&decisions)
+        .first()
+        .map(|dispatch| (dispatch.persona, dispatch.grant))
+}
+
+#[test]
+fn a_persona_cooled_where_a_fetch_was_redirected_is_held_from_the_site_that_redirects() {
+    // F219: a fetch of the shop redirected to another site's wall is booked
+    // to that site (F187), whose cooldown then holds the persona there; the
+    // planner read only the shop's own facts, so the shop's next page went
+    // to the same persona, its visitor, and into the same wall.
+    let mut planner = Planner::new(rules(), Seed::from_u64(5));
+    planner.set_personas(personas(2));
+    let mut facts = facts_for(&["shop.test", "wall.test"]);
+    let mut now = noon();
+    let (walled, grant) = one_page(&mut planner, &facts, "shop.test", now).unwrap();
+    now += secs(5);
+    assert!(planner.complete_on(
+        grant,
+        now,
+        Completion {
+            courtesy: Courtesy::Answered,
+            blocked: true,
+            proxy_failed: false,
+        },
+        Some("wall.test"),
+    ));
+    // The wall's verdict is stored as the persona's cooldown on its site.
+    let cooled_until = now + Duration::hours(6);
+    facts
+        .get_mut("wall.test")
+        .unwrap()
+        .states
+        .entry(walled)
+        .or_insert_with(|| PersonaDomainState::new(walled, "wall.test"))
+        .cooldown_until = Some(cooled_until);
+
+    // The shop's next page: the planner asks for the wall's facts too, and
+    // another persona reads it.
+    now += Duration::minutes(2);
+    planner.submit(work("shop.test"), now);
+    assert!(planner.domains_waiting().contains(&"wall.test".to_owned()));
+    let decisions = planner.plan(now, &facts);
+    let left = dispatched(&decisions);
+    assert_eq!(left.len(), 1, "{decisions:?}");
+    assert_ne!(left[0].persona, walled);
+
+    // Alone, the persona is waited for until its cooldown there ends.
+    let mut alone = Planner::new(rules(), Seed::from_u64(5));
+    alone.set_personas(personas(1));
+    let mut facts = facts_for(&["shop.test", "wall.test"]);
+    let mut now = noon();
+    let (walled, grant) = one_page(&mut alone, &facts, "shop.test", now).unwrap();
+    now += secs(5);
+    assert!(alone.complete_on(
+        grant,
+        now,
+        Completion::of(Courtesy::Answered),
+        Some("wall.test")
+    ));
+    facts
+        .get_mut("wall.test")
+        .unwrap()
+        .states
+        .entry(walled)
+        .or_insert_with(|| PersonaDomainState::new(walled, "wall.test"))
+        .cooldown_until = Some(now + Duration::hours(1));
+    now += Duration::minutes(2);
+    assert_eq!(one_page(&mut alone, &facts, "shop.test", now), None);
+    assert!(
+        alone
+            .wake_at()
+            .is_some_and(|wake| wake >= noon() + secs(5) + Duration::hours(1)),
+        "{:?}",
+        alone.wake_at()
+    );
+
+    // A site the shop never redirected to holds nobody from it, and what
+    // was redirected a day ago and more is forgotten.
+    let mut fresh = Planner::new(rules(), Seed::from_u64(5));
+    fresh.set_personas(personas(1));
+    let mut facts = facts_for(&["shop.test", "wall.test"]);
+    facts.get_mut("wall.test").unwrap().states.insert(id(0), {
+        let mut state = PersonaDomainState::new(id(0), "wall.test");
+        state.cooldown_until = Some(noon() + Duration::days(3));
+        state
+    });
+    let (_, grant) = one_page(&mut fresh, &facts, "shop.test", noon()).unwrap();
+    assert!(fresh.complete_on(
+        grant,
+        noon() + secs(5),
+        Completion::of(Courtesy::Answered),
+        None
+    ));
+    let later = noon() + Duration::hours(2);
+    let (_, grant) = one_page(&mut fresh, &facts, "shop.test", later).unwrap();
+    assert!(fresh.complete_on(
+        grant,
+        later + secs(5),
+        Completion::of(Courtesy::Answered),
+        Some("wall.test"),
+    ));
+    let after_a_day = later + Duration::days(1) + Duration::minutes(1);
+    assert!(one_page(&mut fresh, &facts, "shop.test", after_a_day).is_some());
+}

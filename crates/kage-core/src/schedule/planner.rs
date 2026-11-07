@@ -100,6 +100,15 @@ const LOAD_WINDOW: Duration = Duration::minutes(10);
 /// The window of a domain's requests per minute.
 const RPM_WINDOW: Duration = Duration::minutes(1);
 
+/// How long a site that a domain's fetch was redirected to is remembered
+/// as one the domain's next fetch may end on (F219): a persona that cools
+/// on that site is held from the domain while it does.
+const REDIRECT_MEMORY: Duration = Duration::days(1);
+
+/// The most sites remembered per domain as ones its fetches ended on
+/// ([`REDIRECT_MEMORY`]); the one seen longest ago goes first.
+const MAX_REDIRECTS: usize = 8;
+
 /// How far back a visit to a domain counts for the score (spec §8.2).
 const FRESH_WINDOW: Duration = Duration::hours(1);
 
@@ -501,6 +510,29 @@ struct DomainRun {
     /// When the plain client may start its next page on the domain, where
     /// the site's `Crawl-delay` is kept (`Work::gap_floor`).
     plain_next: Option<DateTime<Utc>>,
+    /// The other sites a fetch of the domain ended on (a redirect, F187),
+    /// with when it last did ([`REDIRECT_MEMORY`], F219).
+    redirects: Vec<(String, DateTime<Utc>)>,
+}
+
+impl DomainRun {
+    /// Notes that a fetch of the domain ended on `site` at `now`.
+    fn redirected_to(&mut self, site: &str, now: DateTime<Utc>) {
+        self.redirects.retain(|(known, _)| known != site);
+        self.redirects.push((site.to_owned(), now));
+        if self.redirects.len() > MAX_REDIRECTS {
+            self.redirects.remove(0);
+        }
+    }
+
+    /// The sites a fetch of the domain ended on within [`REDIRECT_MEMORY`]
+    /// of `now`.
+    fn redirect_targets(&self, now: DateTime<Utc>) -> impl Iterator<Item = &str> {
+        self.redirects
+            .iter()
+            .filter(move |(_, at)| now.signed_duration_since(*at) < REDIRECT_MEMORY)
+            .map(|(site, _)| site.as_str())
+    }
 }
 
 #[derive(Debug)]
@@ -637,6 +669,9 @@ pub struct Planner {
     /// Who is awake at the moment being planned, and when the others get
     /// up; filled once per plan, and only when some waiting work asks.
     awake: HashMap<PersonaId, (bool, DateTime<Utc>)>,
+    /// Per domain, the personas that cool on a site a fetch of the domain
+    /// was redirected to, and until when (F219); filled once per plan.
+    redirect_cools: HashMap<String, Vec<(PersonaId, DateTime<Utc>)>>,
     days: DayBook,
 }
 
@@ -754,6 +789,7 @@ impl Planner {
             wake: None,
             next_grant: 0,
             awake: HashMap::new(),
+            redirect_cools: HashMap::new(),
         }
     }
 
@@ -804,14 +840,23 @@ impl Planner {
         self.queue.remove(ticket).is_some()
     }
 
-    /// The domains that have work waiting.
+    /// The domains that have work waiting, with the later sites of that
+    /// work and the sites its domains' fetches were redirected to (F219),
+    /// whose facts the plan reads.
     pub fn domains_waiting(&self) -> Vec<String> {
         let mut domains: Vec<String> = self
             .queue
             .iter()
             .flat_map(|(_, queued)| {
+                let redirects = self
+                    .domains
+                    .get(&queued.work.domain)
+                    .map(|run| run.redirects.iter().map(|(site, _)| site.clone()))
+                    .into_iter()
+                    .flatten();
                 std::iter::once(queued.work.domain.clone())
                     .chain(queued.work.legs.iter().map(|leg| leg.domain.clone()))
+                    .chain(redirects)
             })
             .collect();
         domains.sort_unstable();
@@ -949,6 +994,7 @@ impl Planner {
                 self.awake.insert(view.id, (awake, up));
             }
         }
+        self.note_redirect_cools(now, facts);
 
         for ticket in self.queue.tickets() {
             let Some(queued) = self.queue.get(ticket) else {
@@ -1474,6 +1520,18 @@ impl Planner {
                     barred = true;
                 }
             }
+            // A site a fetch of the domain was redirected to holds a persona
+            // that cools there, as a later site does (F219).
+            for (_, until) in self
+                .redirect_cools
+                .get(&work.domain)
+                .into_iter()
+                .flatten()
+                .filter(|(persona, _)| *persona == view.id)
+            {
+                at = at.max(*until);
+                barred = true;
+            }
             for (leg, known) in work.legs.iter().zip(legs) {
                 let Some(state) = known.states.get(&view.id) else {
                     continue;
@@ -1986,6 +2044,31 @@ impl Planner {
         Ok(grant)
     }
 
+    /// Who cools on a site that a fetch of a domain with waiting work was
+    /// redirected to, by domain (F219).
+    fn note_redirect_cools(&mut self, now: DateTime<Utc>, facts: &HashMap<String, DomainFacts>) {
+        self.redirect_cools.clear();
+        for (name, run) in &mut self.domains {
+            run.redirects
+                .retain(|(_, at)| now.signed_duration_since(*at) < REDIRECT_MEMORY);
+            let mut cools = Vec::new();
+            for site in run.redirect_targets(now) {
+                let Some(known) = facts.get(site) else {
+                    continue;
+                };
+                cools.extend(known.states.iter().filter_map(|(persona, state)| {
+                    state
+                        .cooldown_until
+                        .filter(|until| *until > now)
+                        .map(|until| (*persona, until))
+                }));
+            }
+            if !cools.is_empty() {
+                self.redirect_cools.insert(name.clone(), cools);
+            }
+        }
+    }
+
     /// Reports that an attempt ended at `now`. `false` for a grant the
     /// planner does not hold: it is reported once.
     pub fn complete(&mut self, grant: GrantId, now: DateTime<Utc>, completion: Completion) -> bool {
@@ -2028,6 +2111,16 @@ impl Planner {
         let Some(grant) = self.grants.remove(&grant) else {
             return false;
         };
+        // A fetch that ended on another site was redirected there: its
+        // domain's next fetch may end there too, so a persona that cools
+        // there is held from the domain while it does (F219). A flow's
+        // later sites are its legs already.
+        if let (Some(site), Some(name), true) = (shown_by, &grant.domain, grant.legs.is_empty()) {
+            self.domains
+                .entry(name.clone())
+                .or_default()
+                .redirected_to(site, now);
+        }
         if let Some(run) = grant
             .persona
             .and_then(|persona| self.runs.get_mut(&persona))
