@@ -211,7 +211,9 @@ add-domains)
     QA_MAX_TIME=30 call POST /v1/admin/policies/reload "$(cat "${run}/admin.token")" | head -n 1
     ;;
 fast)
-    "$0" add-domains "${name}" < /scripts/qa/fast-domains.yaml
+    # Through bash, so that it works when this script was run as `bash
+    # stack.sh` from a copy without the executable bit (F198).
+    bash "${BASH_SOURCE[0]}" add-domains "${name}" < /scripts/qa/fast-domains.yaml
     ;;
 logs) load_run; dump_logs ;;
 *)

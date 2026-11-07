@@ -143,7 +143,7 @@ fmt-check-node:
 # --- Lint --------------------------------------------------------------------
 
 # clippy -D warnings, eslint, tsc, the README's badges.
-lint: lint-rust lint-node lint-observability lint-docs
+lint: lint-rust lint-node lint-observability lint-docs lint-scripts
 
 lint-rust:
     cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
@@ -166,6 +166,18 @@ lint-observability:
 # repo.md, "Badges").
 lint-docs:
     node scripts/check-readme-badges.mjs
+
+# Every shell script in git is executable (F198: the QA harness was 100644,
+# and a script that runs another by its path fails then).
+lint-scripts:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    plain="$(git ls-files --stage -- '*.sh' | awk '$1 != "100755" { print $4 }')"
+    if [ -n "${plain}" ]; then
+        echo "not executable in git (git update-index --chmod=+x <file>):" >&2
+        echo "${plain}" >&2
+        exit 1
+    fi
 
 # The sidecar contract: the committed OpenAPI document is what the zod
 # schemas emit, and it breaks no client of the document on the base branch
