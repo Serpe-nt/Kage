@@ -139,7 +139,9 @@ pub(crate) fn http_factory(
         http = http.with_trust_anchor(pem);
     }
     if config.security.resolve_on_host {
-        http = http.with_resolver(Arc::new(kage_api::resolve::HostResolver::system()));
+        http = http.with_resolver(Arc::new(kage_api::resolve::HostResolver::for_config(
+            config,
+        )));
     }
     Ok(http)
 }

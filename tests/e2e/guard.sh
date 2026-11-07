@@ -19,6 +19,10 @@
 #     engines: ssrf_denied at the first attempt, nothing kept (F167);
 #   - a level 0 redirect to another site, asked for from that site's own
 #     plain exit, never from the first site's (F166).
+#   - a port the browsers refuse: 422 ssrf_denied at every level, and a
+#     redirect to one ssrf_denied at level 0 and in both engines (G3);
+#   - eleven redirects, one more than http.max_redirects: provider_error
+#     too_many_redirects at level 0 and in both engines alike (F181).
 #
 # It uses its own compose project name and host port.
 set -euo pipefail
@@ -242,5 +246,43 @@ check "other-guard.test's page left from its own exit" "${seen}" \
 check "the hop left from third-guard.test's exit only, naming kage" "${seen}" \
     "d.some((r) => r.host === 'pub.third-guard.test:8088') && d.filter((r) => r.host === 'pub.third-guard.test:8088').every((r) => r.from.endsWith('${second_address}') && r.headers.some(([n, v]) => n.toLowerCase() === 'user-agent' && v.startsWith('kage/')))"
 echo "    other-guard.test from ${first}, the hop to third-guard.test from ${second}"
+
+echo "==> the ports the browsers refuse, and one redirect too many: one outcome at every level (G3, F181)"
+# A port a browser refuses, asked for directly: 422 ssrf_denied at every level
+# this world serves (level 1 needs a verified wire fingerprint it has not).
+for level in 0 2 3; do
+    call POST /v1/fetch "${token}" "{\"url\":\"http://pub.kage-guard.test:25/\",\"level\":${level}}"
+    [ "${status}" = 422 ] || fail "level ${level}: port 25 was not refused: ${status} ${body}"
+    check "level ${level}: 422 ssrf_denied for the port" "${body}" "d.code === 'ssrf_denied' && /port 25/.test(d.detail)"
+done
+# A redirect to one: ssrf_denied at the hop, at level 0 (third-guard.test has
+# its plain exit) and in both engines; nothing asked of the port.
+to="$(value "\"http://pub.kage-guard.test:6667/x\"" "encodeURIComponent(d)")"
+fetched "{\"url\":\"${THIRD}/guard/redirect?to=${to}\",\"level\":0}"
+check "level 0, a redirect to port 6667" "${body}" "d.outcome === 'ssrf_denied' && d.attempts.length === 1"
+for engine in chromium firefox; do
+    fetched "{\"url\":\"${PUBLIC}/guard/redirect?to=${to}\",\"level\":2,\"persona\":{\"engines\":[\"${engine}\"]},\"include\":[\"dom\"],\"timeout_ms\":60000}"
+    check "${engine}, a redirect to port 6667" "${body}" "${DENIED}"
+done
+for proxy in proxy-a proxy-b proxy-c; do
+    stats="$(got "http://${proxy}:3128/__stats")"
+    check "${proxy} was never asked for port 6667" "${stats}" \
+        "!Object.keys(d.targets).some((t) => t.endsWith(':6667'))"
+done
+echo "    port 25: 422 at every level; a redirect to 6667: ssrf_denied at level 0 and in both engines"
+# Ten redirects are followed; eleven (one more than http.max_redirects) end
+# provider_error too_many_redirects at level 0 and in both engines alike,
+# never ssrf_denied, nothing kept (QA round two, ssrf-07).
+fetched "{\"url\":\"${THIRD}/guard/chain?n=10\",\"level\":0}"
+check "level 0, ten redirects" "${body}" "d.outcome === 'ok' && d.redirects.length === 10"
+fetched "{\"url\":\"${THIRD}/guard/chain?n=11\",\"level\":0}"
+check "level 0, eleven redirects" "${body}" \
+    "d.outcome === 'provider_error' && d.reason === 'too_many_redirects' && d.attempts.length === 1"
+for engine in chromium firefox; do
+    fetched "{\"url\":\"${PUBLIC}/guard/chain?n=11\",\"level\":2,\"persona\":{\"engines\":[\"${engine}\"]},\"include\":[\"dom\"],\"timeout_ms\":60000}"
+    check "${engine}, eleven redirects" "${body}" \
+        "d.outcome === 'provider_error' && d.reason === 'too_many_redirects' && d.attempts.length === 1 && !d.dom_html && !d.final_url"
+done
+echo "    eleven redirects: provider_error too_many_redirects at level 0 and in both engines"
 
 echo "guard test passed"

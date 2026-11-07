@@ -274,7 +274,11 @@ seen by the sites it reads. Under `direct`:
   port, no path, no wildcard: `*.home.arpa` would match nothing and is
   refused; at most 64) that may resolve to a private or loopback
   address: the operator's own network. `kage config check` warns while
-  the list is not empty. List only what you run yourself.
+  the list is not empty. List only what you run yourself. With
+  `security.resolve_on_host` on as well, the guard's own lookup follows
+  the list: a listed name is fetched, not refused at acceptance (before
+  F181 it was `422 ssrf_denied`). A redirect to a listed name spelled
+  with its one trailing dot (`nas.home.arpa.`) is that name.
 - **No leak check and no provider budget.** There is no proxy to leak
   through, and the pool's stops do not hold the host's connection. Bytes
   are still counted, with `egress: host` (`bandwidth_usage.egress`,

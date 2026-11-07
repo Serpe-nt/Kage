@@ -1011,19 +1011,39 @@ fn denied_by_forwarder(denial: &Denial) -> AttemptOutput {
     output
 }
 
+/// What an attempt comes to whose chain was longer than
+/// `http.max_redirects`: the site answered with nothing that can be used,
+/// `provider_error`, `too_many_redirects`, not retried. One outcome at
+/// every level (F181, QA round two's ssrf-07): a long chain of hops the
+/// guard allows is no target it refuses.
+fn too_many_redirects() -> AttemptOutput {
+    AttemptOutput::failed(
+        Outcome::ProviderError,
+        "too_many_redirects",
+        Courtesy::Answered,
+    )
+    .finally()
+}
+
 /// What a browser attempt comes to whose chain, or a flow's page, reached a
 /// hop the SSRF guard refuses (spec §19): `ssrf_denied` at the hop, never
-/// retried, and nothing the browser captured kept.
+/// retried, and nothing the browser captured kept. A chain the check cut
+/// for its length is the http path's `too_many_redirects`, with nothing
+/// captured kept and no final URL, as there (F181).
 fn denied_hop(
     denied: DeniedHop,
     mut page: Box<PageResult>,
     behavior: BehaviorApplied,
 ) -> AttemptOutput {
     ssrf::drop_captures(&mut page);
-    let mut output =
-        AttemptOutput::failed(Outcome::SsrfDenied, "ssrf_denied", Courtesy::NotTheSite);
+    let too_long = matches!(denied.reason, SsrfDenial::TooManyRedirects(_));
+    let mut output = if too_long {
+        too_many_redirects()
+    } else {
+        AttemptOutput::failed(Outcome::SsrfDenied, "ssrf_denied", Courtesy::NotTheSite)
+    };
     output.classification.evidence.push(denied.evidence());
-    output.final_url = Some(denied.url);
+    output.final_url = (!too_long).then_some(denied.url);
     output.timing = timing_of(&page);
     output.page = Some(page);
     output.behavior = Some(behavior);
@@ -1163,6 +1183,34 @@ fn blame_the_site(mut output: AttemptOutput, relayed: bool) -> AttemptOutput {
     output
 }
 
+/// The reason of an attempt that Kage's own forwarder refused: it did not
+/// take the credential the client presented for the attempt's own page
+/// (F211).
+const FORWARDER_REFUSED: &str = "forwarder_refused";
+
+/// An attempt that got no answer from the site (a server error's courtesy,
+/// or a failed proxy as the client names it) while Kage's own forwarder
+/// refused a credential naming its caller for one of its own targets ended
+/// at that refusal: `provider_error`, `forwarder_refused`, retried, nothing
+/// against the site and nothing against the proxy, which was never asked
+/// (F211). Anything that has the site's answer is as it was.
+fn blame_the_forwarder(mut output: AttemptOutput) -> AttemptOutput {
+    let unanswered_by_the_site =
+        output.courtesy == Courtesy::ServerError || output.reason.as_deref() == Some(PROXY_FAILED);
+    if output.status.is_some() || !unanswered_by_the_site {
+        return output;
+    }
+    let mut evidence = std::mem::take(&mut output.classification.evidence);
+    if let Some(reason) = &output.reason {
+        evidence.push(format!("site_saw_nothing:{reason}"));
+    }
+    output.classification = unanswered(Outcome::ProviderError, FORWARDER_REFUSED);
+    output.classification.evidence.extend(evidence);
+    output.courtesy = Courtesy::NotTheSite;
+    output.reason = Some(FORWARDER_REFUSED.to_owned());
+    output
+}
+
 /// The hosts and ports an attempt asked for itself: its page, the
 /// redirects it followed and where it ended. A third party's host the page
 /// loaded something from is none of them.
@@ -1201,6 +1249,9 @@ fn whose_failure(
     };
     let targets = targets_of(url, &output);
     let targets = || targets.iter().map(|(host, port)| (host.as_str(), *port));
+    if meter.credential_refused_since(caller, targets(), started) {
+        return blame_the_forwarder(output);
+    }
     if meter.unrelayed_since(caller, targets(), started) {
         return blame_the_proxy(output, true);
     }
@@ -1609,12 +1660,7 @@ impl PathExecutor {
                 AttemptOutput::failed(Outcome::ProviderError, "proxy_failed", Courtesy::NotTheSite)
             }
             // The site answered, with nothing that can be used.
-            HttpError::TooManyRedirects { .. } => AttemptOutput::failed(
-                Outcome::ProviderError,
-                "too_many_redirects",
-                Courtesy::Answered,
-            )
-            .finally(),
+            HttpError::TooManyRedirects { .. } => too_many_redirects(),
             HttpError::Tls(_) | HttpError::Request(_) | HttpError::Body(_) => {
                 AttemptOutput::failed(
                     Outcome::ProviderError,
@@ -2252,6 +2298,93 @@ mod tests {
                     .await;
             });
             (served, serving)
+        }
+
+        /// F211: Kage's own forwarder refusing a credential that names a
+        /// persona (`407`, a token that is not its own) is noted by that
+        /// persona, and a page of it that failed meanwhile, even with a
+        /// tunnel of the persona to its target open, ended at the
+        /// forwarder: `forwarder_refused`, neither the site's failure nor
+        /// the proxy's.
+        #[tokio::test]
+        async fn a_credential_the_forwarder_refused_is_neither_the_sites_nor_the_proxys() {
+            let (dead, refusing) = (PersonaId::new(), PersonaId::new());
+            let (gone, _held) = dead_proxy();
+            let (forwarder, serving) = forwarder(Arc::new(Two {
+                dead: (dead, endpoint(gone)),
+                refusing: (refusing, endpoint(refusing_proxy(BAD_GATEWAY).await)),
+            }))
+            .await;
+            let meter = Arc::clone(forwarder.meter());
+            let page = Url::parse("https://shop.kage.test/a").unwrap();
+            let started = tokio::time::Instant::now();
+            // A tunnel of the persona to the page's target was open, as a
+            // browser keeps one from an earlier page.
+            let open = meter.open_tunnel(Caller::Persona(refusing), "shop.kage.test", 443);
+            drop(open);
+
+            let mut client = TcpStream::connect(forwarder.local_addr()).await.unwrap();
+            let credential = base64::engine::general_purpose::STANDARD
+                .encode(format!("{refusing}:not-the-token"));
+            client
+                .write_all(
+                    format!(
+                        "CONNECT shop.kage.test:443 HTTP/1.1\r\nHost: shop.kage.test:443\r\n\
+                         Proxy-Authorization: Basic {credential}\r\n\r\n"
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            let mut answer = Vec::new();
+            let _ =
+                tokio::time::timeout(Duration::from_secs(5), client.read_to_end(&mut answer)).await;
+            assert!(String::from_utf8_lossy(&answer).starts_with("HTTP/1.1 407"));
+            assert!(meter.credential_refused_since(
+                Caller::Persona(refusing),
+                [("shop.kage.test", 443)],
+                started
+            ));
+
+            let failed =
+                AttemptOutput::failed(Outcome::ProviderError, "proxy_failed", Courtesy::NotTheSite);
+            let output = whose_failure(
+                Some(&meter),
+                failed.clone(),
+                Caller::Persona(refusing),
+                &page,
+                started,
+            );
+            assert_eq!(output.reason.as_deref(), Some("forwarder_refused"));
+            assert_eq!(output.outcome(), Outcome::ProviderError);
+            assert_eq!(output.courtesy, Courtesy::NotTheSite);
+            assert!(output.classification.retryable);
+            // Another persona, another target, an answer of the site: as
+            // they were (the open tunnel makes the first the site's).
+            let other = whose_failure(Some(&meter), failed, Caller::Persona(dead), &page, started);
+            assert_ne!(other.reason.as_deref(), Some("forwarder_refused"));
+            let elsewhere = Url::parse("https://other.kage.test/").unwrap();
+            let output = whose_failure(
+                Some(&meter),
+                unanswered(Outcome::Timeout, "timeout"),
+                Caller::Persona(refusing),
+                &elsewhere,
+                started,
+            );
+            assert_eq!(output.reason.as_deref(), Some("timeout"));
+            let mut answered = unanswered(Outcome::ProviderError, "proxy_failed");
+            answered.status = Some(502);
+            let output = whose_failure(
+                Some(&meter),
+                answered,
+                Caller::Persona(refusing),
+                &page,
+                started,
+            );
+            assert_eq!(output.reason.as_deref(), Some("proxy_failed"));
+            // A user name that names nobody is noted for nobody.
+            assert_eq!(Tokens::claimed("someone"), None);
+            serving.abort();
         }
 
         #[tokio::test]
@@ -3065,6 +3198,68 @@ mod tests {
             "{:?}",
             output.classification.evidence
         );
+    }
+
+    /// F181 (QA round two's ssrf-07): a browser's chain one redirect longer
+    /// than the limit ends as the http path's does, `provider_error`,
+    /// `too_many_redirects`, not retried, with nothing kept and no final
+    /// URL; a hop the guard refuses stays `ssrf_denied` at the hop.
+    #[test]
+    fn a_chain_too_long_is_one_outcome_at_every_level() {
+        use kage_core::ssrf::SsrfPolicy;
+
+        let examples: serde_json::Value = serde_json::from_str(EXAMPLES_JSON).unwrap();
+        let mut page: PageResult =
+            serde_json::from_value(examples["PageResult"][0].clone()).unwrap();
+        page.url = "https://shop.example/c-0".to_owned();
+        page.redirects = (0..3)
+            .map(|index| kage_browser::contract::RedirectHop {
+                url: format!("https://shop.example/c-{index}"),
+                status: 302,
+                location: Some(format!("/c-{}", index + 1)),
+            })
+            .collect();
+        page.final_url = "https://shop.example/c-3".to_owned();
+        page.dom_html = Some("<html>the last page</html>".to_owned());
+        let behavior = super::BehaviorApplied {
+            from_request: false,
+            request_ignored: false,
+            scroll_depth: None,
+            dwell: None,
+            patience: None,
+            referer_strategy: RefererStrategy::Direct,
+            seed: Seed::from_u64(7),
+        };
+        let policy = SsrfPolicy::default();
+        assert!(kage_browser::ssrf::check_chain(&page, policy, 3).is_ok());
+        let denied = kage_browser::ssrf::check_chain(&page, policy, 2).unwrap_err();
+
+        let output = super::denied_hop(denied, Box::new(page.clone()), behavior.clone());
+        let level0 = PathExecutor::http_failure(&HttpError::TooManyRedirects {
+            max: 2,
+            location: "/c-3".to_owned(),
+        });
+        assert_eq!(output.outcome(), Outcome::ProviderError);
+        assert_eq!(output.reason.as_deref(), Some("too_many_redirects"));
+        assert_eq!(output.outcome(), level0.outcome());
+        assert_eq!(output.reason, level0.reason);
+        assert_eq!(output.courtesy, level0.courtesy);
+        assert_eq!(
+            output.classification.retryable,
+            level0.classification.retryable
+        );
+        assert_eq!(output.final_url, None);
+        assert_eq!(
+            output.page.as_ref().and_then(|page| page.dom_html.clone()),
+            None
+        );
+
+        // A refused hop of the same chain is the guard's.
+        page.redirects[1].location = Some("http://127.0.0.1/".to_owned());
+        let denied = kage_browser::ssrf::check_chain(&page, policy, 10).unwrap_err();
+        let output = super::denied_hop(denied, Box::new(page), behavior);
+        assert_eq!(output.outcome(), Outcome::SsrfDenied);
+        assert_eq!(output.final_url.as_deref(), Some("http://127.0.0.1/"));
     }
 
     #[test]

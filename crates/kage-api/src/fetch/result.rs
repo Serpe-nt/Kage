@@ -216,7 +216,11 @@ pub(crate) struct AttemptView {
     /// Why it ended as it did when the site did not say, for example
     /// `proxy_failed`, `proxy_refused` (the persona's proxy refused the
     /// tunnel to the target, as a provider that will not carry a site
-    /// does: neither the site's answer nor a failure of the proxy), or
+    /// does: neither the site's answer nor a failure of the proxy),
+    /// `forwarder_refused` (Kage's own forwarder refused the credential
+    /// the persona's client presented: neither the site's answer nor the
+    /// proxy's), `too_many_redirects` (more redirects than
+    /// `http.max_redirects`, at every level), or
     /// `hop_exit_unavailable` (a level-0 redirect to another site whose
     /// own plain exit could not carry traffic: the hop was not asked for).
     #[schema(required = true)]
@@ -448,6 +452,9 @@ pub(crate) struct FetchResult {
     /// `bandwidth_exhausted`, `proxy_failed`, `proxy_refused` (the
     /// persona's proxy refused the tunnel to the target: nothing was
     /// asked of the site, and the proxy is not set aside for it),
+    /// `forwarder_refused` (Kage's own forwarder refused the credential
+    /// the persona's client presented), `too_many_redirects` (more
+    /// redirects than `http.max_redirects`, at every level),
     /// `timeout`, `interrupted`
     /// (the server stopped while the page was being read),
     /// `hop_exit_unavailable` (a level-0 redirect to another site whose own

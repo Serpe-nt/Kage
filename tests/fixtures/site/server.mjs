@@ -558,6 +558,13 @@ const routes = {
   '/guard/link': (_req, res, url) =>
     html(res, page('A link', `<main><p>Read on: <a class="next" href="${attribute(url.searchParams.get('to') ?? '/landing')}">the next page</a></p></main>`)),
   '/guard/secret': (_req, res) => html(res, page('Internal', '<h1 id="secret">INTERNAL-PAGE</h1>')),
+  // A chain of `n` redirects on one site, then the landing page (F181: one
+  // redirect more than `http.max_redirects` is one outcome at every level).
+  '/guard/chain': (_req, res, url) => {
+    const n = Math.max(0, Math.min(50, Number(url.searchParams.get('n') ?? '0') || 0));
+    if (n === 0) return html(res, page('Landing', '<h1 id="landing">Landed</h1>'));
+    return send(res, 302, 'text/plain', '', { location: `/guard/chain?n=${n - 1}` });
+  },
   '/landing': (_req, res) => html(res, page('Landing', '<h1 id="landing">Landed</h1>'), { 'x-fixture': 'landing' }),
   '/slow': (_req, res, url) => {
     setTimeout(() => html(res, page('Slow', '<h1>Slow</h1>')), Number(url.searchParams.get('ms') ?? '1000'));

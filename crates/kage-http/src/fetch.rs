@@ -47,7 +47,7 @@ use http::{Method, StatusCode, Uri, Version};
 use http_body_util::BodyExt;
 use kage_core::domain::{Header, Timing};
 use kage_core::seed::Seed;
-use kage_core::ssrf::{RedirectChain, SsrfDenial, SsrfPolicy, Target, check_resolved};
+use kage_core::ssrf::{RedirectChain, SsrfDenial, SsrfPolicy, Target, check_resolved_with};
 use tokio::time::Instant;
 use url::Url;
 
@@ -490,7 +490,9 @@ pub async fn check_target_addresses(
             Vec::new()
         }
     };
-    check_resolved(target, &addresses)
+    // A name the operator listed for the host's own connection may resolve
+    // into the operator's networks, as the forwarder lets it (F181).
+    check_resolved_with(target, &addresses, resolver.may_be_private(name))
 }
 
 pub(crate) fn millis(duration: Duration) -> u64 {

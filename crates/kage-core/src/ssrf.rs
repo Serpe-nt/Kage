@@ -110,6 +110,17 @@ impl DeniedRange {
             Self::Benchmarking => "benchmarking",
         }
     }
+
+    /// Whether the range is one of the operator's own networks that a name
+    /// of `egress.direct.private_names` may resolve to under `direct`:
+    /// loopback, RFC 1918, CGNAT and unique-local. Link-local, metadata,
+    /// multicast and the reserved ranges never are.
+    pub const fn is_private_network(self) -> bool {
+        matches!(
+            self,
+            Self::Loopback | Self::Private | Self::Cgnat | Self::UniqueLocal
+        )
+    }
 }
 
 impl fmt::Display for DeniedRange {
@@ -285,6 +296,11 @@ pub enum SsrfDenial {
     /// The port is zero.
     #[error("port 0 is not allowed")]
     Port,
+    /// The port is one the browsers refuse to connect to ([`UNSAFE_PORTS`],
+    /// the security review's G3): a service there is not a web server, and
+    /// a request Kage sent it could speak to it in another protocol.
+    #[error("port {0} is one browsers refuse to connect to")]
+    UnsafePort(u16),
     /// The host is a literal IP address and `security.allow_ip_targets` is off.
     #[error("literal IP address {0} is not allowed as a target")]
     IpLiteral(IpAddr),
@@ -362,6 +378,28 @@ const DENIED_NAMES: [(&str, &str); 9] = [
     ("localdomain", "it names this machine"),
 ];
 
+/// The ports the browsers refuse to connect to, whatever the scheme (the
+/// security review's G3): the union of Chromium's `kRestrictedPorts`
+/// (`net/base/port_util.cc`) and Firefox's `gBadPortList`
+/// (`netwerk/base/nsIOService.cpp`), which is the Fetch standard's list of
+/// bad ports. Chromium has 4190 and 6679 only through the standard; port 0,
+/// which Chromium lists too, is [`SsrfDenial::Port`]. Read on 2026-11-07
+/// from both projects' main branches. The guard refuses them on every road,
+/// so that the http path refuses what a browser of any level refuses, and a
+/// URL gets one outcome at every level.
+pub const UNSAFE_PORTS: [u16; 82] = [
+    1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101, 102,
+    103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161, 179, 389, 427, 465,
+    512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993,
+    995, 1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668,
+    6669, 6679, 6697, 10080,
+];
+
+/// Whether a browser refuses to connect to `port` ([`UNSAFE_PORTS`]).
+pub fn is_unsafe_port(port: u16) -> bool {
+    UNSAFE_PORTS.binary_search(&port).is_ok()
+}
+
 /// Step 1: checks everything that can be decided from the URL alone.
 ///
 /// # Errors
@@ -377,6 +415,9 @@ pub fn check_url(url: &Url, policy: SsrfPolicy) -> Result<Target, SsrfDenial> {
     let port = url.port_or_known_default().unwrap_or(0);
     if port == 0 {
         return Err(SsrfDenial::Port);
+    }
+    if is_unsafe_port(port) {
+        return Err(SsrfDenial::UnsafePort(port));
     }
 
     let address = match url.host().ok_or(SsrfDenial::NoHost)? {
@@ -445,6 +486,24 @@ fn check_name(name: &str) -> Result<(), SsrfDenial> {
 /// Fails when the name resolved to nothing, or when any address is in a
 /// denied range.
 pub fn check_resolved(target: &Target, addresses: &[IpAddr]) -> Result<(), SsrfDenial> {
+    check_resolved_with(target, addresses, false)
+}
+
+/// [`check_resolved`] for a name the operator listed in
+/// `egress.direct.private_names` (`private`): under `egress.mode: direct`
+/// such a name may resolve to a private, loopback, CGNAT or unique-local
+/// address ([`DeniedRange::is_private_network`]), as the forwarder lets it
+/// reach one; link-local, metadata, multicast and the other ranges are
+/// refused for every name.
+///
+/// # Errors
+///
+/// As [`check_resolved`].
+pub fn check_resolved_with(
+    target: &Target,
+    addresses: &[IpAddr],
+    private: bool,
+) -> Result<(), SsrfDenial> {
     let TargetHost::Name(name) = &target.host else {
         return Ok(());
     };
@@ -452,8 +511,10 @@ pub fn check_resolved(target: &Target, addresses: &[IpAddr]) -> Result<(), SsrfD
         return Err(SsrfDenial::Unresolved(name.clone()));
     }
     for &address in addresses {
-        if let Some(range) = classify_ip(address) {
-            return Err(SsrfDenial::Address { address, range });
+        match classify_ip(address) {
+            None => {}
+            Some(range) if private && range.is_private_network() => {}
+            Some(range) => return Err(SsrfDenial::Address { address, range }),
         }
     }
     Ok(())
@@ -582,6 +643,12 @@ impl RedirectChain {
             .join(location.trim())
             .map_err(|_| denied(SsrfDenial::InvalidUrl(location.to_owned())))?;
         let target = check_url(&next, self.policy).map_err(denied)?;
+        // A hop's host in its normal form, as a target's (F104, F181): one
+        // trailing dot is the name's own, so the hop is asked for, judged
+        // and matched (`egress.direct.private_names`, the forwarder's
+        // refusals) as the same name without it.
+        let next = crate::urlnorm::normal_url(&next)
+            .map_err(|_| denied(SsrfDenial::InvalidUrl(location.to_owned())))?;
         let downgrade = self.current().scheme() == "https" && next.scheme() == "http";
         self.target = target;
         self.hops.push(RedirectHop {
@@ -904,6 +971,114 @@ mod tests {
         assert_eq!(refused.hop, 1);
         assert_eq!(refused.reason, empty("127.0.0.1.."));
         assert_eq!(chain.redirects(), 0);
+    }
+
+    /// F181 (ssrf-05): a hop's one trailing dot is the name's own, as a
+    /// target's is: the chain points at the name without it, so the hop is
+    /// asked for and matched as that name.
+    #[test]
+    fn a_hops_trailing_dot_is_dropped_as_a_targets_is() {
+        let mut chain =
+            RedirectChain::start(&url("http://qa.kage.test:8091/r"), STRICT, 10).unwrap();
+        let next = chain.follow("http://QA.kage.test.:8091/hop?x=1#f").unwrap();
+        assert_eq!(next.as_str(), "http://qa.kage.test:8091/hop?x=1#f");
+        assert_eq!(
+            chain.target().host(),
+            &TargetHost::Name("qa.kage.test".to_owned())
+        );
+        // A relative hop after it stays on the name without the dot.
+        assert_eq!(
+            chain.follow("/next").unwrap().as_str(),
+            "http://qa.kage.test:8091/next"
+        );
+        // Two dots are still an empty label, refused.
+        assert!(chain.follow("http://qa.kage.test..:8091/").is_err());
+        assert_eq!(chain.redirects(), 2);
+    }
+
+    /// G3: every port a browser refuses is refused on every road, as a
+    /// target and as a hop; the ports around them are not.
+    #[test]
+    fn the_ports_browsers_refuse_are_refused() {
+        let mut sorted = super::UNSAFE_PORTS;
+        sorted.sort_unstable();
+        assert_eq!(sorted, super::UNSAFE_PORTS, "the list stays sorted");
+        for port in super::UNSAFE_PORTS {
+            let text = format!("http://example.org:{port}/");
+            assert_eq!(
+                check_url(&url(&text), STRICT),
+                Err(SsrfDenial::UnsafePort(port)),
+                "{text}"
+            );
+        }
+        // A sample of the list by service, so that it is not emptied.
+        for port in [
+            21, 22, 25, 110, 143, 587, 993, 2049, 4190, 6000, 6679, 10080,
+        ] {
+            assert!(super::is_unsafe_port(port), "{port}");
+        }
+        for port in [
+            80, 443, 8080, 8088, 8443, 8899, 3000, 2, 24, 26, 10079, 10081, 65535,
+        ] {
+            assert!(!super::is_unsafe_port(port), "{port}");
+            let text = format!("https://example.org:{port}/");
+            assert!(check_url(&url(&text), STRICT).is_ok(), "{text}");
+        }
+        // A scheme's default port is judged as the port it is.
+        assert!(check_url(&url("http://example.org/"), STRICT).is_ok());
+        let mut chain = RedirectChain::start(&url("https://example.org/"), STRICT, 10).unwrap();
+        let refused = chain.follow("http://example.org:25/").unwrap_err();
+        assert_eq!(refused.reason, SsrfDenial::UnsafePort(25));
+        assert_eq!(chain.redirects(), 0);
+        assert!(SsrfDenial::UnsafePort(6667).to_string().contains("6667"));
+    }
+
+    /// F181 (ssrf-03): a name of `egress.direct.private_names` may resolve
+    /// into the operator's own networks, and into nothing else that is
+    /// denied; any other name may not.
+    #[test]
+    fn a_listed_private_name_may_resolve_into_the_operators_networks_only() {
+        let target = check_url(&url("http://nas.kage.test/"), STRICT).unwrap();
+        for own in [
+            "192.168.80.7",
+            "10.1.2.3",
+            "127.0.0.1",
+            "100.64.0.1",
+            "fd00::1",
+            "::1",
+        ] {
+            assert_eq!(
+                super::check_resolved_with(&target, &[ip(own)], true),
+                Ok(()),
+                "{own}"
+            );
+            assert!(check_resolved(&target, &[ip(own)]).is_err(), "{own}");
+            assert!(super::check_resolved_with(&target, &[ip(own)], false).is_err());
+        }
+        for never in [
+            "169.254.169.254",
+            "169.254.1.1",
+            "224.0.0.1",
+            "fe80::1",
+            "0.0.0.0",
+            "192.0.2.1",
+        ] {
+            assert!(
+                matches!(
+                    super::check_resolved_with(&target, &[ip(never)], true),
+                    Err(SsrfDenial::Address { .. })
+                ),
+                "{never}"
+            );
+        }
+        assert_eq!(
+            super::check_resolved_with(&target, &[], true),
+            Err(SsrfDenial::Unresolved("nas.kage.test".to_owned()))
+        );
+        assert_eq!(
+            super::check_resolved_with(&target, &[ip("93.184.216.34"), ip("10.0.0.1")], true),
+            Ok(())
+        );
     }
 
     #[test]

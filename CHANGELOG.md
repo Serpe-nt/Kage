@@ -8,6 +8,31 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The guard's edges (F181).** Under `egress.mode: direct` with
+  `security.resolve_on_host`, a name of `egress.direct.private_names` is
+  fetched: the guard's host lookup lets it resolve to a private, loopback,
+  CGNAT or unique-local address as the forwarder does (never link-local,
+  metadata or multicast); every such name was `422 ssrf_denied` at
+  acceptance while `kage config check` said it may resolve privately (QA
+  round two, ssrf-03). A redirect hop's one trailing dot is the name's
+  own, as a target's is: the hop is asked for, judged and matched without
+  it, so a hop to a listed name spelled `name.` is that name and no longer
+  `ssrf_denied` at every level, and under the pool the proxy is no longer
+  asked for `name.:port` (ssrf-05). One redirect more than
+  `http.max_redirects` ends `provider_error`, `too_many_redirects`, not
+  retried, at every level; a browser's chain was `ssrf_denied` (ssrf-07).
+- **A proxy that drops the SYN (F197).** The forwarder's connection to a
+  proxy takes at most 5 s (`PROXY_CONNECT_TIMEOUT`, within
+  `forwarder.connect_timeout`, which still bounds the proxy's answer to a
+  tunnel): such a proxy cost the whole connect timeout (20 s) before
+  F159's immediate refusals began.
+- **A credential Kage's own forwarder refused (F211).** A `407` of the
+  forwarder for a credential that names a persona but is not its own is
+  noted by that persona and the target, and logged at `info` with the
+  persona; a page of it that failed meanwhile ends `provider_error` with
+  the new reason `forwarder_refused`, retried, nothing against the site or
+  the proxy. With a tunnel of the persona to the target still open, it
+  counted as the site's failure.
 - **One server per database (F174).** Kage is single-instance (ADR 0005):
   a server holds a Postgres advisory lock on its database for its life, on
   a connection of its own, and a second `kage serve` on the same database
@@ -131,6 +156,21 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   down again: such a press waits until 15 to 45 ms after the release.
   Holds are drawn as before and every other interval too; over 3000 plans
   the mean interval moved from 147.2 to 147.7 ms (spec §10.4).
+
+### Security
+
+- **The ports the browsers refuse (F57, the security review's G3).** The
+  SSRF guard refuses the 82 ports Chromium and Firefox refuse to connect
+  to (the Fetch standard's bad ports: 21, 22, 25, 110, 143, 6000, 6667, …)
+  on every road: a URL naming one is `422 ssrf_denied` at every level, a
+  redirect hop to one is `ssrf_denied`, and the forwarder refuses a tunnel
+  to one. Level 0 and level 1 could send an HTTP request through an exit
+  to a mail, shell or chat server's port.
+- **The forwarder relays what it checked (F57, G5).** The request target
+  that goes to the persona's proxy is the one the forwarder parsed and
+  judged: the `host:port` of a tunnel and the serialized URL of a plain
+  request, the host in its normal form; it relayed the client's own text,
+  which a proxy that parses otherwise could read as another host.
 
 ## [2.0.4] - 2026-11-07
 

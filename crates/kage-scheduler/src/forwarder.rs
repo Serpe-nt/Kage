@@ -122,6 +122,14 @@ const NAMES_KEPT: usize = 4096;
 /// address.
 const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How long the connection to a proxy itself may take, within
+/// `forwarder.connect_timeout` (F197). One round trip to a provider's
+/// gateway takes far less; a proxy that drops the SYN cost the whole
+/// connect timeout (20 s) before F159's immediate refusals began. The
+/// connect timeout still bounds the proxy's answer to a `CONNECT`, which
+/// waits for the exit to reach the target.
+pub const PROXY_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// How long a proxy that could not be reached is refused at once, without
 /// another try (F159). A browser asks for its tunnel again at once, and
 /// each try of a proxy that is gone cost a name lookup and the connect
@@ -264,15 +272,24 @@ impl Tokens {
         }
     }
 
+    /// Who a credential's user name names, whatever its token: a persona
+    /// or a plain client's exit. Not a proof of anything: only for noting
+    /// whose connection the forwarder refused a credential of (F211).
+    pub fn claimed(username: &str) -> Option<Caller> {
+        if let Some(rest) = username.strip_prefix(PLAIN_PREFIX) {
+            return PlainRoute::parse(rest).map(Caller::Plain);
+        }
+        let persona = PersonaId::from_uuid(Uuid::parse_str(username).ok()?);
+        Some(Caller::Persona(persona))
+    }
+
     /// Who a credential names: a persona or a plain client's exit, when the
     /// token is theirs.
     pub fn verify_caller(&self, username: &str, password: &str) -> Option<Caller> {
-        let (caller, expected) = if let Some(rest) = username.strip_prefix(PLAIN_PREFIX) {
-            let route = PlainRoute::parse(rest)?;
-            (Caller::Plain(route), self.plain_token(route))
-        } else {
-            let persona = PersonaId::from_uuid(Uuid::parse_str(username).ok()?);
-            (Caller::Persona(persona), self.token(persona))
+        let caller = Self::claimed(username)?;
+        let expected = match caller {
+            Caller::Plain(route) => self.plain_token(route),
+            Caller::Persona(persona) => self.token(persona),
         };
         // Compared without stopping at the first difference.
         let equal = expected.len() == password.len()
@@ -546,6 +563,9 @@ struct MeterState {
     /// one was last opened or closed. What came through them was the
     /// site's (F170).
     relayed: HashMap<Unrelayed, Relayed>,
+    /// When the forwarder last refused a credential that names each caller
+    /// for a connection to each target (F211).
+    credential_refused: HashMap<Unrelayed, Instant>,
 }
 
 /// The tunnels of one caller to one target ([`Meter::open_tunnel`]).
@@ -705,6 +725,39 @@ impl Meter {
             .insert((caller, host.to_ascii_lowercase(), port), (now, status));
     }
 
+    /// Notes that the forwarder refused a credential that names `caller`
+    /// (a token that is not the caller's own, an old one say) for a
+    /// connection to `host`:`port`, with a `407` of its own: a page of that
+    /// target that fails meanwhile without an answer failed at Kage's own
+    /// forwarder, neither at the proxy nor at the site (F211).
+    pub fn note_credential_refused(&self, caller: Caller, host: &str, port: u16) {
+        let now = Instant::now();
+        let mut state = self.state();
+        state
+            .credential_refused
+            .retain(|_, at| now.duration_since(*at) < UNRELAYED_KEPT);
+        state
+            .credential_refused
+            .insert((caller, host.to_ascii_lowercase(), port), now);
+    }
+
+    /// Whether the forwarder refused a credential naming `caller` for a
+    /// connection to one of `targets` at `since` or later (F211).
+    pub fn credential_refused_since<'a>(
+        &self,
+        caller: Caller,
+        targets: impl IntoIterator<Item = (&'a str, u16)>,
+        since: Instant,
+    ) -> bool {
+        let state = self.state();
+        targets.into_iter().any(|(host, port)| {
+            state
+                .credential_refused
+                .get(&(caller, host.to_ascii_lowercase(), port))
+                .is_some_and(|at| *at >= since)
+        })
+    }
+
     /// Notes that a tunnel of a caller to `host`:`port` was opened (the
     /// proxy said yes, or, with no upstream, the forwarder reached the
     /// target itself) and holds it as open until the guard is dropped.
@@ -854,10 +907,12 @@ impl Head {
         self.method.eq_ignore_ascii_case("CONNECT")
     }
 
-    /// The head as it goes upstream: as the client wrote it, with the
-    /// provider's credentials in place of the persona's.
-    fn rewritten(&self, upstream: &ProxyEndpoint) -> Vec<u8> {
-        let mut text = format!("{} {} {}\r\n", self.method, self.target, self.version);
+    /// The head as it goes upstream: its request target the one the
+    /// forwarder checked (`target`, G5), its header lines as the client
+    /// wrote them, with the provider's credentials in place of the
+    /// persona's.
+    fn rewritten(&self, target: &str, upstream: &ProxyEndpoint) -> Vec<u8> {
+        let mut text = format!("{} {} {}\r\n", self.method, target, self.version);
         for line in &self.lines {
             if !header_name(line).eq_ignore_ascii_case("proxy-authorization") {
                 text.push_str(line);
@@ -965,8 +1020,26 @@ fn base64_decode(text: &str) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
-/// The URL a request asks the proxy for, and its host and port.
-fn target_of(head: &Head) -> Option<(Url, String, u16)> {
+/// What a request asks the proxy for, as the forwarder read and checks it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Asked {
+    /// The URL the guard judges.
+    url: Url,
+    /// Its host, lower case, in its normal form: one trailing dot is the
+    /// name's own and dropped (F104, F181).
+    host: String,
+    /// Its port, named or the scheme's default.
+    port: u16,
+    /// The request target that goes upstream: the authority the forwarder
+    /// checked for a tunnel (`host:port`), the URL it checked otherwise,
+    /// never the client's own text (G5): a proxy that would parse the
+    /// client's text otherwise connects where the guard looked.
+    relayed: String,
+}
+
+/// What a request asks the proxy for: the URL, its host and port, and the
+/// target to relay ([`Asked`]).
+fn target_of(head: &Head) -> Option<Asked> {
     let url = if head.is_connect() {
         // An authority: `host:port`. The scheme is not known and does not
         // matter to the guard.
@@ -983,9 +1056,24 @@ fn target_of(head: &Head) -> Option<(Url, String, u16)> {
         }
         url
     };
+    // The host's normal form: a name with an empty label keeps it, for the
+    // guard to refuse.
+    let mut url = kage_core::urlnorm::normal_url(&url).unwrap_or(url);
+    url.set_fragment(None);
     let host = url.host_str()?.to_ascii_lowercase();
     let port = url.port_or_known_default()?;
-    Some((url, host, port))
+    let relayed = if head.is_connect() {
+        // `host_str` keeps an IPv6 address's brackets.
+        format!("{host}:{port}")
+    } else {
+        url.as_str().to_owned()
+    };
+    Some(Asked {
+        url,
+        host,
+        port,
+        relayed,
+    })
 }
 
 // --- The forwarder ---------------------------------------------------------
@@ -1416,11 +1504,46 @@ impl Forwarder {
             return Err("the proxy's name has no address".to_owned());
         }
         let connecting = TcpStream::connect(addresses.as_slice());
-        match tokio::time::timeout(self.settings.connect_timeout, connecting).await {
+        let bound = self.settings.connect_timeout.min(PROXY_CONNECT_TIMEOUT);
+        match tokio::time::timeout(bound, connecting).await {
             Ok(Ok(server)) => Ok(server),
             Ok(Err(error)) => Err(error.to_string()),
             Err(_) => Err("the proxy did not answer".to_owned()),
         }
+    }
+
+    /// Answers a request without a credential the forwarder takes with a
+    /// `407`, as any proxy asks for one. A credential that names a caller
+    /// and is not its own (a token that is not the caller's, an old one
+    /// say) is noted by the caller it names: Kage's own forwarder refused
+    /// that caller's connection, which is neither the proxy's failure nor
+    /// the site's answer (F211).
+    async fn ask_for_credential(
+        &self,
+        client: &mut TcpStream,
+        head: &Head,
+        (host, port): (&str, u16),
+    ) -> Result<(), Refused> {
+        if let Some(claimed) = head
+            .credentials()
+            .and_then(|(username, _)| Tokens::claimed(&username))
+        {
+            self.meter.note_credential_refused(claimed, host, port);
+            tracing::info!(
+                persona = ?claimed.persona(),
+                host,
+                port,
+                "the forwarder refused a credential that names a caller"
+            );
+        }
+        let _ = client
+            .write_all(
+                b"HTTP/1.1 407 Proxy Authentication Required\r\n\
+                  Proxy-Authenticate: Basic realm=\"proxy\"\r\n\
+                  Content-Length: 0\r\nConnection: close\r\nProxy-Connection: close\r\n\r\n",
+            )
+            .await;
+        Err(Refused::Credential)
     }
 
     async fn relay(
@@ -1429,7 +1552,13 @@ impl Forwarder {
         head: Head,
         buffer: Vec<u8>,
     ) -> Result<(), Refused> {
-        let Some((url, host, port)) = target_of(&head) else {
+        let Some(Asked {
+            url,
+            host,
+            port,
+            relayed,
+        }) = target_of(&head)
+        else {
             // Not a request to a proxy: no answer.
             return Err(Refused::BadRequest);
         };
@@ -1437,15 +1566,7 @@ impl Forwarder {
             .credentials()
             .and_then(|(username, password)| self.tokens.verify_caller(&username, &password))
         else {
-            // Asking for a credential is what any proxy does.
-            let _ = client
-                .write_all(
-                    b"HTTP/1.1 407 Proxy Authentication Required\r\n\
-                      Proxy-Authenticate: Basic realm=\"proxy\"\r\n\
-                      Content-Length: 0\r\nConnection: close\r\nProxy-Connection: close\r\n\r\n",
-                )
-                .await;
-            return Err(Refused::Credential);
+            return self.ask_for_credential(client, &head, (&host, port)).await;
         };
         let tunnel = head.is_connect();
         if let Err(reason) = self.check_target(&url, &host, port) {
@@ -1500,10 +1621,9 @@ impl Forwarder {
                 .tunnel(
                     client,
                     &mut server,
-                    &head,
+                    &head.rewritten(&relayed, &upstream),
                     buffer,
                     &payer,
-                    &upstream,
                     (caller, &host, port),
                 )
                 .await;
@@ -1754,21 +1874,18 @@ impl Forwarder {
     /// be written to, did not answer, or refused the credential (`407`).
     /// A tunnel the proxy opened is noted for `caller` and its target
     /// (`Meter::note_relayed`).
-    #[allow(clippy::too_many_arguments)] // One tunnel, who asked for it and where it goes.
     async fn tunnel(
         &self,
         client: &mut TcpStream,
         server: &mut TcpStream,
-        head: &Head,
+        request: &[u8],
         early: Vec<u8>,
         payer: &Payer,
-        upstream: &ProxyEndpoint,
         (caller, host, port): (Caller, &str, u16),
     ) -> Result<(), Refused> {
-        let request = head.rewritten(upstream);
         let failed = |error: std::io::Error| Refused::Upstream(error.to_string());
         let gone = |error: std::io::Error| Refused::Unreached(error.to_string());
-        server.write_all(&request).await.map_err(failed)?;
+        server.write_all(request).await.map_err(failed)?;
         self.meter.add_for(payer, request.len() as u64, 0);
 
         let mut answer = Vec::new();
@@ -1819,7 +1936,7 @@ impl Forwarder {
     ) {
         // With no upstream the connection reaches one target, and only
         // requests for that target may follow on it.
-        let opened_for = target_of(&first).map(|(_, host, port)| (host, port));
+        let opened_for = target_of(&first).map(|asked| (asked.host, asked.port));
         self.relayed.fetch_add(1, Ordering::Relaxed);
         let active = Activity::new();
         let idle = self.settings.idle_timeout;
@@ -1838,9 +1955,9 @@ impl Forwarder {
             let mut head = first;
             loop {
                 let request = match (upstream, target_of(&head)) {
-                    (Some(upstream), _) => head.rewritten(upstream),
-                    (None, Some((url, _, _))) => head.origin_form(&url),
-                    (None, None) => break,
+                    (Some(upstream), Some(asked)) => head.rewritten(&asked.relayed, upstream),
+                    (None, Some(asked)) => head.origin_form(&asked.url),
+                    (_, None) => break,
                 };
                 if server_write.write_all(&request).await.is_err() {
                     break;
@@ -1905,7 +2022,10 @@ impl Forwarder {
         through_proxy: bool,
         opened_for: Option<&(String, u16)>,
     ) -> bool {
-        let Some((url, host, port)) = target_of(next) else {
+        let Some(Asked {
+            url, host, port, ..
+        }) = target_of(next)
+        else {
             return false;
         };
         if let Err(reason) = self.check_target(&url, &host, port) {
@@ -2342,7 +2462,8 @@ mod tests {
              Proxy-Connection: keep-alive",
         );
 
-        let rewritten = String::from_utf8(request.rewritten(&upstream())).unwrap();
+        let checked = target_of(&request).unwrap().relayed;
+        let rewritten = String::from_utf8(request.rewritten(&checked, &upstream())).unwrap();
 
         assert_eq!(
             rewritten,
@@ -2352,6 +2473,76 @@ mod tests {
         );
         // The persona's own credential never goes upstream.
         assert!(!rewritten.contains("cGVyc29uYTp0b2tlbg"));
+    }
+
+    /// G5: what goes upstream is the target the forwarder checked, never
+    /// the client's text; F181: a host's one trailing dot is the name's
+    /// own, dropped before it is checked, matched or relayed.
+    #[test]
+    fn the_target_relayed_is_the_one_checked() {
+        let relayed = |line: &str| target_of(&head(line)).map(|asked| (asked.host, asked.relayed));
+        for (line, host, target) in [
+            (
+                "CONNECT Example.ORG:443 HTTP/1.1",
+                "example.org",
+                "example.org:443",
+            ),
+            (
+                "CONNECT qa.kage.test.:8091 HTTP/1.1",
+                "qa.kage.test",
+                "qa.kage.test:8091",
+            ),
+            (
+                "CONNECT [2001:DB8::1]:8443 HTTP/1.1",
+                "[2001:db8::1]",
+                "[2001:db8::1]:8443",
+            ),
+            // A decimal address is the address it names.
+            (
+                "CONNECT 3232235777:443 HTTP/1.1",
+                "192.168.1.1",
+                "192.168.1.1:443",
+            ),
+            (
+                "GET http://QA.kage.test.:8091/a/../b?x=1#frag HTTP/1.1",
+                "qa.kage.test",
+                "http://qa.kage.test:8091/b?x=1",
+            ),
+            // The authority as the parser that checked it reads it: the
+            // backslash ends it, so the proxy is asked for that host, never
+            // for whatever it would make of the text.
+            (
+                "GET http://example.org\\@10.0.0.1/ HTTP/1.1",
+                "example.org",
+                "http://example.org/@10.0.0.1/",
+            ),
+            (
+                "GET http://example.org:80/ HTTP/1.1",
+                "example.org",
+                "http://example.org/",
+            ),
+        ] {
+            assert_eq!(
+                relayed(line),
+                Some((host.to_owned(), target.to_owned())),
+                "{line}"
+            );
+        }
+        let request = head(
+            "GET http://Example.org.:80/a HTTP/1.1\r\nHost: example.org.\r\n\
+             Proxy-Authorization: Basic cGVyc29uYTp0b2tlbg==",
+        );
+        let checked = target_of(&request).unwrap().relayed;
+        let rewritten = String::from_utf8(request.rewritten(&checked, &upstream())).unwrap();
+        assert!(
+            rewritten.starts_with("GET http://example.org/a HTTP/1.1\r\nHost: example.org.\r\n"),
+            "{rewritten}"
+        );
+        // Two trailing dots are an empty label: kept, for the guard.
+        assert_eq!(
+            relayed("CONNECT localhost..:443 HTTP/1.1").map(|(host, _)| host),
+            Some("localhost..".to_owned())
+        );
     }
 
     #[test]
@@ -2376,7 +2567,7 @@ mod tests {
     #[test]
     fn a_target_is_an_authority_or_a_plain_http_url() {
         let target = |line: &str| {
-            target_of(&head(line)).map(|(url, host, port)| (url.to_string(), host, port))
+            target_of(&head(line)).map(|asked| (asked.url.to_string(), asked.host, asked.port))
         };
 
         assert_eq!(

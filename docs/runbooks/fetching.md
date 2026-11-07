@@ -84,7 +84,8 @@ The outcome is `provider_error` and the reason says why:
 | `shutting_down` | The server is stopping: the request waited for a persona when the signal came, and nothing was asked of the site. | Ask again when it is back. |
 
 An attempt can end with a reason too, when it was not the site that
-ended it: `proxy_failed`, `proxy_refused`, `timeout`, and `interrupted`. `proxy_failed`
+ended it: `proxy_failed`, `proxy_refused`, `forwarder_refused`,
+`too_many_redirects`, `timeout`, and `interrupted`. `proxy_failed`
 counts nothing against the site: no pause after server errors, no
 breaker. A browser reports a plain `http://` page whose proxy is down as
 if the site did not answer (`navigation_failed`); the forwarder knows
@@ -118,6 +119,19 @@ open is `navigation_failed` (a browser's page) or `connection_failed` (the
 http path), with a server error's courtesy, and the pool is not told. At
 level 0 a site's `407` over `https` is `ok` with the status, like any
 `4xx` other than `403` and `429`.
+
+`forwarder_refused` is Kage's own forwarder refusing the credential the
+persona's client presented (a token that is not the persona's, an old
+one say): the site was asked nothing and the proxy neither, nothing is
+counted against either, and the attempt is tried again (F211). The
+forwarder logs each such refusal at `info` with the persona it names; one
+that keeps coming is a bug or a client that kept an old credential.
+
+`too_many_redirects` is a chain longer than `http.max_redirects` (10): the
+same at every level and in both engines, not tried again, nothing of it
+kept (F181). A URL whose port is one the browsers refuse to connect to
+(25, 110, 6667, …) is `422 ssrf_denied` at every level, and a redirect to
+one ends `ssrf_denied` (the security review's G3).
 
 A page's text is read as a browser reads it (spec §9, F160, F172): its
 `<meta charset>` as Chrome's tokenizer finds it (never one written inside a
