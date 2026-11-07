@@ -136,3 +136,48 @@ fn a_page_of_twenty_thousand_nested_inline_elements_is_extracted_whole() {
     assert_eq!(extracted.word_count, 102);
     assert!(!extracted.thin_content);
 }
+
+/// F147: a page nested two hundred thousand elements deep, whose parse
+/// would take minutes, is parsed until its time and what was parsed is
+/// extracted in a time of the same order: no walk of the extraction reads a
+/// subtree once per level (the cleaning read the text under every short
+/// block, which over a chain of empty blocks was the square of the depth).
+#[test]
+fn a_page_whose_parse_was_cut_is_extracted_within_its_time() {
+    let html = format!(
+        "<!doctype html><title>Deep</title><p>{}</p>{}<p>the end</p>",
+        words(100),
+        "<div>".repeat(200_000)
+    );
+    let budget = std::time::Duration::from_secs(2);
+    let started = std::time::Instant::now();
+    let (extracted, cut, parsed) = on_a_workers_stack(|| {
+        let document = Document::parse_within(&html, &loaded_from(), encoding_rs::UTF_8, budget);
+        let parsed = started.elapsed();
+        let page = document.page();
+        assert_eq!(page.title, "Deep");
+        (
+            extract(&document, &Options::default()),
+            document.cut(),
+            parsed,
+        )
+    });
+    let took = started.elapsed();
+    eprintln!("parsed in {parsed:?}, read and extracted by {took:?}");
+    assert!(cut);
+    assert_eq!(
+        extracted.truncated,
+        Some(kage_extract::Truncated::ParseTime)
+    );
+    assert_eq!(extracted.title.as_deref(), Some("Deep"));
+    assert!(
+        extracted.text.starts_with("word0 word1 "),
+        "{}",
+        &extracted.text[..80]
+    );
+    assert!(!extracted.text.contains("the end"));
+    assert!(
+        took < budget * 10,
+        "the parse stopped at {parsed:?} and all took {took:?}"
+    );
+}

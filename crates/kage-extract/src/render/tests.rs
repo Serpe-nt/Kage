@@ -243,3 +243,97 @@ fn what_would_start_a_markdown_block_is_escaped() {
         "seen"
     );
 }
+
+/// QA round two's http-07 (F173): quotes and lists nested in one another
+/// past [`super::MAX_NESTING`] are written as the blocks they hold, so the
+/// markdown of a page grows with the page and not with the square of its
+/// depth, and its writing takes time in proportion.
+#[test]
+fn nesting_grows_the_markdown_linearly() {
+    let nested = |kind: &str, depth: usize| {
+        let (open, close) = match kind {
+            "quote" => ("<blockquote>word ", "</blockquote>"),
+            _ => ("<ul><li>word ", "</li></ul>"),
+        };
+        format!("{}bottom{}", open.repeat(depth), close.repeat(depth))
+    };
+    for kind in ["quote", "list"] {
+        let page = nested(kind, 4_000);
+        // The parse is html5ever's, bounded on its own (F147): the time
+        // measured is the writing's.
+        let html = Html::parse_document(&format!("<body>{page}</body>"));
+        let content = Content {
+            parts: vec![html.tree.root()],
+            dropped: Dropped::new(),
+        };
+        let base = Url::parse("https://docs.example/guide/page").unwrap();
+        let started = std::time::Instant::now();
+        let written = render(&content, &base, Mode::Markdown).text;
+        let plain = render(&content, &base, Mode::Text).text;
+        // Every word is there, and no line carries more prefixes than
+        // the writer nests.
+        assert_eq!(written.matches("word").count(), 4_000, "{kind}");
+        assert!(written.ends_with("bottom"), "{kind}");
+        assert_eq!(plain.matches("word").count(), 4_000, "{kind}");
+        let widest = written.lines().map(str::len).max().unwrap_or(0);
+        assert!(widest <= 3 * super::MAX_NESTING + 8, "{kind}: {widest}");
+        assert!(
+            written.len() < 40 * page.len(),
+            "{kind}: {} chars",
+            written.len()
+        );
+        // Four thousand levels took 22 s on the finding's machine; the
+        // writing takes tens of milliseconds.
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "{kind}"
+        );
+    }
+    // Up to the bound a quote is a quote and a list a list.
+    let shallow = markdown(
+        "<blockquote>a <blockquote>b <blockquote>c</blockquote></blockquote></blockquote>",
+    );
+    assert_eq!(shallow, "> a\n>\n> > b\n> >\n> > > c");
+    let deepest = markdown(&nested("quote", super::MAX_NESTING + 2));
+    let last = deepest.lines().last().unwrap_or_default();
+    assert_eq!(
+        last,
+        format!("{}word bottom", "> ".repeat(super::MAX_NESTING))
+    );
+    let nested_list = markdown(&nested("list", super::MAX_NESTING + 2));
+    let long: Vec<&str> = nested_list
+        .lines()
+        .filter(|line| line.len() > 2 * super::MAX_NESTING + 12)
+        .collect();
+    assert_eq!(long, Vec::<&str>::new(), "{nested_list}");
+}
+
+/// QA round one's extract-10 (F142): what the page says is what a markdown
+/// reader shows: tildes that would open a fence or strike text through,
+/// an `&` that would read as an entity, a parenthesis in an address and a
+/// `|` in code in a table's cell are escaped.
+#[test]
+fn markdown_says_what_the_page_says() {
+    assert_eq!(
+        markdown("<p>~~~</p><p>after the tildes</p><p>~~not struck~~</p>"),
+        "\\~\\~\\~\n\nafter the tildes\n\n\\~\\~not struck\\~\\~"
+    );
+    assert_eq!(
+        markdown(
+            "<p>&amp;amp; means an ampersand, &amp;#38; and &amp;#x26; too, &amp; alone, AT&amp;T</p>"
+        ),
+        r"\&amp; means an ampersand, \&#38; and \&#x26; too, & alone, AT&T"
+    );
+    assert_eq!(
+        markdown(r#"<p><a href="/a)b">paren</a> <img src="/i(1).png" alt="i"></p>"#),
+        r"[paren](https://docs.example/a\)b) ![i](https://docs.example/i\(1\).png)"
+    );
+    let table = "<table><thead><tr><th>a</th><th>b</th><th>c</th></tr></thead><tbody>\
+                 <tr><td>1|2</td><td><code>x|y</code></td><td><pre>p|q</pre></td></tr></tbody></table>";
+    assert_eq!(
+        markdown(table),
+        "| a | b | c |\n| --- | --- | --- |\n| 1\\|2 | `x\\|y` | ``` p\\|q ``` |"
+    );
+    // Outside a table, code keeps its `|`.
+    assert_eq!(markdown("<p><code>x|y</code></p>"), "`x|y`");
+}

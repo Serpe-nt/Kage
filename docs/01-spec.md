@@ -1082,7 +1082,9 @@ a site for a fetch nobody waits for.
   12 h).
 - **Capture.** Status, final URL, HTTP version, response headers, the
   decoded body up to `http.max_body_bytes` (default 10 MB; a flag says when
-  it was cut), every hop, and timing per phase: `connect_ms` (TCP to the
+  it was cut: `truncated` of the result and of its attempt, at every level,
+  where a browser's document cut at the limit counts as its body, F122),
+  every hop, and timing per phase: `connect_ms` (TCP to the
   proxy plus the CONNECT tunnel), `tls_ms`, `ttfb_ms`, `total_ms`. `dns_ms`
   is always null because the proxy resolves, and a request on a reused
   connection has neither `connect_ms` nor `tls_ms`. The health probe (§7.4)
@@ -2126,8 +2128,10 @@ works crawls.
 from the document the visit captured (the DOM in a browser, the body on
 the http path when it is HTML) at the end of the attempt that got the
 page, never by a second request. `extract` is null for a fetch that did
-not get its page and for a response that is no HTML document. One tree is
-parsed per page: a crawl reads its links and its text from the tree
+not get its page and for a response that is no HTML document: one whose
+`Content-Type` names another type, or one that names none and whose body
+is no text by the sniffing that keeps `raw_body` null (§9; F180). One
+tree is parsed per page: a crawl reads its links and its text from the tree
 extraction works on (`kage_crawl::html::Document`). How deep a page nests
 is the site's choice, and a page is hostile input: the parse and every
 walk over the tree (the links and the text a crawl reads, the main
@@ -2135,7 +2139,18 @@ content, the rendering as text and as markdown) are loops with a stack of
 their own, never a call per level of nesting, so a page nested five
 thousand or fifty thousand elements deep is read whole on a worker's
 2 MiB stack and the result says what the page says (F97). No depth is
-capped and no result is cut for depth.
+capped and no result is cut for depth. The work is bounded by the page
+too: html5ever's tree builder looks through the open elements for some of
+the elements it meets, so its time grows with the square of the nesting
+(5000 elements 31 ms, 20 000 half a second, 200 000 over a minute), and
+the parser is fed the page in slices of 4 KiB with the clock read between
+two: a parse that has taken ten seconds stops there, and the document is
+what was parsed until then, which `extract.truncated: "parse_time"` says
+(F147; a page nested fifty thousand deep is parsed in a few seconds). The
+markdown grows with the page as well: quotes and lists nested past sixteen
+are written as the blocks they hold, in the sixteenth, so that no line
+carries more than sixteen prefixes and no block is copied once per level
+(F173).
 
 The object: `title` (the document's `<title>`), `description`,
 `canonical` (absolute), `lang`, `published_at` and `modified_at` (from
@@ -2146,20 +2161,40 @@ document order), `jsonld` (every block that parses, a top-level array as
 its members, at most 64; `jsonld_skipped` counts the rest), `links`
 (`url` absolute, `text`, `rel`, `same_site`; what a reader can see, at
 most 5000, with `links_truncated`), `headings` (`level`, `text`, `id`),
-`text` and `markdown` (the main content), `word_count`, `thin_content`.
-The request's `extract: { markdown, links }`, both true unless said,
-leaves either out.
+`text` and `markdown` (the main content), `word_count`, `thin_content`,
+`truncated` (null for a whole document; `max_body_bytes` when the body
+was cut at the limit, §9, `parse_time` when the parse stopped at its time:
+what is said of the page is said of its first part, F122). The request's
+`extract: { markdown, links }`, both true unless said, leaves either out.
+What a reader can see is the browser's word at levels 2 and 3: the
+browser is asked for the links of its document with whether each is shown
+(`capture.links`, the crawl's own, §13), and a link it reports hidden (a
+style sheet's `display: none`, the oldest trap) is left out as a crawl
+leaves it out, as often as the browser saw its address hidden; at levels 0
+and 1 only what the markup itself hides is known (F123, D48).
 
 The main content is Readability's scoring (the algorithm of Firefox's
 reader view) ported onto that tree in `kage-extract`, with three rules of
 Kage's own: what the markup names as furniture (`nav`, `aside`, `footer`,
 the ARIA roles of the same, dialogs) is never content, and a page without
-a candidate has no content; bylines are metadata, not content; where the
+a candidate has no content, unless it has a `<main>`: where the rules
+find less than a few sentences (500 characters) and the page's first
+`<main>` a reader sees holds more, the `<main>` is the content whatever it
+holds, a table, a list or short paragraphs, without what the markup hides
+and the furniture in it, and not cleaned (the owner's decision on F141,
+2026-11-05, an amendment of D48 for `<main>`: a page of prices or of a
+poem has no paragraph to give points, and its markup says where its
+content is; `<article>` and `role="main"` are not taken whole);
+bylines are metadata, not content; where the
 chosen element is one of three or more alike (the posts of a thread) the
 others are content too, and a figure between two parts of the content
 belongs to it. The markdown is written by the same walk as the text:
 headings, nested lists, fenced code with its language, GFM tables with a
-header row, absolute links. `thin_content` is true when the main content
+header row, absolute links. It says what the page says: every character
+that would be read as markdown where it is text is escaped (`~` and an
+`&` that would read as an entity among them), a parenthesis or a
+backslash in a link's or an image's address is escaped, and a `|` in code
+in a table's cell is escaped, as GFM wants it there (F142). `thin_content` is true when the main content
 has fewer words than `extract.thin_words` (80): the document gave a
 reader next to nothing, which on the http path usually means scripts or
 a wall. The result does not guess which.
@@ -2306,7 +2341,9 @@ minute like any call.
   `cache_ttl_too_long`, not cut.
 - **What is kept**: a result with the outcome `ok` or `challenge_passed`
   and a `2xx` status whose extraction, when there was one, is not thin.
-  Never a block, a failure, a refused redirect or an error status.
+  Never a block, a failure, a refused redirect or an error status, and
+  never half a page: a body cut at `max_body_bytes` (`truncated`, §9) or
+  a document whose parse stopped at its time (§14) is not kept (F122).
 - **Who reads and who fills.** A fetch and an item of a batch read and
   fill. A page of a crawl fills and never reads: a page that is not
   visited is not open in the tab, and what it links to cannot be clicked
@@ -2323,7 +2360,11 @@ minute like any call.
   that had the page fetched. What the persona did on the page, the
   browser's log and what a capture fired in it are the stored visit's;
   the pacing is the hit's own, which waited for nobody (F36). Purge and
-  retention of one key take nothing from another.
+  retention of one key take nothing from another. A hit whose stored body
+  is gone (its row, or its file from the artifacts volume: a disk restored
+  without it, an operator's cleanup) is a miss and a visit, which fills
+  the entry again, never `cached: true` without the body it was asked for
+  (F124).
 - **Storage.** `response_cache`; an entry goes with the result it serves
   and is swept when it expires.
 - **Two at once (F52).** Of two requests with one key under way at the
@@ -2448,7 +2489,7 @@ job's key as `owner_key`; F117).
 | `GET /v1/jobs/{id}/items?cursor=&limit=&results=` | jobs | The items in the job's order, 50 a page unless said and at most 200, each with its stored result as `GET /v1/results/{id}` shows it without the document and the body (which are artifacts), an item that ended without its page with what ended it (F155); `results=false` leaves the results out. Read as `GET /v1/jobs/{id}` is |
 | `POST /v1/jobs/{id}/cancel` | jobs | Cooperative cancel: what waits is cancelled at once (a job queued behind `jobs.max_running`, a paused one, a fetch carried on as a job), a page that is being fetched is finished, so at most one more item per visitor ends. A job that has ended is answered as it ended. Every cancel is on the audit trail (`job.cancel`), the owner's own included (F117) |
 | `GET /v1/results/{id}` | fetch | The result of a fetch by the request's id (the `id` of the result, `X-Request-Id` of the fetch): `200` once it ended, `202` while it runs. A request whose job ended without it (cancelled, expired, interrupted) has ended: `200`, `provider_error` with the item's reason (F109). A key reads what it fetched; another key's is `404` |
-| `GET /v1/artifacts/{id}` | fetch | What was kept of a page (document, raw body, screenshot, PDF, the body of a captured XHR response), streamed; served with `nosniff` and a sandboxing CSP, gzip passed through to a client that takes it |
+| `GET /v1/artifacts/{id}` | fetch | What was kept of a page (document, raw body, screenshot, PDF, the body of a captured XHR response), streamed; served with `nosniff` and a sandboxing CSP, gzip passed through to a client that takes it (RFC 9110: the weight of `gzip` when the client names it, else of `*`; a weight of 0 in any spelling refuses, F142) |
 | `POST /v1/sessions` | sessions | Open a session pinned to a persona matching the hints and a `domain`'s policy: `201` new, `200` when the id is open already, `409 no_matching_persona` |
 | `GET /v1/sessions/{id}` / `DELETE` | sessions | Inspect (not a use: the idle time does not start again) or end |
 | `GET /v1/policies/domains/{domain}` | fetch | Effective policy preview: the policy as it resolves (its `cache` as it holds under the configuration's `cache.max_ttl`), the pacing profile, the floor `min_level`, a pause in force. What is no host name (a wildcard, an empty label, a label over 63 characters) is `422 validation_failed` (F136) |

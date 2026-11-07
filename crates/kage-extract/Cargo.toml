@@ -25,6 +25,8 @@ serde_json = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
+# The encoding a test document is parsed in.
+encoding_rs = { workspace = true }
 # The meaning of a robots.txt pattern, said as a regular expression.
 regex = { workspace = true }
 # A port of the robots.txt library Google published: the oracle the

@@ -33,6 +33,10 @@
 //                          table and links, between a menu, a side bar and a
 //                          footer that are none of its content. Nothing of
 //                          the reading room links to it.
+//   /read/prices           a price list: a `<main>` that holds a heading and
+//                          a table and no paragraph to score (F141), and a
+//                          link a style sheet hides beside one it shows
+//                          (F123). Nothing links to it either.
 import { gzipSync } from 'node:zlib';
 
 const WORDS = (
@@ -239,6 +243,22 @@ ${urls}
  *
  * @returns whether the path was one of its own.
  */
+/** The price list of the reading room's shop: a `<main>` of a heading and
+ * a table (F141), with a link a style sheet hides (F123). */
+function prices() {
+  const rows = Array.from(
+    { length: 40 },
+    (_, n) => `<tr><td>${WORDS[n % WORDS.length]} print, plate ${n + 1}</td><td>${n + 3}.50 EUR</td></tr>`,
+  ).join('');
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Prices</title>
+<style>.trap { display: none }</style></head><body>
+<nav><a href="/read/">The reading room</a></nav>
+<main><h1>Prices of the prints</h1>
+<table><thead><tr><th>Print</th><th>Price</th></tr></thead><tbody>${rows}</tbody></table>
+<p><a href="/read/essay">The essay</a> <a class="trap" href="/read/trap">Members only</a></p>
+</main><footer>The reading room</footer></body></html>`;
+}
+
 export function crawlRoute(req, res, url) {
   const host = req.headers.host ?? 'fixture.invalid';
   const send = (status, type, body, headers = {}) => {
@@ -254,6 +274,10 @@ export function crawlRoute(req, res, url) {
   }
   if (path === '/read/essay') {
     html(essay());
+    return true;
+  }
+  if (path === '/read/prices') {
+    html(prices());
     return true;
   }
   if (path === '/sitemap.xml' || path === '/sitemaps/index.xml') {

@@ -20,6 +20,8 @@ ego-tree = { workspace = true }
 # The encoding a document was read in: its links' queries are written in it
 # (F161).
 encoding_rs = { workspace = true }
+# The parser of a page, fed in slices so that its time is bounded (F147).
+html5ever = { workspace = true }
 kage-core = { workspace = true }
 # Gzipped sitemaps.
 flate2 = { workspace = true }

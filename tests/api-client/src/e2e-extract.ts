@@ -232,6 +232,56 @@ async function deep(client: KageClient, site: string) {
   return { engine, reader: fetched.persona.id, depth, words: said.word_count, id: fetched.id };
 }
 
+/**
+ * What the answer says it read of a page, at level 2 by the reader of each
+ * engine: the price list, whose `<main>` of a heading and a table is its
+ * content (F141) and whose link a style sheet hides is no link (F123); and
+ * the essay cut at `max_body_bytes`, which says so and is not kept in the
+ * cache (F122): the same request twice is two visits.
+ */
+async function whatWasRead(client: KageClient, site: string, engine: EngineName) {
+  const prices = await finished(client, {
+    url: `${site}/read/prices?reader=${engine}`,
+    level: 2,
+    timeout_ms: 60_000,
+    include: ['extract'],
+    persona: { engines: [engine] },
+  });
+  assert.equal(prices.outcome, 'ok', `${engine}: ${prices.reason ?? prices.outcome}`);
+  const listed = extractOf(prices);
+  assert.equal(listed.thin_content, false, `${engine}: ${listed.text.slice(0, 300)}`);
+  assert.ok(listed.text.startsWith('Prices of the prints'), listed.text.slice(0, 200));
+  assert.ok(listed.markdown?.includes('| Print | Price |'), listed.markdown?.slice(0, 300));
+  const links = (listed.links ?? []).map((link) => new URL(link.url).pathname);
+  assert.ok(links.includes('/read/essay'), JSON.stringify(links));
+  const trap = links.includes('/read/trap');
+
+  const cut: FetchRequest = {
+    url: `${site}/read/essay?reader=${engine}&cut=1`,
+    level: 2,
+    timeout_ms: 60_000,
+    include: ['extract'],
+    persona: { engines: [engine] },
+    max_body_bytes: 2000,
+    cache_ttl_s: 600,
+  };
+  const first = await finished(client, cut);
+  assert.equal(first.outcome, 'ok', `${engine}: ${first.reason ?? first.outcome}`);
+  assert.equal(first.truncated, true);
+  assert.equal(first.attempts[0]?.truncated, true);
+  assert.equal(extractOf(first).truncated, 'max_body_bytes');
+  const second = await finished(client, cut);
+  return {
+    engine,
+    reader: prices.persona?.id,
+    main_words: listed.word_count,
+    trap,
+    cut: first.truncated,
+    cached_again: second.cached,
+    path: cut.url.slice(site.length),
+  };
+}
+
 /** Another include set is another request: a visit, though the cache holds the page. */
 async function otherInclude(client: KageClient, site: string, engine: EngineName) {
   const third = await finished(client, { ...essayRequest(site, engine), include: ['extract'] });
@@ -409,15 +459,21 @@ async function main(): Promise<unknown> {
   for (const engine of ENGINES) {
     visits.push(await otherInclude(client, site, engine));
   }
+  // What the answer says it read: a `<main>` of a table, a cut body.
+  const reads = [];
+  for (const engine of ENGINES) {
+    reads.push(await whatWasRead(client, site, engine));
+  }
   // The reader of an engine is one persona throughout: the scout took
   // none of them.
   assert.equal(deeps[0]?.reader, essays[1]?.reader, 'firefox: another reader of the deep page');
   for (const [index, engine] of ENGINES.entries()) {
     assert.equal(pages[index]?.reader, essays[index]?.reader, `${engine}: another reader`);
     assert.equal(crawls[index]?.reader, essays[index]?.reader, `${engine}: another reader`);
+    assert.equal(reads[index]?.reader, essays[index]?.reader, `${engine}: another reader`);
   }
 
-  return { essays, deep: deeps, refusals, enforced: pages, crawls, visits };
+  return { essays, deep: deeps, refusals, enforced: pages, crawls, visits, reads };
 }
 
 try {

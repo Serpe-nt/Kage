@@ -47,14 +47,17 @@ fn young_enough(cached_at: DateTime<Utc>, ttl: Duration, now: DateTime<Utc>) -> 
 }
 
 /// Whether a result is one the cache keeps: a page that was fetched
-/// (never a block, a failure, a refused redirect or an error status) and
-/// whose extraction, when there was one, found more than next to nothing.
-fn worth_keeping(record: &FetchRecord, thin: bool) -> bool {
+/// whole (never a block, a failure, a refused redirect, an error status or
+/// a body cut at `max_body_bytes`, F122) and whose reading, when there was
+/// one, found more than next to nothing of a whole document (`partial`: it
+/// was thin, or its parse stopped at its time, F147).
+fn worth_keeping(record: &FetchRecord, partial: bool) -> bool {
     record.outcome.is_success()
         && record
             .status
             .is_some_and(|status| (200..300).contains(&status))
-        && !thin
+        && !partial
+        && !record.truncated
         && !record.cached
 }
 
@@ -169,6 +172,7 @@ impl Pipeline {
             headers: stored.headers,
             final_url: stored.final_url,
             redirects: stored.redirects,
+            truncated: stored.truncated,
             extract: stored.extract,
             xhr,
             artifacts,
@@ -219,11 +223,11 @@ impl Pipeline {
     /// Puts the result of a fetch into the cache when the fetch named a
     /// lifetime and the result is worth keeping. Never fails the fetch:
     /// what could not be written is a warning.
-    pub(super) async fn fill_cache(&self, order: &FetchOrder, record: &FetchRecord, thin: bool) {
+    pub(super) async fn fill_cache(&self, order: &FetchOrder, record: &FetchRecord, partial: bool) {
         let Some(plan) = plan_of(order) else {
             return;
         };
-        if !worth_keeping(record, thin) {
+        if !worth_keeping(record, partial) {
             metrics::cache("bypass");
             return;
         }
@@ -288,6 +292,7 @@ mod tests {
             headers: Vec::new(),
             final_url: None,
             redirects: Vec::new(),
+            truncated: false,
             extract: None,
             xhr: None,
             artifacts: Vec::new(),
@@ -328,6 +333,12 @@ mod tests {
                 "{outcome:?} {status:?}"
             );
         }
+        // A body cut at its limit is half a page (F122).
+        let cut = FetchRecord {
+            truncated: true,
+            ..record(Outcome::Ok, Some(200))
+        };
+        assert!(!worth_keeping(&cut, false));
         // What came from the cache is not put into it again.
         let served = FetchRecord {
             cached: true,

@@ -173,9 +173,11 @@ chrono-tz = { version = "=0.10.4" }
 flate2 = { version = "=1.1.10" }
 
 # --- Extraction, crawl ----------------------------------------------------
-# html5ever comes through scraper (0.39.0, held by Cargo.lock; no crate of
-# ours names it): move scraper and check the lockfile's html5ever with it.
+# html5ever is the parser scraper is built against: named since F147, at
+# the version scraper 0.27.0 locks, to feed it a page in slices against a
+# time budget. Move the two together.
 scraper = { version = "=0.27.0" }
+html5ever = { version = "=0.39.0" }
 # The tree scraper keeps a page in, at the version scraper 0.27.0 locks:
 # kage-extract names its node ids.
 ego-tree = { version = "=0.11.0" }
@@ -232,3 +234,22 @@ print_stderr = "deny"
 lto = "thin"
 # Keep symbol names for backtraces; drop DWARF to keep images small.
 strip = "debuginfo"
+
+# The parser of a page is bounded in time (F147, `kage_crawl::html`). A debug
+# build of it is many times slower than the one that ships, so a test of a
+# deep page would meet a bound only a debug build meets: the parser and the
+# tree it builds are optimized in every profile.
+[profile.dev.package.html5ever]
+opt-level = 3
+
+[profile.dev.package.markup5ever]
+opt-level = 3
+
+[profile.dev.package.tendril]
+opt-level = 3
+
+[profile.dev.package.scraper]
+opt-level = 3
+
+[profile.dev.package.ego-tree]
+opt-level = 3

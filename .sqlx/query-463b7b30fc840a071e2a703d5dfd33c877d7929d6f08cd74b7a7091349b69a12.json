@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, request_id, outcome, status, headers, final_url, redirects, extract, xhr,\n                    artifacts, persona, block, robots, cached, cached_at, reason, visit,\n                    reading, created_at\n             FROM results WHERE request_id = $1",
+  "query": "SELECT id, request_id, outcome, status, headers, final_url, redirects, truncated,\n                    extract, xhr, artifacts, persona, block, robots, cached, cached_at, reason,\n                    visit, reading, created_at\n             FROM results WHERE id = $1",
   "describe": {
     "columns": [
       {
@@ -82,6 +82,17 @@
       },
       {
         "ordinal": 7,
+        "name": "truncated",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "results",
+            "name": "truncated"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
         "name": "extract",
         "type_info": "Jsonb",
         "origin": {
@@ -92,7 +103,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "xhr",
         "type_info": "Jsonb",
         "origin": {
@@ -103,7 +114,7 @@
         }
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "artifacts",
         "type_info": "Jsonb",
         "origin": {
@@ -114,7 +125,7 @@
         }
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "persona",
         "type_info": "Jsonb",
         "origin": {
@@ -125,7 +136,7 @@
         }
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "block",
         "type_info": "Jsonb",
         "origin": {
@@ -136,7 +147,7 @@
         }
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "robots",
         "type_info": "Jsonb",
         "origin": {
@@ -147,7 +158,7 @@
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "cached",
         "type_info": "Bool",
         "origin": {
@@ -158,7 +169,7 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "cached_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -169,7 +180,7 @@
         }
       },
       {
-        "ordinal": 15,
+        "ordinal": 16,
         "name": "reason",
         "type_info": "Text",
         "origin": {
@@ -180,7 +191,7 @@
         }
       },
       {
-        "ordinal": 16,
+        "ordinal": 17,
         "name": "visit",
         "type_info": "Jsonb",
         "origin": {
@@ -191,7 +202,7 @@
         }
       },
       {
-        "ordinal": 17,
+        "ordinal": 18,
         "name": "reading",
         "type_info": "Jsonb",
         "origin": {
@@ -202,7 +213,7 @@
         }
       },
       {
-        "ordinal": 18,
+        "ordinal": 19,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -226,6 +237,7 @@
       false,
       true,
       false,
+      false,
       true,
       true,
       false,
@@ -240,5 +252,5 @@
       false
     ]
   },
-  "hash": "5d066e2955648fed7374ec4f7f93cced99ae51e95364bca83a8dfca910526721"
+  "hash": "463b7b30fc840a071e2a703d5dfd33c877d7929d6f08cd74b7a7091349b69a12"
 }

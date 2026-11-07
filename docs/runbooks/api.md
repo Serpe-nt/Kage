@@ -236,12 +236,33 @@ leaves either out.
   rules, without navigation, side bars, footers and bylines. On a page
   that is a list of the same thing (a thread, search results) every one
   of them is content.
+- A page whose content is a table, a list or short paragraphs gives the
+  rules no paragraph to score. When it has a `<main>`, that is its
+  content whatever it holds (the owner's decision on F141, an amendment
+  of D48 for `<main>`): the prices of a `<main><table>`, the items of a
+  `<main><ul>`, a poem. Without a `<main>` such a page has the content
+  the rules find, which may be none.
 - `thin_content: true` says the main content has fewer than
   `extract.thin_words` (80) words. At level 0 or 1 that usually means
   the page is built by scripts or a wall stands in front of it: fetch it
   at level 2 or 3. The result does not guess which.
 - `extract` is null when the fetch did not get its page (a block, a
-  failure) and for a response that is no HTML document (a PDF, JSON).
+  failure) and for a response that is no HTML document (a PDF, JSON, or
+  bytes of no `Content-Type` that are no text: whatever has no
+  `raw_body` has no `extract` either).
+- `links` are those a reader sees. At levels 2 and 3 the browser says
+  which: a link a style sheet hides is left out, as a crawl leaves it
+  out. At levels 0 and 1 only what the markup hides is known.
+- A body cut at `max_body_bytes` (the request's, else the operator's
+  `http.max_body_bytes`) is said: `truncated: true` on the result and its
+  attempt, and `extract.truncated: "max_body_bytes"`; what `extract` says
+  is said of the first part. `extract.truncated: "parse_time"` says the
+  parse of the page stopped at its ten seconds (a page nested hundreds of
+  thousands of elements deep). Neither is kept in the cache. Ask again
+  with a higher `max_body_bytes` when the end of the page matters.
+- The markdown says what the page says: marks in the text are escaped, so
+  is a parenthesis in an address. Quotes and lists nested deeper than
+  sixteen are written as the paragraphs they hold, in the sixteenth.
 - `title` is the document's `<title>`, as written; the headline is in
   `headings`, what the page says to social networks in `opengraph`.
 - A time with a zone is given in UTC; one without is given as the page
@@ -280,7 +301,12 @@ page (how far it was scrolled matters for what the document holds);
   (a site that shows everybody the same). Across keys the result does not
   say who fetched it (`persona: null`).
 - **Only good pages are kept**: `ok` or `challenge_passed` with a `2xx`,
-  and not a page extraction called thin. A block is never served twice.
+  not a page extraction called thin, and not half a page (`truncated`).
+  A block is never served twice.
+- **A body that is gone is no answer.** When the stored body of an entry
+  is gone from the artifacts volume (a disk restored without it, a
+  cleanup by hand), the next request is a visit, which fills the entry
+  again; nobody gets `cached: true` without the body they asked for.
 - `cache_ttl_s: 0` is "never from the cache", whatever the site's policy
   says. More than the site allows (`cache.max_ttl`, a day unless
   configured, never longer than results are kept) is refused with

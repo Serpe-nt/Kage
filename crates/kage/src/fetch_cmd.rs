@@ -894,6 +894,7 @@ domains:
                 finished_at: at,
                 status: last.status,
                 final_url: last.final_url.clone(),
+                truncated: false,
                 outcome,
                 block: block.clone(),
                 timing: Timing {
@@ -1502,6 +1503,7 @@ domains:
             headers: Vec::new(),
             final_url: Some("https://shop.example/page".to_owned()),
             redirects: Vec::new(),
+            truncated: false,
             extract: None,
             xhr: None,
             artifacts: hit.artifacts.clone(),

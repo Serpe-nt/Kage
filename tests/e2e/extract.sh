@@ -18,6 +18,9 @@
 #     the Firefox persona at level 2: a whole result, and a kage container
 #     that never restarted (F97);
 #   - another include set is a visit;
+#   - a price list whose `<main>` holds a table is read whole at level 2
+#     (F141), without the link its style sheet hides (F123), and the essay
+#     cut at `max_body_bytes` says so and is a visit every time (F122);
 #   - nobody ever asked fixture.kage.test for its robots.txt;
 #   - rules.kage.test was asked for its robots.txt once, by one address
 #     that asked for no page of the site, before the first page there;
@@ -194,6 +197,14 @@ done
 check "the deep page was read whole by the Firefox persona, as deep as its script built it" "${summary}" \
     "d.deep.length === 1 && d.deep[0].engine === 'firefox' && d.deep[0].depth >= 10000 && d.deep[0].words === 100"
 echo "    $(value "${summary}" "d.deep.map((p) => p.engine + ': ' + p.depth + ' elements deep, ' + p.words + ' words').join('; ')")"
+# What the answer says it read (F141, F123, F122).
+check "the price list's <main> was its content, in both engines" "${summary}" \
+    "d.reads.length === 2 && d.reads.every((r) => r.main_words > 150)"
+check "the link a style sheet hides was no link, in both engines" "${summary}" \
+    "d.reads.every((r) => r.trap === false)"
+check "the cut essay said so, and was not served from the cache" "${summary}" \
+    "d.reads.every((r) => r.cut === true && r.cached_again === false)"
+echo "    $(value "${summary}" "d.reads.map((r) => r.engine + ': the price list ' + r.main_words + ' words, the cut essay truncated ' + r.cut + ' and cached again ' + r.cached_again).join('; ')")"
 restarts="$(docker inspect --format '{{.RestartCount}}' "$("${compose[@]}" ps --quiet kage)")"
 [ "${restarts}" = 0 ] || fail "the kage container restarted ${restarts} times"
 
@@ -208,6 +219,8 @@ rules_host='rules.kage.test:8088'
 # set, and none while the cache answered.
 check "each essay was asked for twice in all: the first fetch, and the other include set" "${both}" \
     "d.run.essays.every((e) => d.seen.filter((r) => r.host === '${fixture_host}' && r.path === e.path).length === 2)"
+check "the cut essay was asked for twice by each reader: half a page is not served again" "${both}" \
+    "d.run.reads.every((r) => d.seen.filter((q) => q.host === '${fixture_host}' && q.path === r.path).length === 2)"
 # (A browser asks for a site's icon by itself, some time after a page.)
 check "the site saw no request while the cache answered" "${both}" \
     "d.run.essays.every((e) => !d.seen.some((r) => r.at >= e.hit_from && r.at <= e.hit_until && r.path !== '/favicon.ico'))"

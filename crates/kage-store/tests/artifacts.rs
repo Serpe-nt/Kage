@@ -276,6 +276,26 @@ async fn a_result_from_the_cache_points_at_content_that_is_already_stored() {
     assert_eq!((report.artifacts_deleted, report.blobs_deleted), (1, 0));
     let (_, content) = store.read(linked.id).await.unwrap().unwrap();
     assert_eq!(content, page);
+    // QA round one's extract-08 (F124): a row whose blob is gone from the
+    // disk cannot be pointed at either, so a cache hit on it is a miss.
+    let blob = store.blob_path(&linked.content_hash, linked.encoding);
+    let kept = std::fs::read(&blob).unwrap();
+    std::fs::remove_file(&blob).unwrap();
+    assert!(
+        store
+            .link(linked.id, request.id, later)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    std::fs::write(&blob, kept).unwrap();
+    assert!(
+        store
+            .link(linked.id, request.id, later)
+            .await
+            .unwrap()
+            .is_some()
+    );
     // An artifact that is gone cannot be pointed at.
     assert!(
         store
