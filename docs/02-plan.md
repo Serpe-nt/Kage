@@ -2125,7 +2125,7 @@ and F193 are fixed already:
 
 ## After 2.0.0
 
-2.0.3 (2026-11-06) is the version to run; the field campaign's first
+2.0.4 (2026-11-07) is the version to run; the field campaign's first
 round is done (M13 above) and QA round one is reported (above). What
 remains, in the order the planner would take it, each a pull request of
 its own on the PR workflow, with the owner's word for every merge:
