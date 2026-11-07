@@ -21,6 +21,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   asked for `name.:port` (ssrf-05). One redirect more than
   `http.max_redirects` ends `provider_error`, `too_many_redirects`, not
   retried, at every level; a browser's chain was `ssrf_denied` (ssrf-07).
+- **A level 0 hop the proxy refused (QA round three, level0-01).** A
+  redirect hop of the http path whose tunnel the proxy refused (a `403` to
+  its `CONNECT`) ends `provider_error`, `proxy_refused`, not retried and
+  nothing against the site, as the same target asked for directly and a
+  browser's hop do (F189): the hop the client failed on counts among the
+  attempt's own targets, and a hop to another site under the exit it left
+  by. It was `connection_failed`, asked three times, and booked as the
+  site's server error, so the site's next page waited 30 s, then 60 s.
 - **A proxy that drops the SYN (F197).** The forwarder's connection to a
   proxy takes at most 5 s (`PROXY_CONNECT_TIMEOUT`, within
   `forwarder.connect_timeout`, which still bounds the proxy's answer to a

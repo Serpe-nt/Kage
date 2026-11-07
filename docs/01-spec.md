@@ -947,7 +947,13 @@ refusal, whatever the browser named it (`proxy_failed`, a failed
 navigation, a timeout): `provider_error` with the reason `proxy_refused`,
 not retried, with nothing booked against the site (no cooldown, no
 breaker count, no server-error pause) and nothing against the proxy (no
-setting aside, no report to the pool) (F189). An attempt that got no
+setting aside, no report to the pool) (F189). An attempt's own page is
+every address its client asked for: on the http path a redirect hop it
+failed on is one, and a level 0 hop to another site counts under the exit
+it left by (§25), so a hop whose tunnel the proxy refused ends
+`proxy_refused` at every level, as the same target asked for directly
+does (QA round three, level0-01: it was `connection_failed`, retried and
+booked as the site's server error). An attempt that got no
 answer from the site while Kage's own forwarder refused a credential
 naming its caller (§7.5) for its own page ended at the forwarder:
 `provider_error` with the reason `forwarder_refused`, retried, nothing

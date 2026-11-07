@@ -103,7 +103,8 @@ page with a `4xx` other than `407` (a provider's `403` for a target it
 will not carry): the proxy works, the site was asked nothing, and nothing
 is counted against either (no pause, no breaker, no cooldown, no setting
 aside, no probe); the attempt is not tried again, since every proxy of
-the provider refuses alike (F189). A `5xx` to the tunnel is no refusal
+the provider refuses alike (F189). The same holds for a redirect hop of
+the attempt, at level 0 and level 1 as in a browser. A `5xx` to the tunnel is no refusal
 but a target the exit could not reach. See [proxies.md](proxies.md#a-provider-that-refuses-a-target).
 A plain `http://` page refused the same way comes back as an empty error
 answer, which the forwarder cannot tell from the site's own: a browser
