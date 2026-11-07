@@ -1,0 +1,38 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>key recorder</title></head>
+<body>
+<h1>Key recorder</h1>
+<p>Words a reader reads on this page of the site, a paragraph long enough to be content and not blank at all.</p>
+<form id="f" onsubmit="document.getElementById('sub').textContent=String(Number(document.getElementById('sub').textContent)+1);return false">
+<input id="i" name="i" autocomplete="off" style="width:90%">
+</form>
+<textarea id="t" rows="6" cols="80"></textarea>
+<pre id="vi"></pre><pre id="vt"></pre><pre id="sub">0</pre><pre id="env"></pre>
+<pre id="log"></pre>
+<script>
+// QA round three: every key event of the page with its time, written into
+// the document so that a capture carries it.
+const L = [];
+const out = document.getElementById('log');
+const rec = (e) => {
+  L.push([e.type === 'keydown' ? 'd' : 'u', e.key, e.code, Math.round(e.timeStamp * 10) / 10, e.repeat ? 1 : 0,
+    (e.target && e.target.id) || '', e.getModifierState('AltGraph') ? 1 : 0, e.getModifierState('Shift') ? 1 : 0, e.isTrusted ? 1 : 0]);
+  out.textContent = JSON.stringify(L);
+};
+addEventListener('keydown', rec, true);
+addEventListener('keyup', rec, true);
+const sync = () => {
+  document.getElementById('vi').textContent = JSON.stringify(document.getElementById('i').value);
+  document.getElementById('vt').textContent = JSON.stringify(document.getElementById('t').value);
+};
+addEventListener('input', sync, true);
+const env = { lang: navigator.language, langs: navigator.languages, ua: navigator.userAgent };
+document.getElementById('env').textContent = JSON.stringify(env);
+if (navigator.keyboard && navigator.keyboard.getLayoutMap) {
+  navigator.keyboard.getLayoutMap().then((m) => {
+    env.layout = { KeyY: m.get('KeyY'), KeyZ: m.get('KeyZ'), KeyQ: m.get('KeyQ'), Digit7: m.get('Digit7'), Minus: m.get('Minus'), Semicolon: m.get('Semicolon') };
+    document.getElementById('env').textContent = JSON.stringify(env);
+  }, () => {});
+}
+</script>
+</body></html>

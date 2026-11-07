@@ -1,0 +1,35 @@
+# QA round three, topic level0: with compose.tls.yaml and compose.level0.yaml,
+# the fake Webshare API (infra/pool/webshare.mjs) on the default network
+# behind TLS: tlsworld0 fronts SNI l0h.test (a name of the l0 certificate,
+# signed by the private CA) to webshare:9480, and kage's provider is
+# https://l0h.test/api/. So the provider client meets a private CA, which
+# http.ca_file names (F191). The key is a made-up value that opens the fake.
+services:
+  tlsworld:
+    command: [/qa/infra/level0/tlsworld0.mjs, --certs, /qa/infra/tls/certs, --https-ports, "443,4443", --http-ports, "80,8081", --fixture, "fixture:8088", --fronts, "l0h.test=webshare:9480"]
+  webshare:
+    image: ${KAGE_BROWSER_CHROMIUM_IMAGE:-kage-browser-chromium:dev}
+    entrypoint: [node]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: "no"
+    init: true
+    mem_limit: 256m
+    healthcheck:
+      disable: true
+    volumes:
+      - /scripts/qa/infra/pool:/pool:ro
+      - /scripts/qa/infra/level0:/level0:ro
+    command: [/level0/webshare0.mjs, --port, "9480",
+      --active, "proxy-a:3128:provider-a:e2e-only-a,proxy-b:3128:provider-b:e2e-only-b,proxy-c:3128:provider-c:e2e-only-c",
+      --reserve, ""]
+  kage:
+    depends_on:
+      webshare:
+        condition: service_started
+    environment:
+      KAGE__PROXIES__PROVIDER: webshare
+      KAGE__WEBSHARE__API_KEY: qaqaqaqaqaqaqaqaqaqaqaqa
+      KAGE__WEBSHARE__BASE_URL: https://l0h.test/api/
+      KAGE__PROXIES__SYNC_INTERVAL: 15s

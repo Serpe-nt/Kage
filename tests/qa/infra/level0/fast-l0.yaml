@@ -1,0 +1,75 @@
+  # level0: every l0 name at pacing fast, no sleeping hours; l0d..l0l and l0p enforce robots.txt (add-domains input)
+  l0a.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  l0b.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  l0c.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  l0d.test:
+    robots: enforce
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  l0e.test:
+    robots: enforce
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  l0f.test:
+    robots: enforce
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  l0g.test:
+    robots: enforce
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  l0h.test:
+    robots: enforce
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  l0i.test:
+    robots: enforce
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  l0j.test:
+    robots: enforce
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  l0k.test:
+    robots: enforce
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  l0l.test:
+    robots: enforce
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  l0m.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  l0n.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  l0o.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  l0p.test:
+    robots: enforce
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore

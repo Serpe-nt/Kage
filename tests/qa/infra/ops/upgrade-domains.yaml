@@ -1,0 +1,21 @@
+  capped.ops.test:
+    pacing: capped
+    min_dwell: 500ms
+    active_hours: ignore
+  slow.ops.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  cancel.ops.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  done.ops.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+    robots: enforce
+    cache:
+      shared: false
+      max_ttl: 1d
+      ttl: 1h

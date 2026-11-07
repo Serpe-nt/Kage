@@ -1,0 +1,8 @@
+  done.ops.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+    cache:
+      shared: false
+      max_ttl: 1d
+      ttl: 1h

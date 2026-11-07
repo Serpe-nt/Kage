@@ -1,0 +1,69 @@
+# QA round three, ops: the closed world's stand-ins for docs/runbooks/
+# first-start.md, added as one more --file to the runbook's own
+# `--file deploy/compose.yaml`. In place of the internet: the fixture site
+# (fixture.kage.test, in place of https://example.org/), three
+# "residential proxies" (the entries of the declared list deploy/list.txt),
+# and the echo the health probe reads (in place of checkip.amazonaws.com,
+# ipinfo.io and api.ipify.org, the shipped defaults). Paths are relative to
+# deploy/, as compose reads them.
+x-helper: &helper
+  image: kage-browser-chromium:dev
+  entrypoint: [node]
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: "no"
+  init: true
+  mem_limit: 256m
+  cpus: 1
+  pids_limit: 128
+  volumes:
+    - ../tests/e2e:/e2e:ro
+    - ../tests/fixtures/site:/fixtures/site:ro
+x-allow: &allow "fixture.kage.test:8088,world.kage.test:8089"
+x-proxy-health: &proxy-health
+  test: [CMD, node, -e, "fetch('http://127.0.0.1:3128/__stats').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+  interval: 3s
+  timeout: 3s
+  retries: 10
+services:
+  kage:
+    environment:
+      KAGE__PROXIES__HEALTH__ECHO_URL: http://world.kage.test:8089/ip
+      KAGE__PROXIES__HEALTH__CONFIRM_URL: http://world.kage.test:8089/ip
+      KAGE__PROXIES__HEALTH__GEO_URL: http://world.kage.test:8089/geo
+      KAGE__PROXIES__HEALTH__HOST_IP_URL: http://world:8089/ip
+  fixture:
+    <<: *helper
+    command: [/fixtures/site/server.mjs, --host, 0.0.0.0, --port, "8088"]
+    networks:
+      default:
+        aliases: [fixture.kage.test]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8088/__kage/requests').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+  world:
+    <<: *helper
+    command: [/e2e/world.mjs, echo, --port, "8089"]
+    networks:
+      default:
+        aliases: [world.kage.test]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8089/ip').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+  proxy-a:
+    <<: *helper
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-a, --pass, e2e-only-a, --allow, *allow]
+    healthcheck: *proxy-health
+  proxy-b:
+    <<: *helper
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-b, --pass, e2e-only-b, --allow, *allow]
+    healthcheck: *proxy-health
+  proxy-c:
+    <<: *helper
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-c, --pass, e2e-only-c, --allow, *allow]
+    healthcheck: *proxy-health
