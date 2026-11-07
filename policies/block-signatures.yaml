@@ -41,7 +41,8 @@
 #     together with a marker.
 #   - Every rule that blocks is bounded on every way it matches (F125): a
 #     status that is no 2xx, `visible_text: { max_chars }`, `body_bytes:
-#     { max }`, a header, or an interstitial the browser saw. A marker in the
+#     { max }`, a header (never `content-type`, which every page has), or an
+#     interstitial the browser saw. A marker in the
 #     body alone is not: a long article that quotes a vendor's block page
 #     holds it. A test of this file fails when a rule is not.
 #   - A soft block judges a document: an answer that has none (a HEAD, a

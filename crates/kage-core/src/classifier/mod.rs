@@ -648,7 +648,8 @@ fn check_bounds(name: &str, min: Option<usize>, max: Option<usize>) -> Result<()
 /// Whether a condition holds only where an ordinary page cannot hold it by
 /// what it says (F125): a status other than 200, a bound on the text left
 /// to read (`visible_text: { max_chars }`) or on the body
-/// (`body_bytes: { max }`), a header the site's front sets, or an
+/// (`body_bytes: { max }`), a header the site's front sets (never
+/// `content-type`, which every page has), or an
 /// interstitial the browser saw. A pattern in the body alone is none: a
 /// long article that quotes a vendor's block page holds it. `all` is
 /// bounded by any of its conditions, `any` by all of them, `not` by none.
@@ -669,9 +670,16 @@ fn bounded(condition: &ConditionSpec) -> bool {
         }
         ConditionSpec::VisibleText(bounds) => bounds.max_chars.is_some(),
         ConditionSpec::BodyBytes(bounds) => bounds.max.is_some(),
-        ConditionSpec::Header(_)
-        | ConditionSpec::InterstitialText(_)
-        | ConditionSpec::Interstitial(_) => true,
+        // A header the site's front sets bounds a rule; `content-type` is on
+        // every page, and bounds nothing.
+        ConditionSpec::Header(header) => {
+            let name = match header {
+                NameOrFull::Name(name) => name,
+                NameOrFull::Full(header) => &header.name,
+            };
+            !name.trim().eq_ignore_ascii_case("content-type")
+        }
+        ConditionSpec::InterstitialText(_) | ConditionSpec::Interstitial(_) => true,
         ConditionSpec::Not(_)
         | ConditionSpec::Cookie(_)
         | ConditionSpec::Body(_)
