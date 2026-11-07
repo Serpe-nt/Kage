@@ -1177,7 +1177,14 @@ async fn the_manager_follows_the_pool_until_it_is_told_to_stop() {
             .unwrap()
     })
     .await;
-    assert!(manager.directory().spec(proxy.id).is_some());
+    // The manager stores the persona, then records it in the directory; the
+    // test may look between the two (F206). Only the health probes read the
+    // directory, and a probe in that moment presents as one a moment before
+    // the persona existed; a request reads the store.
+    eventually("the new persona is in the directory", || async {
+        manager.directory().spec(proxy.id)
+    })
+    .await;
 
     // The provider swaps it.
     harness.provider.remove(&proxy.provider_ref);
