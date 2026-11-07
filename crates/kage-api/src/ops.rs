@@ -248,12 +248,18 @@ async fn breaker_gauges(state: &ApiState) -> String {
         return String::new();
     };
     let now = state.clock().now();
-    let samples: Vec<(Vec<(&str, &str)>, f64)> = breakers
+    // The domain label is bounded (L3): the domains past the bound share
+    // `other`, which reads 1 while any of them is paused.
+    let mut by_label: std::collections::BTreeMap<String, f64> = std::collections::BTreeMap::new();
+    for breaker in &breakers {
+        let paused = if breaker.is_open(now) { 1.0 } else { 0.0 };
+        let label = kage_scheduler::metrics::domain_label(&breaker.domain);
+        let value = by_label.entry(label).or_insert(0.0);
+        *value = value.max(paused);
+    }
+    let samples: Vec<(Vec<(&str, &str)>, f64)> = by_label
         .iter()
-        .map(|breaker| {
-            let paused = if breaker.is_open(now) { 1.0 } else { 0.0 };
-            (vec![("domain", breaker.domain.as_str())], paused)
-        })
+        .map(|(label, paused)| (vec![("domain", label.as_str())], *paused))
         .collect();
     gauge_family(
         "kage_breaker_open",

@@ -19,19 +19,111 @@
 //! | `kage_extract_duration_seconds` | | how long reading a page's document took |
 //!
 //! A domain is a label of unbounded cardinality in principle; in practice
-//! it is the set of sites the owner's projects fetch. A level is its
-//! number, `0` to `3` (spec §25).
+//! it is the set of sites the owner's projects fetch. Its values are
+//! bounded all the same (the security review's L3): the first
+//! `server.metrics_max_domains` domains (500) since the start get a label of
+//! their own, and every later one is counted under [`OTHER_DOMAIN`], so that
+//! a key that asks for many hosts cannot grow the series without end
+//! ([`DomainLabels`]). A level is its number, `0` to `3` (spec §25).
 //!
 //! `kage_breaker_open{domain}` is not recorded here: the API reads it from
 //! the stored breakers at every scrape (F126), so that it survives a restart
 //! and comes down when a pause ends.
 
+use std::borrow::Cow;
+use std::collections::HashSet;
+use std::sync::{LazyLock, Mutex, PoisonError};
 use std::time::Duration;
 
 use kage_core::domain::{Exit, Level, Render};
 use kage_core::outcome::Outcome;
 use kage_core::schedule::planner::Refusal;
 use kage_core::schedule::queue::Priority;
+
+/// The `domain` label every domain past the bound shares (L3). A domain has
+/// a dot, so no domain is labelled so by itself.
+pub const OTHER_DOMAIN: &str = "other";
+
+/// How many domains get a `domain` label of their own when nothing else is
+/// set (`server.metrics_max_domains`).
+pub const DEFAULT_MAX_DOMAINS: usize = 500;
+
+/// The `domain` label values in use: the first `max` distinct domains get a
+/// label of their own, for the life of the process, and every later one
+/// [`OTHER_DOMAIN`] (the security review's L3). A domain keeps the label it
+/// got first, so a series never changes its name; lowering the bound keeps
+/// the labels already given.
+#[derive(Debug)]
+pub struct DomainLabels {
+    max: usize,
+    labelled: HashSet<String>,
+}
+
+impl DomainLabels {
+    /// Labels for at most `max` domains.
+    pub fn new(max: usize) -> Self {
+        Self {
+            max,
+            labelled: HashSet::new(),
+        }
+    }
+
+    /// Sets the bound for the domains seen from now on.
+    pub const fn set_max(&mut self, max: usize) {
+        self.max = max;
+    }
+
+    /// The label of `domain`: its own, while there is room or when it has
+    /// one already, else [`OTHER_DOMAIN`].
+    pub fn label<'a>(&mut self, domain: &'a str) -> Cow<'a, str> {
+        if self.labelled.contains(domain) {
+            return Cow::Borrowed(domain);
+        }
+        if self.labelled.len() < self.max {
+            self.labelled.insert(domain.to_owned());
+            return Cow::Borrowed(domain);
+        }
+        Cow::Borrowed(OTHER_DOMAIN)
+    }
+
+    /// Whether `domain` has a label of its own.
+    pub fn has_own(&self, domain: &str) -> bool {
+        self.labelled.contains(domain)
+    }
+
+    /// How many domains have a label of their own.
+    pub fn len(&self) -> usize {
+        self.labelled.len()
+    }
+
+    /// Whether no domain has a label yet.
+    pub fn is_empty(&self) -> bool {
+        self.labelled.is_empty()
+    }
+}
+
+/// The process's labels, behind every metric with a `domain` label.
+static DOMAINS: LazyLock<Mutex<DomainLabels>> =
+    LazyLock::new(|| Mutex::new(DomainLabels::new(DEFAULT_MAX_DOMAINS)));
+
+/// Bounds the `domain` label values (`server.metrics_max_domains`), once at
+/// the start of the server.
+pub fn bound_domains(max: usize) {
+    DOMAINS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .set_max(max);
+}
+
+/// The `domain` label a metric carries for `domain`: its own, or
+/// [`OTHER_DOMAIN`] past the bound ([`DomainLabels`]).
+pub fn domain_label(domain: &str) -> String {
+    DOMAINS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .label(domain)
+        .into_owned()
+}
 
 /// The label of an attempt or a request without a vendor.
 const NO_VENDOR: &str = "none";
@@ -101,7 +193,7 @@ fn vendor_label(vendor: &str) -> String {
 pub fn request(domain: &str, level: Level, outcome: Outcome, vendor: &str) {
     metrics::counter!(
         "kage_requests_total",
-        "domain" => domain.to_owned(),
+        "domain" => domain_label(domain),
         "level" => level.label(),
         "outcome" => outcome.as_str(),
         "vendor" => vendor_label(vendor),
@@ -113,7 +205,7 @@ pub fn request(domain: &str, level: Level, outcome: Outcome, vendor: &str) {
 pub fn attempt(domain: &str, level: Level, outcome: Outcome, vendor: &str, took: Duration) {
     metrics::counter!(
         "kage_attempts_total",
-        "domain" => domain.to_owned(),
+        "domain" => domain_label(domain),
         "level" => level.label(),
         "outcome" => outcome.as_str(),
         "vendor" => vendor_label(vendor),
@@ -156,10 +248,16 @@ pub fn refused(reason: Refusal) {
 }
 
 /// The blocks per hour that pause a domain under its policy (spec §11),
-/// for the alert that compares a domain's blocks with it (spec §20).
+/// for the alert that compares a domain's blocks with it (spec §20). Only
+/// for a domain with a label of its own: the threshold of one domain is
+/// none of the others' that share [`OTHER_DOMAIN`], so no series is made
+/// for that label (L3).
 pub fn breaker_threshold(domain: &str, threshold: u32) {
-    metrics::gauge!("kage_policy_breaker_threshold", "domain" => domain.to_owned())
-        .set(f64::from(threshold));
+    let label = domain_label(domain);
+    if label == OTHER_DOMAIN {
+        return;
+    }
+    metrics::gauge!("kage_policy_breaker_threshold", "domain" => label).set(f64::from(threshold));
 }
 
 /// Bytes passed through the forwarder since the last report, through
@@ -219,6 +317,39 @@ mod tests {
     use kage_core::schedule::queue::Priority;
 
     use super::vendor_label;
+
+    /// L3: the first domains get a label of their own and keep it; every
+    /// later one shares `other`; a bound changed later keeps what was given.
+    #[test]
+    fn the_domain_label_values_are_bounded() {
+        let mut labels = super::DomainLabels::new(2);
+        assert!(labels.is_empty());
+        assert_eq!(labels.label("a.example"), "a.example");
+        assert_eq!(labels.label("b.example"), "b.example");
+        assert_eq!(labels.label("c.example"), super::OTHER_DOMAIN);
+        assert_eq!(labels.label("a.example"), "a.example");
+        assert_eq!(labels.label("d.example"), "other");
+        assert_eq!(labels.len(), 2);
+        assert!(labels.has_own("b.example"));
+        assert!(!labels.has_own("c.example"));
+        labels.set_max(1);
+        assert_eq!(labels.label("b.example"), "b.example");
+        labels.set_max(3);
+        assert_eq!(labels.label("c.example"), "c.example");
+        assert_eq!(labels.label("e.example"), "other");
+        // A bound of 0 gives no domain a label of its own.
+        let mut none = super::DomainLabels::new(0);
+        assert_eq!(none.label("a.example"), "other");
+        // Ten thousand hosts make three series at most here.
+        let mut many = super::DomainLabels::new(3);
+        let distinct: std::collections::HashSet<String> = (0..10_000)
+            .map(|index| many.label(&format!("host-{index}.example")).into_owned())
+            .collect();
+        assert_eq!(distinct.len(), 4);
+        // The process's labels.
+        super::bound_domains(super::DEFAULT_MAX_DOMAINS);
+        assert_eq!(super::domain_label("shop.example"), "shop.example");
+    }
 
     #[test]
     fn an_attempt_without_a_vendor_is_labelled_none() {

@@ -21,7 +21,7 @@ over; **low**, defence in depth; **info**, a decision written down.
 | The operator (shell on the host, `deploy/.env`, `docker`) | everything: the master key, the database, the provider key, the CLI | — |
 | An API consumer (a key) | the scopes of its key, its own requests, results and jobs | other keys' data, the admin endpoints without `admin`, any address the SSRF guard refuses, the identity headers of a persona |
 | A page Kage fetches | nothing; its content is hostile by default | anything but the exit of its persona's proxy |
-| A sidecar | the persona profiles (the `personas` volume), the files it writes, one shared token | the provider's credentials, the master key, Postgres, any way out but kage's forwarder |
+| A sidecar | the persona profiles (the `personas` volume), the files it writes (the `sidecar-files` volume, since round E), one shared token | the provider's credentials, the master key, Postgres, any way out but kage's forwarder |
 | The proxy provider and its exits | the traffic of the personas (TLS is end to end) | the operator's own networks |
 
 The sidecar is the component a hostile page is most likely to take over
@@ -105,7 +105,8 @@ headers read within 10 s (slowloris), a request target of at most 8 KiB,
 at most 1024 connections, `server.request_timeout` (30 s) for every
 endpoint that does not wait for the network, 600 requests a minute for
 the whole API and each key's own rate, concurrency and daily page budget.
-At most 10 000 items a job and 100 steps a flow. A caller cannot set the
+At most 10 000 items a job and 100 steps a flow, and per key 20 open jobs
+and 20 000 of their items waiting (L2). A caller cannot set the
 identity or transport headers of a persona. Keys have scopes; the admin
 endpoints need `admin` and every admin call is in the audit log. The API
 listens on loopback; beyond it the connection is plain HTTP and needs a
@@ -144,9 +145,12 @@ A sidecar that was taken over
 - **cannot** exhaust Kage's memory with an answer: at most 128 MiB is read
   (fixed, S4);
 - **can** read and change every persona's profile (the `personas` volume
-  is the sidecars' by design) and read or delete what the artifacts
-  volume holds, the stored results of other requests included (V1,
-  accepted with a follow-up);
+  is the sidecars' by design) and the files the sidecars wrote and kage
+  has not yet taken; **cannot** read or delete the stored results of other
+  requests: the sidecars mount a volume of their own (`sidecar-files`)
+  that kage mounts below `sidecar/` of its artifacts directory, and never
+  the artifacts volume (fixed in round E, V1; `just hardening` refuses a
+  sidecar with any other volume, `tests/e2e/api.sh` looks from inside both);
 - **can** lie in its answers: a page, a verdict input or a self-test
   report. Kage judges blocks from what it is told; a lying sidecar can
   make a persona look blocked or healthy. That is the trust a browser
@@ -209,11 +213,11 @@ and in no release.
 | S3 | — | no test showed that logs and traces hold no secret | resolved: the redaction audit of the observability end-to-end test |
 | S5 | info | copies of the master key's bytes are not zeroed | accepted: they live as long as the process, which holds the key anyway |
 | L1 | info | the API's global rate is spent before the key is checked | accepted, by design: it bounds the key lookups an unauthenticated flood causes; a deployment that serves other machines limits clients at its reverse proxy |
-| L2 | low | jobs have global limits only: one key can queue many jobs | follow-up after 1.0: a per-key limit of open jobs and items |
-| L3 | low | the `domain` label of the request and attempt metrics grows with every domain asked for | follow-up after 1.0: a bound on distinct domains, the rest as `other`; until then, drop the label in Prometheus' relabelling where many domains are fetched |
+| L2 | low | jobs have global limits only: one key can queue many jobs | fixed in round E (F57): a key may have `jobs.max_open_per_key` (20) jobs open and `jobs.max_queued_items_per_key` (20 000) of their items waiting; past either `POST /v1/jobs` is `429 jobs_limited`, counted in `kage_api_refusals_total{code}`, checked and stored under one lock (`jobs::a_key_may_have_so_many_open_jobs_and_waiting_items`) |
+| L3 | low | the `domain` label of the request and attempt metrics grows with every domain asked for | fixed in round E (F57): the first `server.metrics_max_domains` (500) distinct domains since the start have a label of their own and every later one is `other`, in every metric with a `domain` label (`kage_scheduler::metrics::DomainLabels`, `the_domain_label_values_are_bounded`, `kage-api` `tests/metrics.rs`) |
 | L5 | info | the forwarder binds `0.0.0.0` by default | accepted: it opens nothing without a persona's credential and is never published; a bare `kage serve` on a host names `forwarder.bind` |
 | D1 | info | the database connection has no TLS by default | accepted: compose's Postgres is on the stack's own network; a remote database takes `sslmode=verify-full` in `database.url` (sqlx over rustls with the webpki roots; a private CA is named with `sslrootcert`) |
-| V1 | low | the artifacts volume is shared: a sidecar that was taken over can read and delete stored artifacts | follow-up after 1.0: a volume of their own for the sidecars' files, mounted below `sidecar/` in kage |
+| V1 | low | the artifacts volume is shared: a sidecar that was taken over can read and delete stored artifacts | fixed in round E (F57): the sidecars mount the `sidecar-files` volume at `/var/lib/kage/artifacts/sidecar`, kage mounts it at the same place below its `artifacts` volume, and no sidecar mounts `artifacts` (`deploy/compose.yaml`, both Dockerfiles create the directory for the image's user; `scripts/check-hardening.mjs`, `tests/e2e/api.sh`) |
 
 ## 2.0: camouflage levels and egress
 
@@ -320,7 +324,6 @@ it.
   or stored. With the setting the forwarder refuses that name before the
   proxy is asked (F57), and only a name whose answer changes between the
   forwarder's lookup and the proxy's still leaves (G2).
-- **The `domain` metric label** is unbounded until its follow-up (L3).
 
 ## Known tells
 

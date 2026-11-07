@@ -474,7 +474,9 @@ ships a matching one.
 
 The container: user 65532, read-only root filesystem, every capability
 dropped, `no-new-privileges`, Docker's default seccomp profile, writable
-`/tmp`, the personas and the artifacts volume, 1 GB of `/dev/shm`. The
+`/tmp`, the personas volume and the sidecars' own files (`sidecar-files`,
+below `/var/lib/kage/artifacts/sidecar`; never the stored results), 1 GB of
+`/dev/shm`. The
 stack smoke test checks it on a running container with a context open
 (`tests/e2e/firefox-hardening.mjs`).
 

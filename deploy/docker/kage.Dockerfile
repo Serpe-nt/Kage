@@ -55,6 +55,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     cargo auditable build --release --locked --package kage \
     && install -D --mode 0755 target/release/kage /out/usr/local/bin/kage \
     && install --directory --mode 0750 /out/var/lib/kage/artifacts \
+    && install --directory --mode 0750 /out/var/lib/kage/artifacts/sidecar \
     && install --directory --mode 0750 /out/var/lib/kage/personas
 
 # --- runtime ---------------------------------------------------------------

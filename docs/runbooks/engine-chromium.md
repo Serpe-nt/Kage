@@ -127,7 +127,8 @@ not be made at all; a request that reached the sidecar never is).
 
 - **User 65532, read-only root filesystem, every capability dropped,
   `no-new-privileges`.** Writable: `/tmp` (tmpfs), the personas volume, the
-  artifacts volume, `/dev/shm` (1 GB; the 64 MB default crashes tabs).
+  sidecars' own files (`sidecar-files`, below `/var/lib/kage/artifacts/sidecar`;
+  the stored results are on a volume no sidecar mounts), `/dev/shm` (1 GB; the 64 MB default crashes tabs).
 - **Chrome's sandbox on.** Kage never passes `--no-sandbox`. The sandbox
   puts every renderer into its own user, PID and network namespace and
   chroots it. Docker's default seccomp profile refuses those system calls

@@ -23,7 +23,7 @@ pub use caches::{
 pub use cookies::HttpCookieRepo;
 pub use events::{BreakerRepo, HealthEventRepo, SelftestRepo};
 pub use fetch::{AttemptRepo, RequestRepo, ResultRepo};
-pub use jobs::{Created, Deleted, FrontierRepo, JobCount, JobItemRepo, JobRepo, Tally};
+pub use jobs::{Created, Deleted, FrontierRepo, JobCount, JobItemRepo, JobRepo, OpenOfKey, Tally};
 pub use personas::{BrowserUpgrade, PersonaDomainStateRepo, PersonaRepo, Upgraded};
 pub use proxies::ProxyRepo;
 pub use webhooks::{AttemptEnd, WebhookRepo};

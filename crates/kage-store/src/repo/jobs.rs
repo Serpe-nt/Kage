@@ -159,6 +159,15 @@ pub struct JobCount {
     pub jobs: u64,
 }
 
+/// What one key has open ([`JobRepo::open_of_key`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpenOfKey {
+    /// Its jobs that are queued, running or paused.
+    pub jobs: u64,
+    /// The items of those jobs that wait.
+    pub queued_items: u64,
+}
+
 /// Inserts the items of a new job, a chunk per statement.
 async fn insert_items(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
@@ -728,6 +737,30 @@ impl JobRepo<'_> {
         .execute(self.pool)
         .await?;
         Ok(())
+    }
+
+    /// What one key has open (the security review's L2): its jobs that are
+    /// queued, running or paused, and the items of those jobs that wait.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the query fails.
+    pub async fn open_of_key(&self, api_key_id: ApiKeyId) -> Result<OpenOfKey, StoreError> {
+        let row = sqlx::query!(
+            r#"SELECT count(*) AS "jobs!",
+                      coalesce(sum((SELECT count(*) FROM job_items i
+                                    WHERE i.job_id = j.id AND i.state = 'queued')), 0)::bigint
+                          AS "items!"
+               FROM jobs j
+               WHERE j.api_key_id = $1 AND j.state IN ('queued', 'running', 'paused')"#,
+            api_key_id.as_uuid(),
+        )
+        .fetch_one(self.pool)
+        .await?;
+        Ok(OpenOfKey {
+            jobs: to_u64(("jobs", "count"), row.jobs)?,
+            queued_items: to_u64(("job_items", "count"), row.items)?,
+        })
     }
 
     /// How many jobs of each kind are in each state.

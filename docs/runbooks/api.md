@@ -69,6 +69,8 @@ working, `kage key revoke <id>` otherwise, then read what it did:
 | Requests per minute, per key | 60 | `429 rate_limited`, `limit: requests_per_minute` |
 | Requests in flight, per key | 4 | `429 concurrency_limited`; a fetch whose client hangs up gives its slot back and leaves the queue (F128) |
 | Pages a day (UTC), per key | none | `429 budget_exhausted`; `Retry-After` is the time to midnight UTC |
+| Open jobs (queued, running, paused), per key | `jobs.max_open_per_key` 20 | `429 jobs_limited` with `open_jobs` and `max_open_jobs`; `Retry-After` a minute |
+| Items of a key's open jobs waiting, the new job's included | `jobs.max_queued_items_per_key` 20 000 | `429 jobs_limited` with `queued_items` and `max_queued_items`; a crawl adds its pages as it reads them |
 | Requests per minute, all keys | `server.requests_per_minute` 600 | `429 rate_limited`, `limit: server.requests_per_minute` |
 
 Every `429` has `Retry-After`. A minute's allowance is a bucket: a key
@@ -995,8 +997,10 @@ and `kage_api_refusals_total{code}`, which counts what was refused for the
 key, its scope, its limits or the head of the request (`method` is one
 HTTP defines, `other` for anything else a client sends, so the series
 stay few whatever is sent; `scope_missing` is counted where a handler
-asks for its scope, F182): a rise of `invalid_key` is someone guessing, of
-`scope_missing` a consumer with the wrong key, of `rate_limited` one that
+asks for its scope, F182, and `jobs_limited` where `POST /v1/jobs` refuses a
+job): a rise of `invalid_key` is someone guessing, of
+`scope_missing` a consumer with the wrong key, of `jobs_limited` one that
+queues jobs faster than they are worked, of `rate_limited` one that
 needs a larger allowance or a slower loop.
 
 For jobs: `kage_jobs{job_type,state}` (a growing `paused` is sites that

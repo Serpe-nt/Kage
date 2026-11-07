@@ -80,7 +80,8 @@ pub use scheduler::{
     ServerErrorsConfig,
 };
 pub use server::{
-    MAX_API_BODY_BYTES, MAX_HEADER_BYTES, MIN_HEADER_BYTES, SecurityConfig, ServerConfig,
+    MAX_API_BODY_BYTES, MAX_HEADER_BYTES, MAX_METRICS_DOMAINS, MIN_HEADER_BYTES, SecurityConfig,
+    ServerConfig,
 };
 pub use telemetry::TelemetryConfig;
 

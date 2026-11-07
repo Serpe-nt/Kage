@@ -41,6 +41,11 @@ const EXCEPTIONS = {
  * to Postgres (spec §19, security review L4).
  */
 const BEHIND_KAGE = new Set(['browser-chromium', 'browser-firefox']);
+/**
+ * What a sidecar may mount: the persona profiles, and the volume of its own
+ * files below kage's artifacts directory (security review V1).
+ */
+const SIDECAR_VOLUMES = new Set(['/var/lib/kage/personas', '/var/lib/kage/artifacts/sidecar']);
 /** Services that may run without a Docker healthcheck, and why. */
 const NO_HEALTHCHECK = {
   migrate: 'it runs once and exits; kage waits for it to complete',
@@ -186,6 +191,13 @@ for (const stack of STACKS) {
         }
       }
       if ((service.ports ?? []).length > 0) note(at, 'publishes a port');
+      // A browser that was taken over sees the persona profiles and its own
+      // files, never the store of every request's results (security review V1).
+      for (const volume of service.volumes ?? []) {
+        if (!SIDECAR_VOLUMES.has(String(volume.target ?? ''))) {
+          note(at, `mounts ${volume.target}, which is neither the personas nor the sidecars' own files`);
+        }
+      }
     }
   }
 }

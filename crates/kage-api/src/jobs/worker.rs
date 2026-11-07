@@ -136,6 +136,8 @@ pub(crate) struct JobsHub {
     /// waits for them as it waits for its runners.
     carried: std::sync::atomic::AtomicUsize,
     carried_changed: Notify,
+    /// Held from the check of a key's open jobs to the job's insert (L2).
+    pub(crate) accepting: tokio::sync::Mutex<()>,
 }
 
 /// One fetch that is carried on, counted until it is written back.
@@ -179,6 +181,7 @@ impl JobsHub {
             sender: Mutex::new(None),
             carried: std::sync::atomic::AtomicUsize::new(0),
             carried_changed: Notify::new(),
+            accepting: tokio::sync::Mutex::new(()),
         }
     }
 
