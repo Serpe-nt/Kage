@@ -79,6 +79,7 @@ from a bundle and rebuilds (firewall off for the build, on again after).
 | `ops/` | the upgrade's world (`upgrade-world.yaml`, `upgrade-domains.yaml`, `capped-profile.yaml`, `r02-domains.yaml`) and the first start's (`fs-world.yaml`) | `QA_REPO=/target/qa/kage-202` with the 2.0.2 images for the old side, then main's on the same volumes |
 | `api/` | `nopool.sh NAME up\|url\|down`: a second server with no proxy pool, on a fresh database of its own, beside a stack that is up | api-09 |
 | `browser/` | `keys.html` (an input that writes every key event and the field's value into the document), `keys-analyze.mjs` | served by the responder; browser-06 |
+| `bgcalls/` | `sink.mjs` (a stand-in on 443 and 80 that logs the TLS server name or request line of each connection and answers nothing), `overlay-sink.yaml` (a DNS that answers Google's and Mozilla's zones with the sink, on a local bridge in assigned public space as round two's ssrf world: safe only with the egress DROP; read its head), `sink.sh`, `hosts.sh`, `exp.sh` | `--overlay=/scripts/qa/infra/bgcalls/overlay-sink.yaml BG_NET=11.66.77` with `KAGE_E2E_EGRESS_MODE=direct`; bgcalls-01, bgcalls-02 |
 | `flows/names3.sh` | writes `names3.yaml`, an overlay given at `up` that adds `s1..s8` and `n1..n6.qa.test` without recreating the proxies | `--overlay=` its output |
 
 `sweep3.sh` runs rounds one's and two's scripts (`r1-shared`, `r1-own`,
