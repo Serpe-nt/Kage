@@ -496,6 +496,15 @@ pub struct AttemptOutput {
     /// How the page was reached; `None` when the attempt asked the site
     /// for nothing, and for a flow.
     pub reached: Option<Reached>,
+    /// Every URL the http path's client sent a request to when the attempt
+    /// failed, the hop it failed on included (empty otherwise, and for a
+    /// browser, whose chain is in `page`): the attempt's own targets for
+    /// telling whose failure it was (`whose_failure`), never returned.
+    pub asked: Vec<Url>,
+    /// The callers besides the attempt's own whose credential its requests
+    /// left under at the forwarder: the exits a level 0 redirect to another
+    /// site left by (F166). Never returned.
+    pub asked_by: Vec<Caller>,
 }
 
 impl AttemptOutput {
@@ -517,6 +526,8 @@ impl AttemptOutput {
             behavior: None,
             flow: None,
             reached: None,
+            asked: Vec::new(),
+            asked_by: Vec::new(),
         }
     }
 
@@ -548,6 +559,8 @@ impl AttemptOutput {
             behavior: None,
             flow: None,
             reached: None,
+            asked: Vec::new(),
+            asked_by: Vec::new(),
         }
     }
 
@@ -1212,7 +1225,9 @@ fn blame_the_forwarder(mut output: AttemptOutput) -> AttemptOutput {
 }
 
 /// The hosts and ports an attempt asked for itself: its page, the
-/// redirects it followed and where it ended. A third party's host the page
+/// redirects it followed, where it ended and, for a failed attempt of the
+/// http path, every address its client sent a request to (the hop it
+/// failed on included). A third party's host the page
 /// loaded something from is none of them.
 fn targets_of(url: &Url, output: &AttemptOutput) -> Vec<(String, u16)> {
     let hops = output
@@ -1222,6 +1237,7 @@ fn targets_of(url: &Url, output: &AttemptOutput) -> Vec<(String, u16)> {
         .filter_map(|hop| Url::parse(hop).ok());
     std::iter::once(url.clone())
         .chain(hops)
+        .chain(output.asked.iter().cloned())
         .filter_map(|url| {
             let host = url.host_str()?.to_ascii_lowercase();
             Some((host, url.port_or_known_default()?))
@@ -1249,17 +1265,33 @@ fn whose_failure(
     };
     let targets = targets_of(url, &output);
     let targets = || targets.iter().map(|(host, port)| (host.as_str(), *port));
-    if meter.credential_refused_since(caller, targets(), started) {
+    // The attempt's own caller, and the exits its hops to other sites left
+    // by (F166): what the forwarder noted under any of them is the
+    // attempt's.
+    let callers: Vec<Caller> = std::iter::once(caller)
+        .chain(output.asked_by.iter().copied())
+        .collect();
+    if callers
+        .iter()
+        .any(|caller| meter.credential_refused_since(*caller, targets(), started))
+    {
         return blame_the_forwarder(output);
     }
-    if meter.unrelayed_since(caller, targets(), started) {
+    if callers
+        .iter()
+        .any(|caller| meter.unrelayed_since(*caller, targets(), started))
+    {
         return blame_the_proxy(output, true);
     }
-    let refused = meter.refused_since(caller, targets(), started);
+    let refused = callers
+        .iter()
+        .find_map(|caller| meter.refused_since(*caller, targets(), started));
     if refused.is_some() {
         return blame_the_refusal(output, refused);
     }
-    let relayed = meter.relayed_since(caller, targets(), started);
+    let relayed = callers
+        .iter()
+        .any(|caller| meter.relayed_since(*caller, targets(), started));
     blame_the_site(output, relayed)
 }
 
@@ -1452,9 +1484,12 @@ impl PathExecutor {
             Err(error) => {
                 // A hop the forwarder refused, under whichever exit it left by.
                 return std::iter::once(job.route)
-                    .chain(hop_routes)
+                    .chain(hop_routes.iter().copied())
                     .find_map(|route| self.refused_hop(Caller::Plain(route), mark, &asked))
-                    .unwrap_or_else(|| Self::http_failure(&error));
+                    .unwrap_or_else(|| {
+                        let by = hop_routes.into_iter().map(Caller::Plain).collect();
+                        Self::failed_asking(&error, asked, by)
+                    });
             }
         };
         let classification = self.verdicts.classify(&Observation {
@@ -1491,6 +1526,8 @@ impl PathExecutor {
             behavior: None,
             flow: None,
             reached: Some(Reached::Typed),
+            asked: Vec::new(),
+            asked_by: Vec::new(),
         }
     }
 
@@ -1607,7 +1644,7 @@ impl PathExecutor {
             Err(error) => {
                 return self
                     .refused_hop(Caller::Persona(persona.id), mark, &asked)
-                    .unwrap_or_else(|| Self::http_failure(&error));
+                    .unwrap_or_else(|| Self::failed_asking(&error, asked, Vec::new()));
             }
         };
 
@@ -1644,7 +1681,20 @@ impl PathExecutor {
             behavior: None,
             flow: None,
             reached: Some(reached),
+            asked: Vec::new(),
+            asked_by: Vec::new(),
         }
+    }
+
+    /// A failed attempt of the http path with every address its client
+    /// asked for and the other exits its hops left by: its own targets when
+    /// whose failure it was is told (QA round three, level0-01: a hop whose
+    /// tunnel the proxy refused read as the site's failure).
+    fn failed_asking(error: &HttpError, asked: Vec<Url>, asked_by: Vec<Caller>) -> AttemptOutput {
+        let mut output = Self::http_failure(error);
+        output.asked = asked;
+        output.asked_by = asked_by;
+        output
     }
 
     fn http_failure(error: &HttpError) -> AttemptOutput {
@@ -1936,6 +1986,8 @@ impl PathExecutor {
             cookies_to_http,
             behavior: Some(behavior),
             flow: job.flow.is_some().then_some(flow),
+            asked: Vec::new(),
+            asked_by: Vec::new(),
         }
     }
 
@@ -2584,6 +2636,54 @@ mod tests {
             );
             assert_eq!(output.reason.as_deref(), Some("proxy_failed"));
             serving.abort();
+        }
+
+        /// QA round three's level0-01: at level 0 a redirect hop whose
+        /// tunnel the proxy refused ends at the refusal, `proxy_refused`,
+        /// as the same target asked for directly and a browser's hop do
+        /// (F189): the hop the client failed on is among the attempt's own
+        /// targets, and a hop to another site counts under the exit it left
+        /// by (F166). It was `connection_failed`, the site's, retried and
+        /// booked as the site's server error.
+        #[tokio::test]
+        async fn a_level_0_hop_whose_tunnel_the_proxy_refused_ended_at_the_refusal() {
+            let meter = crate::forwarder::Meter::default();
+            let home = Caller::Plain(PlainRoute::Pool(ProxyId::new()));
+            let other = Caller::Plain(PlainRoute::Pool(ProxyId::new()));
+            let page = Url::parse("https://www.tlsf1.test/hop").unwrap();
+            let hop = Url::parse("https://www.tlsf1.test:9443/there").unwrap();
+            let started = tokio::time::Instant::now();
+            // The first page's tunnel opened, the hop's the proxy refused.
+            drop(meter.open_tunnel(home, "www.tlsf1.test", 443));
+            meter.note_refused(home, "www.tlsf1.test", 9443, 403);
+
+            let failed = unanswered(Outcome::ProviderError, "connection_failed");
+            // Without the hop among its targets the failure read as the
+            // site's (the finding).
+            let output = whose_failure(Some(&meter), failed.clone(), home, &page, started);
+            assert_eq!(output.reason.as_deref(), Some("connection_failed"));
+            let mut asked = failed.clone();
+            asked.asked = vec![page.clone(), hop];
+            let output = whose_failure(Some(&meter), asked, home, &page, started);
+            assert_eq!(output.reason.as_deref(), Some("proxy_refused"));
+            assert_eq!(output.classification.outcome, Outcome::ProviderError);
+            assert_eq!(output.courtesy, Courtesy::NotTheSite);
+            assert!(!output.classification.retryable);
+
+            // A hop to another site, which left by that site's own exit.
+            let first = Url::parse("https://www.l0j.test/").unwrap();
+            meter.note_refused(other, "www.l0o.test", 9443, 403);
+            let mut cross = failed;
+            cross.asked = vec![
+                first.clone(),
+                Url::parse("https://www.l0o.test:9443/").unwrap(),
+            ];
+            let output = whose_failure(Some(&meter), cross.clone(), home, &first, started);
+            assert_eq!(output.reason.as_deref(), Some("connection_failed"));
+            cross.asked_by = vec![other];
+            let output = whose_failure(Some(&meter), cross, home, &first, started);
+            assert_eq!(output.reason.as_deref(), Some("proxy_refused"));
+            assert!(!output.classification.retryable);
         }
 
         #[tokio::test]

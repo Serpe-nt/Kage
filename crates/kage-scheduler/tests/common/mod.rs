@@ -298,6 +298,8 @@ fn answered(outcome: Outcome, block: Option<Block>, status: u16) -> AttemptOutpu
         fetched: None,
         cookies_to_browser: None,
         cookies_to_http: None,
+        asked: Vec::new(),
+        asked_by: Vec::new(),
         behavior: None,
         flow: None,
         reached: None,
