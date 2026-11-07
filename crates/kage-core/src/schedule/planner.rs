@@ -1392,6 +1392,19 @@ impl Planner {
         let waiting_for = possible
             .iter()
             .filter(|one| room || one.visiting || past_room);
+        // Nobody it may have is visiting and there is no room for a new
+        // visitor: the domain's visitors are ones it may not have (a job's
+        // retry leaves out the persona that failed, which may be the
+        // domain's one visitor). Then the work waits for a visit to end,
+        // and is looked at again when the first one does; before, nothing
+        // planned it again, and a crawl's page waited for good (QA round
+        // three, lock-01).
+        let room_at = waiting_for
+            .clone()
+            .next()
+            .is_none()
+            .then(|| self.first_visit_end(&work.domain, now))
+            .flatten();
         let first = waiting_for
             .clone()
             .filter(|one| !claimed.contains(&one.view.id))
@@ -1404,9 +1417,26 @@ impl Planner {
                 Looked::Wait(_) => Looked::Wait(first),
                 refused => refused,
             },
+            // Nobody to wait for but the end of a visit: then, or refused
+            // with that moment past the work's patience.
+            _ if room_at.is_some() => self.wait_or_give_up(work, room_at),
             // Everyone who could is making an attempt, or is spoken for.
             _ => Looked::Wait(first),
         }
+    }
+
+    /// When the first visit of the domain ends by itself ([`Self::visit_end`]).
+    /// `None` when none does: a visitor that is making an attempt plans
+    /// again when the attempt ends.
+    fn first_visit_end(&self, domain: &str, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        self.cadences
+            .iter()
+            .filter(|((persona, on), cadence)| {
+                on == domain && self.is_visiting(*persona, cadence, now)
+            })
+            .filter_map(|((persona, _), cadence)| self.visit_end(*persona, cadence))
+            .filter(|end| *end > now)
+            .min()
     }
 
     /// When a persona has to wait because another persona's start left a

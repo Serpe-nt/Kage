@@ -314,6 +314,18 @@ version's date is the day, in UTC, its tag was made.
   moment to come back, so a job was still told "a minute on" through a
   backoff that can last an hour. Such a persona now carries its proxy's
   `backoff_until`, and `paused.until` is the first one's.
+- **A job's page never waits for a visit that does not end (QA round
+  three, lock-01).** A job's retry leaves out the persona whose attempt
+  failed; when that persona was the domain's one visitor under
+  `domain_concurrency: 1`, nobody the page could have was visiting and
+  there was no room for another, and nothing planned it again: after a
+  kill and a restart of the server a crawl's page (sometimes a batch's)
+  stayed `running` with nothing in flight until a cancel. The page now
+  waits for that visit to end (`scheduler.visit_idle` after its last page
+  at most) and goes on then, or is told the moment when that is past its
+  patience. A context another server opened with other parameters
+  (`context_conflict`) is the persona still busy, as `context_busy` is: no
+  retry spent, no page of the day.
 - **The documents say what Kage does (F145).** The block report runbook
   names `block.type` (it said `block.kind`) and no pacing "that never
   fetches"; the observability runbook names `bandwidth.monthly_cap_gb`;

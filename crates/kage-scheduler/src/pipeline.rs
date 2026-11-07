@@ -114,8 +114,8 @@ use crate::SchedulerError;
 use crate::archive::{Archive, Archived, Keep};
 use crate::backend::Backend;
 use crate::executor::{
-    Arrival, AttemptExecutor, AttemptJob, AttemptOutput, BehaviorWish, CONTEXT_BUSY, FlowPlan,
-    PlainJob, SiteExits, default_capture, default_wait,
+    Arrival, AttemptExecutor, AttemptJob, AttemptOutput, BehaviorWish, CONTEXT_BUSY,
+    CONTEXT_CONFLICT, FlowPlan, PlainJob, SiteExits, default_capture, default_wait,
 };
 use crate::forwarder::PlainRoute;
 use crate::metrics;
@@ -1166,7 +1166,10 @@ impl Pipeline {
                 (
                     attempt.persona_id,
                     attempt.outcome,
-                    attempt.reason.as_deref() == Some(CONTEXT_BUSY),
+                    matches!(
+                        attempt.reason.as_deref(),
+                        Some(CONTEXT_BUSY | CONTEXT_CONFLICT)
+                    ),
                 )
             }),
         );
@@ -2032,7 +2035,10 @@ impl Pipeline {
         // wait, not a failure: it spends no retry, it is no page of the
         // persona's day on the site, and the breakers' trials go back
         // (QA round three, flows-01, lock-01).
-        let unmade = output.reason.as_deref() == Some(CONTEXT_BUSY);
+        let unmade = matches!(
+            output.reason.as_deref(),
+            Some(CONTEXT_BUSY | CONTEXT_CONFLICT)
+        );
         let ruling = if unmade {
             course.progress.record_unmade(persona.id)
         } else {

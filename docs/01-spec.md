@@ -1248,13 +1248,14 @@ Opening is idempotent per persona: the same request again answers with the
 open context (`reused: true`), a different request for a persona whose
 context is open answers `context_conflict`, one context more than the cap
 answers `context_limit`, and a second operation on a context that is busy
-answers `context_busy`. For Kage that refusal means "the persona is still
-busy", never a failure of the request (QA round three, flows-01): an
-attempt whose operation is refused so waits for the context to run
-nothing (it asks with `state/export` of an origin no page can be on,
-without storage, once a second) for as long as the operation itself may
-take, and asks again; one that is still refused at that bound asked the
-site nothing, spends no retry, is no page of the persona's day on the
+answers `context_busy`. For Kage that refusal, and `context_conflict` from
+a context another server opened (a kill and a restart, a hand-over), means
+"the persona is still busy", never a failure of the request (QA round
+three, flows-01, lock-01): an operation refused as busy waits for the
+context to run nothing (Kage asks with `state/export` of an origin no page
+can be on, without storage, once a second) for as long as the operation
+itself may take, and is asked again; an attempt that still ends refused
+either way asked the site nothing, spends no retry, is no page of the persona's day on the
 site, gives a breaker's trial back and leaves the persona to take the
 next attempt, up to three such attempts per request, after which they
 count as failures. Requests and responses are validated against the
@@ -2968,7 +2969,14 @@ start and says so; one that lost its connection and finds the lock taken
 by another stops (F174). A job whose worker stopped is claimed again when
 its lease ran out, by the server started after it, and goes on where its
 items stand: Postgres lets the lock go with the session of a server that
-was killed, so the next one starts at once. An item names the request that carries
+was killed, so the next one starts at once. The persona's context may
+still run the operation of the server that was killed, or be open with
+that server's parameters: the first attempts of the new server wait for
+it or count against nothing (`context_busy`, `context_conflict`, §10.1),
+and a page whose retry may not have the domain's one visitor waits for
+that visit to end and is looked at again then, so that no item stays
+`running` with nothing in flight (QA round three, lock-01: a crawl's page
+stayed so for good). An item names the request that carries
 it out before that request is written, so a request is never begun twice.
 A cancel is read with every renewal of the lease and at once on the server
 that works the job: what waits is cancelled, an item that waits for its
