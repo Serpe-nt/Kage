@@ -278,6 +278,15 @@ it.
 
 ## Accepted exceptions
 
+- **CVE-2026-76844 and CVE-2026-85091 (`zlib1g` of the distroless runtime
+  base)** are ignored in `.trivyignore` until 2026-11-21 or the first
+  `gcr.io/distroless/cc-debian13` build with Debian's `+deb13u1`, whichever
+  comes first. Trivy learned them on 2026-11-06 and refused the `kage` image
+  of the 2.0.3 release for them. The `kage` binary never loads `libz.so.1`
+  (its deflate is Rust; `readelf -d` lists `libstdc++`, `libgcc_s`, `libm`,
+  `libc` and the loader only), and the distroless image has no shell and no package
+  manager, so nothing in it reaches the library. The engine images take
+  Debian's fix at build.
 - **RUSTSEC-2026-0391, -0398, -0403 (`zstd` 0.13.3, `zstd-safe` 7.3.0)**
   are ignored in `deny.toml` and `.cargo/audit.toml` until 2026-12-31 or
   the first `wreq-util` on `zstd` 0.14, whichever comes first. They come

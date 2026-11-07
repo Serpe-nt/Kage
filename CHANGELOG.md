@@ -54,6 +54,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   no way to reach the tab sooner; spec §10.5 and the Chromium runbook say
   what was measured. The default `inject: none` is not affected.
 
+### Security
+
+- **Two `zlib1g` findings of the `kage` image's runtime base are accepted
+  until 2026-11-21.** Trivy refused the `kage` image of the 2.0.3 release
+  for CVE-2026-76844 and CVE-2026-85091 in the distroless base's `zlib1g`,
+  fixed in Debian but in no distroless build yet. The `kage` binary never
+  loads `libz.so.1`, and the image has no shell or package manager, so
+  nothing reaches the library; `.trivyignore` accepts both until the base
+  carries the fix or 2026-11-21, whichever comes first.
+
 ## [2.0.3] - 2026-11-06
 
 ### Fixed
