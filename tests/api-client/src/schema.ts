@@ -1411,7 +1411,7 @@ export interface components {
          *     what a problem document carries as `code`.
          * @enum {string}
          */
-        ErrorCode: "missing_key" | "invalid_key" | "key_disabled" | "scope_missing" | "rate_limited" | "concurrency_limited" | "budget_exhausted" | "invalid_request" | "validation_failed" | "invalid_url" | "ssrf_denied" | "header_denied" | "header_invalid" | "header_not_placeable" | "level_required" | "level_below_policy" | "level_unavailable" | "level_include_conflict" | "level_kind_conflict" | "level_needs_http" | "session_needs_persona" | "request_kind_needs_referer" | "preflight_required" | "timeout_too_short" | "robots_enforced" | "robots_ignored" | "cache_ttl_too_long" | "invalid_pacing" | "invalid_session_id" | "session_not_found" | "session_persona_conflict" | "no_matching_persona" | "not_found" | "method_not_allowed" | "result_not_found" | "artifact_not_found" | "persona_not_found" | "proxy_not_found" | "key_not_found" | "job_not_found" | "idempotency_key_reused" | "webhook_origin_not_allowed" | "driver_input_denied" | "conflict" | "payload_too_large" | "uri_too_long" | "headers_too_large" | "unsupported_media_type" | "request_timeout" | "unavailable" | "internal";
+        ErrorCode: "missing_key" | "invalid_key" | "key_disabled" | "scope_missing" | "rate_limited" | "concurrency_limited" | "jobs_limited" | "budget_exhausted" | "invalid_request" | "validation_failed" | "invalid_url" | "ssrf_denied" | "header_denied" | "header_invalid" | "header_not_placeable" | "level_required" | "level_below_policy" | "level_unavailable" | "level_include_conflict" | "level_kind_conflict" | "level_needs_http" | "session_needs_persona" | "request_kind_needs_referer" | "preflight_required" | "timeout_too_short" | "robots_enforced" | "robots_ignored" | "cache_ttl_too_long" | "invalid_pacing" | "invalid_session_id" | "session_not_found" | "session_persona_conflict" | "no_matching_persona" | "not_found" | "method_not_allowed" | "result_not_found" | "artifact_not_found" | "persona_not_found" | "proxy_not_found" | "key_not_found" | "job_not_found" | "idempotency_key_reused" | "webhook_origin_not_allowed" | "driver_input_denied" | "conflict" | "payload_too_large" | "uri_too_long" | "headers_too_large" | "unsupported_media_type" | "request_timeout" | "unavailable" | "internal";
         /**
          * @description Where a plain client's attempt (level 0) left from: never an address.
          * @enum {string}
@@ -4413,7 +4413,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description A limit of the key or of the API. */
+            /** @description A limit of the key or of the API; `jobs_limited`: the key has as many open jobs (`jobs.max_open_per_key`) or waiting items (`jobs.max_queued_items_per_key`) as it may have. */
             429: {
                 headers: {
                     [name: string]: unknown;

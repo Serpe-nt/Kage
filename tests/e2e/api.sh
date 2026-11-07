@@ -14,6 +14,8 @@
 #     client that was generated from the API's OpenAPI document
 #     (tests/api-client), with the stored result and the kept document and
 #     screenshot read back;
+#   - a sidecar that sees its own files and nothing of the stored results
+#     (the security review's V1);
 #   - the same page at level 0 (spec §25): a plain client, nobody's, from
 #     the site's scout's address;
 #   - a session that pins its requests to one persona and never moves;
@@ -303,6 +305,23 @@ check "both engines fetched the page, kept its document and a screenshot, and re
     "d.pages.length === 2 && d.pages[0].engine === 'chromium' && d.pages[1].engine === 'firefox' && d.pages.every((p) => p.status === 200 && p.document_bytes > 100 && p.screenshot_bytes > 1000 && /^p_[0-9a-f]{16}\$/.test(p.persona)) && d.pages[0].persona !== d.pages[1].persona && d.refused === 'ssrf_denied'"
 echo "    $(value "${summary}" "d.pages.map((p) => p.engine + ': persona ' + p.persona + ', document ' + p.document_bytes + ' B, screenshot ' + p.screenshot_bytes + ' B, dwelt ' + p.dwell_ms + ' ms, ' + p.total_ms + ' ms in all').join('; ')")"
 first="$(value "${summary}" "d.pages[0].id")"
+
+echo "==> a sidecar sees its own files and none of the stored results (the security review's V1)"
+# Both engines just handed kage a screenshot, which kage took into its store
+# (read back above). The sidecars' files are a volume of their own, mounted
+# below the artifacts directory: a sidecar sees that and nothing else of it,
+# and can write nowhere else.
+for engine in chromium firefox; do
+    seen="$("${compose[@]}" exec -T "browser-${engine}" node -e "
+const fs = require('node:fs');
+let written = 'refused';
+try { fs.writeFileSync('/var/lib/kage/artifacts/probe', 'x'); written = 'written'; } catch {}
+console.log(JSON.stringify({ top: fs.readdirSync('/var/lib/kage/artifacts'), written }));
+")"
+    check "browser-${engine} sees the sidecars' own area and nothing of the store" "${seen}" \
+        "d.top.length === 1 && d.top[0] === 'sidecar' && d.written === 'refused'"
+done
+echo "    both sidecars: /var/lib/kage/artifacts holds only sidecar/, read-only around it"
 
 echo "==> what one key fetched, another key cannot read; an admin can, and sees the persona as it is"
 call GET "/v1/results/${first}" "${reader}"

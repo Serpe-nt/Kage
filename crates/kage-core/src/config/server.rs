@@ -38,6 +38,12 @@ pub struct ServerConfig {
     /// publish this port.
     #[serde(default)]
     pub metrics_bind: Option<SocketAddr>,
+    /// How many distinct domains get a `domain` label of their own in the
+    /// metrics (the security review's L3): the first ones since the start;
+    /// every later domain is counted under `other`. At most
+    /// [`MAX_METRICS_DOMAINS`]; `0` labels every domain `other`.
+    #[serde(default = "default_metrics_max_domains")]
+    pub metrics_max_domains: u32,
     /// Largest request body, in bytes.
     #[serde(default = "default_max_body_bytes")]
     pub max_body_bytes: u64,
@@ -79,6 +85,14 @@ pub struct ServerConfig {
     /// Serve Swagger UI at `/docs` to keys with the `admin` scope.
     #[serde(default = "default_true")]
     pub docs: bool,
+}
+
+/// The most `server.metrics_max_domains` may be: beyond it the series of one
+/// Prometheus scrape grow past what a dashboard reads.
+pub const MAX_METRICS_DOMAINS: u32 = 10_000;
+
+const fn default_metrics_max_domains() -> u32 {
+    500
 }
 
 const fn default_bind() -> SocketAddr {
@@ -139,6 +153,7 @@ impl Default for ServerConfig {
             bind: default_bind(),
             healthcheck_addr: default_healthcheck_addr(),
             metrics_bind: None,
+            metrics_max_domains: default_metrics_max_domains(),
             max_body_bytes: default_max_body_bytes(),
             max_header_bytes: default_max_header_bytes(),
             max_headers: default_max_headers(),
@@ -233,6 +248,11 @@ pub(super) fn validate(server: &ServerConfig) -> Result<(), String> {
     if server.max_connections == 0 {
         return Err("server.max_connections must be at least 1".to_owned());
     }
+    if server.metrics_max_domains > MAX_METRICS_DOMAINS {
+        return Err(format!(
+            "server.metrics_max_domains is at most {MAX_METRICS_DOMAINS}"
+        ));
+    }
     if server.metrics_bind == Some(server.bind) {
         return Err(
             "server.metrics_bind must not be the address of the API: it serves metrics without \
@@ -288,6 +308,7 @@ mod tests {
         assert_eq!(server.bind.to_string(), "127.0.0.1:8080");
         assert!(server.bind.ip().is_loopback());
         assert_eq!(server.metrics_bind, None);
+        assert_eq!(server.metrics_max_domains, 500);
         assert_eq!(server.max_body_bytes, 1024 * 1024);
         assert_eq!(server.max_header_bytes, 16 * 1024);
         assert_eq!(server.max_headers, 64);
@@ -309,6 +330,10 @@ mod tests {
         };
 
         assert!(broken(|server| server.max_body_bytes = 0).starts_with("server.max_body_bytes"));
+        assert!(
+            broken(|server| server.metrics_max_domains = super::MAX_METRICS_DOMAINS + 1)
+                .starts_with("server.metrics_max_domains")
+        );
         assert!(
             broken(|server| server.max_body_bytes = u64::MAX).starts_with("server.max_body_bytes")
         );

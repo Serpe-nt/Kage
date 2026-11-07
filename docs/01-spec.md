@@ -1272,7 +1272,9 @@ main body, captured XHR/fetch responses (filtered by content-type and size),
 console entries, timing, challenge signals (vendor scripts seen,
 interstitial detected and whether it auto-resolved within
 `challenge_wait_ms`), screenshots and PDFs as artifact references (sidecar
-writes them to the shared artifacts volume, below `sidecar/<id>/`, and
+writes them below `sidecar/<id>/` of the artifacts directory, on a volume of
+the sidecars' own that kage mounts there and that is all a sidecar sees of
+the directory (`sidecar-files` in compose; the security review's V1), and
 returns their paths, sizes and SHA-256). Kage takes such a file only as it
 is described: below `sidecar/`, with a real path that stays there, a plain
 file (no link at its last step, no pipe, device or directory), at most
@@ -2547,7 +2549,15 @@ from the stored requests, so a restart forgets nothing). The API as a
 whole has `server.requests_per_minute` (600), counted before a key is
 looked at, so guessing keys is limited too. All are `429` with
 `Retry-After` and a code that says which (`rate_limited`,
-`concurrency_limited`, `budget_exhausted`).
+`concurrency_limited`, `budget_exhausted`). A key may also have
+`jobs.max_open_per_key` (20) jobs open (queued, running or paused) and
+`jobs.max_queued_items_per_key` (20 000, at least `jobs.max_items`) items
+of them waiting at once, the new job's included; past either, `POST
+/v1/jobs` is `429 jobs_limited` with the counts and the bounds, a
+`Retry-After` of a minute, and nothing stored (the security review's L2).
+A crawl counts its pages as it adds them, none at acceptance. The check
+and the insert are one step for the server, so two jobs asked for at once
+cannot both pass it.
 
 Keys are made, listed, disabled and rotated through the admin endpoints or
 `kage key create|list|revoke|rotate`, which works on the store and needs no
@@ -3092,7 +3102,9 @@ longer than it is refused at load, at a reload and by `kage config
 check`, F136), `bandwidth` and `forwarder` (§7.5).
 `kage config check` reports the scheduler's caps, the budget and the
 forwarder. `server` holds what the API's listener enforces (§19): `bind`
-(`127.0.0.1:8080`), `metrics_bind` (unset), `max_body_bytes` (1 MiB),
+(`127.0.0.1:8080`), `metrics_bind` (unset), `metrics_max_domains` (500, at
+most 10 000: the distinct domains with a `domain` label of their own in the
+metrics, §20), `max_body_bytes` (1 MiB),
 `max_header_bytes` (16 KiB), `max_headers` (64), `max_uri_bytes` (8 KiB),
 `header_read_timeout` (10 s), `body_read_timeout` (30 s),
 `request_timeout` (30 s, for everything but a fetch, a self-test and a
@@ -3104,7 +3116,7 @@ wildcard, which would be compared as it is written and match nothing;
 F136) and `docs` (true). `security` holds
 `allow_ip_targets`, `resolve_on_host` and `expose_set_cookie`, all false.
 `jobs` holds `max_items` (10 000), `max_running` (8), `max_items_in_flight`
-(24), `max_age` (7 d), `retention_days` (14), `lease` (1 m),
+(24), `max_open_per_key` (20), `max_queued_items_per_key` (20 000, §16.2), `max_age` (7 d), `retention_days` (14), `lease` (1 m),
 `poll_interval` (2 s), `idempotency_ttl` (1 d) and `wind_down` (150 s, at
 most 15 m: how long a server that stops waits for the pages that are
 being read, §16.6). `webhooks` holds
@@ -3516,13 +3528,21 @@ are gzip-compressed on disk.
   `incomplete`), `sidecar_flows_total{engine,result}` (`ok`, `failed`,
   `error`), and each sidecar's process and Node.js families (`process_*`,
   `nodejs_*`), every one under its `engine` (F144).
+  The values of every `domain` label are bounded (the security review's
+  L3): the first `server.metrics_max_domains` (500) distinct domains since
+  the start have a label of their own, and every later domain is counted
+  under `other` (a domain has a dot, so no site is named so); a domain
+  past the bound sets no `kage_policy_breaker_threshold`, and
+  `kage_breaker_open{domain="other"}` is 1 while any of them is paused.
   The API adds `kage_api_requests_total{route,method,status}` (the route
   is the pattern, never the path a client sent; the method one HTTP
   defines, `other` for anything else a client sends, F131),
   `kage_api_request_duration_seconds{route,method}`,
   `kage_api_requests_in_flight` and `kage_api_refusals_total{code}` (what
   was refused for the key, its scope, its limits or the target's length;
-  `scope_missing` counted where a handler asks for its scope, F182).
+  `scope_missing` counted where a handler asks for its scope, F182, and
+  `jobs_limited` where `POST /v1/jobs` refuses a job for the key's open
+  jobs, L2).
   Jobs add `kage_jobs{job_type,state}`, `kage_job_items{state}` (what
   waits and what is being worked) and `kage_webhook_deliveries_pending`,
   read from the store at the scrape, and `kage_jobs_accepted_total{job_type,level}`,

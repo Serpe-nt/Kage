@@ -699,5 +699,31 @@ async fn metrics_expose_the_series_of_the_specification() {
         .and_then(|value| value.trim().parse::<f64>().ok());
     // The scrape itself is the one request in flight.
     assert_eq!(in_flight, Some(1.0), "{text}");
+
+    // L3: the `domain` label's values are bounded. Six hundred hosts asked
+    // for (past the default 500, with the test's own sites before them)
+    // make at most 500 label values of their own and `other`.
+    for number in 0..600 {
+        kage_scheduler::metrics::request(
+            &format!("host-{number}.flood.test"),
+            kage_core::domain::Level::Plain,
+            kage_core::outcome::Outcome::Ok,
+            "",
+        );
+    }
+    let scraped = send(Method::GET, "/metrics", Some(&admin), None).await;
+    let text = String::from_utf8(scraped.body.to_vec()).unwrap();
+    let domains: std::collections::HashSet<&str> = text
+        .lines()
+        .filter(|line| line.starts_with("kage_requests_total{"))
+        .filter_map(|line| line.split("domain=\"").nth(1)?.split('"').next())
+        .collect();
+    assert!(domains.contains("other"), "{domains:?}");
+    assert!(domains.contains("shop.kage.test"), "{domains:?}");
+    assert!(
+        domains.len() <= kage_scheduler::metrics::DEFAULT_MAX_DOMAINS + 1,
+        "{}",
+        domains.len()
+    );
     api.shut_down().await;
 }

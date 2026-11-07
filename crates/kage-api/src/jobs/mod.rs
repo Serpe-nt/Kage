@@ -327,7 +327,7 @@ async fn check_session(
         (status = 404, description = "`session_not_found`.", body = Problem, content_type = "application/problem+json"),
         (status = 409, description = "`idempotency_key_reused`, `session_persona_conflict`.", body = Problem, content_type = "application/problem+json"),
         (status = 422, description = "The job cannot be accepted as asked; `code` says why, `item` (a batch's item, a crawl's seed) or `step` which part.", body = Problem, content_type = "application/problem+json"),
-        (status = 429, description = "A limit of the key or of the API.", body = Problem, content_type = "application/problem+json"),
+        (status = 429, description = "A limit of the key or of the API; `jobs_limited`: the key has as many open jobs (`jobs.max_open_per_key`) or waiting items (`jobs.max_queued_items_per_key`) as it may have.", body = Problem, content_type = "application/problem+json"),
         (status = 503, description = "Nothing can be fetched: no proxy pool, or the server stops.", body = Problem, content_type = "application/problem+json"),
     ),
     security(("api_key" = ["jobs"]))
@@ -491,12 +491,18 @@ pub(crate) async fn create(
         started_at: None,
         finished_at: None,
     };
+    // One key's open jobs and the items of them that wait are bounded (the
+    // security review's L2): checked and stored under one lock, so that
+    // two jobs of a key asked for at once cannot both slip past the bound.
+    let accepting = state.jobs().accepting.lock().await;
+    within_key_limits(&state, &caller, items.len()).await?;
     let created = state
         .store()
         .jobs()
         .create(&job, &items, now)
         .await
         .map_err(|error| ApiError::internal(&error))?;
+    drop(accepting);
     if let Created::Existing(existing) = created {
         // The same key came twice at the same moment: the first one won.
         return replayed(&state, &existing, hash).await;
@@ -526,6 +532,53 @@ pub(crate) async fn create(
     }
     Ok(response)
 }
+
+/// Refuses a job of `adding` items for a key that has as many open jobs as
+/// `jobs.max_open_per_key`, or whose waiting items would pass
+/// `jobs.max_queued_items_per_key` (the security review's L2): `429
+/// jobs_limited`, counted in `kage_api_refusals_total{code}`. A crawl adds
+/// its items as it reads its pages and counts none here; its `max_pages`
+/// bounds it.
+async fn within_key_limits(state: &ApiState, caller: &Caller, adding: usize) -> ApiResult<()> {
+    let limits = state.config().jobs;
+    let open = state
+        .store()
+        .jobs()
+        .open_of_key(caller.key.id)
+        .await
+        .map_err(|error| ApiError::internal(&error))?;
+    let adding = u64::try_from(adding).unwrap_or(u64::MAX);
+    let jobs_full = open.jobs >= u64::from(limits.max_open_per_key);
+    let items_full =
+        open.queued_items.saturating_add(adding) > u64::from(limits.max_queued_items_per_key);
+    if !jobs_full && !items_full {
+        return Ok(());
+    }
+    crate::metrics::refusal(ErrorCode::JobsLimited.as_str());
+    let detail = if jobs_full {
+        format!(
+            "this key has {} open job(s), as many as it may have ({}): ask again when one ended",
+            open.jobs, limits.max_open_per_key
+        )
+    } else {
+        format!(
+            "this key has {} item(s) of its open jobs waiting, and {adding} more would pass the \
+             {} it may have: ask again when they were worked",
+            open.queued_items, limits.max_queued_items_per_key
+        )
+    };
+    Err(ApiError::new(ErrorCode::JobsLimited, detail)
+        .with("open_jobs", open.jobs)
+        .with("max_open_jobs", limits.max_open_per_key)
+        .with("queued_items", open.queued_items)
+        .with("max_queued_items", limits.max_queued_items_per_key)
+        // A hint: when a job ends is not known here, and every 429 of a
+        // key's limits says when to ask again.
+        .retry_after(JOBS_LIMITED_RETRY))
+}
+
+/// The `Retry-After` of `jobs_limited` (L2).
+const JOBS_LIMITED_RETRY: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// A job: its state, how far it has come, and how the deliveries of its
 /// webhook stand.

@@ -193,8 +193,8 @@ RUN --mount=type=cache,id=kage-camoufox,target=/var/cache/kage,sharing=locked \
     && dpkg-query --show --showformat '${Package} ${Version}\n' pulseaudio > /etc/kage/audio
 
 # The runtime needs node only: drop the package managers. The user has the
-# same numeric identity as in the kage image, so both can share the artifacts
-# volume. No file keeps a setuid or setgid bit (the base image's su, passwd
+# same numeric identity as in the kage image, so both can share the volume of
+# the sidecars' files (mounted below the artifacts directory, V1). No file keeps a setuid or setgid bit (the base image's su, passwd
 # and mount, Chrome's chrome-sandbox): nothing here may change its user, and
 # Chrome sandboxes its renderers with namespaces, which no-new-privileges
 # would keep a setuid helper from doing anyway (scripts/check-hardening.mjs).
@@ -205,7 +205,7 @@ RUN rm -rf /usr/local/lib/node_modules /usr/local/bin/npm /usr/local/bin/npx \
     && useradd --uid 65532 --gid 65532 --no-create-home --home-dir /nonexistent \
         --shell /usr/sbin/nologin kage \
     && install --directory --owner kage --group kage --mode 0750 \
-        /var/lib/kage/personas /var/lib/kage/artifacts
+        /var/lib/kage/personas /var/lib/kage/artifacts /var/lib/kage/artifacts/sidecar
 
 COPY --from=deps /app/sidecar /app/sidecar
 

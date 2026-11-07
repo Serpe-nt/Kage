@@ -40,7 +40,11 @@ x-sidecar: &sidecar
   tmpfs: [/tmp]
   volumes:
     - personas:/var/lib/kage/personas
-    - artifacts:/var/lib/kage/artifacts
+    # The sidecars' own files (screenshots, PDFs, large captured bodies),
+    # and nothing else: kage takes each into its store and removes it. The
+    # stored results of every request stay on the artifacts volume, which
+    # no sidecar mounts (the security review's V1).
+    - sidecar-files:/var/lib/kage/artifacts/sidecar
   mem_limit: 4g
   cpus: 2
   pids_limit: 1024
@@ -144,6 +148,9 @@ services:
       # deletes the archive after personas.retention_days.
       - personas:/var/lib/kage/personas
       - artifacts:/var/lib/kage/artifacts
+      # Below the artifacts volume: the files the sidecars hand over, on a
+      # volume of their own that is all a sidecar sees (V1).
+      - sidecar-files:/var/lib/kage/artifacts/sidecar
       # The declared list when KAGE_STATIC_LIST_FILE names one (an absolute
       # path, or one relative to this directory: list.txt, ./secrets/list.txt),
       # else nothing. The long form on purpose: in the short one compose takes
@@ -327,4 +334,5 @@ secrets:
 volumes:
   personas:
   artifacts:
+  sidecar-files:
   pgdata:

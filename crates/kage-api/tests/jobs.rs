@@ -2162,3 +2162,65 @@ async fn a_carried_fetch_nobody_can_read_soon_says_paused_with_its_reason_and_mo
     work.stop().await;
     api.shut_down().await;
 }
+
+/// L2 (the security review): one key may have `jobs.max_open_per_key` jobs
+/// open and `jobs.max_queued_items_per_key` of their items waiting; past
+/// either a job is refused `429 jobs_limited` and nothing of it is stored.
+/// Another key has bounds of its own, and a job that ended counts no more.
+/// (No worker runs here: what is accepted stays queued.)
+#[tokio::test]
+async fn a_key_may_have_so_many_open_jobs_and_waiting_items() {
+    let mut api = Api::start_with(1, 149, FAST, |config| {
+        quick(config);
+        config.jobs.max_items = 3;
+        config.jobs.max_open_per_key = 2;
+        config.jobs.max_queued_items_per_key = 4;
+    })
+    .await;
+    let token = api.key(&[Scope::Jobs]).await;
+    let other = api.key(&[Scope::Jobs]).await;
+    let batch = |count: usize| json!({ "type": "batch", "urls": urls("/limit", count), "defaults": { "level": 3 } });
+
+    let first = api.post(&token, "/v1/jobs", &batch(3)).await;
+    assert_eq!(first.status, StatusCode::CREATED);
+    let first = first.json()["id"].as_str().unwrap().to_owned();
+    // Three waiting and two more would pass four.
+    let refused = api
+        .post(&token, "/v1/jobs", &batch(2))
+        .await
+        .problem(StatusCode::TOO_MANY_REQUESTS, "jobs_limited");
+    assert_eq!(refused["queued_items"], json!(3));
+    assert_eq!(refused["max_queued_items"], json!(4));
+    assert!(refused["detail"].as_str().unwrap().contains("waiting"));
+    let second = api.post(&token, "/v1/jobs", &batch(1)).await;
+    assert_eq!(second.status, StatusCode::CREATED);
+    // Two open: a third is refused, however small.
+    let refused = api
+        .post(&token, "/v1/jobs", &batch(1))
+        .await
+        .problem(StatusCode::TOO_MANY_REQUESTS, "jobs_limited");
+    assert_eq!(refused["open_jobs"], json!(2));
+    assert_eq!(refused["max_open_jobs"], json!(2));
+    assert_eq!(count(&api, "jobs").await, 2);
+    assert_eq!(count(&api, "job_items").await, 4);
+
+    // Another key is not held by the first one's jobs.
+    let elsewhere = api.post(&other, "/v1/jobs", &batch(3)).await;
+    assert_eq!(elsewhere.status, StatusCode::CREATED);
+
+    // A job that ended counts no more, nor do its items.
+    sqlx::query("UPDATE jobs SET state = 'cancelled', finished_at = now() WHERE id = $1::uuid")
+        .bind(&first)
+        .execute(api.lab.store().pool())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE job_items SET state = 'cancelled' WHERE job_id = $1::uuid")
+        .bind(&first)
+        .execute(api.lab.store().pool())
+        .await
+        .unwrap();
+    let third = api.post(&token, "/v1/jobs", &batch(3)).await;
+    assert_eq!(third.status, StatusCode::CREATED);
+    assert_eq!(count(&api, "jobs").await, 4);
+    api.shut_down().await;
+}

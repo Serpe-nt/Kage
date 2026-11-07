@@ -129,8 +129,9 @@ const CRAWL_DUPLICATE_KINDS: [&str; 2] = ["exact", "near"];
 /// the head of the request (its headers, its target) or a body that says
 /// it is too large (`kage_api_refusals_total{code}`): counted before the
 /// handler runs, except `scope_missing`, which the handler counts when it
-/// asks for its scope (F182).
-const REFUSAL_CODES: [ErrorCode; 10] = [
+/// asks for its scope (F182), and `jobs_limited`, which `POST /v1/jobs`
+/// counts when it refuses a job for the key's open jobs (L2).
+const REFUSAL_CODES: [ErrorCode; 11] = [
     ErrorCode::MissingKey,
     ErrorCode::InvalidKey,
     ErrorCode::KeyDisabled,
@@ -141,6 +142,7 @@ const REFUSAL_CODES: [ErrorCode; 10] = [
     ErrorCode::RateLimited,
     ErrorCode::ConcurrencyLimited,
     ErrorCode::BudgetExhausted,
+    ErrorCode::JobsLimited,
 ];
 
 /// Registers at zero every counter whose label values are known before any
@@ -479,7 +481,7 @@ mod tests {
             // Six reasons of the scope, three of the frontier.
             ("kage_crawl_skipped_total", 9),
             ("kage_crawl_duplicates_total", 2),
-            ("kage_api_refusals_total", 10),
+            ("kage_api_refusals_total", 11),
             ("kage_scheduler_refusals_total", 7),
             // Up and down, through the pool and the host.
             ("kage_bandwidth_bytes_total", 4),
@@ -496,6 +498,7 @@ mod tests {
             "kage_scheduler_refusals_total{reason=\"domain_paused\"} 0",
             "kage_bandwidth_bytes_total{direction=\"down\",egress=\"pool\"} 0",
             "kage_api_refusals_total{code=\"rate_limited\"} 0",
+            "kage_api_refusals_total{code=\"jobs_limited\"} 0",
             "kage_replacements_total{reason=\"unreachable\"} 0",
             "kage_jobs_accepted_total{job_type=\"batch\",level=\"mixed\"} 0",
             "kage_job_items_total{job_type=\"crawl\",state=\"failed\",level=\"3\"} 0",

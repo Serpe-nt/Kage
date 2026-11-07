@@ -116,7 +116,11 @@ pub(crate) async fn run(config: Config, bind: Option<SocketAddr>) -> anyhow::Res
         None
     };
 
-    // Before anything records: what is counted from here on is scraped.
+    // Before anything records: what is counted from here on is scraped, with
+    // the `domain` label's values bounded (L3).
+    kage_scheduler::metrics::bound_domains(
+        usize::try_from(config.server.metrics_max_domains).unwrap_or(usize::MAX),
+    );
     let metrics = match kage_api::metrics::install() {
         Ok(handle) => Some(handle),
         Err(error) => {

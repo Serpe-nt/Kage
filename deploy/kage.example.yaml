@@ -40,6 +40,10 @@ server:
   # Prometheus on the same private network. null: metrics are served by the
   # API only, to keys with the admin scope. Never publish this port.
   metrics_bind: null
+  # How many distinct domains get a domain label of their own in the
+  # metrics: the first ones since the start; every later one is counted under
+  # "other" (at most 10000; 0 labels every domain "other").
+  metrics_max_domains: 500
   # Largest request body in bytes.
   max_body_bytes: 1048576
   # Largest head of a request (request line and headers) in bytes, and the
@@ -552,6 +556,12 @@ jobs:
   # Items of all jobs that wait in the scheduler or are being fetched at
   # once. The scheduler's own caps still decide what leaves.
   max_items_in_flight: 24
+  # Jobs one key may have open (queued, running or paused) at once; one
+  # more is refused with 429 jobs_limited.
+  max_open_per_key: 20
+  # Items of its open jobs one key may have waiting at once, the new job's
+  # included (at least max_items); beyond it, 429 jobs_limited.
+  max_queued_items_per_key: 20000
   # How long after it was accepted a job stops waiting for a paused site,
   # a sleeping persona or the bandwidth term: the items left then fail with
   # what they were waiting for.

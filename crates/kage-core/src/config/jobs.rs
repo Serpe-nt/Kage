@@ -33,6 +33,16 @@ pub struct JobsConfig {
     /// once.
     #[serde(default = "default_max_items_in_flight")]
     pub max_items_in_flight: u32,
+    /// Jobs one key may have open (queued, running or paused) at once; a
+    /// job asked for beyond it is refused `429 jobs_limited` (the security
+    /// review's L2).
+    #[serde(default = "default_max_open_per_key")]
+    pub max_open_per_key: u32,
+    /// Items of its open jobs one key may have waiting at once, the new
+    /// job's included; at least `max_items`, so that one job of any allowed
+    /// size can be accepted (L2).
+    #[serde(default = "default_max_queued_items_per_key")]
+    pub max_queued_items_per_key: u32,
     /// How long after it was accepted a job stops waiting: the items left
     /// then fail with what they were waiting for.
     #[serde(default = "default_max_age")]
@@ -71,6 +81,15 @@ const fn default_max_items_in_flight() -> u32 {
     24
 }
 
+const fn default_max_open_per_key() -> u32 {
+    20
+}
+
+/// Two jobs of the largest size by default.
+const fn default_max_queued_items_per_key() -> u32 {
+    20_000
+}
+
 const fn default_max_age() -> HumanDuration {
     HumanDuration::from_hours(7 * 24)
 }
@@ -103,6 +122,8 @@ impl Default for JobsConfig {
             max_items: default_max_items(),
             max_running: default_max_running(),
             max_items_in_flight: default_max_items_in_flight(),
+            max_open_per_key: default_max_open_per_key(),
+            max_queued_items_per_key: default_max_queued_items_per_key(),
             max_age: default_max_age(),
             retention_days: default_retention_days(),
             lease: default_lease(),
@@ -264,6 +285,16 @@ pub(super) fn validate(jobs: &JobsConfig, webhooks: &WebhooksConfig) -> Result<(
     }
     if jobs.max_items_in_flight == 0 {
         return Err("jobs.max_items_in_flight must be at least 1".to_owned());
+    }
+    if jobs.max_open_per_key == 0 {
+        return Err("jobs.max_open_per_key must be at least 1".to_owned());
+    }
+    if jobs.max_queued_items_per_key < jobs.max_items {
+        return Err(format!(
+            "jobs.max_queued_items_per_key must be at least jobs.max_items ({}): a job of that \
+             size could never be accepted",
+            jobs.max_items
+        ));
     }
     if jobs.max_age.get() < Duration::from_secs(60) {
         return Err("jobs.max_age must be at least 1m".to_owned());
@@ -464,6 +495,31 @@ mod tests {
                 &webhooks
             )
             .contains("jobs.max_items")
+        );
+        // L2: a key may have a job open, and one of the largest size queued.
+        assert!(
+            refused(
+                JobsConfig {
+                    max_open_per_key: 0,
+                    ..jobs
+                },
+                &webhooks
+            )
+            .contains("jobs.max_open_per_key")
+        );
+        assert!(
+            refused(
+                JobsConfig {
+                    max_queued_items_per_key: jobs.max_items - 1,
+                    ..jobs
+                },
+                &webhooks
+            )
+            .contains("jobs.max_queued_items_per_key")
+        );
+        assert_eq!(
+            (jobs.max_open_per_key, jobs.max_queued_items_per_key),
+            (20, 20_000)
         );
         assert!(
             refused(
