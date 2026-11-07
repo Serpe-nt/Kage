@@ -155,7 +155,7 @@ queue. Each job calls the same `just` targets a developer runs locally, and
 |---|---|---|
 | `commits` | `scripts/check-conventional-commits.sh` | PR title and commit subjects |
 | `rust` | `fmt-check-rust`, `lint-rust`, `setup-sqlx`, `sqlx-check`, `test-rust`, `cov-rust` | rustfmt, clippy `-D warnings`, migrations and committed query data, tests, 80 % line coverage on the gated crates |
-| `node` | `fmt-check-node`, `lint-node`, `lint-observability`, `lint-docs`, `lint-scripts`, `test-scripts`, `contract-check`, `test-node`, `cov-node` | prettier, tsc, eslint, the dashboards and alert rules (promtool), the README's badges, every `*.sh` executable in git, the gate scripts' own tests, the sidecar contract, vitest, 80 % line coverage on `engine-core` |
+| `node` | `fmt-check-node`, `lint-node`, `lint-observability`, `lint-docs`, `lint-scripts`, `test-scripts`, `contract-check`, `test-node`, `cov-node` | prettier, tsc, eslint, the dashboards and alert rules (promtool), the README's badges, every `*.sh` executable in git, the gate scripts' own tests, the sidecar contract, vitest, 80 % line coverage on each of the sidecar's five packages |
 | `security` | `deny`, `hardening`, `secrets`, `sbom` | cargo-deny, cargo-audit, pnpm audit, sidecar license policy, `openssl-sys` check, the container checklist on the Dockerfiles and compose files, gitleaks, CycloneDX SBOMs |
 | `images` | `build-images`, `hardening-images`, `scan-images`, `sbom-images`, `test-e2e` | image builds, the container checklist on the images, Trivy (fixable HIGH and CRITICAL), SBOM per image, the stack end to end and the load test's design A |
 | `mutants` | `mutants` | reported on every pull request, as far as a 26-minute budget reaches (the job ends green when the budget is spent, so the run is not cancelled and the CI badge does not read it as failing); the gate (70 % on `kage-core`) is run before a milestone is merged |
@@ -218,10 +218,15 @@ already, and it passed at 02:22 UTC on GitHub (run 41752925582).
 Coverage gates:
 
 - Rust: `scripts/check-rust-coverage.mjs` reads the llvm-cov summary and
-  fails when `kage-core`, `kage-store`, `kage-proxy`, `kage-crawl` or
-  `kage-extract` is below 80 % line coverage. The list and the threshold are
-  `cov_gated_crates` and `cov_min_lines` in the `justfile`.
-- Sidecar: the threshold for `engine-core` is in `sidecar/vitest.config.ts`.
+  fails when one of the ten library crates (`kage-core`, `kage-store`,
+  `kage-proxy`, `kage-http`, `kage-browser`, `kage-persona`,
+  `kage-scheduler`, `kage-api`, `kage-crawl`, `kage-extract`) is below
+  80 % line coverage; the `kage` binary is measured for the badge and not
+  gated. The list and the threshold are `cov_gated_crates` and
+  `cov_min_lines` in the `justfile`.
+- Sidecar: each of the five packages (`engine-core`, `contract`, `server`,
+  `engine-chromium`, `engine-firefox`) is held to 80 % line coverage,
+  by the thresholds in `sidecar/vitest.config.ts`.
 
 Database gates (`just sqlx-check`, `scripts/check-migrations.sh`): against a
 throwaway Postgres in Docker, the migrations apply from an empty database,

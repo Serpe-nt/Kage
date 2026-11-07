@@ -196,7 +196,7 @@ A tab a page opens (a `target=_blank` link) gets no override either
 persona opens ask as the browser really is" measures it): its first
 request leaves before the driver reports the tab, and so before the
 engine can prepare it as it prepares its own tabs. Two ways round it were
-tried for 2.0.3 and are closed with the pinned driver. Attaching first:
+tried for 2.0.4 and are closed with the pinned driver. Attaching first:
 the engine's own browser-level debugger session can hold every new tab at
 its start (`Target.setAutoAttach` with `waitForDebuggerOnStart`; Chrome
 starts no navigation of the tab until every session that holds it lets it
@@ -420,7 +420,7 @@ and `Network.responseReceived` where Chrome announced a document), and
 the result is `navigation_failed` with that `status` where it was the
 answer to the address the tab was sent to, nothing kept (spec §10.2,
 F189, F204). Over plain `http://` that is nobody's block; over `https`
-the status is the site's verdict, as on Firefox. Before 2.0.3 Chrome's
+the status is the site's verdict, as on Firefox. Before 2.0.4 Chrome's
 result said `status: null` and booked nothing over `https`.
 
 A page Chrome revalidates (answered `304`) shows the page it kept. The

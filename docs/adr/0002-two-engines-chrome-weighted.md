@@ -1,6 +1,9 @@
 # ADR 0002: Two browser engines behind one contract, Chrome-weighted persona mix
 
-Status: accepted, 2026-10-08
+Status: accepted, 2026-10-08. The Chrome-weighted mix is superseded by
+ADR 0009 (2026-10-09): a Chrome persona claims Linux, and the shipped mix
+is 40 % chromium and 60 % firefox (spec §6.1). The two engines behind one
+contract stand.
 
 ## Context
 

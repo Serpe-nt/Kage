@@ -9,10 +9,13 @@ curl is needed on the host.
 - Linux (or WSL2 on Windows), Docker Engine 27 or newer with Compose v2,
   git, curl.
 - 4 cores and 8 GB of memory for the stack as shipped (two sidecars of
-  4 GB each at most, kage 1 GB, Postgres 1 GB); 20 GB of disk for the
-  images, the browser profiles and the stored pages.
+  4 GB each at most, kage 1 GB, Postgres 1 GB); 30 GB of disk for the
+  first build: the three images and Postgres take about 7.6 GB (the
+  Firefox image alone 5 GB, the Chromium image 1.8 GB), the build cache
+  several GB more until `docker builder prune` frees it, and the browser
+  profiles and the stored pages grow from there.
 - The first build compiles Kage and downloads Chrome and Camoufox (about
-  700 MB): count 20 to 40 minutes.
+  1.4 GB: the Camoufox archive alone is 1.29 GB): count 20 to 40 minutes.
 
 ## 1. The code and the secrets
 
@@ -168,6 +171,7 @@ traces of every request ([observability.md](observability.md)).
 | A new Chrome or Camoufox | [upgrading-an-engine.md](upgrading-an-engine.md) |
 | Stopping and upgrading Kage | [fetching.md](fetching.md#stopping-the-server), the release notes in `CHANGELOG.md` |
 
-The database is the volume `pgdata`: back it up with `docker compose exec
-postgres pg_dump --username kage kage`. The stored pages are in
+The database is the volume `pgdata`: back it up with `docker compose --file
+deploy/compose.yaml exec postgres pg_dump --username kage kage`, from
+the repository's root as every command here. The stored pages are in
 `artifacts`, the browser profiles in `personas`.

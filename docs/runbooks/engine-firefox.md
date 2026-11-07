@@ -418,7 +418,7 @@ that submits itself) to an address where nothing answered, as Kage's
 forwarder closes a plain request to an address it refuses. The engine
 looks at the document once the tab was sent on from a page that answered,
 and ends there: `navigation_failed` where the tab was sent, in a
-fraction of a second. Before 2.0.3 the guard's end-to-end check saw the
+fraction of a second. Before 2.0.4 the guard's end-to-end check saw the
 `script` and `form` roads take the whole `timeout_ms` (60 s) to end
 `ssrf_denied` (F200).
 

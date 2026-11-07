@@ -153,7 +153,7 @@ gets what a person sees at levels 2 and 3, at level 0 as well.
 
 ## Stopping the server
 
-`docker compose stop kage` (or a `SIGTERM`) does three things at once:
+`docker compose --file deploy/compose.yaml stop kage` (or a `SIGTERM`) does three things at once:
 `/readyz` answers `503`, the scheduler grants nothing more (a request that
 waited for a persona is answered `provider_error` with `shutting_down`,
 an item of a job is given back), and the server waits for the pages that

@@ -2,7 +2,8 @@
 
 All notable changes to Kage are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
-follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). A
+version's date is the day, in UTC, its tag was made.
 
 ## [Unreleased]
 
@@ -329,6 +330,22 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sidecar with any other volume. Compose creates the volume at the next
   `docker compose up`; a file a sidecar wrote at that moment and kage had
   not yet taken is lost with its page's screenshot or PDF.
+- **The documents say what Kage does (F145).** The block report runbook
+  names `block.type` (it said `block.kind`) and no pacing "that never
+  fetches"; the observability runbook names `bandwidth.monthly_cap_gb`;
+  every `docker compose` command in the runbooks names its file; `repo.md`
+  lists the ten coverage-gated crates and the five sidecar packages;
+  `first-start.md` gives today's download and disk sizes; D2, D4, D17
+  and D38 of `docs/00-decisions.md`, and ADRs 0002 and 0006, say what
+  superseded them; the changelog's dates are its tags' (1.0.0, 2.0.0,
+  2.0.1 and 2.0.3 were not); three runbook sentences that said "before
+  2.0.3" of fixes that shipped in 2.0.4 say so (QA round one, docs-01,
+  policy-05, docs-03 to docs-09).
+- **The end-to-end suite in a closed world (F221).** `CONTRIBUTING.md`
+  says how a gate runs it with nothing leaving the machine: which images
+  to pull before the egress rule, the rule with an `NFLOG` capture (a
+  nested namespace logs nothing with `LOG`), and which dropped packets to
+  expect.
 
 ## [2.0.4] - 2026-11-07
 
@@ -393,7 +410,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   manager, so nothing reaches the library; `.trivyignore` accepts both
   until the base carries the fix or 2026-11-21, whichever comes first.
 
-## [2.0.3] - 2026-11-06
+## [2.0.3] - 2026-11-07
 
 The tag `v2.0.3` stays where it is, with no GitHub release and no
 released `kage` image: the release's Trivy step refused that image for
@@ -1137,7 +1154,7 @@ replaces it.
   It is not in the binary. The accepted exception for RUSTSEC-2026-0367,
   -0368 and -0369 is gone with it, and the Swagger UI bundle is unchanged.
 
-## [2.0.1] - 2026-10-27
+## [2.0.1] - 2026-10-29
 
 ### Security
 
@@ -1154,7 +1171,7 @@ replaces it.
   advisories are accepted for it until 2026-12-31 or a `wreq-util` on
   `zstd` 0.14 (`docs/security-review.md`).
 
-## [2.0.0] - 2026-10-24
+## [2.0.0] - 2026-10-27
 
 Camouflage levels and egress (spec §25, ADR 0012, decision D50), a
 provider-agnostic pool with declared lists (spec §7.1, ADR 0013, decision
@@ -1516,7 +1533,7 @@ upgrade.
   startup-cache clearing of the engine (ADR 0010). The `omni.sha256` notes
   in existing profiles are no longer read.
 
-## [1.0.0] - 2026-10-17
+## [1.0.0] - 2026-10-18
 
 The first release. Kage fetches web pages through a pool of static
 residential proxies, one long-lived persona per address, in a real
