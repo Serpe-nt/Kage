@@ -472,17 +472,33 @@ impl Pipeline {
             metrics::robots("not_asked");
             return Ok(Asked::NoAnswer);
         }
-        let status = last.and_then(|last| last.status);
+        let mut status = last.and_then(|last| last.status);
         // The file as the site sent it: the body a browser's page carries,
         // else the body the plain client of level 0 read (F99: that one was
         // dropped, and the file was kept empty for a day).
         let body = last.and_then(AttemptOutput::sent_body);
-        let answer = Answer::of(
+        let mut answer = Answer::of(
             report.outcome,
             status,
             body.as_deref(),
             self.robots.max_bytes,
         );
+        // A `304` says the file is what it was (F90, F209): what is kept of
+        // it, a file or "there is none", stands for another `ttl`, instead
+        // of the site's file being "unreachable" for `error_ttl`. With
+        // nothing kept, or only "unreachable", a 304 tells nothing and is
+        // no answer, as before.
+        let revalidated = status == Some(304) && !report.outcome.is_block();
+        if revalidated
+            && let Some(kept) = self
+                .backend()
+                .robots(&call.origin)
+                .await?
+                .filter(|kept| !kept.unreachable)
+        {
+            answer = kept.body.map_or(Answer::Missing, Answer::File);
+            status = kept.status;
+        }
         let now = self.now();
         let entry = robots::entry_of(&call.origin, &call.site, &answer, status, now, &self.robots);
         self.backend().save_robots(&entry).await?;
@@ -496,6 +512,7 @@ impl Pipeline {
             persona = scout.as_ref().map(tracing::field::display),
             level = call.need.level.label(),
             status,
+            revalidated,
             outcome = report.outcome.as_str(),
             unreachable = entry.unreachable,
             expires_at = %entry.expires_at,

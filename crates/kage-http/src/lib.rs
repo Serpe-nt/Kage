@@ -51,7 +51,7 @@ pub use cookies::{
     CookieBackend, CookieBackendError, CookieJar, JarOwner, MemoryCookies, StoreCookies,
 };
 pub use error::{HttpError, Stage};
-pub use fetch::{FetchSpec, Fetched, Guard, Hop, check_target_addresses};
+pub use fetch::{FetchSpec, Fetched, Guard, Hop, TextCache, check_target_addresses};
 pub use headers::{
     CallerHeaders, FORWARDING_HEADERS, HeaderError, IdentityOverride, RequestKind,
     plain_denied_reason,

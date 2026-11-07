@@ -156,7 +156,8 @@ pub(crate) struct DeliveryView {
     /// The status of the last attempt, when the receiver answered.
     pub(crate) last_status: Option<u16>,
     /// Why the last attempt failed when the receiver did not answer:
-    /// `timeout`, `connect`, `unresolved`, `address_denied`, …
+    /// `timeout`, `connect`, `tls` (the handshake was refused either way),
+    /// `unresolved`, `address_denied`, …
     pub(crate) last_error: Option<String>,
     /// When the event happened.
     pub(crate) created_at: DateTime<Utc>,

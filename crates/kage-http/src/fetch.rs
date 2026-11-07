@@ -38,7 +38,7 @@
 //!   is not emulated, so such a request is refused
 //!   ([`HttpError::PreflightRequired`]).
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use bytes::{Bytes, BytesMut};
@@ -198,6 +198,41 @@ pub struct Fetched {
     /// What subresource emulation did; `None` when it was off or the
     /// response was not a page.
     pub subresources: Option<SubresourceReport>,
+    /// The body as text, decoded once at its first use and shared by the
+    /// clones (F213); a new `Fetched` starts with `TextCache::default()`.
+    pub text_cache: TextCache,
+}
+
+/// The text of a [`Fetched`] body and its encoding, decoded at the first
+/// use and kept: the subresource emulation, the classifier and the reader
+/// of a page each read it, and each decoded it again (F213). It says
+/// nothing of the response: two caches always compare equal. It holds the
+/// text of the body it was filled from; a body changed afterwards is
+/// decoded on its own, never read from it.
+#[derive(Clone, Default)]
+pub struct TextCache(Arc<OnceLock<DecodedBody>>);
+
+/// What a [`TextCache`] keeps: which body it was decoded from, the text,
+/// and the encoding.
+struct DecodedBody {
+    /// Where the body's bytes were and how many, when they were decoded.
+    of: (usize, usize),
+    text: String,
+    encoding: &'static encoding_rs::Encoding,
+}
+
+impl std::fmt::Debug for TextCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TextCache")
+            .field("filled", &self.0.get().is_some())
+            .finish()
+    }
+}
+
+impl PartialEq for TextCache {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
 }
 
 impl Fetched {
@@ -227,12 +262,33 @@ impl Fetched {
     /// in: the document's encoding, in which a link's query is written
     /// (F161).
     pub fn decoded(&self) -> (String, &'static encoding_rs::Encoding) {
+        let (text, encoding) = self.decoded_ref();
+        (text.into_owned(), encoding)
+    }
+
+    /// [`Fetched::decoded`] without a copy: the text decoded at the first
+    /// call is lent from [`Fetched::text_cache`].
+    pub fn decoded_ref(&self) -> (std::borrow::Cow<'_, str>, &'static encoding_rs::Encoding) {
+        let of = (self.body.as_ptr().addr(), self.body.len());
+        let kept = self.text_cache.0.get_or_init(|| self.decode_now(of));
+        if kept.of == of {
+            return (std::borrow::Cow::Borrowed(&kept.text), kept.encoding);
+        }
+        let fresh = self.decode_now(of);
+        (std::borrow::Cow::Owned(fresh.text), fresh.encoding)
+    }
+
+    fn decode_now(&self, of: (usize, usize)) -> DecodedBody {
         let decoded = crate::charset::decode_from(
             Some(&self.final_url),
             self.header("content-type"),
             &self.body,
         );
-        (decoded.text.into_owned(), decoded.encoding)
+        DecodedBody {
+            of,
+            text: decoded.text.into_owned(),
+            encoding: decoded.encoding,
+        }
     }
 }
 
@@ -690,6 +746,7 @@ impl HttpClient {
                 total_ms: millis(total),
             },
             subresources: None,
+            text_cache: TextCache::default(),
         };
         // Only a page that was asked for with a GET has a first paint.
         if arrived.method == Method::GET
@@ -925,5 +982,75 @@ impl HttpClient {
             setup: phases.setup(),
             waited: sent.elapsed(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::borrow::Cow;
+    use std::sync::Arc;
+
+    use bytes::Bytes;
+    use encoding_rs::{UTF_8, WINDOWS_1251};
+    use kage_core::domain::{Header, Timing};
+    use url::Url;
+
+    use super::{Fetched, TextCache};
+
+    fn page(body: &'static [u8]) -> Fetched {
+        Fetched {
+            status: 200,
+            final_url: Url::parse("http://shop.kage.test/").unwrap(),
+            http_version: "http/1.1",
+            headers: vec![Header {
+                name: "Content-Type".to_owned(),
+                value: "text/html".to_owned(),
+            }],
+            body: Bytes::from_static(body),
+            truncated: false,
+            hops: Vec::new(),
+            downgraded: false,
+            timing: Timing::default(),
+            subresources: None,
+            text_cache: TextCache::default(),
+        }
+    }
+
+    /// F213: the subresource emulation, the classifier and the reader of a
+    /// page each asked for its text and each decoded the body again. It is
+    /// decoded once, and every clone of the fetch lends the same text.
+    #[test]
+    fn a_body_is_decoded_once_and_its_clones_share_the_text() {
+        let fetched = page(b"<meta charset=windows-1251><p>\xcf\xf0\xe8</p>");
+        assert!(fetched.text_cache.0.get().is_none());
+        let (text, encoding) = fetched.decoded();
+        assert_eq!(encoding, WINDOWS_1251);
+        assert!(text.contains("При"), "{text}");
+        assert!(fetched.text_cache.0.get().is_some());
+
+        let copy = fetched.clone();
+        assert!(Arc::ptr_eq(&fetched.text_cache.0, &copy.text_cache.0));
+        let (lent, encoding) = copy.decoded_ref();
+        assert!(matches!(lent, Cow::Borrowed(_)));
+        assert_eq!((lent.as_ref(), encoding), (text.as_str(), WINDOWS_1251));
+        assert_eq!(copy.text(), text);
+
+        // A body put in afterwards is read on its own, never from the
+        // cache of the one before.
+        let mut changed = fetched.clone();
+        changed.body = Bytes::from_static(b"<meta charset=utf-8><p>ok</p>");
+        let (other, encoding) = changed.decoded_ref();
+        assert!(matches!(other, Cow::Owned(_)));
+        assert_eq!(encoding, UTF_8);
+        assert!(other.contains("ok"));
+        assert_eq!(fetched.text(), text);
+
+        // The cache is not part of the response.
+        assert_eq!(page(b"x"), fetched_and_read(page(b"x")));
+    }
+
+    fn fetched_and_read(fetched: Fetched) -> Fetched {
+        let _ = fetched.text();
+        fetched
     }
 }

@@ -75,6 +75,7 @@ wreq = { workspace = true }
 
 [dev-dependencies]
 http-body-util = { workspace = true }
+rcgen = { workspace = true }
 sqlx = { workspace = true }
 tempfile = { workspace = true }
 testcontainers = { workspace = true }

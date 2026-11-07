@@ -251,9 +251,13 @@ pub enum SendError {
     /// The receiver's name resolves to an address Kage does not post to.
     #[error("address_denied")]
     AddressDenied,
-    /// No connection could be made.
+    /// No connection could be made, or it broke off before an answer.
     #[error("connect")]
     Connect,
+    /// The connection was made and the receiver's TLS refused the
+    /// handshake, or Kage refused the receiver's certificate (F208).
+    #[error("tls")]
+    Tls,
     /// The receiver took too long.
     #[error("timeout")]
     Timeout,
@@ -357,6 +361,8 @@ impl Transport for DirectTransport {
         let response = request.send().await.map_err(|error| {
             if error.is_timeout() {
                 SendError::Timeout
+            } else if kage_http::error::refused_handshake(&error).is_some() {
+                SendError::Tls
             } else if error.is_connect() {
                 SendError::Connect
             } else {
@@ -711,7 +717,62 @@ mod tests {
     use kage_core::config::WebhooksConfig;
     use kage_core::ids::WebhookDeliveryId;
 
-    use super::{postable, retry_wait, signature, verify};
+    use super::{
+        DirectTransport, Outgoing, SendError, Transport, postable, retry_wait, signature, verify,
+    };
+
+    fn outgoing(url: &str) -> Outgoing {
+        Outgoing {
+            url: url.parse().unwrap(),
+            private: true,
+            headers: Vec::new(),
+            body: "{}".to_owned(),
+            timeout: Duration::from_secs(5),
+        }
+    }
+
+    /// F208: a receiver whose certificate Kage does not trust refused the
+    /// handshake (`tls`); one whose connection broke off before any TLS
+    /// answer did not connect (`connect`), as level 0 tells them apart
+    /// since F170.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_refused_handshake_is_told_from_a_failed_connection() {
+        let key = rcgen::KeyPair::generate().unwrap();
+        let certificate = rcgen::CertificateParams::new(vec!["localhost".to_owned()])
+            .unwrap()
+            .self_signed(&key)
+            .unwrap();
+        let tls = kage_http::echo::EchoTls::from_pem(
+            certificate.pem().as_bytes(),
+            key.serialize_pem().as_bytes(),
+        )
+        .unwrap();
+        let server = kage_http::echo::EchoServer::bind("127.0.0.1:0".parse().unwrap(), tls)
+            .await
+            .unwrap();
+        let port = server.local_addr().unwrap().port();
+        let serving = tokio::spawn(server.serve());
+        let refused = DirectTransport::system()
+            .post(&outgoing(&format!("https://127.0.0.1:{port}/hooks")))
+            .await;
+        assert_eq!(refused, Err(SendError::Tls));
+        assert_eq!(SendError::Tls.to_string(), "tls");
+        serving.abort();
+
+        // A receiver that takes the connection and closes it at once.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let closing = tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                drop(stream);
+            }
+        });
+        let broken = DirectTransport::system()
+            .post(&outgoing(&format!("https://127.0.0.1:{port}/hooks")))
+            .await;
+        assert_eq!(broken, Err(SendError::Connect));
+        closing.abort();
+    }
 
     #[test]
     fn a_signature_is_the_hmac_of_the_timestamp_a_dot_and_the_body() {
