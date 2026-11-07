@@ -1,0 +1,76 @@
+# QA round three, bgcalls: the names a browser calls by itself answered
+# inside the world, so that what the forwarder does with them is seen.
+#   dns   round two's programmable DNS server (infra/ssrf/dns.mjs) at
+#         ${BG_NET}.53 on "pubnet" (a bridge of the nested Docker; the
+#         guard calls its addresses public, nothing sent there leaves the
+#         machine). bgcalls/sink.sh programs it: Google's and Mozilla's
+#         zones answer ${BG_NET}.30.
+#   sink  infra/bgcalls/sink.mjs at ${BG_NET}.30: logs every connection on
+#         443 and 80 (TLS server name or request line), answers nothing.
+# kage joins pubnet at .20 and asks dns for every name Docker's own
+# resolver does not know. The proxies are not changed: under the pool they
+# still refuse every name outside their allow list.
+# Start with: stack.sh up NAME --overlay=/scripts/qa/infra/bgcalls/overlay-sink.yaml BG_NET=11.66.77
+services:
+  dns:
+    image: ${KAGE_BROWSER_CHROMIUM_IMAGE:-kage-browser-chromium:dev}
+    entrypoint: [node]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
+    restart: "no"
+    init: true
+    mem_limit: 128m
+    volumes:
+      - /scripts/qa:/qa:ro
+    command: [/qa/infra/ssrf/dns.mjs, --port, "53", --control, "8053", --forward, "127.0.0.11"]
+    networks:
+      pubnet:
+        ipv4_address: ${BG_NET:-11.66.77}.53
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8053/__log').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+  sink:
+    image: ${KAGE_BROWSER_CHROMIUM_IMAGE:-kage-browser-chromium:dev}
+    entrypoint: [node]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
+    restart: "no"
+    init: true
+    mem_limit: 128m
+    volumes:
+      - /scripts/qa:/qa:ro
+    command: [/qa/infra/bgcalls/sink.mjs, --control, "8055"]
+    networks:
+      pubnet:
+        ipv4_address: ${BG_NET:-11.66.77}.30
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8055/__log').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+  kage:
+    dns:
+      - "${BG_NET:-11.66.77}.53"
+    networks:
+      default: {}
+      browsers: {}
+      pubnet:
+        ipv4_address: ${BG_NET:-11.66.77}.20
+    depends_on:
+      dns:
+        condition: service_healthy
+      sink:
+        condition: service_healthy
+networks:
+  pubnet:
+    ipam:
+      config:
+        - subnet: ${BG_NET:-11.66.77}.0/24
