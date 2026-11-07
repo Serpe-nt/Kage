@@ -1507,3 +1507,34 @@ async fn an_attempt_a_busy_context_refused_is_no_page_and_spends_no_retry() {
     assert_eq!(report.attempts.len(), 4);
     world.shut_down().await;
 }
+
+/// QA round three, lock-01: a context that another server opened with other
+/// parameters (`context_conflict` after a kill and a restart, or a
+/// hand-over) is the persona still busy as well: no retry spent, no page.
+#[tokio::test(start_paused = true)]
+async fn an_attempt_that_met_another_servers_context_spends_no_retry() {
+    let mut world = World::new(1, DEFAULT_DOMAINS);
+    world
+        .script
+        .then(AttemptOutput::failed(
+            Outcome::ProviderError,
+            "context_conflict",
+            Courtesy::NotTheSite,
+        ))
+        .then(ok());
+    let report = world
+        .pipeline
+        .fetch(FetchOrder {
+            max_retries: Some(0),
+            ..browser("https://shop.example/a")
+        })
+        .await
+        .unwrap();
+    assert_eq!(report.outcome, Outcome::Ok, "{:?}", report.reason);
+    assert_eq!(report.attempts.len(), 2);
+    let persona = report.attempts[1].persona_id.unwrap();
+    assert_eq!(report.attempts[0].persona_id, Some(persona));
+    let state = world.backend.domain_state(persona, "shop.example").unwrap();
+    assert_eq!(state.requests_today, 1);
+    world.shut_down().await;
+}

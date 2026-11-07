@@ -4659,3 +4659,71 @@ fn a_persona_cooled_where_a_fetch_was_redirected_is_held_from_the_site_that_redi
     let after_a_day = later + Duration::days(1) + Duration::minutes(1);
     assert!(one_page(&mut fresh, &facts, "shop.test", after_a_day).is_some());
 }
+
+#[test]
+fn a_job_that_may_not_have_the_domains_one_visitor_waits_for_its_visit_to_end() {
+    // QA round three, lock-01: a job's retry leaves out the persona whose
+    // attempt failed, and that persona is still the domain's one visitor
+    // under `domain_concurrency: 1`. Nobody it may have is visiting and
+    // there is no room for another: it waits for the visit to end and is
+    // looked at again then. Before, nothing planned it again and the page
+    // waited for good, `running` with nothing in flight.
+    let one = PacingProfile {
+        domain_concurrency: 1,
+        ..brisk()
+    };
+    let mut sim = Sim::new(personas(2));
+    sim.takes = Box::new(|_| millis(400));
+    sim.submit(Work {
+        pacing: one,
+        ..work("example.org")
+    });
+    sim.settle();
+    sim.run_until(noon() + secs(2));
+    assert_eq!(sim.log.len(), 1);
+    let visitor = sim.log[0].1.persona;
+    let retry = sim.submit(Work {
+        pacing: one,
+        exclude: vec![visitor],
+        ..work("example.org")
+    });
+    sim.run_until(noon() + Duration::minutes(30));
+    assert_eq!(
+        sim.log.len(),
+        2,
+        "the retry never left: {:?}",
+        sim.planner.wake_at()
+    );
+    let (left_at, dispatch) = &sim.log[1];
+    assert_eq!(dispatch.work, retry);
+    assert_ne!(dispatch.persona, visitor);
+    // When the visit was over: `visit_idle` after its page started.
+    assert!(*left_at >= noon() + Duration::minutes(10), "{left_at}");
+    assert!(*left_at <= noon() + Duration::minutes(11), "{left_at}");
+
+    // With a patience shorter than that, it is told the moment instead.
+    let mut sim = Sim::new(personas(2));
+    sim.takes = Box::new(|_| millis(400));
+    sim.submit(Work {
+        pacing: one,
+        ..work("example.org")
+    });
+    sim.settle();
+    sim.run_until(noon() + secs(2));
+    let visitor = sim.log[0].1.persona;
+    let patient = sim.submit(Work {
+        pacing: one,
+        exclude: vec![visitor],
+        give_up_at: Some(noon() + Duration::minutes(5)),
+        ..work("example.org")
+    });
+    sim.settle();
+    assert_eq!(sim.refused.len(), 1, "{:?}", sim.refused);
+    assert_eq!(sim.refused[0].1, patient);
+    assert_eq!(sim.refused[0].2, Refusal::NoPersona);
+    assert!(
+        sim.refused[0]
+            .3
+            .is_some_and(|at| at >= noon() + Duration::minutes(10))
+    );
+}

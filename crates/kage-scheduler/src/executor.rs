@@ -1395,6 +1395,13 @@ where
     asked
 }
 
+/// The reason of an attempt whose persona's context is open in its sidecar
+/// with other parameters, by a server that ran before this one (a kill and
+/// a restart, a hand-over) and that may still drive it: the persona is
+/// still busy, as with [`CONTEXT_BUSY`], and the attempt counts against
+/// nothing (QA round three, lock-01).
+pub const CONTEXT_CONFLICT: &str = "context_conflict";
+
 /// How a failure of the persona's own plumbing is named.
 fn plumbing(error: &PersonaError) -> (&'static str, bool) {
     match error {
@@ -1403,9 +1410,7 @@ fn plumbing(error: &PersonaError) -> (&'static str, bool) {
             ("proxy_not_usable", true)
         }
         PersonaError::Retired(_) | PersonaError::NotFound(_) => ("persona_gone", true),
-        PersonaError::Browser(browser) if browser.is_context_conflict() => {
-            ("context_conflict", true)
-        }
+        PersonaError::Browser(browser) if browser.is_context_conflict() => (CONTEXT_CONFLICT, true),
         PersonaError::Browser(browser) if browser.is_context_busy() => (CONTEXT_BUSY, true),
         PersonaError::Browser(browser) if browser.is_at_capacity() => ("context_limit", true),
         PersonaError::Browser(browser) if browser.is_unreachable() => ("sidecar_unreachable", true),
