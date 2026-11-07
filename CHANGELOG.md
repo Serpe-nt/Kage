@@ -208,6 +208,69 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   which no results page can serve yet, is a typed visit that says `direct`
   (policy-10); a site's own 407 over plain http (no `Proxy-Authenticate`) is
   `ok` with its status at levels 0 and 1, not `proxy_failed` (policy-11).
+- **A `304` to the robots.txt scout keeps the file (F209, F90's first
+  half).** A scout answered `304 Not Modified` once the kept answer ran
+  out keeps what was kept (the file, or "there is none") for another
+  `robots.ttl`; before, the file was dropped and the site was
+  `robots_unavailable` for `robots.error_ttl` (an hour). A 304 with
+  nothing kept is "unreachable" as before (QA round C's level 0 over
+  `https`, tls level0.sh check 6).
+- **A persona that met a wall where a fetch was redirected is held from
+  the site that redirects there (F219).** The wall is booked to the site
+  that showed it (F187), and for a day after a fetch of a domain last
+  ended on another site, a persona that cools on that site is held from
+  the domain too; the domain's next page went to the same persona, its
+  visitor, and into the same wall.
+- **`KagePoolUnavailable` counts no proxy that carries nothing (F195).**
+  A proxy marked `exit_shared_with` is `degraded` but carries no persona
+  and no level 0; `kage_proxy_state` counts it as `backoff` while the mark
+  lasts, so a pool whose answering proxies share an exit reads as no
+  usable proxy.
+- **No span event carries what a log line says (F196).** The trace
+  exporter strips every span event to its level, its target and where it
+  was written, so no seed, path, address or token in a line leaves the
+  process in a trace, whatever the line holds (spec §20); the line itself
+  is in the log with the span's ids.
+- **A refused handshake is a webhook's `tls`, not `connect` (F208).** A
+  receiver whose certificate Kage refuses, or whose TLS ends the
+  handshake, shows `last_error: "tls"` in the delivery log; a connection
+  that could not be made or broke off is still `connect`.
+- **The health probe's `407` (F210).** A `407` read inside the tunnel of
+  an `https` echo is the echo's answer (an echo that did not answer), not
+  the proxy refusing its login (`proxy_auth`); the proxy's refusal of the
+  tunnel still is.
+- **Character references in a `<meta>` charset at level 0 (F212).**
+  `content="text/html; charset=&quot;shift_jis&quot;"` and
+  `charset="&#x73;hift_jis"` declare Shift_JIS, as in Chrome, whose
+  tokenizer decodes them.
+- **A page's text is decoded once (F213).** The subresource emulation, the
+  classifier and the reader of a level 0 or level 1 page each decoded its
+  body again; the text is decoded at its first use and shared.
+- **No panic on a span past the last date in the health checker (F194).**
+  Every date the checker adds a span to is held at the last date there is
+  instead of overflowing; unreachable since the interval is bounded to a
+  day (#58), but the checker is a library.
+- **The persona manager's test waits for the directory (F206).** The test
+  read the directory right after the store's row; only the health probes
+  read the directory, and a probe in that instant presents as one an
+  instant before the persona existed, so production shows no gap.
+- **CI's `setup-rust` cannot take the job's whole time (F207).** Each
+  `apt-get` call is bounded and tried three times, a stalled cache
+  download is given up after five minutes per segment, and every step
+  that uses the action is bounded to 15 minutes; `apt-get update` once
+  stalled the `rust` job for 45 minutes on a mirror (run 42081090157).
+- **The QA harness runs from a copy without the executable bit (F198).**
+  `tests/qa/*.sh` are executable in git, `stack.sh fast` runs itself
+  through `bash`, and `just lint-scripts` (in `just lint` and CI's `node`
+  job) refuses a shell script that is not executable in git.
+
+### Added
+
+- **A daily scan of `main`'s images (F220).** `image-scan.yaml` builds the
+  three images from `main` every morning and runs `just scan-images` with
+  `.trivyignore`; a fixable HIGH or CRITICAL finding that is new, or an
+  accepted one past its review date, fails it before a tag is pushed
+  rather than at release (`docs/runbooks/repo.md`, "Daily image scan").
 
 ### Security
 

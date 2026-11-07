@@ -388,7 +388,9 @@ domains:
   allowed. A server error, a timeout or a block is "unreachable" for an
   hour (`robots.error_ttl`): under `enforce` nothing of the origin is
   fetched meanwhile (`reason: "robots_unavailable"`, with `retry_at`), a
-  job's pages of that site wait (`paused`, `robots_unavailable`).
+  job's pages of that site wait (`paused`, `robots_unavailable`). A `304`
+  to the scout keeps what was kept (the file, or "no file") for another
+  day (F209); with nothing kept it is "unreachable".
 - Kage answers to the group of `*`, and to a group that names `kage`
   (`robots.agents`) in its place: a site owner who wants to address Kage
   can. A scout's request carries its browser's `User-Agent`; a plain
@@ -845,7 +847,9 @@ While a receiver fails, its other events wait behind the next probe: a
 receiver that is down gets one request per step, not one per job. The job
 shows one row per event (`webhook.deliveries`): its state, how many
 attempts it took, and the status, the error and the time of the last one
-(jobs-10); every attempt is kept in the store (`webhook_attempts`), and
+(jobs-10; the error is `timeout`, `connect`, `tls` for a handshake the
+receiver's TLS refused or a certificate Kage refused (F208), `unresolved`,
+`address_denied` or `transport`); every attempt is kept in the store (`webhook_attempts`), and
 `kage_webhook_deliveries_total{event,result}` counts them.
 
 ### Retention and the purge

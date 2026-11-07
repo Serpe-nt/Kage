@@ -1375,7 +1375,8 @@ export interface components {
             id: string;
             /**
              * @description Why the last attempt failed when the receiver did not answer:
-             *     `timeout`, `connect`, `unresolved`, `address_denied`, …
+             *     `timeout`, `connect`, `tls` (the handshake was refused either way),
+             *     `unresolved`, `address_denied`, …
              */
             last_error?: string | null;
             /**

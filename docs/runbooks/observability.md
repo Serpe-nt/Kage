@@ -61,7 +61,12 @@ Every request is one trace:
 No span holds a URL's path or query, an address, a seed, a token, a
 fingerprint or a body. That includes the span events: a log line written
 inside a span leaves with the trace as an event of it, so the attempt's
-line carries no seed (F182; the seed is `attempts.seed` in the store). Traces are sent only when Kage is given
+line carries no seed (F182; the seed is `attempts.seed` in the store).
+Since F196 that does not rest on each line: before a span leaves, every
+event of it is stripped to its level, its target and where it was
+written, under the name `log`. In Jaeger a span's logs therefore say that
+a line was written and how loud it was; to read the line, search Kage's
+log for the span's `trace_id` and `span_id`. Traces are sent only when Kage is given
 `telemetry.otlp_endpoint` (`KAGE__TELEMETRY__OTLP_ENDPOINT`) and a sidecar
 `SIDECAR_OTLP_ENDPOINT`: OTLP over HTTP with protobuf, the address with
 its path (`http://otel-collector:4318/v1/traces`), asked directly and
@@ -174,7 +179,10 @@ minutes (F111). In a pool of four or more, while more than half fails its
 latest probe, the outage guard freezes the counters and no proxy changes
 state; the gauge then counts every proxy whose latest probe failed as
 `backoff`, as the scheduler holds it (F169), so that a pool that died whole
-reads as no usable proxy and the alert fires (F151). The gauge is set at
+reads as no usable proxy and the alert fires (F151). A proxy whose probe
+saw an older proxy's exit address (`proxy_exit_shared`) is `degraded` in
+the store but carries nothing, and counts as `backoff` too while the mark
+lasts (F195). The gauge is set at
 every change of a proxy's state, after every probe while the guard holds or
 is lifted, and at every maintenance pass of the pool.
 

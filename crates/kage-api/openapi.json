@@ -3811,7 +3811,7 @@
               "string",
               "null"
             ],
-            "description": "Why the last attempt failed when the receiver did not answer:\n`timeout`, `connect`, `unresolved`, `address_denied`, …"
+            "description": "Why the last attempt failed when the receiver did not answer:\n`timeout`, `connect`, `tls` (the handshake was refused either way),\n`unresolved`, `address_denied`, …"
           },
           "last_status": {
             "type": [
