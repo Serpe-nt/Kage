@@ -1,0 +1,9 @@
+
+# QA round three, ops: one page per persona per day, so that a crawl pauses.
+capped:
+  gap_ms: { dist: uniform, min: 300, max: 1200 }
+  burst_pages: { min: 50, max: 50 }
+  burst_break_ms: { dist: uniform, min: 0, max: 0 }
+  daily_cap_per_persona_per_domain: 1
+  domain_concurrency: 10
+  domain_rpm: 300

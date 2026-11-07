@@ -1,0 +1,16 @@
+# QA round three, ops: three more names of the fixture site for the upgrade
+# path (a crawl that pauses on a daily cap, a crawl still under way at the
+# stop, a crawl to cancel), relayed by the world's proxies. Works on the
+# 2.0.2 tree and on main alike.
+x-allow: &allow "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091,capped.ops.test:8088,slow.ops.test:8088,cancel.ops.test:8088,done.ops.test:8088"
+services:
+  fixture:
+    networks:
+      default:
+        aliases: [fixture.kage.test, lenient.kage.test, rules.kage.test, wall.field.test, capped.ops.test, slow.ops.test, cancel.ops.test, done.ops.test]
+  proxy-a:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-a, --pass, e2e-only-a, --allow, *allow]
+  proxy-b:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-b, --pass, e2e-only-b, --allow, *allow]
+  proxy-c:
+    command: [/e2e/world.mjs, proxy, --port, "3128", --user, provider-c, --pass, e2e-only-c, --allow, *allow]

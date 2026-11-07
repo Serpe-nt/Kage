@@ -61,6 +61,32 @@ for `infra/timers/obs.yaml` the observability images at their digests) before
 | `flows/` | eight more sites `s1..s8.qa.test` for flows across sites, with their trailing-dot spellings (`mk-extra.sh`), their domain rules and robots files (`sites.sh`), helpers (`lib.sh`) | `infra/flows/mk-extra.sh NAME`, then `infra/flows/sites.sh NAME`; recreating the proxies can hand them each other's addresses (round two, timers-04): prefer a fresh stack |
 | `left/` | the leftovers' worlds: sites `dc1.test`, `dc2.test` and a name every proxy refuses with 403 (`repro.yaml`, `refuse.yaml`), more responder names (`names.yaml`), five proxies (`five.yaml`), a `fast`-like pacing profile with `domain_concurrency: 1` (`single.yaml`), their domain rules | `--overlay=/scripts/qa/infra/left/repro.yaml` at `up`; append `single.yaml` to the stack's `pacing-profiles.yaml` (`stack.sh policies NAME`), then `stack.sh add-domains NAME < /scripts/qa/infra/left/repro-domains.yaml` |
 
+## The worlds of round three (`infra/`)
+
+Round three (`docs/qa/2026-11-07.md`) ran in a container `kage-qa3` the same
+way, with the firewall of `container/fw-on.sh`: an NFLOG rule before each DROP
+copies every dropped packet to `/out/qa3/fw-drops-N.pcap` (`tcpdump -i
+nflog:7`; the LOG target writes nothing from a nested network namespace).
+`container/pull.sh` pulls every image the worlds need before it goes on;
+`build-202.sh` makes the 2.0.2 tree (`/target/qa/kage-202`) and its Firefox
+image for the upgrade; `rebuild-sidecars.sh` moves the clone to a newer `main`
+from a bundle and rebuilds (firewall off for the build, on again after).
+
+| Folder | What it adds | How a stack uses it |
+|---|---|---|
+| `level0/` | `tlsworld0.mjs` (one state on 443, 4443, 80 and 8081; 16 more https sites, TLS fronts for plain services, an `/__ip` echo), `mkcerts0.sh` (its certificate and bad CA files, keys in `tls/certs/`), `compose.level0.yaml`, `compose.l0-webshare.yaml` with `webshare0.mjs` (the fake Webshare behind TLS), `fast-l0.yaml` | after `tls/mkcerts.sh` and `level0/mkcerts0.sh`: `--overlay=` the tls world, `compose.tls-level0.yaml` (F191's `http.ca_file`) and `compose.level0.yaml` |
+| `lock/` | `lib.sh` (who holds the server lock; a cut between `kage` and Postgres in kage's network namespace that keeps the addresses), `second.sh` (a `kage2` second server on the stack's database, no restart) | source `lib.sh` beside a stack that is up |
+| `ops/` | the upgrade's world (`upgrade-world.yaml`, `upgrade-domains.yaml`, `capped-profile.yaml`, `r02-domains.yaml`) and the first start's (`fs-world.yaml`) | `QA_REPO=/target/qa/kage-202` with the 2.0.2 images for the old side, then main's on the same volumes |
+| `api/` | `nopool.sh NAME up\|url\|down`: a second server with no proxy pool, on a fresh database of its own, beside a stack that is up | api-09 |
+| `browser/` | `keys.html` (an input that writes every key event and the field's value into the document), `keys-analyze.mjs` | served by the responder; browser-06 |
+| `flows/names3.sh` | writes `names3.yaml`, an overlay given at `up` that adds `s1..s8` and `n1..n6.qa.test` without recreating the proxies | `--overlay=` its output |
+
+`sweep3.sh` runs rounds one's and two's scripts (`r1-shared`, `r1-own`,
+`r2-fresh`, `r2-own`), `verify3.sh` reproduces round three's findings,
+`retry3.sh N ID...` tries a race up to N times on fresh stacks, and
+`dnscheck.sh` counts the browsers' background lookups that leave under the
+pool and under `direct`.
+
 Each finding of a round has its `finding.md` and `repro.sh` in the round's
 evidence, outside the repository; a repro names the world it needs on its
 second line (`# own-stack: ...`).
