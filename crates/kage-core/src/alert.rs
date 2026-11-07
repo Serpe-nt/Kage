@@ -524,6 +524,14 @@ mod tests {
             (json!({ "file": "x" }), false)
         );
 
+        // F215: tracing-core caches a callsite's interest for every thread.
+        // While a single dispatcher is alive, a callsite registered on any
+        // thread asks only that thread's default, so a test running beside
+        // this one that raises an alert with no subscriber could register
+        // these callsites as never wanted, and the scoped subscribers below
+        // would see nothing. A second dispatcher kept alive for the test
+        // makes every registration ask all of them.
+        let _all_are_asked = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::new());
         let lines = Lines::default();
         let alert = Alert::new(
             AlertKind::ProxyLeak,
