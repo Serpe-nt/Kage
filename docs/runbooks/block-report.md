@@ -128,8 +128,8 @@ What to do, in this order:
 A vendor's wall that comes back as `ok` or as `generic` gets a signature
 in `policies/block-signatures.yaml` (the file says how a rule is
 written). Every rule that blocks is bounded on every way it matches: a
-status other than 200, `visible_text: { max_chars }`, a header or an
-interstitial the browser saw; a pattern in the body alone matches an
+status other than 200, `visible_text: { max_chars }`, a header (not
+`content-type`, which every page has) or an interstitial the browser saw; a pattern in the body alone matches an
 article that quotes the vendor's page (F125), and the classifier's tests
 fail on a shipped rule that is not bounded. Keep a sanitized copy of the page as a fixture in
 `tests/fixtures/blocks/` with no personal data in it; the classifier's
