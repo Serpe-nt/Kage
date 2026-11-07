@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.0.4] - 2026-11-07
+
 ### Fixed
 
 - **Firefox's result headers are the lines the site sent (F190).** Its
@@ -59,12 +61,24 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Two `zlib1g` findings of the `kage` image's runtime base are accepted
   until 2026-11-21.** Trivy refused the `kage` image of the 2.0.3 release
   for CVE-2026-76844 and CVE-2026-85091 in the distroless base's `zlib1g`,
-  fixed in Debian but in no distroless build yet. The `kage` binary never
-  loads `libz.so.1`, and the image has no shell or package manager, so
-  nothing reaches the library; `.trivyignore` accepts both until the base
-  carries the fix or 2026-11-21, whichever comes first.
+  fixed in Debian (`zlib1g` `+deb13u1`) but in no distroless build yet.
+  CVE-2026-85091 is a heap buffer overflow in `gz_vacate()`; Trivy's title
+  for CVE-2026-76844 names webpack-dev-middleware, while its Debian data
+  lists that finding on `zlib1g` as fixed by the same update. The `kage`
+  binary never loads `libz.so.1`, and the image has no shell or package
+  manager, so nothing reaches the library; `.trivyignore` accepts both
+  until the base carries the fix or 2026-11-21, whichever comes first.
 
 ## [2.0.3] - 2026-11-06
+
+The tag `v2.0.3` stays where it is, with no GitHub release and no
+released `kage` image: the release's Trivy step refused that image for
+CVE-2026-76844 and CVE-2026-85091 in the runtime base's `zlib1g`
+(2.0.4 accepts them: the binary never loads `libz.so.1`). Its
+`kage-browser-chromium` image was published by digest. The tag
+`ghcr.io/serpe-nt/kage:2.0.3` points at an image pushed before the
+scan refused it, unsigned and unattested: do not use it; 2.0.4
+replaces it.
 
 ### Fixed
 
@@ -2216,7 +2230,8 @@ M12 that made it, newest first within each kind of change.
   secret is missing. `deploy/.env` gained `KAGE_SIDECAR_TOKEN` and
   `KAGE_MASTER_KEY`; `just setup` adds them to an existing file.
 
-[Unreleased]: https://github.com/Serpe-nt/Kage/compare/v2.0.3...HEAD
+[Unreleased]: https://github.com/Serpe-nt/Kage/compare/v2.0.4...HEAD
+[2.0.4]: https://github.com/Serpe-nt/Kage/compare/v2.0.3...v2.0.4
 [2.0.3]: https://github.com/Serpe-nt/Kage/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/Serpe-nt/Kage/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/Serpe-nt/Kage/compare/v2.0.0...v2.0.1

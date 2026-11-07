@@ -18,7 +18,7 @@ curl is needed on the host.
 
 ```bash
 git clone https://github.com/Serpe-nt/Kage.git kage && cd kage
-git checkout v2.0.3
+git checkout v2.0.4
 scripts/dev-secrets.sh
 ```
 

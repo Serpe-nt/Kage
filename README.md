@@ -97,7 +97,7 @@ git, curl and bash, and nothing else:
 
 ```bash
 git clone https://github.com/Serpe-nt/Kage.git kage && cd kage
-git checkout v2.0.3
+git checkout v2.0.4
 scripts/dev-secrets.sh
 ```
 
