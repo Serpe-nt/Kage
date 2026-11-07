@@ -165,6 +165,12 @@ pub fn policies(dir: &Path, domains: &str, alerts: Arc<MemoryAlertSink>) -> Arc<
     Arc::new(PolicyStore::open(dir, alerts).unwrap())
 }
 
+/// Where an answer made by [`ok`], [`blocked`] or [`server_error`] ended
+/// until the script runs it: then the address it was asked for, as no
+/// redirect took it elsewhere (a block met on another site is booked to
+/// that site, F187).
+const ANSWERED_AT: &str = "https://example.org/";
+
 /// A page the site served.
 pub fn ok() -> AttemptOutput {
     answered(Outcome::Ok, None, 200)
@@ -281,7 +287,7 @@ fn answered(outcome: Outcome, block: Option<Block>, status: u16) -> AttemptOutpu
         courtesy: Courtesy::Answered,
         reason: None,
         status: Some(status),
-        final_url: Some("https://example.org/".to_owned()),
+        final_url: Some(ANSWERED_AT.to_owned()),
         headers: Vec::new(),
         redirects: Vec::new(),
         timing: Timing {
@@ -434,11 +440,14 @@ impl AttemptExecutor for Script {
         let took = *self.took.lock().unwrap();
         tokio::time::sleep(took).await;
         let ruled = self.rules.lock().unwrap().iter().find_map(|rule| rule(job));
-        if let Some(output) = ruled {
-            return output;
+        let mut output = ruled.unwrap_or_else(|| {
+            let reply = self.replies.lock().unwrap().pop_front();
+            reply.map_or_else(ok, |reply| reply(job))
+        });
+        if output.final_url.as_deref() == Some(ANSWERED_AT) {
+            output.final_url = Some(job.url.to_string());
         }
-        let reply = self.replies.lock().unwrap().pop_front();
-        reply.map_or_else(ok, |reply| reply(job))
+        output
     }
 
     async fn plain(&self, job: &PlainJob) -> AttemptOutput {

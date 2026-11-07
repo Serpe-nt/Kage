@@ -927,6 +927,7 @@ mod tests {
             country: country.parse::<CountryCode>().ok(),
             timezone: "Europe/Berlin".to_owned(),
             ready,
+            ready_at: None,
             http: false,
             network: Network::of(None, None),
         }

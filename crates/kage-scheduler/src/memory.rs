@@ -181,6 +181,7 @@ impl Backend for MemoryBackend {
                 country: persona.country,
                 timezone: persona.timezone.clone(),
                 ready: persona.is_ready() && *usable,
+                ready_at: None,
                 http: http_spec(persona).is_ok(),
                 network: network.clone(),
             })

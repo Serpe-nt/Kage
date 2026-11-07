@@ -613,5 +613,40 @@ async fn metrics_expose_the_series_of_the_specification() {
         let reply = ask(&private, request(Method::GET, at, Some(&admin), None)).await;
         assert_eq!(reply.status, StatusCode::NOT_FOUND, "{at}");
     }
+
+    // F128 (sched-03): clients that hang up on a fetch bring the gauge of
+    // the requests in flight back down. It rose by one for every one of
+    // them, for the life of the process.
+    Mock::given(method("GET"))
+        .and(path("/slow"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/html; charset=utf-8")
+                .set_body_string(article("Slow"))
+                .set_delay(std::time::Duration::from_secs(2)),
+        )
+        .mount(&api.lab.site)
+        .await;
+    for number in 0..3 {
+        let hung_up = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            send(
+                Method::POST,
+                "/v1/fetch",
+                Some(&fetch),
+                Some(json!({ "url": Api::url(&format!("/slow?n={number}")), "level": 1 })),
+            ),
+        )
+        .await;
+        assert!(hung_up.is_err(), "the fetch answered within 200 ms");
+    }
+    let scraped = send(Method::GET, "/metrics", Some(&admin), None).await;
+    let text = String::from_utf8(scraped.body.to_vec()).unwrap();
+    let in_flight = text
+        .lines()
+        .find_map(|line| line.strip_prefix("kage_api_requests_in_flight "))
+        .and_then(|value| value.trim().parse::<f64>().ok());
+    // The scrape itself is the one request in flight.
+    assert_eq!(in_flight, Some(1.0), "{text}");
     api.shut_down().await;
 }

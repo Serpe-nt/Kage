@@ -1312,3 +1312,126 @@ async fn a_host_with_a_trailing_dot_is_the_same_site_and_one_with_two_is_refused
     assert_eq!(world.script.plain_seen().len(), 2);
     world.shut_down().await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_fetch_redirected_to_another_sites_wall_books_the_block_to_that_site() {
+    // F187 (flows-03): the shop redirects to another site's wall. The
+    // block is that site's, as a flow's is since F101: the persona cools
+    // there, its breaker counts it, and the shop that only redirected is
+    // left as it was.
+    let rules = "defaults: { pacing: fast, active_hours: ignore, breaker_threshold: 1, \
+                 breaker_pause: 30m, retries: 0 }\ndomains: {}\n";
+    let mut world = World::with(2, false, rules, &[]);
+    let mut wall = blocked(Outcome::Forbidden, 1.0);
+    wall.final_url = Some("https://wall.example/denied".to_owned());
+    world.script.then(wall);
+
+    let report = world
+        .pipeline
+        .fetch(browser("https://shop.example/r"))
+        .await
+        .unwrap();
+    assert_eq!(report.outcome, Outcome::Forbidden);
+    let persona = report.attempts[0].persona_id.unwrap();
+    let there = world.backend.domain_state(persona, "wall.example").unwrap();
+    assert!(there.cooldown_until.is_some());
+    assert_eq!(there.block_count_24h, 1);
+    assert_eq!(
+        world
+            .backend
+            .breaker("wall.example")
+            .map(|breaker| breaker.state),
+        Some(BreakerState::Open)
+    );
+    assert!(world.backend.breaker("shop.example").is_none());
+    let shop = world.backend.domain_state(persona, "shop.example").unwrap();
+    assert_eq!(shop.cooldown_until, None);
+    assert_eq!(shop.block_count_24h, 0);
+    assert_eq!(shop.last_outcome, Some(Outcome::Ok));
+
+    // The shop is not paused: its next page goes at once.
+    let next = world
+        .pipeline
+        .fetch(browser("https://shop.example/b"))
+        .await
+        .unwrap();
+    assert_eq!(next.outcome, Outcome::Ok);
+    world.shut_down().await;
+}
+
+/// A flow that starts on the shop and goes on to `pay.example`.
+fn across() -> FetchOrder {
+    let goto = |url: &str| kage_browser::contract::FlowAction::Goto {
+        human: None,
+        timeout_ms: None,
+        url: url.to_owned(),
+    };
+    FetchOrder {
+        level: Level::Human,
+        max_retries: Some(0),
+        flow: Some(kage_scheduler::FlowPlan {
+            actions: vec![
+                goto("https://shop.example/start"),
+                goto("https://pay.example/checkout"),
+            ],
+            typos: false,
+        }),
+        ..get("https://shop.example/start")
+    }
+}
+
+/// A flow whose `goto` to its later site ran out of time: no page came.
+fn later_site_timed_out() -> AttemptOutput {
+    let step = |index: u32, ok: bool| kage_scheduler::FlowStep {
+        index,
+        action: "goto".to_owned(),
+        ok,
+        duration_ms: 1000,
+        paced_ms: None,
+        error: (!ok).then(|| "timeout: page.goto: Timeout 30000ms exceeded".to_owned()),
+        capture: None,
+        opened_tabs: Vec::new(),
+    };
+    let mut output = timed_out();
+    output.flow = Some(kage_scheduler::FlowRun {
+        steps: vec![step(0, true), step(1, false)],
+        ok: false,
+    });
+    output
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_flows_later_site_is_booked_its_own_timeouts() {
+    // F162: three flows whose `goto` to the later site timed out. The
+    // timeouts are that site's: its pause after server errors holds the
+    // next flow that goes there, and the shop, which answered every time,
+    // is not paused for them.
+    let mut world = World::with(4, false, DEFAULT_DOMAINS, &[]);
+    for _ in 0..3 {
+        world.script.then(later_site_timed_out());
+        let report = world.pipeline.fetch(across()).await.unwrap();
+        assert_eq!(report.outcome, Outcome::Timeout, "{:?}", report.reason);
+    }
+    let paused_at = world.now();
+    // The shop's own page goes at once.
+    let shop = world
+        .pipeline
+        .fetch(browser("https://shop.example/page"))
+        .await
+        .unwrap();
+    assert_eq!(shop.outcome, Outcome::Ok);
+    let shop_at = world.script.seen().last().unwrap().at;
+    assert!(
+        shop_at - paused_at < Span::seconds(30),
+        "{shop_at} {paused_at}"
+    );
+    // The next flow to the later site waits for the end of its pause.
+    let onward = world.pipeline.fetch(across()).await.unwrap();
+    assert_eq!(onward.outcome, Outcome::Ok);
+    let onward_at = world.script.seen().last().unwrap().at;
+    assert!(
+        onward_at - paused_at >= Span::seconds(29),
+        "{onward_at} {paused_at}"
+    );
+    world.shut_down().await;
+}

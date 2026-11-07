@@ -67,7 +67,7 @@ working, `kage key revoke <id>` otherwise, then read what it did:
 | Limit | Default | Answer when reached |
 |---|---|---|
 | Requests per minute, per key | 60 | `429 rate_limited`, `limit: requests_per_minute` |
-| Requests in flight, per key | 4 | `429 concurrency_limited` |
+| Requests in flight, per key | 4 | `429 concurrency_limited`; a fetch whose client hangs up gives its slot back and leaves the queue (F128) |
 | Pages a day (UTC), per key | none | `429 budget_exhausted`; `Retry-After` is the time to midnight UTC |
 | Requests per minute, all keys | `server.requests_per_minute` 600 | `429 rate_limited`, `limit: server.requests_per_minute` |
 
@@ -403,7 +403,18 @@ the site is asked for nothing more, and `GET /v1/results/{id}` answers
 that was being read when the cancel came is finished and kept. Such a
 fetch no longer ends with an error because its
 site was paused or its persona asleep: it waits, as a job waits, for up to
-`jobs.max_age`. If the server is stopped while it runs, the job worker of
+`jobs.max_age`. It waits in the scheduler as a job's page does: when
+nobody may read it within five minutes (every persona cooling or at its
+daily cap on the site, the night), its job is `paused` with the reason
+and the moment (`no_persona` and the end of the cooling, F130), and
+nothing of it waits in the queue of synchronous requests.
+
+A client that hangs up before the answer (its own timeout, a killed
+`curl`) takes its fetch out of the queue: nothing is asked of the site
+for it, the key's slot is free, and its request ends `provider_error`
+with the reason `cancelled`. A page that was being fetched when the
+client left is finished and kept (F128). A client that wants the page
+whatever happens waits for the answer, or for the `202`. If the server is stopped while it runs, the job worker of
 the next start takes it up again under the same request id.
 
 ### JSON endpoints
@@ -589,7 +600,23 @@ A flow is a script of steps in one browser, by one persona:
 - A wall met on the way is booked to the site that showed it (the persona
   cools down there, that site's breaker counts it) and retried by another
   persona from the first step; a step that fails otherwise (a selector that is not there, an
-  assertion) ends the flow and is not tried again.
+  assertion) ends the flow and is not tried again. So is a later site's
+  timeout or server error: that site's own pause holds the next flow that
+  goes there (F162). A fetch redirected to another site's wall is booked
+  the same way (F187).
+- `human` is for the steps a person does with the mouse and the keys
+  (`click`, `hover`, `type`, `press`, `scroll`, `select`, `back`); `goto`
+  and the steps that only read (`wait_for`, `assert`, `extract`,
+  `screenshot`, `pdf`) take none (jobs-09).
+- A `wait_for` of `ms` is done only when all of it was waited: one longer
+  than its step's `timeout_ms`, or than what is left of the flow's
+  `timeout_ms`, fails the step at once (jobs-11).
+- A cancel stops a flow at the step under way: Kage hangs up on the
+  sidecar, which finishes that step and begins no other. Its items are
+  `cancelled`, the steps it ran are not reported, and the job is
+  `cancelled` (F175).
+- The result's `robots` is the verdict of the address the flow ended on,
+  under that site's policy (F186).
 - The items of the job are the steps, each with `step.ok`,
   `step.duration_ms`, `step.paced_ms` and `step.opened_tabs`; an `extract`,
   `screenshot` or `pdf` step names a result of its own; the last item is the
@@ -646,7 +673,9 @@ reader does.
 added for every page it asks for, in that order, so `items.total` grows
 to at most `max_pages`. The job's `crawl` counts what it discovered,
 fetched, failed and skipped by reason (`off_site`, `too_deep`, `denied`,
-`not_allowed`, `not_a_page`, `hidden`, `already_read`, `ssrf_denied`),
+`not_allowed`, `not_a_page`, `hidden`, `already_read`, `ssrf_denied`,
+`robots_denied`, and `invalid_url` for an address longer than a request
+may name, which costs no page of `max_pages`, F139),
 its duplicates, how its pages were reached, and `ended`: `completed`
 (nothing inside its scope is left), `max_pages`, `cancelled` or `expired`.
 An item's `crawl` says the page's depth, where its link was first seen,
@@ -680,7 +709,12 @@ http path), its content hash, and what it repeats:
 - A page reached by a click is asked for under the address the page it
   was clicked on gives, so an item's `url` may carry another campaign tag
   than the address the crawl first met.
-- A cancel finishes the page that is being read and asks for no other.
+- A cancel finishes the page that is being read and asks for no other;
+  a page a worker that died left `running` ends `cancelled` with it
+  (F157).
+- A page the crawl began that waits for its site or its visitor (a
+  paused site, the daily cap) is counted as `waiting`, not `fetching`, and
+  in `pages` once it is asked for again (F139).
 
 **Links nobody can see are not followed.** In a browser the crawl takes
 only links a reader can see: rendered, with a box, on the page, not
@@ -780,8 +814,10 @@ after 30 s, 2 min, 8 min, 32 min and 2 h 8 min (each moved by up to a
 fifth), then given up. `Retry-After` is honoured up to an hour; `410`
 ends the retries at once. A redirect is a failure and is never followed.
 While a receiver fails, its other events wait behind the next probe: a
-receiver that is down gets one request per step, not one per job. The log
-of every attempt is on the job (`webhook.deliveries`), and
+receiver that is down gets one request per step, not one per job. The job
+shows one row per event (`webhook.deliveries`): its state, how many
+attempts it took, and the status, the error and the time of the last one
+(jobs-10); every attempt is kept in the store (`webhook_attempts`), and
 `kage_webhook_deliveries_total{event,result}` counts them.
 
 ### Retention and the purge

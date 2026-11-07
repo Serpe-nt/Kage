@@ -503,6 +503,17 @@ export function buildApp(options: AppOptions): App {
     const id = contextId(request);
     const stream = { started: false, ok: false };
     const abandoned = { flow: false };
+    // A caller that hangs up stops the flow before its next step: the step
+    // under way is finished, and nothing more is asked of any site (F175).
+    // Kage's cancel of a flow's job hangs up.
+    const hungUp = new AbortController();
+    const ran = { over: false };
+    reply.raw.on('close', () => {
+      if (!ran.over && !reply.raw.writableFinished) {
+        abandoned.flow = true;
+        hungUp.abort();
+      }
+    });
     const emit = (event: FlowEvent) => {
       const checked = FlowEventSchema.safeParse(event);
       if (!checked.success) {
@@ -534,7 +545,7 @@ export function buildApp(options: AppOptions): App {
             id,
             true,
             (context) =>
-              context.flow(body, operationEnv(id), (event) => {
+              context.flow(body, { ...operationEnv(id), signal: hungUp.signal }, (event) => {
                 // A flow that outlasted its bound sends nothing more.
                 if (!abandoned.flow) {
                   emit(event);
@@ -556,6 +567,7 @@ export function buildApp(options: AppOptions): App {
       }
       request.log.error({ err: error, context_id: id }, 'a flow broke after its stream began');
     } finally {
+      ran.over = true;
       if (stream.started) {
         reply.raw.end();
       }

@@ -137,6 +137,7 @@ fn persona(number: u8) -> PersonaView {
         country: "DE".parse().ok(),
         timezone: "Europe/Berlin".to_owned(),
         ready: true,
+        ready_at: None,
         http: true,
         network: Network::of(
             Some(IpAddr::V4(Ipv4Addr::new(198, 51, number, 10))),
@@ -4366,4 +4367,179 @@ fn a_flow_whose_later_site_has_no_seat_is_given_to_its_visitor() {
     });
     job.run_until(noon() + secs(10));
     assert_eq!(job.log.len(), 1, "{:?}", job.log);
+}
+
+// --- Round D: what waits says why, and whose site said what ---------------
+
+#[test]
+fn a_job_nobody_could_start_within_its_patience_is_told_when_instead_of_waiting() {
+    // F130 (sched-08): every persona that may read the site has read its
+    // one page of the day there and is still visiting it, so the site has
+    // no room for another visit. The page waited in the queue for those
+    // visits to end, `running` with nothing said, though nobody could read
+    // it before midnight in the personas' zone.
+    let capped = PacingProfile {
+        daily_cap_per_persona_per_domain: 1,
+        domain_concurrency: 2,
+        ..brisk()
+    };
+    let mut sim = Sim::new(personas(2));
+    sim.takes = Box::new(|_| secs(1));
+    for _ in 0..2 {
+        sim.submit(Work {
+            pacing: capped,
+            ..work("capped.test")
+        });
+    }
+    sim.run_until(noon() + secs(30));
+    assert_eq!(sim.log.len(), 2, "{:?}", sim.log);
+    assert_eq!(sim.refused, []);
+
+    let patient = Work {
+        pacing: capped,
+        give_up_at: Some(sim.now + Duration::minutes(5)),
+        ..work("capped.test")
+    };
+    let waiting = sim.submit(patient.clone());
+    sim.settle();
+    let midnight = place::next_local_midnight(sim.now, "Europe/Berlin");
+    assert_eq!(
+        sim.refused,
+        [(sim.now, waiting, Refusal::NoPersona, Some(midnight))]
+    );
+    assert_eq!(sim.log.len(), 2);
+
+    // A wait within the patience is waited out in the queue, as before:
+    // the cooling of the only other persona ends in two minutes.
+    let mut sim = Sim::new(personas(1));
+    let back = noon() + Duration::minutes(2);
+    sim.state(id(0), "cool.test").cooldown_until = Some(back);
+    sim.submit(Work {
+        give_up_at: Some(noon() + Duration::minutes(5)),
+        ..work("cool.test")
+    });
+    sim.settle();
+    assert_eq!(sim.refused, []);
+    assert_eq!(sim.planner.wake_at(), Some(back));
+    // One that cools for an hour is not waited for by a job of five
+    // minutes' patience: it is told when.
+    let mut sim = Sim::new(personas(1));
+    let back = noon() + Duration::hours(1);
+    sim.state(id(0), "cool.test").cooldown_until = Some(back);
+    let hurried = sim.submit(Work {
+        give_up_at: Some(noon() + Duration::minutes(5)),
+        ..work("cool.test")
+    });
+    sim.settle();
+    assert_eq!(
+        sim.refused,
+        [(noon(), hurried, Refusal::NoPersona, Some(back))]
+    );
+}
+
+#[test]
+fn work_nobody_is_ready_for_looks_again_when_the_first_backoff_ends() {
+    // F156: a job paused for the pool's return was looked at every minute
+    // while a proxy's backoff can last an hour.
+    let unready = |ready_at: [Option<DateTime<Utc>>; 2]| {
+        let mut views = personas(2);
+        for (view, at) in views.iter_mut().zip(ready_at) {
+            view.ready = false;
+            view.ready_at = at;
+        }
+        views
+    };
+    let refused_at = |views: Vec<PersonaView>| {
+        let mut sim = Sim::new(views);
+        let job = sim.submit(work("example.org"));
+        sim.settle();
+        assert_eq!(sim.refused.len(), 1, "{:?}", sim.refused);
+        assert_eq!(sim.refused[0].1, job);
+        assert_eq!(sim.refused[0].2, Refusal::NoPersona);
+        sim.refused[0].3
+    };
+    let forty = noon() + Duration::minutes(40);
+    let twenty = noon() + Duration::minutes(20);
+    // Both backoffs known: the first that ends.
+    assert_eq!(
+        refused_at(unready([Some(forty), Some(twenty)])),
+        Some(twenty)
+    );
+    // One nobody knows the end of (a warm-up): a minute on, as before.
+    assert_eq!(
+        refused_at(unready([Some(forty), None])),
+        Some(noon() + Duration::minutes(1))
+    );
+    // A backoff that is over waits for its probe: a minute on.
+    assert_eq!(
+        refused_at(unready([Some(noon() - secs(5)), Some(forty)])),
+        Some(noon() + Duration::minutes(1))
+    );
+    // One that ends sooner than a minute is looked at then.
+    assert_eq!(
+        refused_at(unready([Some(noon() + secs(20)), Some(forty)])),
+        Some(noon() + secs(20))
+    );
+}
+
+#[test]
+fn a_flows_later_site_is_booked_its_own_server_errors() {
+    // F162: the server errors and the timeouts a flow met on a later site
+    // were booked to its first domain: the later site's own pause never
+    // saw them, and the first site was paused for what it did not do.
+    let mut planner = Planner::new(rules(), Seed::from_u64(5));
+    planner.set_personas(personas(6));
+    let facts = facts_for(&["first.test", "later.test"]);
+    let mut now = noon();
+    for _ in 0..3 {
+        planner.submit(flow_to("first.test", "later.test"), now);
+        let decisions = planner.plan(now, &facts);
+        let grant = dispatched(&decisions)
+            .first()
+            .map(|dispatch| dispatch.grant)
+            .unwrap();
+        now += secs(1);
+        assert!(planner.complete_on(
+            grant,
+            now,
+            Completion::of(Courtesy::ServerError),
+            Some("later.test"),
+        ));
+        // Reported once.
+        assert!(!planner.complete_on(
+            grant,
+            now,
+            Completion::of(Courtesy::ServerError),
+            Some("later.test"),
+        ));
+        now += secs(10);
+    }
+    assert!(planner.server_error_pause("later.test", now).is_some());
+    assert_eq!(planner.server_error_pause("first.test", now), None);
+
+    // The first site's own pages go on; a flow to the later site waits for
+    // the end of its pause.
+    let own = planner.submit(work("first.test"), now);
+    let onward = planner.submit(flow_to("first.test", "later.test"), now);
+    let decisions = planner.plan(now, &facts);
+    let left: Vec<Ticket> = dispatched(&decisions)
+        .iter()
+        .map(|dispatch| dispatch.work)
+        .collect();
+    assert!(left.contains(&own), "{decisions:?}");
+    assert!(!left.contains(&onward), "{decisions:?}");
+
+    // What an attempt says of its own domain stays the domain's.
+    let mut planner = Planner::new(rules(), Seed::from_u64(5));
+    planner.set_personas(personas(6));
+    let mut now = noon();
+    for _ in 0..3 {
+        planner.submit(work("first.test"), now);
+        let decisions = planner.plan(now, &facts);
+        let grant = dispatched(&decisions)[0].grant;
+        now += secs(1);
+        assert!(planner.complete(grant, now, Completion::of(Courtesy::ServerError)));
+        now += secs(10);
+    }
+    assert!(planner.server_error_pause("first.test", now).is_some());
 }

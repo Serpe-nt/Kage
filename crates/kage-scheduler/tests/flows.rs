@@ -14,11 +14,12 @@ mod common;
 use common::lab::{HIDDEN, Lab, OnFlow, SITE};
 use kage_browser::contract::FlowAction;
 use kage_core::domain::{BreakerState, Level, Render};
+use kage_core::ids::RequestId;
 use kage_core::outcome::Outcome;
 use kage_core::schedule::breaker::BreakerRules;
 use kage_core::schedule::queue::Priority;
 use kage_scheduler::pipeline::attempt_seed;
-use kage_scheduler::{Backend, Capture, FetchOrder, FlowPlan, Keep};
+use kage_scheduler::{Backend, Capture, FetchOrder, FlowPlan, JobFetch, Keep};
 use serde_json::{Value, json};
 
 /// Every request goes to the browser.
@@ -966,5 +967,87 @@ async fn with_resolve_on_host_a_flows_pages_are_judged_by_their_addresses() {
         "{:?}",
         last.classification.evidence
     );
+    lab.shut_down().await;
+}
+
+/// Waits until the lab's sidecar was asked for `count` flows.
+async fn flows_asked(lab: &Lab, count: usize) {
+    for _ in 0..200 {
+        if lab.chromium.with(|sidecar| sidecar.flows.len()) >= count {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("the sidecar was not asked for {count} flows");
+}
+
+#[tokio::test]
+async fn a_flows_cancel_cuts_the_flow_under_way_and_a_stop_of_the_server_does_not() {
+    // F175 (pool-04): a flow's job that was cancelled ran on to its last
+    // step and ended `succeeded`. Its cancel now cuts the flow: the
+    // sidecar sees its caller hang up and stops before its next step, and
+    // the fetch stops with the cut attempt in its record.
+    let mut lab = Lab::start(2, 149, BROWSER_FAST).await;
+    lab.chromium
+        .with(|sidecar| sidecar.flow_delay = Some(std::time::Duration::from_secs(20)));
+    let (stop, stopping) = tokio::sync::watch::channel(false);
+    let (cancel, cancelled) = tokio::sync::watch::channel(false);
+    let id = RequestId::new();
+    let running = {
+        let pipeline = lab.pipeline.clone();
+        let order = flow(&across());
+        tokio::spawn(async move {
+            pipeline
+                .fetch_flow_for_job(id, order, None, stopping, cancelled)
+                .await
+        })
+    };
+    flows_asked(&lab, 1).await;
+    let cut_at = std::time::Instant::now();
+    stop.send_replace(true);
+    cancel.send_replace(true);
+    let fetched = running.await.unwrap().unwrap();
+    assert!(matches!(fetched, JobFetch::Stopped), "{fetched:?}");
+    assert!(cut_at.elapsed() < std::time::Duration::from_secs(5));
+    let attempts = lab.store().attempts().list_for_request(id).await.unwrap();
+    let [attempt] = attempts.as_slice() else {
+        panic!("one attempt, not {attempts:?}");
+    };
+    assert_eq!(attempt.outcome, Outcome::ProviderError);
+    assert_eq!(attempt.reason.as_deref(), Some("cancelled"));
+    // Nothing was concluded: the job ends the request with its items.
+    assert!(
+        lab.store()
+            .results()
+            .get_by_request(id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // A server that stops says `stop` only: the flow under way ends as
+    // the sidecar ends it.
+    lab.chromium
+        .with(|sidecar| sidecar.flow_delay = Some(std::time::Duration::from_secs(2)));
+    let (stop, stopping) = tokio::sync::watch::channel(false);
+    let (_cancel, cancelled) = tokio::sync::watch::channel(false);
+    let id = RequestId::new();
+    let running = {
+        let pipeline = lab.pipeline.clone();
+        let order = flow(&across());
+        tokio::spawn(async move {
+            pipeline
+                .fetch_flow_for_job(id, order, None, stopping, cancelled)
+                .await
+        })
+    };
+    flows_asked(&lab, 2).await;
+    stop.send_replace(true);
+    match running.await.unwrap().unwrap() {
+        JobFetch::Finished(report) => {
+            assert_eq!(report.outcome, Outcome::Ok, "{:?}", report.reason);
+        }
+        other => panic!("the flow was not finished: {other:?}"),
+    }
     lab.shut_down().await;
 }

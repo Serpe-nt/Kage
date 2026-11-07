@@ -717,8 +717,10 @@ pub(crate) async fn items(
 /// What waits is cancelled at once; an item that waits for its persona is
 /// taken out of the queue; a page that is being fetched at this moment is
 /// finished, so at most one more item per visitor ends after the cancel.
-/// The answer is the job as it stands; it is `cancelled` once what was
-/// under way is over. A job that has ended is answered as it ended.
+/// A flow stops at the step under way: the step is finished and no other
+/// begins; its items are `cancelled`. The answer is the job as it stands;
+/// it is `cancelled` once what was under way is over. A job that has
+/// ended is answered as it ended.
 #[utoipa::path(
     post,
     path = "/v1/jobs/{id}/cancel",

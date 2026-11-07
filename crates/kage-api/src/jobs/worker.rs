@@ -83,9 +83,9 @@ use crate::state::{ApiState, EngineParts};
 mod crawl;
 
 /// How long a page waits in the scheduler for its persona before the job
-/// would rather be told when to come back: longer than a gap or a break
-/// between bursts, shorter than a visitor's long break or its night.
-const PATIENCE: Duration = Duration::from_mins(5);
+/// would rather be told when to come back: the pipeline's, which a fetch
+/// carried on as a job waits as long as (F130).
+const PATIENCE: Duration = kage_scheduler::JOB_PATIENCE;
 
 /// A wait shorter than this is waited out with the job in hand; for a
 /// longer one the job is given back as `paused`.
@@ -504,7 +504,7 @@ impl Work {
         request: RequestId,
         order: FetchOrder,
         earlier: Option<Vec<kage_core::domain::Attempt>>,
-        stop: Stop,
+        (stop, cancel): (Stop, Option<Stop>),
     ) -> ItemEnd {
         // A job's page is a trace of its own (spec §20).
         let span = tracing::info_span!(
@@ -513,13 +513,23 @@ impl Work {
             job = %self.job,
             request = %request,
         );
-        match self
-            .engine
-            .pipeline
-            .fetch_for_job(request, order, earlier, stop)
-            .instrument(span)
-            .await
-        {
+        let pipeline = &self.engine.pipeline;
+        // A flow's cancel cuts the flow under way (F175).
+        let fetched = match cancel {
+            Some(cancel) => {
+                pipeline
+                    .fetch_flow_for_job(request, order, earlier, stop, cancel)
+                    .instrument(span)
+                    .await
+            }
+            None => {
+                pipeline
+                    .fetch_for_job(request, order, earlier, stop)
+                    .instrument(span)
+                    .await
+            }
+        };
+        match fetched {
             Ok(JobFetch::Finished(report)) => ItemEnd::Finished(report),
             Ok(JobFetch::Deferred(deferred)) => ItemEnd::Deferred {
                 reason: deferred.reason.as_str().to_owned(),
@@ -641,7 +651,7 @@ impl Work {
         if tune.links {
             order.capture.links = Some(true);
         }
-        self.fetch(request, order, earlier, stop).await
+        self.fetch(request, order, earlier, (stop, None)).await
     }
 
     /// Ends the request of an item nobody will attempt any more, so that
@@ -1294,7 +1304,7 @@ impl Runner {
         spec: Value,
         request: Option<RequestId>,
         first: JobItemId,
-        stop: Stop,
+        (stop, cancel): (Stop, Stop),
     ) -> (RequestId, Vec<Option<StepKeep>>, ItemEnd) {
         let failed = |error: &str| ItemEnd::Failed {
             error: error.to_owned(),
@@ -1366,7 +1376,7 @@ impl Runner {
             patience: Some(PATIENCE),
             ..planned.planned.order
         };
-        let end = work.fetch(id, order, earlier, stop).await;
+        let end = work.fetch(id, order, earlier, (stop, Some(cancel))).await;
         (id, keeps, end)
     }
 
@@ -1395,22 +1405,27 @@ impl Runner {
                 continue;
             }
             let request = open.iter().find_map(|item| item.request_id);
+            // A cancel stops the flow at the step under way (F175); a
+            // server that stops, or a deadline, lets a flow under way end.
+            let (cancel, cancelled) = watch::channel(false);
             let unit = Self::flow_unit(
                 self.work.clone(),
                 self.job.spec.clone(),
                 request,
                 first.id,
-                self.stop.subscribe(),
+                (self.stop.subscribe(), cancelled),
             );
             tokio::pin!(unit);
             let (request, keeps, end) = loop {
                 tokio::select! {
                     done = &mut unit => break done,
                     _ = self.signal.changed() => {
-                        if self.ending().is_some() {
-                            // What waits for a persona comes back; a flow
-                            // that is under way is finished.
+                        if let Some(ending) = self.ending() {
+                            // What waits for a persona comes back.
                             let _ = self.stop.send(true);
+                            if ending == Ending::Cancelled {
+                                cancel.send_replace(true);
+                            }
                         }
                     }
                 }
