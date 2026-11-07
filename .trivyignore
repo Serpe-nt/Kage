@@ -3,8 +3,10 @@
 # accepted it and when it must be reviewed again.
 
 # zlib1g 1:1.3.dfsg+really1.3.1-1+b1 of gcr.io/distroless/cc-debian13, the kage
-# image's runtime base: CVE-2026-76844 and CVE-2026-85091 (a heap overflow in
-# gz_vacate), fixed in Debian's +deb13u1, which no distroless build carries yet
+# image's runtime base: CVE-2026-85091 (a heap overflow in gz_vacate) and
+# CVE-2026-76844 (its record's title names webpack-dev-middleware, but Debian
+# lists it as fixed by the same zlib update, so Trivy matches it), both fixed
+# in Debian's +deb13u1, which no distroless build carries yet
 # (the newest, sha256:08476c24..., read 2026-11-07, still has +b1). The kage
 # binary never loads libz.so.1: its deflate is Rust (zlib-rs, miniz_oxide), and
 # readelf -d of the release build lists libstdc++, libgcc_s, libm, libc and the
