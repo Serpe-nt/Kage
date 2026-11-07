@@ -1,3 +1,19 @@
 # Trivy findings accepted for the images built from deploy/docker/.
 # One finding per line, each with a comment: why it does not apply, who
-# accepted it and when it must be reviewed again. Empty on purpose.
+# accepted it and when it must be reviewed again.
+
+# zlib1g 1:1.3.dfsg+really1.3.1-1+b1 of gcr.io/distroless/cc-debian13, the kage
+# image's runtime base: CVE-2026-76844 and CVE-2026-85091 (a heap overflow in
+# gz_vacate), fixed in Debian's +deb13u1, which no distroless build carries yet
+# (the newest, sha256:08476c24..., read 2026-11-07, still has +b1). The kage
+# binary never loads libz.so.1: its deflate is Rust (zlib-rs, miniz_oxide), and
+# readelf -d of the release build lists libstdc++, libgcc_s, libm, libc and the
+# loader only;
+# the distroless image has no shell and no package manager, so nothing in it
+# reaches the library. The engine images take Debian's fix at build (#53).
+# Accepted by the planner on the owner's standing approval, 2026-11-07. Review by
+# 2026-11-21 (Trivy fails again then) or with the first cc-debian13 build that
+# carries +deb13u1, whichever comes first: drop both lines and move
+# RUNTIME_IMAGE's digest in deploy/docker/kage.Dockerfile and docs/versions.md.
+CVE-2026-76844 exp:2026-11-21
+CVE-2026-85091 exp:2026-11-21

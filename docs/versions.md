@@ -262,7 +262,7 @@ Every image is pinned by tag and digest.
 | Image | Digest | Used by |
 |---|---|---|
 | `rust:1.99.0-trixie` | `sha256:6ff07edce8775d0f64be7aba9197229407301bddf2054d62c27b541a6238a181` | kage builder |
-| `gcr.io/distroless/cc-debian13:nonroot` | `sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2` | kage runtime |
+| `gcr.io/distroless/cc-debian13:nonroot` | `sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2` | kage runtime. Its `zlib1g` `+b1` carries CVE-2026-76844 and CVE-2026-85091, fixed in Debian's `+deb13u1`, which no distroless build has yet (2026-11-07): accepted in `.trivyignore` until 2026-11-21, since the `kage` binary never loads `libz.so.1` (`docs/security-review.md`, Accepted exceptions); move this digest to the first build with the fix. |
 | `node:24.21.0-trixie-slim` | `sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66` | sidecar build and runtime |
 | `postgres:17.11-trixie` | `sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3` | compose |
 | `otel/opentelemetry-collector:0.162.0` | `sha256:310a800ad69ee430e7c541796852a242c9c7db97aaad4daa5ccf843c525fbdb2` | `observability` profile. The core distribution (27 components; contrib has 242 at three times the size): OTLP in, OTLP to Jaeger, the memory limiter and the health endpoint. Apache-2.0, uid 10001, no writable path, no shell, so no Docker healthcheck. 0.163 came out on 2026-10-16; this is the week-old line. |
