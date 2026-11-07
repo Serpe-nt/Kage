@@ -51,6 +51,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-rust
+        # Bounded on its own: an apt mirror once stalled it to the job limit (F207).
+        timeout-minutes: 15
       - run: just fmt-check-rust
       - run: just lint-rust
       - name: Install sqlx-cli
@@ -109,6 +111,8 @@ jobs:
         run: just lint-observability
       - name: The README's badges say what the repository says
         run: just lint-docs
+      - name: Every shell script in git is executable
+        run: just lint-scripts
       - name: The gate scripts' own tests
         run: just test-scripts
       - name: The committed OpenAPI document is current and breaks no client
@@ -146,6 +150,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup-rust
+        # Bounded on its own: an apt mirror once stalled it to the job limit (F207).
+        timeout-minutes: 15
         with:
           # Nothing here compiles the workspace.
           build-deps: "false"
@@ -207,6 +213,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-rust
+        # Bounded on its own: an apt mirror once stalled it to the job limit (F207).
+        timeout-minutes: 15
         with:
           build-deps: "false"
       - name: Mutants, as far as the budget reaches

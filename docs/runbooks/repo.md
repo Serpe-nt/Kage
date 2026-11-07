@@ -155,12 +155,20 @@ queue. Each job calls the same `just` targets a developer runs locally, and
 |---|---|---|
 | `commits` | `scripts/check-conventional-commits.sh` | PR title and commit subjects |
 | `rust` | `fmt-check-rust`, `lint-rust`, `setup-sqlx`, `sqlx-check`, `test-rust`, `cov-rust` | rustfmt, clippy `-D warnings`, migrations and committed query data, tests, 80 % line coverage on the gated crates |
-| `node` | `fmt-check-node`, `lint-node`, `lint-observability`, `lint-docs`, `test-scripts`, `contract-check`, `test-node`, `cov-node` | prettier, tsc, eslint, the dashboards and alert rules (promtool), the README's badges, the gate scripts' own tests, the sidecar contract, vitest, 80 % line coverage on `engine-core` |
+| `node` | `fmt-check-node`, `lint-node`, `lint-observability`, `lint-docs`, `lint-scripts`, `test-scripts`, `contract-check`, `test-node`, `cov-node` | prettier, tsc, eslint, the dashboards and alert rules (promtool), the README's badges, every `*.sh` executable in git, the gate scripts' own tests, the sidecar contract, vitest, 80 % line coverage on `engine-core` |
 | `security` | `deny`, `hardening`, `secrets`, `sbom` | cargo-deny, cargo-audit, pnpm audit, sidecar license policy, `openssl-sys` check, the container checklist on the Dockerfiles and compose files, gitleaks, CycloneDX SBOMs |
 | `images` | `build-images`, `hardening-images`, `scan-images`, `sbom-images`, `test-e2e` | image builds, the container checklist on the images, Trivy (fixable HIGH and CRITICAL), SBOM per image, the stack end to end and the load test's design A |
 | `mutants` | `mutants` | reported on every pull request, as far as a 26-minute budget reaches (the job ends green when the budget is spent, so the run is not cancelled and the CI badge does not read it as failing); the gate (70 % on `kage-core`) is run before a milestone is merged |
 | `coverage-badge` | none | on a push to `main` only: writes the figure `cov-rust` measured to the `gh-pages` branch ("Badges" below); not a check, and `ci-ok` does not wait for it |
 | `ci-ok` | none | fails unless all required jobs passed |
+
+Every step that uses `.github/actions/setup-rust` is bounded to 15
+minutes, and the action bounds and retries each `apt-get` call and gives up
+a stalled cache download after five minutes per segment, so a slow mirror
+or cache costs a retry or a cold build, never the job's whole limit (F207:
+`apt-get update` once stalled the `rust` job to its 45 minutes). Outside
+`ci.yaml`, `image-scan.yaml` scans `main`'s images every morning ("Daily
+image scan" below).
 
 ### The end-to-end suite at any hour
 
@@ -329,6 +337,38 @@ To run it locally:
 
 ```bash
 KAGE_LIVE=1 KAGE__WEBSHARE__API_KEY=... KAGE__SECRETS__MASTER_KEY=... just test-live
+```
+
+## Daily image scan
+
+`image-scan.yaml` builds the three images from `main` every morning at
+04:41 UTC and runs `just scan-images` on them: the pinned Trivy, today's
+advisory database, `--severity HIGH,CRITICAL --ignore-unfixed` and
+`.trivyignore`, the same scan as the `images` job and the release (F220).
+A pull request's scan reads the database of its own day, so an advisory
+published after `main` passed shows here the next morning instead of on
+release day, when the release refuses the image (2.0.3's kage image was
+refused for two zlib advisories that Trivy learned after CI had passed).
+It needs no secret and asks for nothing but `contents: read`.
+
+When it fails:
+
+1. Read which image and which package the run names. A finding that a
+   rebuild fixes (the engine images take Debian's updates at build, #53)
+   goes away when the base or the package moves: move the pin in a pull
+   request of its own (`docs/versions.md`).
+2. A finding that cannot be fixed yet, and does not reach Kage, goes into
+   `.trivyignore` with its reason, who accepted it and a review date
+   (`exp:`), as the file's head says. An entry whose date has passed fails
+   the scan again on that day: that is the reminder.
+3. Do not tag a release while the scan is red: the release runs the same
+   scan on the pushed image and refuses it.
+
+GitHub notifies the user who last changed the workflow's schedule of a
+failed scheduled run. Run it by hand after a fix:
+
+```bash
+gh workflow run image-scan.yaml --ref main
 ```
 
 ## Releases

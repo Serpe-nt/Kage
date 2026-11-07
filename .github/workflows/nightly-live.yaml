@@ -89,6 +89,8 @@ jobs:
           fi
 
       - uses: ./.github/actions/setup-rust
+        # Bounded on its own: an apt mirror once stalled it to the job limit (F207).
+        timeout-minutes: 15
       - uses: ./.github/actions/setup-node
 
       - name: Let Chrome's sandbox create user namespaces

@@ -1,0 +1,42 @@
+name: image-scan
+
+# The images of `main` against today's advisories (F220). A pull request's
+# `images` job scans its images once, with the Trivy database of that day;
+# an advisory published later shows only when the next release builds and
+# scans its images, as two zlib advisories did on 2.0.3's release day. Every
+# morning this builds the three images from `main` and runs the same scan as
+# `just scan-images`, with `.trivyignore`: it fails when a fixable HIGH or
+# CRITICAL finding is new, or when an accepted one's review date has passed,
+# so either shows before a tag is pushed. It reaches no proxy, no site and no
+# registry but the ones the image builds and the scanner read.
+#
+# What to do when it fails: docs/runbooks/repo.md, "Daily image scan".
+
+on:
+  schedule:
+    - cron: "41 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    name: trivy on main's images
+    runs-on: ubuntu-24.04
+    # Three image builds without a layer cache and three scans.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: ./.github/actions/setup-just
+        timeout-minutes: 5
+      - run: just build-images
+      - name: Trivy, as the images job and the release run it
+        run: just scan-images
