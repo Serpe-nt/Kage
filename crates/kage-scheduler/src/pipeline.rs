@@ -70,7 +70,6 @@ mod visit;
 mod wind_down;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -334,6 +333,9 @@ pub struct Running {
     pub request: RequestId,
     task: tokio::task::JoinHandle<Result<Ran, SchedulerError>>,
     stop: Arc<tokio::sync::watch::Sender<bool>>,
+    /// Says `true` from the moment the fetch outlasted its wall time; kept
+    /// while the fetch runs, so that its word stands.
+    _overflow: tokio::sync::watch::Sender<bool>,
 }
 
 /// Stops a fetch that is carried on as a job from waiting any longer (its
@@ -454,8 +456,42 @@ pub struct Kept {
 const PLAIN_EXIT_WAIT: Duration = Duration::from_mins(5);
 
 /// Tells work for a job to stop waiting: `true` once it should. An attempt
-/// that is under way is not cut by it.
+/// that is under way is not cut by it, but for a flow's (F175).
 pub type Stop = tokio::sync::watch::Receiver<bool>;
+
+/// Tells a synchronous fetch that it outlasted its wall time: `true` from
+/// then on, when it is a job's and waits where a job waits (spec §8.4).
+pub(crate) type Overflow = tokio::sync::watch::Receiver<bool>;
+
+/// How long a job's page waits in the scheduler for its persona before it
+/// would rather be told when to come back (spec §16.6): longer than a gap
+/// or a break between bursts, shorter than a visitor's long break or its
+/// night. A synchronous fetch that outlasted its wall time waits as long
+/// (F130).
+pub const JOB_PATIENCE: Duration = Duration::from_mins(5);
+
+/// The reason a request ends with when nobody waits for it any more: its
+/// job was cancelled, or the caller of a synchronous fetch hung up before
+/// its page was asked for (F128).
+pub const CANCELLED: &str = "cancelled";
+
+/// Takes a synchronous fetch out of the queue when its caller stops
+/// waiting within the wall time: the future that waits for it is dropped,
+/// and the fetch is told to stop (F128). What waits for a persona or its
+/// site leaves the scheduler's queue and the request ends `cancelled`; an
+/// attempt that is under way is finished.
+struct HangUp {
+    stop: Arc<tokio::sync::watch::Sender<bool>>,
+    armed: bool,
+}
+
+impl Drop for HangUp {
+    fn drop(&mut self) {
+        if self.armed {
+            self.stop.send_replace(true);
+        }
+    }
+}
 
 /// The span of one request through the pipeline (spec §20): its id, its
 /// domain and its level, never its address.
@@ -485,6 +521,48 @@ fn note_ending(ran: &Result<Ran, SchedulerError>) {
 async fn stopped(stop: &mut Stop) {
     if stop.wait_for(|stop| *stop).await.is_err() {
         std::future::pending::<()>().await;
+    }
+}
+
+/// How a wait in the scheduler's queue ended.
+enum Waited<T> {
+    /// The scheduler answered.
+    Answered(T),
+    /// The stop signal came first: the work left the queue.
+    Stopped,
+    /// The synchronous fetch outlasted its wall time first: the work left
+    /// the queue, to wait again as a job's (F130).
+    Overflowed,
+}
+
+/// Waits for the scheduler's answer, unless the stop signal or the end of
+/// a synchronous fetch's wall time comes first: the wait is then dropped,
+/// which takes the work out of the queue.
+async fn waited<T>(
+    asking: impl Future<Output = T>,
+    stop: Option<&mut Stop>,
+    overflow: Option<Overflow>,
+) -> Waited<T> {
+    let stopping = async {
+        match stop {
+            Some(stop) => stopped(stop).await,
+            None => std::future::pending().await,
+        }
+    };
+    let overflowing = async {
+        match overflow {
+            Some(mut overflow) => {
+                if overflow.wait_for(|over| *over).await.is_err() {
+                    std::future::pending::<()>().await;
+                }
+            }
+            None => std::future::pending().await,
+        }
+    };
+    tokio::select! {
+        answer = asking => Waited::Answered(answer),
+        () = stopping => Waited::Stopped,
+        () = overflowing => Waited::Overflowed,
     }
 }
 
@@ -622,26 +700,45 @@ pub fn attempt_seed(persona: &Seed, request: RequestId, n: u32) -> Seed {
     )
 }
 
-/// The site that showed what a flow's attempt came to, when it is not the
-/// request's own domain: the host of the page the flow ended on, once a
-/// page arrived there (F101). A wall met there is that site's, and so is
-/// the page the persona read. `None` for a fetch, for a flow that ended on
-/// its own domain, and for an attempt that brought no site's page back
-/// (a refused hop, a failed connection). The host is in its normal form
-/// (F104), as the request's domain and the flow's later sites are.
+/// The site that showed what an attempt came to, when it is not the
+/// request's own domain: the host of the page the attempt ended on, once a
+/// page arrived there: a flow's later site (F101), or the site a fetch was
+/// redirected to (F187). A wall met there is that site's, and so is the
+/// page the persona read. A flow whose `goto` to a later site found no
+/// server answering there in time (a timeout, a server that did not
+/// answer) ended there as well: what that says of a site's health is the
+/// later site's (F162). `None` for an attempt that ended on its own
+/// domain, and for one that brought no site's page back otherwise (a
+/// refused hop, a failed connection, the proxy). The host is in its
+/// normal form (F104), as the request's domain and the flow's later sites
+/// are.
 fn shown_by(course: &Course, output: &AttemptOutput) -> Option<String> {
-    if course.order.flow.is_none()
-        || output.status.is_none()
-        || output.outcome() == Outcome::SsrfDenied
-    {
+    if output.outcome() == Outcome::SsrfDenied {
         return None;
     }
-    let ended = Url::parse(output.final_url.as_deref()?).ok()?;
+    let ended = if output.status.is_some() {
+        Url::parse(output.final_url.as_deref()?).ok()?
+    } else if output.courtesy == Courtesy::ServerError {
+        failed_goto(&course.order, output)?
+    } else {
+        return None;
+    };
     let host = kage_core::urlnorm::normal_url(&ended)
         .unwrap_or(ended)
         .host_str()?
         .to_ascii_lowercase();
     (host != course.domain).then_some(host)
+}
+
+/// The address of the `goto` step a flow's attempt ended at, when that
+/// step failed.
+fn failed_goto(order: &FetchOrder, output: &AttemptOutput) -> Option<Url> {
+    let step = output.flow.as_ref()?.failed()?;
+    let actions = &order.flow.as_ref()?.actions;
+    match actions.get(usize::try_from(step.index).ok()?)? {
+        FlowAction::Goto { url, .. } => Url::parse(url).ok(),
+        _ => None,
+    }
 }
 
 /// The countries a request's persona may be of: those every site it
@@ -723,9 +820,9 @@ struct Course {
     /// Whether the fetch was made for a job: what only says "not now"
     /// defers it, and the stop signal gives it back.
     job: bool,
-    /// Set once a synchronous fetch outlasted its wall time: it is carried
+    /// Says once a synchronous fetch outlasted its wall time: it is carried
     /// on as a job and waits where a job waits.
-    overflowed: Option<Arc<AtomicBool>>,
+    overflowed: Option<Overflow>,
     /// The site the page belongs to: its registrable domain.
     site: String,
     /// The site's scout, which reads none of its pages.
@@ -741,6 +838,9 @@ struct Course {
     /// The request's hold on its cache key while it is fetched: an
     /// identical one waits until the course ends.
     flight: Option<Flight>,
+    /// A flow's cancel (F175): once it says stop, the flow under way is
+    /// cut, and the sidecar stops it before its next step.
+    cancel: Option<Stop>,
 }
 
 impl Course {
@@ -750,11 +850,24 @@ impl Course {
     /// Whether the fetch is a job's by now: made for one, or a
     /// synchronous fetch that outlasted its wall time.
     fn waits_like_a_job(&self) -> bool {
-        self.job
-            || self
-                .overflowed
+        self.job || self.overflowed.as_ref().is_some_and(|flag| *flag.borrow())
+    }
+
+    /// What tells a synchronous fetch that waits for its turn as one that
+    /// it outlasted its wall time: then the work it waits with is a job's
+    /// (F130). `None` for work that waits as a job's already, or for a
+    /// fetch that cannot outlast anything.
+    fn overflow_watch(&self) -> Option<Overflow> {
+        self.overflowed.clone().filter(|_| !self.waits_like_a_job())
+    }
+
+    /// Whether the last attempt was a flow cut by its job's cancel (F175).
+    fn was_cancelled(&self) -> bool {
+        self.cancel.is_some()
+            && self
+                .last
                 .as_ref()
-                .is_some_and(|flag| flag.load(Ordering::Relaxed))
+                .is_some_and(|last| last.reason.as_deref() == Some(CANCELLED))
     }
 
     /// Whether the last attempt was cut because the server stopped.
@@ -885,30 +998,39 @@ impl Pipeline {
     ) -> Result<Synchronous, SchedulerError> {
         let wall = self.settings.sync_wall_time;
         let pipeline = self.clone();
-        let overflowed = Arc::new(AtomicBool::new(false));
-        let flag = Arc::clone(&overflowed);
-        // Said only once the fetch is carried on as a job and the job is
-        // cancelled (F109): within the wall time nobody holds a canceller.
+        let (overflow, overflowed) = tokio::sync::watch::channel(false);
+        // Said once the fetch is carried on as a job and the job is
+        // cancelled (F109), or within the wall time when its caller hangs
+        // up (F128).
         let (stop, stopping) = tokio::sync::watch::channel(false);
         let stop = Arc::new(stop);
+        let mut hang_up = HangUp {
+            stop: Arc::clone(&stop),
+            armed: true,
+        };
         let span = fetch_span(request, &order);
         let mut task = tokio::spawn(
             async move {
                 let mut course = pipeline.begin(request, order, None, None).await?;
-                course.overflowed = Some(flag);
+                course.overflowed = Some(overflowed);
                 let ran = Box::pin(pipeline.run(course, Some(stopping))).await;
                 note_ending(&ran);
                 ran
             }
             .instrument(span),
         );
-        let Ok(finished) = tokio::time::timeout(wall, &mut task).await else {
-            // From here on the fetch is a job's.
-            overflowed.store(true, Ordering::Relaxed);
+        let waited = tokio::time::timeout(wall, &mut task).await;
+        // Its caller waited to the end: the fetch is not stopped for it.
+        hang_up.armed = false;
+        let Ok(finished) = waited else {
+            // From here on the fetch is a job's, and the work it waits with
+            // is a job's (F130).
+            overflow.send_replace(true);
             return Ok(Synchronous::Overflowed(Running {
                 request,
                 task,
                 stop,
+                _overflow: overflow,
             }));
         };
         match finished.unwrap_or(Err(SchedulerError::ShuttingDown))? {
@@ -1069,6 +1191,7 @@ impl Pipeline {
             robots: None,
             gap_floor: None,
             flight: None,
+            cancel: None,
         })
     }
 
@@ -1109,10 +1232,43 @@ impl Pipeline {
         earlier: Option<Vec<Attempt>>,
         stop: Stop,
     ) -> Result<JobFetch, SchedulerError> {
+        self.job_fetch(id, order, earlier, stop, None).await
+    }
+
+    /// [`Self::fetch_for_job`] of a flow's job, with its cancel (F175):
+    /// `stop` takes what waits out of the queue as for any job; `cancel`
+    /// also cuts the flow that is under way. The sidecar finishes the step
+    /// it is at and begins no other, and the fetch is stopped with the cut
+    /// attempt (`provider_error`, reason `cancelled`) in its record. A
+    /// server that stops says `stop` only: a flow under way is waited for.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::fetch`].
+    pub async fn fetch_flow_for_job(
+        &self,
+        id: RequestId,
+        order: FetchOrder,
+        earlier: Option<Vec<Attempt>>,
+        stop: Stop,
+        cancel: Stop,
+    ) -> Result<JobFetch, SchedulerError> {
+        self.job_fetch(id, order, earlier, stop, Some(cancel)).await
+    }
+
+    async fn job_fetch(
+        &self,
+        id: RequestId,
+        order: FetchOrder,
+        earlier: Option<Vec<Attempt>>,
+        stop: Stop,
+        cancel: Option<Stop>,
+    ) -> Result<JobFetch, SchedulerError> {
         let span = fetch_span(id, &order);
         let ran = async {
             let mut course = self.begin(id, order, None, earlier).await?;
             course.job = true;
+            course.cancel = cancel;
             let ran = Box::pin(self.run(course, Some(stop))).await;
             note_ending(&ran);
             ran
@@ -1277,20 +1433,18 @@ impl Pipeline {
 
         loop {
             // Waiting for a persona and its turn (spec §20).
-            let acquiring =
-                self.scheduler
-                    .acquire(self.work(&course))
-                    .instrument(tracing::info_span!(
-                        "scheduler.wait",
-                        kind = ?course.order.priority,
-                        n = course.progress.attempts() + 1,
-                    ));
-            let granted = match &mut stop {
-                Some(stop) => tokio::select! {
-                    granted = acquiring => granted,
-                    () = stopped(stop) => return Ok(Ran::Stopped),
-                },
-                None => acquiring.await,
+            let work = self.work(&course);
+            let overflow = course.overflow_watch();
+            let acquiring = self.scheduler.acquire(work).instrument(tracing::info_span!(
+                "scheduler.wait",
+                kind = ?course.order.priority,
+                n = course.progress.attempts() + 1,
+            ));
+            let granted = match waited(acquiring, stop.as_mut(), overflow).await {
+                Waited::Answered(granted) => granted,
+                Waited::Stopped => return Box::pin(self.stopped_run(course)).await,
+                // Taken out of the queue, and put in again as a job's.
+                Waited::Overflowed => continue,
             };
             let grant = match granted {
                 Ok(grant) => grant,
@@ -1304,6 +1458,10 @@ impl Pipeline {
             // attempt in its record; any other ends with it.
             if course.was_cut() {
                 return Box::pin(self.after_cut(course)).await;
+            }
+            // A flow its job's cancel cut asks for nothing more (F175).
+            if course.was_cancelled() {
+                return Box::pin(self.stopped_run(course)).await;
             }
             // A session's persona that was turned away cannot be replaced:
             // the request ends with what it got.
@@ -1373,6 +1531,7 @@ impl Pipeline {
                     .ok()
                     .and_then(|pause| self.now().checked_add_signed(pause));
             }
+            let overflow = course.overflow_watch();
             let acquiring = self
                 .scheduler
                 .acquire_plain(work)
@@ -1381,12 +1540,10 @@ impl Pipeline {
                     kind = ?course.order.priority,
                     n = course.progress.attempts() + 1,
                 ));
-            let granted = match &mut stop {
-                Some(stop) => tokio::select! {
-                    granted = acquiring => granted,
-                    () = stopped(stop) => return Ok(Ran::Stopped),
-                },
-                None => acquiring.await,
+            let granted = match waited(acquiring, stop.as_mut(), overflow).await {
+                Waited::Answered(granted) => granted,
+                Waited::Stopped => return Box::pin(self.stopped_run(course)).await,
+                Waited::Overflowed => continue,
             };
             let grant = match granted {
                 Ok(grant) => grant,
@@ -1483,6 +1640,29 @@ impl Pipeline {
         Ok(Some(usable.then_some(proxy)))
     }
 
+    /// How a run ends that its stop signal stopped while it waited: a
+    /// job's fetch, or one carried on as a job's, is given back with its
+    /// request open, for whoever carries it on to take up again or end. A
+    /// synchronous fetch whose caller hung up within the wall time has
+    /// nobody to give it back to: it ends here, `cancelled` when nothing
+    /// was asked of the site, else with what its attempts reached (F128).
+    async fn stopped_run(&self, course: Course) -> Result<Ran, SchedulerError> {
+        if course.waits_like_a_job() {
+            return Ok(Ran::Stopped);
+        }
+        tracing::info!(
+            request = %course.request.id,
+            "the caller hung up: the fetch leaves the queue"
+        );
+        let (outcome, reason) = if course.attempts.is_empty() {
+            (Outcome::ProviderError, Some(CANCELLED.to_owned()))
+        } else {
+            course.standing()
+        };
+        let report = self.conclude(course, outcome, reason, None).await?;
+        Ok(Ran::Finished(Box::new(report)))
+    }
+
     /// How a run ends whose last attempt was cut: a fetch for a job
     /// is stopped and one that outlasted its wall time is given
     /// back, both with the request open; any other ends with what was cut.
@@ -1515,13 +1695,13 @@ impl Pipeline {
         if course.attempts.is_empty() {
             match self.board(&mut course, stop).await? {
                 Boarded::Served(report) => return Ok(Err(Ran::Finished(report))),
-                Boarded::Stopped => return Ok(Err(Ran::Stopped)),
+                Boarded::Stopped => return Ok(Err(Box::pin(self.stopped_run(course)).await?)),
                 Boarded::Go => {}
             }
         }
         let (outcome, reason, retry_at) = match self.robots_gate(&mut course, stop).await? {
             Gate::Open => return Ok(Ok(course)),
-            Gate::Stopped => return Ok(Err(Ran::Stopped)),
+            Gate::Stopped => return Ok(Err(Box::pin(self.stopped_run(course)).await?)),
             Gate::Denied(reason) => {
                 metrics::robots_denied(reason.unwrap_or("rule"));
                 (Outcome::RobotsDenied, reason.map(str::to_owned), None)
@@ -1628,9 +1808,16 @@ impl Pipeline {
                 }
             })
             .collect();
+        // A synchronous fetch that outlasted its wall time is a job's: it
+        // keeps no synchronous request's place before the jobs (F130).
+        let carried = order.priority == Priority::Sync && course.waits_like_a_job();
         Work {
             domain: course.domain.clone(),
-            priority: order.priority,
+            priority: if carried {
+                Priority::Job
+            } else {
+                order.priority
+            },
             render: course.progress.render(),
             // A session's persona.
             pin: order.pin,
@@ -1671,8 +1858,11 @@ impl Pipeline {
             retry_pause: course.retry,
             not_before: None,
             gap_floor: course.gap_floor,
+            // A fetch carried on as a job waits as long as a job's page,
+            // and is then told when to come back (F130).
             give_up_at: course.give_up_at.or_else(|| {
-                let patience = chrono::Duration::from_std(order.patience?).ok()?;
+                let patience = order.patience.or_else(|| carried.then_some(JOB_PATIENCE))?;
+                let patience = chrono::Duration::from_std(patience).ok()?;
                 self.now().checked_add_signed(patience)
             }),
             plain: order.level == Level::Plain,
@@ -1782,10 +1972,29 @@ impl Pipeline {
             vendor = tracing::field::Empty,
         );
         let started_at = self.now();
-        let output = self
+        let running = self
             .under_way
-            .until_cut(self.executor.run(&job).instrument(span.clone()))
-            .await;
+            .until_cut(self.executor.run(&job).instrument(span.clone()));
+        // A flow's job that is cancelled cuts the flow (F175): the sidecar
+        // sees its caller hang up, finishes the step it is at, and begins
+        // no other.
+        let output = match course
+            .cancel
+            .clone()
+            .filter(|_| course.order.flow.is_some())
+        {
+            Some(mut cancel) => tokio::select! {
+                output = running => output,
+                () = stopped(&mut cancel) => {
+                    tracing::info!(
+                        request = %course.request.id,
+                        "a flow's job was cancelled: the flow stops at the step under way"
+                    );
+                    AttemptOutput::failed(Outcome::ProviderError, CANCELLED, Courtesy::NotTheSite)
+                }
+            },
+            None => running.await,
+        };
         let finished_at = self.now();
         let outcome = output.outcome();
         span.record("outcome", outcome.as_str());
@@ -1820,19 +2029,18 @@ impl Pipeline {
             course.avoid.extend(network);
         }
         // What another site answered says nothing of the domain's health,
-        // and the persona's visit of the domain was not turned away.
-        let elsewhere = shown_by.is_some();
-        grant.complete(Completion {
-            courtesy: if elsewhere {
-                Courtesy::NotTheSite
-            } else {
-                output.courtesy
+        // and the persona's visit of the domain was not turned away: it
+        // says what it says of the site that showed it (F162).
+        grant.complete_on(
+            Completion {
+                courtesy: output.courtesy,
+                // Its visit is over when it was turned away for good.
+                blocked: ruling.penalty.is_some(),
+                // Or when its proxy failed: the site had no say (F108).
+                proxy_failed: at_the_proxy(output.reason.as_deref()),
             },
-            // Its visit is over when it was turned away for good.
-            blocked: ruling.penalty.is_some() && !elsewhere,
-            // Or when its proxy failed: the site had no say (F108).
-            proxy_failed: at_the_proxy(output.reason.as_deref()),
-        });
+            shown_by.as_deref(),
+        );
 
         let attempt = Attempt {
             id: AttemptId::new(),
@@ -2020,6 +2228,26 @@ impl Pipeline {
     }
 
     /// Stores the result and reports.
+    /// What a request's result says of `robots.txt`: the verdict of the
+    /// address it asked for, and for a flow the verdict of the address it
+    /// ended on, not its first site's (F186).
+    async fn reported_robots(
+        &self,
+        course: &Course,
+    ) -> Result<Option<RobotsVerdict>, SchedulerError> {
+        let ended = course
+            .last
+            .as_ref()
+            .and_then(|last| last.final_url.as_deref())
+            .filter(|_| course.order.flow.is_some())
+            .and_then(|ended| Url::parse(ended).ok())
+            .filter(|ended| *ended != course.order.url);
+        Ok(match &ended {
+            Some(ended) => Some(self.robots_at_end(course, ended).await?),
+            None => course.robots.clone(),
+        })
+    }
+
     async fn conclude(
         &self,
         course: Course,
@@ -2027,6 +2255,7 @@ impl Pipeline {
         reason: Option<String>,
         retry_at: Option<DateTime<Utc>>,
     ) -> Result<FetchReport, SchedulerError> {
+        let robots = self.reported_robots(&course).await?;
         let last = course.last;
         let persona = course.last_persona.as_ref().map(|persona| PersonaSummary {
             id: persona.id,
@@ -2078,7 +2307,7 @@ impl Pipeline {
             artifacts: archived.artifacts.clone(),
             persona: persona.clone(),
             block: block.clone(),
-            robots: course.robots.clone(),
+            robots: robots.clone(),
             cached: false,
             cached_at: None,
             reason: reason.clone(),
@@ -2115,7 +2344,7 @@ impl Pipeline {
             block,
             pacing,
             extract: reading.extract,
-            robots: course.robots,
+            robots,
             page: reading.page,
             reading: reading.crawl,
             cached: None,

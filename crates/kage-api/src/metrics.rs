@@ -305,6 +305,27 @@ pub(crate) fn in_flight(change: f64) {
     metrics::gauge!("kage_api_requests_in_flight").increment(change);
 }
 
+/// One request the API is working on, from its first layer until its
+/// answer is made or its client hangs up: the future that holds it is
+/// then dropped before its end, and the request is no longer in flight
+/// all the same (F128: the gauge only ever rose for a client that left).
+#[derive(Debug)]
+pub(crate) struct InFlight(());
+
+impl InFlight {
+    /// Counts a request as in flight until what is returned is dropped.
+    pub(crate) fn begin() -> Self {
+        in_flight(1.0);
+        Self(())
+    }
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        in_flight(-1.0);
+    }
+}
+
 /// Counts a request that was refused before its handler ran.
 pub(crate) fn refusal(code: &'static str) {
     metrics::counter!("kage_api_refusals_total", "code" => code).increment(1);

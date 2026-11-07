@@ -145,6 +145,41 @@ function rig(
 }
 
 describe('the flow executor', () => {
+  it('finishes the step under way and begins no other once its caller went away (F175)', async () => {
+    const { calls, events, host } = rig();
+    const hungUp = new AbortController();
+    const goto = host.goto.bind(host);
+    host.goto = async (url, timeoutMs) => {
+      await goto(url, timeoutMs);
+      // The caller hangs up while the first page is being asked for.
+      if (url.endsWith('/a')) {
+        hungUp.abort();
+      }
+    };
+    const outcome = await runFlow(
+      {
+        actions: [
+          { action: 'goto', url: 'https://example.org/a' },
+          { action: 'wait_for', ms: 0 },
+          { action: 'goto', url: 'https://example.org/b' },
+        ],
+        capture,
+      },
+      host,
+      (event) => events.push(event),
+      Date.now,
+      hungUp.signal,
+    );
+    expect(outcome).toEqual({ ok: false, dwellMs: 0, stopped: true });
+    // The page under way came; nothing after it was asked for.
+    expect(calls.filter((call) => call.startsWith('goto'))).toEqual([
+      `goto https://example.org/a ${DEFAULT_STEP_TIMEOUT_MS}`,
+    ]);
+    expect(
+      events.map((event) => (event.type === 'step' ? [event.action, event.ok] : event)),
+    ).toEqual([['goto', true]]);
+  });
+
   it('does every step through the mouse and keyboard unless told otherwise', async () => {
     const { calls, events, run } = rig();
     const ok = await run([
@@ -348,6 +383,12 @@ describe('the flow executor', () => {
       'an address that never comes',
       { action: 'wait_for', url: '**/never', timeout_ms: 500 },
       'the URL did not match **/never within 500 ms',
+      {},
+    ],
+    [
+      'a timed wait longer than its step',
+      { action: 'wait_for', ms: 5000, timeout_ms: 1000 },
+      'a wait of 5000 ms does not fit in the 1000 ms the step has',
       {},
     ],
     [

@@ -115,6 +115,8 @@ export class FlowStepError extends Error {
 export interface FlowOutcome {
   /** Whether every step succeeded. */
   readonly ok: boolean;
+  /** Whether it was stopped before a step because its caller went away (F175). */
+  readonly stopped?: boolean;
   /** Milliseconds the persona dwelled on the pages a paced flow arrived on, together; 0 for a flow that is not paced. */
   readonly dwellMs: number;
 }
@@ -312,7 +314,17 @@ async function perform(
           throw new FlowStepError(`the network was not idle within ${timeout} ms`);
         });
       } else {
-        await sleep(Math.min(action.ms ?? 0, timeout));
+        // A wait for a given time is done only when all of it was waited
+        // (jobs-11): one the step's time, or what is left of the flow's
+        // budget, cannot hold fails at once and says so, as a wait for a
+        // selector or an address that does not come in time fails.
+        const wanted = action.ms ?? 0;
+        if (wanted > timeout) {
+          throw new FlowStepError(
+            `a wait of ${wanted} ms does not fit in the ${timeout} ms the step has`,
+          );
+        }
+        await sleep(wanted);
       }
       return stayed;
     }
@@ -436,7 +448,8 @@ class Pacer {
 /**
  * Runs the steps of a flow in order (spec §10.5) and reports each as it
  * finishes. The first step that fails ends the flow; so does the flow's
- * own budget.
+ * own budget, and so does `signal` once it is aborted (its caller went
+ * away, F175): the step under way is finished, and no other begins.
  *
  * A flow with `behavior.pace` paces itself: its pauses belong to the step
  * they come before or after, count in that step's `duration_ms` and are
@@ -449,11 +462,17 @@ export async function runFlow(
   host: FlowHost,
   emit: (event: FlowEvent) => void,
   now: () => number = Date.now,
+  signal?: AbortSignal,
 ): Promise<FlowOutcome> {
   const deadline = now() + (request.timeout_ms ?? DEFAULT_FLOW_TIMEOUT_MS);
   const pace = request.behavior?.pace ?? null;
   const pacer = pace === null ? null : new Pacer(pace, host, now, deadline);
   for (const [index, action] of request.actions.entries()) {
+    if (signal?.aborted === true) {
+      // Nobody waits for the flow any more: nothing more is asked of any
+      // site for it (F175).
+      return { ok: false, dwellMs: pacer?.dwelled ?? 0, stopped: true };
+    }
     const started = now();
     let left = deadline - started;
     let paced = 0;

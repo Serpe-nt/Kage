@@ -2102,3 +2102,63 @@ async fn a_webhook_to_a_host_with_an_empty_label_is_refused_whatever_the_operato
     assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.json());
     api.shut_down().await;
 }
+
+#[tokio::test]
+async fn a_carried_fetch_nobody_can_read_soon_says_paused_with_its_reason_and_moment() {
+    // F130 (sched-08): every persona cools on the site for an hour. A fetch
+    // of it outlasts the wall time and is carried on as a job; its job
+    // used to read `running`, `paused: null`, for as long as it waited.
+    let mut api = Api::start_with(2, 149, FAST, |config| {
+        quick(config);
+        config.scheduler.sync_wall_time = HumanDuration::new(Duration::from_millis(300));
+    })
+    .await;
+    pages(&api, "/cool", page("Cool")).await;
+    for persona in &api.lab.personas {
+        sqlx::query(
+            "INSERT INTO persona_domain_state (persona_id, domain, cooldown_until) \
+             VALUES ($1, $2, now() + interval '1 hour') \
+             ON CONFLICT (persona_id, domain) DO UPDATE SET cooldown_until = EXCLUDED.cooldown_until",
+        )
+        .bind(persona.id.as_uuid())
+        .bind(SITE)
+        .execute(api.lab.store().pool())
+        .await
+        .unwrap();
+    }
+    let token = api.key(&[Scope::Fetch, Scope::Jobs]).await;
+    let work = api.work();
+    let reply = api
+        .post(
+            &token,
+            "/v1/fetch",
+            &json!({ "url": Api::url("/cool/1"), "level": 1 }),
+        )
+        .await;
+    assert_eq!(reply.status, StatusCode::ACCEPTED, "{:?}", reply.json());
+    let job = reply.json()["job_id"].as_str().unwrap().to_owned();
+
+    let paused = api
+        .job_until(&token, &job, |job| job["state"] == "paused")
+        .await;
+    assert_eq!(paused["paused"]["reason"], "no_persona", "{paused}");
+    let until: DateTime<Utc> = paused["paused"]["until"].as_str().unwrap().parse().unwrap();
+    // The end of the cooldown, an hour on.
+    let ahead = until - Utc::now();
+    assert!(
+        ahead > chrono::Duration::minutes(55) && ahead <= chrono::Duration::minutes(61),
+        "{paused}"
+    );
+    assert_eq!(asked(&api, "/cool/").await, Vec::<String>::new());
+    api.call(
+        Method::POST,
+        &format!("/v1/jobs/{job}/cancel"),
+        Some(&token),
+        None,
+    )
+    .await;
+    let done = api.job_until(&token, &job, ended).await;
+    assert_eq!(done["state"], "cancelled", "{done}");
+    work.stop().await;
+    api.shut_down().await;
+}

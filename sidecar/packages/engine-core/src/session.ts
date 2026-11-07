@@ -2771,9 +2771,16 @@ export class PageSession {
       openedTabs: () => this.openedTabs(),
     };
     try {
-      const outcome = await runFlow(request, host, emit).finally(() => {
+      const outcome = await runFlow(request, host, emit, Date.now, env.signal).finally(() => {
         this.freshOnNavigation = 'never';
       });
+      if (outcome.stopped === true) {
+        // Its caller went away (F175): nobody reads a final page, and the
+        // tabs the flow's page opened end with it.
+        this.flowTabs = null;
+        await this.closeOtherTabs();
+        return;
+      }
       const result = await snapshot(request.capture, null);
       // The tabs the flow's page opened end with the flow, before it is
       // reported done (F184).

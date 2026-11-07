@@ -50,6 +50,12 @@ export interface OperationEnv {
   readonly artifacts: ArtifactWriter;
   /** Directory below the artifacts volume when the request names none. */
   readonly defaultArtifactPrefix: string;
+  /**
+   * Aborted when the caller of the operation went away (it hung up): a
+   * flow stops before its next step, and the step under way is finished
+   * (F175). Absent: nobody stops the operation.
+   */
+  readonly signal?: AbortSignal;
 }
 
 /** One open persona context: a browser, its profile, its display, its proxy. */
