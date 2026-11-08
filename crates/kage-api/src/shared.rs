@@ -9,7 +9,8 @@
 //! | `401`, `403`, `429`, `500` | every operation that takes a key | the key, its scope, its limits; a store that does not answer |
 //! | `400` | an operation with a body or a path parameter | a body that is not JSON, a path parameter that cannot be read |
 //! | `408` | an operation with a body, or one with a deadline | `server.body_read_timeout`, `server.request_timeout` |
-//! | `415`, `422` | an operation with a body | the media type, the members |
+//! | `415` | an operation with a body | the media type |
+//! | `422` | an operation with a body or a query parameter | the members, a query it cannot read (QA round three api-02) |
 //! | `413`, `414`, `431` | every operation | the limits of spec §19 on a request's head and its stated length |
 //!
 //! An answer an operation already documents keeps its own description.
@@ -80,7 +81,8 @@ const UNPROCESSABLE: Shared = Shared {
     status: "422",
     description: "`validation_failed`, or another code of a request that cannot be made as \
                   asked: `field` names the member (a member given twice and a NUL character \
-                  in a string included).",
+                  in a string included); a query parameter that cannot be read is \
+                  `validation_failed` with `in: query`.",
 };
 const TOO_LARGE: Shared = Shared {
     name: "PayloadTooLarge",
@@ -169,9 +171,13 @@ fn complete_operation(operation: &mut Operation) {
         .as_ref()
         .is_some_and(|requirements| !requirements.is_empty());
     let body = operation.request_body.is_some();
-    let path_parameter = operation.parameters.iter().flatten().any(|parameter| {
-        matches!(parameter, RefOr::T(parameter) if parameter.parameter_in == ParameterIn::Path)
-    });
+    let has = |place: ParameterIn| {
+        operation.parameters.iter().flatten().any(
+            |parameter| matches!(parameter, RefOr::T(parameter) if parameter.parameter_in == place),
+        )
+    };
+    let path_parameter = has(ParameterIn::Path);
+    let query_parameter = has(ParameterIn::Query);
     let deadline =
         !WITHOUT_DEADLINE.contains(&operation.operation_id.as_deref().unwrap_or_default());
     if keyed {
@@ -186,9 +192,10 @@ fn complete_operation(operation: &mut Operation) {
         name(operation, &BAD_REQUEST);
     }
     if body {
-        for shared in [&UNSUPPORTED, &UNPROCESSABLE] {
-            name(operation, shared);
-        }
+        name(operation, &UNSUPPORTED);
+    }
+    if body || query_parameter {
+        name(operation, &UNPROCESSABLE);
     }
     for shared in [&TOO_LARGE, &URI_TOO_LONG, &HEADERS_TOO_LARGE] {
         name(operation, shared);
@@ -268,12 +275,19 @@ mod tests {
                     .as_array()
                     .is_some_and(|requirements| !requirements.is_empty());
                 let body = operation.get("requestBody").is_some();
+                let query = operation["parameters"]
+                    .as_array()
+                    .is_some_and(|parameters| parameters.iter().any(|one| one["in"] == "query"));
                 let mut wanted = vec!["413", "414", "431"];
                 if keyed {
                     wanted.extend(["401", "403", "429", "500"]);
                 }
                 if body {
                     wanted.extend(["400", "408", "415", "422"]);
+                }
+                // QA round three api-02: a query that cannot be read.
+                if query {
+                    wanted.push("422");
                 }
                 for status in wanted {
                     assert!(

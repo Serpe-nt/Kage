@@ -645,15 +645,40 @@ pub(crate) fn parse_job(body: &Value) -> ApiResult<JobRequest> {
     let rest = Value::Object(rest);
     match kind {
         "batch" => typed_value(rest).map(JobRequest::Batch),
-        "flow" => match typed_value::<FlowJob>(rest.clone()) {
-            Ok(flow) => Ok(JobRequest::Flow(Box::new(flow))),
-            Err(error) => Err(step_refused(error, &rest)),
-        },
+        "flow" => {
+            match steps_are_objects(&rest).and_then(|()| typed_value::<FlowJob>(rest.clone())) {
+                Ok(flow) => Ok(JobRequest::Flow(Box::new(flow))),
+                Err(error) => Err(step_refused(error, &rest)),
+            }
+        }
         "crawl" => typed_value(rest).map(|crawl| JobRequest::Crawl(Box::new(crawl))),
         other => Err(ApiError::field(
             "type",
             format!("type: unknown type {other:?}; a job is a {JOB_TYPES}"),
         )),
+    }
+}
+
+/// Every step of a flow is an object. A step is an internally tagged enum,
+/// which serde reads from an array as well (the action first, then the
+/// members by their order): the reader of [`typed_value`] cannot see into
+/// its buffer, so the shape is checked here (QA round three api-01).
+fn steps_are_objects(flow: &Value) -> ApiResult<()> {
+    let Some(steps) = flow.get("actions").and_then(Value::as_array) else {
+        return Ok(());
+    };
+    match steps.iter().position(|step| !step.is_object()) {
+        None => Ok(()),
+        Some(index) => {
+            let field = format!("actions[{index}]");
+            Err(at_step(
+                ApiError::field(
+                    &field,
+                    format!("{field}: a step is an object with an action"),
+                ),
+                index,
+            ))
+        }
     }
 }
 

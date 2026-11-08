@@ -3298,7 +3298,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `validation_failed`, or another code of a request that cannot be made as asked: `field` names the member (a member given twice and a NUL character in a string included). */
+        /** @description `validation_failed`, or another code of a request that cannot be made as asked: `field` names the member (a member given twice and a NUL character in a string included); a query parameter that cannot be read is `validation_failed` with `in: query`. */
         UnprocessableEntity: {
             headers: {
                 [name: string]: unknown;
@@ -3460,6 +3460,7 @@ export interface operations {
             408: components["responses"]["RequestTimeout"];
             413: components["responses"]["PayloadTooLarge"];
             414: components["responses"]["UriTooLong"];
+            422: components["responses"]["UnprocessableEntity"];
             429: components["responses"]["TooManyRequests"];
             431: components["responses"]["HeadersTooLarge"];
             500: components["responses"]["InternalError"];
@@ -3658,6 +3659,7 @@ export interface operations {
             408: components["responses"]["RequestTimeout"];
             413: components["responses"]["PayloadTooLarge"];
             414: components["responses"]["UriTooLong"];
+            422: components["responses"]["UnprocessableEntity"];
             429: components["responses"]["TooManyRequests"];
             431: components["responses"]["HeadersTooLarge"];
             500: components["responses"]["InternalError"];
@@ -3702,6 +3704,7 @@ export interface operations {
             408: components["responses"]["RequestTimeout"];
             413: components["responses"]["PayloadTooLarge"];
             414: components["responses"]["UriTooLong"];
+            422: components["responses"]["UnprocessableEntity"];
             429: components["responses"]["TooManyRequests"];
             431: components["responses"]["HeadersTooLarge"];
             500: components["responses"]["InternalError"];
@@ -3755,6 +3758,15 @@ export interface operations {
             429: components["responses"]["TooManyRequests"];
             431: components["responses"]["HeadersTooLarge"];
             500: components["responses"]["InternalError"];
+            /** @description `unavailable`: no proxy pool is configured, or the persona's sidecar does not answer. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     retire_persona: {
@@ -3796,6 +3808,15 @@ export interface operations {
             429: components["responses"]["TooManyRequests"];
             431: components["responses"]["HeadersTooLarge"];
             500: components["responses"]["InternalError"];
+            /** @description `unavailable`: no proxy pool is configured. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     selftest_persona: {
@@ -3853,6 +3874,15 @@ export interface operations {
             429: components["responses"]["TooManyRequests"];
             431: components["responses"]["HeadersTooLarge"];
             500: components["responses"]["InternalError"];
+            /** @description `unavailable`: no proxy pool is configured, or the persona's sidecar does not answer. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     reload_policies: {
@@ -3918,6 +3948,15 @@ export interface operations {
             429: components["responses"]["TooManyRequests"];
             431: components["responses"]["HeadersTooLarge"];
             500: components["responses"]["InternalError"];
+            /** @description `unavailable`: no proxy pool is configured. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     list_proxies: {
@@ -3946,6 +3985,7 @@ export interface operations {
             408: components["responses"]["RequestTimeout"];
             413: components["responses"]["PayloadTooLarge"];
             414: components["responses"]["UriTooLong"];
+            422: components["responses"]["UnprocessableEntity"];
             429: components["responses"]["TooManyRequests"];
             431: components["responses"]["HeadersTooLarge"];
             500: components["responses"]["InternalError"];
@@ -3998,6 +4038,15 @@ export interface operations {
             429: components["responses"]["TooManyRequests"];
             431: components["responses"]["HeadersTooLarge"];
             500: components["responses"]["InternalError"];
+            /** @description `unavailable`: no proxy pool is configured. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     replace_proxy: {
@@ -4048,6 +4097,15 @@ export interface operations {
             429: components["responses"]["TooManyRequests"];
             431: components["responses"]["HeadersTooLarge"];
             500: components["responses"]["InternalError"];
+            /** @description `unavailable`: no proxy pool is configured. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     purge: {
@@ -4726,6 +4784,15 @@ export interface operations {
             429: components["responses"]["TooManyRequests"];
             431: components["responses"]["HeadersTooLarge"];
             500: components["responses"]["InternalError"];
+            /** @description `unavailable`: no proxy pool is configured, so there is no persona to pin a session to. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     get_session: {
@@ -4764,6 +4831,15 @@ export interface operations {
             408: components["responses"]["RequestTimeout"];
             413: components["responses"]["PayloadTooLarge"];
             414: components["responses"]["UriTooLong"];
+            /** @description `invalid_session_id`: the id is not one a session can have. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             429: components["responses"]["TooManyRequests"];
             431: components["responses"]["HeadersTooLarge"];
             500: components["responses"]["InternalError"];
@@ -4803,6 +4879,15 @@ export interface operations {
             408: components["responses"]["RequestTimeout"];
             413: components["responses"]["PayloadTooLarge"];
             414: components["responses"]["UriTooLong"];
+            /** @description `invalid_session_id`: the id is not one a session can have. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             429: components["responses"]["TooManyRequests"];
             431: components["responses"]["HeadersTooLarge"];
             500: components["responses"]["InternalError"];

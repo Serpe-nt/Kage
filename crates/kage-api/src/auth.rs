@@ -10,7 +10,8 @@
 //!    route's pattern and a method HTTP defines.
 //! 2. [`authenticate`]: the limit of the whole API, then the key: its
 //!    token is read, its row found, the secret compared, and the key's own
-//!    limits applied. Every refusal here is counted by its code.
+//!    limits applied. Every refusal here is counted by its code, and one of
+//!    an admin call by the key's limits is on the audit trail (api-04).
 //! 3. [`audit`], on the admin endpoints only: the `admin` scope is asked
 //!    for, and whatever comes of the call is written to `audit_events`
 //!    with the key, the action, its target and its outcome (spec §19).
@@ -349,11 +350,23 @@ pub(crate) async fn authenticate(
         }
     };
     tracing::Span::current().record("key", tracing::field::display(key.id));
+    let id = request
+        .extensions()
+        .get::<RequestId>()
+        .copied()
+        .unwrap_or_default();
     let admitted = match state.limits().admit(&key) {
         Ok(admitted) => admitted,
         Err(error) => {
             crate::metrics::refusal(error.code().as_str());
-            return error.into_response();
+            let caller = Caller {
+                key: Arc::new(key),
+                request: id,
+            };
+            let route = route_of(&request);
+            let action = admin_action(request.method(), &route, request.uri().path());
+            let path = request.uri().path().to_owned();
+            return refused_for_the_key(&state, &caller, action, (&route, path), error).await;
         }
     };
     let now = state.clock().now();
@@ -363,11 +376,6 @@ pub(crate) async fn authenticate(
     if overdue && let Err(error) = state.store().api_keys().touch(key.id, now).await {
         tracing::warn!(key = %key.id, %error, "a key's last use could not be recorded");
     }
-    let id = request
-        .extensions()
-        .get::<RequestId>()
-        .copied()
-        .unwrap_or_default();
     request.extensions_mut().insert(Caller {
         key: Arc::new(key),
         request: id,
@@ -379,6 +387,58 @@ pub(crate) async fn authenticate(
     // The key's request is no longer in flight once its answer has a head.
     drop(admitted);
     response
+}
+
+/// The action an admin call is written to the audit trail as, for the
+/// routes whose every call is on it: the admin endpoints, and `/metrics`
+/// and `/docs`, which ask for the `admin` scope. `None` for the others.
+fn admin_action(method: &Method, route: &str, path: &str) -> Option<String> {
+    if route.starts_with("/v1/admin/") {
+        Some(action_of(method, route))
+    } else if route == "/metrics" {
+        Some("admin.metrics.read".to_owned())
+    } else if path == crate::DOCS_PATH || path.starts_with(&format!("{}/", crate::DOCS_PATH)) {
+        Some("admin.docs.read".to_owned())
+    } else {
+        None
+    }
+}
+
+/// The answer to a request the key's own limits refused. An admin call is
+/// written to the audit trail as one the `admin` scope refused is
+/// (`denied`, with the status and the code; spec §16.2, QA round three
+/// api-04): a stolen key that the limiter stopped still shows what it
+/// tried.
+async fn refused_for_the_key(
+    state: &ApiState,
+    caller: &Caller,
+    action: Option<String>,
+    (route, path): (&str, String),
+    error: ApiError,
+) -> Response {
+    let Some(action) = action else {
+        return error.into_response();
+    };
+    let limit = error.problem().extensions.get("limit").cloned();
+    let written = record(
+        state,
+        caller,
+        action,
+        target_of(route, &path),
+        AuditOutcome::Denied,
+        json!({
+            "request_id": caller.request,
+            "path": path,
+            "status": error.code().status().as_u16(),
+            "code": error.code().as_str(),
+            "limit": limit,
+        }),
+    )
+    .await;
+    match written {
+        Ok(()) => error.into_response(),
+        Err(failed) => failed.into_response(),
+    }
 }
 
 /// What an admin handler adds to its audit event: what it acted on and

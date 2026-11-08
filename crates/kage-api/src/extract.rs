@@ -314,7 +314,8 @@ pub(crate) fn type_refused(error: &serde_path_to_error::Error<serde_json::Error>
 /// `validation_failed` naming the member.
 pub(crate) fn typed<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, ApiError> {
     let mut deserializer = serde_json::Deserializer::from_slice(bytes);
-    serde_path_to_error::deserialize(&mut deserializer).map_err(|error| type_refused(&error))
+    serde_path_to_error::deserialize(Objects(&mut deserializer))
+        .map_err(|error| type_refused(&error))
 }
 
 /// Reads a value of type `T` from a JSON value, naming the member a refusal
@@ -324,7 +325,315 @@ pub(crate) fn typed<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, ApiError> {
 ///
 /// `validation_failed` naming the member.
 pub(crate) fn typed_value<T: DeserializeOwned>(value: Value) -> Result<T, ApiError> {
-    serde_path_to_error::deserialize(value).map_err(|error| type_refused(&error))
+    serde_path_to_error::deserialize(Objects(value)).map_err(|error| type_refused(&error))
+}
+
+/// What a struct is read from when it is sent as anything but an object.
+const AN_OBJECT: &str = "an object with named members";
+
+/// A deserializer that reads a struct from a JSON object only.
+///
+/// `serde_json` reads a struct from an array as well, by the order of its
+/// fields (`["https://…","GET",{},null,0]` was a fetch): that order would
+/// be a contract of its own, no refusal could name a member, and a field
+/// added in the middle would change what an old body means (QA round three
+/// api-01). This wrapper passes everything through and refuses an array
+/// where a struct is asked for, at every depth.
+struct Objects<D>(D);
+
+/// The visitor of [`Objects`]: `object_only` when a struct was asked for.
+struct ObjectsVisitor<V> {
+    inner: V,
+    object_only: bool,
+}
+
+/// A seed whose value is read through [`Objects`].
+struct ObjectsSeed<S>(S);
+
+/// What a sequence, a map or an enum hands on, wrapped in [`Objects`].
+struct ObjectsAccess<A>(A);
+
+impl<V> ObjectsVisitor<V> {
+    const fn any(inner: V) -> Self {
+        Self {
+            inner,
+            object_only: false,
+        }
+    }
+}
+
+/// Every `deserialize_*` that takes only a visitor, passed through.
+macro_rules! pass_through {
+    ($($method:ident),* $(,)?) => {
+        $(
+            fn $method<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+                self.0.$method(ObjectsVisitor::any(visitor))
+            }
+        )*
+    };
+}
+
+impl<'de, D: de::Deserializer<'de>> de::Deserializer<'de> for Objects<D> {
+    type Error = D::Error;
+
+    pass_through!(
+        deserialize_any,
+        deserialize_bool,
+        deserialize_i8,
+        deserialize_i16,
+        deserialize_i32,
+        deserialize_i64,
+        deserialize_i128,
+        deserialize_u8,
+        deserialize_u16,
+        deserialize_u32,
+        deserialize_u64,
+        deserialize_u128,
+        deserialize_f32,
+        deserialize_f64,
+        deserialize_char,
+        deserialize_str,
+        deserialize_string,
+        deserialize_bytes,
+        deserialize_byte_buf,
+        deserialize_option,
+        deserialize_unit,
+        deserialize_seq,
+        deserialize_map,
+        deserialize_identifier,
+        deserialize_ignored_any,
+    );
+
+    fn deserialize_unit_struct<V: Visitor<'de>>(
+        self,
+        name: &'static str,
+        visitor: V,
+    ) -> Result<V::Value, Self::Error> {
+        self.0
+            .deserialize_unit_struct(name, ObjectsVisitor::any(visitor))
+    }
+
+    fn deserialize_newtype_struct<V: Visitor<'de>>(
+        self,
+        name: &'static str,
+        visitor: V,
+    ) -> Result<V::Value, Self::Error> {
+        self.0
+            .deserialize_newtype_struct(name, ObjectsVisitor::any(visitor))
+    }
+
+    fn deserialize_tuple<V: Visitor<'de>>(
+        self,
+        len: usize,
+        visitor: V,
+    ) -> Result<V::Value, Self::Error> {
+        self.0.deserialize_tuple(len, ObjectsVisitor::any(visitor))
+    }
+
+    fn deserialize_tuple_struct<V: Visitor<'de>>(
+        self,
+        name: &'static str,
+        len: usize,
+        visitor: V,
+    ) -> Result<V::Value, Self::Error> {
+        self.0
+            .deserialize_tuple_struct(name, len, ObjectsVisitor::any(visitor))
+    }
+
+    fn deserialize_struct<V: Visitor<'de>>(
+        self,
+        name: &'static str,
+        fields: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, Self::Error> {
+        self.0.deserialize_struct(
+            name,
+            fields,
+            ObjectsVisitor {
+                inner: visitor,
+                object_only: true,
+            },
+        )
+    }
+
+    fn deserialize_enum<V: Visitor<'de>>(
+        self,
+        name: &'static str,
+        variants: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, Self::Error> {
+        self.0
+            .deserialize_enum(name, variants, ObjectsVisitor::any(visitor))
+    }
+
+    fn is_human_readable(&self) -> bool {
+        self.0.is_human_readable()
+    }
+}
+
+/// Every `visit_*` of a plain value, passed through.
+macro_rules! visit_through {
+    ($($method:ident: $type:ty),* $(,)?) => {
+        $(
+            fn $method<E: de::Error>(self, value: $type) -> Result<Self::Value, E> {
+                self.inner.$method(value)
+            }
+        )*
+    };
+}
+
+impl<'de, V: Visitor<'de>> Visitor<'de> for ObjectsVisitor<V> {
+    type Value = V::Value;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.inner.expecting(formatter)
+    }
+
+    visit_through!(
+        visit_bool: bool,
+        visit_i8: i8,
+        visit_i16: i16,
+        visit_i32: i32,
+        visit_i64: i64,
+        visit_i128: i128,
+        visit_u8: u8,
+        visit_u16: u16,
+        visit_u32: u32,
+        visit_u64: u64,
+        visit_u128: u128,
+        visit_f32: f32,
+        visit_f64: f64,
+        visit_char: char,
+        visit_str: &str,
+        visit_borrowed_str: &'de str,
+        visit_string: String,
+        visit_bytes: &[u8],
+        visit_borrowed_bytes: &'de [u8],
+        visit_byte_buf: Vec<u8>,
+    );
+
+    fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+        self.inner.visit_none()
+    }
+
+    fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+        self.inner.visit_unit()
+    }
+
+    fn visit_some<D: de::Deserializer<'de>>(
+        self,
+        deserializer: D,
+    ) -> Result<Self::Value, D::Error> {
+        self.inner.visit_some(Objects(deserializer))
+    }
+
+    fn visit_newtype_struct<D: de::Deserializer<'de>>(
+        self,
+        deserializer: D,
+    ) -> Result<Self::Value, D::Error> {
+        self.inner.visit_newtype_struct(Objects(deserializer))
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Self::Value, A::Error> {
+        if self.object_only {
+            return Err(de::Error::invalid_type(de::Unexpected::Seq, &AN_OBJECT));
+        }
+        self.inner.visit_seq(ObjectsAccess(seq))
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+        self.inner.visit_map(ObjectsAccess(map))
+    }
+
+    fn visit_enum<A: de::EnumAccess<'de>>(self, data: A) -> Result<Self::Value, A::Error> {
+        self.inner.visit_enum(ObjectsAccess(data))
+    }
+}
+
+impl<'de, S: DeserializeSeed<'de>> DeserializeSeed<'de> for ObjectsSeed<S> {
+    type Value = S::Value;
+
+    fn deserialize<D: de::Deserializer<'de>>(self, deserializer: D) -> Result<S::Value, D::Error> {
+        self.0.deserialize(Objects(deserializer))
+    }
+}
+
+impl<'de, A: SeqAccess<'de>> SeqAccess<'de> for ObjectsAccess<A> {
+    type Error = A::Error;
+
+    fn next_element_seed<T: DeserializeSeed<'de>>(
+        &mut self,
+        seed: T,
+    ) -> Result<Option<T::Value>, A::Error> {
+        self.0.next_element_seed(ObjectsSeed(seed))
+    }
+
+    fn size_hint(&self) -> Option<usize> {
+        self.0.size_hint()
+    }
+}
+
+impl<'de, A: MapAccess<'de>> MapAccess<'de> for ObjectsAccess<A> {
+    type Error = A::Error;
+
+    fn next_key_seed<K: DeserializeSeed<'de>>(
+        &mut self,
+        seed: K,
+    ) -> Result<Option<K::Value>, A::Error> {
+        self.0.next_key_seed(ObjectsSeed(seed))
+    }
+
+    fn next_value_seed<T: DeserializeSeed<'de>>(&mut self, seed: T) -> Result<T::Value, A::Error> {
+        self.0.next_value_seed(ObjectsSeed(seed))
+    }
+
+    fn size_hint(&self) -> Option<usize> {
+        self.0.size_hint()
+    }
+}
+
+impl<'de, A: de::EnumAccess<'de>> de::EnumAccess<'de> for ObjectsAccess<A> {
+    type Error = A::Error;
+    type Variant = ObjectsAccess<A::Variant>;
+
+    fn variant_seed<T: DeserializeSeed<'de>>(
+        self,
+        seed: T,
+    ) -> Result<(T::Value, Self::Variant), A::Error> {
+        self.0
+            .variant_seed(ObjectsSeed(seed))
+            .map(|(value, variant)| (value, ObjectsAccess(variant)))
+    }
+}
+
+impl<'de, A: de::VariantAccess<'de>> de::VariantAccess<'de> for ObjectsAccess<A> {
+    type Error = A::Error;
+
+    fn unit_variant(self) -> Result<(), A::Error> {
+        self.0.unit_variant()
+    }
+
+    fn newtype_variant_seed<T: DeserializeSeed<'de>>(self, seed: T) -> Result<T::Value, A::Error> {
+        self.0.newtype_variant_seed(ObjectsSeed(seed))
+    }
+
+    fn tuple_variant<V: Visitor<'de>>(self, len: usize, visitor: V) -> Result<V::Value, A::Error> {
+        self.0.tuple_variant(len, ObjectsVisitor::any(visitor))
+    }
+
+    fn struct_variant<V: Visitor<'de>>(
+        self,
+        fields: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, A::Error> {
+        self.0.struct_variant(
+            fields,
+            ObjectsVisitor {
+                inner: visitor,
+                object_only: true,
+            },
+        )
+    }
 }
 
 /// The body of a request, read as the module documentation says.
@@ -696,6 +1005,100 @@ mod tests {
         let whole = typed_value::<Wanted>(json!("a text")).unwrap_err();
         assert!(field(&whole).is_none());
         assert_eq!(path_of(&[]), "");
+    }
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    #[serde(deny_unknown_fields)]
+    struct Shapes {
+        #[serde(default)]
+        list: Vec<u8>,
+        #[serde(default)]
+        pair: Option<(u8, String)>,
+        #[serde(default)]
+        map: std::collections::BTreeMap<String, u8>,
+        #[serde(default)]
+        kind: Option<Kind>,
+        #[serde(default)]
+        id: Option<Id>,
+    }
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    enum Kind {
+        Plain,
+        Wrapped(u8),
+        Tupled(u8, u8),
+        Shaped { a: u8 },
+    }
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct Id(String);
+
+    #[tokio::test]
+    async fn a_struct_is_read_from_an_object_and_never_from_an_array() {
+        // QA round three api-01: a body or a member that is an array was
+        // read as the struct by the order of its fields.
+        for (text, member) in [
+            (r#"["x"]"#, None),
+            (r#"["x",null,"fast",null]"#, None),
+            (r"[]", None),
+            (r#"{"url":"x","inner":[["fast"]]}"#, Some("inner")),
+            (r#"{"url":"x","inner":[]}"#, Some("inner")),
+        ] {
+            for error in [
+                typed::<Wanted>(text.as_bytes()).unwrap_err(),
+                typed_value::<Wanted>(serde_json::from_str(text).unwrap()).unwrap_err(),
+            ] {
+                assert_eq!(error.code(), ErrorCode::ValidationFailed, "{text}");
+                assert_eq!(field(&error).as_deref(), member, "{text}");
+                assert!(error.detail().contains("an object"), "{}", error.detail());
+                assert!(!error.detail().contains("elements"), "{}", error.detail());
+            }
+            assert_eq!(
+                body(Some("application/json"), text).await,
+                Err(ErrorCode::ValidationFailed),
+                "{text}"
+            );
+        }
+        // A struct variant is an object too.
+        let error = typed::<Shapes>(br#"{"kind":{"shaped":[1]}}"#).unwrap_err();
+        assert_eq!(field(&error).as_deref(), Some("kind.shaped"));
+
+        // Everything else reads as before: an object, a list, a tuple, a
+        // map, the variants of an enum, a newtype, a borrowed string.
+        let read = typed::<Shapes>(
+            br#"{"list":[1,2],"pair":[3,"c"],"map":{"a":4},"kind":{"tupled":[5,6]},"id":"i"}"#,
+        )
+        .unwrap();
+        assert_eq!(read.list, [1, 2]);
+        assert_eq!(read.pair, Some((3, "c".to_owned())));
+        assert_eq!(read.map["a"], 4);
+        assert_eq!(read.kind, Some(Kind::Tupled(5, 6)));
+        assert_eq!(read.id, Some(Id("i".to_owned())));
+        for (text, kind) in [
+            (r#"{"kind":"plain"}"#, Kind::Plain),
+            (r#"{"kind":{"wrapped":7}}"#, Kind::Wrapped(7)),
+            (r#"{"kind":{"shaped":{"a":8}}}"#, Kind::Shaped { a: 8 }),
+        ] {
+            assert_eq!(
+                typed_value::<Shapes>(serde_json::from_str(text).unwrap())
+                    .unwrap()
+                    .kind,
+                Some(kind),
+                "{text}"
+            );
+        }
+        assert_eq!(
+            typed::<Wanted>(br#"{"url":"x","limit":3,"inner":{"list":["slow"]}}"#).unwrap(),
+            Wanted {
+                limit: Some(3),
+                inner: Some(Inner {
+                    list: vec![Mode::Slow]
+                }),
+                ..wanted("x")
+            }
+        );
+        assert!(typed::<serde_json::Value>(b"[1,{\"a\":true},null,1.5]").is_ok());
     }
 
     #[tokio::test]

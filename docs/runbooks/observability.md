@@ -172,6 +172,15 @@ the first block too and counts a restart's reset as zero; a query of your
 own over those three families should do the same where one event matters.
 A counter that exists from zero is reset by a restart like any other.
 
+`kage_server_lock_held` and `kage_server_lock_confirmed_timestamp_seconds`
+say whether the server still holds its database's lock (ADR 0005) and
+when it last saw it held. The look that confirms it runs every 15 s on
+the lock's own connection; cut that connection (a partition) and the
+look hangs until TCP gives up, while the server serves on, and another
+server may take the lock meanwhile. Neither gauge moves then: query the
+age, `time() - kage_server_lock_confirmed_timestamp_seconds`, which
+stays under 30 s on a healthy server.
+
 `kage_proxy_state{state}` counts a proxy under the state its last probe
 left it in. A proxy whose backoff ran out is `degraded` in the store and in
 `kage proxy list` while it waits for the probe that decides it, a few

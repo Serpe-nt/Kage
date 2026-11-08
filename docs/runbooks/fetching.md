@@ -156,7 +156,8 @@ gets what a person sees at levels 2 and 3, at level 0 as well.
 `docker compose --file deploy/compose.yaml stop kage` (or a `SIGTERM`) does three things at once:
 `/readyz` answers `503`, the scheduler grants nothing more (a request that
 waited for a persona is answered `provider_error` with `shutting_down`,
-an item of a job is given back), and the server waits for the pages that
+an item of a job is given back; a fetch or a job sent after the signal
+is `503 unavailable` and nothing of it is kept), and the server waits for the pages that
 are being read, for at most `jobs.wind_down` (150 s). A page under the
 shipped behavior takes one to two minutes, so a stop takes that long
 while one is open and no time when none is.

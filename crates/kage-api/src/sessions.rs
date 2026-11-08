@@ -184,6 +184,7 @@ impl Wanted {
         (status = 200, description = "The session was open already.", body = SessionView),
         (status = 409, description = "`no_matching_persona`, or `session_persona_conflict` for an open session whose persona the request excludes.", body = Problem, content_type = "application/problem+json"),
         (status = 422, description = "The id or a hint is not well formed.", body = Problem, content_type = "application/problem+json"),
+        (status = 503, description = "`unavailable`: no proxy pool is configured, so there is no persona to pin a session to.", body = Problem, content_type = "application/problem+json"),
     ),
     security(("api_key" = ["sessions"]))
 )]
@@ -246,6 +247,7 @@ pub(crate) async fn open(
     responses(
         (status = 200, description = "The session.", body = SessionView),
         (status = 404, description = "`session_not_found`: never opened, or ended.", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "`invalid_session_id`: the id is not one a session can have.", body = Problem, content_type = "application/problem+json"),
     ),
     security(("api_key" = ["sessions"]))
 )]
@@ -291,6 +293,7 @@ pub(crate) async fn show(
     responses(
         (status = 204, description = "The session ended."),
         (status = 404, description = "`session_not_found`.", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "`invalid_session_id`: the id is not one a session can have.", body = Problem, content_type = "application/problem+json"),
     ),
     security(("api_key" = ["sessions"]))
 )]

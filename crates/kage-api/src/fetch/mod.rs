@@ -192,6 +192,16 @@ pub(crate) async fn fetch(
              from the host's own address only under egress.mode: direct",
         ));
     };
+    // A fetch that arrives once the server stops is not served: it is a
+    // `503` the caller may send elsewhere, as a job is, never a stored
+    // `provider_error` that costs a page of the budget (QA round three
+    // api-06). One that came before waits as documented.
+    if state.is_stopping() {
+        return Err(ApiError::new(
+            ErrorCode::Unavailable,
+            "the server is stopping: no fetch is accepted",
+        ));
+    }
     let policies = state.policies().current();
     let mut planned = plan(&request, &policies.pacing)?;
     settle(
@@ -234,7 +244,14 @@ pub(crate) async fn fetch(
                     .await
                     .map_err(|error| ApiError::internal(&error))
             })
-            .await?;
+            .await
+            .inspect_err(|error| {
+                // A limit of the key, counted as the layer of the key
+                // counts its others (QA round three api-05).
+                if error.code() == ErrorCode::BudgetExhausted {
+                    crate::metrics::refusal(error.code().as_str());
+                }
+            })?;
     }
 
     let mut order = planned.order;
@@ -407,6 +424,14 @@ human:
         assert_eq!(
             failed(&SchedulerError::ShuttingDown).code(),
             ErrorCode::Unavailable
+        );
+        // api-08: a panic is Kage's own fault, not a stop.
+        let panicked = failed(&SchedulerError::Panicked("overflowed".to_owned()));
+        assert_eq!(panicked.code(), ErrorCode::Internal);
+        assert!(
+            !panicked.detail().contains("overflowed"),
+            "{}",
+            panicked.detail()
         );
     }
 }

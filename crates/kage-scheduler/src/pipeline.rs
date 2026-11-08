@@ -372,7 +372,7 @@ impl Running {
             match self
                 .task
                 .await
-                .unwrap_or(Err(SchedulerError::ShuttingDown))?
+                .unwrap_or_else(|error| Err(SchedulerError::of_join(&error)))?
             {
                 Ran::Finished(report) => JobFetch::Finished(report),
                 Ran::Deferred(deferred) => JobFetch::Deferred(deferred),
@@ -1055,7 +1055,7 @@ impl Pipeline {
                 _overflow: overflow,
             }));
         };
-        match finished.unwrap_or(Err(SchedulerError::ShuttingDown))? {
+        match finished.unwrap_or_else(|error| Err(SchedulerError::of_join(&error)))? {
             Ran::Finished(report) => Ok(Synchronous::Finished(report)),
             // Nothing is deferred or stopped inside the wall time.
             Ran::Deferred(_) | Ran::Stopped => Err(SchedulerError::ShuttingDown),

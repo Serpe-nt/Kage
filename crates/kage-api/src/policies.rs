@@ -40,6 +40,16 @@ pub(crate) struct PolicyPreview {
     pub(crate) paused_until: Option<DateTime<Utc>>,
 }
 
+/// The host a path names, normalized, when it is one: a host name (no
+/// wildcard, no empty label, no label over 63 characters, RFC 1035) or an
+/// address in brackets. What the policy preview (F136) and a site's scout
+/// (QA round three api-03) take.
+pub(crate) fn host_named(text: &str) -> Option<String> {
+    normalize_host(text).filter(|host| {
+        !text.contains('/') && !text.contains('*') && (host.starts_with('[') || is_host_name(host))
+    })
+}
+
 /// What Kage would do with a request for a host.
 ///
 /// The policy is resolved as a request's would be: the host's own entry,
@@ -65,19 +75,13 @@ pub(crate) async fn preview(
     caller.require(Scope::Fetch)?;
     // What is no host name has no policy: a wildcard, an empty label, a
     // label too long (F136).
-    let host = normalize_host(&domain)
-        .filter(|host| {
-            !domain.contains('/')
-                && !domain.contains('*')
-                && (host.starts_with('[') || is_host_name(host))
-        })
-        .ok_or_else(|| {
-            ApiError::field(
-                "domain",
-                "a host name, without a scheme, a path or a wildcard: an entry already covers \
-                 its subdomains",
-            )
-        })?;
+    let host = host_named(&domain).ok_or_else(|| {
+        ApiError::field(
+            "domain",
+            "a host name, without a scheme, a path or a wildcard: an entry already covers its \
+             subdomains",
+        )
+    })?;
     let policies = state.policies().current();
     let mut policy = policies.domains.resolve(&host);
     // The cache as it holds under the configuration's bound.

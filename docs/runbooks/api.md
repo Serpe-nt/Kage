@@ -819,7 +819,9 @@ webhooks:
   private_origins: ["http://app:3000"]
 ```
 
-An origin is `scheme://host[:port]` and nothing else. A receiver that is
+An origin is `scheme://host[:port]` and nothing else: no credentials, no
+path. An entry that is not one is refused at load naming its place
+(`webhooks.allowed_origins[1]`), never its text. A receiver that is
 not listed is `422 webhook_origin_not_allowed`. A listed one must be a
 public address unless it is also in `private_origins`; a private origin
 is your own network by definition, so list there only what you run
@@ -930,6 +932,10 @@ Every call below is written to the audit trail with the key, the action,
 what it was done to and how it ended, a refusal for a missing scope
 included; so is a refusal at `/metrics` (`admin.metrics.read`) and at
 `/docs` (`admin.docs.read`), while a scrape that is let through is not.
+An admin call that the key's own limits refuse (`429 rate_limited` or
+`concurrency_limited`) is there too, `denied`, with the status, the code
+and the `limit` in its details: what a leaked key tried is on the trail
+even where the limiter stopped it.
 `GET /v1/admin/audit` reads it, newest first (`limit` up to 200,
 `cursor` from `next_cursor`); what was done at the command line is in the
 same trail with the actor `cli`. A command whose event cannot be written
@@ -948,7 +954,7 @@ script that reads the exit code learns that the trail misses it.
 | `POST /v1/admin/proxies/{id}/replace` | Ask the provider for a replacement, inside the budget (`docs/runbooks/proxies.md`); the answer says what became of it. |
 | `GET /v1/admin/pool` | Proxies by state, personas by state and engine, open browsers, the bandwidth budget. |
 | `POST /v1/admin/policies/reload` | Read the policy files again now. A file that is invalid changes nothing and is `422`. |
-| `POST /v1/admin/sites/{site}/scout` | Give a site another scout (above, under `robots.txt`); `409 no_matching_persona` when nobody else may ask. |
+| `POST /v1/admin/sites/{site}/scout` | Give a site another scout (above, under `robots.txt`); `409 no_matching_persona` when nobody else may ask. A wildcard or a label over 63 characters is no site: `422 validation_failed`, `field: site`. |
 
 ### A self-test of a persona
 
@@ -997,11 +1003,20 @@ and `kage_api_refusals_total{code}`, which counts what was refused for the
 key, its scope, its limits or the head of the request (`method` is one
 HTTP defines, `other` for anything else a client sends, so the series
 stay few whatever is sent; `scope_missing` is counted where a handler
-asks for its scope, F182, and `jobs_limited` where `POST /v1/jobs` refuses a
-job): a rise of `invalid_key` is someone guessing, of
-`scope_missing` a consumer with the wrong key, of `jobs_limited` one that
-queues jobs faster than they are worked, of `rate_limited` one that
-needs a larger allowance or a slower loop.
+asks for its scope, F182, `jobs_limited` where `POST /v1/jobs` refuses a
+job, and `budget_exhausted` where a fetch spends its page): a rise of
+`invalid_key` is someone guessing, of `scope_missing` a consumer with the
+wrong key, of `jobs_limited` one that queues jobs faster than they are
+worked, of `rate_limited` one that needs a larger allowance or a slower
+loop, of `budget_exhausted` a key whose day is spent.
+
+The server's lock on its database (one server per database, ADR 0005):
+`kage_server_lock_held` is 1 while the server's latest look (every 15 s)
+found it holding the lock, and `kage_server_lock_confirmed_timestamp_seconds`
+is when it last did. A look sent into a cut connection hangs and moves
+neither, so watch the age: `time() -
+kage_server_lock_confirmed_timestamp_seconds > 60` is a server that serves
+on a lock it cannot confirm, and another server may hold it meanwhile.
 
 For jobs: `kage_jobs{job_type,state}` (a growing `paused` is sites that
 are closed or personas that sleep; a growing `queued` is more work than
@@ -1085,5 +1100,5 @@ behind a residential provider.
 | `webhook_origin_not_allowed` | `422`: the webhook's receiver is not in `webhooks.allowed_origins`. |
 | `driver_input_denied` | `422`: a flow step with `human: false` on a site whose policy does not have `driver_input: true`. |
 | `session_not_found`, `session_persona_conflict`, `no_matching_persona` | Sessions (above). |
-| `unavailable` | `503`: no proxy pool is configured, or the server is stopping. |
+| `unavailable` | `503`: no proxy pool is configured, or the server is stopping (a fetch or a job sent once the stop began; send it to another server or again after the restart). |
 | `internal` | `500`. The cause is in the log under `request_id`, never in the answer. |

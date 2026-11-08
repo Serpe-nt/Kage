@@ -168,7 +168,7 @@ impl ArtifactStore {
             encoding,
             request_id: new.request_id,
             created_at: now,
-            expires_at: now + self.retention,
+            expires_at: kage_core::duration::after(now, self.retention),
         };
         ArtifactRepo::insert_on(&mut transaction, &artifact).await?;
         transaction.commit().await.map_err(StoreError::from)?;
@@ -219,7 +219,7 @@ impl ArtifactStore {
             id: ArtifactId::new(),
             request_id: Some(request_id),
             created_at: now,
-            expires_at: now + self.retention,
+            expires_at: kage_core::duration::after(now, self.retention),
             ..found
         };
         ArtifactRepo::insert_on(&mut transaction, &artifact).await?;

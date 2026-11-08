@@ -309,6 +309,30 @@ async fn metrics_expose_the_series_of_the_specification() {
     send(Method::GET, "/v1/nothing", None, None)
         .await
         .problem(StatusCode::NOT_FOUND, "not_found");
+    // A key whose page budget is spent (QA round three api-05): the
+    // refusal is counted as the key's other limits are.
+    let (_, budgeted) = api
+        .key_with(
+            &[Scope::Fetch],
+            kage_core::domain::KeyLimits {
+                daily_page_budget: Some(1),
+                ..common::ROOMY
+            },
+        )
+        .await;
+    for (at, status) in [
+        ("/page?budget=1", StatusCode::OK),
+        ("/page?budget=2", StatusCode::TOO_MANY_REQUESTS),
+    ] {
+        let reply = send(
+            Method::POST,
+            "/v1/fetch",
+            Some(&budgeted),
+            Some(json!({ "url": Api::url(at), "level": 0 })),
+        )
+        .await;
+        assert_eq!(reply.status, status, "{:?}", reply.json());
+    }
     // What the server's loops would have done by now.
     let engine = api.parts.engine.clone().unwrap();
     engine.bandwidth.flush().await.unwrap();
@@ -613,6 +637,11 @@ async fn metrics_expose_the_series_of_the_specification() {
     );
     expect(&text, "kage_api_requests_in_flight", &[]);
     expect(&text, "kage_api_refusals_total", &["code=\"missing_key\""]);
+    expect(
+        &text,
+        "kage_api_refusals_total",
+        &["code=\"budget_exhausted\"", " 1"],
+    );
     // A key without the scope a route needs is counted too (F182, timers-02).
     let scope_missing = text
         .lines()
