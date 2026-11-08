@@ -20,7 +20,7 @@ export class BehaviorError extends Error {
   override readonly name = 'BehaviorError';
 
   constructor(
-    readonly reason: 'element_not_found' | 'element_not_reachable',
+    readonly reason: 'element_not_found' | 'element_not_reachable' | 'stopped',
     message: string,
     /** What the hand saw when it gave up, for the log: numbers only, never the page's address. */
     readonly seen: readonly RevealStep[] = [],
@@ -430,9 +430,26 @@ export class Human {
     return 'deadline';
   }
 
-  /** Types text on the keyboard, key by key. The caller has put the focus where it belongs. */
-  async type(text: string, options: { readonly typos: boolean }): Promise<void> {
+  /**
+   * Types text on the keyboard, key by key. The caller has put the focus
+   * where it belongs.
+   *
+   * With `signal`, typing stops at the next key once it is aborted (a step
+   * whose budget ran out): no key goes down after that, every key still
+   * down comes up, and the keys lent for the text are given back. Nothing
+   * of the text then lands anywhere later (the next step, the next
+   * request's tab).
+   *
+   * @throws {BehaviorError} `stopped` when the signal stopped it before its last key.
+   */
+  async type(
+    text: string,
+    options: { readonly typos: boolean; readonly signal?: AbortSignal },
+  ): Promise<void> {
     const { device, profile, random } = this.parts;
+    const { signal } = options;
+    // Keys pressed and not yet released, in the order they went down.
+    const down: string[] = [];
     try {
       // Keys the layout lacks are lent before the plan's clock starts, so
       // that the keyboard's change takes no time out of a hold or a gap
@@ -444,25 +461,68 @@ export class Human {
       for (const action of plan.actions) {
         const wait = started + action.t - this.clock.now();
         if (wait > 0) {
-          await this.clock.sleep(wait);
+          await this.pause(wait, signal);
+        }
+        if (signal?.aborted === true) {
+          throw new BehaviorError('stopped', 'typing was stopped before its last key');
         }
         if (action.action === 'down') {
           await device.keyDown(action.key);
+          down.push(action.key);
           this.counts.keys += 1;
         } else {
           await device.keyUp(action.key);
+          const at = down.lastIndexOf(action.key);
+          if (at >= 0) {
+            down.splice(at, 1);
+          }
         }
       }
       await device.flush();
       this.counts.typos += plan.typos;
     } finally {
+      // What is still down comes up, the last pressed first, while the
+      // keys lent to it are still lent. Each release is tried: one the
+      // display refuses does not keep the others down.
+      for (const key of down.reverse()) {
+        await device.keyUp(key).catch(() => undefined);
+      }
       await device.unprepare();
     }
   }
 
-  /** Presses one key, with the modifiers the keyboard needs for it. */
+  /** Waits, and stops waiting once `signal` is aborted. */
+  private pause(ms: number, signal: AbortSignal | undefined): Promise<void> {
+    if (signal === undefined) {
+      return this.clock.sleep(ms);
+    }
+    if (signal.aborted) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      const done = () => {
+        signal.removeEventListener('abort', done);
+        resolve();
+      };
+      signal.addEventListener('abort', done);
+      void this.clock.sleep(ms).then(done);
+    });
+  }
+
+  /**
+   * Presses one key, with the modifiers the keyboard needs for it. A
+   * character the layout makes with a dead key, or has no key for, is
+   * typed as `type` types it: the dead key and then the letter, or on a
+   * key lent before the press (browser-07).
+   */
   press(key: string): Promise<void> {
     const levels = this.parts.device.levelsOf(key);
+    // One character, never a key's name (`Enter`, `F13`): a name the
+    // layout lacks is refused by the keyboard, as before.
+    const character = Array.from(key).length === 1;
+    if (character && (levels.compose !== null || !levels.onLayout)) {
+      return this.type(key, { typos: false });
+    }
     return this.chord(
       [...(levels.shift ? ['Shift'] : []), ...(levels.altGr ? ['AltGraph'] : [])],
       key,

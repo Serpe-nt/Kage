@@ -554,7 +554,15 @@ version's date is the day, in UTC, its tag was made.
   Such an item ends `failed` with the error `internal` (the log has the
   cause); it was taken for a stop of the server and queued again at once,
   so it panicked again with every turn.
-
+- **A `type` step whose budget runs out stops typing.** The step failed
+  at its `timeout_ms` (30 s by default, about 200 characters), but its
+  typing went on after the flow had returned: into the page of the
+  context's next request, over a retry's own keys, and a release could be
+  lost and leave a key down. Typing now stops at its next key once the
+  budget is over, every key down comes up on the key code it went down on,
+  the keys lent for the text are given back, and the flow returns once
+  that is done. A flow's `press` of a character the layout makes with a
+  dead key, or has no key for, is typed as `type` types it (spec §10.5).
 ### Added
 
 - **Two reasons: `server_errors` and `crawl_delay`.** A synchronous

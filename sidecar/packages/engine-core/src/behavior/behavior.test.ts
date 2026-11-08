@@ -751,6 +751,10 @@ function rig(
     glideMs?: number;
     /** A key whose press the device refuses, or `prepare` to refuse the lending. */
     refuse?: string;
+    /** The keyboard's layout (US by default). */
+    layout?: (key: string) => KeyLevels;
+    /** Told of every key pressed, after the press. */
+    onKey?: (key: string) => void;
   } = {},
 ) {
   const log: string[] = [];
@@ -811,7 +815,7 @@ function rig(
       log.push(`wheel ${direction}`);
       return Promise.resolve();
     },
-    levelsOf: usLayout,
+    levelsOf: options.layout ?? usLayout,
     prepare: (text) => {
       log.push(`prepare ${text} @${Math.round(now)}`);
       return options.refuse === 'prepare'
@@ -827,6 +831,7 @@ function rig(
         return Promise.reject(new Error(`the display refused ${key}`));
       }
       log.push(`key ${key}`);
+      options.onKey?.(key);
       return Promise.resolve();
     },
     keyUp: (key) => {
@@ -1156,6 +1161,58 @@ describe('a persona at its mouse and keyboard', () => {
     await expect(unlent.human.type('Hi', { typos: false })).rejects.toThrow(/refused the lending/);
     expect(unlent.log.filter((entry) => entry.startsWith('key '))).toEqual([]);
     expect(unlent.log.at(-1)).toMatch(/^unprepare @/);
+  });
+
+  it('stops typing at the next key once told to, and lets every key up first', async () => {
+    // A step whose budget ran out: nothing more goes down, nothing stays down.
+    const stop = new AbortController();
+    const { human, log } = rig({
+      onKey: (key) => {
+        if (key === 'o') {
+          stop.abort();
+        }
+      },
+    });
+    await expect(
+      human.type('Hello you, how are you', { typos: false, signal: stop.signal }),
+    ).rejects.toMatchObject({ name: 'BehaviorError', reason: 'stopped' });
+    const presses = log.filter((entry) => entry.startsWith('key '));
+    expect(presses.at(-1)).toBe('key o');
+    expect(log).not.toContain('key y');
+    // Every key that went down came up, Shift with the rest, before the
+    // lent keys were given back.
+    const count = (prefix: string) =>
+      log.filter((entry) => entry.startsWith(prefix)).map((entry) => entry.split(' ')[1]);
+    expect(count('keyup ').sort()).toEqual(count('key ').sort());
+    expect(log.at(-1)).toMatch(/^unprepare @/);
+    // A signal already aborted types nothing.
+    const none = rig();
+    await expect(
+      none.human.type('abc', { typos: false, signal: AbortSignal.abort() }),
+    ).rejects.toMatchObject({ reason: 'stopped' });
+    expect(none.log.filter((entry) => entry.startsWith('key '))).toEqual([]);
+  });
+
+  it('presses a letter its layout lacks as it types one: dead key and letter, or a lent key', async () => {
+    const { human, log } = rig({ layout: germanLayout });
+    await human.press('é');
+    expect(log.filter((entry) => /^(key|keyup|prepare|unprepare) /.test(entry))).toEqual([
+      expect.stringMatching(/^prepare é @/),
+      'key Dead:acute',
+      'keyup Dead:acute',
+      'key e',
+      'keyup e',
+      expect.stringMatching(/^unprepare @/),
+    ]);
+    const lent = rig({ layout: germanLayout });
+    await lent.human.press('ж');
+    expect(lent.log[0]).toMatch(/^prepare ж @/);
+    expect(lent.log).toContain('key ж');
+    // A key the layout has goes as before, without lending anything.
+    const plain = rig({ layout: germanLayout });
+    await plain.human.press('Enter');
+    expect(plain.log).toEqual(['key Enter', 'keyup Enter']);
+    expect(plain.human.counts.keys).toBe(1);
   });
 
   it('dwells for the time asked, with an idle hand that moves a little, or does not', async () => {

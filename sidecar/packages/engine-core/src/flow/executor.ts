@@ -123,18 +123,49 @@ export interface FlowOutcome {
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, ms)));
 
-/** Ends work that outlives its budget. The grace lets a step report its own, better worded, timeout first. */
-function withTimeout<T>(work: Promise<T>, ms: number, graceMs: number, what: string): Promise<T> {
+/**
+ * How long a step that outlived its budget is given to stop once told
+ * to: typing stops at its next key and lets every key up (QA round
+ * three, the timed-out `type`).
+ */
+const STOP_GRACE_MS = 1000;
+
+/**
+ * Ends work that outlives its budget. The grace lets a step report its
+ * own, better worded, timeout first. Once the budget is over the work's
+ * signal is aborted, and the work is waited for until it stopped (for
+ * `STOP_GRACE_MS` at most): a step whose budget ran out does nothing more
+ * once the flow has moved on (a `type` typed on into the next request's
+ * tab, and over a retry's own keys).
+ */
+async function withTimeout<T>(
+  work: (signal: AbortSignal) => Promise<T>,
+  ms: number,
+  graceMs: number,
+  what: string,
+): Promise<T> {
+  const stop = new AbortController();
+  const running = work(stop.signal);
   let timer: NodeJS.Timeout | undefined;
-  const limit = new Promise<never>((_resolve, reject) => {
+  const late = new Promise<'late'>((resolve) => {
     timer = setTimeout(() => {
-      reject(new FlowStepError(`${what} did not finish within ${ms} ms`));
+      resolve('late');
     }, ms + graceMs);
   });
-  return Promise.race([work, limit]).finally(() => {
+  try {
+    const first = await Promise.race([running.then((value) => ({ value })), late]);
+    if (first !== 'late') {
+      return first.value;
+    }
+  } finally {
     clearTimeout(timer);
-  });
+  }
+  stop.abort();
+  await Promise.race([running.then(nothing, nothing), sleep(STOP_GRACE_MS)]);
+  throw new FlowStepError(`${what} did not finish within ${ms} ms`);
 }
+
+const nothing = (): void => undefined;
 
 /** Waits until a selector matches, looking again every little while. */
 async function waitUntilExists(host: FlowHost, selector: string, timeoutMs: number): Promise<void> {
@@ -202,12 +233,14 @@ async function leaving(
  * Does one step.
  *
  * @param paced whether the flow paces itself: then a click or a key of the driver is watched for a navigation like a person's, because the dwell on the next page depends on it.
+ * @param signal aborted once the step's budget is over: typing stops at its next key.
  */
 async function perform(
   action: FlowAction,
   host: FlowHost,
   timeout: number,
   paced: boolean,
+  signal: AbortSignal,
 ): Promise<Performed> {
   const humanly = action.human ?? true;
   switch (action.action) {
@@ -245,7 +278,7 @@ async function perform(
         // The click may have opened a tab, which the browser shows in
         // front: the keys are for the flow's page (F184).
         await host.keepFront();
-        await human.type(action.text, { typos: host.typos });
+        await human.type(action.text, { typos: host.typos, signal });
       } else {
         await host.driver.fill(action.selector, action.text, timeout);
       }
@@ -494,7 +527,7 @@ export async function runFlow(
         const timeout = Math.min(action.timeout_ms ?? DEFAULT_STEP_TIMEOUT_MS, Math.max(0, left));
         // Human steps take the time a person takes; the step's budget still ends them.
         const performed = await withTimeout(
-          perform(action, host, timeout, pacer !== null),
+          (stopping) => perform(action, host, timeout, pacer !== null, stopping),
           timeout,
           250,
           action.action,

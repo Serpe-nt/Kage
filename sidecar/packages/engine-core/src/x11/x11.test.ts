@@ -263,6 +263,40 @@ describe('the input of a display', () => {
     await input.close();
   });
 
+  it('lets a key up on the key code it went down on, and nothing lent stays down', async () => {
+    const input = await X11Input.open(display.name);
+    const connection = await X11Connection.connect(display.name);
+    // QueryKeymap (44): one bit for every key code that is down now.
+    const isDown = async (keycode: number | null) => {
+      const ask = connection as unknown as {
+        request(opcode: number, data: number): Promise<Buffer>;
+      };
+      const reply = await ask.request(44, 0);
+      const code = keycode ?? 0;
+      return ((reply[8 + Math.floor(code / 8)] ?? 0) & (1 << (code % 8))) !== 0;
+    };
+    await input.prepare('ж');
+    const zhe = input.levelsOf('ж').keycode;
+    await input.keyDown('ж');
+    await input.flush();
+    expect(await isDown(zhe)).toBe(true);
+    // The keys lent for the text are given back with ж still down (a typing
+    // that was stopped): it comes up first, on its own key code.
+    await input.unprepare();
+    expect(await isDown(zhe)).toBe(false);
+    // A later release finds nothing to let up and sends nothing wrong.
+    await input.keyUp('ж');
+    await input.keyDown('a');
+    await input.flush();
+    const a = input.levelsOf('a').keycode;
+    expect(await isDown(a)).toBe(true);
+    await input.keyUp('a');
+    await input.flush();
+    expect(await isDown(a)).toBe(false);
+    connection.close();
+    await input.close();
+  });
+
   it('makes a letter the layout lacks with its dead key: é is ´ then e (browser-07)', async () => {
     const input = await X11Input.open(display.name);
     expect(input.levelsOf('é').compose).toEqual({ dead: 'Dead:acute', base: 'e' });

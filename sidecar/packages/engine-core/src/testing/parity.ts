@@ -2739,6 +2739,47 @@ export function defineParitySuite(subject: ParitySubject): void {
       expect(median(lent)).toBeGreaterThan(0.75 * median(spaces));
     });
 
+    it('stops a type step whose budget ran out: the next flow on the context hears none of its keys', async () => {
+      // A type step longer than its budget typed on after the flow had
+      // returned, into the page of whatever came next on the context.
+      const text = 'the quick brown fox jumps over the lazy dog '.repeat(3);
+      const { first, second } = await withContext('stopped-type', async (context) => {
+        const timedOut = await flow(context, {
+          behavior: { seed: SEEDS.first, typos: false },
+          timeout_ms: 60_000,
+          actions: [
+            { action: 'goto', url: named('/input/') },
+            { action: 'wait_for', selector: 'body[data-ready]' },
+            { action: 'type', selector: '#field', text, timeout_ms: 2000 },
+          ],
+        });
+        const next = await flow(context, {
+          behavior: { seed: SEEDS.first, typos: false },
+          timeout_ms: 60_000,
+          actions: [
+            { action: 'goto', url: named('/input/?next') },
+            { action: 'wait_for', selector: 'body[data-ready]' },
+            { action: 'wait_for', ms: 4000 },
+            { action: 'extract', capture: DOM },
+          ],
+        });
+        return { first: timedOut, second: next };
+      });
+      expect(first.steps.map((step) => [step.action, step.ok])).toEqual([
+        ['goto', true],
+        ['wait_for', true],
+        ['type', false],
+      ]);
+      expect(first.steps.at(-1)?.error).toBe('type did not finish within 2000 ms');
+      expect(second.steps.every((step) => step.ok)).toBe(true);
+      const report = inputReportOf(second.steps.at(-1)?.capture?.dom_html ?? null);
+      measured('what the next flow heard after a type step ran out of budget', {
+        keys: report.events.filter((event) => event.type.startsWith('key')).length,
+      });
+      expect(report.events.filter((event) => event.type.startsWith('key'))).toEqual([]);
+      expect(report.field).toBe('');
+    });
+
     it('clicks, types and selects through the mouse and keyboard of its display', async () => {
       const text = 'Zürich y@web';
       const run = await withContext('flow-human', (context) =>
