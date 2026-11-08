@@ -1712,6 +1712,13 @@ budget) fails the step at once and says so (jobs-11). A human
 `scroll` goes on as long as its step has time, less two seconds for the
 flick that is under way: a page too long for the step is scrolled as far as
 that and the step succeeds (a longer `timeout_ms` scrolls further). A human
+`type` longer than its step's time fails the step, and stops at its next
+key: no key goes down after that, every key down comes up, and the flow
+returns only once that is done (a second at most). Up to 2.0.4 it typed on
+after the flow had returned, into the page of whatever the context did
+next, and over a retry's own keys. A `press` of a character the layout
+makes with a dead key, or has no key for, is typed as `type` types it
+(§10.4). A human
 step is done by the behavior engine through the display: a `select` is
 opened with a click and chosen with the arrow keys and `Enter`, `back` is
 `Alt` and the left arrow. A step with `human: false` is done by the

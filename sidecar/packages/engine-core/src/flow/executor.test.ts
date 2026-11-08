@@ -8,6 +8,7 @@ import {
   motorProfile,
   tempo,
   type Clock,
+  systemClock,
   type InputDevice,
   type PageSurface,
 } from '../behavior/index.js';
@@ -700,6 +701,92 @@ const quantile = (values: readonly number[], share: number) =>
 const page = (name: string): FlowAction => ({
   action: 'goto',
   url: `https://example.org/${name}`,
+});
+
+describe('a type step whose budget runs out', () => {
+  it('stops at its next key, lets every key up and gives the lent keys back before the flow returns', async () => {
+    // A type step longer than its budget kept typing after the flow had
+    // returned: into the next request's tab, and over a retry's keys.
+    const log: string[] = [];
+    const note = (entry: string) => {
+      log.push(entry);
+      return Promise.resolve();
+    };
+    const device: InputDevice = {
+      screen: { width: 1920, height: 1080 },
+      pointerPosition: () => Promise.resolve({ x: 960, y: 540 }),
+      pointerMove: () => Promise.resolve(),
+      buttonDown: () => Promise.resolve(),
+      buttonUp: () => Promise.resolve(),
+      wheelNotch: () => Promise.resolve(),
+      levelsOf: () => ({
+        shift: false,
+        altGr: false,
+        onLayout: true,
+        keycode: null,
+        compose: null,
+      }),
+      prepare: () => note('prepare'),
+      unprepare: () => note('unprepare'),
+      keyDown: (key) => note(`down ${key}`),
+      keyUp: (key) => note(`up ${key}`),
+      flush: () => Promise.resolve(),
+      close: () => Promise.resolve(),
+    };
+    const surface: PageSurface = {
+      metrics: () =>
+        Promise.resolve({
+          origin: { x: 0, y: 90 },
+          viewport: { width: 1200, height: 800 },
+          scrollY: 0,
+          scrollHeight: 800,
+        }),
+      visibleWords: () => Promise.resolve(120),
+      boxOf: () => Promise.resolve({ x: 500, y: 300, width: 140, height: 40 }),
+      painted: () => Promise.resolve(true),
+    };
+    const human = new Human({
+      device,
+      surface,
+      profile: motorProfile(SEED),
+      tempo: tempo(SEED),
+      random: new SeededRandom(SEED, 'behavior:stopped'),
+      clock: systemClock,
+    });
+    // The click before typing is not what is measured here.
+    human.click = () => Promise.resolve();
+    const host: FlowHost = { ...rig().host, human: () => Promise.resolve(human) };
+    const events: FlowEvent[] = [];
+    const text = `${'a'.repeat(40)}z`;
+    const started = Date.now();
+    const outcome = await runFlow(
+      {
+        actions: [
+          { action: 'type', selector: '#q', text, timeout_ms: 400 },
+          { action: 'extract', capture },
+        ],
+        capture,
+      },
+      host,
+      (event) => events.push(event),
+    );
+    const took = Date.now() - started;
+    expect(outcome.ok).toBe(false);
+    expect(events).toMatchObject([
+      { type: 'step', action: 'type', ok: false, error: 'type did not finish within 400 ms' },
+    ]);
+    // Stopped part of the way, every key up, the lent keys given back: all
+    // before the flow returned, and nothing after.
+    expect(log).not.toContain('down z');
+    const downs = log.filter((entry) => entry.startsWith('down ')).length;
+    expect(downs).toBeGreaterThan(0);
+    expect(log.filter((entry) => entry.startsWith('up ')).length).toBe(downs);
+    expect(log.at(-1)).toBe('unprepare');
+    expect(took).toBeLessThan(400 + 250 + 1000);
+    const atReturn = log.length;
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(log.length).toBe(atReturn);
+  });
 });
 
 describe('a flow that paces itself', () => {

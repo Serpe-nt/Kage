@@ -146,6 +146,8 @@ export class X11Input implements InputDevice {
   private lent: string | null = null;
   /** Characters `prepare` lent a key of their own, by character. */
   private readonly prepared = new Map<string, number>();
+  /** Keys down, by the key code each went down on. */
+  private readonly down = new Map<string, number>();
 
   private constructor(
     private readonly connection: X11Connection,
@@ -316,6 +318,12 @@ export class X11Input implements InputDevice {
     if (this.prepared.size === 0) {
       return;
     }
+    // A lent key still down comes up before its key is taken back.
+    for (const [key, keycode] of [...this.down]) {
+      if ([...this.prepared.values()].includes(keycode)) {
+        this.release(key, keycode);
+      }
+    }
     await this.connection.sync();
     await sleep(REMAP_SETTLE_MS);
     await this.remap(new Map([...this.prepared.values()].map((keycode) => [keycode, 0])));
@@ -368,14 +376,9 @@ export class X11Input implements InputDevice {
       this.fake(FAKE.keyPress, this.modifier(KEYSYM_LEVEL3, 'AltGr'));
       return;
     }
-    const position = this.position(key);
-    if (position !== null) {
-      this.fake(FAKE.keyPress, position.keycode);
-      return;
-    }
-    const own = this.prepared.get(key);
-    if (own !== undefined) {
-      this.fake(FAKE.keyPress, own);
+    const keycode = this.position(key)?.keycode ?? this.prepared.get(key);
+    if (keycode !== undefined) {
+      this.press(key, keycode);
       return;
     }
     // No key of the layout produces this character: lend it a spare key
@@ -395,9 +398,14 @@ export class X11Input implements InputDevice {
     await this.connection.sync();
     await sleep(REMAP_SETTLE_MS);
     this.lent = key;
-    this.fake(FAKE.keyPress, spare);
+    this.press(key, spare);
   }
 
+  /**
+   * Releases a key on the key code it went down on, whatever the keyboard
+   * says of it now: a key lent for a text and given back since (a typing
+   * that was stopped) still comes up.
+   */
   async keyUp(key: string): Promise<void> {
     if (key === 'Shift') {
       this.fake(FAKE.keyRelease, this.modifier(KEYSYM_SHIFT, 'Shift'));
@@ -409,7 +417,7 @@ export class X11Input implements InputDevice {
     }
     const spare = this.keymap.spare;
     if (this.lent === key && spare !== null) {
-      this.fake(FAKE.keyRelease, spare);
+      this.release(key, spare);
       this.lent = null;
       await sleep(REMAP_SETTLE_MS);
       this.connection.changeKeyboardMapping(
@@ -419,15 +427,21 @@ export class X11Input implements InputDevice {
       await this.connection.sync();
       return;
     }
-    const position = this.position(key);
-    if (position !== null) {
-      this.fake(FAKE.keyRelease, position.keycode);
-      return;
+    const keycode = this.down.get(key) ?? this.position(key)?.keycode ?? this.prepared.get(key);
+    if (keycode !== undefined) {
+      this.release(key, keycode);
     }
-    const own = this.prepared.get(key);
-    if (own !== undefined) {
-      this.fake(FAKE.keyRelease, own);
-    }
+  }
+
+  /** Sends a key's press, and remembers the key code it went down on. */
+  private press(key: string, keycode: number): void {
+    this.fake(FAKE.keyPress, keycode);
+    this.down.set(key, keycode);
+  }
+
+  private release(key: string, keycode: number): void {
+    this.fake(FAKE.keyRelease, keycode);
+    this.down.delete(key);
   }
 
   /** Waits until the server has handled everything sent, and reports a refused request. */
