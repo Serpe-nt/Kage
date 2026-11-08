@@ -344,10 +344,24 @@ figure.
 (F96), and Chrome then opens two or three connections to
 `www.google.com:443` (one to four when the browser starts), through the
 persona's proxy like the rest; TLS hides whether they are preconnects or
-requests. A page with a form adds `content-autofill.googleapis.com`. Under
-`egress.mode: direct` all of it, and the idle traffic of the table, leaves
-from the host's own address ([levels-and-egress.md](levels-and-egress.md)).
-The site a persona reads sees none of it (QA round three, bgcalls-02).
+requests. Under `egress.mode: direct` all of it, and the idle traffic of
+the table, leaves from the host's own address
+([levels-and-egress.md](levels-and-egress.md)). The site a persona reads
+sees none of it (QA round three, bgcalls-02).
+
+**At every page with a form.** Chrome asks Google's Autofill server,
+`content-autofill.googleapis.com`, about every page with a form it reads,
+at levels 2 and 3, as a stock Chrome does to learn the fields' types
+(feature `AutofillServerCommunication`; `--disable-background-networking`
+does not turn it off). It sends the form's signature: hashes of the form's
+and its fields' names and structure, from which Google can tell which site
+and which form the persona is on. Answered, it is one query per page;
+refused, Chrome asks again with a growing pause. It leaves through the
+persona's proxy, or under `egress.mode: direct` from the host's own
+address. A page without a form asks nothing, and Camoufox makes no such
+call. Unlike the table's traffic it is not idle: it is made per page read
+and carries what the page holds. The owner kept it on 2026-11-08
+(`docs/security-review.md`, T9; QA round three, bgcalls-01).
 
 ## Input and flows
 

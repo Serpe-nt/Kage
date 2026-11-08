@@ -261,13 +261,14 @@ seen by the sites it reads. Under `direct`:
   asks `www.google.com`, `accounts.google.com` and
   `android.clients.google.com` within two seconds of a browser start and
   again with a growing pause while they fail, `www.google.com` at every
-  request, and `content-autofill.googleapis.com` at a page with a form
+  request, and `content-autofill.googleapis.com` at a page with a form,
+  with the form's signature (`docs/security-review.md`, T9)
   ([engine-chromium.md](engine-chromium.md), "What an idle browser
   costs"); Camoufox its media plugin hosts, Google's among them, 20 to 27
   seconds after a start ([engine-firefox.md](engine-firefox.md),
   "Camoufox's own calls"). The sites Kage reads see none of it; Google and
   Mozilla see the host's address, as they would see a browser of the
-  machine's own (QA round three, bgcalls-02).
+  machine's own (QA round three, bgcalls-01, bgcalls-02).
 - **The pool is idle**: not synced, not probed, not used. Its personas
   wait unused and are scheduled again when the mode goes back to
   `proxies`. A provider that is still configured raises a warning in
