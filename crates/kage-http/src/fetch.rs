@@ -279,10 +279,13 @@ impl Fetched {
     }
 
     fn decode_now(&self, of: (usize, usize)) -> DecodedBody {
-        let decoded = crate::charset::decode_from(
+        // A body cut at `max_body_bytes` ends at its last whole character
+        // (QA round three's extract-08).
+        let decoded = crate::charset::decode_cut_from(
             Some(&self.final_url),
             self.header("content-type"),
             &self.body,
+            self.truncated,
         );
         DecodedBody {
             of,
@@ -348,6 +351,34 @@ impl Trail {
             Self::Open { hops, .. } => hops
                 .windows(2)
                 .any(|pair| pair[0].scheme() == "https" && pair[1].scheme() == "http"),
+        }
+    }
+
+    /// The first hop that left `https` for `http`: its number in the
+    /// chain (1 for the first redirect) and the addresses on either side.
+    pub(crate) fn downgrade(&self) -> Option<(usize, &Url, &Url)> {
+        let urls: Vec<&Url> = match self {
+            Self::Guarded(chain) => chain.hops().iter().map(|hop| &hop.url).collect(),
+            Self::Open { hops, .. } => hops.iter().collect(),
+        };
+        urls.windows(2)
+            .enumerate()
+            .find(|(_, pair)| pair[0].scheme() == "https" && pair[1].scheme() == "http")
+            .map(|(at, pair)| (at + 1, pair[0], pair[1]))
+    }
+
+    /// Records a downgrade that was followed, as a browser follows it
+    /// (spec §9, QA round three's level0-05): kage's log names the hop and
+    /// the hosts, never the addresses, whose paths and queries may be the
+    /// caller's.
+    pub(crate) fn note_downgrade(&self) {
+        if let Some((hop, from, to)) = self.downgrade() {
+            tracing::info!(
+                hop,
+                from_host = ?from.host_str(),
+                to_host = ?to.host_str(),
+                "a redirect of the http path left https for http"
+            );
         }
     }
 
@@ -759,6 +790,7 @@ impl HttpClient {
                 .fetch_assets(&fetched, spec.guard, spec.seed, deadline)
                 .await;
         }
+        trail.note_downgrade();
         tracing::debug!(
             proxy = %self.proxy,
             host = ?fetched.final_url.host_str(),
@@ -1052,5 +1084,33 @@ mod tests {
     fn fetched_and_read(fetched: Fetched) -> Fetched {
         let _ = fetched.text();
         fetched
+    }
+
+    /// QA round three's level0-05: the hop that left `https` for `http`
+    /// is found, to be recorded, on a guarded chain and on an open one.
+    #[test]
+    fn the_hop_that_left_https_for_http_is_found() {
+        let url = |text: &str| Url::parse(text).unwrap();
+        let policy = kage_core::ssrf::SsrfPolicy::default();
+        let mut guarded =
+            super::Trail::start(&url("https://shop.example/a"), super::Guard::Target(policy), 10).unwrap();
+        assert_eq!(guarded.downgrade(), None);
+        guarded.follow("https://shop.example/b").unwrap();
+        guarded.follow("http://shop.example/c").unwrap();
+        guarded.follow("http://shop.example/d").unwrap();
+        let (hop, from, to) = guarded.downgrade().unwrap();
+        assert_eq!(
+            (hop, from.as_str(), to.as_str()),
+            (2, "https://shop.example/b", "http://shop.example/c")
+        );
+        assert!(guarded.downgraded());
+
+        let mut open =
+            super::Trail::start(&url("http://hook.example/"), super::Guard::OperatorEndpoint, 10).unwrap();
+        open.follow("https://hook.example/x").unwrap();
+        assert_eq!(open.downgrade(), None);
+        open.follow("http://hook.example/y").unwrap();
+        assert_eq!(open.downgrade().map(|(hop, _, _)| hop), Some(2));
+        assert!(open.downgraded());
     }
 }
