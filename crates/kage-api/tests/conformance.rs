@@ -190,6 +190,57 @@ async fn a_body_or_a_member_that_is_an_array_is_no_object() {
         let reply = api.post(&token, at, &body).await;
         assert_eq!(field(&reply), member, "{at} {body}");
     }
+    // The objects inside a step, which serde reads into a buffer with the
+    // step (the planner's review of #83): each one named, with its step.
+    for (step, member) in [
+        (
+            json!({ "action": "screenshot", "options": [true] }),
+            "actions[1].options",
+        ),
+        (
+            json!({ "action": "pdf", "options": ["A4"] }),
+            "actions[1].options",
+        ),
+        (
+            json!({ "action": "extract", "include": ["xhr"], "xhr": ["/api/"] }),
+            "actions[1].xhr",
+        ),
+        (
+            json!({ "action": "extract", "include": ["extract"], "extract": [["h1"]] }),
+            "actions[1].extract",
+        ),
+    ] {
+        let body = json!({ "type": "flow", "level": 2, "actions": [
+            { "action": "goto", "url": page },
+            step,
+        ] });
+        let reply = api.post(&token, "/v1/jobs", &body).await;
+        let problem = reply.problem(StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+        assert_eq!(problem["field"], member, "{body}: {problem}");
+        assert_eq!(problem["step"], 1, "{body}: {problem}");
+        let detail = problem["detail"].as_str().unwrap();
+        assert!(detail.contains("an object"), "{body}: {detail}");
+    }
+    // Control: the same members as objects pass the reading (the flow is
+    // then refused, if at all, for something else than these members).
+    for step in [
+        json!({ "action": "screenshot", "options": {} }),
+        json!({ "action": "pdf", "options": {} }),
+        json!({ "action": "extract", "include": ["xhr"], "xhr": {} }),
+    ] {
+        let body = json!({ "type": "flow", "level": 2, "dry_run_member_check": true, "actions": [
+            { "action": "goto", "url": page },
+            step,
+        ] });
+        let reply = api.post(&token, "/v1/jobs", &body).await;
+        let problem = reply.problem(StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+        // An unknown member of the flow, read after its steps: the steps
+        // passed.
+        assert_eq!(
+            problem["field"], "dry_run_member_check",
+            "{body}: {problem}"
+        );
+    }
     // Nothing of them was fetched or kept.
     let requests: i64 = sqlx::query_scalar("SELECT count(*) FROM requests")
         .fetch_one(api.lab.store().pool())

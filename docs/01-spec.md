@@ -2545,8 +2545,10 @@ minute like any call.
   rules, `POST /v1/admin/personas/{id}/selftest` included (F113). What
   the document gives as an object is read from a JSON object only: an
   array is `422 validation_failed` whether it is the body (a fetch, a
-  session, a key), a member (`wait`) or a flow's step, never read by the
-  order of the type's fields (QA round three api-01).
+  session, a key), a member (`wait`), a flow's step or an object inside
+  one (a screenshot's or a PDF's `options`, an extract's `xhr` and
+  `extract`), never read by the order of the type's fields (QA round
+  three api-01).
 - Errors follow RFC 9457 problem details (`application/problem+json`) with
   a stable `code`, the request's id as `request_id`, and what a client
   needs to act as further members (`field`, `header`, `retry_after_s`,
@@ -3294,8 +3296,10 @@ and one key's page may serve another's; `cache.max_ttl` bounds how long
 its results are served, inside the configuration's; `cache.ttl` is what a
 request gets that does not name `cache_ttl_s` (nothing unless set).
 Reloaded on file change with typed validation (unknown keys rejected,
-semantic checks, every named pacing profile must exist); an invalid file
-keeps the last good policy and raises an alert.
+semantic checks, every named pacing profile must exist, a duration at
+most ten years, `3650d`, as everywhere a duration is read: QA round three
+api-08); an invalid file keeps the last good policy and raises an alert,
+and at start it is refused.
 
 ---
 

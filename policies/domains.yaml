@@ -87,7 +87,8 @@
 #                      403 or 429 with no vendor marker). Each key cascades on
 #                      its own.
 #
-# Durations are written as 500ms, 30s, 30m, 2h, 7d.
+# Durations are written as 500ms, 30s, 30m, 2h, 7d, and are at most ten
+# years (3650d): a longer one makes the file invalid.
 #
 # The search_engine strategy needs a results URL for every visit. Kage will
 # build it from a template and a query when it schedules the visit (M7, M8);

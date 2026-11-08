@@ -389,12 +389,14 @@ version's date is the day, in UTC, its tag was made.
   any other (medians of such holds went from 0.46 of the other keys' to
   1.03–1.05 in both engines). The page still sees such a key with an
   empty `code`; that tell is written down in both engines' runbooks
-  (spec §10.4).- **A body is an object (QA round three api-01).** A JSON array was read
+  (spec §10.4).
+- **A body is an object (QA round three api-01).** A JSON array was read
   as the object the document names, by the order of its fields: a fetch
   made from `["https://…","GET",{},null,0]`, a session opened from
   `["id"]`, a `wait` taken from `["load",null,0]`, a flow's step from
-  `["click","#next"]`. Each is `422 validation_failed` now, naming the
-  member where there is one.
+  `["click","#next"]`, and the objects inside a step (a screenshot's or a
+  PDF's `options`, an extract's `xhr` and `extract`). Each is `422
+  validation_failed` now, naming the member where there is one.
 - **Every status in the document (QA round three api-02, api-09).** An
   operation with a query parameter names the `422` it answers for one it
   cannot read (`GET /v1/admin/audit`, `/personas`, `/personas/{id}`,
@@ -429,10 +431,22 @@ version's date is the day, in UTC, its tag was made.
   session, while `/readyz` said ready. A date counted from a duration stops
   at the last one a timestamp has rather than panic, and a fetch whose
   task panicked is `500 internal`, no longer "the server is stopping".
-- **The server's lock is a metric (QA round three lock-02).**
-  `kage_server_lock_held` and `kage_server_lock_confirmed_timestamp_seconds`
-  show whether the server still holds its database's lock and since when
-  it could not confirm it; nothing but the log said so.
+
+### Changed
+
+- **Durations are at most ten years (QA round three api-08).** A duration
+  over `3650d` (`87600h`) in the configuration or in a policy file
+  (`robots.ttl: 5000d`, `cache.max_ttl: 4000d`) is refused. Check yours
+  before upgrading: a configuration with one no longer starts (`kage config
+  check` names the key), and a policy file with one is refused at start,
+  or on a reload, where the last good policies stay in force.
+  `artifacts.retention_days`, `jobs.retention_days` and
+  `personas.upgrade_backup_days` are at most 3650 likewise.
+- **A job's page whose fetch panicked fails (QA round three api-08).**
+  Such an item ends `failed` with the error `internal` (the log has the
+  cause); it was taken for a stop of the server and queued again at once,
+  so it panicked again with every turn.
+
 ### Added
 
 - **A daily scan of `main`'s images (F220).** `image-scan.yaml` builds the
@@ -440,6 +454,14 @@ version's date is the day, in UTC, its tag was made.
   `.trivyignore`; a fixable HIGH or CRITICAL finding that is new, or an
   accepted one past its review date, fails it before a tag is pushed
   rather than at release (`docs/runbooks/repo.md`, "Daily image scan").
+- **The server's lock is a metric (QA round three lock-02).**
+  `kage_server_lock_held` (1 while the latest look found this server
+  holding its database's lock) and
+  `kage_server_lock_confirmed_timestamp_seconds` (when it last did) show
+  a server that serves on a lock it cannot confirm; nothing but the log
+  said so. Watch the age, `time() -
+  kage_server_lock_confirmed_timestamp_seconds` (spec §20,
+  `docs/runbooks/observability.md`).
 
 ### Security
 
