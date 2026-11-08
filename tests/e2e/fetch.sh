@@ -359,22 +359,35 @@ alerted="$(psql "SELECT count(*) FROM health_events WHERE kind = 'domain_paused'
 [ "${alerted}" -eq 1 ] || fail "${alerted} domain_paused events are stored, expected 1"
 
 echo "==> every byte is counted: what Kage wrote to the store is what the proxies carried for it"
-sleep 2
-counted="$(psql "SELECT COALESCE(SUM(bytes_up), 0) || ' ' || COALESCE(SUM(bytes_down), 0) FROM bandwidth_usage")"
-carried_up=0
-carried_down=0
-for proxy in proxy-a proxy-b proxy-c; do
-    stats="$(got "http://${proxy}:3128/__stats")"
-    check "${proxy} refused no credential: the forwarder added the provider's" "${stats}" "d.refused_credentials === 0"
-    # Everything but the health probes, which do not pass the forwarder,
-    # and this very question.
-    up="$(value "${stats}" "Object.entries(d.targets).filter(([t]) => t !== 'world.kage.test:8089' && t !== '(stats)').reduce((sum, [, e]) => sum + e.bytes_in, 0)")"
-    down="$(value "${stats}" "Object.entries(d.targets).filter(([t]) => t !== 'world.kage.test:8089' && t !== '(stats)').reduce((sum, [, e]) => sum + e.bytes_out, 0)")"
-    carried_up=$((carried_up + up))
-    carried_down=$((carried_down + down))
+# A browser's keep-alive tunnel may carry its last bytes after Kage's latest
+# write to the store, so the two counts are compared until they agree, for
+# at most 30 s; a count that never agrees is a byte Kage did not book.
+carried_counts() {
+    carried_up=0
+    carried_down=0
+    for proxy in proxy-a proxy-b proxy-c; do
+        stats="$(got "http://${proxy}:3128/__stats")"
+        check "${proxy} refused no credential: the forwarder added the provider's" "${stats}" "d.refused_credentials === 0"
+        # Everything but the health probes, which do not pass the forwarder,
+        # and this very question.
+        up="$(value "${stats}" "Object.entries(d.targets).filter(([t]) => t !== 'world.kage.test:8089' && t !== '(stats)').reduce((sum, [, e]) => sum + e.bytes_in, 0)")"
+        down="$(value "${stats}" "Object.entries(d.targets).filter(([t]) => t !== 'world.kage.test:8089' && t !== '(stats)').reduce((sum, [, e]) => sum + e.bytes_out, 0)")"
+        carried_up=$((carried_up + up))
+        carried_down=$((carried_down + down))
+    done
+}
+settled=''
+for second in $(seq 1 30); do
+    sleep 1
+    counted="$(psql "SELECT COALESCE(SUM(bytes_up), 0) || ' ' || COALESCE(SUM(bytes_down), 0) FROM bandwidth_usage")"
+    carried_counts
+    if [ "${counted}" = "${carried_up} ${carried_down}" ]; then
+        settled="${second}"
+        break
+    fi
 done
-echo "    kage counted (up down): ${counted}; the proxies carried: ${carried_up} ${carried_down}"
-[ "${counted}" = "${carried_up} ${carried_down}" ] || fail "the counts differ"
+echo "    kage counted (up down): ${counted}; the proxies carried: ${carried_up} ${carried_down}${settled:+ (agreed after ${settled} s)}"
+[ -n "${settled}" ] || fail "the counts differ after 30 s"
 by_domain="$(psql "SELECT domain || '=' || SUM(bytes_up + bytes_down) FROM bandwidth_usage GROUP BY domain ORDER BY domain" | tr '\n' ' ')"
 echo "    by domain: ${by_domain}"
 case "${by_domain}" in
