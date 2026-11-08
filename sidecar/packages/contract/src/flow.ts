@@ -238,6 +238,15 @@ export const FlowRequestSchema = z
       .optional()
       .describe('Budget for the whole flow; default 180000.'),
     behavior: FlowBehaviorSchema.optional().describe('How the human steps are performed.'),
+    max_body_bytes: z
+      .number()
+      .int()
+      .min(1)
+      .max(100_000_000)
+      .optional()
+      .describe(
+        "Largest raw body and DOM kept of every page the flow captures, its steps' and its final one; default 10000000. A longer one is cut and flagged.",
+      ),
   })
   .meta({ id: 'FlowRequest', description: 'A scripted navigation flow.' });
 export type FlowRequest = z.infer<typeof FlowRequestSchema>;

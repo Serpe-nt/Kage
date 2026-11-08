@@ -1136,8 +1136,11 @@ one job's, begun once and ended once (QA round three's flows-03).
   dropped when the jar was idle for `http.session_cookie_idle` (default
   12 h).
 - **Capture.** Status, final URL, HTTP version, response headers, the
-  decoded body up to `http.max_body_bytes` (default 10 MB; a flag says when
-  it was cut: `truncated` of the result and of its attempt, at every level,
+  decoded body up to `http.max_body_bytes` (default 10 MB; a request may
+  ask for less, never for more, and the limit is the same at every level:
+  a browser's navigation and flow are sent it, at most the sidecar
+  contract's 100 MB, QA round three extract-07; a flag says when it was
+  cut: `truncated` of the result and of its attempt, at every level,
   where a browser's document cut at the limit counts as its body, F122;
   a cut that falls inside a character ends the text at the last whole
   one, at every level, never at a replacement character, QA round three's

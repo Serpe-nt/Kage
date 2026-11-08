@@ -518,6 +518,14 @@ version's date is the day, in UTC, its tag was made.
   a minute; a file that took 31 s to have left the scout free, and its
   open visit read the page. The request now records the scout its gate
   chose, from the store when the memory has let it go.
+- **`http.max_body_bytes` bounds a browser's page too (QA round three,
+  extract-07).** At levels 2 and 3 a page was kept whole up to the
+  sidecar's own 10 MB whatever the operator set, and a request's
+  `max_body_bytes` above the operator's was honoured there though cut at
+  level 0; a flow kept 10 MB whatever was asked. The browser path is now
+  sent the request's limit, else the operator's, never more than the
+  operator's, and the sidecar's flow request takes `max_body_bytes` as its
+  navigation does (sidecar contract: an optional field).
 
 ### Changed
 

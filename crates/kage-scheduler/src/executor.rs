@@ -983,6 +983,7 @@ pub fn flow_for(
             ..job.capture.clone()
         },
         timeout_ms: Some(millis(job.timeout)),
+        max_body_bytes: job.max_body_bytes,
     };
     // A flow scrolls where its steps say; the entry is a typed navigation.
     let _ = browser;

@@ -1169,6 +1169,28 @@ describe('the browser stays inside its limits', () => {
       expect(Buffer.byteLength(big.raw_body?.data ?? '')).toBeLessThanOrEqual(1001);
       expect(big.raw_body?.bytes).toBeGreaterThan(80_000);
 
+      // A flow keeps to the same limit, which Kage sends as the request's
+      // or the operator's (QA round three, extract-07).
+      const flowed: FlowEvent[] = [];
+      await context.flow(
+        {
+          capture: { ...NO_CAPTURE, dom: true, raw: true },
+          behavior: { seed: SEED, typos: false },
+          timeout_ms: 60_000,
+          max_body_bytes: 1001,
+          actions: [{ action: 'goto', url: named('/big.html') }],
+        },
+        env,
+        (event) => flowed.push(event),
+      );
+      const flowBig = flowed.find((event) => event.type === 'final')?.result;
+      expect(flowBig).toMatchObject({
+        dom_truncated: true,
+        raw_body: { truncated: true },
+      });
+      expect(Buffer.byteLength(flowBig?.dom_html ?? '')).toBeLessThanOrEqual(1001);
+      expect(Buffer.byteLength(flowBig?.raw_body?.data ?? '')).toBeLessThanOrEqual(1001);
+
       const capped = await go(context, named('/'), {
         wait: { until: 'network_idle' },
         capture: { ...NO_CAPTURE, xhr: { content_types: ['*/*'], max_bytes: 3, max_responses: 2 } },

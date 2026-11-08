@@ -256,7 +256,8 @@ leaves either out.
   which: a link a style sheet hides is left out, as a crawl leaves it
   out. At levels 0 and 1 only what the markup hides is known.
 - A body cut at `max_body_bytes` (the request's, else the operator's
-  `http.max_body_bytes`) is said: `truncated: true` on the result and its
+  `http.max_body_bytes`; never more than the operator's, at every level,
+  a browser's page and a flow's included) is said: `truncated: true` on the result and its
   attempt, and `extract.truncated: "max_body_bytes"`; what `extract` says
   is said of the first part. `extract.truncated: "parse_time"` says the
   parse of the page stopped at its ten seconds (a page nested hundreds of
