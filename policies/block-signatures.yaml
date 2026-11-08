@@ -13,6 +13,8 @@
 #   script_host / iframe_host / interstitial_text: regex   (browser path only)
 #   visible_text: { min_chars, max_chars }   text left after dropping markup
 #   body_bytes: { min, max }
+#   shown_frames: { min, max }   frames a reader is shown: none in a comment,
+#                                <noscript>, hidden or a pixel
 #   render: http | browser                interstitial: detected | resolved | unresolved
 # Patterns match anywhere in the value and are case-sensitive unless they
 # start with (?i). Only the first `settings.max_body_bytes` of a body are read.
@@ -437,14 +439,16 @@ rules:
     description: >-
       An HTML page that renders no text at all. A page whose content is in
       frames renders theirs: the frames' text is no text of the top
-      document, and a reader reads it (F116).
+      document, and a reader reads it (F116). Only a frame a reader is shown
+      counts: not one in a comment, in <noscript> (a tag manager's snippet),
+      hidden or a pixel (class-01).
     when:
       all:
         - status: 200
         - header: { name: content-type, regex: '(?i)text/html' }
         - body_bytes: { min: 1 }
         - visible_text: { max_chars: 0 }
-        - not: { body: '(?i)<(iframe|frame|frameset)\b' }
+        - not: { shown_frames: { min: 1 } }
 
   - id: soft-login-wall
     vendor: generic

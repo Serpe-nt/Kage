@@ -1447,6 +1447,25 @@ export function defineParitySuite(subject: ParitySubject): void {
         // A link the browser answers by saving a file: the result is of no
         // page, not of the page that was open under the address of the file,
         // and nothing is typed after it, whatever the fallback says.
+
+        // A link the site answers with no content (204, 205): the answer's
+        // status is the result's, the page was come to by the click, no
+        // file was saved, and the click's wait ends at once (crawl-02: no
+        // status and `download`).
+        for (const status of [204, 205]) {
+          const empty = await enter(`nc${status}`, `/no-content?status=${status}`, 'none');
+          expect(empty.result.error, String(status)).toMatchObject({ code: 'aborted' });
+          expect(empty.result.status, String(status)).toBe(status);
+          expect(empty.result.behavior, String(status)).toMatchObject({
+            clicks: 1,
+            entry: { outcome: 'arrived', referer: odd(`nc${status}`) },
+          });
+          expect(empty.took, String(status)).toBeLessThan(10_000);
+          expect(await askedFor('/no-content'), String(status)).toEqual([
+            `/no-content?status=${status}`,
+          ]);
+        }
+
         const file = await enter('file', '/download?from=odd', 'none');
         expect(file.result.error).toMatchObject({ code: 'aborted' });
         expect(file.result).toMatchObject({
@@ -2069,6 +2088,56 @@ export function defineParitySuite(subject: ParitySubject): void {
         // page: the result is of no page, not of that one under the
         // address of the file (which is what both drivers report). Nothing
         // is typed after it either, whatever the fallback says.
+
+        // A link the site answers with no content (204, 205): the answer's
+        // status is the result's, the page was come to by the click, no
+        // file was saved, and the click's wait ends at once (crawl-02: no
+        // status and `download`).
+        for (const status of [204, 205]) {
+          const empty = await attempt(`nc${status}`, `/no-content?status=${status}`, 'none');
+          expect(empty.result.error, String(status)).toMatchObject({ code: 'aborted' });
+          expect(empty.result.status, String(status)).toBe(status);
+          expect(empty.result.behavior, String(status)).toMatchObject({
+            clicks: 1,
+            entry: { outcome: 'arrived', backs: 0 },
+          });
+          expect(empty.took, String(status)).toBeLessThan(10_000);
+          expect(await askedFor('/no-content'), String(status)).toEqual([
+            `/no-content?status=${status}`,
+          ]);
+        }
+
+        // The same after going back to the page: Chrome heard the 204 as
+        // the document's answer and waited for a load until the request's
+        // budget, and the item failed `timeout` (crawl-02).
+        await site.reset();
+        expect((await go(context, odd('back'), { tab: 'crawl' })).error).toBeNull();
+        const fromOdd = (fallback: 'stop' | 'none') => ({
+          seed: SEEDS.first,
+          entry: {
+            strategy: 'link' as const,
+            from_url: odd('back'),
+            from_open_page: true,
+            max_backs: 3,
+            fallback,
+          },
+        });
+        const away = await go(context, secure('/landing?from=wrapped'), {
+          tab: 'crawl',
+          behavior: fromOdd('stop'),
+        });
+        expect(away.error).toBeNull();
+        const backBegan = Date.now();
+        const back = await go(context, secure('/no-content?status=204'), {
+          tab: 'crawl',
+          behavior: fromOdd('none'),
+        });
+        expect(back.error).toMatchObject({ code: 'aborted' });
+        expect(back.status).toBe(204);
+        expect(back.behavior).toMatchObject({ clicks: 1, entry: { outcome: 'arrived', backs: 1 } });
+        expect(Date.now() - backBegan).toBeLessThan(15_000);
+        expect(await askedFor('/no-content')).toEqual(['/no-content?status=204']);
+
         const file = await attempt('file', '/download?from=odd', 'none');
         expect(file.result.error).toMatchObject({ code: 'aborted' });
         expect(file.result).toMatchObject({

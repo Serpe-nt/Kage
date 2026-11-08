@@ -54,6 +54,121 @@ pub(crate) fn visible_text(html: &str) -> String {
     collapsed
 }
 
+/// Elements whose contents show no frame: what never renders, and
+/// `<noscript>`, which a browser that runs scripts shows as nothing (and
+/// whose markup it keeps as text: a tag manager's snippet).
+const NO_FRAME_ELEMENTS: [&str; 6] = ["script", "style", "template", "head", "title", "noscript"];
+
+/// How many frames (`<iframe>`, `<frame>`) the markup shows a reader: not
+/// one in a comment, in `<noscript>` or in what never renders, and not one
+/// that is hidden by its own attributes (`hidden`, `display: none`,
+/// `visibility: hidden`) or is a pixel (a width or height of 0 or 1). A
+/// frame hidden by an element around it is counted: the rough reduction
+/// does not follow styles (class-01).
+pub(crate) fn shown_frames(html: &str) -> usize {
+    let mut shown = 0;
+    let mut rest = html;
+    while let Some(open) = rest.find('<') {
+        let tag = &rest[open..];
+        if let Some(after) = tag.strip_prefix("<!--") {
+            rest = after.find("-->").map_or("", |end| &after[end + 3..]);
+        } else if let Some(name) = element_named(tag, &NO_FRAME_ELEMENTS) {
+            rest = match after_closing_tag(tag, name) {
+                Some(after) => after,
+                None if name == "head" || name == "title" => after_tag(tag),
+                None => "",
+            };
+        } else if element_named(tag, &["iframe", "frame"]).is_some() {
+            let end = tag.find('>').unwrap_or(tag.len());
+            if !hidden_frame(&tag[..end].to_ascii_lowercase()) {
+                shown += 1;
+            }
+            rest = after_tag(tag);
+        } else {
+            rest = &tag[1..];
+        }
+    }
+    shown
+}
+
+/// Whether a frame's own tag (lower case, without its `>`) hides it.
+fn hidden_frame(tag: &str) -> bool {
+    let style: String = attribute(tag, "style")
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace())
+        .collect();
+    let pixel = |value: &str| {
+        let value = value.trim().trim_end_matches("px").trim();
+        value == "0" || value == "1"
+    };
+    attribute(tag, "hidden").is_some()
+        || style.contains("display:none")
+        || style.contains("visibility:hidden")
+        || attribute(tag, "width").is_some_and(pixel)
+        || attribute(tag, "height").is_some_and(pixel)
+        || ["width:", "height:"].into_iter().any(|property| {
+            style
+                .split(';')
+                .filter_map(|declaration| declaration.strip_prefix(property))
+                .any(pixel)
+        })
+}
+
+/// The value of an attribute of a tag (lower case, without its `>`): `""`
+/// for one without a value, `None` when the tag has none of that name.
+fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    // The element's name first, then the attributes.
+    let mut rest = tag
+        .trim_start_matches('<')
+        .trim_start_matches(|c: char| c.is_ascii_alphanumeric());
+    loop {
+        rest = rest.trim_start_matches(|c: char| c.is_ascii_whitespace() || c == '/');
+        if rest.is_empty() {
+            return None;
+        }
+        let length = rest
+            .find(|c: char| c.is_ascii_whitespace() || c == '=' || c == '/')
+            .unwrap_or(rest.len());
+        let (key, after) = rest.split_at(length);
+        let after = after.trim_start_matches(|c: char| c.is_ascii_whitespace());
+        let (value, next) = if let Some(after) = after.strip_prefix('=') {
+            let after = after.trim_start_matches(|c: char| c.is_ascii_whitespace());
+            if let Some(quote @ ('"' | '\'')) = after.chars().next() {
+                let inner = &after[1..];
+                let end = inner.find(quote).unwrap_or(inner.len());
+                (&inner[..end], inner.get(end + 1..).unwrap_or(""))
+            } else {
+                let end = after
+                    .find(|c: char| c.is_ascii_whitespace())
+                    .unwrap_or(after.len());
+                after.split_at(end)
+            }
+        } else {
+            ("", after)
+        };
+        if key == name {
+            return Some(value);
+        }
+        if next.len() == rest.len() {
+            return None;
+        }
+        rest = next;
+    }
+}
+
+/// The element of `names` that starts at `tag` (which begins with `<`), if any.
+fn element_named(tag: &str, names: &[&'static str]) -> Option<&'static str> {
+    let body = &tag[1..];
+    names.iter().copied().find(|name| {
+        starts_with_ignore_case(body, name)
+            && body[name.len()..]
+                .chars()
+                .next()
+                .is_none_or(|c| c == '>' || c == '/' || c.is_ascii_whitespace())
+    })
+}
+
 /// The non-text element that starts at `tag` (which begins with `<`), if any.
 fn non_text_element(tag: &str) -> Option<&'static str> {
     let body = &tag[1..];
@@ -156,6 +271,49 @@ mod tests {
             "a b"
         );
         assert_eq!(visible_text("<script/>x</script>y"), "y");
+    }
+
+    /// class-01: a frame in a comment, in `<noscript>` (a tag manager's
+    /// snippet), hidden or a pixel is shown to no reader; a frame of
+    /// content is, and a frameset's frames are.
+    #[test]
+    fn only_the_frames_a_reader_is_shown_are_counted() {
+        let blank = |inside: &str| {
+            format!(
+                "<html><body><script>var x = '<iframe>';</script><div>{inside}</div></body></html>"
+            )
+        };
+        for hidden in [
+            "<!-- an <iframe> used to be here -->",
+            r#"<noscript><iframe src="/ns.html?id=GTM-QA" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>"#,
+            r#"<iframe src="/pixel" style="display:none"></iframe>"#,
+            r#"<IFRAME SRC="/pixel" STYLE="visibility : hidden"></IFRAME>"#,
+            r#"<iframe src="/pixel" hidden></iframe>"#,
+            r#"<iframe src="/pixel" width=1 height=1></iframe>"#,
+            r#"<iframe src="/pixel" style="width:0px;height:0px"></iframe>"#,
+            "<iframes>not one</iframes> <frameset-like>",
+        ] {
+            assert_eq!(super::shown_frames(&blank(hidden)), 0, "{hidden}");
+        }
+        for (shown, count) in [
+            (
+                r#"<iframe src="/reading/a" width="800" height="600"></iframe>"#,
+                1,
+            ),
+            (
+                r#"<iframe src='/a'></iframe><iframe src=/b title="x>y"></iframe>"#,
+                2,
+            ),
+            (
+                r#"<frameset cols="50%,50%"><frame src="/a"><frame src="/b"></frameset>"#,
+                2,
+            ),
+            (r#"<iframe src="/a" data-width="0"></iframe>"#, 1),
+        ] {
+            assert_eq!(super::shown_frames(&blank(shown)), count, "{shown}");
+        }
+        assert_eq!(super::shown_frames("<iframe"), 1);
+        assert_eq!(super::shown_frames("<noscript><iframe src=/a>"), 0);
     }
 
     #[test]

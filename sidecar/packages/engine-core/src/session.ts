@@ -947,6 +947,33 @@ class NoPage extends Error {
   }
 }
 
+/**
+ * A click on a link was answered with no content (204, 205): the browser
+ * stays on the page it showed, no navigation follows, and the answer's
+ * status is the result's (F116, crawl-02). Reported as `aborted`, as a
+ * typed address answered so is.
+ */
+class NoContent extends Error {
+  override readonly name = 'NoContent';
+
+  /** How the click was come to, filled in by the caller that made it. */
+  entry: EntryReport | null = null;
+
+  constructor(
+    readonly status: number,
+    /** The `Referer` the browser sent with the click. */
+    readonly referer: string | null,
+  ) {
+    super(`the link was answered with no content (${status}): the tab stays on the page it showed`);
+  }
+}
+
+/** The status of an answer with no content (204, 205), or `null`. */
+const noContentStatus = (response: DriverResponse | null): number | null => {
+  const status = response?.status() ?? null;
+  return status === 204 || status === 205 ? status : null;
+};
+
 /** Counts the times of a document from another moment than the one it was first noted at. */
 function countFrom(state: DocumentState, moment: number): void {
   const later = moment - state.started;
@@ -1874,6 +1901,11 @@ export class PageSession {
       }
       await sleep(40);
     }
+    if (noContentStatus(this.document.response) !== null) {
+      // No content: no document follows, and no `load` would come
+      // (crawl-02: Chrome waited out the request's budget after a back).
+      return true;
+    }
     const state = WAIT_UNTIL[until];
     if (state !== 'commit') {
       // The driver reports the answer of a download like a page's, and a
@@ -1950,7 +1982,14 @@ export class PageSession {
     if (Date.now() >= deadline) {
       throw this.notCome('the time of the navigation ran out before the link was clicked');
     }
-    const arrived = await this.clickThrough(target, mode, until, human, deadline);
+    const arrived = await this.clickThrough(target, mode, until, human, deadline).catch(
+      (thrown: unknown) => {
+        if (thrown instanceof NoContent) {
+          thrown.entry = report('arrived', thrown.referer);
+        }
+        throw thrown;
+      },
+    );
     return arrived === null ? report(notFound, null) : report('arrived', arrived.referer);
   }
 
@@ -1965,6 +2004,7 @@ export class PageSession {
    *   document.
    * @throws {ArrivalTimeout} when the page the link leads to was asked for and did not come in time.
    * @throws {NoPage} when the click was answered with no page.
+   * @throws {NoContent} when the click was answered with no content (204, 205).
    */
   private async clickThrough(
     target: string,
@@ -2047,6 +2087,13 @@ export class PageSession {
       // tab, or the page drew something itself.
       this.freshOnNavigation = 'never';
       return null;
+    }
+    const empty = noContentStatus(this.document.response);
+    if (empty !== null) {
+      // The site answered the click with no content: its status is the
+      // result's, and the page that was open stays. Not a file: nothing
+      // was saved (crawl-02).
+      throw new NoContent(empty, this.document.response?.request().headers()['referer'] ?? null);
     }
     const referer = this.document.response?.request().headers()['referer'] ?? null;
     if (shown !== null && !(await this.replaced(shown.born))) {
@@ -2190,7 +2237,14 @@ export class PageSession {
     if (Date.now() >= deadline) {
       throw this.notCome('the time of the navigation ran out before the link was clicked');
     }
-    const arrived = await this.clickThrough(target, 'exact', until, human, deadline);
+    const arrived = await this.clickThrough(target, 'exact', until, human, deadline).catch(
+      (thrown: unknown) => {
+        if (thrown instanceof NoContent) {
+          thrown.entry = report('arrived', thrown.referer, backs);
+        }
+        throw thrown;
+      },
+    );
     return arrived === null ? notFound(null) : report('arrived', arrived.referer, backs);
   }
 
@@ -2534,7 +2588,14 @@ export class PageSession {
       if (thrown instanceof EngineError) {
         throw thrown;
       }
-      error = driver.classifyError(thrown);
+      error =
+        thrown instanceof NoContent
+          ? { code: 'aborted', message: thrown.message, net_error: null }
+          : driver.classifyError(thrown);
+      if (thrown instanceof NoContent) {
+        // The link was clicked and answered: the page was come to by it.
+        entryReport = thrown.entry;
+      }
       if (
         this.document.response === null &&
         this.document.proxyChallenged &&

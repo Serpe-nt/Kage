@@ -22,7 +22,7 @@ use kage_core::config::Config;
 use kage_core::domain::{KeyLimits, Scope};
 use kage_core::duration::HumanDuration;
 use serde_json::{Value, json};
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{header_regex, method, path};
 use wiremock::{Mock, ResponseTemplate};
 
 /// A persona may leave a page after half a second, and nobody asks for a
@@ -1477,9 +1477,18 @@ async fn a_crawl_takes_links_from_html_only_and_asks_for_no_sitemap_the_file_dis
         &api,
         "/",
         "text/html; charset=utf-8",
-        article("Home", &["/json", "/txt", "/xml"]),
+        article("Home", &["/json", "/txt", "/xml", "/untyped"]),
     )
     .await;
+    // The same JSON with no type at all (QA round three's crawl-01): text
+    // to a browser's sniffing, so no links either.
+    Mock::given(method("GET"))
+        .and(path("/untyped"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(
+            format!(r#"{{"html":"<a href="{}">x</a>"}}"#, "/fromuntyped").into_bytes(),
+        ))
+        .mount(&api.lab.site)
+        .await;
     serve(
         &api,
         "/json",
@@ -1501,7 +1510,14 @@ async fn a_crawl_takes_links_from_html_only_and_asks_for_no_sitemap_the_file_dis
         "<?xml version=\"1.0\"?><doc><a href=\"/fromxml\">x</a></doc>",
     )
     .await;
-    for page in ["/only", "/secret", "/fromjson", "/fromtxt", "/fromxml"] {
+    for page in [
+        "/only",
+        "/secret",
+        "/fromjson",
+        "/fromtxt",
+        "/fromxml",
+        "/fromuntyped",
+    ] {
         serve(&api, page, "text/html; charset=utf-8", article("Page", &[])).await;
     }
 
@@ -1525,7 +1541,11 @@ async fn a_crawl_takes_links_from_html_only_and_asks_for_no_sitemap_the_file_dis
     assert_eq!(asked[..2], ["/robots.txt", "/maps/pages.xml"], "{asked:?}");
     let mut pages: Vec<&str> = asked[2..].iter().map(String::as_str).collect();
     pages.sort_unstable();
-    assert_eq!(pages, ["/", "/json", "/only", "/txt", "/xml"], "{asked:?}");
+    assert_eq!(
+        pages,
+        ["/", "/json", "/only", "/txt", "/untyped", "/xml"],
+        "{asked:?}"
+    );
     assert_eq!(
         done["crawl"]["sitemaps"],
         json!([
@@ -1540,11 +1560,194 @@ async fn a_crawl_takes_links_from_html_only_and_asks_for_no_sitemap_the_file_dis
             .as_str()
             .unwrap()
             .trim_start_matches(&Api::url(""));
-        if matches!(at, "/json" | "/txt" | "/xml") {
+        if matches!(at, "/json" | "/txt" | "/xml" | "/untyped") {
             assert_eq!(item["state"], "succeeded", "{item}");
             assert_eq!(item["crawl"]["links"]["found"], 0, "{item}");
         }
     }
+    work.stop().await;
+    api.shut_down().await;
+}
+
+/// QA round three's crawl-03: where the site's robots.txt is enforced, a
+/// sitemap on another host of the site (a `Sitemap:` line, an index's
+/// child) is not asked for before that host's own file is read, nor at all
+/// when that file disallows it; it is listed `robots_denied`. The seed
+/// host's file read first was no answer for the other host's.
+#[tokio::test]
+async fn a_sitemap_on_another_host_of_the_site_waits_for_that_hosts_robots_txt() {
+    let mut api = Api::start_with(3, 155, ENFORCED, quick).await;
+    let token = api.key(&[Scope::Jobs, Scope::Crawl, Scope::Fetch]).await;
+    let other = |path: &str| format!("http://maps.kage.test{path}");
+    let on = |host: &'static str, at: &'static str, content_type: &'static str, body: String| {
+        Mock::given(method("GET"))
+            .and(path(at))
+            .and(header_regex(
+                "host",
+                &format!("^{}(:|$)", host.replace('.', "\\.")),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(body.into_bytes(), content_type))
+    };
+    let urlset = |urls: &[String]| {
+        let urls: Vec<String> = urls
+            .iter()
+            .map(|url| format!("<url><loc>{url}</loc></url>"))
+            .collect();
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+             <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">{}</urlset>",
+            urls.concat()
+        )
+    };
+    let mocks = [
+        on(
+            "shop.kage.test",
+            "/robots.txt",
+            "text/plain",
+            format!(
+                "User-agent: *\nDisallow: /nothing-here\nSitemap: {}\nSitemap: {}\n",
+                Api::url("/maps/index.xml"),
+                other("/m/blocked-line.xml")
+            ),
+        ),
+        on(
+            "maps.kage.test",
+            "/robots.txt",
+            "text/plain",
+            "User-agent: *\nDisallow: /m/blocked\n".to_owned(),
+        ),
+        on(
+            "shop.kage.test",
+            "/maps/index.xml",
+            "application/xml",
+            format!(
+                "<?xml version=\"1.0\"?><sitemapindex xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\
+                 <sitemap><loc>{}</loc></sitemap><sitemap><loc>{}</loc></sitemap></sitemapindex>",
+                other("/m/blocked-child.xml"),
+                other("/m/ok-child.xml")
+            ),
+        ),
+        on(
+            "maps.kage.test",
+            "/m/ok-child.xml",
+            "application/xml",
+            urlset(&[other("/m/page")]),
+        ),
+        on(
+            "maps.kage.test",
+            "/m/blocked-line.xml",
+            "application/xml",
+            urlset(&[other("/m/from-line")]),
+        ),
+        on(
+            "maps.kage.test",
+            "/m/blocked-child.xml",
+            "application/xml",
+            urlset(&[other("/m/from-child")]),
+        ),
+        on(
+            "shop.kage.test",
+            "/",
+            "text/html; charset=utf-8",
+            article("Home", &[]),
+        ),
+        on(
+            "maps.kage.test",
+            "/m/page",
+            "text/html; charset=utf-8",
+            article("Page", &[]),
+        ),
+    ];
+    for mock in mocks {
+        mock.mount(&api.lab.site).await;
+    }
+    // The other host of the site is served by the same server.
+    for proxy in &api.lab.proxies {
+        proxy.route("maps.kage.test:80", *api.lab.site.address());
+    }
+
+    let body = json!({
+        "type": "crawl",
+        "seeds": [Api::url("/")],
+        "use_sitemaps": true,
+        "max_depth": 1,
+        "defaults": { "level": 0 },
+    });
+    let reply = api.post(&token, "/v1/jobs", &body).await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.json());
+    let id = reply.json()["id"].as_str().unwrap().to_owned();
+    let work = api.work();
+    let done = api.job_until(&token, &id, ended).await;
+    assert_eq!(done["state"], "succeeded", "{done}");
+
+    let asked: Vec<String> = api
+        .lab
+        .site
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|request| {
+            let host = request
+                .headers
+                .get("host")
+                .and_then(|host| host.to_str().ok())
+                .unwrap_or_default()
+                .split(':')
+                .next()
+                .unwrap_or_default()
+                .to_owned();
+            format!("{host}{}", request.url.path())
+        })
+        .collect();
+    // The other host's file before anything of that host, and never what it
+    // disallows.
+    let file = asked
+        .iter()
+        .position(|seen| seen == "maps.kage.test/robots.txt")
+        .unwrap_or_else(|| panic!("the other host's robots.txt was not read: {asked:?}"));
+    let first_of_maps = asked
+        .iter()
+        .position(|seen| seen.starts_with("maps.kage.test/"))
+        .unwrap();
+    assert_eq!(first_of_maps, file, "{asked:?}");
+    for never in [
+        "maps.kage.test/m/blocked-line.xml",
+        "maps.kage.test/m/blocked-child.xml",
+        "maps.kage.test/m/from-line",
+        "maps.kage.test/m/from-child",
+    ] {
+        assert!(
+            !asked.iter().any(|seen| seen == never),
+            "{never}: {asked:?}"
+        );
+    }
+    assert!(
+        asked.iter().any(|seen| seen == "maps.kage.test/m/page"),
+        "{asked:?}"
+    );
+    let states: std::collections::BTreeMap<String, String> = done["crawl"]["sitemaps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|one| {
+            (
+                one["url"].as_str().unwrap().to_owned(),
+                one["state"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        states[&other("/m/blocked-line.xml")],
+        "robots_denied",
+        "{states:?}"
+    );
+    assert_eq!(
+        states[&other("/m/blocked-child.xml")],
+        "robots_denied",
+        "{states:?}"
+    );
+    assert_eq!(states[&other("/m/ok-child.xml")], "read", "{states:?}");
     work.stop().await;
     api.shut_down().await;
 }

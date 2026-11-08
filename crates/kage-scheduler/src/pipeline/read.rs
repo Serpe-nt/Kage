@@ -83,6 +83,9 @@ pub struct ReadLink {
 /// HTML document gives no links and no text, whatever a browser made of
 /// it (F118).
 fn crawl_reading(last: &AttemptOutput, page: Option<&Page>, document: bool) -> CrawlReading {
+    // What extraction read of a body that is no HTML document is no page
+    // of the crawl's either.
+    let page = page.filter(|_| document);
     let seen = last.page.as_ref().filter(|_| document).and_then(|seen| {
         seen.links
             .as_ref()
@@ -162,6 +165,32 @@ pub(super) fn is_document(output: &AttemptOutput) -> bool {
         || output
             .sent_body()
             .is_none_or(|body| kage_http::charset::untyped_is_text(&body))
+}
+
+/// Whether a crawl reads a response's links and text: an HTML document
+/// ([`is_document`]) that says it is HTML, or says nothing and begins as
+/// HTML does, as a browser's sniffing takes it. An untyped JSON body is
+/// text to a browser, and its escaped quotes are no links (crawl-01, F118).
+/// A body a browser showed without bringing its bytes is the browser's
+/// page.
+pub(super) fn is_markup(output: &AttemptOutput) -> bool {
+    if !is_document(output) {
+        return false;
+    }
+    let typed = output.headers.iter().any(|header| {
+        header.name.eq_ignore_ascii_case("content-type")
+            && !header
+                .value
+                .split(';')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .is_empty()
+    });
+    typed
+        || output
+            .sent_body()
+            .is_none_or(|body| kage_http::charset::sniffs_as_html(&body))
 }
 
 /// A document an attempt captured.
@@ -279,9 +308,9 @@ impl Pipeline {
         let document = is_document(last);
         let options = order.extract.filter(|_| outcome.is_success() && document);
         // A crawl reads a page's links and text from its markup only when
-        // it is a document: the escaped quotes of a JSON body or the text of
-        // a plain file are no links (F118).
-        let read_page = order.read_page && document;
+        // it is an HTML document: the escaped quotes of a JSON body or the
+        // text of a plain file are no links, typed or not (F118, crawl-01).
+        let read_page = order.read_page && is_markup(last);
         if !read_page && options.is_none() {
             return Reading {
                 crawl: (order.read_page && outcome.is_success())

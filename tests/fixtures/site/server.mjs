@@ -341,6 +341,7 @@ const LEAVE_ODD_PAGE = page(
 <p><a id="other-tab" target="_blank" href="/landing?from=tab">A link that opens another tab</a></p>
 <p><a id="soft" href="/landing?from=soft">A link the page answers itself</a></p>
 <p><a id="file" href="/download?from=odd">A link to a file the browser saves</a></p>
+<p><a id="nc204" href="/no-content?status=204">A link answered with no content</a> <a id="nc205" href="/no-content?status=205">and one answered to reset the form</a></p>
 <p id="view">first view</p>
 <script>
 document.getElementById('soft').addEventListener('click', (event) => {
@@ -633,6 +634,13 @@ const routes = {
       ],
     }),
   '/cookies': (req, res) => json(res, { cookie: req.headers.cookie ?? '' }),
+  // No content (204) or reset content (205): the browser stays on the page
+  // it showed (F116, crawl-02).
+  '/no-content': (req, res) => {
+    const status = new URL(req.url, 'http://fixture.localhost').searchParams.get('status') === '205' ? 205 : 204;
+    res.writeHead(status);
+    res.end();
+  },
   '/download': (_req, res) =>
     send(res, 200, 'application/octet-stream', 'file body', { 'content-disposition': 'attachment; filename="file.bin"' }),
   '/status/404': (_req, res) => html(res, page('Not found', '<h1>404</h1>'), {}, 404),

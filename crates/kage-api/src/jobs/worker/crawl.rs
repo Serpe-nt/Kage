@@ -96,6 +96,13 @@ enum Back {
         url: String,
         read: Result<RobotsRead, SchedulerError>,
     },
+    /// The `robots.txt` of another origin of the site, read before a
+    /// sitemap there is asked for (`url`, the sitemap; crawl-03).
+    RobotsFirst {
+        site: String,
+        url: String,
+        read: Result<RobotsRead, SchedulerError>,
+    },
 }
 
 /// The path of the file a site says its rules for robots in.
@@ -286,6 +293,9 @@ struct Crawl {
     busy: HashSet<(String, usize)>,
     /// The sites a scout is reading a sitemap of.
     scouting: HashSet<String>,
+    /// The origins whose `robots.txt` was read for a sitemap there, so
+    /// that a file that cannot be kept is not read without end.
+    read_first: HashSet<String>,
 }
 
 impl Crawl {
@@ -384,6 +394,7 @@ impl Crawl {
             held: HashMap::new(),
             busy: HashSet::new(),
             scouting: HashSet::new(),
+            read_first: HashSet::new(),
         }))
     }
 
@@ -969,7 +980,9 @@ impl Crawl {
     /// Whether the site's `robots.txt`, enforced, disallows a sitemap: the
     /// guess `/sitemap.xml`, or a file a `Sitemap:` line or an index names
     /// alike. It is then not asked for, and listed `robots_denied` (F119).
-    /// The file is known by then: it is read before any sitemap.
+    /// The file is known by then: it is read before any sitemap, the seed's
+    /// origin's for the sitemaps it names, another origin's before a
+    /// sitemap there ([`Crawl::start_sitemaps`], crawl-03).
     async fn robots_denies(
         &mut self,
         runner: &Runner,
@@ -1034,6 +1047,44 @@ impl Crawl {
                     let _place = place;
                     let read = pipeline.robots_read(&url, wish, need, stop).await;
                     Back::Robots {
+                        site,
+                        url: file,
+                        read,
+                    }
+                });
+                continue;
+            }
+            let origin = kage_scheduler::robots::origin_of(&url);
+            if origin
+                .as_ref()
+                .is_some_and(|origin| !self.read_first.contains(origin))
+                && !runner
+                    .work
+                    .engine
+                    .pipeline
+                    .robots_settled(&url, self.robots)
+                    .await?
+            {
+                // A sitemap on another origin of the site (a `Sitemap:`
+                // line, an index's child): the origin's own file is read
+                // first, by the site's scout, and the sitemap waits for it
+                // (crawl-03: it was asked before the file that disallows
+                // it).
+                let Ok(place) = Arc::clone(&runner.hub().in_flight).try_acquire_owned() else {
+                    return Ok(true);
+                };
+                if let Some(origin) = origin {
+                    self.read_first.insert(origin);
+                }
+                self.scouting.insert(site.clone());
+                self.held.remove(&site);
+                let pipeline = runner.work.engine.pipeline.clone();
+                let stop = runner.stop.subscribe();
+                let wish = self.robots;
+                set.spawn(async move {
+                    let _place = place;
+                    let read = pipeline.robots_read(&url, wish, need, stop).await;
+                    Back::RobotsFirst {
                         site,
                         url: file,
                         read,
@@ -1322,6 +1373,50 @@ impl Crawl {
         self.persist(runner).await
     }
 
+    /// Takes the file of another origin that was read before a sitemap
+    /// there (`file`). The sitemap waits as it did: it is weighed again
+    /// with the file known, and one the file disallows is listed
+    /// `robots_denied` and never asked for (crawl-03).
+    async fn robots_first_back(
+        &mut self,
+        runner: &Runner,
+        site: String,
+        file: &str,
+        read: Result<RobotsRead, SchedulerError>,
+    ) -> Result<(), WorkError> {
+        self.scouting.remove(&site);
+        match read {
+            Ok(
+                RobotsRead::Read { .. }
+                | RobotsRead::NotAsked
+                | RobotsRead::Unreachable { .. }
+                | RobotsRead::Stopped,
+            ) => {}
+            // Nobody but a reader could ask, and a reader does not.
+            Ok(RobotsRead::NoScout) => self.note_sitemap(file, "no_scout", 0),
+            Ok(RobotsRead::Later(deferred)) => {
+                // The site waits for its scout, and the file with it.
+                let reason = deferred.reason.as_str();
+                let until = deferred
+                    .retry_at
+                    .unwrap_or_else(|| later(runner.now(), default_wait(reason)));
+                self.held.insert(site, (until, reason.to_owned()));
+                if let Some(origin) = Url::parse(file)
+                    .ok()
+                    .and_then(|url| kage_scheduler::robots::origin_of(&url))
+                {
+                    // Read again when the site's turn comes.
+                    self.read_first.remove(&origin);
+                }
+            }
+            Err(error) => {
+                tracing::warn!(job = %runner.job.id, file, %error, "a robots.txt could not be read before a sitemap");
+                self.note_sitemap(file, "failed", 0);
+            }
+        }
+        self.persist(runner).await
+    }
+
     /// Takes a sitemap that came back.
     async fn sitemap_back(
         &mut self,
@@ -1452,19 +1547,23 @@ impl Crawl {
         // A link the browser answered by saving a file: the site answered,
         // and the tab still shows the page the link stands on (F120).
         let file = read && report.reason.as_deref() == Some("download");
+        let status = report.last.as_ref().and_then(|last| last.status);
+        // An answer with no content (204, 205) leaves the tab where it was
+        // too: it is a page reached, but none the tab shows (crawl-02).
+        let stays = file || (read && matches!(status, Some(204 | 205)));
         let view = if read {
             let reached = reached_of(report);
             // What the tab holds now: a click on a page it went back to
-            // dropped what came after that page; a file leaves the tab on
-            // that page.
-            if (file || !matches!(reached.0, ReachedField::Typed))
+            // dropped what came after that page; a file or no content
+            // leaves the tab on that page.
+            if (stays || !matches!(reached.0, ReachedField::Typed))
                 && let Some(at) = flight
                     .from
                     .and_then(|from| slot.tab.iter().rposition(|held| *held == from))
             {
                 slot.tab.truncate(at + 1);
             }
-            if !file {
+            if !stays {
                 slot.tab.push(seq);
             }
             if slot.tab.len() > back_limit.saturating_add(1) {
@@ -1478,7 +1577,6 @@ impl Crawl {
             // What the site answered with an error is no page of the
             // crawl: it was reached and is stored like any answer, and
             // nothing is taken from it (its links are the error page's).
-            let status = report.last.as_ref().and_then(|last| last.status);
             let answered = status.is_none_or(|status| (200..300).contains(&status));
             let recorded = asked.filter(|_| answered).map(|asked| {
                 let page = page_of(report, &asked);
@@ -1675,6 +1773,9 @@ impl Crawl {
                 (_, Back::Robots { site, url, read }) => {
                     self.robots_back(runner, site, &url, read).await?;
                 }
+                (_, Back::RobotsFirst { site, url, read }) => {
+                    self.robots_first_back(runner, site, &url, read).await?;
+                }
                 (
                     _,
                     Back::Page {
@@ -1851,6 +1952,9 @@ impl Runner {
                         }
                         Back::Robots { site, url, read } => {
                             crawl.robots_back(self, site, &url, read).await?;
+                        }
+                        Back::RobotsFirst { site, url, read } => {
+                            crawl.robots_first_back(self, site, &url, read).await?;
                         }
                     }
                 }

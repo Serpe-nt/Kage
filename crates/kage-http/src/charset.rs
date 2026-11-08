@@ -290,6 +290,19 @@ fn sniffs_as_markup(body: &[u8]) -> bool {
     })
 }
 
+/// Whether a body of no declared type is HTML to a browser's MIME
+/// sniffing: it begins as one of the standard's HTML patterns. The XML
+/// declaration makes it XML, and a body that begins otherwise (a JSON
+/// object, words) is text. A crawl takes links from such a body only
+/// (crawl-01).
+pub fn sniffs_as_html(body: &[u8]) -> bool {
+    sniffs_as_markup(body)
+        && !body
+            .trim_ascii_start()
+            .get(..5)
+            .is_some_and(|start| start.eq_ignore_ascii_case(b"<?xml"))
+}
+
 fn read<'a>(bytes: &'a [u8], encoding: &'static Encoding, by: DecidedBy) -> Decoded<'a> {
     let (text, malformed) = encoding.decode_without_bom_handling(bytes);
     Decoded {
@@ -896,8 +909,8 @@ mod tests {
     use url::Url;
 
     use super::{
-        DecidedBy, charset_of, decode, decode_from, detect, is_text, prescan, text_of,
-        text_of_from, top_level_domain, untyped_is_text,
+        DecidedBy, charset_of, decode, decode_from, detect, is_text, prescan, sniffs_as_html,
+        text_of, text_of_from, top_level_domain, untyped_is_text,
     };
 
     /// "Café Müller, Straße" in ISO-8859-1.
@@ -1543,6 +1556,31 @@ mod tests {
     }
     /// F180: a body of no type is text, and so a document extraction may
     /// read, exactly when [`text_of`] gives it as text.
+    /// crawl-01: of a body of no type, only one that begins as HTML is
+    /// HTML; the XML declaration, a JSON object and words are not.
+    #[test]
+    fn an_untyped_body_is_html_only_when_it_begins_as_html() {
+        for body in [
+            b"<!DOCTYPE html><p>x".as_slice(),
+            b"  \n<html lang=en>".as_slice(),
+            b"<HEAD>".as_slice(),
+            b"<!-- a comment --><p>".as_slice(),
+            b"<p>words</p>".as_slice(),
+        ] {
+            assert!(sniffs_as_html(body), "{body:?}");
+        }
+        for body in [
+            br#"{"html":"<a href=\"/x\">x</a>"}"#.as_slice(),
+            br#"<?xml version="1.0"?><doc/>"#.as_slice(),
+            br#"<?XML version="1.0"?>"#.as_slice(),
+            b"words and <a href=x>a link</a>".as_slice(),
+            b"<htmlx>".as_slice(),
+            b"".as_slice(),
+        ] {
+            assert!(!sniffs_as_html(body), "{body:?}");
+        }
+    }
+
     #[test]
     fn a_body_of_no_type_is_text_when_raw_body_would_show_it() {
         for body in [

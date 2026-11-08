@@ -680,7 +680,7 @@ scope besides `jobs`.
 | `max_pages` | 100 | Pages asked of the sites, a failed one included; at most `jobs.max_items`. |
 | `same_site_only` | true | A site is a registrable domain: `shop.example.org` and `www.example.org` are one. |
 | `use_sitemaps` | false | See below: a sitemap request is a tell. |
-| `defaults` | | What every page is fetched with: `level` (required), `include`, `pacing`, `behavior`, `persona`, … Not `url`, `session_id`, `method`, `body`, `request_kind`. At level 0 every page is typed, its links are read from the markup of an HTML page (a JSON, XML or plain-text answer gives none, at any level), and `robots.txt` and sitemaps are asked for by the plain client from the site's plain exit. |
+| `defaults` | | What every page is fetched with: `level` (required), `include`, `pacing`, `behavior`, `persona`, … Not `url`, `session_id`, `method`, `body`, `request_kind`. At level 0 every page is typed, its links are read from the markup of an HTML page (a JSON, XML or plain-text answer gives none, at any level, typed or not: an answer of no type is HTML only when it begins as HTML does), and `robots.txt` and sitemaps are asked for by the plain client from the site's plain exit. |
 | `visitors` | 1 | Personas that read one site at a time; at most the `domain_concurrency` of the pacing in force, refused beyond, and refused at level 0. |
 | `session_id` | | An open session: its persona reads every page. |
 

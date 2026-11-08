@@ -1,0 +1,19 @@
+synthetic: true
+source: >-
+  Hand-written (QA round three, class-01). A script-only shell with a hidden tracking frame. It shows its reader no
+  frame, so it is the blank page the rule exists for, not a page whose
+  content is in frames.
+observation:
+  render: http
+  status: 200
+  url: https://shell.harbour.example/app/
+  headers:
+    - { name: content-type, value: "text/html; charset=utf-8" }
+  body: |
+    <!doctype html><html><head><title></title><script>var x=1;</script></head><body><iframe src="/pixel" style="display:none"></iframe><div class="shell"></div></body></html>
+expect:
+  outcome: soft_block
+  vendor: generic
+  type: blank_page
+  rule: soft-blank-page
+  vendors: []
