@@ -190,6 +190,16 @@ async fn a_page_is_fetched_on_the_http_path_and_found_again_by_its_id() {
     assert_eq!(packed.header("content-encoding"), Some("gzip"));
     assert!(packed.body.len() < kept.body.len());
     assert_eq!(&packed.body[..2], [0x1f, 0x8b]);
+    // Each representation has an entity tag of its own (QA round three's
+    // extract-03): a strong tag is never shared by the gzip and the
+    // unpacked bytes.
+    let (plain_tag, packed_tag) = (kept.header("etag").unwrap(), packed.header("etag").unwrap());
+    assert_ne!(plain_tag, packed_tag);
+    assert_eq!(
+        packed_tag,
+        format!("{}-gzip\"", plain_tag.trim_end_matches('"'))
+    );
+    assert!(!plain_tag.starts_with("W/"), "{plain_tag}");
 
     // The result is found again by the request's id, with what is stored.
     let again = api.get(&token, &format!("/v1/results/{id}")).await;

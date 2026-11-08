@@ -368,10 +368,16 @@ fn artifact_headers(artifact: &Artifact) -> HeaderMap {
         HeaderValue::from_static("private, max-age=3600, immutable"),
     );
     headers.insert(VARY, HeaderValue::from_static("accept-encoding"));
-    if let Ok(etag) = HeaderValue::from_str(&format!("\"{}\"", artifact.content_hash)) {
-        headers.insert(ETAG, etag);
-    }
     headers
+}
+
+/// The entity tag of one representation of an artifact: the stored
+/// content's hash, with `-gzip` for the compressed one. A strong tag names
+/// one representation, so the gzip and the unpacked bytes never share one
+/// (RFC 9110 §8.8.3, QA round three's extract-03).
+fn entity_tag(artifact: &Artifact, gzip: bool) -> Option<HeaderValue> {
+    let suffix = if gzip { "-gzip" } else { "" };
+    HeaderValue::from_str(&format!("\"{}{suffix}\"", artifact.content_hash)).ok()
 }
 
 /// The artifact with this id, when the caller may read it.
@@ -432,6 +438,9 @@ pub(crate) async fn artifact(
             Err(error) => return Err(ApiError::internal(&error)),
         };
         headers.insert(CONTENT_LENGTH, HeaderValue::from(bytes.len()));
+        if let Some(etag) = entity_tag(&artifact, false) {
+            headers.insert(ETAG, etag);
+        }
         return Ok((headers, bytes).into_response());
     }
 
@@ -447,8 +456,12 @@ pub(crate) async fn artifact(
         Err(error) => return Err(ApiError::internal(&error)),
     };
     headers.insert(CONTENT_LENGTH, HeaderValue::from(artifact.stored_bytes));
-    if artifact.encoding == ArtifactEncoding::Gzip {
+    let gzip = artifact.encoding == ArtifactEncoding::Gzip;
+    if gzip {
         headers.insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+    }
+    if let Some(etag) = entity_tag(&artifact, gzip) {
+        headers.insert(ETAG, etag);
     }
     Ok((headers, stream_file(file)).into_response())
 }
