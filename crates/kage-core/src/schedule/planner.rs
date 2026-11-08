@@ -102,7 +102,8 @@ const RPM_WINDOW: Duration = Duration::minutes(1);
 
 /// How long a site that a domain's fetch was redirected to is remembered
 /// as one the domain's next fetch may end on (F219): a persona that cools
-/// on that site is held from the domain while it does.
+/// on that site is held from the domain while it does, and no longer than
+/// this after the last such fetch.
 const REDIRECT_MEMORY: Duration = Duration::days(1);
 
 /// The most sites remembered per domain as ones its fetches ended on
@@ -296,6 +297,12 @@ pub struct Work {
     /// http path. It is never a half-open breaker's trial: a site that
     /// answers a plain client says nothing about the personas.
     pub plain: bool,
+    /// The fetch of the site's scout, for what no reader asks for (its
+    /// `robots.txt`): a persona that cools on a site the domain's fetches
+    /// were redirected to is not held from it for that (F219), since the
+    /// scout reads none of the domain's pages and the domain cannot be
+    /// read at all while its file cannot be had.
+    pub scout: bool,
     /// The other sites the attempt reaches: the later sites of a flow
     /// (spec §10.5, F101). Each holds the attempt as a request of its own
     /// would be held, for the same persona: its breaker, its pause after
@@ -523,15 +530,6 @@ impl DomainRun {
         if self.redirects.len() > MAX_REDIRECTS {
             self.redirects.remove(0);
         }
-    }
-
-    /// The sites a fetch of the domain ended on within [`REDIRECT_MEMORY`]
-    /// of `now`.
-    fn redirect_targets(&self, now: DateTime<Utc>) -> impl Iterator<Item = &str> {
-        self.redirects
-            .iter()
-            .filter(move |(_, at)| now.signed_duration_since(*at) < REDIRECT_MEMORY)
-            .map(|(site, _)| site.as_str())
     }
 }
 
@@ -1551,13 +1549,14 @@ impl Planner {
                 }
             }
             // A site a fetch of the domain was redirected to holds a persona
-            // that cools there, as a later site does (F219).
+            // that cools there, as a later site does (F219); not the site's
+            // scout, which asks for no page of it.
             for (_, until) in self
                 .redirect_cools
                 .get(&work.domain)
                 .into_iter()
                 .flatten()
-                .filter(|(persona, _)| *persona == view.id)
+                .filter(|(persona, _)| *persona == view.id && !work.scout)
             {
                 at = at.max(*until);
                 barred = true;
@@ -2075,22 +2074,27 @@ impl Planner {
     }
 
     /// Who cools on a site that a fetch of a domain with waiting work was
-    /// redirected to, by domain (F219).
+    /// redirected to, by domain, and until when that holds them from the
+    /// domain: the end of the cooldown, or [`REDIRECT_MEMORY`] after the
+    /// last fetch that ended there, whichever comes first (F219).
     fn note_redirect_cools(&mut self, now: DateTime<Utc>, facts: &HashMap<String, DomainFacts>) {
         self.redirect_cools.clear();
         for (name, run) in &mut self.domains {
             run.redirects
                 .retain(|(_, at)| now.signed_duration_since(*at) < REDIRECT_MEMORY);
             let mut cools = Vec::new();
-            for site in run.redirect_targets(now) {
+            for (site, at) in &run.redirects {
                 let Some(known) = facts.get(site) else {
                     continue;
                 };
+                let forgotten = at
+                    .checked_add_signed(REDIRECT_MEMORY)
+                    .unwrap_or(DateTime::<Utc>::MAX_UTC);
                 cools.extend(known.states.iter().filter_map(|(persona, state)| {
                     state
                         .cooldown_until
                         .filter(|until| *until > now)
-                        .map(|until| (*persona, until))
+                        .map(|until| (*persona, until.min(forgotten)))
                 }));
             }
             if !cools.is_empty() {

@@ -247,13 +247,17 @@ version's date is the day, in UTC, its tag was made.
   `robots.ttl`; before, the file was dropped and the site was
   `robots_unavailable` for `robots.error_ttl` (an hour). A 304 with
   nothing kept is "unreachable" as before (QA round C's level 0 over
-  `https`, tls level0.sh check 6).
+  `https`, tls level0.sh check 6), and its log line says
+  `revalidated: false`.
 - **A persona that met a wall where a fetch was redirected is held from
   the site that redirects there (F219).** The wall is booked to the site
   that showed it (F187), and for a day after a fetch of a domain last
   ended on another site, a persona that cools on that site is held from
-  the domain too; the domain's next page went to the same persona, its
-  visitor, and into the same wall.
+  the domain too, until that cooldown ends and at most for that day; the
+  domain's next page went to the same persona, its visitor, and into the
+  same wall. The domain's robots.txt scout is not held: it reads none of
+  the domain's pages, and without the file an enforcing site cannot be
+  read at all.
 - **`KagePoolUnavailable` counts no proxy that carries nothing (F195).**
   A proxy marked `exit_shared_with` is `degraded` but carries no persona
   and no level 0; `kage_proxy_state` counts it as `backoff` while the mark
@@ -263,7 +267,10 @@ version's date is the day, in UTC, its tag was made.
   exporter strips every span event to its level, its target and where it
   was written, so no seed, path, address or token in a line leaves the
   process in a trace, whatever the line holds (spec §20); the line itself
-  is in the log with the span's ids.
+  is in the log with the span's ids. A line's own field named `level`,
+  `target` or `code.*` is dropped as well, and an error's text no longer
+  reaches the span's status description (a message-less `warn!(%error)`)
+  or its `exception.message` (a `&dyn Error` field).
 - **A refused handshake is a webhook's `tls`, not `connect` (F208).** A
   receiver whose certificate Kage refuses, or whose TLS ends the
   handshake, shows `last_error: "tls"` in the delivery log; a connection

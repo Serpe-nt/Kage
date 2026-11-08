@@ -1895,6 +1895,7 @@ impl Pipeline {
                 self.now().checked_add_signed(patience)
             }),
             plain: order.level == Level::Plain,
+            scout: order.scout,
             legs,
         }
     }

@@ -64,7 +64,10 @@ inside a span leaves with the trace as an event of it, so the attempt's
 line carries no seed (F182; the seed is `attempts.seed` in the store).
 Since F196 that does not rest on each line: before a span leaves, every
 event of it is stripped to its level, its target and where it was
-written, under the name `log`. In Jaeger a span's logs therefore say that
+written, under the name `log` (a line's own field named `level`,
+`target` or `code.*` is dropped too), and a span's error status leaves
+without a description: an error's text is never the status description
+or an `exception.message`. In Jaeger a span's logs therefore say that
 a line was written and how loud it was; to read the line, search Kage's
 log for the span's `trace_id` and `span_id`. Traces are sent only when Kage is given
 `telemetry.otlp_endpoint` (`KAGE__TELEMETRY__OTLP_ENDPOINT`) and a sidecar
