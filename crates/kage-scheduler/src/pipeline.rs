@@ -599,6 +599,8 @@ const fn waits(refused: &crate::scheduler::Refused) -> bool {
         | Refusal::BandwidthExhausted
         | Refusal::RobotsUnavailable
         | Refusal::PlainExitUnavailable
+        | Refusal::ServerErrors
+        | Refusal::CrawlDelay
         | Refusal::ShuttingDown => true,
         // Nobody can serve it at all, unless the scheduler named the
         // moment somebody can.

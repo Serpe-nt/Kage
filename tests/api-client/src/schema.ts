@@ -1761,7 +1761,13 @@ export interface components {
             raw_body?: string | null;
             /**
              * @description Why it ended without the site's verdict, as a stable name:
-             *     `no_persona`, `domain_paused`, `egress_unsafe`,
+             *     `no_persona` (no persona can start in time), `domain_paused`,
+             *     `server_errors` (the site paused itself with its own 5xx and
+             *     timeouts, at any level: the pause ends after the fetch would have
+             *     waited; `retry_at` is its end), `crawl_delay` (level 0 keeps to
+             *     the `Crawl-delay` of the site's enforced robots.txt, and the next
+             *     page may start only after the fetch would have waited),
+             *     `egress_unsafe`,
              *     `bandwidth_exhausted`, `proxy_failed`, `proxy_refused` (the
              *     persona's proxy refused the tunnel to the target: nothing was
              *     asked of the site, and the proxy is not set aside for it),
@@ -2319,8 +2325,11 @@ export interface components {
         PausedView: {
             /**
              * @description What stands in the way: `domain_paused`, `bandwidth_exhausted`,
-             *     `egress_unsafe`, `budget_exhausted`, or `no_persona` (its visitor
-             *     is on a break or asleep).
+             *     `egress_unsafe`, `budget_exhausted`, `no_persona` (its visitor
+             *     is on a break or asleep, or no persona is ready), `server_errors`
+             *     (the site paused itself with its own 5xx and timeouts in a row, at
+             *     any level; nothing of Kage's is wrong) or `crawl_delay` (level 0
+             *     keeps to the `Crawl-delay` of the site's enforced robots.txt).
              * @example domain_paused
              */
             reason: string;

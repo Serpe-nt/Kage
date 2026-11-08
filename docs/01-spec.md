@@ -3001,9 +3001,12 @@ session rules, and the job counts as use of the session while it has items
 left. A batch is planned by the same planner as everything else (D37): it
 never wakes a sleeper and has the priority of a job.
 
-**An item that cannot be attempted now is not failed.** A paused site, a
-visitor that sleeps or is on a break, the bandwidth term, the key's daily
-page budget, a pool with no persona ready (every proxy in backoff:
+**An item that cannot be attempted now is not failed.** A paused site
+(`domain_paused` for its breaker; `server_errors` for its own pause after
+server errors in a row, §8.3, at any level; `crawl_delay` for level 0's
+wait for the site's `Crawl-delay`; QA round three level0-02), a visitor
+that sleeps or is on a break, the bandwidth term, the key's daily page
+budget, a pool with no persona ready (every proxy in backoff:
 `no_persona`, asked again when the first backoff ends, F107, F156): the
 item goes back into
 the queue with the time to come back,

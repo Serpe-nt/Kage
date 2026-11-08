@@ -550,7 +550,8 @@ mod tests {
             ("kage_crawl_skipped_total", 9),
             ("kage_crawl_duplicates_total", 2),
             ("kage_api_refusals_total", 11),
-            ("kage_scheduler_refusals_total", 7),
+            // Nine reasons; `server_errors` and `crawl_delay` since level0-02.
+            ("kage_scheduler_refusals_total", 9),
             // Up and down, through the pool and the host.
             ("kage_bandwidth_bytes_total", 4),
             ("kage_cache_requests_total", 5),
@@ -564,6 +565,8 @@ mod tests {
         for line in [
             "kage_webhook_deliveries_total{event=\"job.completed\",result=\"failed\"} 0",
             "kage_scheduler_refusals_total{reason=\"domain_paused\"} 0",
+            "kage_scheduler_refusals_total{reason=\"server_errors\"} 0",
+            "kage_scheduler_refusals_total{reason=\"crawl_delay\"} 0",
             "kage_bandwidth_bytes_total{direction=\"down\",egress=\"pool\"} 0",
             "kage_api_refusals_total{code=\"rate_limited\"} 0",
             "kage_api_refusals_total{code=\"jobs_limited\"} 0",

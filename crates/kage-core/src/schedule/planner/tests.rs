@@ -1539,21 +1539,36 @@ fn work_for_a_domain_that_is_down_waits_for_the_end_of_its_pause() {
     assert_eq!(sim.log[3].0, third + secs(30));
 
     // A request that would rather not wait that long is refused with the
-    // time to come back at.
+    // time to come back at, and with what holds it: the site's own pause,
+    // not a persona (QA round three, level0-02). A plain client of level 0,
+    // which needs no persona, is told the same.
     let fourth = sim.ended[3].0;
     let impatient = sim.submit(Work {
+        give_up_at: Some(sim.now + secs(10)),
+        ..sync("example.org")
+    });
+    let plain = sim.submit(Work {
+        plain: true,
         give_up_at: Some(sim.now + secs(10)),
         ..sync("example.org")
     });
     sim.settle();
     assert_eq!(
         sim.refused,
-        [(
-            sim.now,
-            impatient,
-            Refusal::NoPersona,
-            Some(fourth + secs(60))
-        )]
+        [
+            (
+                sim.now,
+                impatient,
+                Refusal::ServerErrors,
+                Some(fourth + secs(60))
+            ),
+            (
+                sim.now,
+                plain,
+                Refusal::ServerErrors,
+                Some(fourth + secs(60))
+            )
+        ]
     );
 }
 
@@ -1717,6 +1732,8 @@ fn refusal_names_are_the_reasons_callers_get() {
             "shutting_down",
             "robots_unavailable",
             "plain_exit_unavailable",
+            "server_errors",
+            "crawl_delay",
         ],
     );
 }
@@ -3802,7 +3819,9 @@ fn a_plain_client_that_would_wait_past_its_patience_for_the_delay_is_refused_wit
     else {
         panic!("{decisions:?}");
     };
-    assert_eq!((*work, *reason), (impatient, Refusal::NoPersona));
+    // What holds it is the site's `Crawl-delay`, not a persona (QA round
+    // three, level0-02): level 0 has none.
+    assert_eq!((*work, *reason), (impatient, Refusal::CrawlDelay));
     assert!(*retry_at >= noon() + Duration::hours(1), "{retry_at}");
     assert!(*retry_at <= noon() + Duration::minutes(72), "{retry_at}");
 

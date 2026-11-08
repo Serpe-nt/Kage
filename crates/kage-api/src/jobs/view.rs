@@ -125,8 +125,11 @@ pub(crate) struct Counters {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub(crate) struct PausedView {
     /// What stands in the way: `domain_paused`, `bandwidth_exhausted`,
-    /// `egress_unsafe`, `budget_exhausted`, or `no_persona` (its visitor
-    /// is on a break or asleep).
+    /// `egress_unsafe`, `budget_exhausted`, `no_persona` (its visitor
+    /// is on a break or asleep, or no persona is ready), `server_errors`
+    /// (the site paused itself with its own 5xx and timeouts in a row, at
+    /// any level; nothing of Kage's is wrong) or `crawl_delay` (level 0
+    /// keeps to the `Crawl-delay` of the site's enforced robots.txt).
     #[schema(example = "domain_paused")]
     pub(crate) reason: String,
     /// When the job looks again.
