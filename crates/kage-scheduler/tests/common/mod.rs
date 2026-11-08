@@ -340,6 +340,8 @@ pub struct Script {
     plain_replies: Mutex<VecDeque<AttemptOutput>>,
     plain_seen: Mutex<Vec<SeenPlain>>,
     took: Mutex<Duration>,
+    settled: Mutex<Vec<PersonaId>>,
+    settle_takes: Mutex<Duration>,
     clock: Arc<dyn Clock>,
 }
 
@@ -359,8 +361,21 @@ impl Script {
             plain_replies: Mutex::new(VecDeque::new()),
             plain_seen: Mutex::new(Vec::new()),
             took: Mutex::new(Duration::from_millis(800)),
+            settled: Mutex::new(Vec::new()),
+            settle_takes: Mutex::new(Duration::ZERO),
             clock,
         }
+    }
+
+    /// The personas whose context the pipeline waited for after an
+    /// attempt (`AttemptExecutor::settle`), in order.
+    pub fn settled(&self) -> Vec<PersonaId> {
+        self.settled.lock().unwrap().clone()
+    }
+
+    /// How long every later wait for a persona's context takes.
+    pub fn settle_takes(&self, took: Duration) {
+        *self.settle_takes.lock().unwrap() = took;
     }
 
     /// The next attempt that has no answer yet gets this one.
@@ -450,6 +465,12 @@ impl AttemptExecutor for Script {
             output.final_url = Some(job.url.to_string());
         }
         output
+    }
+
+    async fn settle(&self, job: &AttemptJob) {
+        self.settled.lock().unwrap().push(job.persona.id);
+        let took = *self.settle_takes.lock().unwrap();
+        tokio::time::sleep(took).await;
     }
 
     async fn plain(&self, job: &PlainJob) -> AttemptOutput {

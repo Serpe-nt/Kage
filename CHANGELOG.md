@@ -304,10 +304,13 @@ version's date is the day, in UTC, its tag was made.
   refused `context_busy`, booked as a failed attempt and counted as a page
   of the persona's day on the site. The job still ends at once, but the
   persona takes no other work until its context runs nothing again, at
-  most until the flow's own time is up. An attempt that meets a busy
-  context anyway (a server that was killed left it) waits for it and asks
-  again; one still refused at its bound spends no retry, is no page of
-  the day and gives a breaker's trial back.
+  most for the attempt's time and 20 s counted from the cancel. An
+  attempt that meets a busy context anyway (a server that was killed left
+  it) waits for it and asks again; one still refused at its bound spends
+  no retry, is no page of the day and gives a breaker's trial back. A
+  context still busy at a request's third such attempt holds its persona
+  the same way, so that the persona's next requests do not each wait it
+  out.
 - **A job that waits for its proxies' backoff is told when the first one
   ends (QA round three, flows-02).** F156 did not hold: a persona whose
   proxy is in backoff is stored `cooling` (`proxy_backoff`) and had no
@@ -325,7 +328,8 @@ version's date is the day, in UTC, its tag was made.
   at most) and goes on then, or is told the moment when that is past its
   patience. A context another server opened with other parameters
   (`context_conflict`) is the persona still busy, as `context_busy` is: no
-  retry spent, no page of the day.
+  retry spent, no page of the day; since asking again is refused the same
+  at once, the next attempt goes to another persona.
 - **The documents say what Kage does (F145).** The block report runbook
   names `block.type` (it said `block.kind`) and no pacing "that never
   fetches"; the observability runbook names `bandwidth.monthly_cap_gb`;

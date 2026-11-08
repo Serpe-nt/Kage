@@ -620,11 +620,14 @@ pub trait AttemptExecutor: Send + Sync + fmt::Debug {
     /// browser is over (QA round three, flows-01): a flow's cancel hangs up
     /// on the sidecar, which finishes the step under way on the persona's
     /// context (spec §16.6), so the persona is not given other work before
-    /// that context runs nothing again. Bounded by what the flow could
-    /// still take since `began`. An executor with no browser has nothing
-    /// to wait for.
-    async fn settle(&self, job: &AttemptJob, began: tokio::time::Instant) {
-        let _ = (job, began);
+    /// that context runs nothing again. Bounded from the cut by what the
+    /// flow's step could still take, the attempt's whole time and the
+    /// browser's grace: what the attempt spent before the cut (opening the
+    /// context, its cookies, a wait for a busy context) does not shorten
+    /// it, and the wait ends as soon as the context is free. An executor
+    /// with no browser has nothing to wait for.
+    async fn settle(&self, job: &AttemptJob) {
+        let _ = job;
     }
 }
 
@@ -2222,14 +2225,15 @@ impl AttemptExecutor for PathExecutor {
         self.whose(output, (Caller::Plain(job.route), &job.url), proxy, started)
     }
 
-    async fn settle(&self, job: &AttemptJob, began: tokio::time::Instant) {
+    async fn settle(&self, job: &AttemptJob) {
         let Some((context, engine)) = self.manager.contexts().open_context_of(job.persona.id)
         else {
             return;
         };
         // The sidecar ends the flow within the time Kage would have waited
-        // for it: nothing of it runs past that.
-        let bound = (job.timeout + BROWSER_GRACE).saturating_sub(began.elapsed());
+        // for it: nothing of it runs past that. Counted from the cut, which
+        // may come after a wait for a busy context.
+        let bound = job.timeout + BROWSER_GRACE;
         if !context_free(self.manager.sidecars().of(engine), context, bound).await {
             tracing::warn!(
                 persona = %job.persona.id,

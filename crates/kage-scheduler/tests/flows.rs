@@ -1106,6 +1106,82 @@ async fn after_a_flows_cancel_its_persona_waits_for_the_step_under_way() {
     lab.shut_down().await;
 }
 
+/// #78's review: the wait after a cut is counted from the cut, not from
+/// the attempt's start. A flow that first waited out a busy context and was
+/// cancelled once asked kept its persona only for what was left of the
+/// attempt's time, and the persona went back while its step still ran. The
+/// wait ends at its bound, the attempt's time and the browser's grace (20 s)
+/// after the cut, when the step runs on past it.
+#[tokio::test]
+async fn the_wait_after_a_cut_runs_its_whole_bound_from_the_cut() {
+    let mut lab = Lab::start(1, 149, BROWSER_FAST).await;
+    let first = lab
+        .pipeline
+        .fetch(FetchOrder {
+            level: Level::Human,
+            ..FetchOrder::get(Lab::url("/first"), Priority::Sync)
+        })
+        .await
+        .unwrap();
+    assert_eq!(first.outcome, Outcome::Ok, "{:?}", first.reason);
+    // The context runs something else for 6 s when the flow asks, and the
+    // flow's step then runs for longer than any bound.
+    let before = std::time::Duration::from_secs(6);
+    lab.chromium.with(|sidecar| {
+        let now = std::time::Instant::now();
+        let contexts: Vec<String> = sidecar
+            .contexts
+            .values()
+            .map(|(context, _)| context.clone())
+            .collect();
+        for context in contexts {
+            sidecar.busy_until.insert(context, now + before);
+        }
+        sidecar.flow_delay = Some(std::time::Duration::from_secs(34));
+    });
+    let timeout = std::time::Duration::from_secs(8);
+    let (_stop, stopping) = tokio::sync::watch::channel(false);
+    let (cancel, cancelled) = tokio::sync::watch::channel(false);
+    let id = RequestId::new();
+    let running = {
+        let pipeline = lab.pipeline.clone();
+        let order = FetchOrder {
+            timeout: Some(timeout),
+            ..flow(&across())
+        };
+        tokio::spawn(async move {
+            pipeline
+                .fetch_flow_for_job(id, order, None, stopping, cancelled)
+                .await
+        })
+    };
+    flows_asked(&lab, 1).await;
+    let cut = chrono::Utc::now();
+    cancel.send_replace(true);
+    let fetched = running.await.unwrap().unwrap();
+    assert!(matches!(fetched, JobFetch::Stopped), "{fetched:?}");
+
+    // The next page has the persona once the wait ran out: the attempt's
+    // 8 s and the grace's 20 s after the cut (counted from the attempt's
+    // start, 6 s of it were gone), not when the step ended (34 s).
+    let page = lab
+        .pipeline
+        .fetch(FetchOrder {
+            level: Level::Human,
+            max_retries: Some(0),
+            timeout: Some(std::time::Duration::from_secs(1)),
+            ..FetchOrder::get(Lab::url("/after"), Priority::Sync)
+        })
+        .await
+        .unwrap();
+    let started = page.attempts[0].started_at - cut;
+    assert!(
+        started >= chrono::Duration::seconds(27) && started <= chrono::Duration::seconds(32),
+        "{started:?}"
+    );
+    lab.shut_down().await;
+}
+
 /// QA round three, flows-01 and lock-01: a context that runs an operation
 /// Kage did not wait for (a server that was killed left it, or a cut whose
 /// wait ran out) is waited for by the attempt that meets it, and the page
