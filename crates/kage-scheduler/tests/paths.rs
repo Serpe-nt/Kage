@@ -243,6 +243,54 @@ async fn the_http_path_leaves_through_the_forwarder_and_the_personas_own_proxy()
     lab.shut_down().await;
 }
 
+/// #76's review: what the http path earned goes into a browser whose
+/// context is busy with another operation once that operation is over;
+/// the cookies were left behind with a warning, and the page asked for
+/// without them.
+#[tokio::test]
+async fn the_http_paths_cookies_wait_for_a_busy_context() {
+    let mut lab = Lab::start(1, 149, FAST).await;
+    serve(
+        &lab,
+        "/start",
+        page("The shop").insert_header("set-cookie", "pre=1; Path=/"),
+    )
+    .await;
+    let start = lab.pipeline.fetch(http("/start")).await.unwrap();
+    assert_eq!(start.outcome, Outcome::Ok, "{:?}", start.reason);
+    let opened = lab.pipeline.fetch(get("/wall")).await.unwrap();
+    assert_eq!(opened.outcome, Outcome::Ok, "{:?}", opened.reason);
+    assert_eq!(lab.chromium.with(|sidecar| sidecar.imported.len()), 1);
+
+    // The context runs something else for 3 s when the next page comes.
+    let since = std::time::Instant::now();
+    lab.chromium.with(|sidecar| {
+        let contexts: Vec<String> = sidecar
+            .contexts
+            .values()
+            .map(|(context, _)| context.clone())
+            .collect();
+        for context in contexts {
+            sidecar
+                .busy_until
+                .insert(context, since + Duration::from_secs(3));
+        }
+    });
+    let report = lab.pipeline.fetch(get("/wall")).await.unwrap();
+    assert_eq!(report.outcome, Outcome::Ok, "{:?}", report.reason);
+    assert_eq!(report.last.as_ref().unwrap().cookies_to_browser, Some(1));
+    let (imported, refused) = lab
+        .chromium
+        .with(|sidecar| (sidecar.imported.clone(), sidecar.refused_busy.clone()));
+    assert_eq!(imported.len(), 2);
+    assert_eq!(imported[1]["cookies"][0]["name"], "pre");
+    assert_eq!(
+        refused.first().map(String::as_str),
+        Some("POST state/import")
+    );
+    lab.shut_down().await;
+}
+
 #[tokio::test]
 async fn a_personas_cookies_flow_between_its_http_path_and_its_browser() {
     let mut lab = Lab::start(1, 149, FAST).await;
@@ -1137,6 +1185,100 @@ async fn work_that_waits_for_every_proxys_backoff_is_told_when_the_first_one_end
         other => panic!("deferred, not {other:?}"),
     }
     assert_eq!(lab.received("/page").await.len(), 0);
+
+    // #76's review: a backoff that is extended is told by its new end. The
+    // first proxy's backoff ends (an operator's check) and its probe fails
+    // again: a longer backoff.
+    let extended = live
+        .iter()
+        .find(|proxy| proxy.backoff_until == Some(first))
+        .unwrap()
+        .id;
+    lab.pool.end_backoff(extended).await.unwrap();
+    let after = lab
+        .pool
+        .record_probe(
+            extended,
+            &ProbeReport {
+                at: first,
+                exit: Err(HealthFailure::Unreachable),
+                leak: None,
+                geo: None,
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.state, ProxyState::Backoff);
+    assert!(
+        after.backoff_until.is_some_and(|until| until > first),
+        "{after:?}"
+    );
+    let next = lab
+        .pool
+        .live()
+        .await
+        .unwrap()
+        .iter()
+        .filter_map(|proxy| proxy.backoff_until)
+        .min()
+        .unwrap();
+    assert!(next > first);
+    let refused = lab.pipeline.fetch(http("/page")).await.unwrap();
+    assert_eq!(refused.reason.as_deref(), Some("no_persona"));
+    assert_eq!(refused.retry_at, Some(next));
+
+    // A backoff that is cleared: the proxy passes its probes, the persona
+    // manager makes its persona active again, and the page is read.
+    let cleared = lab
+        .personas
+        .iter()
+        .find(|persona| persona.proxy_id == extended)
+        .unwrap()
+        .proxy_id;
+    let mut at = after.backoff_until.unwrap();
+    let mut state = ProxyState::Backoff;
+    for _ in 0..8 {
+        let passed = lab
+            .pool
+            .record_probe(
+                cleared,
+                &ProbeReport {
+                    at,
+                    exit: Ok(ExitObservation {
+                        ip: "192.0.2.10".parse().unwrap(),
+                        latency_ms: 3,
+                        connect_ms: None,
+                        tls_ms: None,
+                    }),
+                    leak: Some(false),
+                    geo: None,
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        state = passed.state;
+        if state.is_usable() {
+            break;
+        }
+        at += chrono::Duration::seconds(30);
+    }
+    assert!(state.is_usable(), "{state:?}");
+    lab.manager
+        .handle(&kage_proxy::PoolEvent::StateChanged {
+            proxy: cleared,
+            from: ProxyState::Backoff,
+            to: state,
+        })
+        .await
+        .unwrap();
+    let views = lab.backend.personas().await.unwrap();
+    let back: Vec<_> = views.iter().filter(|view| view.ready).collect();
+    assert_eq!(back.len(), 1, "{views:?}");
+    assert_eq!(back[0].ready_at, None);
+    let served = lab.pipeline.fetch(http("/page")).await.unwrap();
+    assert_eq!(served.outcome, Outcome::Ok, "{:?}", served.reason);
     lab.shut_down().await;
 }
 

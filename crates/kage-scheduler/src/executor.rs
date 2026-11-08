@@ -1997,7 +1997,21 @@ impl PathExecutor {
         // first. A persona without an http path has nothing to hand over.
         let mut cookies_to_browser = None;
         if let Some(origin) = &origin {
-            match self.manager.http_to_browser(persona, context, origin).await {
+            let mut handed = self.manager.http_to_browser(persona, context, origin).await;
+            // A context busy with another operation is waited for, as for
+            // the page itself, and asked once more (#76's review): the
+            // site's cookies were left behind with a warning.
+            if matches!(&handed, Err(PersonaError::Browser(error)) if error.is_context_busy())
+                && context_free(
+                    self.manager.sidecars().of(persona.engine),
+                    context,
+                    job.timeout + BROWSER_GRACE,
+                )
+                .await
+            {
+                handed = self.manager.http_to_browser(persona, context, origin).await;
+            }
+            match handed {
                 Ok(handoff) => cookies_to_browser = Some(handoff.moved),
                 Err(PersonaError::HttpPathOff { .. }) => {}
                 Err(error) => {
@@ -2226,20 +2240,24 @@ impl AttemptExecutor for PathExecutor {
     }
 
     async fn settle(&self, job: &AttemptJob) {
-        let Some((context, engine)) = self.manager.contexts().open_context_of(job.persona.id)
-        else {
+        // Held while it is waited for: a context nobody holds may be closed
+        // for another persona's room, which the busy sidecar refuses, and
+        // Kage would forget a context that still fills the sidecar.
+        let Some(lease) = self.manager.contexts().hold(job.persona.id).await else {
             return;
         };
         // The sidecar ends the flow within the time Kage would have waited
         // for it: nothing of it runs past that. Counted from the cut, which
         // may come after a wait for a busy context.
         let bound = job.timeout + BROWSER_GRACE;
-        if !context_free(self.manager.sidecars().of(engine), context, bound).await {
+        let sidecar = self.manager.sidecars().of(lease.engine());
+        if !context_free(sidecar, lease.context(), bound).await {
             tracing::warn!(
                 persona = %job.persona.id,
                 "the context of a cut flow was still busy when its time ran out"
             );
         }
+        lease.keep(false);
     }
 }
 

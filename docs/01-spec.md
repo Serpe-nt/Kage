@@ -1269,7 +1269,9 @@ a context another server opened (a kill and a restart, a hand-over), means
 three, flows-01, lock-01): an operation refused as busy waits for the
 context to run nothing (Kage asks with `state/export` of an origin no page
 can be on, without storage, once a second) for as long as the operation
-itself may take, and is asked again; an attempt that still ends refused
+itself may take, and is asked again (the cookies of the persona's http
+path that go into the browser before the page included); an attempt
+that still ends refused
 either way asked the site nothing, spends no retry, is no page of the persona's day on the
 site and gives a breaker's trial back, up to three such attempts per
 request, after which they count as failures. After `context_busy` the
@@ -3032,8 +3034,10 @@ finishes that step and begins no other, so that at most the page the step
 was reading is asked for after the cancel. The job does not wait for that
 step, but the persona is given no other work until its context runs
 nothing again, at most for the attempt's time and the browser's grace
-(20 s) counted from the cancel, whatever the attempt spent before it
-(QA round three,
+(20 s) counted from the cancel, whatever the attempt spent before it;
+meanwhile Kage holds that context, so that no other persona's room and
+no idle close takes it, and a sidecar that cannot say what the context
+runs ends the wait (QA round three,
 flows-01: the scheduler handed the persona out at once, and every request
 it took meanwhile was refused `context_busy` and booked as a failed
 attempt, a page of the day's cap included); the flow's items are

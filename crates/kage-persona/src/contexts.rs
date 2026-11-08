@@ -276,15 +276,6 @@ impl Contexts {
         open
     }
 
-    /// The persona's context as far as Kage knows it is open, and the
-    /// engine whose sidecar holds it.
-    pub fn open_context_of(&self, persona: PersonaId) -> Option<(Uuid, Engine)> {
-        self.state()
-            .open
-            .get(&persona)
-            .map(|open| (open.context, open.engine))
-    }
-
     /// How many contexts of an engine are open.
     pub fn open_on(&self, engine: Engine) -> usize {
         self.state()
@@ -419,6 +410,33 @@ impl Contexts {
             engine: persona.engine,
             context: opened.context_id,
             reused: opened.reused,
+            returned: false,
+            _alone: alone,
+        })
+    }
+
+    /// Takes the persona's context as it is open, without asking the
+    /// sidecar: for waiting until what a cut attempt left running on it is
+    /// over (QA round three, flows-01). While the lease is held the context
+    /// is nobody's victim and no idle or retired persona's close takes it:
+    /// the sidecar would refuse to close it, busy, and Kage would forget a
+    /// context that still fills the sidecar. `None` when Kage knows no
+    /// open context of the persona. Waits while another lease holds it.
+    pub async fn hold(self: &Arc<Self>, persona: PersonaId) -> Option<Lease> {
+        let lock = Arc::clone(self.state().locks.entry(persona).or_default());
+        let alone = lock.lock_owned().await;
+        let (context, engine) = {
+            let mut state = self.state();
+            let open = state.open.get_mut(&persona)?;
+            open.held = true;
+            (open.context, open.engine)
+        };
+        Some(Lease {
+            contexts: Arc::clone(self),
+            persona,
+            engine,
+            context,
+            reused: true,
             returned: false,
             _alone: alone,
         })
