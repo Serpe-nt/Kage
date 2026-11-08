@@ -154,7 +154,7 @@ impl Session {
 mod tests {
     use std::time::Duration;
 
-    use chrono::Utc;
+    use chrono::{DateTime, Utc};
 
     use super::{InvalidSessionId, Session, SessionId, SessionLimits};
     use crate::ids::{ApiKeyId, PersonaId};
@@ -229,5 +229,24 @@ mod tests {
         session.touch(near_end, limits);
         assert_eq!(session.expires_at, start + limits.max_lifetime);
         assert!(session.is_expired(start + limits.max_lifetime));
+    }
+
+    #[test]
+    fn a_lifetime_beyond_the_calendar_ends_at_its_last_day_and_never_panics() {
+        // QA round three api-08: `200000000d` panicked every session.
+        let limits = SessionLimits {
+            idle_ttl: Duration::MAX,
+            max_lifetime: Duration::from_hours(200_000_000 * 24),
+        };
+        let start = Utc::now();
+        let session = Session::open(
+            SessionId::mint(),
+            ApiKeyId::new(),
+            PersonaId::new(),
+            start,
+            limits,
+        );
+        assert_eq!(session.expires_at, DateTime::<Utc>::MAX_UTC);
+        assert!(!session.is_expired(start));
     }
 }
