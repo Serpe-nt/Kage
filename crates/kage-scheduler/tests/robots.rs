@@ -1171,16 +1171,89 @@ async fn a_robots_txt_a_plain_client_brought_is_kept_as_sent_and_enforced_at_eve
     world.shut_down().await;
 }
 
+/// The `revalidated` field of every "a robots.txt was asked for" line
+/// written while it is the thread's subscriber.
+#[derive(Clone, Default)]
+struct AskedLines(std::sync::Arc<std::sync::Mutex<Vec<bool>>>);
+
+impl AskedLines {
+    fn read(&self) -> Vec<bool> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+/// One line's message and `revalidated` field.
+#[derive(Default)]
+struct AskedLine {
+    message: String,
+    revalidated: Option<bool>,
+}
+
+impl tracing::field::Visit for AskedLine {
+    fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+        if field.name() == "revalidated" {
+            self.revalidated = Some(value);
+        }
+    }
+
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "message" {
+            self.message = format!("{value:?}");
+        }
+    }
+}
+
+impl tracing::Subscriber for AskedLines {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        let mut line = AskedLine::default();
+        event.record(&mut line);
+        if line.message == "a robots.txt was asked for" {
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(line.revalidated.unwrap_or_default());
+        }
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
 /// F209 (F90 at level 0, QA round C's tls level 0 check): a `304` to the
 /// scout once the kept file expired keeps the file and its rules for
 /// another day; before, the file was dropped and the site was
 /// `robots_unavailable` for an hour. A 304 with nothing kept tells
-/// nothing: the file cannot be had, as before.
+/// nothing: the file cannot be had, as before, and the log does not say
+/// it was revalidated (#73's review).
 #[tokio::test(start_paused = true)]
 async fn a_304_to_the_scout_keeps_the_file_it_had_for_another_ttl() {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU16, Ordering};
 
+    let lines = AskedLines::default();
+    let _lines = tracing::subscriber::set_default(lines.clone());
+    // While one dispatcher is registered, tracing-core takes a callsite's
+    // interest from the subscriber of the thread that reaches it first and
+    // keeps it for every thread: a test running beside this one that writes
+    // the line first, with no subscriber, would leave it off here. With a
+    // second one alive every registration asks all of them.
+    let _second = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
     let mut world = World::new(4, SITES);
     let answering = Arc::new(AtomicU16::new(200));
     let status = Arc::clone(&answering);
@@ -1260,6 +1333,8 @@ async fn a_304_to_the_scout_keeps_the_file_it_had_for_another_ttl() {
         .unwrap();
     assert!(none.unreachable);
     assert_eq!(none.status, Some(304));
+    // Revalidated is the kept file's 304 only.
+    assert_eq!(lines.read(), [false, true, false]);
     world.shut_down().await;
 }
 

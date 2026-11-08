@@ -14,17 +14,18 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use kage_core::config::TelemetryConfig;
+use opentelemetry::KeyValue;
 use opentelemetry::propagation::TextMapPropagator;
-use opentelemetry::trace::{SpanContext, TraceContextExt, TracerProvider as _};
+use opentelemetry::trace::{SpanContext, Status, TraceContextExt, TracerProvider as _};
 use opentelemetry_http::{Bytes, HttpClient, HttpError, Request, Response};
 use opentelemetry_otlp::{Protocol, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::error::OTelSdkResult;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
-use opentelemetry_sdk::trace::{SdkTracerProvider, SpanData, SpanExporter};
+use opentelemetry_sdk::trace::{SdkTracerProvider, SpanData, SpanExporter, Tracer};
 use tracing::dispatcher::WeakDispatch;
 use tracing::{Dispatch, Subscriber};
-use tracing_opentelemetry::OpenTelemetrySpanExt;
+use tracing_opentelemetry::{OpenTelemetryLayer, OpenTelemetrySpanExt};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer;
 use tracing_subscriber::fmt::format::{Format, Json, JsonFields, Writer};
@@ -85,7 +86,7 @@ pub(crate) fn install(to_stderr: bool, telemetry: &TelemetryConfig) -> anyhow::R
         .json()
         .event_format(WithTraceIds::new(&dispatcher))
         .fmt_fields(JsonFields::new());
-    let spans = tracing_opentelemetry::layer().with_tracer(tracer);
+    let spans = spans_layer(tracer);
     let registry = tracing_subscriber::registry()
         .with(filter)
         .with(spans)
@@ -98,6 +99,25 @@ pub(crate) fn install(to_stderr: bool, telemetry: &TelemetryConfig) -> anyhow::R
     installed.map_err(|error| anyhow::anyhow!("failed to install the log subscriber: {error}"))?;
     kage_browser::trace_context_from(traceparent);
     Ok(Telemetry { provider })
+}
+
+/// The layer that turns `tracing`'s spans into OpenTelemetry spans, with
+/// the two settings of tracing-opentelemetry that would put a line's text
+/// on its span, where [`EventsWithoutFields`] does not look, turned off:
+/// `error_events_to_status` makes the text of a message-less line's
+/// `error` field (`warn!(%error)`) the span's status description, and
+/// `error_records_to_exceptions` adds a `&dyn Error` field's text and its
+/// sources to the span as `exception.message` and `exception.stacktrace`
+/// (F196). An `ERROR` line still sets the span's error status.
+fn spans_layer<S>(tracer: Tracer) -> OpenTelemetryLayer<S, Tracer>
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+{
+    tracing_opentelemetry::layer()
+        .with_tracer(tracer)
+        .with_location(true)
+        .with_error_events_to_status(false)
+        .with_error_records_to_exceptions(false)
 }
 
 /// The W3C `traceparent` of the current span, when it has a trace.
@@ -177,15 +197,16 @@ where
     }
 }
 
-/// The attributes a span event keeps on its way out: where it was written
-/// and how loud it was, never what it says.
-const EVENT_ATTRIBUTES: [&str; 5] = [
-    "level",
-    "target",
-    "code.file.path",
-    "code.module.name",
-    "code.line.number",
-];
+/// The attributes tracing-opentelemetry writes first on every span event,
+/// before any field of the line: how loud it was and where it came from.
+const HEAD_ATTRIBUTES: [&str; 2] = ["level", "target"];
+
+/// The attributes tracing-opentelemetry writes last on every span event,
+/// after every field of the line: where it was written.
+const TAIL_ATTRIBUTES: [&str; 3] = ["code.file.path", "code.module.name", "code.line.number"];
+
+/// The levels a span event's `level` can name.
+const LEVELS: [&str; 5] = ["TRACE", "DEBUG", "INFO", "WARN", "ERROR"];
 
 /// The name every span event leaves under.
 const EVENT_NAME: &str = "log";
@@ -194,29 +215,68 @@ const EVENT_NAME: &str = "log";
 /// turns every log line written inside a span into an event of that span,
 /// with the line's message as its name and its fields as attributes, so a
 /// line that names a seed, a URL's path, an address or a token would leave
-/// the process in a trace. This exporter strips each event to
-/// [`EVENT_ATTRIBUTES`] under [`EVENT_NAME`] before the spans are sent,
-/// whatever the line held; the line itself, with the span's `trace_id` and
-/// `span_id`, is in the process's log. Spans keep their own fields and the
-/// error status an `ERROR` line sets.
+/// the process in a trace. This exporter strips each event to the
+/// attributes tracing-opentelemetry writes itself under [`EVENT_NAME`]
+/// before the spans are sent, whatever the line held; the line itself, with
+/// the span's `trace_id` and `span_id`, is in the process's log. A line's
+/// own field may carry one of those names (`target = %url`), so a key is
+/// kept only where the layer writes it: [`HEAD_ATTRIBUTES`] at its first
+/// occurrence (the layer writes them before the fields), `level` only when
+/// it names a level, and [`TAIL_ATTRIBUTES`] at its last (the layer writes
+/// them after the fields, [`spans_layer`] keeps the location on); a field of
+/// the same name is dropped. Spans keep their own fields and the error
+/// status an `ERROR` line sets, without a description: whatever wrote one
+/// wrote a line's or an error's text.
 #[derive(Debug)]
 struct EventsWithoutFields<E>(E);
 
 impl<E> EventsWithoutFields<E> {
     fn strip(batch: &mut [SpanData]) {
         for span in batch {
+            if let Status::Error { description } = &span.status
+                && !description.is_empty()
+            {
+                span.status = Status::error("");
+            }
             for event in &mut span.events.events {
                 event.name = std::borrow::Cow::Borrowed(EVENT_NAME);
                 let before = event.attributes.len();
-                event
-                    .attributes
-                    .retain(|attribute| EVENT_ATTRIBUTES.contains(&attribute.key.as_str()));
+                event.attributes = Self::kept(std::mem::take(&mut event.attributes));
                 let dropped = before - event.attributes.len();
                 event.dropped_attributes_count = event
                     .dropped_attributes_count
                     .saturating_add(u32::try_from(dropped).unwrap_or(u32::MAX));
             }
         }
+    }
+
+    /// The attributes of one event that the layer wrote itself.
+    fn kept(attributes: Vec<KeyValue>) -> Vec<KeyValue> {
+        let last_of = |key: &str| {
+            attributes
+                .iter()
+                .rposition(|attribute| attribute.key.as_str() == key)
+        };
+        let tail: Vec<Option<usize>> = TAIL_ATTRIBUTES.iter().map(|key| last_of(key)).collect();
+        let mut head_seen = [false; HEAD_ATTRIBUTES.len()];
+        attributes
+            .into_iter()
+            .enumerate()
+            .filter(|(index, attribute)| {
+                let key = attribute.key.as_str();
+                if let Some(at) = HEAD_ATTRIBUTES.iter().position(|head| *head == key) {
+                    let first = !head_seen[at];
+                    head_seen[at] = true;
+                    return first
+                        && (key != "level" || LEVELS.contains(&attribute.value.as_str().as_ref()));
+                }
+                TAIL_ATTRIBUTES
+                    .iter()
+                    .position(|tail_key| *tail_key == key)
+                    .is_some_and(|at| tail[at] == Some(*index))
+            })
+            .map(|(_, attribute)| attribute)
+            .collect()
     }
 }
 
@@ -311,7 +371,9 @@ mod tests {
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    use super::{Dispatcher, EventsWithoutFields, ToCollector, WithTraceIds, traceparent};
+    use super::{
+        Dispatcher, EventsWithoutFields, ToCollector, WithTraceIds, spans_layer, traceparent,
+    };
 
     /// The lines a test subscriber wrote.
     #[derive(Clone, Default)]
@@ -442,15 +504,47 @@ mod tests {
         );
     }
 
+    /// An error whose text and source name what no trace may hold.
+    #[derive(Debug)]
+    struct Refused(io::Error);
+
+    impl std::fmt::Display for Refused {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "refused at /private/inbox")
+        }
+    }
+
+    impl std::error::Error for Refused {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    /// What the lines of a careless request below say that no trace may
+    /// hold.
+    const SECRETS: [&str; 8] = [
+        "9f2c41d07be1a3c5",
+        "/account",
+        "kage_secret",
+        "203.0.113.9",
+        "198.51.100.7",
+        "/private/inbox",
+        "192.0.2.44",
+        "field-named-target",
+    ];
+
     /// The spans one request makes when its lines name a seed, a path, an
-    /// address and a token, exported through `exporter`.
-    fn spans_of_a_careless_request<E: SpanExporter + 'static>(exporter: E) {
+    /// address and a token, as a message, as fields, as a message-less
+    /// line's error, as a `&dyn Error` and as fields named like the ones
+    /// the layer writes itself; exported through `exporter` from the
+    /// server's layer when `guarded`, else from tracing-opentelemetry's
+    /// default one.
+    fn spans_of_a_careless_request<E: SpanExporter + 'static>(exporter: E, guarded: bool) {
         let provider = SdkTracerProvider::builder()
             .with_simple_exporter(exporter)
             .build();
-        let subscriber = tracing_subscriber::registry()
-            .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("test")));
-        tracing::subscriber::with_default(subscriber, || {
+        let tracer = provider.tracer("test");
+        let run = || {
             let span = tracing::info_span!("attempt", attempt = 1, level = 3);
             let _span = span.enter();
             tracing::info!(
@@ -459,15 +553,35 @@ mod tests {
                 token = "kage_secret",
                 "reached 203.0.113.9:8080 for /account/settings"
             );
+            let error = io::Error::other("no route to 198.51.100.7");
+            tracing::warn!(%error);
+            let refused = Refused(io::Error::other("reset by 192.0.2.44"));
+            let refused: &(dyn std::error::Error + 'static) = &refused;
+            tracing::warn!(error = refused, "the proxy refused");
+            tracing::info!(
+                target = "field-named-target",
+                level = "kage_secret",
+                code.file.path = "/account/settings",
+                code.line.number = "203.0.113.9",
+                "fields named like the layer's own"
+            );
             tracing::error!(error = "refused by 203.0.113.9", "the attempt failed");
-        });
+        };
+        if guarded {
+            let subscriber = tracing_subscriber::registry().with(spans_layer(tracer));
+            tracing::subscriber::with_default(subscriber, run);
+        } else {
+            let subscriber = tracing_subscriber::registry()
+                .with(tracing_opentelemetry::layer().with_tracer(tracer));
+            tracing::subscriber::with_default(subscriber, run);
+        }
     }
 
     #[test]
     fn a_span_event_leaves_with_its_level_and_target_only() {
         // F196: the rule of spec §20 holds whatever a line in a span says.
         let spans = Spans::default();
-        spans_of_a_careless_request(EventsWithoutFields(spans.clone()));
+        spans_of_a_careless_request(EventsWithoutFields(spans.clone()), true);
         let finished = spans
             .0
             .lock()
@@ -476,21 +590,42 @@ mod tests {
         assert_eq!(finished.len(), 1);
         let attempt = &finished[0];
         let sent = format!("{attempt:?}");
-        for secret in ["9f2c41d07be1a3c5", "/account", "kage_secret", "203.0.113.9"] {
+        for secret in SECRETS {
             assert!(!sent.contains(secret), "{secret} left in {sent}");
         }
-        assert_eq!(attempt.events.events.len(), 2);
+        assert_eq!(attempt.events.events.len(), 5);
         for event in &attempt.events.events {
             assert_eq!(event.name, "log");
-            let mut keys: Vec<&str> = event
+            let keys: Vec<&str> = event
                 .attributes
                 .iter()
                 .map(|attribute| attribute.key.as_str())
                 .collect();
-            keys.retain(|key| !key.starts_with("code."));
-            assert_eq!(keys, ["level", "target"], "{event:?}");
+            assert_eq!(
+                keys,
+                [
+                    "level",
+                    "target",
+                    "code.file.path",
+                    "code.module.name",
+                    "code.line.number"
+                ],
+                "{event:?}"
+            );
+            let value = |at: usize| event.attributes[at].value.as_str().into_owned();
+            assert!(super::LEVELS.contains(&value(0).as_str()), "{event:?}");
+            assert_eq!(value(1), module_path!());
+            assert!(value(2).ends_with("telemetry.rs"), "{event:?}");
             assert!(event.dropped_attributes_count > 0);
         }
+        // Nothing was added to the span from a line's error.
+        assert!(
+            attempt
+                .attributes
+                .iter()
+                .all(|attribute| !attribute.key.as_str().starts_with("exception.")),
+            "{attempt:?}"
+        );
         // The span keeps its own fields and the status an ERROR line set.
         assert!(
             attempt
@@ -498,24 +633,60 @@ mod tests {
                 .iter()
                 .any(|attribute| attribute.key.as_str() == "attempt")
         );
-        assert!(matches!(
-            attempt.status,
-            opentelemetry::trace::Status::Error { .. }
-        ));
+        assert_eq!(attempt.status, opentelemetry::trace::Status::error(""));
+    }
+
+    #[test]
+    fn a_status_description_never_leaves() {
+        // F196: whatever wrote it, the guard sends an error status bare.
+        let spans = Spans::default();
+        let provider = SdkTracerProvider::builder()
+            .with_simple_exporter(EventsWithoutFields(spans.clone()))
+            .build();
+        let subscriber = tracing_subscriber::registry().with(spans_layer(provider.tracer("test")));
+        tracing::subscriber::with_default(subscriber, || {
+            let _span = tracing::info_span!(
+                "attempt",
+                otel.status_code = "ERROR",
+                otel.status_description = "refused by 203.0.113.9"
+            )
+            .entered();
+        });
+        let finished = spans
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        assert_eq!(finished.len(), 1);
+        assert_eq!(finished[0].status, opentelemetry::trace::Status::error(""));
     }
 
     #[test]
     fn without_the_guard_a_line_in_a_span_would_leave_with_it() {
         // The negative control of the test above: tracing-opentelemetry as
-        // it is sends a line's message and fields as a span event.
+        // it is sends a line's message and fields as a span event, a
+        // message-less line's error as the span's status description and a
+        // `&dyn Error` field as the span's `exception.message`.
         let spans = Spans::default();
-        spans_of_a_careless_request(spans.clone());
-        let sent = format!(
-            "{:?}",
-            spans.0.lock().unwrap_or_else(PoisonError::into_inner)
-        );
-        assert!(sent.contains("9f2c41d07be1a3c5"));
-        assert!(sent.contains("203.0.113.9"));
+        spans_of_a_careless_request(spans.clone(), false);
+        let finished = spans
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let sent = format!("{finished:?}");
+        for secret in SECRETS {
+            assert!(sent.contains(secret), "{secret} not in {sent}");
+        }
+        let attempt = &finished[0];
+        let opentelemetry::trace::Status::Error { description } = &attempt.status else {
+            panic!("{attempt:?}");
+        };
+        assert!(description.contains("198.51.100.7"), "{description}");
+        assert!(attempt.attributes.iter().any(|attribute| {
+            attribute.key.as_str() == "exception.message"
+                && attribute.value.as_str().contains("/private/inbox")
+        }));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

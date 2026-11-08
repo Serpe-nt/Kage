@@ -171,6 +171,7 @@ fn work(domain: &str) -> Work {
         give_up_at: None,
         gap_floor: None,
         plain: false,
+        scout: false,
         legs: Vec::new(),
     }
 }
@@ -4726,4 +4727,68 @@ fn a_job_that_may_not_have_the_domains_one_visitor_waits_for_its_visit_to_end() 
             .3
             .is_some_and(|at| at >= noon() + Duration::minutes(10))
     );
+}
+
+#[test]
+fn the_redirect_hold_spares_the_scout_and_ends_a_day_after_the_last_redirect() {
+    // #73's review of F219: a persona cooling for three days on the wall a
+    // fetch of the shop was redirected to was held from the shop for all
+    // three, though the redirect is remembered for a day; and the shop's
+    // robots.txt scout, the same persona, could not ask for the file
+    // meanwhile, so an enforcing site was `robots_unavailable`.
+    let mut planner = Planner::new(rules(), Seed::from_u64(5));
+    planner.set_personas(personas(1));
+    let mut facts = facts_for(&["shop.test", "wall.test"]);
+    let mut now = noon();
+    let (walled, grant) = one_page(&mut planner, &facts, "shop.test", now).unwrap();
+    now += secs(5);
+    let redirected = now;
+    assert!(planner.complete_on(
+        grant,
+        now,
+        Completion::of(Courtesy::Answered),
+        Some("wall.test")
+    ));
+    facts
+        .get_mut("wall.test")
+        .unwrap()
+        .states
+        .entry(walled)
+        .or_insert_with(|| PersonaDomainState::new(walled, "wall.test"))
+        .cooldown_until = Some(now + Duration::days(3));
+
+    // The scout asks for the shop's file now.
+    now += Duration::minutes(2);
+    planner.submit(
+        Work {
+            pin: Some(walled),
+            scout: true,
+            ..sync("shop.test")
+        },
+        now,
+    );
+    let decisions = planner.plan(now, &facts);
+    let asked = dispatched(&decisions);
+    assert_eq!(asked.len(), 1, "{decisions:?}");
+    assert_eq!(asked[0].persona, walled);
+    assert!(planner.complete(
+        asked[0].grant,
+        now + secs(1),
+        Completion::of(Courtesy::Answered)
+    ));
+
+    // A page of the shop waits for the redirect to be forgotten, a day
+    // after it, not for the cooldown's end.
+    now += Duration::minutes(2);
+    assert_eq!(one_page(&mut planner, &facts, "shop.test", now), None);
+    let forgotten = redirected + Duration::days(1);
+    assert!(
+        planner
+            .wake_at()
+            .is_some_and(|wake| wake > now && wake <= forgotten),
+        "{:?}",
+        planner.wake_at()
+    );
+    let decisions = planner.plan(forgotten, &facts);
+    assert_eq!(dispatched(&decisions).len(), 1, "{decisions:?}");
 }

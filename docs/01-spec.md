@@ -880,7 +880,10 @@ site (§10.5, F187), and for a day after a fetch of the domain last ended
 on such a site (at most eight sites per domain, kept by the planner, not
 across a restart) a persona that cools there is held from the domain as
 well, so that the domain's next page does not send it into the same wall
-(F219); its cap, gap and seats there are not looked at. A persona already visiting the domain keeps its
+(F219): until its cooldown there ends, and at most a day after the last
+such fetch; never from the fetch of the domain's `robots.txt` by its scout
+(§14), which reads none of its pages. Its cap, gap and seats there are
+not looked at. A persona already visiting the domain keeps its
 work while its visit lasts (§11); the score chooses a new visitor only
 when work waits and fewer than `domain_concurrency` personas are visiting.
 A synchronous request goes past that only for a visitor's break: when
@@ -3679,8 +3682,13 @@ are gzip-compressed on disk.
   exporter strips every span event to its level, its target and where it
   was written, under the name `log`, before a span leaves the process, so
   no message or field of a line is ever sent (F196); the line itself is in
-  the log, with the span's ids. Spans keep their own fields and the error
-  status an `ERROR` line gives them. Every JSON line of Kage and of a sidecar written
+  the log, with the span's ids. A line's own field named like one the
+  exporter keeps (`level`, `target`, `code.*`) is dropped: the exporter
+  keeps each where tracing-opentelemetry writes it. Spans keep their own
+  fields and the error status an `ERROR` line gives them, without a
+  description; an error's text never becomes the span's status
+  description or its `exception.message` (tracing-opentelemetry's
+  `error_events_to_status` and `error_records_to_exceptions` are off). Every JSON line of Kage and of a sidecar written
   inside a span carries `trace_id` and `span_id`, also when nothing is
   sent.
 - Dashboards (optional profile): overview, per-domain block rate, persona

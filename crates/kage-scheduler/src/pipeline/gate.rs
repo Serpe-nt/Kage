@@ -487,9 +487,10 @@ impl Pipeline {
         // it, a file or "there is none", stands for another `ttl`, instead
         // of the site's file being "unreachable" for `error_ttl`. With
         // nothing kept, or only "unreachable", a 304 tells nothing and is
-        // no answer, as before.
-        let revalidated = status == Some(304) && !report.outcome.is_block();
-        if revalidated
+        // no answer, as before, and nothing was revalidated.
+        let mut revalidated = false;
+        if status == Some(304)
+            && !report.outcome.is_block()
             && let Some(kept) = self
                 .backend()
                 .robots(&call.origin)
@@ -498,6 +499,7 @@ impl Pipeline {
         {
             answer = kept.body.map_or(Answer::Missing, Answer::File);
             status = kept.status;
+            revalidated = true;
         }
         let now = self.now();
         let entry = robots::entry_of(&call.origin, &call.site, &answer, status, now, &self.robots);
