@@ -1092,4 +1092,39 @@ describe('joinedHeaders (F190)', () => {
     ]);
     expect(joinedHeaders([])).toEqual([]);
   });
+
+  it('gives each line Firefox joined with a line feed as a line of its own (browser-01)', () => {
+    // Two `WWW-Authenticate` lines of a 401 and of a page, as the driver
+    // hands them over: Firefox joined them with a line feed, and the
+    // driver split the value at its commas.
+    expect(
+      joinedHeaders([
+        { name: 'Content-Type', value: 'text/html' },
+        { name: 'WWW-Authenticate', value: 'Negotiate\nNTLM' },
+      ]),
+    ).toEqual([
+      { name: 'Content-Type', value: 'text/html' },
+      { name: 'WWW-Authenticate', value: 'Negotiate' },
+      { name: 'WWW-Authenticate', value: 'NTLM' },
+    ]);
+    expect(
+      joinedHeaders([
+        { name: 'www-authenticate', value: 'Basic realm="a' },
+        { name: 'www-authenticate', value: 'b"\nBearer realm="x"' },
+        { name: 'www-authenticate', value: 'error="invalid_token"' },
+        { name: 'Proxy-Authenticate', value: 'Basic realm="p"\nDigest realm="q"' },
+      ]),
+    ).toEqual([
+      { name: 'www-authenticate', value: 'Basic realm="a, b"' },
+      { name: 'www-authenticate', value: 'Bearer realm="x", error="invalid_token"' },
+      { name: 'Proxy-Authenticate', value: 'Basic realm="p"' },
+      { name: 'Proxy-Authenticate', value: 'Digest realm="q"' },
+    ]);
+    // No value of the result holds a line feed.
+    expect(
+      joinedHeaders([{ name: 'X-Odd', value: 'a\n\nb' }]).every(
+        (line) => !line.value.includes('\n'),
+      ),
+    ).toBe(true);
+  });
 });

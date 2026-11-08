@@ -41,6 +41,8 @@ import {
 } from '@kage/engine-core';
 import type { BrowserContext, Page, Response } from 'playwright-core';
 
+import { keptBody as readKeptBody } from './cache-entry.js';
+
 const PROXY_ERRORS = /NS_ERROR_(PROXY_[A-Z_]+|UNKNOWN_PROXY_HOST)/;
 
 const CONSOLE_LEVELS: Readonly<Record<string, ConsoleLevel>> = {
@@ -95,11 +97,16 @@ export function classifyNavigationError(error: unknown): NavigationError {
  * splits every value at its commas and trims each piece, so a date
  * (`Tue, 03 Nov 2026 ...`) and a list come as several headers of one name;
  * Firefox itself holds one value per name, with repeated lines joined by
- * `, `, and `Set-Cookie` lines joined by a line feed, which the driver
- * splits there and keeps as lines. Consecutive pieces of one name are made
- * one value again, joined as Firefox joins them: as sent wherever a comma
- * was followed by one space, as in a date and most lists; `a,b` comes
- * back as `a, b`, which the driver no longer tells apart.
+ * `, `, and the lines of the names whose values hold commas of their own
+ * (`Set-Cookie`, `WWW-Authenticate`, `Proxy-Authenticate`) joined by a line
+ * feed; the driver splits `Set-Cookie`'s there and keeps them as lines.
+ * Consecutive pieces of one name are made one value again, joined as
+ * Firefox joins them: as sent wherever a comma was followed by one space,
+ * as in a date and most lists; `a,b` comes back as `a, b`, which the driver
+ * no longer tells apart. A value Firefox joined with a line feed is the
+ * field lines it joined, one each: no field value holds a line feed
+ * (RFC 9110 §5.5), and Chrome and the http path give them so (QA round
+ * three, browser-01).
  */
 export function joinedHeaders(
   split: readonly { name: string; value: string }[],
@@ -114,7 +121,9 @@ export function joinedHeaders(
       lines.push({ name, value });
     }
   }
-  return lines;
+  return lines.flatMap(({ name, value }) =>
+    value.split('\n').map((line) => ({ name, value: line.trim() })),
+  );
 }
 
 /**
@@ -151,6 +160,12 @@ export interface FirefoxContextParts {
   readonly keptHeads: KeptHeads;
   /** The file in the persona's profile that holds them. */
   readonly keptHeadsPath: string;
+  /**
+   * The entries of the browser's own HTTP cache in the persona's profile
+   * (`cache2/entries`), where the bodies of the pages it keeps are: read,
+   * never written (browser-05).
+   */
+  readonly cacheEntries: string;
   readonly browserVersion: string;
   readonly applied: AppliedIdentity;
   /** The persona's seed: its motor profile derives from it. */
@@ -362,6 +377,26 @@ export class FirefoxContext implements EngineContext, SessionDriver {
     const kept =
       status === 304 ? this.parts.keptHeads.shown(response.url(), headers, Date.now()) : null;
     return kept ?? { status, headers };
+  }
+
+  /**
+   * The body of the page Firefox kept, where it revalidated it and shows it
+   * (QA round three, browser-05): the driver refuses a body for the wire's
+   * `304`, so the engine reads the page's entry of the browser's own cache
+   * in the persona's profile, as Firefox serves it to the tab, never
+   * through the page. Only where the engine keeps the page's head, whose
+   * `Content-Encoding` it undoes; `null` where the entry is not the whole
+   * page.
+   */
+  async keptBody(response: DriverResponse): Promise<Buffer | null> {
+    if (response.status() !== 304) {
+      return null;
+    }
+    const kept = this.parts.keptHeads.shown(response.url(), [], Date.now());
+    if (kept === null) {
+      return null;
+    }
+    return readKeptBody(this.parts.cacheEntries, response.url(), kept.headers);
   }
 
   async protocolOf(response: DriverResponse): Promise<string | null> {

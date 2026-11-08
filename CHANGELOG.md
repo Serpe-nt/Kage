@@ -41,6 +41,55 @@ version's date is the day, in UTC, its tag was made.
   body of no type is HTML only when it begins as HTML does, as a
   browser's MIME sniffing takes it; a JSON, XML or plain-text body gives no
   links, typed or not.
+- **A site's empty `4xx` over `https` in a browser (QA round three,
+  browser-02).** An empty `404`, `451` or other `4xx` (not `403`, `429`)
+  that a browser replaced with its own page inside a tunnel is the site's
+  `ok` with its status, as at level 0 and with a body: not retried on
+  another persona, nothing booked, no count toward the server-error pause;
+  a flow's `goto` that stopped there fails its step `flow_step_failed`, not
+  retried. It was `provider_error` `navigation_failed` (`connection_failed`
+  in a flow), retried, in both engines. Over plain `http` it stays a failed
+  navigation (F189).
+- **Firefox's head of a page (QA round three, browser-01, browser-03).**
+  Lines Firefox joins with a line feed (two `WWW-Authenticate` challenges,
+  as an IIS site sends `Negotiate` and `NTLM`; `Proxy-Authenticate`) come
+  back one line each, as in Chrome and at level 0; the value held a raw
+  line feed, in the result and in the persona's `kept-heads.json`, which is
+  read as the lines from now on. A revalidated page keeps its own
+  `Content-Type`, `Content-Encoding`, `Content-Length`, `Content-Range`,
+  `Content-Location`, `Content-MD5` and `ETag` where the site's `304` names
+  others, as both browsers do: a `304` that named `text/plain` made the
+  result of an HTML page `text/plain` (and its `extract` null) on Firefox
+  from then on.
+- **The body of a page Firefox revalidated (QA round three, browser-05).**
+  `include: ["raw"]` gives the kept page's body, and keeps its artifact,
+  on Firefox as on Chrome: Firefox's driver refuses a body for the wire's
+  `304`, so the engine reads the page's entry of the browser's own cache
+  in the persona's profile (read only, never through the page), its
+  content coding undone. Since 2.0.4 such a result said `200` with
+  `raw_body` null.
+- **Chrome's header order (QA round three, browser-04).** A Chrome page's
+  `headers` are in the order the site sent them, read from the head as
+  Chrome's debugger quotes it from the wire; they came sorted by name.
+  Over HTTP/2 and HTTP/3, where the debugger has no such text, they stay
+  sorted.
+- **A `304` the browser kept no page for (QA round three, class-02).** A
+  site's `304` to a typed address the persona's browser has no page of is
+  `ok` with its `304` in both engines, as at level 0: Chrome's engine
+  reports the wire's `304` and its fields, which Chrome's debugger heard,
+  where Chrome broke the load off. It was `provider_error`, `aborted`,
+  with no status, on Chrome.
+- **A file the browser saved carries no body (QA round three,
+  crawl-04).** A typed address answered with a file (`ok`, reason
+  `download`) has no `raw_body` and keeps no `raw_body` artifact in either
+  engine, whatever `include` asks: Camoufox's result carried the file's
+  bytes, Chrome's nothing. A scout still reads a gzipped sitemap from what
+  Camoufox hands over.
+- **A hidden link with `^` or `|` in its address (QA round three,
+  extract-06).** At levels 2 and 3 a link a style sheet hides is left out
+  of `extract.links` however the browser spells its address: Firefox and
+  Chrome percent-encode `^` in a path, Chrome `|`, and such a link was
+  kept.
 - **The guard's edges (F181).** Under `egress.mode: direct` with
   `security.resolve_on_host`, a name of `egress.direct.private_names` is
   fetched: the guard's host lookup lets it resolve to a private, loopback,

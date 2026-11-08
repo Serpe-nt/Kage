@@ -702,6 +702,13 @@ document.getElementById('f').addEventListener('submit', (event) => {
       ),
     );
   },
+  // A `304` to a request that asked for no revalidation, as a server that
+  // misbehaves answers one: the browser kept no page for it (QA round
+  // three, class-02).
+  '/status/not-modified': (_req, res) => {
+    res.writeHead(304, { etag: '"x"' });
+    res.end();
+  },
   // An empty error answer, as a proxy refuses a plain `http://` target:
   // both browsers show their own page in its place (F189).
   '/status/empty-403': (_req, res) => {
@@ -725,6 +732,31 @@ document.getElementById('f').addEventListener('submit', (event) => {
       'x-fixture': 'kept',
     });
   },
+  // The same page, whose `304` names another type, as some stacks give a
+  // bodiless answer a default one: the tab shows the kept HTML page
+  // (QA round three, browser-03).
+  '/cached/retyped': (req, res) => {
+    if (req.headers['if-none-match'] === '"t1"') {
+      res.writeHead(304, { etag: '"t1"', 'content-type': 'text/plain', 'x-fixture': 'fresh' });
+      res.end();
+      return;
+    }
+    html(res, page('Kept', '<h1 id="kept">Kept</h1>'), {
+      etag: '"t1"',
+      'cache-control': 'no-cache',
+      'x-fixture': 'kept',
+    });
+  },
+  // Fields in an order no sorting gives, and a name sent on two lines whose
+  // values hold commas of their own (QA round three, browser-01, browser-04).
+  '/headers/order': (_req, res) =>
+    html(res, page('Order', '<h1>Order</h1>'), {
+      'x-qa-zulu': '1',
+      'x-qa-alpha': '2',
+      'x-qa-mike': '3',
+      'www-authenticate': ['Basic realm="a, b"', 'Bearer realm="x", error="invalid_token"'],
+      'x-qa-bravo': '4',
+    }),
   // Header values that hold commas, as a date and a list do (F190).
   '/headers/commas': (_req, res) =>
     html(res, page('Commas', '<h1>Commas</h1>'), {

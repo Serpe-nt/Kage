@@ -1670,6 +1670,58 @@ async fn a_page_that_stopped_answering_is_its_failure_and_no_empty_page() {
     lab.shut_down().await;
 }
 
+/// QA round three's browser-02: an `https` page whose answer was an empty
+/// `404` (or `451`), which the browser replaced with its own error page.
+/// Inside the tunnel only the site answers: the missing page is the site's
+/// `ok` with its status, as at level 0 and as the same `404` with a body,
+/// asked of no other persona.
+#[tokio::test]
+async fn the_sites_empty_error_answer_over_https_is_ok_with_its_status() {
+    let mut lab = Lab::start(2, 1891, FAST).await;
+    let at = format!("https://{SITE}/gone");
+    for status in [404_u16, 451] {
+        let at = at.clone();
+        lab.chromium.with(move |sidecar| {
+            sidecar.next_pages.push_back(json!({
+                "final_url": at,
+                "status": status,
+                "title": null,
+                "dom_html": null,
+                "raw_body": null,
+                "headers": [],
+                "error": {
+                    "code": "navigation_failed",
+                    "message": format!("the browser could not load {at}: it answered with {status} and shows its own error page"),
+                    "net_error": null,
+                },
+            }));
+        });
+
+        // The default retries: the site's verdict is asked of nobody else.
+        let report = lab.pipeline.fetch(get("/gone")).await.unwrap();
+
+        assert_eq!(report.attempts.len(), 1, "{status}: {report:?}");
+        let first = &report.attempts[0];
+        assert_eq!(first.outcome, Outcome::Ok, "{status}");
+        assert_eq!(first.reason, None, "{status}");
+        assert_eq!(first.status, Some(status));
+        assert_eq!(first.block, None);
+        assert_eq!(report.outcome, Outcome::Ok);
+        assert_eq!(report.reason, None);
+        assert_eq!(
+            report.last.as_ref().and_then(|last| last.status),
+            Some(status)
+        );
+        let facts = lab.backend.facts(SITE).await.unwrap();
+        assert_eq!(
+            facts.states[&first.persona_id.unwrap()].cooldown_until,
+            None
+        );
+        assert_eq!(facts.breaker, None);
+    }
+    lab.shut_down().await;
+}
+
 /// QA round two's left-02 (F189): a plain `http://` page whose answer was
 /// an empty `403`, which Firefox replaced with its own error page. Kage
 /// cannot tell the proxy's refusal from the site's, so it is nobody's

@@ -436,6 +436,12 @@ impl Archive for StoreArchive {
             return Archived::default();
         }
         if let Some(page) = &output.page {
+            // A file the browser saved is no body of a result, in either
+            // engine (QA round three, crawl-04).
+            let keep = Keep {
+                raw: keep.raw && !output.saved_file(),
+                ..keep
+            };
             return self.keep_page(request, keep, page, now).await;
         }
         if let Some(fetched) = &output.fetched {

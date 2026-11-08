@@ -46,6 +46,59 @@ describe('the heads of the pages a persona’s browser keeps (F178)', () => {
     });
   });
 
+  it('keeps the kept page’s type and validator where a 304 names others (browser-03)', () => {
+    const heads = new KeptHeads();
+    heads.note(page, 200, full, 0);
+    const odd = [
+      { name: 'Content-Type', value: 'text/plain' },
+      { name: 'ETag', value: '"v2"' },
+      { name: 'Content-Encoding', value: 'gzip' },
+      { name: 'Content-Location', value: '/elsewhere' },
+      { name: 'Content-Range', value: 'bytes 0-0/1' },
+      { name: 'Content-MD5', value: 'x' },
+      { name: 'Trailer', value: 'Expires' },
+      { name: 'Proxy-Authenticate', value: 'Basic' },
+      { name: 'Cache-Control', value: 'max-age=60' },
+    ];
+    const shown = heads.shown(page, odd, 1);
+    expect(shown?.headers).toEqual([
+      { name: 'Content-Type', value: 'text/html; charset=utf-8' },
+      { name: 'ETag', value: '"v1"' },
+      { name: 'Cache-Control', value: 'max-age=60' },
+      { name: 'Content-Length', value: '120' },
+      { name: 'Date', value: 'Tue, 03 Nov 2026 20:00:00 GMT' },
+    ]);
+    // And the next time: the kept head brought up to date keeps them too.
+    heads.note(page, 304, odd, 1);
+    expect(
+      heads.shown(page, [], 2)?.headers.find((line) => line.name === 'Content-Type')?.value,
+    ).toBe('text/html; charset=utf-8');
+  });
+
+  it('reads a value a file of an older sidecar joined with a line feed as its lines (browser-01)', () => {
+    const heads = KeptHeads.parse(
+      JSON.stringify({
+        version: 1,
+        heads: [
+          {
+            url: page,
+            status: 401,
+            at: 0,
+            headers: [
+              { name: 'ETag', value: '"a"' },
+              { name: 'WWW-Authenticate', value: 'Negotiate\nNTLM' },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(heads.shown(page, [], 0)?.headers).toEqual([
+      { name: 'ETag', value: '"a"' },
+      { name: 'WWW-Authenticate', value: 'Negotiate' },
+      { name: 'WWW-Authenticate', value: 'NTLM' },
+    ]);
+  });
+
   it('keeps no state the page set and nothing of one connection', () => {
     const heads = new KeptHeads();
     heads.note(page, 200, full, 0);

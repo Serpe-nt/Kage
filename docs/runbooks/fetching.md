@@ -88,10 +88,12 @@ The outcome is `provider_error` and the reason says why:
 A result that is `ok` can carry one reason: `download`, a page the
 browser answered by saving a file (a link to a file, or a typed address
 answered with `Content-Disposition: attachment`). The site answered;
-there is no page and nothing to extract, nobody else asks for it, and a
-crawl's reader stays on the page the link stands on. A `204` is `ok`
-with its status at every level, and so is the answer to a `HEAD`: nothing
-is judged of a document there is none of, and neither is ever a block.
+there is no page and nothing to extract, no body either (`raw_body` is
+null in both engines, whatever `include` asks), nobody else asks for it,
+and a crawl's reader stays on the page the link stands on. A `204` is
+`ok` with its status at every level, and so is a `304` the browser kept
+no page for, and the answer to a `HEAD`: nothing is judged of a document
+there is none of, and none is ever a block.
 `aborted` is a page the browser broke off for another reason (a page that
 closed, an entry that found no link).
 
@@ -121,7 +123,10 @@ but a target the exit could not reach. See [proxies.md](proxies.md#a-provider-th
 A plain `http://` page refused the same way comes back as an empty error
 answer, which the forwarder cannot tell from the site's own: a browser
 shows its own page for it and the attempt is `navigation_failed` (with
-the `status` Firefox saw, `null` on Chrome), nobody's block.
+the `status` the browser saw), nobody's block. Over `https` such an empty
+answer can only be the site's: a `403` or `429` is its block, and any
+other `4xx` is `ok` with its status, asked of nobody else (QA round three,
+browser-02).
 
 What ends a page inside a tunnel the proxy opened is the site's (F170):
 a certificate the client refuses, a handshake the site breaks off, and a
