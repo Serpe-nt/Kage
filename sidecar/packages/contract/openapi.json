@@ -2520,6 +2520,12 @@
           "behavior": {
             "description": "How the human steps are performed.",
             "$ref": "#/components/schemas/FlowBehavior"
+          },
+          "max_body_bytes": {
+            "description": "Largest raw body and DOM kept of every page the flow captures, its steps' and its final one; default 10000000. A longer one is cut and flagged.",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100000000
           }
         },
         "required": [

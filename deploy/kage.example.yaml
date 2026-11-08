@@ -237,8 +237,9 @@ http:
   # Redirect hops followed before the attempt fails. Every hop passes the
   # SSRF guard again.
   max_redirects: 10
-  # A body is read up to this many bytes; the rest is dropped and the
-  # result says so.
+  # A body is read up to this many bytes, at every level (a browser's
+  # page and a flow's too, up to 100 MB); the rest is dropped and the
+  # result says so. A request may ask for less, never for more.
   max_body_bytes: 10000000
   # Session cookies are forgotten when a cookie jar was not used for this
   # long: the user closed the browser.

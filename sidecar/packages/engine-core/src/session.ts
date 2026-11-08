@@ -2784,7 +2784,7 @@ export class PageSession {
       return this.capture(
         page.url(),
         options,
-        DEFAULT_MAX_BODY_BYTES,
+        request.max_body_bytes ?? DEFAULT_MAX_BODY_BYTES,
         env,
         { prefix, stamp: `${started.toString(36)}-${captures}` },
         {

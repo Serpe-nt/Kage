@@ -120,6 +120,43 @@ async fn a_page_is_fetched_by_one_persona_and_everything_about_it_is_stored() {
     world.shut_down().await;
 }
 
+/// The operator's `http.max_body_bytes` bounds a browser page as it bounds
+/// one of the http path (QA round three, extract-07): the sidecar is sent
+/// the request's limit, else the operator's, and never more than the
+/// operator's.
+#[tokio::test(start_paused = true)]
+async fn a_browser_attempt_keeps_to_the_operators_body_limit() {
+    let mut world = World::with(
+        2,
+        true,
+        DEFAULT_DOMAINS,
+        &[("KAGE__HTTP__MAX_BODY_BYTES", "2000")],
+    );
+    for (asked, sent) in [(None, 2000), (Some(5000), 2000), (Some(1000), 1000)] {
+        let order = FetchOrder {
+            max_body_bytes: asked,
+            ..browser("https://shop.example/a")
+        };
+        let report = world.pipeline.fetch(order).await.unwrap();
+        assert_eq!(report.outcome, Outcome::Ok);
+        let seen = world.script.seen();
+        let job = &seen.last().unwrap().job;
+        assert_eq!(job.render, Render::Browser);
+        assert_eq!(job.max_body_bytes, Some(sent), "asked {asked:?}");
+    }
+    world.shut_down().await;
+
+    // Left alone, the operator's default.
+    let mut world = World::new(2, DEFAULT_DOMAINS);
+    world
+        .pipeline
+        .fetch(browser("https://shop.example/a"))
+        .await
+        .unwrap();
+    assert_eq!(world.script.seen()[0].job.max_body_bytes, Some(10_000_000));
+    world.shut_down().await;
+}
+
 #[tokio::test(start_paused = true)]
 async fn three_blocked_attempts_are_made_by_three_personas() {
     let mut world = World::new(6, DEFAULT_DOMAINS);

@@ -606,6 +606,10 @@ const fn waits(refused: &crate::scheduler::Refused) -> bool {
     }
 }
 
+/// The largest body the sidecar's contract lets a browser attempt keep
+/// (`max_body_bytes` of a navigation or a flow).
+const SIDECAR_MAX_BODY_BYTES: u64 = 100_000_000;
+
 /// What the pipeline works with besides the scheduler.
 #[derive(Debug, Clone, Copy)]
 pub struct PipelineSettings {
@@ -623,6 +627,9 @@ pub struct PipelineSettings {
     pub expose_set_cookie: bool,
     /// Where level 0 leaves from (`egress.plain`).
     pub plain_exit: Exit,
+    /// The largest body kept (`http.max_body_bytes`), at every level: a
+    /// request may ask for less, never for more.
+    pub max_body_bytes: u64,
 }
 
 impl PipelineSettings {
@@ -636,6 +643,7 @@ impl PipelineSettings {
             security: config.security.ssrf(),
             expose_set_cookie: config.security.expose_set_cookie,
             plain_exit: config.egress.plain_exit(),
+            max_body_bytes: config.http.max_body_bytes,
         }
     }
 }
@@ -1783,6 +1791,17 @@ impl Pipeline {
         }
     }
 
+    /// The largest body a browser attempt keeps: the request's limit, else
+    /// the operator's `http.max_body_bytes`, and never more than the
+    /// operator's, as at levels 0 and 1 (QA round three, extract-07); at
+    /// most what the sidecar's contract takes.
+    fn body_limit(&self, asked: Option<u64>) -> u64 {
+        let operator = self.settings.max_body_bytes;
+        asked
+            .map_or(operator, |asked| asked.min(operator))
+            .min(SIDECAR_MAX_BODY_BYTES)
+    }
+
     /// Records on the course the scout of each site it reaches that had
     /// none when the request began: its gate may have chosen one since.
     /// What the desk holds of a site's scout is forgotten after a while
@@ -2313,7 +2332,7 @@ impl Pipeline {
             keeps_visiting: !dispatch.ends_visit,
             capture: course.order.capture.clone(),
             wait: course.order.wait.clone(),
-            max_body_bytes: course.order.max_body_bytes,
+            max_body_bytes: Some(self.body_limit(course.order.max_body_bytes)),
             flow: course.order.flow.clone(),
             arrival: course.order.arrival.clone(),
             tab: course.order.tab.clone(),
