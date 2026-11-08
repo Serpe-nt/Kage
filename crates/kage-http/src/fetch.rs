@@ -377,7 +377,7 @@ impl Trail {
                 hop,
                 from_host = ?from.host_str(),
                 to_host = ?to.host_str(),
-                "a redirect of the http path left https for http"
+                "a redirect of the http path downgraded https to http; it was followed, as a browser follows it"
             );
         }
     }

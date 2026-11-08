@@ -120,7 +120,9 @@ pub(crate) async fn bodies(
             Ok(Some((_, bytes))) if kind == ArtifactKind::DomHtml => String::from_utf8(bytes).ok(),
             // The page's address is the detector's hint for an undeclared
             // body, as on the fresh answer (F160).
-            Ok(Some((_, bytes))) => kage_http::charset::text_of_from(
+            // A body cut at `max_body_bytes` ends at its last whole
+            // character (QA round three's extract-08).
+            Ok(Some((_, bytes))) => kage_http::charset::text_of_cut_from(
                 record
                     .final_url
                     .as_deref()
@@ -128,6 +130,7 @@ pub(crate) async fn bodies(
                     .as_ref(),
                 content_type_of(record),
                 &bytes,
+                record.truncated,
             ),
             // Expired, or its blob is gone: the result is still a result.
             Ok(None) | Err(ArtifactError::Missing { .. }) => None,

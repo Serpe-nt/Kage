@@ -957,10 +957,13 @@ pub(crate) fn from_report(
         .unwrap_or_default();
     if let Some(fetched) = fetched.filter(|_| readable) {
         // Read in the encoding a browser would take for it (F100).
-        bodies.raw_body = kage_http::charset::text_of_from(
+        // A body cut at `max_body_bytes` ends at its last whole character
+        // (QA round three's extract-08).
+        bodies.raw_body = kage_http::charset::text_of_cut_from(
             Some(&fetched.final_url),
             fetched.header("content-type"),
             &fetched.body,
+            fetched.truncated,
         );
     }
     let wants_raw = include.has(Include::Raw) || (include.has(Include::Dom) && fetched.is_some());
