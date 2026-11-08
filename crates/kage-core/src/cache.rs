@@ -31,8 +31,11 @@ use crate::urlnorm::{NormalizeOptions, normalize};
 
 /// The version of the key: raised when what goes into it changes, so that
 /// an entry written under an older meaning is never served. 2 since the
-/// level replaced the render mode (2.0).
-const VERSION: u32 = 2;
+/// level replaced the render mode (2.0); 3 since a body cut at
+/// `max_body_bytes` is no longer kept (F122): an entry an older version
+/// made may hold half a page, and nothing in it says so (QA round three's
+/// ops-02).
+const VERSION: u32 = 3;
 
 /// Everything that makes two requests one to the cache.
 #[derive(Debug, Clone)]
@@ -246,6 +249,19 @@ mod tests {
         // The same request, the same key.
         assert_eq!(request.key(), key);
     }
+
+    /// The key of a request is the same from one build to the next, and
+    /// changes only with the version (QA round three's ops-02: an upgrade
+    /// that changes what an entry holds raises it).
+    #[test]
+    fn the_key_of_a_request_is_pinned_by_its_version() {
+        let mut request = Request::plain();
+        request.scope = None;
+        assert_eq!(request.key(), PINNED_KEY);
+    }
+
+    /// [`Request::plain`] without a scope, under version 3.
+    const PINNED_KEY: &str = "34e7d90fbe0cb1dfb9c527b0e9e2e978d9cbf4932ee91760ab30ee12bfaa2247";
 
     #[test]
     fn what_a_crawl_calls_one_address_is_one_key() {
