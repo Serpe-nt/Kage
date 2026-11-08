@@ -942,6 +942,22 @@ same trail with the actor `cli`. A command whose event cannot be written
 (the store refuses it) shows what it did and ends non-zero saying so: a
 script that reads the exit code learns that the trail misses it.
 
+The trail is never swept: no retention applies to `audit_events`, and
+since the limiter's refusals are written too, a key that keeps calling an
+admin route past its `requests_per_minute` adds a row (a few hundred
+bytes) for every refusal. A busy deployment, or one where a key was
+abused, prunes it by hand in Postgres, keeping as much as its own rules
+ask for (the index on `at` makes this cheap). Export what is deleted
+first if it must be kept elsewhere:
+
+```sql
+\copy (SELECT * FROM audit_events WHERE at < now() - interval '400 days') TO 'audit.csv' CSV HEADER
+DELETE FROM audit_events WHERE at < now() - interval '400 days';
+```
+
+A sweep of the trail by Kage itself, with a configured retention, is a
+candidate for the plan, not a feature yet.
+
 | Endpoint | What |
 |---|---|
 | `GET /v1/admin/personas[?state=…&all=true]` | The personas; live ones unless asked. |

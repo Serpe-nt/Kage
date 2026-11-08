@@ -646,7 +646,7 @@ pub(crate) fn parse_job(body: &Value) -> ApiResult<JobRequest> {
     match kind {
         "batch" => typed_value(rest).map(JobRequest::Batch),
         "flow" => {
-            match steps_are_objects(&rest).and_then(|()| typed_value::<FlowJob>(rest.clone())) {
+            match steps_read_alone(&rest).and_then(|()| typed_value::<FlowJob>(rest.clone())) {
                 Ok(flow) => Ok(JobRequest::Flow(Box::new(flow))),
                 Err(error) => Err(step_refused(error, &rest)),
             }
@@ -659,82 +659,70 @@ pub(crate) fn parse_job(body: &Value) -> ApiResult<JobRequest> {
     }
 }
 
-/// Every step of a flow is an object. A step is an internally tagged enum,
-/// which serde reads from an array as well (the action first, then the
-/// members by their order): the reader of [`typed_value`] cannot see into
-/// its buffer, so the shape is checked here (QA round three api-01).
-fn steps_are_objects(flow: &Value) -> ApiResult<()> {
+/// Every step of a flow is an object, and is read alone as the struct its
+/// action names before the flow is read. A step is an internally tagged
+/// enum, which serde reads into a buffer first: from an array as well (the
+/// action first, then the members by their order), and so are the objects
+/// inside it (a screenshot's `options`, an extract's `xhr` and `extract`).
+/// The reader of [`typed_value`] cannot see into that buffer; read alone,
+/// each struct of the step is an object or a refusal naming its member
+/// (QA round three api-01).
+fn steps_read_alone(flow: &Value) -> ApiResult<()> {
     let Some(steps) = flow.get("actions").and_then(Value::as_array) else {
         return Ok(());
     };
-    match steps.iter().position(|step| !step.is_object()) {
-        None => Ok(()),
-        Some(index) => {
+    for (index, step) in steps.iter().enumerate() {
+        let Value::Object(members) = step else {
             let field = format!("actions[{index}]");
-            Err(at_step(
+            return Err(at_step(
                 ApiError::field(
                     &field,
                     format!("{field}: a step is an object with an action"),
                 ),
                 index,
-            ))
-        }
+            ));
+        };
+        read_step(index, members)?;
     }
+    Ok(())
 }
 
-/// The step a path into a flow is about: `actions[2]...` is step 2.
-fn step_of(field: &str) -> Option<usize> {
-    let rest = field.strip_prefix("actions[")?;
-    let (index, _) = rest.split_once(']')?;
-    index.parse().ok()
-}
-
-/// A refusal of a flow that is about one of its steps names the step, and
-/// the member of the step where one is to blame. A step is an internally
-/// tagged enum whose members are read into a buffer first, so the path of
-/// the refusal ends at the step; the step is read again here as the struct
-/// its action names, which reaches the member.
-fn step_refused(error: ApiError, flow: &Value) -> ApiError {
-    let field = error
+/// A refusal of a step's member, named from the flow: `actions[2].options`,
+/// with `step`.
+fn named_in_step(index: usize, error: &ApiError) -> ApiError {
+    let member = error
         .problem()
         .extensions
         .get("field")
         .and_then(Value::as_str)
-        .map(str::to_owned);
-    let Some(index) = field.as_deref().and_then(step_of) else {
-        return error;
-    };
-    let step = &flow["actions"][index];
-    let named = |error: ApiError| {
-        let member = error
-            .problem()
-            .extensions
-            .get("field")
-            .and_then(Value::as_str)
-            .map_or_else(
-                || format!("actions[{index}]"),
-                |member| format!("actions[{index}].{member}"),
-            );
-        let detail = error.detail().to_owned();
-        let detail = detail
-            .split_once(": ")
-            .filter(|(path, _)| !path.contains(' '))
-            .map_or(detail.as_str(), |(_, said)| said)
-            .to_owned();
-        at_step(
-            ApiError::field(&member, format!("{member}: {detail}")),
-            index,
-        )
-    };
-    let Value::Object(members) = step else {
-        return at_step(error, index);
-    };
+        .map_or_else(
+            || format!("actions[{index}]"),
+            |member| format!("actions[{index}].{member}"),
+        );
+    let detail = error.detail().to_owned();
+    let detail = detail
+        .split_once(": ")
+        .filter(|(path, _)| !path.contains(' '))
+        .map_or(detail.as_str(), |(_, said)| said)
+        .to_owned();
+    at_step(
+        ApiError::field(&member, format!("{member}: {detail}")),
+        index,
+    )
+}
+
+/// Reads one step as the struct its action names.
+///
+/// # Errors
+///
+/// `validation_failed` naming the step's member, as [`named_in_step`] does.
+fn read_step(index: usize, members: &Map<String, Value>) -> ApiResult<()> {
     let action = match members.get("action") {
         Some(Value::String(action)) => action.clone(),
         _ => {
-            return named(ApiError::field(
-                "action",
-                "action: missing, or not the name of an action",
+            return Err(named_in_step(
+                index,
+                &ApiError::field("action", "action: missing, or not the name of an action"),
             ));
         }
     };
@@ -759,8 +747,36 @@ fn step_refused(error: ApiError, flow: &Value) -> ApiError {
             format!("action: unknown action {unknown:?}"),
         )),
     };
-    match read {
-        Err(refusal) => named(refusal),
+    read.map_err(|refusal| named_in_step(index, &refusal))
+}
+
+/// The step a path into a flow is about: `actions[2]...` is step 2.
+fn step_of(field: &str) -> Option<usize> {
+    let rest = field.strip_prefix("actions[")?;
+    let (index, _) = rest.split_once(']')?;
+    index.parse().ok()
+}
+
+/// A refusal of a flow that is about one of its steps names the step, and
+/// the member of the step where one is to blame. A step is an internally
+/// tagged enum whose members are read into a buffer first, so the path of
+/// the refusal ends at the step; the step is read again here as the struct
+/// its action names, which reaches the member.
+fn step_refused(error: ApiError, flow: &Value) -> ApiError {
+    let field = error
+        .problem()
+        .extensions
+        .get("field")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let Some(index) = field.as_deref().and_then(step_of) else {
+        return error;
+    };
+    let Value::Object(members) = &flow["actions"][index] else {
+        return at_step(error, index);
+    };
+    match read_step(index, members) {
+        Err(refusal) => refusal,
         // The step reads alone: what is wrong is in the step as a whole.
         Ok(()) => at_step(error, index),
     }
