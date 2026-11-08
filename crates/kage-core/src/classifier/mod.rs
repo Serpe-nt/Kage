@@ -32,8 +32,8 @@
 //!
 //! Conditions are `all`, `any`, `not`, and the leaves `status`, `header`,
 //! `cookie`, `body`, `url`, `script_host`, `iframe_host`,
-//! `interstitial_text`, `visible_text`, `body_bytes`, `render` and
-//! `interstitial`. Patterns are regular expressions matched anywhere in the
+//! `interstitial_text`, `visible_text`, `body_bytes`, `shown_frames`,
+//! `render` and `interstitial`. Patterns are regular expressions matched anywhere in the
 //! value; they are case-sensitive unless they start with `(?i)`.
 //!
 //! `retryable` and `cooldown` tell the scheduler what a match means. Each
@@ -61,7 +61,7 @@ use serde::{Deserialize, Serialize};
 use crate::domain::{Header, Render};
 use crate::outcome::{Block, BlockType, CooldownClass, Outcome, Vendor};
 use crate::policy::Retired;
-use text::visible_text;
+use text::{shown_frames, visible_text};
 
 /// The only signature file version this build reads.
 pub const SIGNATURE_FILE_VERSION: u32 = 1;
@@ -314,6 +314,7 @@ enum ConditionSpec {
     InterstitialText(String),
     VisibleText(CharBounds),
     BodyBytes(ByteBounds),
+    ShownFrames(ByteBounds),
     Render(Render),
     Interstitial(InterstitialState),
 }
@@ -421,6 +422,8 @@ enum Condition {
     InterstitialText(Pattern),
     VisibleText(CharBounds),
     BodyBytes(ByteBounds),
+    /// The frames the markup shows a reader (`text::shown_frames`).
+    ShownFrames(ByteBounds),
     Render(Render),
     Interstitial(InterstitialState),
 }
@@ -487,6 +490,10 @@ impl Condition {
             ConditionSpec::BodyBytes(bounds) => {
                 check_bounds("body_bytes", bounds.min, bounds.max)?;
                 Self::BodyBytes(bounds)
+            }
+            ConditionSpec::ShownFrames(bounds) => {
+                check_bounds("shown_frames", bounds.min, bounds.max)?;
+                Self::ShownFrames(bounds)
             }
             ConditionSpec::Render(render) => Self::Render(render),
             ConditionSpec::Interstitial(state) => Self::Interstitial(state),
@@ -598,6 +605,14 @@ impl Condition {
                     || format!("body_bytes:{bytes}"),
                 )
             }
+            Self::ShownFrames(bounds) => {
+                let frames = shown_frames(context.body);
+                record(
+                    context.observation.document && within(frames, bounds.min, bounds.max),
+                    evidence,
+                    || format!("shown_frames:{frames}"),
+                )
+            }
             Self::Render(render) => record(context.observation.render == *render, evidence, || {
                 format!("render:{render}")
             }),
@@ -669,7 +684,9 @@ fn bounded(condition: &ConditionSpec) -> bool {
             }
         }
         ConditionSpec::VisibleText(bounds) => bounds.max_chars.is_some(),
-        ConditionSpec::BodyBytes(bounds) => bounds.max.is_some(),
+        ConditionSpec::BodyBytes(bounds) | ConditionSpec::ShownFrames(bounds) => {
+            bounds.max.is_some()
+        }
         // A header the site's front sets bounds a rule; `content-type` is on
         // every page, and bounds nothing.
         ConditionSpec::Header(header) => {

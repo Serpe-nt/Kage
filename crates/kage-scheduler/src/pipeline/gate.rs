@@ -816,6 +816,34 @@ impl Pipeline {
         })
     }
 
+    /// Whether what the site's file says of `url` is known, or nothing has
+    /// to know it: true where the file is not enforced, or where a fresh
+    /// reading of the origin's file is kept. Nothing is asked of anybody.
+    /// A crawl reads an origin's file before it asks for a sitemap there
+    /// (crawl-03: [`Pipeline::robots_peek`] says go for an origin nothing
+    /// is known of, and a sitemap waits for no verdict).
+    ///
+    /// # Errors
+    ///
+    /// Fails when the backend fails.
+    pub async fn robots_settled(
+        &self,
+        url: &Url,
+        wish: RobotsWish,
+    ) -> Result<bool, SchedulerError> {
+        let Some(host) = url.host_str().map(str::to_ascii_lowercase) else {
+            return Ok(true);
+        };
+        let policy = self.verdicts.policies().current().domains.resolve(&host);
+        if robots::mode(policy.robots, wish) != Ok(RobotsMode::Enforce) {
+            return Ok(true);
+        }
+        let Some(origin) = robots::origin_of(url) else {
+            return Ok(true);
+        };
+        Ok(self.robots_fresh(&origin).await?.is_some())
+    }
+
     /// Reads the `robots.txt` of the origin of `url` for somebody who
     /// waits for it: from what is kept, else by the site's scout.
     ///

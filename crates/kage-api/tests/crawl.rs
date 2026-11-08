@@ -1411,3 +1411,102 @@ async fn a_link_answered_with_a_file_is_one_request_and_the_tab_stays() {
     work.stop().await;
     api.shut_down().await;
 }
+
+/// QA round three's crawl-02: a link the site answers with no content
+/// (204) ends its item `ok` with its status, by one request of the reader,
+/// reached by its click; the tab still shows the page the link stands on:
+/// the 204 is no entry of the reader's tab. (Its link is the last page,
+/// clicked after going back from the page before it, so that the tab at the
+/// end is the tab after the 204.)
+#[tokio::test]
+async fn a_link_answered_with_no_content_is_ok_with_its_status_and_the_tab_stays() {
+    let mut api = Api::start_with(3, 149, BROWSER_FAST, quick).await;
+    let site = vec![leaf("/", &["/before", "/nc204"]), leaf("/before", &[])];
+    show(&api, &site);
+    api.lab.chromium.with(|sidecar| {
+        // The sidecar's report of a click answered with no content (its
+        // parity tests pin it): aborted, the status, the click arrived.
+        sidecar.pages.insert(
+            Api::url("/nc204"),
+            json!({
+                "error": {
+                    "code": "aborted",
+                    "message": "the link was answered with no content (204): the tab stays on the page it showed",
+                    "net_error": null,
+                },
+                "status": 204, "title": null, "headers": [], "dom_html": "<html><body>the page before</body></html>",
+                "raw_body": null, "links": null,
+                "behavior": {
+                    "seed": "5f1c0e9a7b3d2468", "profile_id": "3451761c17e3a615",
+                    "entry": {
+                        "strategy": "link", "outcome": "arrived", "from_url": Api::url("/"),
+                        "referer": Api::url("/"), "backs": 1,
+                    },
+                    "dwell_ms": 0, "moves": 1, "positions": 10, "overshoots": 0, "clicks": 1,
+                    "notches": 0, "keys": 0, "typos": 0, "wanders": 0, "patience_ms": null,
+                    "scroll_reached": null, "scroll_ended_by": null,
+                },
+            }),
+        );
+    });
+    let token = api.key(&[Scope::Jobs, Scope::Crawl, Scope::Fetch]).await;
+    let body = json!({
+        "type": "crawl", "seeds": [Api::url("/")], "max_depth": 1, "defaults": { "level": 3 },
+    });
+    let reply = api.post(&token, "/v1/jobs", &body).await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.json());
+    let id = reply.json()["id"].as_str().unwrap().to_owned();
+    let work = api.work();
+    let done = api.job_until(&token, &id, ended).await;
+    assert_eq!(done["state"], "succeeded", "{done}");
+
+    let items = api.job_items(&token, &id).await;
+    assert_eq!(paths(&items), ["/", "/before", "/nc204"]);
+    let empty = items.iter().find(|item| path_of(item) == "/nc204").unwrap();
+    assert_eq!(
+        (&empty["state"], &empty["outcome"], &empty["error"]),
+        (&json!("succeeded"), &json!("ok"), &Value::Null),
+        "{empty}"
+    );
+    assert_eq!(empty["crawl"]["reached"], "back_click", "{empty}");
+    let result = api
+        .get(
+            &token,
+            &format!("/v1/results/{}", empty["request_id"].as_str().unwrap()),
+        )
+        .await
+        .json();
+    assert_eq!(result["outcome"], "ok", "{result}");
+    assert_eq!(result["status"], 204, "{result}");
+    assert_eq!(result["reason"], Value::Null, "{result}");
+    assert_eq!(result["attempts"].as_array().unwrap().len(), 1, "{result}");
+    let navigations = api.lab.chromium.with(|sidecar| sidecar.navigated.clone());
+    let to_empty = navigations
+        .iter()
+        .filter(|asked| asked["url"] == Api::url("/nc204"))
+        .count();
+    assert_eq!(to_empty, 1, "{navigations:?}");
+    let reader = personas_of(&api, items[0]["request_id"].as_str().unwrap()).await;
+    assert_eq!(
+        personas_of(&api, empty["request_id"].as_str().unwrap()).await,
+        reader
+    );
+    // The reader went back to the page the link stands on and clicked: the
+    // tab holds that page alone, not the 204 (positions: `/` 0, `/before`
+    // 1, `/nc204` 2).
+    let kept: Value = sqlx::query_scalar("SELECT crawl FROM jobs WHERE id = $1::uuid")
+        .bind(&id)
+        .fetch_one(api.lab.store().pool())
+        .await
+        .unwrap();
+    let tabs: Vec<&Value> = kept["slots"]
+        .as_object()
+        .unwrap()
+        .values()
+        .flat_map(|slots| slots.as_array().unwrap())
+        .map(|slot| &slot["tab"])
+        .collect();
+    assert_eq!(tabs, [&json!([0])], "{kept}");
+    work.stop().await;
+    api.shut_down().await;
+}

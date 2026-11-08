@@ -9,6 +9,34 @@ version's date is the day, in UTC, its tag was made.
 
 ### Fixed
 
+- **A crawl's link answered with no content (QA round three, crawl-02).**
+  At level 2 a clicked link the site answered `204` or `205` came back
+  `ok`, reason `download`, with no status, in Chromium and Camoufox, or,
+  in Chromium after going back to the page, waited for a load until the
+  request's budget and failed `timeout`, and the reader's tab was dropped.
+  The sidecar ends a click's wait at once on such an answer and reports
+  its status, the click arrived; the result is `ok` with its status, as a
+  typed address is, and the reader's tab stays on the page the link
+  stands on.
+- **A blank page that names a frame (QA round three, class-01).** The
+  `soft-blank-page` rule's exception for a page whose content is in frames
+  was a pattern on the markup, so a page that renders no text and names
+  an `<iframe>` in a comment, in a tag manager's `<noscript>` snippet or
+  as a hidden pixel was `ok`. It now counts the frames a reader is shown
+  (`shown_frames`, a new condition of the signature file): not one in a
+  comment, in `<noscript>`, hidden or of a width or height of 0 or 1.
+- **A sitemap on another host of the site under `enforce` (QA round
+  three, crawl-03).** A sitemap a `Sitemap:` line or an index named on
+  another host of the crawl's site was asked for before that host's
+  `robots.txt` was read, and although the file disallowed it. That host's
+  file is now read first, by the site's scout, and a sitemap it disallows
+  is listed `robots_denied` and not asked for.
+- **Links of an untyped JSON body (QA round three, crawl-01).** At level 0
+  a body of no `Content-Type` was read for links when it was text, so the
+  escaped quotes of a JSON body made an address the crawl asked for. A
+  body of no type is HTML only when it begins as HTML does, as a
+  browser's MIME sniffing takes it; a JSON, XML or plain-text body gives no
+  links, typed or not.
 - **The guard's edges (F181).** Under `egress.mode: direct` with
   `security.resolve_on_host`, a name of `egress.direct.private_names` is
   fetched: the guard's host lookup lets it resolve to a private, loopback,

@@ -86,6 +86,9 @@ expect:
 | `soft-empty-body.yaml` | synthetic | `soft_block`, generic / empty_body |
 | `soft-js-required.yaml` | synthetic | `soft_block`, generic / js_required |
 | `soft-blank-page.yaml` | synthetic | `soft_block`, generic / blank_page |
+| `soft-blank-page-commented-frame.yaml` | synthetic | `soft_block`, generic / blank_page: a frame in a comment shows nothing (class-01) |
+| `soft-blank-page-gtm-noscript.yaml` | synthetic | `soft_block`, generic / blank_page: a tag manager's `<noscript>` frame shows nothing (class-01) |
+| `soft-blank-page-hidden-frame.yaml` | synthetic | `soft_block`, generic / blank_page: a hidden frame shows nothing (class-01) |
 | `soft-login-wall.yaml` | synthetic | `soft_block`, generic / login_wall |
 | `soft-consent-wall.yaml` | synthetic | `soft_block`, generic / consent_wall |
 
