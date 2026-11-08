@@ -1,7 +1,15 @@
 import type { InputDevice, KeyLevels, PointerButton } from '../behavior/device.js';
 
 import { X11Connection, X11Error } from './connection.js';
-import { KEYSYM_LEVEL3, KEYSYM_SHIFT, NAMED_KEYSYMS, keysymsOf, unicodeKeysym } from './keysyms.js';
+import {
+  DEAD_KEYS,
+  DEAD_KEYSYMS,
+  KEYSYM_LEVEL3,
+  KEYSYM_SHIFT,
+  NAMED_KEYSYMS,
+  keysymsOf,
+  unicodeKeysym,
+} from './keysyms.js';
 
 /** Event types of an XTEST `FakeInput` request. */
 const FAKE = { keyPress: 2, keyRelease: 3, buttonPress: 4, buttonRelease: 5, motion: 6 } as const;
@@ -16,8 +24,27 @@ const WHEEL = { up: 4, down: 5, left: 6, right: 7 } as const;
  */
 const REMAP_SETTLE_MS = 60;
 
+/**
+ * How long applications are given to read the keys lent before a text,
+ * before its first key: spent once, before the plan's clock starts, so it
+ * takes nothing from a hold or a gap (browser-07).
+ */
+const PREPARE_SETTLE_MS = 200;
+
 /** The key code of the right Alt key on every X server that uses evdev key codes. */
 const RIGHT_ALT_KEYCODE = 108;
+
+/**
+ * Key codes of the X server's evdev keyboard that a page hears with an
+ * empty `KeyboardEvent.code`, in Chrome 155 and Camoufox 156 alike: the
+ * only keys lent to characters before typing. Other key codes a layout
+ * leaves empty are `F13` to `F24`, `Lang5`, `IntlRo` or `IntlYen` to a
+ * page (measured for QA round three, browser-07), and a letter on such a
+ * key would be a tell of its own.
+ */
+const CODELESS_KEYCODES: ReadonlySet<number> = new Set([
+  8, 120, 149, 154, 168, 178, 183, 184, 217, 219, 222, 230,
+]);
 
 /** Where a key symbol sits on the keyboard. */
 export interface KeyPosition {
@@ -38,9 +65,16 @@ export class Keymap {
   private readonly positions = new Map<number, KeyPosition>();
   /** A key code with no symbol at all, to lend to characters the layout lacks. */
   readonly spare: number | null;
+  /**
+   * The other key codes with no symbol that a page hears with no `code`,
+   * highest first: each character a text needs and the layout lacks is
+   * lent one of them before typing.
+   */
+  readonly spares: readonly number[];
 
   constructor(rows: readonly (readonly number[])[], minKeycode: number) {
     let spare: number | null = null;
+    const empty: number[] = [];
     const levels = [
       { column: 0, shift: false, altGr: false },
       { column: 1, shift: true, altGr: false },
@@ -63,9 +97,13 @@ export class Keymap {
     rows.forEach((row, index) => {
       if (row.every((keysym) => keysym === 0)) {
         spare = minKeycode + index;
+        empty.push(spare);
       }
     });
     this.spare = spare;
+    this.spares = empty
+      .filter((keycode) => keycode !== spare && CODELESS_KEYCODES.has(keycode))
+      .reverse();
     // Layouts list AltGr twice: on the right Alt key and on a key no
     // keyboard has. The real key is the one a person presses.
     if (rows[RIGHT_ALT_KEYCODE - minKeycode]?.[0] === KEYSYM_LEVEL3) {
@@ -106,11 +144,14 @@ export class X11Input implements InputDevice {
   private rowWidth: number;
   /** Characters that currently sit on the spare key, by the key held down. */
   private lent: string | null = null;
+  /** Characters `prepare` lent a key of their own, by character. */
+  private readonly prepared = new Map<string, number>();
 
   private constructor(
     private readonly connection: X11Connection,
     private readonly xtest: number,
     rows: number[][],
+    private readonly deadKeys: boolean,
   ) {
     this.keymap = new Keymap(rows, connection.setup.minKeycode);
     this.rowWidth = rows[0]?.length ?? 2;
@@ -119,16 +160,28 @@ export class X11Input implements InputDevice {
   /**
    * Opens the input of a display.
    *
+   * @param options.deadKeys whether a letter the layout lacks is typed with
+   *   its dead key (`´`, then `e`), as a person does: only for a browser
+   *   that composes the two on this display (default true). Otherwise such
+   *   a letter is lent a key like any character the layout lacks.
    * @throws {X11Error} when the display cannot be reached or has no XTEST extension.
    */
-  static async open(display: string): Promise<X11Input> {
+  static async open(
+    display: string,
+    options: { readonly deadKeys?: boolean } = {},
+  ): Promise<X11Input> {
     const connection = await X11Connection.connect(display);
     try {
       const extension = await connection.queryExtension('XTEST');
       if (extension === null) {
         throw new X11Error(`the X server at ${display} has no XTEST extension`);
       }
-      return new X11Input(connection, extension.majorOpcode, await connection.keyboardMapping());
+      return new X11Input(
+        connection,
+        extension.majorOpcode,
+        await connection.keyboardMapping(),
+        options.deadKeys ?? true,
+      );
     } catch (error) {
       connection.close();
       throw error;
@@ -191,20 +244,103 @@ export class X11Input implements InputDevice {
 
   levelsOf(key: string): KeyLevels {
     const position = this.position(key);
-    if (position === null) {
-      // Every character the layout lacks is lent the one spare key.
-      return { shift: false, altGr: false, onLayout: false, keycode: this.keymap.spare };
+    if (position !== null) {
+      return {
+        shift: position.shift,
+        altGr: position.altGr,
+        onLayout: true,
+        keycode: position.keycode,
+        compose: null,
+      };
     }
-    return {
-      shift: position.shift,
-      altGr: position.altGr,
-      onLayout: true,
-      keycode: position.keycode,
-    };
+    const compose = this.composed(key);
+    if (compose !== null) {
+      return { shift: false, altGr: false, onLayout: true, keycode: null, compose };
+    }
+    // A character the layout lacks is on the key `prepare` lent it, or
+    // else lent the one spare key when it is pressed.
+    const keycode = this.prepared.get(key) ?? this.keymap.spare;
+    return { shift: false, altGr: false, onLayout: false, keycode, compose: null };
+  }
+
+  /**
+   * The dead key and the letter that make a character the layout has no
+   * key for (`é`: `´` and `e`), where the layout has both; `null` otherwise.
+   */
+  private composed(key: string): { dead: string; base: string } | null {
+    if (!this.deadKeys || NAMED_KEYSYMS[key] !== undefined || DEAD_KEYSYMS[key] !== undefined) {
+      return null;
+    }
+    const [base, mark, ...rest] = key.normalize('NFD');
+    const dead = mark === undefined ? undefined : DEAD_KEYS[mark];
+    if (base === undefined || dead === undefined || rest.length > 0) {
+      return null;
+    }
+    if (this.keymap.find(dead.keysym) === null || this.keymap.findCharacter(base) === null) {
+      return null;
+    }
+    return { dead: dead.name, base };
+  }
+
+  /**
+   * Lends each character of the text that the layout has neither a key
+   * nor a dead key for a spare key of its own, and waits once for the
+   * applications to read the changed mapping, all before the text's first
+   * key: a press of such a character is then as prompt as any other.
+   * Characters beyond the spare keys there are borrow the one spare key
+   * when they are pressed, as before.
+   */
+  async prepare(text: string): Promise<void> {
+    const taken = new Set(this.prepared.values());
+    const free = this.keymap.spares.filter((keycode) => !taken.has(keycode));
+    const changes = new Map<number, number>();
+    for (const character of new Set(text)) {
+      if (this.prepared.has(character) || this.levelsOf(character).onLayout) {
+        continue;
+      }
+      const keycode = free.shift();
+      if (keycode === undefined) {
+        break;
+      }
+      changes.set(keycode, unicodeKeysym(character));
+      this.prepared.set(character, keycode);
+    }
+    if (changes.size > 0) {
+      await this.remap(changes);
+      await sleep(PREPARE_SETTLE_MS);
+    }
+  }
+
+  /** Takes the keys `prepare` lent back, once applications have read their releases. */
+  async unprepare(): Promise<void> {
+    if (this.prepared.size === 0) {
+      return;
+    }
+    await this.connection.sync();
+    await sleep(REMAP_SETTLE_MS);
+    await this.remap(new Map([...this.prepared.values()].map((keycode) => [keycode, 0])));
+    this.prepared.clear();
+    // Applications read the keyboard again now, not while the next step's input comes.
+    await sleep(PREPARE_SETTLE_MS);
+  }
+
+  /**
+   * Gives key codes a new symbol (0: none), one request a key (rewriting
+   * the keys between them would let the server rebuild their levels), and
+   * waits until the server has them.
+   */
+  private async remap(changes: ReadonlyMap<number, number>): Promise<void> {
+    for (const [keycode, keysym] of changes) {
+      this.connection.changeKeyboardMapping(
+        keycode,
+        Array.from({ length: this.rowWidth }, (_unused, column) => (column < 2 ? keysym : 0)),
+      );
+    }
+    await this.connection.sync();
   }
 
   private position(key: string): KeyPosition | null {
-    const named = NAMED_KEYSYMS[key];
+    const named = NAMED_KEYSYMS[key] ?? DEAD_KEYSYMS[key];
     if (named !== undefined) {
       return this.keymap.find(named);
     }
@@ -237,10 +373,15 @@ export class X11Input implements InputDevice {
       this.fake(FAKE.keyPress, position.keycode);
       return;
     }
+    const own = this.prepared.get(key);
+    if (own !== undefined) {
+      this.fake(FAKE.keyPress, own);
+      return;
+    }
     // No key of the layout produces this character: lend it a spare key
     // for as long as it is held.
     const spare = this.keymap.spare;
-    if (spare === null || NAMED_KEYSYMS[key] !== undefined) {
+    if (spare === null || NAMED_KEYSYMS[key] !== undefined || DEAD_KEYSYMS[key] !== undefined) {
       throw new X11Error(`the keyboard of this display cannot produce ${JSON.stringify(key)}`);
     }
     if (this.lent !== null) {
@@ -281,6 +422,11 @@ export class X11Input implements InputDevice {
     const position = this.position(key);
     if (position !== null) {
       this.fake(FAKE.keyRelease, position.keycode);
+      return;
+    }
+    const own = this.prepared.get(key);
+    if (own !== undefined) {
+      this.fake(FAKE.keyRelease, own);
     }
   }
 

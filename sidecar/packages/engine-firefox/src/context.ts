@@ -287,7 +287,10 @@ export class FirefoxContext implements EngineContext, SessionDriver {
   }
 
   private device(): Promise<X11Input> {
-    this.input ??= X11Input.open(this.parts.display);
+    // Camoufox on the display hears a dead key and then the plain letter
+    // (`´`, `e` arrives as `e`): it does not compose them here, so a letter
+    // the layout lacks is lent a key instead (QA round three, browser-07).
+    this.input ??= X11Input.open(this.parts.display, { deadKeys: false });
     return this.input;
   }
 

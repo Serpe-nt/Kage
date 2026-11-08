@@ -2615,6 +2615,83 @@ export function defineParitySuite(subject: ParitySubject): void {
       }
     });
 
+    it('types letters its layout lacks with dead keys, every key held as a hand holds it (browser-07)', async () => {
+      // The German layout has no key for `é`, `ç`, `ñ`: they were typed on
+      // a key lent at the press, which Chrome named "\u0000", held 0 to
+      // 29 ms while the keyboard changed. A German typist types `´`, `e`.
+      const text = 'Café au lait, Señor García, ça va, crème brûlée';
+      const run = await withContext('dead-keys', (context) =>
+        flow(context, {
+          behavior: { seed: SEEDS.first, typos: false },
+          timeout_ms: 200_000,
+          actions: [
+            { action: 'goto', url: named('/input/') },
+            { action: 'wait_for', selector: 'body[data-ready]' },
+            { action: 'click', selector: '#field' },
+            { action: 'type', selector: '#field', text, timeout_ms: 150_000 },
+            { action: 'wait_for', ms: 300 },
+            { action: 'extract', capture: DOM },
+          ],
+        }),
+      );
+      expect(run.steps.every((step) => step.ok)).toBe(true);
+      const report = inputReportOf(run.steps.at(-1)?.capture?.dom_html ?? null);
+      const keys = report.events.filter(
+        (event) =>
+          (event.type === 'keydown' || event.type === 'keyup') &&
+          event.key !== 'Shift' &&
+          event.key !== 'AltGraph',
+      );
+      const holds: [string, string, number][] = [];
+      const down = new Map<string, number>();
+      for (const event of keys) {
+        const code = event.code ?? '';
+        // A key is its `code`; keys lent to characters have none, and are
+        // told apart by the character (`key` is the same down and up).
+        const id = code === '' ? `|${event.key ?? ''}` : code;
+        if (event.type === 'keydown') {
+          down.set(id, event.t);
+        } else {
+          const at = down.get(id);
+          if (at !== undefined) {
+            holds.push([event.key ?? '', code, Math.round(event.t - at)]);
+            down.delete(id);
+          }
+        }
+      }
+      measured('the keys of letters made with dead keys', {
+        dead: keys
+          .filter((event) => event.key === 'Dead' || /[éçñíèûü]/.test(event.key ?? ''))
+          .map((event) => [event.type, event.key, event.code]),
+        holds: holds.map(([key, code, held]) => `${key}/${code}:${held}`),
+        first: report.events
+          .filter((event) => event.type.startsWith('key') || event.type.startsWith('composition'))
+          .slice(0, 24)
+          .map((event) => [event.type, event.key ?? null, event.code ?? null]),
+      });
+      expect(report.field).toBe(text);
+      // Every key a page hears is held as a hand holds it, and named. A
+      // letter's own key (lent or dead) is held as long as the others: a
+      // press that waited for the keyboard to change was held about half
+      // as long (medians 0.46 of the others' in both engines up to 2.0.4).
+      expect(holds.filter(([, , held]) => held < 25)).toEqual([]);
+      const median = (values: number[]) =>
+        [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)] ?? 0;
+      const special = holds.filter(([key, code]) => code === '' || key === 'Dead');
+      const ordinary = holds.filter(([key, code]) => code !== '' && key !== 'Dead');
+      expect(special.length).toBeGreaterThanOrEqual(7);
+      expect(median(special.map(([, , held]) => held))).toBeGreaterThan(
+        0.75 * median(ordinary.map(([, , held]) => held)),
+      );
+      expect(keys.filter((event) => event.key === '\u0000')).toEqual([]);
+      // Chrome composes the dead keys: only `ñ`, for which the German
+      // layout has no dead key, is lent one (`code` empty). Camoufox does
+      // not compose them on this display, so each such letter is lent a
+      // key, named as itself with an empty `code`.
+      const lent = subject.name === 'firefox' ? /^[éñíçèû]$/ : /^ñ$/;
+      expect(keys.filter((event) => event.code === '' && !lent.test(event.key ?? ''))).toEqual([]);
+    });
+
     it('clicks, types and selects through the mouse and keyboard of its display', async () => {
       const text = 'Zürich y@web';
       const run = await withContext('flow-human', (context) =>

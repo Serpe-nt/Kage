@@ -40,10 +40,25 @@ const SEEDS = Array.from({ length: 20 }, (_unused, index) =>
 );
 const seed = SEEDS[0] ?? '';
 const stream = (label: string, of = seed) => new SeededRandom(of, label);
+/** Dead keys by the combining mark they add, as the X display's device names them. */
+const DEAD: Readonly<Record<string, string>> = Object.fromEntries(
+  (
+    [
+      [0x300, 'Dead:grave'],
+      [0x301, 'Dead:acute'],
+      [0x302, 'Dead:circumflex'],
+      [0x303, 'Dead:tilde'],
+      [0x327, 'Dead:cedilla'],
+    ] as const
+  ).map(([mark, name]) => [String.fromCodePoint(mark), name]),
+);
+const MARK_OF = Object.fromEntries(Object.entries(DEAD).map(([mark, name]) => [name, mark]));
+
 /**
  * A keyboard as a device knows it: each key's characters, plain, with
  * Shift, with AltGr and with both, by key code. A character no key has is
- * lent the spare key, as the X display's device does.
+ * made with a dead key where the keyboard has one for it, and else lent
+ * the spare key, as the X display's device does.
  */
 function keyboard(keys: readonly (readonly string[])[]): (key: string) => KeyLevels {
   const SPARE = 250;
@@ -57,12 +72,31 @@ function keyboard(keys: readonly (readonly string[])[]): (key: string) => KeyLev
           altGr: column >= 2,
           onLayout: true,
           keycode: 10 + index,
+          compose: null,
         });
       }
     });
   }
-  return (key) =>
-    levels.get(key) ?? { shift: false, altGr: false, onLayout: false, keycode: SPARE };
+  return (key) => {
+    const known = levels.get(key);
+    if (known !== undefined) {
+      return known;
+    }
+    const [base, mark, ...rest] = key.normalize('NFD');
+    const dead = mark === undefined ? undefined : DEAD[mark];
+    if (base !== undefined && dead !== undefined && rest.length === 0) {
+      if (levels.has(dead) && levels.has(base)) {
+        return {
+          shift: false,
+          altGr: false,
+          onLayout: true,
+          keycode: null,
+          compose: { dead, base },
+        };
+      }
+    }
+    return { shift: false, altGr: false, onLayout: false, keycode: SPARE, compose: null };
+  };
 }
 /** Keys of plain ASCII characters, each written as its characters. */
 const keysOf = (keys: string) => keys.split(' ').map((key) => key.split(''));
@@ -94,6 +128,9 @@ const germanLayout = keyboard([
   [',', ';', '·', '×'],
   ['.', ':', '…', '÷'],
   ['-', '_', '–', '—'],
+  // The key right of ß: `´` and, with Shift, `` ` `` as dead keys, the cedilla with AltGr.
+  ['Dead:acute', 'Dead:grave', 'Dead:cedilla'],
+  ['Dead:circumflex', '°'],
   ...letters('wrtzuiopasdfghjklyxcvbnüöä'),
 ]);
 /** The same keyboard, as a device that cannot say where a key lies. */
@@ -112,6 +149,8 @@ function replay(
   const down = new Map<number | string, number>();
   const whileHeld: string[] = [];
   const typed: string[] = [];
+  // A dead key waits for the next letter and puts its mark on it.
+  let mark = '';
   for (const action of plan.actions) {
     if (action.key === 'Shift' || action.key === 'AltGraph') {
       continue;
@@ -122,10 +161,14 @@ function replay(
       if (held > 0) {
         whileHeld.push(`${action.key} at ${action.t} ms`);
       }
-      if (action.key === 'Backspace') {
+      const dead = MARK_OF[action.key];
+      if (dead !== undefined) {
+        mark = dead;
+      } else if (action.key === 'Backspace') {
         typed.pop();
       } else {
-        typed.push(action.key);
+        typed.push(`${action.key}${mark}`.normalize('NFC'));
+        mark = '';
       }
     }
     down.set(key, held + (action.action === 'down' ? 1 : -1));
@@ -483,6 +526,43 @@ describe('typing', () => {
     expect(moved.length).toBeGreaterThan(0);
   });
 
+  it('types a letter the layout lacks with its dead key, as a German typist does (browser-07)', () => {
+    // On the German layout `é` is `´` then `e`, `è` is Shift `´` then `e`,
+    // `ç` is AltGr `´` then `c`; `ж` has neither and is lent a key.
+    const text = 'Café au lait, García, ça va, crème brûlée, Ελλάδα ж';
+    for (const each of SEEDS) {
+      const hand = motorProfile(each);
+      for (const typos of [false, true]) {
+        const plan = planTyping(text, germanLayout, hand, stream('dead', each), { typos });
+        const seen = replay(plan, germanLayout);
+        expect(seen.whileHeld).toEqual([]);
+        expect(seen.typed).toBe(text);
+        const presses = plan.actions.filter((action) => action.action === 'down');
+        // No letter that a dead key makes is pressed as itself.
+        expect(presses.filter((press) => 'éíçèûá'.includes(press.key))).toEqual([]);
+        // `é` twice and `í`; `è` is the grave.
+        expect(presses.filter((press) => press.key === 'Dead:acute')).toHaveLength(3);
+        expect(presses.some((press) => press.key === 'Dead:cedilla')).toBe(true);
+        expect(presses.some((press) => press.key === 'Dead:circumflex')).toBe(true);
+        for (const interval of keyIntervals(plan.actions)) {
+          expect(interval).toBeGreaterThanOrEqual(HUMAN_BOUNDS.keyIntervalMs[0] - 0.11);
+          expect(interval).toBeLessThanOrEqual(HUMAN_BOUNDS.keyIntervalMs[1] + 0.11);
+        }
+        // Every key, dead or lent, is held as long as any other.
+        const downAt = new Map<string, number>();
+        for (const action of plan.actions) {
+          if (action.action === 'down') {
+            downAt.set(action.key, action.t);
+          } else if (action.key !== 'Shift' && action.key !== 'AltGraph') {
+            const held = action.t - (downAt.get(action.key) ?? Number.NaN);
+            expect(held).toBeGreaterThanOrEqual(35 - 0.11);
+            expect(held).toBeLessThanOrEqual(160 + 0.11);
+          }
+        }
+      }
+    }
+  });
+
   it('makes a typo now and then when asked, notices it, and takes it back', () => {
     const clumsy = { ...profile, typing: { ...profile.typing, typoRate: 0.2 } };
     const plan = planTyping(text.repeat(3), usLayout, clumsy, stream('typos'), { typos: true });
@@ -730,6 +810,14 @@ function rig(
       return Promise.resolve();
     },
     levelsOf: usLayout,
+    prepare: (text) => {
+      log.push(`prepare ${text} @${Math.round(now)}`);
+      return Promise.resolve();
+    },
+    unprepare: () => {
+      log.push(`unprepare @${Math.round(now)}`);
+      return Promise.resolve();
+    },
     keyDown: (key) => {
       log.push(`key ${key}`);
       return Promise.resolve();
@@ -1034,6 +1122,11 @@ describe('a persona at its mouse and keyboard', () => {
       expect.arrayContaining(['key Shift', 'key H', 'keyup Shift', 'key u', 'keyup u']),
     );
     expect(log.indexOf('key Shift')).toBeLessThan(log.indexOf('key H'));
+    // The keyboard is ready before the first key and given back after the
+    // last (browser-07): the plan's clock starts once it is ready.
+    expect(log[0]).toMatch(/^prepare Hi you @/);
+    expect(log.at(-1)).toMatch(/^unprepare @/);
+    expect(log.at(-2)).toMatch(/^keyup /);
     expect(human.counts.keys).toBe(7);
     expect(elapsed()).toBeGreaterThan(5 * 60);
     const before = log.length;

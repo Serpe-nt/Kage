@@ -433,22 +433,30 @@ export class Human {
   /** Types text on the keyboard, key by key. The caller has put the focus where it belongs. */
   async type(text: string, options: { readonly typos: boolean }): Promise<void> {
     const { device, profile, random } = this.parts;
-    const plan = planTyping(text, (key) => device.levelsOf(key), profile, random, options);
-    const started = this.clock.now();
-    for (const action of plan.actions) {
-      const wait = started + action.t - this.clock.now();
-      if (wait > 0) {
-        await this.clock.sleep(wait);
+    // Keys the layout lacks are lent before the plan's clock starts, so
+    // that the keyboard's change takes no time out of a hold or a gap
+    // (browser-07).
+    await device.prepare(text);
+    try {
+      const plan = planTyping(text, (key) => device.levelsOf(key), profile, random, options);
+      const started = this.clock.now();
+      for (const action of plan.actions) {
+        const wait = started + action.t - this.clock.now();
+        if (wait > 0) {
+          await this.clock.sleep(wait);
+        }
+        if (action.action === 'down') {
+          await device.keyDown(action.key);
+          this.counts.keys += 1;
+        } else {
+          await device.keyUp(action.key);
+        }
       }
-      if (action.action === 'down') {
-        await device.keyDown(action.key);
-        this.counts.keys += 1;
-      } else {
-        await device.keyUp(action.key);
-      }
+      await device.flush();
+      this.counts.typos += plan.typos;
+    } finally {
+      await device.unprepare();
     }
-    await device.flush();
-    this.counts.typos += plan.typos;
   }
 
   /** Presses one key, with the modifiers the keyboard needs for it. */

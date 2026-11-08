@@ -94,6 +94,10 @@ const physicalKey = (key: string, levels: KeyLevels) =>
  * down sends nothing on a real keyboard, and the X display drops such a
  * press too. Only those presses move, and the moment is drawn only for
  * them, so a plan without one is the plan it was.
+ *
+ * A character the layout has no key for but makes with a dead key (`é`
+ * on the German layout) is typed as a person types it: the dead key, then
+ * the letter, two keystrokes with an interval between them like any other.
  */
 export function planTyping(
   text: string,
@@ -156,6 +160,16 @@ export function planTyping(
   for (const typed of text) {
     const code = typed.codePointAt(0);
     const character = code === 0x0a || code === 0x0d ? 'Enter' : code === 0x09 ? 'Tab' : typed;
+    // A character the layout makes with a dead key is its two keys, each
+    // a keystroke of its own (browser-07).
+    const { compose } = levelsOf(character);
+    if (compose !== null) {
+      end = Math.max(end, stroke(compose.dead));
+      now += interval();
+      end = Math.max(end, stroke(compose.base));
+      now += interval();
+      continue;
+    }
     const wrong = options.typos ? NEIGHBOURS[character.toLowerCase()] : undefined;
     if (wrong !== undefined && random.chance(profile.typing.typoRate)) {
       const slip = wrong[random.integer(0, wrong.length - 1)] ?? character;

@@ -409,7 +409,8 @@ export class ChromiumContext implements EngineContext, SessionDriver {
   }
 
   openInput(): Promise<X11Input> {
-    return X11Input.open(this.parts.display);
+    // Chrome composes a dead key with the letter after it, as on a desktop.
+    return X11Input.open(this.parts.display, { deadKeys: true });
   }
 
   navigate(request: NavigateRequest, env: OperationEnv): Promise<PageResult> {

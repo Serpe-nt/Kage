@@ -98,6 +98,7 @@ review.
 | after the driver's first typed navigation the address bar keeps the keyboard focus (a person who typed the address and pressed Enter has the page focused); `document.hasFocus()` says true either way | a page that waits for keys without a click first | follow-up F64: a typed navigation by the hand |
 | `history.length` counts the driver's `about:blank` start page | nobody: the same as for a person who opened a new tab and typed | — |
 | every request starts in a fresh tab (F96): the page that was open sees `blur`, `visibilitychange` and `pagehide` as its tab closes, and the next page a window with the same values | the page that is left, which could record it; a person who opens a new tab does the same to the page they leave | a persona's tab must hold nothing of another request (spec §10.5, §16.5); only a crawl's pages share a tab |
+| a character the persona's layout has no key for and no dead key makes (`ñ` on a German layout, Cyrillic, emoji) is typed on a spare key lent before the text: the page sees its own `key` with an empty `code` (a letter a dead key makes, `é`, is typed `´` then `e` as a person does) | a page's key listener | no key of the layout gives it; a real person would use an input method; up to 2.0.4 Chrome named such a key `"\u0000"` and held it 0 to 29 ms (QA round three, browser-07) |
 
 ## Settings
 
