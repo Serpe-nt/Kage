@@ -1043,7 +1043,10 @@ finished (F109). A caller that hangs up within the wall time does the
 same to its fetch: what waits for a persona or its site leaves the queue,
 and the request ends `provider_error` with the reason `cancelled`; the
 page that is being fetched is finished and kept (F128). Nothing is asked of
-a site for a fetch nobody waits for.
+a site for a fetch nobody waits for. Once the wall time is out the fetch
+is the job's: a caller that hangs up while its job is being written
+changes nothing of it, so that a fetch is always either the caller's or
+one job's, begun once and ended once (QA round three's flows-03).
 
 ---
 

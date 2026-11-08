@@ -301,8 +301,21 @@ pub(crate) async fn fetch(
             // It is a job's from here on: it waits where a job waits, and
             // is taken up again after a stop of the server.
             let request = running.request;
-            let job = crate::jobs::worker::carry_on(&state, &caller.key, running, spec, site)
+            // Carrying it on is the server's work, not the caller's: a
+            // client that hangs up while the job is written must not cut
+            // that in half (a job leased to nobody's task, whose worker
+            // begins the same request again later) or before it (a
+            // request that never ends). Detached, it is written whole
+            // either way (QA round three's flows-03).
+            let carrying = {
+                let (state, key) = (state.clone(), std::sync::Arc::clone(&caller.key));
+                tokio::spawn(async move {
+                    crate::jobs::worker::carry_on(&state, &key, running, spec, site).await
+                })
+            };
+            let job = carrying
                 .await
+                .map_err(|error| ApiError::internal(&error))?
                 .map_err(|error| ApiError::internal(&error))?;
             let accepted = FetchAccepted::carried(request, job);
             let mut response = (StatusCode::ACCEPTED, Json(&accepted)).into_response();

@@ -2335,3 +2335,90 @@ async fn the_same_key_sent_twice_at_once_is_a_replay_not_a_job_past_the_limit() 
         .problem(StatusCode::TOO_MANY_REQUESTS, "jobs_limited");
     api.shut_down().await;
 }
+
+/// QA round three's flows-03: a client that hangs up right at the wall
+/// time, while its fetch is being carried on as a job, leaves the fetch
+/// one thing: the caller's, ended by the hang-up (F128), or one job's,
+/// asked of the site once and ended once. Never a job half written, whose
+/// worker begins the same request again when its lease runs out, and never
+/// a request that nobody ends.
+#[tokio::test]
+async fn a_client_that_hangs_up_at_the_wall_time_leaves_its_fetch_whole() {
+    let rules = "defaults: { pacing: fast, active_hours: ignore }\ndomains: {}\n";
+    let mut api = Api::start_with(3, 149, rules, |config| {
+        quick(config);
+        config.scheduler.sync_wall_time = HumanDuration::new(Duration::from_millis(300));
+    })
+    .await;
+    let token = api.key(&[Scope::Fetch, Scope::Jobs]).await;
+    pages(
+        &api,
+        "/hang",
+        page("Hang").set_delay(Duration::from_millis(600)),
+    )
+    .await;
+    let work = api.work();
+
+    // Hang-ups on both sides of the wall time and right at it, where the
+    // job is being written.
+    for number in 0..24_u64 {
+        let patience = Duration::from_millis(286 + number * 2);
+        let reply = tokio::time::timeout(
+            patience,
+            api.post(
+                &token,
+                "/v1/fetch",
+                &json!({ "url": Api::url(&format!("/hang/{number}")), "level": 1, "max_retries": 0 }),
+            ),
+        )
+        .await;
+        if let Ok(reply) = reply {
+            assert_eq!(reply.status, StatusCode::ACCEPTED, "{:?}", reply.json());
+        }
+    }
+
+    // Every request ends, and then the lease of a job half written would
+    // have run out and its worker begun the request again.
+    let pool = api.lab.store().pool().clone();
+    let open = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM requests WHERE finished_at IS NULL")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+    };
+    for _ in 0..400 {
+        if open().await == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(open().await, 0, "a request was left without an end");
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert_eq!(open().await, 0);
+
+    // Each page was asked for once at most, and every job the hang-ups
+    // left is the one that carried its request on, and ended with it.
+    let seen = asked(&api, "/hang/").await;
+    for number in 0..24 {
+        let path = format!("/hang/{number}");
+        let times = seen.iter().filter(|seen| **seen == path).count();
+        assert!(times <= 1, "{path} was asked for {times} times");
+    }
+    let jobs: Vec<(String, String)> = sqlx::query_as(
+        "SELECT state::text, origin::text FROM jobs WHERE state::text NOT IN ('succeeded')",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(jobs, Vec::<(String, String)>::new());
+    let unadopted: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM job_items i JOIN requests r ON r.id = i.request_id \
+         WHERE r.job_id IS DISTINCT FROM i.job_id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(unadopted, 0);
+    work.stop().await;
+    api.shut_down().await;
+}
