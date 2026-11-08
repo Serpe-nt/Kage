@@ -358,7 +358,17 @@ version's date is the day, in UTC, its tag was made.
   they prescribe one. And an upgrade: back up before it, `migrate` applies
   the new schema, and the way back to the older release is that backup
   (`fetching.md`, "Upgrading Kage").
-
+- **Two characters on one key are typed whole (QA round three,
+  browser-06).** F202 let a key come up before it went down again only
+  where the next character was the same letter, so two different
+  characters on one key (`5` and `%`, `7` and `/`, `q` and `@` or `e` and
+  `€` with AltGr on the German layout) still came while the key was down
+  and the display dropped the second: `25%` arrived as `25` and `q@` as
+  `q`, in both engines, while the flow's `type` step said ok. The planner
+  now asks the display's keyboard which key each character is on, on any
+  of its levels, and such a press waits until 15 to 45 ms after the
+  release; a text with no such pair is planned exactly as before
+  (spec §10.4).
 ### Added
 
 - **A daily scan of `main`'s images (F220).** `image-scan.yaml` builds the

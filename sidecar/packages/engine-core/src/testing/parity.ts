@@ -2571,6 +2571,50 @@ export function defineParitySuite(subject: ParitySubject): void {
       }
     });
 
+    it('types two characters of one key whole, the key up between them (browser-06)', async () => {
+      // On the display's German layout `5` and `%`, `q` and `@` (AltGr),
+      // `7` and `/` are one key each: the second came while the first was
+      // down, and the display dropped it (`25%` arrived as `25`).
+      const pairs = '25% 1! 7/ 5% q@ e€ -_ .: 0= 25% 1! 7/ q@ e€ .: 5% 1! 7/ q@ -_';
+      const text = `${pairs} ${pairs}`;
+      const run = await withContext('one-key', (context) =>
+        flow(context, {
+          behavior: { seed: SEEDS.first, typos: false },
+          timeout_ms: 240_000,
+          actions: [
+            { action: 'goto', url: named('/input/') },
+            { action: 'wait_for', selector: 'body[data-ready]' },
+            { action: 'click', selector: '#field' },
+            { action: 'type', selector: '#field', text, timeout_ms: 200_000 },
+            { action: 'wait_for', ms: 300 },
+            { action: 'extract', capture: DOM },
+          ],
+        }),
+      );
+      expect(run.steps.every((step) => step.ok)).toBe(true);
+      const report = inputReportOf(run.steps.at(-1)?.capture?.dom_html ?? null);
+      expect(report.field).toBe(text);
+      // Every press is heard, and every one after its key came up.
+      const keys = report.events.filter(
+        (event) =>
+          (event.type === 'keydown' || event.type === 'keyup') &&
+          event.key !== 'Shift' &&
+          event.key !== 'AltGraph' &&
+          event.key !== undefined,
+      );
+      expect(keys.filter((event) => event.type === 'keydown')).toHaveLength(text.length);
+      const down = new Set<string>();
+      for (const event of keys) {
+        const code = event.code ?? '';
+        if (event.type === 'keydown') {
+          expect(down.has(code), `${event.key ?? ''} at ${event.t}`).toBe(false);
+          down.add(code);
+        } else {
+          down.delete(code);
+        }
+      }
+    });
+
     it('clicks, types and selects through the mouse and keyboard of its display', async () => {
       const text = 'Zürich y@web';
       const run = await withContext('flow-human', (context) =>

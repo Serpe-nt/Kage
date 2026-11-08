@@ -1588,12 +1588,17 @@ persona's seed and the request's seed, which the result records.
   unless the caller fixes it.
 - Typing: per-key delay 60–220 ms, occasional typo plus backspace when
   `behavior.typos` is on. A key is up before it goes down again: where the
-  next character is on the key still held (a doubled letter, a capital
-  after its small letter), its press waits until 15 to 45 ms after the
-  release, as a finger lifts the key first; a key pressed while it is down
-  sends nothing on a real keyboard, and the display dropped such a press
-  up to 2.0.4 (`hello` arrived as `helo`, F202). Only those presses move;
-  the holds and every other interval are drawn as before.
+  next character is on the key still held, on any of its levels (a doubled
+  letter, a capital after its small letter, `%` after `5`, `@` after `q`
+  with AltGr on the German layout), its press waits until 15 to 45 ms
+  after the release, as a finger lifts the key first; a key pressed while
+  it is down sends nothing on a real keyboard, and the display dropped
+  such a press (`hello` arrived as `helo` up to 2.0.4, F202; `25%` as `25`
+  and `q@` as `q` after it, QA round three, browser-06). The key is the
+  one the persona's layout puts the character on, as the display's
+  keyboard says; characters the layout lacks share the one key the display
+  lends them. Only those presses move; the holds and every other interval
+  are drawn as before.
 - Entry: the first navigation in a context for a new origin SHOULD arrive
   with a plausible `Referer` strategy from policy: `direct`, `search_engine`
   (visit the engine results page first, then click), or `none`. `none`

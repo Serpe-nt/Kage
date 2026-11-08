@@ -498,7 +498,7 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
     buttonDown: refuse('button down'),
     buttonUp: refuse('button up'),
     wheelNotch: refuse('wheel notch'),
-    levelsOf: () => ({ shift: false, altGr: false, onLayout: true }),
+    levelsOf: () => ({ shift: false, altGr: false, onLayout: true, keycode: null }),
     keyDown: refuse('key down'),
     keyUp: refuse('key up'),
     flush: () => Promise.resolve(),

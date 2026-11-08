@@ -65,12 +65,16 @@ const clamp = (value: number, min: number, max: number) => Math.max(min, Math.mi
 const REPRESS_MS: readonly [number, number] = [15, 45];
 
 /**
- * The key a character is typed on, as far as the planner can tell: a
- * letter and its capital share one; other characters are told apart by
- * what they are, since the planner knows the levels of a key, not where
- * it lies.
+ * The physical key a character is typed on: the keyboard's own key, so
+ * that every character on one key, on any of its levels, is one key (`5`
+ * and `%`, `q` and `@` with AltGr; QA round three, browser-06). Where the
+ * keyboard cannot say, a letter and its capital share one and other
+ * characters are told apart by what they are.
  */
-const physicalKey = (key: string) => (key.length === 1 ? key.toLowerCase() : key);
+const physicalKey = (key: string, levels: KeyLevels) =>
+  levels.keycode !== null
+    ? `keycode:${levels.keycode}`
+    : `char:${key.length === 1 ? key.toLowerCase() : key}`;
 
 /**
  * Plans the keys of a text: when each goes down and up.
@@ -84,11 +88,12 @@ const physicalKey = (key: string) => (key.length === 1 ? key.toLowerCase() : key
  * with `Backspace` and typed again.
  *
  * A key is up before it goes down again (F202): where the next character
- * is on the key still held (a doubled letter), its press waits until a
- * moment after the release, as a finger must lift the key first. A key
- * pressed while it is down sends nothing on a real keyboard, and the X
- * display drops such a press too. Only those presses move, and the moment
- * is drawn only for them, so a plan without one is the plan it was.
+ * is on the key still held, on any of its levels (a doubled letter, `5`
+ * then `%`, `q` then `@`), its press waits until a moment after the
+ * release, as a finger must lift the key first. A key pressed while it is
+ * down sends nothing on a real keyboard, and the X display drops such a
+ * press too. Only those presses move, and the moment is drawn only for
+ * them, so a plan without one is the plan it was.
  */
 export function planTyping(
   text: string,
@@ -131,12 +136,12 @@ export function planTyping(
     held[name] = wanted;
   };
   const stroke = (key: string) => {
-    const physical = physicalKey(key);
+    const levels = levelsOf(key);
+    const physical = physicalKey(key, levels);
     const up = upAt.get(physical);
     if (up !== undefined && now <= up) {
       now = up + random.uniform(REPRESS_MS[0], REPRESS_MS[1]);
     }
-    const levels = levelsOf(key);
     modifier('shift', 'Shift', levels.shift);
     modifier('altGr', 'AltGraph', levels.altGr);
     emit(now, 'down', key);

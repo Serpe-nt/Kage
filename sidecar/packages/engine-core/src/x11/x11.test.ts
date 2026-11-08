@@ -173,14 +173,35 @@ describe('the input of a display', () => {
 
   it('knows a German keyboard: Shift for capitals, AltGr for @ and €, Z where Y is', async () => {
     const input = await X11Input.open(display.name);
-    expect(input.levelsOf('z')).toEqual({ shift: false, altGr: false, onLayout: true });
-    expect(input.levelsOf('Z')).toEqual({ shift: true, altGr: false, onLayout: true });
-    expect(input.levelsOf('ü')).toEqual({ shift: false, altGr: false, onLayout: true });
-    expect(input.levelsOf('@')).toEqual({ shift: false, altGr: true, onLayout: true });
-    expect(input.levelsOf('€')).toEqual({ shift: false, altGr: true, onLayout: true });
-    expect(input.levelsOf('Enter')).toEqual({ shift: false, altGr: false, onLayout: true });
-    expect(input.levelsOf('ж')).toEqual({ shift: false, altGr: false, onLayout: false });
+    const placed = { keycode: expect.any(Number) as unknown };
+    expect(input.levelsOf('z')).toEqual({ shift: false, altGr: false, onLayout: true, ...placed });
+    expect(input.levelsOf('Z')).toEqual({ shift: true, altGr: false, onLayout: true, ...placed });
+    expect(input.levelsOf('ü')).toEqual({ shift: false, altGr: false, onLayout: true, ...placed });
+    expect(input.levelsOf('@')).toEqual({ shift: false, altGr: true, onLayout: true, ...placed });
+    expect(input.levelsOf('€')).toEqual({ shift: false, altGr: true, onLayout: true, ...placed });
+    expect(input.levelsOf('Enter')).toEqual({
+      shift: false,
+      altGr: false,
+      onLayout: true,
+      ...placed,
+    });
+    expect(input.levelsOf('ж')).toEqual({ shift: false, altGr: false, onLayout: false, ...placed });
     expect(() => input.levelsOf('NoSuchKey')).toThrow(/not a key this keyboard knows/);
+    // The key a character is on, on any of its levels (browser-06): Z
+    // where Y is, `%` on 5, `/` on 7, `@` on Q and `€` on E with AltGr.
+    const keyOf = (key: string) => input.levelsOf(key).keycode;
+    for (const [plain, other] of [
+      ['z', 'Z'],
+      ['5', '%'],
+      ['7', '/'],
+      ['1', '!'],
+      ['q', '@'],
+      ['e', '€'],
+      ['ж', 'ю'],
+    ] as const) {
+      expect(keyOf(other), `${plain} ${other}`).toBe(keyOf(plain));
+    }
+    expect(new Set(['y', 'z', '5', '6', 'q', 'e', ' ', 'Enter', 'ж'].map(keyOf)).size).toBe(9);
     // Every kind of key goes down and up without the server refusing anything.
     for (const key of ['Shift', 'AltGraph', 'a', 'Enter', 'Backspace', ' ']) {
       await input.keyDown(key);

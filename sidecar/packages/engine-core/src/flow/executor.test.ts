@@ -585,7 +585,7 @@ function pacedRig(options: { seed?: string; persona?: string; leaves?: readonly 
     buttonDown: nothing,
     buttonUp: nothing,
     wheelNotch: nothing,
-    levelsOf: () => ({ shift: false, altGr: false, onLayout: true }),
+    levelsOf: () => ({ shift: false, altGr: false, onLayout: true, keycode: null }),
     keyDown: nothing,
     keyUp: nothing,
     flush: nothing,
