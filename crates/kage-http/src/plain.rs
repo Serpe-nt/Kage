@@ -437,7 +437,6 @@ impl PlainClient {
             read_body(response, cap, started, deadline).await?
         };
         let total = started.elapsed();
-        trail.note_downgrade();
         tracing::debug!(
             host = ?trail.current().host_str(),
             status = status.as_u16(),
@@ -454,7 +453,7 @@ impl PlainClient {
             body,
             truncated,
             hops,
-            downgraded: trail.downgraded(),
+            downgraded: trail.note_downgrade(),
             timing: Timing {
                 dns_ms: None,
                 connect_ms: connect.map(millis),
