@@ -1461,7 +1461,7 @@ with NDJSON: one `step` line per finished step as it finishes, then one
 before its first step is an ordinary error answer; a flow that breaks
 after lines were sent ends without its final line.
 
-The contract is at 1.7.0: everything M5 added (1.1.0) is optional in
+The contract is at 1.9.0: everything M5 added (1.1.0) is optional in
 requests and additional in responses, and so is what M9 added (1.2.0: a
 flow's `behavior.pace` and the `paced_ms` of a step, §10.5) and what M10
 added: `behavior.patience_ms` and what the scrolling came to
@@ -1486,7 +1486,16 @@ which loaded every page once). F96 added the tab a navigation runs in
 (1.7.0: `tab`, an opaque name only Kage gives, to a crawl's pages: a
 navigation that names the tab the context's open tab was last used under
 goes on in it; one that names another, or none, and every flow and
-self-test, starts in a fresh tab, §10.5).
+self-test, starts in a fresh tab, §10.5). F184 added the tabs a flow's
+page opened (1.8.0: `opened_tabs` of a step event, §10.5). QA round
+three's extract-07 added a flow's bound on what it keeps of each page it
+captures (`max_body_bytes` of a flow request, as a navigation has it),
+with no version of its own: it is part of 1.9.0's document, which
+flows-04 made for where a page sent the tab and nothing answered
+(`unanswered_url` of a page result). The request schemas are strict: a
+sidecar of before 1.9.0 answers `400` to a flow, since Kage always names
+`max_body_bytes` (the job's, else the operator's), so sidecars and Kage
+are upgraded together.
 
 A breaking change of the contract needs a new major of the contract
 version; `just contract-check` compares the committed document with the
@@ -3012,9 +3021,13 @@ As built (the OpenAPI document is the contract):
   refuses a body for the wire's `304` (as for any `3xx`), so the Firefox
   engine reads the page's entry of the browser's own HTTP cache in the
   persona's profile (`cache2/entries`, the entry of the page's key, its
-  `Content-Encoding` undone), from the disk, never through the page; an
-  entry that is not the whole page, or whose head the engine does not keep,
-  gives `raw_body: null` (QA round three, browser-05: since 2.0.4 such a
+  `Content-Encoding` undone, no more decoded than the request's
+  `max_body_bytes`), from the disk, never through the page; an entry that
+  is not the whole page, one whose head the engine does not keep, one under
+  a key it does not find (a host whose partition key Firefox writes
+  otherwise: an IP literal with a port, a host with no dot, IPv6) and a
+  body under a compression dictionary (`dcb`, `dcz`) give `raw_body: null`
+  (`docs/runbooks/engine-firefox.md`) (QA round three, browser-05: since 2.0.4 such a
   Firefox result said `200` and had no `raw_body` and no artifact).
 - `dom_html` and `raw_body` are inline when `include` asks; the http path
   (levels 0 and 1) has no document, so `dom` is refused there

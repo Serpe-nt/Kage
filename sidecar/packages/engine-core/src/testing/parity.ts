@@ -1214,6 +1214,23 @@ export function defineParitySuite(subject: ParitySubject): void {
         expect(value(result, 'etag'), `visit ${index}`).toBe('"v1"');
       }
       expect(value(again, 'set-cookie')).toBeNull();
+      // The same page sent gzipped: the browser keeps the encoded bytes
+      // (Firefox's cache entry holds them as they came), and the body
+      // reported is the page, decoded, in both engines.
+      const gzipped = named('/cached/revalidated-gzip?id=parity');
+      await withContext('revalidated', (context) => go(context, gzipped));
+      const unpacked = await withContext('revalidated', (context) =>
+        go(context, gzipped, { capture: { ...DOM, raw: true } }),
+      );
+      const askedGzip = (await site.requests()).filter(
+        (request) => request.path === '/cached/revalidated-gzip?id=parity',
+      );
+      expect(askedGzip).toHaveLength(2);
+      expect(headerOf(askedGzip[1], 'if-none-match')).toBe('"g1"');
+      expect(unpacked.status).toBe(200);
+      expect(value(unpacked, 'content-encoding')).toBe('gzip');
+      expect(unpacked.raw_body).toMatchObject({ encoding: 'utf8', truncated: false });
+      expect(unpacked.raw_body?.data).toContain('<h1 id="kept">Kept, gzipped</h1>');
       if (subject.keptHeadsFile !== undefined) {
         // Where the engine has lost what it kept, the wire's `304` and its
         // own fields: a status it cannot know is never made up.

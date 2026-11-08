@@ -385,10 +385,10 @@ export class FirefoxContext implements EngineContext, SessionDriver {
    * `304`, so the engine reads the page's entry of the browser's own cache
    * in the persona's profile, as Firefox serves it to the tab, never
    * through the page. Only where the engine keeps the page's head, whose
-   * `Content-Encoding` it undoes; `null` where the entry is not the whole
+   * `Content-Encoding` it undoes, at most `limit` bytes; `null` where the entry is not the whole
    * page.
    */
-  async keptBody(response: DriverResponse): Promise<Buffer | null> {
+  async keptBody(response: DriverResponse, limit: number): Promise<Buffer | null> {
     if (response.status() !== 304) {
       return null;
     }
@@ -396,7 +396,7 @@ export class FirefoxContext implements EngineContext, SessionDriver {
     if (kept === null) {
       return null;
     }
-    return readKeptBody(this.parts.cacheEntries, response.url(), kept.headers);
+    return readKeptBody(this.parts.cacheEntries, response.url(), kept.headers, limit);
   }
 
   async protocolOf(response: DriverResponse): Promise<string | null> {
