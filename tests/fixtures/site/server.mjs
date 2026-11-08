@@ -13,6 +13,7 @@
 import { readFileSync } from 'node:fs';
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
+import { gzipSync } from 'node:zlib';
 
 import { crawlRoute } from './crawl.mjs';
 
@@ -731,6 +732,25 @@ document.getElementById('f').addEventListener('submit', (event) => {
       'cache-control': 'no-cache',
       'x-fixture': 'kept',
     });
+  },
+  // The same page sent gzipped: the browser's cache holds the encoded bytes
+  // and the Firefox engine decodes what it reads of them (QA round three,
+  // browser-05).
+  '/cached/revalidated-gzip': (req, res) => {
+    if (req.headers['if-none-match'] === '"g1"') {
+      res.writeHead(304, { etag: '"g1"', 'cache-control': 'no-cache' });
+      res.end();
+      return;
+    }
+    const body = gzipSync(page('Kept', '<h1 id="kept">Kept, gzipped</h1>'));
+    res.writeHead(200, {
+      'content-type': 'text/html; charset=utf-8',
+      'content-encoding': 'gzip',
+      'content-length': String(body.length),
+      etag: '"g1"',
+      'cache-control': 'no-cache',
+    });
+    res.end(body);
   },
   // The same page, whose `304` names another type, as some stacks give a
   // bodiless answer a default one: the tab shows the kept HTML page

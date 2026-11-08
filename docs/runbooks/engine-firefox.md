@@ -468,7 +468,9 @@ the kept body and its validator (`Content-Type`, `Content-Encoding`,
 `ETag`), the proxy's and those of one connection. A `304` that named
 `text/plain` made an HTML page's result `text/plain` from then on, though
 the tab rendered the kept HTML (QA round three, browser-03). A `304` whose
-head is not kept is reported as it came (F178).
+head is not kept is reported as it came (F178). The file holds what the
+browser's own cache entry holds; it goes with the profile when a persona
+is retired.
 
 The kept page's body. playwright-core 1.62.1 refuses a body for any `3xx`
 response ("Response body is unavailable for redirect responses"), the
@@ -477,20 +479,33 @@ null on Firefox (QA round three, browser-05). The engine reads it where
 Firefox does: the page's entry in the browser's HTTP cache in the
 persona's profile, `user-data/cache2/entries/<SHA-1 of the key>`. The key
 of a top-level document under network partitioning is
-`O^partitionKey=%28<scheme>%2C<site>%29,:<url>` (the site is the host's
-registrable domain; the engine tries the host's suffixes, longest first,
-and the unpartitioned `:<url>`, and takes an entry only when the key it
-holds is the one asked for). An entry is the body as it came over the wire
-(still content-encoded), then Firefox's metadata (`CacheFileMetadata`,
-version 4 in Camoufox 156), then the metadata's offset, which is the
-body's length. The engine undoes `gzip`, `deflate`, `br` and `zstd`, and
+`O^partitionKey=%28<scheme>%2C<site>%29,:<url>`, where `<url>` is the
+address as Firefox gave it to the driver, but for its fragment (the engine
+never respells it: Firefox keeps a quote in a query, which a URL parser
+would encode), and the site is the host's registrable domain. The engine
+tries the host's suffixes, longest first, and the unpartitioned `:<url>`,
+and takes an entry only when the key it holds is the one asked for. Hosts
+whose partition key Firefox writes otherwise find no entry and give
+`raw_body: null`: an IP literal with a port of its own, a host with no dot
+(`localhost`, an intranet name), an IPv6 literal. An entry is the body as
+it came over the wire (still content-encoded), then Firefox's metadata
+(`CacheFileMetadata`, version 4 in Camoufox 156), then the metadata's
+offset, which is the body's length; the engine reads at most 1 MB of
+metadata besides its chunk hashes and checks every read for what it got.
+It undoes `gzip`, `deflate` (zlib's format, else raw), `br` and `zstd`
+with zlib's streams, off the event loop's hot path, and stops once the
+request's `max_body_bytes` came out (the result says the body was cut). It
 gives nothing where the body's length is not the kept head's
-`Content-Length`, where the coding is another (a compression dictionary's)
-or where no entry holds the key. It only reads the cache, never writes it,
-and never through the page. A Camoufox build that changes the cache's
-format shows up in `cache-entry.test.ts` (a name observed in a 156 profile)
-and in the parity suite's F178 case, which asks for the kept body. The file holds what the browser's own cache
-entry holds; it goes with the profile when a persona is retired.
+`Content-Length`, where no entry holds the key, where the body does not
+decode, or where the coding is a compression dictionary's (`dcb`, `dcz`,
+which this Firefox may use since the launch plan turns dictionaries on):
+it would need the dictionary, which this engine does not look up. It only
+reads the cache, never writes it, and never through the page.
+`cache-entry.test.ts` pins the reader against entries it writes itself and
+one file name observed in a Camoufox 156 profile; only the parity suite's
+F178 case, which asks a real Camoufox for the kept body (plain and
+gzipped), shows that a new build still writes the format this reads. Run
+it when Camoufox moves.
 
 ## Camoufox's own calls
 

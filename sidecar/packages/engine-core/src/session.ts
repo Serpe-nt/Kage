@@ -292,10 +292,10 @@ export interface SessionDriver {
    * The body of the page the browser kept and shows where it revalidated
    * it and its driver gives no body (Firefox's gives only the wire's `304`
    * and refuses a body for any `3xx`, QA round three browser-05); `null`
-   * where it cannot be had. An engine whose driver gives the kept body
+   * where it cannot be had; at most `limit` bytes of it. An engine whose driver gives the kept body
    * leaves it out.
    */
-  keptBody?(response: DriverResponse): Promise<Buffer | null>;
+  keptBody?(response: DriverResponse, limit: number): Promise<Buffer | null>;
 }
 
 /** The head of a response as the tab shows it (see {@link SessionDriver.shownHead}). */
@@ -2431,7 +2431,7 @@ export class PageSession {
     // Where the driver has no body of the page the tab shows (Firefox's
     // `304` of a page it kept), the engine may read the kept one (browser-05).
     const keptBody = async (shown: DriverResponse): Promise<CapturedBody | null> => {
-      const kept = await driver.keptBody?.(shown).catch(() => null);
+      const kept = await driver.keptBody?.(shown, maxBody + 1).catch(() => null);
       return kept == null ? null : captureBody(kept, maxBody);
     };
     const rawBody =
