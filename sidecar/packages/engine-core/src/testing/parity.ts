@@ -2615,6 +2615,38 @@ export function defineParitySuite(subject: ParitySubject): void {
       }
     });
 
+    /**
+     * The keys a page heard (modifiers left out) and how long each was
+     * held. A key is its `code`; keys lent to characters have none, and
+     * are told apart by the character (`key` is the same down and up).
+     */
+    const keysAndHolds = (report: ReturnType<typeof inputReportOf>) => {
+      const keys = report.events.filter(
+        (event) =>
+          (event.type === 'keydown' || event.type === 'keyup') &&
+          event.key !== 'Shift' &&
+          event.key !== 'AltGraph',
+      );
+      const holds: [string, string, number][] = [];
+      const down = new Map<string, number>();
+      for (const event of keys) {
+        const code = event.code ?? '';
+        const id = code === '' ? `|${event.key ?? ''}` : code;
+        if (event.type === 'keydown') {
+          down.set(id, event.t);
+        } else {
+          const at = down.get(id);
+          if (at !== undefined) {
+            holds.push([event.key ?? '', code, Math.round(event.t - at)]);
+            down.delete(id);
+          }
+        }
+      }
+      return { keys, holds };
+    };
+    const median = (values: number[]) =>
+      [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)] ?? 0;
+
     it('types letters its layout lacks with dead keys, every key held as a hand holds it (browser-07)', async () => {
       // The German layout has no key for `é`, `ç`, `ñ`: they were typed on
       // a key lent at the press, which Chrome named "\u0000", held 0 to
@@ -2636,29 +2668,7 @@ export function defineParitySuite(subject: ParitySubject): void {
       );
       expect(run.steps.every((step) => step.ok)).toBe(true);
       const report = inputReportOf(run.steps.at(-1)?.capture?.dom_html ?? null);
-      const keys = report.events.filter(
-        (event) =>
-          (event.type === 'keydown' || event.type === 'keyup') &&
-          event.key !== 'Shift' &&
-          event.key !== 'AltGraph',
-      );
-      const holds: [string, string, number][] = [];
-      const down = new Map<string, number>();
-      for (const event of keys) {
-        const code = event.code ?? '';
-        // A key is its `code`; keys lent to characters have none, and are
-        // told apart by the character (`key` is the same down and up).
-        const id = code === '' ? `|${event.key ?? ''}` : code;
-        if (event.type === 'keydown') {
-          down.set(id, event.t);
-        } else {
-          const at = down.get(id);
-          if (at !== undefined) {
-            holds.push([event.key ?? '', code, Math.round(event.t - at)]);
-            down.delete(id);
-          }
-        }
-      }
+      const { keys, holds } = keysAndHolds(report);
       measured('the keys of letters made with dead keys', {
         dead: keys
           .filter((event) => event.key === 'Dead' || /[éçñíèûü]/.test(event.key ?? ''))
@@ -2675,8 +2685,6 @@ export function defineParitySuite(subject: ParitySubject): void {
       // press that waited for the keyboard to change was held about half
       // as long (medians 0.46 of the others' in both engines up to 2.0.4).
       expect(holds.filter(([, , held]) => held < 25)).toEqual([]);
-      const median = (values: number[]) =>
-        [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)] ?? 0;
       const special = holds.filter(([key, code]) => code === '' || key === 'Dead');
       const ordinary = holds.filter(([key, code]) => code !== '' && key !== 'Dead');
       expect(special.length).toBeGreaterThanOrEqual(7);
@@ -2690,6 +2698,45 @@ export function defineParitySuite(subject: ParitySubject): void {
       // key, named as itself with an empty `code`.
       const lent = subject.name === 'firefox' ? /^[éñíçèû]$/ : /^ñ$/;
       expect(keys.filter((event) => event.code === '' && !lent.test(event.key ?? ''))).toEqual([]);
+    });
+
+    it('lends each of twelve characters a spare key of its own, each held as a hand holds it (browser-07)', async () => {
+      // Twelve letters no key or dead key of the German layout makes: every
+      // spare key the display lends before typing is used, each one a key
+      // a page hears with no `code` (others would be F13 to F24, Lang5,
+      // IntlRo or IntlYen).
+      const text = 'абвгд ежзийкл вдаг';
+      const run = await withContext('lent-keys', (context) =>
+        flow(context, {
+          behavior: { seed: SEEDS.first, typos: false },
+          timeout_ms: 200_000,
+          actions: [
+            { action: 'goto', url: named('/input/') },
+            { action: 'wait_for', selector: 'body[data-ready]' },
+            { action: 'click', selector: '#field' },
+            { action: 'type', selector: '#field', text, timeout_ms: 150_000 },
+            { action: 'wait_for', ms: 300 },
+            { action: 'extract', capture: DOM },
+          ],
+        }),
+      );
+      expect(run.steps.every((step) => step.ok)).toBe(true);
+      const report = inputReportOf(run.steps.at(-1)?.capture?.dom_html ?? null);
+      const { keys, holds } = keysAndHolds(report);
+      measured('the keys lent to twelve letters', {
+        holds: holds.map(([key, code, held]) => `${key}/${code}:${held}`),
+      });
+      expect(report.field).toBe(text);
+      const letters = keys.filter((event) => event.key !== ' ');
+      expect(letters.filter((event) => event.type === 'keydown')).toHaveLength(16);
+      expect(
+        letters.filter((event) => event.code !== '' || !/^[а-л]$/.test(event.key ?? '')),
+      ).toEqual([]);
+      expect(holds.filter(([, , held]) => held < 25)).toEqual([]);
+      const lent = holds.filter(([, code]) => code === '').map(([, , held]) => held);
+      const spaces = holds.filter(([, code]) => code === 'Space').map(([, , held]) => held);
+      expect(lent).toHaveLength(16);
+      expect(median(lent)).toBeGreaterThan(0.75 * median(spaces));
     });
 
     it('clicks, types and selects through the mouse and keyboard of its display', async () => {

@@ -749,6 +749,8 @@ function rig(
     notchPx?: number;
     dark?: readonly [number, number];
     glideMs?: number;
+    /** A key whose press the device refuses, or `prepare` to refuse the lending. */
+    refuse?: string;
   } = {},
 ) {
   const log: string[] = [];
@@ -812,13 +814,18 @@ function rig(
     levelsOf: usLayout,
     prepare: (text) => {
       log.push(`prepare ${text} @${Math.round(now)}`);
-      return Promise.resolve();
+      return options.refuse === 'prepare'
+        ? Promise.reject(new Error('the display refused the lending'))
+        : Promise.resolve();
     },
     unprepare: () => {
       log.push(`unprepare @${Math.round(now)}`);
       return Promise.resolve();
     },
     keyDown: (key) => {
+      if (key === options.refuse) {
+        return Promise.reject(new Error(`the display refused ${key}`));
+      }
       log.push(`key ${key}`);
       return Promise.resolve();
     },
@@ -1135,6 +1142,20 @@ describe('a persona at its mouse and keyboard', () => {
     await human.chord(['Alt'], 'ArrowLeft');
     expect(log.slice(-4)).toEqual(['key Alt', 'key ArrowLeft', 'keyup ArrowLeft', 'keyup Alt']);
     expect(human.counts.keys).toBe(7 + 2 + 2);
+  });
+
+  it('gives the lent keys back when typing fails, even when the lending itself failed', async () => {
+    // A key the display refuses half way through the text (browser-07).
+    const refused = rig({ refuse: 'y' });
+    await expect(refused.human.type('Hi you', { typos: false })).rejects.toThrow(/refused y/);
+    expect(refused.log[0]).toMatch(/^prepare Hi you @/);
+    expect(refused.log.at(-1)).toMatch(/^unprepare @/);
+    expect(refused.log).not.toContain('key o');
+    // A lending refused before the first key: nothing typed, the keys given back.
+    const unlent = rig({ refuse: 'prepare' });
+    await expect(unlent.human.type('Hi', { typos: false })).rejects.toThrow(/refused the lending/);
+    expect(unlent.log.filter((entry) => entry.startsWith('key '))).toEqual([]);
+    expect(unlent.log.at(-1)).toMatch(/^unprepare @/);
   });
 
   it('dwells for the time asked, with an idle hand that moves a little, or does not', async () => {

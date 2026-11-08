@@ -433,11 +433,12 @@ export class Human {
   /** Types text on the keyboard, key by key. The caller has put the focus where it belongs. */
   async type(text: string, options: { readonly typos: boolean }): Promise<void> {
     const { device, profile, random } = this.parts;
-    // Keys the layout lacks are lent before the plan's clock starts, so
-    // that the keyboard's change takes no time out of a hold or a gap
-    // (browser-07).
-    await device.prepare(text);
     try {
+      // Keys the layout lacks are lent before the plan's clock starts, so
+      // that the keyboard's change takes no time out of a hold or a gap
+      // (browser-07). Inside the `try`: a lending that failed half way is
+      // given back too.
+      await device.prepare(text);
       const plan = planTyping(text, (key) => device.levelsOf(key), profile, random, options);
       const started = this.clock.now();
       for (const action of plan.actions) {

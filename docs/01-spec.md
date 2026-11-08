@@ -1614,8 +1614,10 @@ persona's seed and the request's seed, which the result records.
   with its own `key` and an empty `code`: no keyboard of the persona's
   country sends that, and it is the tell left (Chrome named such a key
   `"\u0000"` up to 2.0.4). A text with more such characters than spare
-  keys (eleven on the German layout) types the rest on the one key lent at
-  the press, as before.
+  keys (twelve on the German layout) types the rest on the one key lent at
+  the press, as before, and there the tell of 2.0.4 is back: Chrome names
+  such a key `"\u0000"`, and it and its neighbours are held 1 to 51 ms (in
+  Camoufox, which names the character, 4 to 44 ms).
 - Entry: the first navigation in a context for a new origin SHOULD arrive
   with a plausible `Referer` strategy from policy: `direct`, `search_engine`
   (visit the engine results page first, then click), or `none`. `none`
