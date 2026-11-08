@@ -6,7 +6,7 @@
 use encoding_rs::Encoding;
 use kage_core::domain::Header;
 use kage_core::outcome::Outcome;
-use kage_crawl::html::Page;
+use kage_crawl::html::{PARSE_BUDGET, Page};
 use kage_extract::{Document, Options, Truncated};
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -258,9 +258,24 @@ pub(super) async fn read_document(
     options: Option<Options>,
     seen: Option<Vec<(String, bool)>>,
 ) -> Reading {
+    read_document_within(captured, loaded_from, page, options, seen, PARSE_BUDGET).await
+}
+
+/// [`read_document`] with a time of its own for the parse (F147's bound is
+/// [`PARSE_BUDGET`]): a test that reads a deep page whole gives it all the
+/// time it takes, so that a slow runner cannot cut it.
+async fn read_document_within(
+    captured: Captured,
+    loaded_from: Url,
+    page: bool,
+    options: Option<Options>,
+    seen: Option<Vec<(String, bool)>>,
+    budget: std::time::Duration,
+) -> Reading {
     let started = std::time::Instant::now();
     let read = tokio::task::spawn_blocking(move || {
-        let document = Document::parse_in(&captured.text, &loaded_from, captured.encoding);
+        let document =
+            Document::parse_within(&captured.text, &loaded_from, captured.encoding, budget);
         let page = page.then(|| document.page());
         let extract = options.map(|options| {
             let mut extract = kage_extract::extract(&document, &options);
@@ -350,7 +365,7 @@ mod tests {
     use kage_core::schedule::politeness::Courtesy;
     use kage_http::Fetched;
 
-    use super::{Captured, document_of, is_document, is_html, read_document};
+    use super::{Captured, document_of, is_document, is_html, read_document, read_document_within};
     use crate::executor::AttemptOutput;
 
     /// A document of the browser's, whole.
@@ -480,13 +495,18 @@ mod tests {
                 "<!doctype html><title>Deep</title>{}<p>{words} <a href=\"next\">on</a></p>",
                 "<div>".repeat(depth)
             );
-            let read = runtime.block_on(read_document(
+            // All the time the parse takes: what is tested is the stack, and
+            // a runner slowed by coverage once outran F147's ten seconds
+            // and cut the page before its link.
+            let read = runtime.block_on(read_document_within(
                 whole(html),
                 base.clone(),
                 true,
                 Some(Options::default()),
                 None,
+                AMPLE,
             ));
+            assert!(!read.cut, "{depth}");
             let page = read.page.unwrap();
             assert_eq!(page.title, "Deep", "{depth}");
             let links: Vec<&str> = page.links.iter().map(|link| link.url.as_str()).collect();
@@ -498,6 +518,31 @@ mod tests {
             assert_eq!(extract["links"].as_array().unwrap().len(), 1, "{depth}");
             assert!(!read.thin, "{depth}");
         }
+    }
+
+    /// A parse budget no test's page outruns, however slow the runner.
+    const AMPLE: std::time::Duration = std::time::Duration::from_secs(3600);
+
+    /// F147's bound on the read path: a parse that outruns its budget is
+    /// cut, and the reading says so; what came after the cut is not read.
+    #[tokio::test]
+    async fn a_page_whose_parse_outruns_its_budget_is_read_as_far_as_it_went() {
+        let base = Url::parse("http://deep.kage.test/page").unwrap();
+        let html = format!(
+            "<!doctype html><title>Deep</title>{}<p>words <a href=\"next\">on</a></p>",
+            "<div>".repeat(20_000)
+        );
+        let read = read_document_within(
+            whole(html),
+            base,
+            true,
+            Some(Options::default()),
+            None,
+            std::time::Duration::ZERO,
+        )
+        .await;
+        assert!(read.cut);
+        assert_eq!(read.page.unwrap().links, Vec::new());
     }
 
     /// What the http path fetched, for a test: `body` with `content_type`.

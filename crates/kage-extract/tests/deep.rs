@@ -38,6 +38,18 @@ fn loaded_from() -> Url {
     Url::parse("http://deep.kage.test/page").unwrap()
 }
 
+/// A parse budget no test's page outruns, however slow the runner: what is
+/// tested here is the stack, not F147's ten seconds, which a runner slowed
+/// by coverage instrumentation outran once with a page of 20 000 levels.
+const AMPLE: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// The page `html` parsed with all the time it takes, whole.
+fn parsed(html: &str) -> Document {
+    let document = Document::parse_within(html, &loaded_from(), encoding_rs::UTF_8, AMPLE);
+    assert!(!document.cut());
+    document
+}
+
 /// The finding's page: `depth` `<div>` opened and never closed, then a
 /// paragraph of a hundred words.
 fn findings_page(depth: usize) -> String {
@@ -51,7 +63,7 @@ fn findings_page(depth: usize) -> String {
 #[test]
 fn the_findings_page_is_extracted_on_a_workers_stack() {
     let extracted = on_a_workers_stack(|| {
-        let document = Document::parse(&findings_page(5_000), &loaded_from());
+        let document = parsed(&findings_page(5_000));
         extract(&document, &Options::default())
     });
     assert_eq!(extracted.title.as_deref(), Some("Deep"));
@@ -77,7 +89,7 @@ fn a_page_of_twenty_thousand_nested_blocks_is_extracted_whole() {
         "</div>".repeat(depth)
     );
     let (extracted, main) = on_a_workers_stack(|| {
-        let document = Document::parse(&html, &loaded_from());
+        let document = parsed(&html);
         (
             extract(&document, &Options::default()),
             main_content(&document),
@@ -124,7 +136,7 @@ fn a_page_of_twenty_thousand_nested_inline_elements_is_extracted_whole() {
         "</span>".repeat(depth)
     );
     let extracted = on_a_workers_stack(|| {
-        let document = Document::parse(&html, &loaded_from());
+        let document = parsed(&html);
         extract(&document, &Options::default())
     });
     assert_eq!(extracted.title.as_deref(), Some("Inline"));

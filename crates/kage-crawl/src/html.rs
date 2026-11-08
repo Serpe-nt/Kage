@@ -440,7 +440,7 @@ mod tests {
 
     use scraper::Html;
 
-    use super::{Document, MAX_LINKS, Page, read};
+    use super::{Document, MAX_LINKS, PARSE_BUDGET, Page, read};
 
     fn page(html: &str) -> Page {
         read(
@@ -767,6 +767,31 @@ mod tests {
         );
         assert!(cut.cut());
         let page = cut.page();
+        assert_eq!(page.title, "Deep");
+        assert_eq!(hrefs(&page), ["https://shop.example/first"]);
+        assert!(!page.text.contains("last"));
+    }
+
+    /// F147's bound as shipped: `Document::parse` stops the parse of a page
+    /// that would take minutes at [`PARSE_BUDGET`], ten seconds, and keeps
+    /// what came first. The tests that read deep pages whole give their
+    /// parse all the time it takes instead, so that a slow runner cannot
+    /// cut them; this one is the bound's. It takes about ten seconds.
+    #[test]
+    fn the_shipped_bound_stops_a_parse_at_ten_seconds() {
+        assert_eq!(PARSE_BUDGET, Duration::from_secs(10));
+        let loaded_from = Url::parse("https://shop.example/catalogue/list?page=2").unwrap();
+        let deep = format!(
+            "<title>Deep</title><p>first <a href=\"/first\">link</a></p>{}<p>last</p>",
+            "<div>".repeat(400_000)
+        );
+        let started = Instant::now();
+        let document = Document::parse(&deep, &loaded_from);
+        let took = started.elapsed();
+        assert!(document.cut());
+        assert!(took >= PARSE_BUDGET, "{took:?}");
+        assert!(took < PARSE_BUDGET * 6, "{took:?}");
+        let page = document.page();
         assert_eq!(page.title, "Deep");
         assert_eq!(hrefs(&page), ["https://shop.example/first"]);
         assert!(!page.text.contains("last"));
