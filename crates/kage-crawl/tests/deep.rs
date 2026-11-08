@@ -6,7 +6,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use kage_crawl::html::{Document, read};
+use kage_crawl::html::Document;
 use url::Url;
 
 /// The stack of a Tokio worker thread, and of its blocking pool.
@@ -36,6 +36,18 @@ fn loaded_from() -> Url {
     Url::parse("http://deep.kage.test/page").unwrap()
 }
 
+/// A parse budget no test's page outruns, however slow the runner: what is
+/// tested here is the stack, not F147's ten seconds, which a runner slowed
+/// by coverage instrumentation outran once with a page of 20 000 levels.
+const AMPLE: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// The page `html` parsed with all the time it takes, whole.
+fn parsed(html: &str) -> Document {
+    let document = Document::parse_within(html, &loaded_from(), encoding_rs::UTF_8, AMPLE);
+    assert!(!document.cut());
+    document
+}
+
 /// The finding's page: `depth` `<div>` opened and never closed, then a
 /// paragraph of a hundred words.
 fn findings_page(depth: usize) -> String {
@@ -48,7 +60,7 @@ fn findings_page(depth: usize) -> String {
 
 #[test]
 fn the_findings_page_is_read_on_a_workers_stack() {
-    let page = on_a_workers_stack(|| read(&findings_page(5_000), &loaded_from()));
+    let page = on_a_workers_stack(|| parsed(&findings_page(5_000)).page());
     assert_eq!(page.title, "Deep");
     assert_eq!(page.text, words(100));
     assert_eq!(page.main_text, page.text);
@@ -66,7 +78,7 @@ fn a_page_of_twenty_thousand_nested_elements_gives_its_links_and_text() {
         words(100),
         "</div>".repeat(depth)
     );
-    let page = on_a_workers_stack(|| Document::parse(&html, &loaded_from()).page());
+    let page = on_a_workers_stack(|| parsed(&html).page());
     assert_eq!(page.title, "Deeper");
     let hrefs: Vec<&str> = page.links.iter().map(|link| link.url.as_str()).collect();
     assert_eq!(
@@ -97,7 +109,7 @@ fn what_an_element_hands_down_holds_at_any_depth() {
         "<section>".repeat(depth),
         "</section>".repeat(depth)
     );
-    let page = on_a_workers_stack(|| read(&html, &loaded_from()));
+    let page = on_a_workers_stack(|| parsed(&html).page());
     let seen: Vec<(&str, bool, bool)> = page
         .links
         .iter()
