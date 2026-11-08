@@ -318,8 +318,13 @@ in Firefox, 120 in Chrome) with its smooth scrolling, modifiers are keys.
 - The keyboard layout of the display is the persona's: `setxkbmap` with
   the layout of the request's locale (`de`, `at`, `fr`, `gb`, `it`, …), so
   `KeyboardEvent.code` relates to `key` as on that country's keyboard. A
-  character the layout cannot produce is typed through a spare key that
-  is mapped to it for the moment.
+  character the layout cannot produce is typed through a spare key lent
+  to it before the text's first key, so its press is as prompt as any
+  other and held as long. Camoufox does not compose a dead key with the
+  next letter on the display (`´`, `e` arrives as `e`), so here `é` on a
+  German layout is such a character too, where Chrome types `´`, `e`. A
+  page sees it with its own `key` and an empty `code`: the tell left
+  (QA round three, browser-07; spec §10.4).
 - A persona has a motor profile, drawn once from its seed
   (`motor-profile-v1`): how fast it aims (Fitts' law), where its speed
   peaks, to which side its paths bend, how often it overshoots, how long

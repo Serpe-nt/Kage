@@ -37,6 +37,13 @@ export interface KeyLevels {
    * one spare key to. `null` where the device cannot say.
    */
   readonly keycode: number | null;
+  /**
+   * Where the layout has no key for the character but a dead key that
+   * makes it from a letter it has (`é` on the German layout: `´`, then
+   * `e`), the two keys typed for it; `null` otherwise. A person types such
+   * a character so, and the page sees the keys a real keyboard sends.
+   */
+  readonly compose: { readonly dead: string; readonly base: string } | null;
 }
 
 /** The mouse and the keyboard of one display. Coordinates are pixels of the screen. */
@@ -54,6 +61,15 @@ export interface InputDevice {
    * as `KeyboardEvent.key` writes it (`Enter`, `Backspace`, `Shift`, …).
    */
   levelsOf(key: string): KeyLevels;
+  /**
+   * Gets the keyboard ready for a text before its first key goes down: a
+   * character the layout has no key for, nor a dead key, is lent a key of
+   * its own now, so that no press of it waits for the keyboard to change
+   * (QA round three, browser-07). `levelsOf` then names that key.
+   */
+  prepare(text: string): Promise<void>;
+  /** Gives back the keys `prepare` lent, once the text's last key is up. */
+  unprepare(): Promise<void>;
   /** Presses a key. Modifiers are keys too and are pressed by the caller. */
   keyDown(key: string): Promise<void>;
   keyUp(key: string): Promise<void>;

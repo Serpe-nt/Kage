@@ -173,7 +173,7 @@ describe('the input of a display', () => {
 
   it('knows a German keyboard: Shift for capitals, AltGr for @ and €, Z where Y is', async () => {
     const input = await X11Input.open(display.name);
-    const placed = { keycode: expect.any(Number) as unknown };
+    const placed = { keycode: expect.any(Number) as unknown, compose: null };
     expect(input.levelsOf('z')).toEqual({ shift: false, altGr: false, onLayout: true, ...placed });
     expect(input.levelsOf('Z')).toEqual({ shift: true, altGr: false, onLayout: true, ...placed });
     expect(input.levelsOf('ü')).toEqual({ shift: false, altGr: false, onLayout: true, ...placed });
@@ -228,6 +228,65 @@ describe('the input of a display', () => {
     await input.keyUp('ю');
     await input.keyUp('ж');
     expect(await free()).toBe(before);
+    await input.flush();
+    connection.close();
+    await input.close();
+  });
+
+  it('makes a letter the layout lacks with its dead key: é is ´ then e (browser-07)', async () => {
+    const input = await X11Input.open(display.name);
+    expect(input.levelsOf('é').compose).toEqual({ dead: 'Dead:acute', base: 'e' });
+    expect(input.levelsOf('É').compose).toEqual({ dead: 'Dead:acute', base: 'E' });
+    expect(input.levelsOf('è').compose).toEqual({ dead: 'Dead:grave', base: 'e' });
+    expect(input.levelsOf('û').compose).toEqual({ dead: 'Dead:circumflex', base: 'u' });
+    expect(input.levelsOf('é')).toMatchObject({ onLayout: true, keycode: null });
+    // A letter on the layout is typed as itself, a character no dead key
+    // makes is lent a key, and a dead key is a key like any other.
+    expect(input.levelsOf('ü').compose).toBeNull();
+    expect(input.levelsOf('ж').compose).toBeNull();
+    expect(input.levelsOf('Dead:acute')).toMatchObject({ onLayout: true, compose: null });
+    expect(input.levelsOf('Dead:grave')).toMatchObject({ shift: true, onLayout: true });
+    for (const key of ['Dead:acute', 'e', 'Dead:grave', 'a']) {
+      await input.keyDown(key);
+      await input.keyUp(key);
+    }
+    await input.flush();
+    await input.close();
+    // For a browser that does not compose them, `é` is lent a key.
+    const plain = await X11Input.open(display.name, { deadKeys: false });
+    expect(plain.levelsOf('é')).toMatchObject({ onLayout: false, compose: null });
+    expect(plain.levelsOf('ü')).toMatchObject({ onLayout: true, compose: null });
+    await plain.close();
+  });
+
+  it('lends each such character a key of its own before typing, and takes them back (browser-07)', async () => {
+    const input = await X11Input.open(display.name);
+    const connection = await X11Connection.connect(display.name);
+    const free = async () =>
+      (await connection.keyboardMapping()).filter((row) => row.every((keysym) => keysym === 0))
+        .length;
+    const before = await free();
+    // `é` has a dead key, `ж` and `ю` none: two keys are lent, once.
+    await input.prepare('жюжé a');
+    expect(await free()).toBe(before - 2);
+    const zhe = input.levelsOf('ж');
+    const yu = input.levelsOf('ю');
+    expect(zhe.onLayout).toBe(false);
+    expect(zhe.keycode).not.toBeNull();
+    expect(yu.keycode).not.toBe(zhe.keycode);
+    expect(yu.keycode).not.toBe(input.levelsOf('ä').keycode);
+    // Pressing them changes nothing more: no wait at the press.
+    for (const key of ['ж', 'ю', 'ж']) {
+      await input.keyDown(key);
+      await input.keyUp(key);
+    }
+    expect(await free()).toBe(before - 2);
+    await input.prepare('ж');
+    expect(await free()).toBe(before - 2);
+    await input.unprepare();
+    expect(await free()).toBe(before);
+    expect(input.levelsOf('ж').keycode).toBe(input.levelsOf('ю').keycode);
+    await input.unprepare();
     await input.flush();
     connection.close();
     await input.close();

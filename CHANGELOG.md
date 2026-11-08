@@ -368,6 +368,20 @@ version's date is the day, in UTC, its tag was made.
   now asks the display's keyboard which key each character is on, on any
   of its levels, and such a press waits until 15 to 45 ms after the
   release; a text with no such pair is planned exactly as before
+  (spec §10.4).- **A letter the layout lacks is typed as a hand types it (QA round
+  three, browser-07).** A character the persona's layout has no key for
+  (`é`, `ç`, `ñ` on the German layout) was typed on a spare key mapped at
+  the press: the press waited up to 60 ms for applications to read the
+  change while its release kept its planned time, so such keys were held
+  0 to 29 ms and their neighbours' holds collapsed, and Chrome named the
+  key `"\u0000"`. In Chrome a letter a dead key makes is now typed as a
+  German typist types it, `´` then `e`; every other such character (all of
+  them in Camoufox, which does not compose dead keys on the display) gets
+  a spare key of its own before the text's first key, chosen among those a
+  page hears with no `code`, so its press is on time and held as long as
+  any other (medians of such holds went from 0.46 of the other keys' to
+  1.03–1.05 in both engines). The page still sees such a key with an
+  empty `code`; that tell is written down in both engines' runbooks
   (spec §10.4).
 ### Added
 

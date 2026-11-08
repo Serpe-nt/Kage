@@ -38,6 +38,39 @@ export const NAMED_KEYSYMS: Readonly<Record<string, number>> = {
   ' ': 0x20,
 };
 
+/**
+ * Dead keys, by the combining mark they put on the letter typed after
+ * them: a person whose layout has no key for `é` types the dead key `´`
+ * and then `e` (QA round three, browser-07). The name is the key's name
+ * for the planner and the device; a page sees `Dead`.
+ */
+export const DEAD_KEYS: Readonly<
+  Record<string, { readonly name: string; readonly keysym: number }>
+> = Object.fromEntries(
+  (
+    [
+      [0x300, 'grave', 0xfe50],
+      [0x301, 'acute', 0xfe51],
+      [0x302, 'circumflex', 0xfe52],
+      [0x303, 'tilde', 0xfe53],
+      [0x304, 'macron', 0xfe54],
+      [0x306, 'breve', 0xfe55],
+      [0x307, 'abovedot', 0xfe56],
+      [0x308, 'diaeresis', 0xfe57],
+      [0x30a, 'abovering', 0xfe58],
+      [0x30b, 'doubleacute', 0xfe59],
+      [0x30c, 'caron', 0xfe5a],
+      [0x327, 'cedilla', 0xfe5b],
+      [0x328, 'ogonek', 0xfe5c],
+    ] as const
+  ).map(([mark, name, keysym]) => [String.fromCodePoint(mark), { name: `Dead:${name}`, keysym }]),
+);
+
+/** The key symbol of a dead key by its name (`Dead:acute`), as `DEAD_KEYS` names them. */
+export const DEAD_KEYSYMS: Readonly<Record<string, number>> = Object.fromEntries(
+  Object.values(DEAD_KEYS).map((dead) => [dead.name, dead.keysym]),
+);
+
 /** `Shift_L`, the key that selects the second level of a key. */
 export const KEYSYM_SHIFT = 0xffe1;
 /** `ISO_Level3_Shift`, the AltGr key that selects the third level. */
