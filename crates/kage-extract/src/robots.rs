@@ -67,6 +67,10 @@ struct Rule {
     /// The pattern, an escape of an unreserved character decoded and the
     /// other percent-escapes in upper case.
     pattern: String,
+    /// The pattern as the file writes it, which is what is reported: the
+    /// decoded one is how it is compared, not what a reader finds in the
+    /// file (QA round three's level0-03).
+    written: String,
 }
 
 /// The character a percent-escape of the two hex digits `high` and `low`
@@ -93,12 +97,13 @@ fn push_escape(out: &mut String, high: u8, low: u8) {
 }
 
 impl Rule {
-    /// The line as it is reported: `Disallow: /private`.
+    /// The line as it is reported, its pattern as the file writes it:
+    /// `Disallow: /private`.
     fn written(&self) -> String {
         format!(
             "{}: {}",
             if self.allow { "Allow" } else { "Disallow" },
-            self.pattern
+            self.written
         )
     }
 }
@@ -174,7 +179,8 @@ impl Builder {
         self.rules += 1;
         group.rules.push(Rule {
             allow,
-            pattern: value.to_owned(),
+            pattern: escape_pattern(value),
+            written: value.to_owned(),
         });
     }
 }
@@ -245,7 +251,7 @@ impl Builder {
         if begins(&["user-agent", "useragent", "user agent"]) {
             self.user_agent(value);
         } else if begins(&["allow"]) {
-            self.rule(true, &escape_pattern(value));
+            self.rule(true, value);
         } else if begins(&[
             "disallow",
             "dissallow",
@@ -254,7 +260,7 @@ impl Builder {
             "diasllow",
             "disallaw",
         ]) {
-            self.rule(false, &escape_pattern(value));
+            self.rule(false, value);
         } else if begins(&["sitemap", "site-map"]) {
             self.sitemap(value);
         } else {
@@ -814,10 +820,23 @@ mod tests {
             decide(body, "/h03-%70rivate").matched_rule.as_deref(),
             Some("Disallow: /h03-private")
         );
+        // The rule is reported as the file writes it (QA round three's
+        // level0-03), not as it is compared.
         assert_eq!(
             decide(body, "/h03-baz").matched_rule.as_deref(),
-            Some("Disallow: /h03-baz")
+            Some("Disallow: /h03-%62az")
         );
+        let written = "User-agent: *\nDisallow: /a/%7euser\nDisallow: /q?x=%41\nDisallow: /c/café\nDisallow: /d/%2fx\n";
+        for (path, line) in [
+            ("/a/~user", "Disallow: /a/%7euser"),
+            ("/q?x=A", "Disallow: /q?x=%41"),
+            ("/c/caf%C3%A9", "Disallow: /c/café"),
+            ("/d/%2Fx", "Disallow: /d/%2fx"),
+        ] {
+            let decision = decide(written, path);
+            assert!(!decision.allowed, "{path}");
+            assert_eq!(decision.matched_rule.as_deref(), Some(line), "{path}");
+        }
         for (high, low, decoded) in [
             (b'7', b'0', Some('p')),
             (b'4', b'1', Some('A')),
