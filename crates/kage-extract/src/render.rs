@@ -279,21 +279,78 @@ fn destination(address: &str) -> String {
 }
 
 /// A paragraph whose first characters would start a markdown block gets
-/// them escaped.
+/// them escaped, and so does every line a hard break starts in it: a line
+/// after a break is read as the start of a block as well (`CommonMark` §5.3,
+/// QA round three's extract-02).
 fn guard_start(block: &str) -> String {
-    let digits = block.chars().take_while(char::is_ascii_digit).count();
-    let numbered =
-        digits > 0 && digits <= 9 && matches!(block[digits..].chars().next(), Some('.' | ')'));
-    let marked = ["# ", "##", "+ ", "- ", "---", "==="]
-        .iter()
-        .any(|start| block.starts_with(start));
-    if marked {
-        format!("\\{block}")
-    } else if numbered {
-        format!("{}\\{}", &block[..digits], &block[digits..])
-    } else {
-        block.to_owned()
+    let mut out = String::with_capacity(block.len() + 2);
+    for (number, line) in block.split('\n').enumerate() {
+        if number > 0 {
+            out.push('\n');
+        }
+        guard_line(line, &mut out);
     }
+    out
+}
+
+/// One line of [`guard_start`]: a heading's `#`s, an item's `-` or `+`, a
+/// number and its `.` or `)`, a rule, or a setext underline of `=`, each
+/// alone or followed by white space, gets its first mark escaped.
+fn guard_line(line: &str, out: &mut String) {
+    // A mark is one when the line ends after it or white space follows it.
+    let ends_a_mark = |rest: &str| rest.is_empty() || rest.starts_with([' ', '\t']);
+    let digits = line.chars().take_while(char::is_ascii_digit).count();
+    let numbered =
+        digits > 0 && digits <= 9 && matches!(line[digits..].chars().next(), Some('.' | ')'));
+    let hashes = line.bytes().take_while(|byte| *byte == b'#').count();
+    let shown = line.trim_end();
+    let marked = (hashes > 0 && ends_a_mark(&line[hashes..]))
+        || line.starts_with("##")
+        || (line.starts_with(['-', '+']) && ends_a_mark(&line[1..]))
+        || line.starts_with("---")
+        || (!shown.is_empty() && shown.bytes().all(|byte| byte == b'='));
+    if marked {
+        out.push('\\');
+        out.push_str(line);
+    } else if numbered {
+        out.push_str(&line[..digits]);
+        out.push('\\');
+        out.push_str(&line[digits..]);
+    } else {
+        out.push_str(line);
+    }
+}
+
+/// A heading's title whose last characters would read as the closing `#`s
+/// of an ATX heading (`CommonMark` §4.2) gets the first of them escaped.
+fn guard_heading_end(title: String) -> String {
+    let kept = title.trim_end_matches('#');
+    if kept.len() == title.len() || !(kept.is_empty() || kept.ends_with([' ', '\t'])) {
+        return title;
+    }
+    format!("{kept}\\{}", &title[kept.len()..])
+}
+
+/// Whether an element is one the writer marks inline: emphasis, code, a
+/// link.
+fn is_inline_mark(name: &str) -> bool {
+    matches!(
+        name,
+        "em" | "i"
+            | "cite"
+            | "dfn"
+            | "var"
+            | "strong"
+            | "b"
+            | "del"
+            | "s"
+            | "strike"
+            | "code"
+            | "kbd"
+            | "samp"
+            | "tt"
+            | "a"
+    )
 }
 
 /// The longest run of a character in a text.
@@ -468,6 +525,14 @@ impl Writer<'_> {
             return false;
         }
         let in_data_table = self.tables.last().copied().unwrap_or(false);
+        // Inside a code span what is inline is its text: a code span holds
+        // no marks, links or code spans (`CommonMark` §6.1), and a span
+        // written around every nested one would grow with the square of
+        // the depth, its writing with the cube (QA round three's
+        // extract-01).
+        if self.open_code > 0 && !blocky && is_inline_mark(name) {
+            return false;
+        }
         let kind = match name {
             "br" => {
                 self.line_break();
@@ -714,6 +779,12 @@ impl Writer<'_> {
                 _ => inner.to_owned(),
             };
             if let Some(top) = self.top() {
+                // A `!` right before a link would make an image of it
+                // (`CommonMark` §6.4, QA round three's extract-02).
+                let joined = !(frame.led_by_space || top.space_owed || top.broke);
+                if markdown && written.starts_with('[') && joined && top.inline.ends_with('!') {
+                    top.inline.insert(top.inline.len() - 1, '\\');
+                }
                 top.push(&written, frame.led_by_space, frame.space_owed);
             }
             return;
@@ -757,7 +828,11 @@ impl Writer<'_> {
                     return title;
                 }
                 if markdown {
-                    format!("{} {title}", "#".repeat(usize::from(level)))
+                    format!(
+                        "{} {}",
+                        "#".repeat(usize::from(level)),
+                        guard_heading_end(title)
+                    )
                 } else {
                     self.headings.push(Heading {
                         level,
