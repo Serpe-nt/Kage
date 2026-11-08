@@ -1,0 +1,2 @@
+  l7.left.test: { pacing: fast, min_dwell: 500ms, active_hours: ignore, robots: enforce }
+  l8.left.test: { pacing: fast, min_dwell: 500ms, active_hours: ignore, robots: enforce }
