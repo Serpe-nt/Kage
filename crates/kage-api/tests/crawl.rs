@@ -1434,7 +1434,10 @@ async fn a_link_answered_with_no_content_is_ok_with_its_status_and_the_tab_stays
                     "message": "the link was answered with no content (204): the tab stays on the page it showed",
                     "net_error": null,
                 },
-                "status": 204, "title": null, "headers": [], "dom_html": "<html><body>the page before</body></html>",
+                // What an engine that read the tab would say: the page
+                // before, its address and title (the review of #84).
+                "final_url": Api::url("/"), "title": "/",
+                "status": 204, "headers": [], "dom_html": "<html><body>the page before</body></html>",
                 "raw_body": null, "links": null,
                 "behavior": {
                     "seed": "5f1c0e9a7b3d2468", "profile_id": "3451761c17e3a615",
@@ -1480,6 +1483,12 @@ async fn a_link_answered_with_no_content_is_ok_with_its_status_and_the_tab_stays
     assert_eq!(result["status"], 204, "{result}");
     assert_eq!(result["reason"], Value::Null, "{result}");
     assert_eq!(result["attempts"].as_array().unwrap().len(), 1, "{result}");
+    // The answer's address, not the page the tab still shows: no landing
+    // on the page before, and so no duplicate of it.
+    assert_eq!(result["final_url"], Api::url("/nc204"), "{result}");
+    assert_eq!(result["title"], Value::Null, "{result}");
+    assert_eq!(empty["crawl"]["duplicate_of"], Value::Null, "{empty}");
+    assert_eq!(done["crawl"]["duplicates"], 0, "{done}");
     let navigations = api.lab.chromium.with(|sidecar| sidecar.navigated.clone());
     let to_empty = navigations
         .iter()

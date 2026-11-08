@@ -536,11 +536,20 @@ fn every_rule_that_blocks_is_bounded() {
         - { id: typed, vendor: akamai, type: bot_manager_challenge, outcome: challenge_failed, confidence: 0.9, \
             when: { all: [ { body: 'x' }, { header: { name: Content-Type, regex: html } } ] } }\n\
         - { id: vendor-header, vendor: akamai, type: bot_manager_challenge, outcome: challenge_failed, confidence: 0.9, \
-            when: { all: [ { body: 'x' }, { header: x-vendor-block } ] } }\n";
+            when: { all: [ { body: 'x' }, { header: x-vendor-block } ] } }\n\
+        - { id: frameless, vendor: generic, type: blank_page, outcome: soft_block, confidence: 0.6, \
+            when: { all: [ { body: 'x' }, { shown_frames: { max: 0 } } ] } }\n";
     // A `content-type` header is on every page: it bounds nothing; a header
     // the site's front sets does.
     assert_eq!(
         unbounded_rules(unbounded),
-        ["quoted", "any-of", "twohundred", "negated", "typed"]
+        [
+            "quoted",
+            "any-of",
+            "twohundred",
+            "negated",
+            "typed",
+            "frameless"
+        ]
     );
 }

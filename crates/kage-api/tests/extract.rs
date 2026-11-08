@@ -1569,93 +1569,94 @@ async fn a_crawl_takes_links_from_html_only_and_asks_for_no_sitemap_the_file_dis
     api.shut_down().await;
 }
 
-/// QA round three's crawl-03: where the site's robots.txt is enforced, a
-/// sitemap on another host of the site (a `Sitemap:` line, an index's
-/// child) is not asked for before that host's own file is read, nor at all
-/// when that file disallows it; it is listed `robots_denied`. The seed
-/// host's file read first was no answer for the other host's.
-#[tokio::test]
-async fn a_sitemap_on_another_host_of_the_site_waits_for_that_hosts_robots_txt() {
-    let mut api = Api::start_with(3, 155, ENFORCED, quick).await;
-    let token = api.key(&[Scope::Jobs, Scope::Crawl, Scope::Fetch]).await;
-    let other = |path: &str| format!("http://maps.kage.test{path}");
-    let on = |host: &'static str, at: &'static str, content_type: &'static str, body: String| {
-        Mock::given(method("GET"))
-            .and(path(at))
-            .and(header_regex(
-                "host",
-                &format!("^{}(:|$)", host.replace('.', "\\.")),
-            ))
-            .respond_with(ResponseTemplate::new(200).set_body_raw(body.into_bytes(), content_type))
-    };
-    let urlset = |urls: &[String]| {
-        let urls: Vec<String> = urls
-            .iter()
-            .map(|url| format!("<url><loc>{url}</loc></url>"))
-            .collect();
-        format!(
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
-             <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">{}</urlset>",
-            urls.concat()
-        )
+/// An address of the other host of the lab's site (crawl-03).
+fn on_maps(path: &str) -> String {
+    format!("http://maps.kage.test{path}")
+}
+
+/// A mock that answers on one host of the lab's site only.
+fn on_host(host: &str, at: &str, answer: ResponseTemplate) -> Mock {
+    Mock::given(method("GET"))
+        .and(path(at))
+        .and(header_regex(
+            "host",
+            &format!("^{}(:|$)", host.replace('.', "\\.")),
+        ))
+        .respond_with(answer)
+}
+
+/// A sitemap of these addresses.
+fn urlset(urls: &[String]) -> String {
+    let urls: Vec<String> = urls
+        .iter()
+        .map(|url| format!("<url><loc>{url}</loc></url>"))
+        .collect();
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+         <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">{}</urlset>",
+        urls.concat()
+    )
+}
+
+/// QA round three's crawl-03 world: the seed host's robots.txt names an
+/// index on its host and a sitemap on `maps.kage.test`; the index names two
+/// sitemaps there. The other host's own file answers `maps_robots`, and
+/// when it is read it disallows `/m/blocked`.
+async fn two_hosts_of_one_site(api: &Api, maps_robots: ResponseTemplate) {
+    let ok = |content_type: &str, body: String| {
+        ResponseTemplate::new(200).set_body_raw(body.into_bytes(), content_type)
     };
     let mocks = [
-        on(
+        on_host(
             "shop.kage.test",
             "/robots.txt",
-            "text/plain",
-            format!(
-                "User-agent: *\nDisallow: /nothing-here\nSitemap: {}\nSitemap: {}\n",
-                Api::url("/maps/index.xml"),
-                other("/m/blocked-line.xml")
+            ok(
+                "text/plain",
+                format!(
+                    "User-agent: *\nDisallow: /nothing-here\nSitemap: {}\nSitemap: {}\n",
+                    Api::url("/maps/index.xml"),
+                    on_maps("/m/blocked-line.xml")
+                ),
             ),
         ),
-        on(
-            "maps.kage.test",
-            "/robots.txt",
-            "text/plain",
-            "User-agent: *\nDisallow: /m/blocked\n".to_owned(),
-        ),
-        on(
+        on_host("maps.kage.test", "/robots.txt", maps_robots),
+        on_host(
             "shop.kage.test",
             "/maps/index.xml",
-            "application/xml",
-            format!(
-                "<?xml version=\"1.0\"?><sitemapindex xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\
-                 <sitemap><loc>{}</loc></sitemap><sitemap><loc>{}</loc></sitemap></sitemapindex>",
-                other("/m/blocked-child.xml"),
-                other("/m/ok-child.xml")
+            ok(
+                "application/xml",
+                format!(
+                    "<?xml version=\"1.0\"?><sitemapindex xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\
+                     <sitemap><loc>{}</loc></sitemap><sitemap><loc>{}</loc></sitemap></sitemapindex>",
+                    on_maps("/m/blocked-child.xml"),
+                    on_maps("/m/ok-child.xml")
+                ),
             ),
         ),
-        on(
+        on_host(
             "maps.kage.test",
             "/m/ok-child.xml",
-            "application/xml",
-            urlset(&[other("/m/page")]),
+            ok("application/xml", urlset(&[on_maps("/m/page")])),
         ),
-        on(
+        on_host(
             "maps.kage.test",
             "/m/blocked-line.xml",
-            "application/xml",
-            urlset(&[other("/m/from-line")]),
+            ok("application/xml", urlset(&[on_maps("/m/from-line")])),
         ),
-        on(
+        on_host(
             "maps.kage.test",
             "/m/blocked-child.xml",
-            "application/xml",
-            urlset(&[other("/m/from-child")]),
+            ok("application/xml", urlset(&[on_maps("/m/from-child")])),
         ),
-        on(
+        on_host(
             "shop.kage.test",
             "/",
-            "text/html; charset=utf-8",
-            article("Home", &[]),
+            ok("text/html; charset=utf-8", article("Home", &[])),
         ),
-        on(
+        on_host(
             "maps.kage.test",
             "/m/page",
-            "text/html; charset=utf-8",
-            article("Page", &[]),
+            ok("text/html; charset=utf-8", article("Page", &[])),
         ),
     ];
     for mock in mocks {
@@ -1665,23 +1666,11 @@ async fn a_sitemap_on_another_host_of_the_site_waits_for_that_hosts_robots_txt()
     for proxy in &api.lab.proxies {
         proxy.route("maps.kage.test:80", *api.lab.site.address());
     }
+}
 
-    let body = json!({
-        "type": "crawl",
-        "seeds": [Api::url("/")],
-        "use_sitemaps": true,
-        "max_depth": 1,
-        "defaults": { "level": 0 },
-    });
-    let reply = api.post(&token, "/v1/jobs", &body).await;
-    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.json());
-    let id = reply.json()["id"].as_str().unwrap().to_owned();
-    let work = api.work();
-    let done = api.job_until(&token, &id, ended).await;
-    assert_eq!(done["state"], "succeeded", "{done}");
-
-    let asked: Vec<String> = api
-        .lab
+/// What the lab's site was asked for, in order: host and path.
+async fn asked_by_host(api: &Api) -> Vec<String> {
+    api.lab
         .site
         .received_requests()
         .await
@@ -1699,7 +1688,43 @@ async fn a_sitemap_on_another_host_of_the_site_waits_for_that_hosts_robots_txt()
                 .to_owned();
             format!("{host}{}", request.url.path())
         })
-        .collect();
+        .collect()
+}
+
+/// The crawl of crawl-03's world, at level 0 with its sitemaps.
+fn two_hosts_crawl() -> Value {
+    json!({
+        "type": "crawl",
+        "seeds": [Api::url("/")],
+        "use_sitemaps": true,
+        "max_depth": 1,
+        "defaults": { "level": 0 },
+    })
+}
+
+/// QA round three's crawl-03: where the site's robots.txt is enforced, a
+/// sitemap on another host of the site (a `Sitemap:` line, an index's
+/// child) is not asked for before that host's own file is read, nor at all
+/// when that file disallows it; it is listed `robots_denied`. The seed
+/// host's file read first was no answer for the other host's.
+#[tokio::test]
+async fn a_sitemap_on_another_host_of_the_site_waits_for_that_hosts_robots_txt() {
+    let mut api = Api::start_with(3, 155, ENFORCED, quick).await;
+    let token = api.key(&[Scope::Jobs, Scope::Crawl, Scope::Fetch]).await;
+    two_hosts_of_one_site(
+        &api,
+        ResponseTemplate::new(200)
+            .set_body_raw("User-agent: *\nDisallow: /m/blocked\n", "text/plain"),
+    )
+    .await;
+    let reply = api.post(&token, "/v1/jobs", &two_hosts_crawl()).await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.json());
+    let id = reply.json()["id"].as_str().unwrap().to_owned();
+    let work = api.work();
+    let done = api.job_until(&token, &id, ended).await;
+    assert_eq!(done["state"], "succeeded", "{done}");
+
+    let asked = asked_by_host(&api).await;
     // The other host's file before anything of that host, and never what it
     // disallows.
     let file = asked
@@ -1738,16 +1763,59 @@ async fn a_sitemap_on_another_host_of_the_site_waits_for_that_hosts_robots_txt()
         })
         .collect();
     assert_eq!(
-        states[&other("/m/blocked-line.xml")],
+        states[&on_maps("/m/blocked-line.xml")],
         "robots_denied",
         "{states:?}"
     );
     assert_eq!(
-        states[&other("/m/blocked-child.xml")],
+        states[&on_maps("/m/blocked-child.xml")],
         "robots_denied",
         "{states:?}"
     );
-    assert_eq!(states[&other("/m/ok-child.xml")], "read", "{states:?}");
+    assert_eq!(states[&on_maps("/m/ok-child.xml")], "read", "{states:?}");
+    work.stop().await;
+    api.shut_down().await;
+}
+
+/// The review of crawl-03: where the other host's robots.txt cannot be had
+/// (503) under `enforce`, nothing of that host is asked for: its sitemaps
+/// wait with the site for the file, as the seed's own origin's do. Nothing
+/// known of the file had let the sitemaps go at once.
+#[tokio::test]
+async fn a_sitemap_on_another_host_waits_while_that_hosts_robots_txt_cannot_be_had() {
+    let mut api = Api::start_with(3, 155, ENFORCED, quick).await;
+    let token = api.key(&[Scope::Jobs, Scope::Crawl, Scope::Fetch]).await;
+    two_hosts_of_one_site(&api, ResponseTemplate::new(503)).await;
+    let reply = api.post(&token, "/v1/jobs", &two_hosts_crawl()).await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.json());
+    let id = reply.json()["id"].as_str().unwrap().to_owned();
+    let work = api.work();
+    // The other host's file is asked for, and then a while goes by.
+    let mut asked = Vec::new();
+    for _ in 0..200 {
+        asked = asked_by_host(&api).await;
+        if asked.iter().any(|seen| seen == "maps.kage.test/robots.txt") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        asked.iter().any(|seen| seen == "maps.kage.test/robots.txt"),
+        "{asked:?}"
+    );
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let asked = asked_by_host(&api).await;
+    let of_maps: Vec<&String> = asked
+        .iter()
+        .filter(|seen| seen.starts_with("maps.kage.test/") && !seen.ends_with("/robots.txt"))
+        .collect();
+    assert_eq!(of_maps, Vec::<&String>::new(), "{asked:?}");
+    let job = api.get(&token, &format!("/v1/jobs/{id}")).await.json();
+    assert_ne!(job["state"], "succeeded", "{job}");
+    let cancelled = api
+        .post(&token, &format!("/v1/jobs/{id}/cancel"), &json!({}))
+        .await;
+    assert_eq!(cancelled.status, StatusCode::OK, "{:?}", cancelled.json());
     work.stop().await;
     api.shut_down().await;
 }

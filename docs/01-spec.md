@@ -1303,8 +1303,10 @@ S1). A navigation that fails is a page result too, with a typed `error`
 was captured until then. A navigation the browser broke off because the
 site's answer holds no page is no failure (F116, F120): a `204` or `205`
 (the tab stays on what it showed, and nothing of that is returned) is
-`ok` with its status, as at level 0, typed or clicked: a click so
-answered ends its wait at once and was come to by the link (crawl-02); a file the browser saved and showed
+`ok` with its status, as at level 0, typed or clicked, and its `final_url`
+is the answer's address, not the page the tab still shows: a click so
+answered, a redirect before it included, ends its wait at once and was
+come to by the link (crawl-02); a file the browser saved and showed
 nothing of (a typed address answered with `Content-Disposition:
 attachment`, or a click with no entry report and no status) is `ok` with
 the reason `download` and no page. Neither is tried again by another
@@ -2169,7 +2171,7 @@ saving a file is a page that was read and holds no links (its result is
 reader stays the site's reader, and its tab still shows the page the link
 stands on, from which the next page is clicked (F120). A link answered
 with no content (`204`, `205`) is a page reached by its click, `ok` with
-its status, that holds no links: its tab, too, still shows the page the
+its status, landed where it was asked, that holds no links: its tab, too, still shows the page the
 link stands on (crawl-02).
 
 **robots.txt.** Where the policy of a seed's site has its `robots.txt`
@@ -2183,8 +2185,8 @@ no page of the budget, counted as `skipped.robots_denied`. Nor is a
 sitemap the file disallows asked for: the guess `/sitemap.xml`, a file a
 `Sitemap:` line or an index names alike; it is listed with the state
 `robots_denied` (F119; D46). A sitemap on another origin of the site
-waits for that origin's own file, read first by the site's scout
-(crawl-03). An address no request can be made for
+waits for that origin's own file, read first by the site's scout, and a
+file that cannot be had holds the site as the seed's does (crawl-03). An address no request can be made for
 (longer than the 8192 bytes a request may name) is no page either:
 `skipped.invalid_url`, never an item that fails (F139). The first page
 of an origin whose file is not known yet waits for it in the pipeline

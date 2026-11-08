@@ -341,7 +341,7 @@ const LEAVE_ODD_PAGE = page(
 <p><a id="other-tab" target="_blank" href="/landing?from=tab">A link that opens another tab</a></p>
 <p><a id="soft" href="/landing?from=soft">A link the page answers itself</a></p>
 <p><a id="file" href="/download?from=odd">A link to a file the browser saves</a></p>
-<p><a id="nc204" href="/no-content?status=204">A link answered with no content</a> <a id="nc205" href="/no-content?status=205">and one answered to reset the form</a></p>
+<p><a id="nc204" href="/no-content?status=204">A link answered with no content</a> <a id="nc205" href="/no-content?status=205">and one answered to reset the form</a> <a id="ncvia" href="/no-content/after-redirect?delay=600">and one sent on to no content</a></p>
 <p id="view">first view</p>
 <script>
 document.getElementById('soft').addEventListener('click', (event) => {
@@ -636,9 +636,19 @@ const routes = {
   '/cookies': (req, res) => json(res, { cookie: req.headers.cookie ?? '' }),
   // No content (204) or reset content (205): the browser stays on the page
   // it showed (F116, crawl-02).
+  // `delay` (ms, at most 3000) holds the answer back.
   '/no-content': (req, res) => {
-    const status = new URL(req.url, 'http://fixture.localhost').searchParams.get('status') === '205' ? 205 : 204;
-    res.writeHead(status);
+    const asked = new URL(req.url, 'http://fixture.localhost').searchParams;
+    const status = asked.get('status') === '205' ? 205 : 204;
+    setTimeout(() => {
+      res.writeHead(status);
+      res.end();
+    }, Math.min(3000, Number(asked.get('delay') ?? '0') || 0));
+  },
+  // A redirect to no content (crawl-02).
+  '/no-content/after-redirect': (req, res) => {
+    const delay = new URL(req.url, 'http://fixture.localhost').searchParams.get('delay');
+    res.writeHead(302, { location: `/no-content?status=204&via=redirect${delay === null ? '' : `&delay=${delay}`}` });
     res.end();
   },
   '/download': (_req, res) =>

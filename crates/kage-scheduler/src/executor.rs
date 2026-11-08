@@ -1044,6 +1044,19 @@ fn host_of(url: &Url) -> Option<String> {
     url.host_str().map(str::to_ascii_lowercase)
 }
 
+/// The address that gave a page result's answer: where its last redirect
+/// pointed, else the URL asked for. Not what the tab shows, which an answer
+/// with no content leaves on the page before (crawl-02).
+fn answered_at(page: &PageResult) -> String {
+    page.redirects
+        .last()
+        .and_then(|hop| {
+            let from = Url::parse(&hop.url).ok()?;
+            from.join(hop.location.as_deref()?).ok()
+        })
+        .map_or_else(|| page.url.clone(), |to| to.to_string())
+}
+
 /// The hosts of every address a page result names: the URL asked for, the
 /// redirect hops with where each pointed, and where the page ended.
 fn hosts_of(page: &PageResult) -> Vec<String> {
@@ -2020,6 +2033,10 @@ impl PathExecutor {
         // (Firefox: a gzipped sitemap is read from them); a 204's are none.
         if without_page == Some(NoDocument::Empty) {
             page.raw_body = None;
+            // The answer's own address: the tab's is the page before, which
+            // a crawl would take for the page it landed on (crawl-02).
+            page.final_url = answered_at(&page);
+            page.title = None;
         }
         let failure = page_failure(&page);
         let mut classification = self.verdicts.judge_page(&page);
