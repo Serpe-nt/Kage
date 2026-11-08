@@ -500,7 +500,13 @@ version's date is the day, in UTC, its tag was made.
   echo of the operator's own under a private authority answers the probe.
   Its handshake was refused, and the probe went on to the confirmation
   echo, the public one by default, which then saw every proxy's address;
-  that step is now logged at `warn`.
+  that step is now logged at `warn`.- **A hang-up at the wall time leaves the fetch whole (QA round three,
+  flows-03).** A synchronous fetch that outlasts `scheduler.sync_wall_time`
+  is written as a job by a task of its own, which a client that hangs up
+  in that moment no longer cuts short. A cut there left either a job
+  leased to nobody, whose worker began the same request again when the
+  lease ran out (the site got the page twice and the job ended `failed`,
+  `internal`), or a request with no job and no end.
 ### Added
 
 - **A daily scan of `main`'s images (F220).** `image-scan.yaml` builds the
