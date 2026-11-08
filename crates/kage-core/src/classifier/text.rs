@@ -62,9 +62,11 @@ const NO_FRAME_ELEMENTS: [&str; 6] = ["script", "style", "template", "head", "ti
 /// How many frames (`<iframe>`, `<frame>`) the markup shows a reader: not
 /// one in a comment, in `<noscript>` or in what never renders, and not one
 /// that is hidden by its own attributes (`hidden`, `display: none`,
-/// `visibility: hidden`) or is a pixel (a width or height of 0 or 1). A
-/// frame hidden by an element around it is counted: the rough reduction
-/// does not follow styles (class-01).
+/// `visibility: hidden`) or is a pixel (a width and a height of 0 or 1).
+/// A frame of one side only so small is counted: a script may size it to
+/// its content (iframe-resizer's `width: 1px; min-width: 100%`). A frame
+/// hidden by an element around it is counted too: the rough reduction does
+/// not follow styles (class-01).
 pub(crate) fn shown_frames(html: &str) -> usize {
     let mut shown = 0;
     let mut rest = html;
@@ -102,17 +104,23 @@ fn hidden_frame(tag: &str) -> bool {
         let value = value.trim().trim_end_matches("px").trim();
         value == "0" || value == "1"
     };
+    // A side is a pixel by its attribute or its style, and not when the
+    // style lets it grow (`min-width`, `min-height`).
+    let side = |name: &str| {
+        let grows = style
+            .split(';')
+            .any(|declaration| declaration.starts_with(&format!("min-{name}:")));
+        let small = attribute(tag, name).is_some_and(pixel)
+            || style
+                .split(';')
+                .filter_map(|declaration| declaration.strip_prefix(&format!("{name}:")))
+                .any(pixel);
+        small && !grows
+    };
     attribute(tag, "hidden").is_some()
         || style.contains("display:none")
         || style.contains("visibility:hidden")
-        || attribute(tag, "width").is_some_and(pixel)
-        || attribute(tag, "height").is_some_and(pixel)
-        || ["width:", "height:"].into_iter().any(|property| {
-            style
-                .split(';')
-                .filter_map(|declaration| declaration.strip_prefix(property))
-                .any(pixel)
-        })
+        || (side("width") && side("height"))
 }
 
 /// The value of an attribute of a tag (lower case, without its `>`): `""`
@@ -291,6 +299,7 @@ mod tests {
             r#"<iframe src="/pixel" hidden></iframe>"#,
             r#"<iframe src="/pixel" width=1 height=1></iframe>"#,
             r#"<iframe src="/pixel" style="width:0px;height:0px"></iframe>"#,
+            r#"<iframe src="/pixel" width="1" style="height:0"></iframe>"#,
             "<iframes>not one</iframes> <frameset-like>",
         ] {
             assert_eq!(super::shown_frames(&blank(hidden)), 0, "{hidden}");
@@ -309,6 +318,17 @@ mod tests {
                 2,
             ),
             (r#"<iframe src="/a" data-width="0"></iframe>"#, 1),
+            // One side only: a script sizes it (iframe-resizer), or it
+            // grows by its style.
+            (r#"<iframe src="/a" height="0"></iframe>"#, 1),
+            (
+                r#"<iframe src="/a" style="width:1px;min-width:100%"></iframe>"#,
+                1,
+            ),
+            (
+                r#"<iframe src="/a" width="1" height="1" style="min-width:100%"></iframe>"#,
+                1,
+            ),
         ] {
             assert_eq!(super::shown_frames(&blank(shown)), count, "{shown}");
         }

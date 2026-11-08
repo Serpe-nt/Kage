@@ -258,6 +258,44 @@ fn page_read(reading: Option<&CrawlReading>, asked: &Url) -> PageRead {
     }
 }
 
+/// How a page that was read came into its reader's tab.
+#[derive(Debug, Clone, Copy)]
+struct TabLanding {
+    /// The position of the page its link stands on, when it was clicked.
+    from: Option<u64>,
+    /// Whether its address was typed.
+    typed: bool,
+    /// Whether the browser saved it as a file.
+    file: bool,
+    /// Whether the tab still shows what it showed: a file, or an answer
+    /// with no content (204, 205).
+    stays: bool,
+}
+
+/// What a reader's tab holds after a page was read: a click on a page it
+/// went back to dropped what came after that page, and so did a file the
+/// browser saved from it (F120); a page the tab shows is its latest
+/// entry, and a file or no content is none (crawl-02). A typed address
+/// went back nowhere: answered with no content, the tab is as it was (the
+/// review of #84). At most `back_limit` entries behind the open one are
+/// kept.
+fn tab_after(tab: &mut Vec<u64>, seq: u64, landed: TabLanding, back_limit: usize) {
+    if (landed.file || !landed.typed)
+        && let Some(at) = landed
+            .from
+            .and_then(|from| tab.iter().rposition(|held| *held == from))
+    {
+        tab.truncate(at + 1);
+    }
+    if !landed.stays {
+        tab.push(seq);
+    }
+    if tab.len() > back_limit.saturating_add(1) {
+        let extra = tab.len() - back_limit.saturating_add(1);
+        tab.drain(..extra);
+    }
+}
+
 /// A page as the crawl takes it from a fetch that got it.
 fn page_of(report: &FetchReport, asked: &Url) -> PageRead {
     page_read(report.reading.as_ref(), asked)
@@ -1385,13 +1423,26 @@ impl Crawl {
         read: Result<RobotsRead, SchedulerError>,
     ) -> Result<(), WorkError> {
         self.scouting.remove(&site);
+        let origin = Url::parse(file)
+            .ok()
+            .and_then(|url| kage_scheduler::robots::origin_of(&url));
         match read {
-            Ok(
-                RobotsRead::Read { .. }
-                | RobotsRead::NotAsked
-                | RobotsRead::Unreachable { .. }
-                | RobotsRead::Stopped,
-            ) => {}
+            Ok(RobotsRead::Read { .. } | RobotsRead::NotAsked | RobotsRead::Stopped) => {}
+            Ok(RobotsRead::Unreachable { until }) => {
+                if Url::parse(file)
+                    .is_ok_and(|url| self.robots_mode(runner, &url) == RobotsMode::Enforce)
+                {
+                    // Nothing of the origin is asked for until its file can
+                    // be had: the site waits, and the sitemap with it; the
+                    // file is read again then (the planner's review: a 503
+                    // let the sitemap go at once, as nothing was known).
+                    self.held
+                        .insert(site, (until, kage_scheduler::ROBOTS_UNAVAILABLE.to_owned()));
+                    if let Some(origin) = &origin {
+                        self.read_first.remove(origin);
+                    }
+                }
+            }
             // Nobody but a reader could ask, and a reader does not.
             Ok(RobotsRead::NoScout) => self.note_sitemap(file, "no_scout", 0),
             Ok(RobotsRead::Later(deferred)) => {
@@ -1401,12 +1452,9 @@ impl Crawl {
                     .retry_at
                     .unwrap_or_else(|| later(runner.now(), default_wait(reason)));
                 self.held.insert(site, (until, reason.to_owned()));
-                if let Some(origin) = Url::parse(file)
-                    .ok()
-                    .and_then(|url| kage_scheduler::robots::origin_of(&url))
-                {
+                if let Some(origin) = &origin {
                     // Read again when the site's turn comes.
-                    self.read_first.remove(&origin);
+                    self.read_first.remove(origin);
                 }
             }
             Err(error) => {
@@ -1553,23 +1601,13 @@ impl Crawl {
         let stays = file || (read && matches!(status, Some(204 | 205)));
         let view = if read {
             let reached = reached_of(report);
-            // What the tab holds now: a click on a page it went back to
-            // dropped what came after that page; a file or no content
-            // leaves the tab on that page.
-            if (stays || !matches!(reached.0, ReachedField::Typed))
-                && let Some(at) = flight
-                    .from
-                    .and_then(|from| slot.tab.iter().rposition(|held| *held == from))
-            {
-                slot.tab.truncate(at + 1);
-            }
-            if !stays {
-                slot.tab.push(seq);
-            }
-            if slot.tab.len() > back_limit.saturating_add(1) {
-                let extra = slot.tab.len() - back_limit.saturating_add(1);
-                slot.tab.drain(..extra);
-            }
+            let landed = TabLanding {
+                from: flight.from,
+                typed: matches!(reached.0, ReachedField::Typed),
+                file,
+                stays,
+            };
+            tab_after(&mut slot.tab, seq, landed, back_limit);
             let asked = self
                 .frontier
                 .entry(entry)
@@ -1975,7 +2013,50 @@ mod tests {
     use kage_crawl::scope::Skip;
     use serde_json::{Value, json};
 
-    use super::{entry_at, entry_of, position, scroll_of};
+    use super::{TabLanding, entry_at, entry_of, position, scroll_of, tab_after};
+
+    /// A reader's tab after a page: a click from a page further back cuts
+    /// what came after it; a page shown is pushed; a file or no content is
+    /// none; a typed answer with no content leaves the tab as it was (the
+    /// review of #84); the oldest go past the back limit.
+    #[test]
+    fn the_tab_holds_what_the_reader_sees() {
+        let land = |from: Option<u64>, typed: bool, file: bool, stays: bool| TabLanding {
+            from,
+            typed,
+            file,
+            stays,
+        };
+        let after = |tab: &[u64], seq: u64, landed: TabLanding| {
+            let mut tab = tab.to_vec();
+            tab_after(&mut tab, seq, landed, 3);
+            tab
+        };
+        // Clicked on the open page, and after going back one.
+        assert_eq!(
+            after(&[0, 1], 2, land(Some(1), false, false, false)),
+            [0, 1, 2]
+        );
+        assert_eq!(
+            after(&[0, 1], 2, land(Some(0), false, false, false)),
+            [0, 2]
+        );
+        // A clicked file or 204 after going back: the page it stands on.
+        assert_eq!(after(&[0, 1], 2, land(Some(0), false, true, true)), [0]);
+        assert_eq!(after(&[0, 1], 2, land(Some(0), false, false, true)), [0]);
+        // Typed: a page is pushed, nothing cut; a 204 leaves the tab.
+        assert_eq!(
+            after(&[0, 1], 2, land(Some(0), true, false, false)),
+            [0, 1, 2]
+        );
+        assert_eq!(after(&[0, 1], 2, land(Some(0), true, false, true)), [0, 1]);
+        assert_eq!(after(&[0, 1], 2, land(None, true, false, true)), [0, 1]);
+        // At most three behind the open one.
+        assert_eq!(
+            after(&[0, 1, 2, 3], 4, land(Some(3), false, false, false)),
+            [1, 2, 3, 4]
+        );
+    }
 
     fn row() -> FrontierEntry {
         let at = Utc.with_ymd_and_hms(2026, 10, 12, 9, 0, 0).unwrap();

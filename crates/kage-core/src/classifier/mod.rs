@@ -684,9 +684,7 @@ fn bounded(condition: &ConditionSpec) -> bool {
             }
         }
         ConditionSpec::VisibleText(bounds) => bounds.max_chars.is_some(),
-        ConditionSpec::BodyBytes(bounds) | ConditionSpec::ShownFrames(bounds) => {
-            bounds.max.is_some()
-        }
+        ConditionSpec::BodyBytes(bounds) => bounds.max.is_some(),
         // A header the site's front sets bounds a rule; `content-type` is on
         // every page, and bounds nothing.
         ConditionSpec::Header(header) => {
@@ -703,7 +701,10 @@ fn bounded(condition: &ConditionSpec) -> bool {
         | ConditionSpec::Url(_)
         | ConditionSpec::ScriptHost(_)
         | ConditionSpec::IframeHost(_)
-        | ConditionSpec::Render(_) => false,
+        | ConditionSpec::Render(_)
+        // An ordinary article shows no frame: `shown_frames: { max: 0 }`
+        // holds for it, and bounds nothing.
+        | ConditionSpec::ShownFrames(_) => false,
     }
 }
 

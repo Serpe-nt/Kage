@@ -1919,8 +1919,11 @@ export class PageSession {
         });
       // Read anew at every look: the load ends while the look waits.
       const ended = (): boolean => loaded;
+      // An answer with no content after a redirect ends it too: no
+      // `load` comes of it (crawl-02).
+      const empty = () => noContentStatus(this.document.response) !== null;
       const file = (async () => {
-        while (!ended() && !saving()) {
+        while (!ended() && !saving() && !empty()) {
           await sleep(40);
         }
       })();
@@ -1928,6 +1931,10 @@ export class PageSession {
       if (saving()) {
         load.catch(() => undefined);
         return false;
+      }
+      if (empty()) {
+        load.catch(() => undefined);
+        return true;
       }
       await load;
     }
@@ -2074,6 +2081,12 @@ export class PageSession {
         countFrom(this.document, clicked);
       }
     });
+    const late = noContentStatus(this.document.response);
+    if (!arrived && late !== null) {
+      // No content came at the end of the wait (after a redirect): the
+      // answer, not a file (crawl-02).
+      throw new NoContent(late, this.document.response?.request().headers()['referer'] ?? null);
+    }
     if (!arrived) {
       if (saving()) {
         // The answer was a file: the page that was open stays.
@@ -2103,6 +2116,12 @@ export class PageSession {
       // download like one of a page, and the page that was open stays.
       // Reported as arrived, the result would be that page under the
       // target's address.
+      const late = noContentStatus(this.document.response);
+      if (late !== null) {
+        // The answer that came while the page was looked at, after a
+        // redirect, had no content: not a file (crawl-02).
+        throw new NoContent(late, this.document.response?.request().headers()['referer'] ?? null);
+      }
       this.document = newDocument();
       throw new NoPage();
     }
@@ -2344,8 +2363,16 @@ export class PageSession {
           : null;
     // A page the browser brought back from before the flow is a document
     // too, though nothing is known of the response it once came with.
+    // An answer with no content (204, 205) holds no page: the tab still
+    // shows the page before, which is no page of this request's. Its
+    // address is the answer's, and nothing of the page shown is read
+    // (F116, crawl-02).
+    const empty = noContentStatus(response) !== null;
     const loaded =
-      !failedThere && unanswering === null && (response !== null || state.restored !== null);
+      !failedThere &&
+      unanswering === null &&
+      !empty &&
+      (response !== null || state.restored !== null);
     let domHtml: string | null = null;
     let domTruncated = false;
     if (options.dom && loaded) {
@@ -2427,7 +2454,14 @@ export class PageSession {
     }
     return {
       url,
-      final_url: failedThere || refusedTo !== null ? (sentTo ?? url) : loaded ? shown : url,
+      final_url:
+        failedThere || refusedTo !== null
+          ? (sentTo ?? url)
+          : empty
+            ? withoutFragment(response?.url() ?? url)
+            : loaded
+              ? shown
+              : url,
       status: shownHead?.status ?? response?.status() ?? replacedStatus,
       http_version:
         response === null || unanswering !== null

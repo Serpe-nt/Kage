@@ -1456,6 +1456,13 @@ export function defineParitySuite(subject: ParitySubject): void {
           const empty = await enter(`nc${status}`, `/no-content?status=${status}`, 'none');
           expect(empty.result.error, String(status)).toMatchObject({ code: 'aborted' });
           expect(empty.result.status, String(status)).toBe(status);
+          // The answer's address, and nothing of the page the tab still
+          // shows: not its address, title or document.
+          expect(empty.result, String(status)).toMatchObject({
+            final_url: secure(`/no-content?status=${status}`),
+            title: null,
+            dom_html: null,
+          });
           expect(empty.result.behavior, String(status)).toMatchObject({
             clicks: 1,
             entry: { outcome: 'arrived', referer: odd(`nc${status}`) },
@@ -2097,6 +2104,13 @@ export function defineParitySuite(subject: ParitySubject): void {
           const empty = await attempt(`nc${status}`, `/no-content?status=${status}`, 'none');
           expect(empty.result.error, String(status)).toMatchObject({ code: 'aborted' });
           expect(empty.result.status, String(status)).toBe(status);
+          // The answer's address, and nothing of the page the tab still
+          // shows: not its address, title or document.
+          expect(empty.result, String(status)).toMatchObject({
+            final_url: secure(`/no-content?status=${status}`),
+            title: null,
+            dom_html: null,
+          });
           expect(empty.result.behavior, String(status)).toMatchObject({
             clicks: 1,
             entry: { outcome: 'arrived', backs: 0 },
@@ -2134,9 +2148,76 @@ export function defineParitySuite(subject: ParitySubject): void {
         });
         expect(back.error).toMatchObject({ code: 'aborted' });
         expect(back.status).toBe(204);
+        expect(back).toMatchObject({ final_url: secure('/no-content?status=204'), title: null });
         expect(back.behavior).toMatchObject({ clicks: 1, entry: { outcome: 'arrived', backs: 1 } });
         expect(Date.now() - backBegan).toBeLessThan(15_000);
         expect(await askedFor('/no-content')).toEqual(['/no-content?status=204']);
+
+        // A link sent on by a redirect to no content, which comes late:
+        // the same, under the address of the answer (crawl-02).
+        await site.reset();
+        expect((await go(context, odd('via'), { tab: 'crawl' })).error).toBeNull();
+        const viaBegan = Date.now();
+        const via = await go(context, secure('/no-content/after-redirect?delay=600'), {
+          tab: 'crawl',
+          behavior: {
+            seed: SEEDS.first,
+            entry: {
+              strategy: 'link',
+              from_url: odd('via'),
+              from_open_page: true,
+              fallback: 'none',
+            },
+          },
+        });
+        expect(via.error).toMatchObject({ code: 'aborted' });
+        expect(via).toMatchObject({
+          status: 204,
+          title: null,
+          final_url: secure('/no-content?status=204&via=redirect&delay=600'),
+        });
+        expect(via.behavior).toMatchObject({ clicks: 1, entry: { outcome: 'arrived', backs: 0 } });
+        expect(Date.now() - viaBegan).toBeLessThan(10_000);
+        expect(await askedFor('/no-content')).toEqual([
+          '/no-content/after-redirect?delay=600',
+          '/no-content?status=204&via=redirect&delay=600',
+        ]);
+
+        // The same after going back to the page, where Chrome waited for a
+        // load of the redirect's target until the budget.
+        await site.reset();
+        expect((await go(context, odd('viaback'), { tab: 'crawl' })).error).toBeNull();
+        const fromViaBack = (fallback: 'stop' | 'none') => ({
+          seed: SEEDS.first,
+          entry: {
+            strategy: 'link' as const,
+            from_url: odd('viaback'),
+            from_open_page: true,
+            max_backs: 3,
+            fallback,
+          },
+        });
+        const awayAgain = await go(context, secure('/landing?from=wrapped'), {
+          tab: 'crawl',
+          behavior: fromViaBack('stop'),
+        });
+        expect(awayAgain.error).toBeNull();
+        const viaBackBegan = Date.now();
+        const viaBack = await go(context, secure('/no-content/after-redirect?delay=600'), {
+          tab: 'crawl',
+          behavior: fromViaBack('none'),
+        });
+        expect(viaBack.error).toMatchObject({ code: 'aborted' });
+        expect(viaBack).toMatchObject({
+          status: 204,
+          title: null,
+          final_url: secure('/no-content?status=204&via=redirect&delay=600'),
+        });
+        expect(viaBack.behavior).toMatchObject({
+          clicks: 1,
+          entry: { outcome: 'arrived', backs: 1 },
+        });
+        expect(Date.now() - viaBackBegan).toBeLessThan(15_000);
 
         const file = await attempt('file', '/download?from=odd', 'none');
         expect(file.result.error).toMatchObject({ code: 'aborted' });
