@@ -324,7 +324,10 @@ in Firefox, 120 in Chrome) with its smooth scrolling, modifiers are keys.
   next letter on the display (`´`, `e` arrives as `e`), so here `é` on a
   German layout is such a character too, where Chrome types `´`, `e`. A
   page sees it with its own `key` and an empty `code`: the tell left
-  (QA round three, browser-07; spec §10.4).
+  (QA round three, browser-07; spec §10.4). The German layout has twelve
+  such spare keys; further distinct characters of one text are typed on
+  the one key lent at the press, and those are held 4 to 44 ms, as every
+  such key was before 2.0.4.
 - A persona has a motor profile, drawn once from its seed
   (`motor-profile-v1`): how fast it aims (Fitts' law), where its speed
   peaks, to which side its paths bend, how often it overshoots, how long

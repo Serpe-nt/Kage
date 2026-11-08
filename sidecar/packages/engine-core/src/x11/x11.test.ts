@@ -233,6 +233,36 @@ describe('the input of a display', () => {
     await input.close();
   });
 
+  it('lends twelve keys before typing, and types the rest on the key lent at the press (browser-07)', async () => {
+    const input = await X11Input.open(display.name);
+    const connection = await X11Connection.connect(display.name);
+    const free = async () =>
+      (await connection.keyboardMapping()).filter((row) => row.every((keysym) => keysym === 0))
+        .length;
+    const before = await free();
+    const letters = Array.from('абвгдежзийклмнопрст');
+    await input.prepare(letters.join(''));
+    // The German keymap has twelve spare keys a page hears with no `code`.
+    expect(await free()).toBe(before - 12);
+    const keycodes = letters.map((letter) => input.levelsOf(letter).keycode);
+    expect(new Set(keycodes.slice(0, 12)).size).toBe(12);
+    // The rest share the one key lent at the press, the way it was before.
+    const rest = new Set(keycodes.slice(12));
+    expect(rest.size).toBe(1);
+    expect(keycodes.slice(0, 12)).not.toContain([...rest][0]);
+    await input.keyDown('р');
+    expect(await free()).toBe(before - 13);
+    await input.keyUp('р');
+    await input.keyDown('а');
+    await input.keyUp('а');
+    expect(await free()).toBe(before - 12);
+    await input.unprepare();
+    expect(await free()).toBe(before);
+    await input.flush();
+    connection.close();
+    await input.close();
+  });
+
   it('makes a letter the layout lacks with its dead key: é is ´ then e (browser-07)', async () => {
     const input = await X11Input.open(display.name);
     expect(input.levelsOf('é').compose).toEqual({ dead: 'Dead:acute', base: 'e' });

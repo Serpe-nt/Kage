@@ -98,7 +98,9 @@ review.
 | after the driver's first typed navigation the address bar keeps the keyboard focus (a person who typed the address and pressed Enter has the page focused); `document.hasFocus()` says true either way | a page that waits for keys without a click first | follow-up F64: a typed navigation by the hand |
 | `history.length` counts the driver's `about:blank` start page | nobody: the same as for a person who opened a new tab and typed | — |
 | every request starts in a fresh tab (F96): the page that was open sees `blur`, `visibilitychange` and `pagehide` as its tab closes, and the next page a window with the same values | the page that is left, which could record it; a person who opens a new tab does the same to the page they leave | a persona's tab must hold nothing of another request (spec §10.5, §16.5); only a crawl's pages share a tab |
-| a character the persona's layout has no key for and no dead key makes (`ñ` on a German layout, Cyrillic, emoji) is typed on a spare key lent before the text: the page sees its own `key` with an empty `code` (a letter a dead key makes, `é`, is typed `´` then `e` as a person does) | a page's key listener | no key of the layout gives it; a real person would use an input method; up to 2.0.4 Chrome named such a key `"\u0000"` and held it 0 to 29 ms (QA round three, browser-07) |
+| a character the persona's layout has no key for and no dead key makes (`ñ` on a German layout, Cyrillic, emoji) is typed on a spare key lent before the text: the page sees its own `key` with an empty `code` | a page's key listener | no key of the layout gives it; a real person would use an input method; up to 2.0.4 Chrome named such a key `"\u0000"` and held it 0 to 29 ms (QA round three, browser-07) |
+| past the twelve spare keys of the German layout, the further distinct characters of one text are typed on the one key lent at the press: Chrome names it `"\u0000"` (empty `code`) and it and its neighbours are held 1 to 51 ms, as before 2.0.4 | a page's key listener | measured with sixteen distinct Cyrillic letters; a text with more than twelve such characters is rare for a persona of the layout's country |
+| a letter a dead key makes (`é` on a German layout) is typed `´` then `e`, and the page hears what Chrome on a Linux desktop sends: `keydown` `Process`/`Equal`, `keyup` `Dead`/`Equal`, `keydown` `Process`/`KeyE`, `keyup` `e`/`KeyE`, then the composed `é` | a page's key listener | it is Chrome's own handling of real X key events through GTK's input method, as on any Linux desktop, and a Chromium persona claims Linux (ADR 0009). Under `allow_cross_os_claims` a Windows claim would not match: Chrome on Windows sends `keydown` `Dead` and then `keydown` `é` (the UI Events specification's dead-key sequence; not measured here, no Windows host) |
 
 ## Settings
 
@@ -199,6 +201,9 @@ Client Hints override plus one script per document, the same bytes on
 every open. Its integration test (`engine.integration.test.ts`, "fails for
 a Windows claim: its workers still say Linux") pins what that achieves and
 what it does not. Leave it off unless the target is known not to look.
+Such a persona types as the Linux it runs on: a letter its layout makes
+with a dead key arrives as `Process` and `Dead` key events, where Chrome on
+Windows sends `Dead` and then the letter (see the tells above).
 
 A tab a page opens (a `target=_blank` link) gets no override either
 (F203, documented, not fixed; the test "lets a tab a page of an injected
