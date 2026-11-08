@@ -330,6 +330,25 @@ mod tests {
         // A path parameter that cannot be read.
         let job = statuses(&document, "/v1/jobs/{id}", "get");
         assert!(job.iter().any(|status| status == "400"), "{job:?}");
+        // QA round three api-09: what needs the pool says it may be
+        // missing; api-02: a session's id that is none.
+        for (path, method, status) in [
+            ("/v1/sessions", "post", "503"),
+            ("/v1/admin/personas/{id}/retire", "post", "503"),
+            ("/v1/admin/personas/{id}/regenerate", "post", "503"),
+            ("/v1/admin/personas/{id}/selftest", "post", "503"),
+            ("/v1/admin/proxies/{id}/health", "post", "503"),
+            ("/v1/admin/proxies/{id}/replace", "post", "503"),
+            ("/v1/admin/pool", "get", "503"),
+            ("/v1/sessions/{id}", "get", "422"),
+            ("/v1/sessions/{id}", "delete", "422"),
+        ] {
+            let has = statuses(&document, path, method);
+            assert!(
+                has.iter().any(|known| known == status),
+                "{method} {path} does not name {status}: {has:?}"
+            );
+        }
     }
 
     #[test]
