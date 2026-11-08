@@ -1190,6 +1190,8 @@ describe('the browser stays inside its limits', () => {
       });
       expect(Buffer.byteLength(flowBig?.dom_html ?? '')).toBeLessThanOrEqual(1001);
       expect(Buffer.byteLength(flowBig?.raw_body?.data ?? '')).toBeLessThanOrEqual(1001);
+      // Every navigation of that tab was answered.
+      expect(flowBig?.unanswered_url ?? null).toBeNull();
 
       const capped = await go(context, named('/'), {
         wait: { until: 'network_idle' },

@@ -1849,7 +1849,12 @@ runs the script again from its first step inside the retry budget; the
 flow's first site is booked the page it served. So is what a flow's
 end says of a site's health: a `goto` to a later site that timed out or
 found no server answering is that site's, and its own pause after server
-errors holds the next flow that goes there (F162). A fetch redirected to
+errors holds the next flow that goes there (F162). So is a click, a key,
+a `back` or a script that sent the tab to another site that never
+answered while the tab still showed the page before it: the sidecar
+names that address (`unanswered_url` of the page result, contract
+1.9.0), and the timeout is booked to its site, not to the shown page's
+(QA round three, flows-04). A fetch redirected to
 another site's wall is booked the same way, to the site that showed it
 (F187). A later site's trial the
 flow took ends with the attempt whatever site the flow ended on: a flow

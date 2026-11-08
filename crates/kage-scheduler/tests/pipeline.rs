@@ -13,7 +13,9 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 
 use chrono::Duration as Span;
-use common::{DEFAULT_DOMAINS, World, blocked, id, ok, persona, server_error, timed_out};
+use common::{
+    DEFAULT_DOMAINS, World, blocked, id, ok, page_with, persona, server_error, timed_out,
+};
 use kage_core::alert::AlertKind;
 use kage_core::domain::{BreakerState, Exit, Level, Render, RenderMode};
 use kage_core::ids::ProxyId;
@@ -1469,6 +1471,101 @@ async fn a_flows_later_site_is_booked_its_own_timeouts() {
     assert!(
         onward_at - paused_at >= Span::seconds(29),
         "{onward_at} {paused_at}"
+    );
+    world.shut_down().await;
+}
+
+/// A flow that goes to its later site by a click: its own address is
+/// known only when the click sends the tab there.
+fn clicked_across() -> FetchOrder {
+    FetchOrder {
+        level: Level::Human,
+        max_retries: Some(0),
+        flow: Some(kage_scheduler::FlowPlan {
+            actions: vec![
+                kage_browser::contract::FlowAction::Goto {
+                    human: None,
+                    timeout_ms: None,
+                    url: "https://shop.example/start".to_owned(),
+                },
+                serde_json::from_value(serde_json::json!({
+                    "action": "click", "selector": "#pay", "timeout_ms": 5000,
+                }))
+                .unwrap(),
+            ],
+            typos: false,
+        }),
+        ..get("https://shop.example/start")
+    }
+}
+
+/// A flow whose click sent the tab to its later site, which never
+/// answered: the tab still shows the shop's page, and the browser names
+/// the address that did not answer.
+fn click_to_a_later_site_timed_out() -> AttemptOutput {
+    let mut output = page_with(
+        "https://shop.example/start",
+        &serde_json::json!({
+            "error": { "code": "timeout", "message": "the page did not answer", "net_error": null },
+            "unanswered_url": "https://pay.example/checkout",
+        }),
+    );
+    let failed = timed_out();
+    output.classification = failed.classification;
+    output.courtesy = failed.courtesy;
+    output.reason = failed.reason;
+    let step = |index: u32, action: &str, ok: bool| kage_scheduler::FlowStep {
+        index,
+        action: action.to_owned(),
+        ok,
+        duration_ms: 1000,
+        paced_ms: None,
+        error: (!ok).then(|| "timeout: the page the click led to did not answer".to_owned()),
+        capture: None,
+        opened_tabs: Vec::new(),
+    };
+    output.flow = Some(kage_scheduler::FlowRun {
+        steps: vec![step(0, "goto", true), step(1, "click", false)],
+        ok: false,
+    });
+    output
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_later_site_a_click_led_to_is_booked_its_own_timeouts() {
+    // QA round three, flows-04: F162 held for a `goto` only. Three flows
+    // whose click sent the tab to the later site, which never answered:
+    // the timeouts are that site's, though the tab still showed the shop.
+    let mut world = World::with(4, false, DEFAULT_DOMAINS, &[]);
+    for _ in 0..3 {
+        world.script.then(click_to_a_later_site_timed_out());
+        let report = world.pipeline.fetch(clicked_across()).await.unwrap();
+        assert_eq!(report.outcome, Outcome::Timeout, "{:?}", report.reason);
+    }
+    let paused_at = world.now();
+    // The shop, which answered every time, is not paused.
+    let shop = world
+        .pipeline
+        .fetch(browser("https://shop.example/page"))
+        .await
+        .unwrap();
+    assert_eq!(shop.outcome, Outcome::Ok);
+    let shop_at = world.script.seen().last().unwrap().at;
+    assert!(
+        shop_at - paused_at < Span::seconds(30),
+        "the shop waited: {shop_at} {paused_at}"
+    );
+    // The later site's next page waits for the end of its pause.
+    let later = world
+        .pipeline
+        .fetch(browser("https://pay.example/page"))
+        .await
+        .unwrap();
+    assert_eq!(later.outcome, Outcome::Ok);
+    let later_at = world.script.seen().last().unwrap().at;
+    assert!(
+        later_at - paused_at >= Span::seconds(29),
+        "{later_at} {paused_at}"
     );
     world.shut_down().await;
 }
