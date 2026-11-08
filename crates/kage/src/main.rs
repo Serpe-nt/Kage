@@ -724,9 +724,28 @@ async fn main() -> anyhow::Result<()> {
             traces = config.telemetry.otlp_endpoint.is_some(),
             "kage starting"
         );
-        let served = serve::run(config, bind).await.context("serve failed");
+        let served = serve::run(config, bind).await;
+        // A server that could not confirm its database's lock exits with a
+        // code of its own: no other server was seen, and starting it again
+        // is right once the database can be reached (QA round three,
+        // lock-02; the first-start runbook).
+        let unconfirmed = served
+            .as_ref()
+            .err()
+            .filter(|error| error.is::<serve::LockUnconfirmed>());
+        if let Some(error) = unconfirmed {
+            tracing::error!(
+                %error,
+                exit_code = serve::EXIT_LOCK_UNCONFIRMED,
+                "kage serve stops"
+            );
+        }
+        let unconfirmed = unconfirmed.is_some();
         telemetry.shut_down().await;
-        return served;
+        if unconfirmed {
+            std::process::exit(i32::from(serve::EXIT_LOCK_UNCONFIRMED));
+        }
+        return served.context("serve failed");
     }
     init_tracing(matches!(
         cli.command,

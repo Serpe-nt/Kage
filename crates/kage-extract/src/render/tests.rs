@@ -399,8 +399,11 @@ fn text_reads_as_text_after_a_break_alone_and_before_a_link() {
             "a  \n- b  \n1. c  \n# d  \n===",
             "a  \n\\- b  \n1\\. c  \n\\# d  \n\\===",
         ),
+        ("--", r"\--"),
+        ("-- ", r"\-- "),
         ("=x", "=x"),
         ("-x", "-x"),
+        ("--x", "--x"),
         ("+1", "+1"),
     ] {
         assert_eq!(guard_start(written), guarded, "{written:?}");
@@ -418,6 +421,9 @@ fn text_reads_as_text_after_a_break_alone_and_before_a_link() {
         markdown("<p>Title<br># hash</p><p>Title two<br>===</p><p>Title four<br>-</p>"),
         "Title  \n\\# hash\n\nTitle two  \n\\===\n\nTitle four  \n\\-"
     );
+    // Two dashes alone made a setext `<h2>` of the line before them (the
+    // planner's review of extract-02).
+    assert_eq!(markdown("<p>Title<br>--</p>"), "Title  \n\\--");
     assert_eq!(markdown("<h2>Section #</h2>"), r"## Section \#");
     assert_eq!(markdown("<h3>#</h3>"), r"### \#");
     assert_eq!(markdown("<h3>C#</h3>"), "### C#");

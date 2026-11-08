@@ -310,7 +310,18 @@ pub(crate) async fn fetch(
             let carrying = {
                 let (state, key) = (state.clone(), std::sync::Arc::clone(&caller.key));
                 tokio::spawn(async move {
-                    crate::jobs::worker::carry_on(&state, &key, running, spec, site).await
+                    let carried =
+                        crate::jobs::worker::carry_on(&state, &key, running, spec, site).await;
+                    // Logged here: once the client hung up, nobody reads
+                    // what the task came to.
+                    if let Err(error) = &carried {
+                        tracing::error!(
+                            %request,
+                            %error,
+                            "a fetch that outlasted its wall time could not be carried on as a job"
+                        );
+                    }
+                    carried
                 })
             };
             let job = carrying

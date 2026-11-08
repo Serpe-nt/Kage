@@ -431,21 +431,6 @@ version's date is the day, in UTC, its tag was made.
   session, while `/readyz` said ready. A date counted from a duration stops
   at the last one a timestamp has rather than panic, and a fetch whose
   task panicked is `500 internal`, no longer "the server is stopping".
-
-### Changed
-
-- **Durations are at most ten years (QA round three api-08).** A duration
-  over `3650d` (`87600h`) in the configuration or in a policy file
-  (`robots.ttl: 5000d`, `cache.max_ttl: 4000d`) is refused. Check yours
-  before upgrading: a configuration with one no longer starts (`kage config
-  check` names the key), and a policy file with one is refused at start,
-  or on a reload, where the last good policies stay in force.
-  `artifacts.retention_days`, `jobs.retention_days` and
-  `personas.upgrade_backup_days` are at most 3650 likewise.
-- **A job's page whose fetch panicked fails (QA round three api-08).**
-  Such an item ends `failed` with the error `internal` (the log has the
-  cause); it was taken for a stop of the server and queued again at once,
-  so it panicked again with every turn.
 - **Nested code is one code span (QA round three, extract-01).** A code
   span holds no code span, mark or link: nested `<code>` elements and what
   is inline in them are written as one span with their text. Each level
@@ -500,20 +485,40 @@ version's date is the day, in UTC, its tag was made.
   echo of the operator's own under a private authority answers the probe.
   Its handshake was refused, and the probe went on to the confirmation
   echo, the public one by default, which then saw every proxy's address;
-  that step is now logged at `warn`.- **A hang-up at the wall time leaves the fetch whole (QA round three,
+  that step is now logged at `warn`.
+- **A hang-up at the wall time leaves the fetch whole (QA round three,
   flows-03).** A synchronous fetch that outlasts `scheduler.sync_wall_time`
   is written as a job by a task of its own, which a client that hangs up
   in that moment no longer cuts short. A cut there left either a job
   leased to nobody, whose worker began the same request again when the
   lease ran out (the site got the page twice and the job ended `failed`,
-  `internal`), or a request with no job and no end.- **Two servers never serve one database after a partition (QA round
+  `internal`), or a request with no job and no end.
+- **A server cut off from its database stops within 55 s (QA round
   three, lock-02).** A look at the server lock answers within 5 s or
-  confirms nothing, and a server that could not confirm its lock for 40 s
-  stops as one whose lock was taken, before Postgres gives a silent
-  session's lock up (about a minute) and a second server could take it.
+  confirms nothing; when a look made 40 s or more after the last
+  confirmation fails too (45 to 55 s after it), the server stops, cuts the
+  pages under way at once instead of finishing them within
+  `jobs.wind_down`, and exits with code 75. This is before Postgres
+  gives a silent session's lock up (about a minute) and a second server
+  could take it and claim the same items.
   The look waited on the dead session until the network healed, and the
   server served on, `/readyz` ready, for 4 to 51 s beside the server that
   held the lock.
+### Changed
+
+- **Durations are at most ten years (QA round three api-08).** A duration
+  over `3650d` (`87600h`) in the configuration or in a policy file
+  (`robots.ttl: 5000d`, `cache.max_ttl: 4000d`) is refused. Check yours
+  before upgrading: a configuration with one no longer starts (`kage config
+  check` names the key), and a policy file with one is refused at start,
+  or on a reload, where the last good policies stay in force.
+  `artifacts.retention_days`, `jobs.retention_days` and
+  `personas.upgrade_backup_days` are at most 3650 likewise.
+- **A job's page whose fetch panicked fails (QA round three api-08).**
+  Such an item ends `failed` with the error `internal` (the log has the
+  cause); it was taken for a stop of the server and queued again at once,
+  so it panicked again with every turn.
+
 ### Added
 
 - **A daily scan of `main`'s images (F220).** `image-scan.yaml` builds the

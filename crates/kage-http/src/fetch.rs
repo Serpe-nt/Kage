@@ -368,8 +368,8 @@ impl Trail {
         };
         tracing::info!(
             hop,
-            from_host = ?from.host_str(),
-            to_host = ?to.host_str(),
+            from_host = %from.host_str().unwrap_or_default(),
+            to_host = %to.host_str().unwrap_or_default(),
             "a redirect of the http path downgraded https to http; it was followed, as a browser follows it"
         );
         true
