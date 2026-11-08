@@ -1729,7 +1729,10 @@ impl Pipeline {
             }
         }
         let (outcome, reason, retry_at) = match self.robots_gate(&mut course, stop).await? {
-            Gate::Open => return Ok(Ok(course)),
+            Gate::Open => {
+                self.learn_scouts(&mut course).await?;
+                return Ok(Ok(course));
+            }
             Gate::Stopped => return Ok(Err(Box::pin(self.stopped_run(course)).await?)),
             Gate::Denied(reason) => {
                 metrics::robots_denied(reason.unwrap_or("rule"));
@@ -1778,6 +1781,28 @@ impl Pipeline {
                 ],
             ),
         }
+    }
+
+    /// Records on the course the scout of each site it reaches that had
+    /// none when the request began: its gate may have chosen one since.
+    /// What the desk holds of a site's scout is forgotten after a while
+    /// (`RECHECK`), and a file that took longer than that to have (a
+    /// robots.txt of 31 s, QA round three) left the course with only the
+    /// `None` it began with, and the scout free to read the page. The
+    /// store keeps the scout; the desk answers when it still holds it.
+    async fn learn_scouts(&self, course: &mut Course) -> Result<(), SchedulerError> {
+        if course.order.scout || course.order.pin.is_some() || self.robots.own_scout {
+            return Ok(());
+        }
+        if course.site_scout.is_none() {
+            course.site_scout = self.site_scout(&course.site).await?;
+        }
+        for leg in &mut course.legs {
+            if leg.scout.is_none() {
+                leg.scout = self.site_scout(&leg.site).await?;
+            }
+        }
+        Ok(())
     }
 
     /// The scouts of every site a request reaches, which read none of its

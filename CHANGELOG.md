@@ -512,6 +512,13 @@ version's date is the day, in UTC, its tag was made.
   The look waited on the dead session until the network healed, and the
   server served on, `/readyz` ready, for 4 to 51 s beside the server that
   held the lock.
+- **A scout whose robots.txt took long reads none of the site's pages
+  (found by round F's gate).** A site's scout chosen inside a request was
+  kept from its pages only while the pipeline's memory of it lasted, half
+  a minute; a file that took 31 s to have left the scout free, and its
+  open visit read the page. The request now records the scout its gate
+  chose, from the store when the memory has let it go.
+
 ### Changed
 
 - **Durations are at most ten years (QA round three api-08).** A duration

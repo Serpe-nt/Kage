@@ -278,6 +278,33 @@ async fn where_a_file_is_enforced_a_scout_asks_first_and_the_reader_never() {
     world.shut_down().await;
 }
 
+/// The scout's ruling is kept for the whole request (QA round three):
+/// what the pipeline holds in memory of a site's scout is looked at again
+/// after half a minute, and a scout chosen inside the request was then
+/// forgotten by it when its file took longer than that. The scout, its
+/// visit open, read the page.
+#[tokio::test(start_paused = true)]
+async fn a_scout_whose_file_took_long_still_reads_none_of_the_sites_pages() {
+    let mut world = World::new(2, SITES);
+    robots_txt(&world, |url| file(url, 200, RULES));
+    world.script.takes(Duration::from_secs(31));
+
+    let first = world
+        .pipeline
+        .fetch(get("https://enforced.example/a"))
+        .await
+        .unwrap();
+    assert_eq!(first.outcome, Outcome::Ok);
+
+    let (files, pages) = asked(&world);
+    assert_eq!(files.len(), 1, "{files:?}");
+    let scout = files[0].1;
+    assert_eq!(world.backend.scout_of("enforced.example"), Some(scout));
+    assert_eq!(pages.len(), 1, "{pages:?}");
+    assert_ne!(pages[0].1, scout, "the scout read the page");
+    world.shut_down().await;
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_crawl_delay_is_kept_to_where_the_file_is_enforced_and_only_there() {
     // A scout and one reader.
