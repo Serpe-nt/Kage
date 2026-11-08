@@ -105,6 +105,20 @@ pub struct Ruling {
 /// through the waits of so many attempts is no passing state.
 pub const MAX_UNMADE: u32 = 3;
 
+/// Why an attempt was never made: the persona's context in its sidecar
+/// would not take it (QA round three, flows-01, lock-01).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unmade {
+    /// The context ran another operation for as long as the attempt waited
+    /// (`context_busy`): the persona takes the next attempt, which waits
+    /// for that operation again.
+    Busy,
+    /// The context is open with other parameters, by a server that ran
+    /// before this one (`context_conflict`): asking again is answered the
+    /// same at once, so the next attempt goes to another persona.
+    Conflict,
+}
+
 /// How far a request has come.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RequestProgress {
@@ -141,23 +155,32 @@ impl RequestProgress {
         self.resumed_marked(
             earlier
                 .into_iter()
-                .map(|(persona, outcome)| (persona, outcome, false)),
+                .map(|(persona, outcome)| (persona, outcome, None)),
         )
     }
 
-    /// [`Self::resumed`], each earlier attempt marked with whether it was
-    /// never made ([`Self::record_unmade`]): such an attempt is numbered,
-    /// spends no retry (at most [`MAX_UNMADE`] of them) and does not keep
-    /// its persona from the next attempt.
+    /// [`Self::resumed`], each earlier attempt marked with why it was
+    /// never made, when it was not ([`Self::record_unmade`]): such an
+    /// attempt is numbered, spends no retry (at most [`MAX_UNMADE`] of
+    /// them) and keeps its persona from the next attempt only for an
+    /// [`Unmade::Conflict`].
     #[must_use]
     pub fn resumed_marked(
         mut self,
-        earlier: impl IntoIterator<Item = (Option<PersonaId>, Outcome, bool)>,
+        earlier: impl IntoIterator<Item = (Option<PersonaId>, Outcome, Option<Unmade>)>,
     ) -> Self {
         for (persona, outcome, unmade) in earlier {
             self.attempts = self.attempts.saturating_add(1);
-            if unmade && self.unmade < MAX_UNMADE {
+            if let Some(why) = unmade
+                && self.unmade < MAX_UNMADE
+            {
                 self.unmade = self.unmade.saturating_add(1);
+                if why == Unmade::Conflict
+                    && let Some(persona) = persona
+                    && !self.used.contains(&persona)
+                {
+                    self.used.push(persona);
+                }
                 continue;
             }
             let Some(persona) = persona else { continue };
@@ -185,17 +208,22 @@ impl RequestProgress {
     /// its sidecar ran another operation for as long as the attempt waited
     /// for it, so nothing was asked of the site (QA round three, flows-01,
     /// lock-01). The persona is still busy: that is a wait, not a failure
-    /// of the request. It is numbered, spends no retry, and leaves the
-    /// persona free to take the next attempt (a job's visitor stays its
-    /// visitor, a session's persona its persona), which waits for the
-    /// context again; past [`MAX_UNMADE`] such attempts it counts as a
-    /// failure that may be retried, as before.
-    pub fn record_unmade(&mut self, persona: PersonaId) -> Ruling {
+    /// of the request. It is numbered and spends no retry. A busy context
+    /// leaves the persona free to take the next attempt (a job's visitor
+    /// stays its visitor, a session's persona its persona), which waits for
+    /// the context again; a conflicting one keeps the persona from the next
+    /// attempt, since asking it again is refused the same at once. Past
+    /// [`MAX_UNMADE`] such attempts it counts as a failure that may be
+    /// retried, as before.
+    pub fn record_unmade(&mut self, persona: PersonaId, why: Unmade) -> Ruling {
         if self.unmade >= MAX_UNMADE {
             return self.record(Some(persona), AttemptVerdict::plain(Outcome::ProviderError));
         }
         self.attempts = self.attempts.saturating_add(1);
         self.unmade = self.unmade.saturating_add(1);
+        if why == Unmade::Conflict && !self.used.contains(&persona) {
+            self.used.push(persona);
+        }
         Ruling {
             step: Step::Retry,
             penalty: None,
@@ -340,8 +368,8 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     use super::{
-        AttemptVerdict, CooldownRules, MAX_UNMADE, RequestProgress, Ruling, Step, cooldown_for,
-        cooldown_seed, retry_pause,
+        AttemptVerdict, CooldownRules, MAX_UNMADE, RequestProgress, Ruling, Step, Unmade,
+        cooldown_for, cooldown_seed, retry_pause,
     };
     use crate::classifier::Classification;
     use crate::domain::{Level, Render};
@@ -563,7 +591,7 @@ mod tests {
         let busy = PersonaId::new();
         let mut progress = RequestProgress::new(Level::Human, 0);
         for made in 1..=MAX_UNMADE {
-            let ruling = progress.record_unmade(busy);
+            let ruling = progress.record_unmade(busy, Unmade::Busy);
             assert_eq!(
                 ruling,
                 Ruling {
@@ -578,14 +606,14 @@ mod tests {
         }
         // Past the bound it is a failure like another: with no retry left
         // the request ends.
-        let ruling = progress.record_unmade(busy);
+        let ruling = progress.record_unmade(busy, Unmade::Busy);
         assert_eq!(ruling.step, Step::Finish);
         assert_eq!(progress.used(), [busy]);
         assert!(!progress.attempts_left());
 
         // The attempt that is made after one that was not is the first.
         let mut progress = RequestProgress::new(Level::Human, 0);
-        progress.record_unmade(busy);
+        progress.record_unmade(busy, Unmade::Busy);
         let ruling = progress.record(Some(busy), verdict(Outcome::Timeout));
         assert_eq!(ruling.step, Step::Finish);
         assert_eq!(progress.attempts(), 2);
@@ -593,17 +621,42 @@ mod tests {
         // Taken up again after a restart: the same.
         let other = PersonaId::new();
         let resumed = RequestProgress::new(Level::Human, 1).resumed_marked([
-            (Some(busy), Outcome::ProviderError, true),
-            (Some(other), Outcome::Timeout, false),
+            (Some(busy), Outcome::ProviderError, Some(Unmade::Busy)),
+            (Some(other), Outcome::Timeout, None),
         ]);
         assert_eq!(resumed.attempts(), 2);
         assert_eq!(resumed.unmade(), 1);
         assert_eq!(resumed.used(), [other]);
         assert!(resumed.attempts_left());
-        let many = RequestProgress::new(Level::Human, 0)
-            .resumed_marked((0..=MAX_UNMADE).map(|_| (Some(busy), Outcome::ProviderError, true)));
+        let many = RequestProgress::new(Level::Human, 0).resumed_marked(
+            (0..=MAX_UNMADE).map(|_| (Some(busy), Outcome::ProviderError, Some(Unmade::Busy))),
+        );
         assert_eq!(many.unmade(), MAX_UNMADE);
         assert!(!many.attempts_left());
+    }
+
+    #[test]
+    fn an_attempt_a_conflicting_context_refused_spends_no_retry_and_leaves_its_persona_out() {
+        // #78's review: a context open with other parameters is refused
+        // again at once, so the next attempt goes to another persona.
+        let conflicting = PersonaId::new();
+        let mut progress = RequestProgress::new(Level::Human, 0);
+        let ruling = progress.record_unmade(conflicting, Unmade::Conflict);
+        assert_eq!(ruling.step, Step::Retry);
+        assert_eq!(ruling.penalty, None);
+        assert_eq!(progress.unmade(), 1);
+        assert!(progress.attempts_left());
+        assert_eq!(progress.used(), [conflicting]);
+        assert_eq!(progress.blocked(), []);
+        // Taken up again after a restart: the same.
+        let resumed = RequestProgress::new(Level::Human, 0).resumed_marked([(
+            Some(conflicting),
+            Outcome::ProviderError,
+            Some(Unmade::Conflict),
+        )]);
+        assert_eq!(resumed.unmade(), 1);
+        assert_eq!(resumed.used(), [conflicting]);
+        assert!(resumed.attempts_left());
     }
 
     #[test]

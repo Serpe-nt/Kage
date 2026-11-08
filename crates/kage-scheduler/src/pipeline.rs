@@ -92,7 +92,9 @@ use kage_core::schedule::planner::{
 use kage_core::schedule::politeness::Courtesy;
 use kage_core::schedule::queue::Priority;
 use kage_core::schedule::retry::retry_pause;
-use kage_core::schedule::retry::{AttemptVerdict, RequestProgress, Ruling, Step};
+use kage_core::schedule::retry::{
+    AttemptVerdict, MAX_UNMADE, RequestProgress, Ruling, Step, Unmade,
+};
 use kage_core::schedule::selection::Network;
 use kage_core::seed::Seed;
 use kage_core::ssrf::{SsrfPolicy, check_url};
@@ -572,6 +574,17 @@ async fn waited<T>(
 /// `proxy_failed`, or a proxy the persona manager would not use.
 fn at_the_proxy(reason: Option<&str>) -> bool {
     matches!(reason, Some("proxy_failed" | "proxy_not_usable"))
+}
+
+/// Why an attempt that ended with `reason` was never made, when it was
+/// not: the persona's context would not take it (QA round three, flows-01,
+/// lock-01).
+fn unmade_by(reason: Option<&str>) -> Option<Unmade> {
+    match reason {
+        Some(CONTEXT_BUSY) => Some(Unmade::Busy),
+        Some(CONTEXT_CONFLICT) => Some(Unmade::Conflict),
+        _ => None,
+    }
 }
 
 /// Whether a refusal is one a job waits out instead of failing its item:
@@ -1166,10 +1179,7 @@ impl Pipeline {
                 (
                     attempt.persona_id,
                     attempt.outcome,
-                    matches!(
-                        attempt.reason.as_deref(),
-                        Some(CONTEXT_BUSY | CONTEXT_CONFLICT)
-                    ),
+                    unmade_by(attempt.reason.as_deref()),
                 )
             }),
         );
@@ -1991,7 +2001,6 @@ impl Pipeline {
             vendor = tracing::field::Empty,
         );
         let started_at = self.now();
-        let began = tokio::time::Instant::now();
         let running = self
             .under_way
             .until_cut(self.executor.run(&job).instrument(span.clone()));
@@ -2035,12 +2044,15 @@ impl Pipeline {
         // wait, not a failure: it spends no retry, it is no page of the
         // persona's day on the site, and the breakers' trials go back
         // (QA round three, flows-01, lock-01).
-        let unmade = matches!(
-            output.reason.as_deref(),
-            Some(CONTEXT_BUSY | CONTEXT_CONFLICT)
-        );
-        let ruling = if unmade {
-            course.progress.record_unmade(persona.id)
+        let unmade = unmade_by(output.reason.as_deref());
+        // A context that stayed busy through the waits of `MAX_UNMADE`
+        // attempts runs something that may not end soon (the sidecar puts
+        // no bound on a state export, an import or a self-test), and the
+        // sidecar refuses to close a busy context: its persona is held as a
+        // cut flow's is, below, and this request goes on without it.
+        let stuck = unmade == Some(Unmade::Busy) && course.progress.unmade() >= MAX_UNMADE;
+        let ruling = if let Some(why) = unmade {
+            course.progress.record_unmade(persona.id, why)
         } else {
             let verdict = AttemptVerdict::of(&output.classification);
             course.progress.record(Some(persona.id), verdict)
@@ -2051,7 +2063,7 @@ impl Pipeline {
         // or read that site's page (F101). The first site served what the
         // flow asked of it there.
         let shown_by = shown_by(course, &output);
-        if unmade {
+        if unmade.is_some() {
             // Counted as a page when it was dispatched: taken back.
             self.backend()
                 .undispatched(persona.id, &dispatch.domain, started_at)
@@ -2097,16 +2109,18 @@ impl Pipeline {
             // Or when its proxy failed: the site had no say (F108).
             proxy_failed: at_the_proxy(output.reason.as_deref()),
         };
-        if cut {
+        if cut || stuck {
             // The sidecar still finishes the cut step on the persona's
             // context (spec §16.6): the grant, which keeps the persona from
             // any other work, goes back once that context runs nothing, at
             // most when the flow's own time is up; the job does not wait
-            // for it (QA round three, flows-01).
+            // for it (QA round three, flows-01). A context that stayed busy
+            // is waited for the same way, so that the persona's next
+            // requests do not each spend their waits on it (#78's review).
             let executor = Arc::clone(&self.executor);
             let settling = job.clone();
             tokio::spawn(async move {
-                executor.settle(&settling, began).await;
+                executor.settle(&settling).await;
                 grant.complete_on(completion, shown_by.as_deref());
             });
         } else {

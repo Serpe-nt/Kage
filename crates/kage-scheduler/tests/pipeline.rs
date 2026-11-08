@@ -1489,11 +1489,15 @@ async fn an_attempt_a_busy_context_refused_is_no_page_and_spends_no_retry() {
 
     // A context that stays busy through every wait: past the bound the
     // refusals count as failures, and with no retry left the request ends.
+    // The persona is then held until its context is free, as a cut flow's
+    // is (#78's review): the next request has it only after that.
+    assert_eq!(world.script.settled(), []);
     let busy =
         || AttemptOutput::failed(Outcome::ProviderError, "context_busy", Courtesy::NotTheSite);
     for _ in 0..4 {
         world.script.then(busy());
     }
+    world.script.settle_takes(Duration::from_secs(90));
     let report = world
         .pipeline
         .fetch(FetchOrder {
@@ -1505,15 +1509,31 @@ async fn an_attempt_a_busy_context_refused_is_no_page_and_spends_no_retry() {
     assert_eq!(report.outcome, Outcome::ProviderError);
     assert_eq!(report.reason.as_deref(), Some("context_busy"));
     assert_eq!(report.attempts.len(), 4);
+    let ended = report.attempts[3].finished_at;
+    let next = world
+        .pipeline
+        .fetch(browser("https://shop.example/c"))
+        .await
+        .unwrap();
+    assert_eq!(next.outcome, Outcome::Ok, "{:?}", next.reason);
+    // Waited for once, after the fourth refusal only.
+    assert_eq!(world.script.settled(), [persona]);
+    assert!(
+        next.attempts[0].started_at - ended >= Span::seconds(90),
+        "{:?}",
+        next.attempts[0].started_at - ended
+    );
     world.shut_down().await;
 }
 
 /// QA round three, lock-01: a context that another server opened with other
 /// parameters (`context_conflict` after a kill and a restart, or a
 /// hand-over) is the persona still busy as well: no retry spent, no page.
+/// Asking it again is refused the same at once, so the next attempt goes to
+/// another persona (#78's review).
 #[tokio::test(start_paused = true)]
 async fn an_attempt_that_met_another_servers_context_spends_no_retry() {
-    let mut world = World::new(1, DEFAULT_DOMAINS);
+    let mut world = World::new(2, DEFAULT_DOMAINS);
     world
         .script
         .then(AttemptOutput::failed(
@@ -1532,9 +1552,40 @@ async fn an_attempt_that_met_another_servers_context_spends_no_retry() {
         .unwrap();
     assert_eq!(report.outcome, Outcome::Ok, "{:?}", report.reason);
     assert_eq!(report.attempts.len(), 2);
+    let conflicting = report.attempts[0].persona_id.unwrap();
     let persona = report.attempts[1].persona_id.unwrap();
-    assert_eq!(report.attempts[0].persona_id, Some(persona));
+    assert_ne!(persona, conflicting);
     let state = world.backend.domain_state(persona, "shop.example").unwrap();
     assert_eq!(state.requests_today, 1);
+    assert_eq!(
+        world
+            .backend
+            .domain_state(conflicting, "shop.example")
+            .map_or(0, |state| state.requests_today),
+        0
+    );
     world.shut_down().await;
+
+    // With no other persona the request is not given the conflicting one
+    // again: it gets no second attempt.
+    let mut alone = World::new(1, DEFAULT_DOMAINS);
+    alone
+        .script
+        .then(AttemptOutput::failed(
+            Outcome::ProviderError,
+            "context_conflict",
+            Courtesy::NotTheSite,
+        ))
+        .then(ok());
+    let report = alone
+        .pipeline
+        .fetch(FetchOrder {
+            max_retries: Some(0),
+            ..browser("https://shop.example/a")
+        })
+        .await
+        .unwrap();
+    assert_eq!(alone.script.seen().len(), 1, "{report:?}");
+    assert_ne!(report.outcome, Outcome::Ok, "{report:?}");
+    alone.shut_down().await;
 }
