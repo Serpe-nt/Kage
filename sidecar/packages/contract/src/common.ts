@@ -122,12 +122,14 @@ export const HeaderSchema = z
   .meta({ id: 'Header', description: 'One response header.' });
 export type Header = z.infer<typeof HeaderSchema>;
 
-/** A file the sidecar wrote to the shared artifacts volume. */
+/** A file the sidecar wrote to its own volume, which Kage mounts too. */
 export const ArtifactRefSchema = z
   .strictObject({
     path: z
       .string()
-      .describe('Path of the file relative to the artifacts volume, with forward slashes.'),
+      .describe(
+        'Path of the file relative to the artifacts directory, with forward slashes: below `sidecar/`, the volume of the sidecars.',
+      ),
     bytes: z.number().int().nonnegative().describe('Size of the file in bytes.'),
     sha256: z
       .string()
@@ -137,7 +139,8 @@ export const ArtifactRefSchema = z
   })
   .meta({
     id: 'ArtifactRef',
-    description: 'A file the sidecar wrote to the artifacts volume it shares with Kage.',
+    description:
+      'A file the sidecar wrote below `sidecar/` of the artifacts directory: its own volume (`sidecar-files`), which Kage mounts there too and reads.',
   });
 export type ArtifactRef = z.infer<typeof ArtifactRefSchema>;
 

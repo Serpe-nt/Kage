@@ -164,7 +164,9 @@ pub struct JobCount {
 pub struct OpenOfKey {
     /// Its jobs that are queued, running or paused.
     pub jobs: u64,
-    /// The items of those jobs that wait.
+    /// The items of those jobs that wait; for a crawl, the pages it may
+    /// still ask for: its `max_pages` less the items it has begun, and
+    /// never fewer than its items that wait.
     pub queued_items: u64,
 }
 
@@ -740,20 +742,36 @@ impl JobRepo<'_> {
     }
 
     /// What one key has open (the security review's L2): its jobs that are
-    /// queued, running or paused, and the items of those jobs that wait.
+    /// queued, running or paused, and the items of those jobs that wait. A
+    /// crawl counts what it may still grow to (its `max_pages`, kept with
+    /// it, less the items it has begun), so that its pages are bounded from
+    /// its acceptance; one whose `max_pages` is not kept yet counts
+    /// `most_pages`.
     ///
     /// # Errors
     ///
     /// Fails when the query fails.
-    pub async fn open_of_key(&self, api_key_id: ApiKeyId) -> Result<OpenOfKey, StoreError> {
+    pub async fn open_of_key(
+        &self,
+        api_key_id: ApiKeyId,
+        most_pages: u32,
+    ) -> Result<OpenOfKey, StoreError> {
         let row = sqlx::query!(
             r#"SELECT count(*) AS "jobs!",
-                      coalesce(sum((SELECT count(*) FROM job_items i
-                                    WHERE i.job_id = j.id AND i.state = 'queued')), 0)::bigint
-                          AS "items!"
+                      coalesce(sum(CASE WHEN j.kind = 'crawl'
+                                   THEN greatest(coalesce((j.crawl #>> '{progress,max_pages}')::bigint,
+                                                          $2) - items.begun,
+                                                 items.waiting)
+                                   ELSE items.waiting END), 0)::bigint AS "items!"
                FROM jobs j
+               CROSS JOIN LATERAL (
+                   SELECT count(*) FILTER (WHERE i.state = 'queued') AS waiting,
+                          count(*) FILTER (WHERE i.state <> 'queued') AS begun
+                   FROM job_items i WHERE i.job_id = j.id
+               ) AS items
                WHERE j.api_key_id = $1 AND j.state IN ('queued', 'running', 'paused')"#,
             api_key_id.as_uuid(),
+            i64::from(most_pages),
         )
         .fetch_one(self.pool)
         .await?;

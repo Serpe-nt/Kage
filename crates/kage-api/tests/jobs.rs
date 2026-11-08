@@ -2167,6 +2167,7 @@ async fn a_carried_fetch_nobody_can_read_soon_says_paused_with_its_reason_and_mo
 /// open and `jobs.max_queued_items_per_key` of their items waiting; past
 /// either a job is refused `429 jobs_limited` and nothing of it is stored.
 /// Another key has bounds of its own, and a job that ended counts no more.
+/// A crawl counts its `max_pages` from its acceptance (the planner's review).
 /// (No worker runs here: what is accepted stays queued.)
 #[tokio::test]
 async fn a_key_may_have_so_many_open_jobs_and_waiting_items() {
@@ -2174,7 +2175,7 @@ async fn a_key_may_have_so_many_open_jobs_and_waiting_items() {
         quick(config);
         config.jobs.max_items = 3;
         config.jobs.max_open_per_key = 2;
-        config.jobs.max_queued_items_per_key = 4;
+        config.jobs.max_queued_items_per_key = Some(4);
     })
     .await;
     let token = api.key(&[Scope::Jobs]).await;
@@ -2208,6 +2209,37 @@ async fn a_key_may_have_so_many_open_jobs_and_waiting_items() {
     let elsewhere = api.post(&other, "/v1/jobs", &batch(3)).await;
     assert_eq!(elsewhere.status, StatusCode::CREATED);
 
+    // A crawl has no items when it is accepted, but may ask for its
+    // `max_pages`: they count from now on, so its key cannot queue past
+    // the bound behind it.
+    let crawler = api.key(&[Scope::Jobs, Scope::Crawl]).await;
+    let crawl = json!({
+        "type": "crawl", "seeds": [Api::url("/limit/crawl")], "max_pages": 3,
+        "defaults": { "level": 1 },
+    });
+    let reply = api.post(&crawler, "/v1/jobs", &crawl).await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.json());
+    assert_eq!(reply.json()["items"]["total"], 0);
+    let refused = api
+        .post(&crawler, "/v1/jobs", &batch(2))
+        .await
+        .problem(StatusCode::TOO_MANY_REQUESTS, "jobs_limited");
+    assert_eq!(refused["queued_items"], json!(3));
+    assert_eq!(refused["open_jobs"], json!(1));
+    let beside = api.post(&crawler, "/v1/jobs", &batch(1)).await;
+    assert_eq!(beside.status, StatusCode::CREATED);
+    // A crawl that would pass the bound is refused like any job.
+    let late = api.key(&[Scope::Jobs, Scope::Crawl]).await;
+    assert_eq!(
+        api.post(&late, "/v1/jobs", &batch(2)).await.status,
+        StatusCode::CREATED
+    );
+    let refused = api
+        .post(&late, "/v1/jobs", &crawl)
+        .await
+        .problem(StatusCode::TOO_MANY_REQUESTS, "jobs_limited");
+    assert_eq!(refused["queued_items"], json!(2));
+
     // A job that ended counts no more, nor do its items.
     sqlx::query("UPDATE jobs SET state = 'cancelled', finished_at = now() WHERE id = $1::uuid")
         .bind(&first)
@@ -2221,6 +2253,85 @@ async fn a_key_may_have_so_many_open_jobs_and_waiting_items() {
         .unwrap();
     let third = api.post(&token, "/v1/jobs", &batch(3)).await;
     assert_eq!(third.status, StatusCode::CREATED);
-    assert_eq!(count(&api, "jobs").await, 4);
+    assert_eq!(count(&api, "jobs").await, 7);
+    api.shut_down().await;
+}
+
+/// The planner's review of L2: the same `Idempotency-Key` sent twice at once
+/// by a key that may open one more job is one job and a replay. Both looked
+/// the key up before either had made the job; the second waited for the
+/// first under the lock and was refused `jobs_limited` (the first's job was
+/// the key's last), where it is the replay it was before L2.
+#[tokio::test]
+async fn the_same_key_sent_twice_at_once_is_a_replay_not_a_job_past_the_limit() {
+    let mut api = Api::start_with(1, 149, FAST, |config| {
+        quick(config);
+        config.jobs.max_open_per_key = 1;
+    })
+    .await;
+    let token = api.key(&[Scope::Jobs]).await;
+    let body = json!({ "type": "batch", "urls": urls("/twice", 2), "defaults": { "level": 3 } });
+    let keyed = || {
+        let mut request = request(Method::POST, "/v1/jobs", Some(&token), Some(&body));
+        request
+            .headers_mut()
+            .insert("idempotency-key", "at-once".parse().unwrap());
+        let router = api.router.clone();
+        tokio::spawn(async move { ask(&router, request).await })
+    };
+    // The jobs table is held until both requests wait for it, so that both
+    // look the key up before either has made its job.
+    let mut held = api.lab.store().pool().begin().await.unwrap();
+    sqlx::query("LOCK TABLE jobs IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *held)
+        .await
+        .unwrap();
+    let (first, second) = (keyed(), keyed());
+    let mut waiting = 0_i64;
+    for _ in 0..400 {
+        waiting = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_locks l JOIN pg_class c ON c.oid = l.relation
+             WHERE c.relname = 'jobs' AND NOT l.granted",
+        )
+        .fetch_one(api.lab.store().pool())
+        .await
+        .unwrap();
+        if waiting >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(
+        waiting >= 2,
+        "both requests wait for the jobs table: {waiting}"
+    );
+    held.rollback().await.unwrap();
+    let (first, second) = (first.await.unwrap(), second.await.unwrap());
+
+    let mut statuses = [first.status, second.status];
+    statuses.sort();
+    assert_eq!(
+        statuses,
+        [StatusCode::OK, StatusCode::CREATED],
+        "{:?} {:?}",
+        first.json(),
+        second.json()
+    );
+    assert_eq!(first.json()["id"], second.json()["id"]);
+    let replay = if first.status == StatusCode::OK {
+        &first
+    } else {
+        &second
+    };
+    assert_eq!(replay.header("idempotency-replayed"), Some("true"));
+    assert_eq!(count(&api, "jobs").await, 1);
+    // A new key past the limit is still refused.
+    let mut request = request(Method::POST, "/v1/jobs", Some(&token), Some(&body));
+    request
+        .headers_mut()
+        .insert("idempotency-key", "another".parse().unwrap());
+    api.send(request)
+        .await
+        .problem(StatusCode::TOO_MANY_REQUESTS, "jobs_limited");
     api.shut_down().await;
 }

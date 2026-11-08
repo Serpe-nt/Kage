@@ -26,7 +26,7 @@ use kage_core::outcome::{Block, BlockType, Outcome, Vendor};
 use kage_core::secret::SealedSecret;
 use kage_core::seed::Seed;
 use kage_store::StoreError;
-use kage_store::repo::{BrowserUpgrade, ResponseCacheEntry, RobotsCacheEntry, Upgraded};
+use kage_store::repo::{BrowserUpgrade, OpenOfKey, ResponseCacheEntry, RobotsCacheEntry, Upgraded};
 
 // One proxy followed through its whole life: each step needs the one before.
 #[allow(clippy::too_many_lines)]
@@ -2041,6 +2041,43 @@ async fn the_crawl_frontier_holds_one_entry_per_url_key_and_is_claimed_once() {
     let mut orphan = page(JobItemId::new());
     orphan.job_id = JobId::new();
     assert_eq!(items.append(&orphan).await.unwrap(), None);
+
+    // L2: an open crawl counts what it may still grow to against its key's
+    // waiting items: its `max_pages` less the pages it has begun, never
+    // fewer than its items that wait; one that keeps no `max_pages` yet
+    // counts the most a crawl may have.
+    let open = |most: u32| jobs.open_of_key(key.id, most);
+    // Two begun of 100; the other crawl keeps nothing: 98 + 100.
+    assert_eq!(
+        open(100).await.unwrap(),
+        OpenOfKey {
+            jobs: 2,
+            queued_items: 198
+        }
+    );
+    let kept = serde_json::json!({ "progress": { "max_pages": 5 } });
+    jobs.set_crawl(crawl.id, &kept).await.unwrap();
+    assert_eq!(open(100).await.unwrap().queued_items, 3 + 100);
+    let mut waiting = page(JobItemId::new());
+    waiting.state = JobItemState::Queued;
+    items.append(&waiting).await.unwrap();
+    // Two begun and one waiting of five: three it may still add.
+    assert_eq!(open(100).await.unwrap().queued_items, 3 + 100);
+    jobs.set_crawl(
+        crawl.id,
+        &serde_json::json!({ "progress": { "max_pages": 2 } }),
+    )
+    .await
+    .unwrap();
+    // Its one waiting item counts, whatever its pages.
+    assert_eq!(open(100).await.unwrap().queued_items, 1 + 100);
+    jobs.set_crawl(
+        other_crawl.id,
+        &serde_json::json!({ "progress": { "max_pages": 7 } }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(open(100).await.unwrap().queued_items, 1 + 7);
 
     // The frontier goes with its crawl.
     sqlx::query("DELETE FROM jobs WHERE id = $1")

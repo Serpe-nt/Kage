@@ -357,17 +357,8 @@ pub(crate) async fn create(
     let key = idempotency_key(&headers)?;
     let hash = fingerprint(&state.jobs().idempotency_key, &body);
     let now = crate::stored(state.clock().now());
-    if let Some(key) = &key {
-        let existing = state
-            .store()
-            .jobs()
-            .find_by_idempotency_key(caller.key.id, key)
-            .await
-            .map_err(|error| ApiError::internal(&error))?
-            .filter(|job| job.idempotency_until.is_none_or(|until| until > now));
-        if let Some(existing) = existing {
-            return replayed(&state, &existing, hash).await;
-        }
+    if let Some(existing) = made_by_key(&state, &caller, key.as_deref(), now).await? {
+        return replayed(&state, &existing, hash).await;
     }
 
     let policies = state.policies().current();
@@ -441,9 +432,10 @@ pub(crate) async fn create(
             let seeds: Vec<&Planned> = planned.seeds.iter().collect();
             check_session(&state, &caller, session.as_ref(), &seeds).await?;
             let level = shared_level(seeds.iter().map(|seed| seed.level));
-            crawl_start = Some(planned.start);
             // A crawl has no items yet: one is added for every page it
-            // asks a site for.
+            // asks a site for. Its `max_pages` counts against the key's
+            // waiting items from now on (L2).
+            crawl_start = Some(planned.start);
             (JobKind::Crawl, Vec::new(), level)
         }
     };
@@ -495,20 +487,34 @@ pub(crate) async fn create(
     // security review's L2): checked and stored under one lock, so that
     // two jobs of a key asked for at once cannot both slip past the bound.
     let accepting = state.jobs().accepting.lock().await;
-    within_key_limits(&state, &caller, items.len()).await?;
+    // The same key sent twice at once: the second waited here for the
+    // first, which made the job; it is a replay, not a job beyond the
+    // key's limits.
+    if let Some(existing) =
+        made_by_key(&state, &caller, job.idempotency_key.as_deref(), now).await?
+    {
+        drop(accepting);
+        return replayed(&state, &existing, hash).await;
+    }
+    let adding = crawl_start.as_ref().map_or(items.len(), |start| {
+        usize::try_from(start.progress.max_pages).unwrap_or(usize::MAX)
+    });
+    within_key_limits(&state, &caller, adding).await?;
     let created = state
         .store()
         .jobs()
         .create(&job, &items, now)
         .await
         .map_err(|error| ApiError::internal(&error))?;
-    drop(accepting);
     if let Created::Existing(existing) = created {
         // The same key came twice at the same moment: the first one won.
+        drop(accepting);
         return replayed(&state, &existing, hash).await;
     }
     if let Some(start) = crawl_start {
-        // What the crawl shows until its worker has begun.
+        // What the crawl shows until its worker has begun, its
+        // `max_pages` among it: kept before the next job of the key is
+        // weighed, which counts it.
         let start = serde_json::to_value(start).map_err(|error| ApiError::internal(&error))?;
         state
             .store()
@@ -517,6 +523,7 @@ pub(crate) async fn create(
             .await
             .map_err(|error| ApiError::internal(&error))?;
     }
+    drop(accepting);
     metrics::counter!(
         "kage_jobs_accepted_total",
         "job_type" => kind.as_str(),
@@ -533,24 +540,44 @@ pub(crate) async fn create(
     Ok(response)
 }
 
+/// The job this key made with this `Idempotency-Key` while the key still
+/// names it, if any.
+async fn made_by_key(
+    state: &ApiState,
+    caller: &Caller,
+    key: Option<&str>,
+    now: DateTime<Utc>,
+) -> ApiResult<Option<Job>> {
+    let Some(key) = key else {
+        return Ok(None);
+    };
+    Ok(state
+        .store()
+        .jobs()
+        .find_by_idempotency_key(caller.key.id, key)
+        .await
+        .map_err(|error| ApiError::internal(&error))?
+        .filter(|job| job.idempotency_until.is_none_or(|until| until > now)))
+}
+
 /// Refuses a job of `adding` items for a key that has as many open jobs as
 /// `jobs.max_open_per_key`, or whose waiting items would pass
 /// `jobs.max_queued_items_per_key` (the security review's L2): `429
-/// jobs_limited`, counted in `kage_api_refusals_total{code}`. A crawl adds
-/// its items as it reads its pages and counts none here; its `max_pages`
-/// bounds it.
+/// jobs_limited`, counted in `kage_api_refusals_total{code}`. A crawl
+/// counts its `max_pages`, from its acceptance until it ends, less the
+/// pages it has begun: what it may still add.
 async fn within_key_limits(state: &ApiState, caller: &Caller, adding: usize) -> ApiResult<()> {
     let limits = state.config().jobs;
+    let most_items = limits.queued_items_per_key();
     let open = state
         .store()
         .jobs()
-        .open_of_key(caller.key.id)
+        .open_of_key(caller.key.id, limits.max_items)
         .await
         .map_err(|error| ApiError::internal(&error))?;
     let adding = u64::try_from(adding).unwrap_or(u64::MAX);
     let jobs_full = open.jobs >= u64::from(limits.max_open_per_key);
-    let items_full =
-        open.queued_items.saturating_add(adding) > u64::from(limits.max_queued_items_per_key);
+    let items_full = open.queued_items.saturating_add(adding) > u64::from(most_items);
     if !jobs_full && !items_full {
         return Ok(());
     }
@@ -564,14 +591,14 @@ async fn within_key_limits(state: &ApiState, caller: &Caller, adding: usize) -> 
         format!(
             "this key has {} item(s) of its open jobs waiting, and {adding} more would pass the \
              {} it may have: ask again when they were worked",
-            open.queued_items, limits.max_queued_items_per_key
+            open.queued_items, most_items
         )
     };
     Err(ApiError::new(ErrorCode::JobsLimited, detail)
         .with("open_jobs", open.jobs)
         .with("max_open_jobs", limits.max_open_per_key)
         .with("queued_items", open.queued_items)
-        .with("max_queued_items", limits.max_queued_items_per_key)
+        .with("max_queued_items", most_items)
         // A hint: when a job ends is not known here, and every 429 of a
         // key's limits says when to ask again.
         .retry_after(JOBS_LIMITED_RETRY))

@@ -49,8 +49,11 @@ async fn metrics_expose_the_series_of_the_specification() {
 
     // Any level for the shop, and a domain that takes nothing below a
     // person's browser and is paused after two blocks.
+    // The second domain is a site the operator named that nothing asks for
+    // until the end (L3).
     let rules = "defaults: { pacing: fast, active_hours: ignore }\n\
-                 domains:\n  walled.kage.test: { min_level: 3, breaker_threshold: 2, breaker_pause: 30m, retries: 1 }\n";
+                 domains:\n  walled.kage.test: { min_level: 3, breaker_threshold: 2, breaker_pause: 30m, retries: 1 }\n\
+                 \x20 named.kage.test: { retries: 1 }\n";
     // Three personas: the plain client leaves through the proxy of the
     // site's scout, which reads none of its pages, and the wall is met by
     // the two others.
@@ -62,8 +65,14 @@ async fn metrics_expose_the_series_of_the_specification() {
             kind: SelftestPageKind::Probe,
             url: "http://shop.kage.test/probe/".to_owned(),
         }];
+        // One open job per key (L2), and room for 300 domains (L3).
+        config.jobs.max_open_per_key = 1;
+        config.server.metrics_max_domains = 300;
     })
     .await;
+    // As `serve` does before anything records: the bound from the
+    // configuration, the policies' domains first.
+    kage_api::metrics::bound_domains(&api.parts.config.server, &api.parts.policies.current());
     let router = api.with_parts(|parts| parts.metrics = Some(handle.clone()));
     let fetch = api.key(&[Scope::Fetch]).await;
     let admin = api.key(&[Scope::Admin]).await;
@@ -700,9 +709,30 @@ async fn metrics_expose_the_series_of_the_specification() {
     // The scrape itself is the one request in flight.
     assert_eq!(in_flight, Some(1.0), "{text}");
 
+    // L2: a key with as many open jobs as it may have is refused, and the
+    // refusal is counted. No worker runs any more: the first job stays.
+    let open = send(
+        Method::POST,
+        "/v1/jobs",
+        Some(&jobs),
+        Some(json!({ "type": "batch", "urls": [Api::url("/page?item=3")], "defaults": { "level": 1 } })),
+    )
+    .await;
+    assert_eq!(open.status, StatusCode::CREATED, "{:?}", open.json());
+    let limited = send(
+        Method::POST,
+        "/v1/jobs",
+        Some(&jobs),
+        Some(json!({ "type": "batch", "urls": [Api::url("/page?item=4")], "defaults": { "level": 1 } })),
+    )
+    .await;
+    limited.problem(StatusCode::TOO_MANY_REQUESTS, "jobs_limited");
+
     // L3: the `domain` label's values are bounded. Six hundred hosts asked
-    // for (past the default 500, with the test's own sites before them)
-    // make at most 500 label values of their own and `other`.
+    // for (past `server.metrics_max_domains`, 300 here, with the test's own
+    // sites before them) make at most 300 label values of their own and
+    // `other`; the site the policies name kept its label, though nothing
+    // asked for it before the flood.
     for number in 0..600 {
         kage_scheduler::metrics::request(
             &format!("host-{number}.flood.test"),
@@ -720,10 +750,24 @@ async fn metrics_expose_the_series_of_the_specification() {
         .collect();
     assert!(domains.contains("other"), "{domains:?}");
     assert!(domains.contains("shop.kage.test"), "{domains:?}");
-    assert!(
-        domains.len() <= kage_scheduler::metrics::DEFAULT_MAX_DOMAINS + 1,
-        "{}",
-        domains.len()
+    assert!(domains.len() <= 301, "{}", domains.len());
+    kage_scheduler::metrics::request(
+        "named.kage.test",
+        kage_core::domain::Level::Plain,
+        kage_core::outcome::Outcome::Ok,
+        "",
     );
+    let scraped = send(Method::GET, "/metrics", Some(&admin), None).await;
+    let text = String::from_utf8(scraped.body.to_vec()).unwrap();
+    expect(
+        &text,
+        "kage_requests_total",
+        &["domain=\"named.kage.test\""],
+    );
+    let jobs_limited = text
+        .lines()
+        .find_map(|line| line.strip_prefix("kage_api_refusals_total{code=\"jobs_limited\"} "))
+        .and_then(|value| value.trim().parse::<f64>().ok());
+    assert_eq!(jobs_limited, Some(1.0), "{text}");
     api.shut_down().await;
 }

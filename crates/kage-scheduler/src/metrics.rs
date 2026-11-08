@@ -73,6 +73,16 @@ impl DomainLabels {
         self.max = max;
     }
 
+    /// Gives `domains` a label of their own before any other, in their
+    /// order, while there is room: the domains the policy files name, at the
+    /// start, so that a flood of hosts cannot push the operator's own sites
+    /// into [`OTHER_DOMAIN`].
+    pub fn name_first<'a>(&mut self, domains: impl IntoIterator<Item = &'a str>) {
+        for domain in domains {
+            let _ = self.label(domain);
+        }
+    }
+
     /// The label of `domain`: its own, while there is room or when it has
     /// one already, else [`OTHER_DOMAIN`].
     pub fn label<'a>(&mut self, domain: &'a str) -> Cow<'a, str> {
@@ -107,12 +117,12 @@ static DOMAINS: LazyLock<Mutex<DomainLabels>> =
     LazyLock::new(|| Mutex::new(DomainLabels::new(DEFAULT_MAX_DOMAINS)));
 
 /// Bounds the `domain` label values (`server.metrics_max_domains`), once at
-/// the start of the server.
-pub fn bound_domains(max: usize) {
-    DOMAINS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .set_max(max);
+/// the start of the server, and gives `named` (the domains the policy files
+/// name) their labels first ([`DomainLabels::name_first`]).
+pub fn bound_domains<'a>(max: usize, named: impl IntoIterator<Item = &'a str>) {
+    let mut labels = DOMAINS.lock().unwrap_or_else(PoisonError::into_inner);
+    labels.set_max(max);
+    labels.name_first(named);
 }
 
 /// The `domain` label a metric carries for `domain`: its own, or
@@ -346,9 +356,20 @@ mod tests {
             .map(|index| many.label(&format!("host-{index}.example")).into_owned())
             .collect();
         assert_eq!(distinct.len(), 4);
+        // Named first, the operator's domains keep their labels whatever
+        // comes after; past the bound even a named one shares `other`.
+        let mut named = super::DomainLabels::new(2);
+        named.name_first(["mine.example", "ours.example", "theirs.example"]);
+        for index in 0..100 {
+            assert_eq!(named.label(&format!("host-{index}.example")), "other");
+        }
+        assert_eq!(named.label("mine.example"), "mine.example");
+        assert_eq!(named.label("ours.example"), "ours.example");
+        assert_eq!(named.label("theirs.example"), "other");
         // The process's labels.
-        super::bound_domains(super::DEFAULT_MAX_DOMAINS);
+        super::bound_domains(super::DEFAULT_MAX_DOMAINS, ["named.example"]);
         assert_eq!(super::domain_label("shop.example"), "shop.example");
+        assert_eq!(super::domain_label("named.example"), "named.example");
     }
 
     #[test]

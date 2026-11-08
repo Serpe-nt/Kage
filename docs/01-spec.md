@@ -138,7 +138,9 @@ otel-collector, jaeger, prometheus, grafana (optional compose profiles)
 One Compose project. Services: `kage`, `browser-chromium`, `browser-firefox`,
 `postgres`. Optional profile `observability`: `otel-collector`, `jaeger`,
 `prometheus`, `grafana`. Volumes: `personas` (browser profile directories),
-`artifacts`, `pgdata`. Only `kage` publishes a port, and only the API's:
+`artifacts` (kage's alone), `sidecar-files` (the files the sidecars write,
+mounted at `artifacts/sidecar` in both sidecars and in kage, §10.2),
+`pgdata`. Only `kage` publishes a port, and only the API's:
 the forwarder (§7.5) listens on the compose network alone.
 
 ---
@@ -2551,13 +2553,15 @@ looked at, so guessing keys is limited too. All are `429` with
 `Retry-After` and a code that says which (`rate_limited`,
 `concurrency_limited`, `budget_exhausted`). A key may also have
 `jobs.max_open_per_key` (20) jobs open (queued, running or paused) and
-`jobs.max_queued_items_per_key` (20 000, at least `jobs.max_items`) items
-of them waiting at once, the new job's included; past either, `POST
+`jobs.max_queued_items_per_key` (at least `jobs.max_items`; unset, twice
+`jobs.max_items` and at least 20 000) items of them waiting at once, the
+new job's included; past either, `POST
 /v1/jobs` is `429 jobs_limited` with the counts and the bounds, a
 `Retry-After` of a minute, and nothing stored (the security review's L2).
-A crawl counts its pages as it adds them, none at acceptance. The check
-and the insert are one step for the server, so two jobs asked for at once
-cannot both pass it.
+A crawl counts its `max_pages` from its acceptance, less the pages it has
+begun. The check and the insert are one step for the server, so two jobs
+asked for at once cannot both pass it, and the same `Idempotency-Key`
+sent twice at once is one job and a replay.
 
 Keys are made, listed, disabled and rotated through the admin endpoints or
 `kage key create|list|revoke|rotate`, which works on the store and needs no
@@ -3116,7 +3120,7 @@ wildcard, which would be compared as it is written and match nothing;
 F136) and `docs` (true). `security` holds
 `allow_ip_targets`, `resolve_on_host` and `expose_set_cookie`, all false.
 `jobs` holds `max_items` (10 000), `max_running` (8), `max_items_in_flight`
-(24), `max_open_per_key` (20), `max_queued_items_per_key` (20 000, §16.2), `max_age` (7 d), `retention_days` (14), `lease` (1 m),
+(24), `max_open_per_key` (20), `max_queued_items_per_key` (unset: twice `max_items`, at least 20 000; §16.2), `max_age` (7 d), `retention_days` (14), `lease` (1 m),
 `poll_interval` (2 s), `idempotency_ttl` (1 d) and `wind_down` (150 s, at
 most 15 m: how long a server that stops waits for the pages that are
 being read, §16.6). `webhooks` holds
@@ -3530,8 +3534,9 @@ are gzip-compressed on disk.
   `nodejs_*`), every one under its `engine` (F144).
   The values of every `domain` label are bounded (the security review's
   L3): the first `server.metrics_max_domains` (500) distinct domains since
-  the start have a label of their own, and every later domain is counted
-  under `other` (a domain has a dot, so no site is named so); a domain
+  the start have a label of their own, the domains the policy files name
+  first (so that a flood of hosts after a start cannot take their labels),
+  and every later domain is counted under `other` (a domain has a dot, so no site is named so); a domain
   past the bound sets no `kage_policy_breaker_threshold`, and
   `kage_breaker_open{domain="other"}` is 1 while any of them is paused.
   The API adds `kage_api_requests_total{route,method,status}` (the route
