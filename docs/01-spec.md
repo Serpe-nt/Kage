@@ -3049,7 +3049,13 @@ jobs in the scheduler. Kage is single-instance (ADR 0005): a server holds
 a Postgres advisory lock on its database for its whole life, on a
 connection of its own, and a second server on the same database refuses to
 start and says so; one that lost its connection and finds the lock taken
-by another stops (F174). A job whose worker stopped is claimed again when
+by another stops (F174). A look at the lock answers within 5 s or confirms
+nothing, and a server that could not confirm its lock for 40 s stops as
+one whose lock was taken: Postgres gives a silent session's lock up after
+about a minute, so the server stops serving and claiming jobs before
+another could take the lock (QA round three's lock-02; a network that
+dropped every packet had a server serve on, `/readyz` ready, for 4 to
+51 s beside a second one that held the lock). A job whose worker stopped is claimed again when
 its lease ran out, by the server started after it, and goes on where its
 items stand: Postgres lets the lock go with the session of a server that
 was killed, so the next one starts at once. The persona's context may
