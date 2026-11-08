@@ -318,6 +318,14 @@ version's date is the day, in UTC, its tag was made.
   context still busy at a request's third such attempt holds its persona
   the same way, so that the persona's next requests do not each wait it
   out.
+- **The wait for a cut flow's context holds it, and the http path's
+  cookies wait for a busy context (review of QA round three's flows-01).**
+  While Kage waited for what a cut flow left running, the context counted
+  as nobody's: another persona's open could close it for room, which the
+  busy sidecar refused, and Kage forgot a context that still filled the
+  sidecar, so the next open failed `context_limit`. And the cookies the
+  persona's http path earned were left out of a browser whose context was
+  busy, with a warning; they now wait for it as the page does.
 - **A job that waits for its proxies' backoff is told when the first one
   ends (QA round three, flows-02).** F156 did not hold: a persona whose
   proxy is in backoff is stored `cooling` (`proxy_backoff`) and had no

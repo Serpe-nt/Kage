@@ -1182,6 +1182,59 @@ async fn the_wait_after_a_cut_runs_its_whole_bound_from_the_cut() {
     lab.shut_down().await;
 }
 
+/// #76's review: a sidecar that cannot say what the context of a cut flow
+/// runs (it fails, or is gone) ends the wait: the persona is not held for
+/// what nobody can tell, and its next page goes to the sidecar as any.
+#[tokio::test]
+async fn the_wait_after_a_cut_ends_when_the_sidecar_cannot_say() {
+    let mut lab = Lab::start(1, 149, BROWSER_FAST).await;
+    lab.chromium
+        .with(|sidecar| sidecar.flow_delay = Some(std::time::Duration::from_secs(30)));
+    let (_stop, stopping) = tokio::sync::watch::channel(false);
+    let (cancel, cancelled) = tokio::sync::watch::channel(false);
+    let id = RequestId::new();
+    let running = {
+        let pipeline = lab.pipeline.clone();
+        let order = flow(&across());
+        tokio::spawn(async move {
+            pipeline
+                .fetch_flow_for_job(id, order, None, stopping, cancelled)
+                .await
+        })
+    };
+    flows_asked(&lab, 1).await;
+    let cut = chrono::Utc::now();
+    cancel.send_replace(true);
+    let fetched = running.await.unwrap().unwrap();
+    assert!(matches!(fetched, JobFetch::Stopped), "{fetched:?}");
+    // Kage looks at the busy context once a second, then the sidecar
+    // fails: one look fails and there is no other.
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    assert!(!lab.chromium.with(|sidecar| sidecar.refused_busy.is_empty()));
+    lab.chromium.with(|sidecar| sidecar.failing = true);
+    tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+    let failed = lab.chromium.with(|sidecar| sidecar.failed.clone());
+    assert_eq!(failed, ["POST state/export"]);
+
+    // The sidecar answers again: the next page has the persona at once.
+    lab.chromium.with(|sidecar| {
+        sidecar.failing = false;
+        sidecar.busy_until.clear();
+    });
+    let page = lab
+        .pipeline
+        .fetch(FetchOrder {
+            level: Level::Human,
+            max_retries: Some(0),
+            ..FetchOrder::get(Lab::url("/after"), Priority::Sync)
+        })
+        .await
+        .unwrap();
+    assert_eq!(page.outcome, Outcome::Ok, "{:?}", page.reason);
+    assert!(page.attempts[0].started_at - cut < chrono::Duration::seconds(12));
+    lab.shut_down().await;
+}
+
 /// QA round three, flows-01 and lock-01: a context that runs an operation
 /// Kage did not wait for (a server that was killed left it, or a cut whose
 /// wait ran out) is waited for by the attempt that meets it, and the page

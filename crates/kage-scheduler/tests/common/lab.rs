@@ -268,6 +268,11 @@ pub struct SidecarState {
     /// §10.1); these are counted in `refused_busy`.
     pub busy_until: HashMap<String, std::time::Instant>,
     pub refused_busy: Vec<String>,
+    /// While set, every operation on a context fails `internal`: a
+    /// sidecar that cannot say what its contexts run. They are counted in
+    /// `failed`.
+    pub failing: bool,
+    pub failed: Vec<String>,
 }
 
 struct SidecarResponder {
@@ -608,6 +613,10 @@ impl Respond for SidecarResponder {
         if !known {
             return refusal(404, "context_not_found", "no such context");
         }
+        if state.failing {
+            state.failed.push(format!("{method} {operation}"));
+            return refusal(500, "internal", "the sidecar failed");
+        }
         if state
             .busy_until
             .get(context)
@@ -698,6 +707,8 @@ impl MockSidecar {
             flow_delay: None,
             busy_until: HashMap::new(),
             refused_busy: Vec::new(),
+            failing: false,
+            failed: Vec::new(),
             on_flow: None,
             exported: Vec::new(),
             imported: Vec::new(),

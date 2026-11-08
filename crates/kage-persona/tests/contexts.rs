@@ -197,6 +197,56 @@ async fn when_every_context_of_the_engine_is_held_a_lease_waits_for_one() {
     assert_ne!(context.to_string(), closed(&harness)[0]);
 }
 
+/// #76's review: while Kage waits for what a cut attempt left running on a
+/// context, it holds the context, so that no other persona's room, no idle
+/// close and no close of a retired persona takes it. The sidecar would
+/// refuse to close it, busy, and Kage would forget a context that still
+/// fills the sidecar; the next open of another persona then failed
+/// `context_limit`.
+#[tokio::test]
+async fn a_context_held_for_its_wait_is_nobodys_victim() {
+    let harness = Harness::start_with(|config| {
+        chromium_only(config);
+        config.scheduler.max_contexts_per_engine = 1;
+    })
+    .await;
+    let contexts = Arc::clone(harness.manager.contexts());
+    let (_, first) = harness.persona("DE").await;
+    let (_, second) = harness.persona("DE").await;
+    let first_endpoint = endpoint(&harness, &first).await;
+    let second_endpoint = endpoint(&harness, &second).await;
+    assert!(contexts.hold(first.id).await.is_none());
+    contexts
+        .acquire(&first, &first_endpoint)
+        .await
+        .unwrap()
+        .keep(false);
+
+    let held = contexts.hold(first.id).await.unwrap();
+    assert!(held.reused());
+    assert!(!contexts.close_of(first.id).await);
+    assert_eq!(contexts.close_all().await, 0);
+    let waiting = tokio::spawn({
+        let contexts = Arc::clone(&contexts);
+        async move {
+            contexts
+                .acquire(&second, &second_endpoint)
+                .await
+                .unwrap()
+                .keep(false);
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!waiting.is_finished());
+    assert_eq!(closed(&harness), Vec::<String>::new());
+
+    // Given back, it makes room as any other.
+    let context = held.context().to_string();
+    held.keep(false);
+    waiting.await.unwrap();
+    assert_eq!(closed(&harness), [context]);
+}
+
 #[tokio::test]
 async fn idle_contexts_are_closed_and_held_ones_never() {
     let harness = Harness::start_with(chromium_only).await;
