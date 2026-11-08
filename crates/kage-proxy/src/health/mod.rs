@@ -194,7 +194,7 @@ impl HealthChecker {
     /// Fails when the emulation profile is unknown or a client cannot be
     /// built.
     pub fn from_config(config: &Config, pool: Arc<Pool>) -> Result<Self, HealthSetupError> {
-        let clients = EmulatedClientFactory::from_config(&config.proxies.health)?;
+        let clients = EmulatedClientFactory::for_config(config)?;
         Self::with_clients(config, pool, clients)
     }
 

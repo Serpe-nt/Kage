@@ -206,17 +206,36 @@ impl PersonaProbeClients {
 impl PersonaProbeClients {
     /// The probe clients the configuration describes: the persona behind
     /// each proxy, with the limits and the fallback profile of
-    /// `proxies.health`.
+    /// `proxies.health`, every client trusting the operator's own
+    /// authorities of `http.ca_file` as the persona's own clients do (spec
+    /// §9, QA round three's level0-06).
     ///
     /// # Errors
     ///
-    /// Fails when the configured profile is not one this build ships.
+    /// Fails when the configured profile is not one this build ships, or
+    /// when `http.ca_file` cannot be read.
     pub fn from_config(
         directory: std::sync::Arc<Directory>,
-        health: &kage_core::config::ProxyHealthConfig,
+        config: &kage_core::config::Config,
     ) -> Result<Self, ProbeClientError> {
-        let fallback = EmulatedClientFactory::from_config(health)?;
-        Ok(Self::new(directory, *fallback.settings(), fallback))
+        let anchor = kage_http::trust_anchor(&config.http).map_err(ProbeClientError::Build)?;
+        let mut fallback = EmulatedClientFactory::from_config(&config.proxies.health)?;
+        let mut factory = ClientFactory::in_memory(*fallback.settings());
+        if let Some(pem) = anchor {
+            fallback = fallback.with_trust_anchor(pem.clone());
+            factory = factory.with_trust_anchor(pem);
+        }
+        Ok(Self {
+            directory,
+            factory,
+            fallback,
+        })
+    }
+
+    /// How many operator authorities the probe clients trust besides the
+    /// public roots: the persona's and the fallback's alike.
+    pub fn trust_anchors(&self) -> (usize, usize) {
+        (self.factory.trust_anchors(), self.fallback.trust_anchors())
     }
 }
 
@@ -389,5 +408,53 @@ mod tests {
             .client(&endpoint(kage_core::ids::ProxyId::new()))
             .unwrap();
         assert_eq!(other.profile().name(), "chrome_149");
+    }
+
+    /// QA round three's level0-06: the probe clients trust the operator's
+    /// own authorities of `http.ca_file` as the persona's clients do, the
+    /// persona's and the fallback alike; a file that cannot be read stops
+    /// the start with the key's name.
+    #[test]
+    fn the_probe_clients_trust_the_operators_authorities() {
+        let mut config = kage_core::config::Config::load(
+            None,
+            [
+                ("KAGE__DATABASE__URL", "postgres://kage@localhost/kage"),
+                ("KAGE__SIDECAR__TOKEN", "token"),
+                (
+                    "KAGE__SECRETS__MASTER_KEY",
+                    "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+                ),
+            ]
+            .map(|(key, value)| (key.to_owned(), value.to_owned())),
+        )
+        .unwrap();
+        let directory = Arc::new(Directory::new());
+        let plain = PersonaProbeClients::from_config(Arc::clone(&directory), &config).unwrap();
+        assert_eq!(plain.trust_anchors(), (0, 0));
+
+        let dir = tempfile::tempdir().unwrap();
+        let ca = dir.path().join("ca.pem");
+        std::fs::write(
+            &ca,
+            rcgen::CertificateParams::new(Vec::<String>::new())
+                .unwrap()
+                .self_signed(&rcgen::KeyPair::generate().unwrap())
+                .unwrap()
+                .pem(),
+        )
+        .unwrap();
+        config.http.ca_file = Some(ca);
+        let trusting = PersonaProbeClients::from_config(Arc::clone(&directory), &config).unwrap();
+        assert_eq!(trusting.trust_anchors(), (1, 1));
+        let fallback = EmulatedClientFactory::for_config(&config).unwrap();
+        assert_eq!(fallback.trust_anchors(), 1);
+
+        config.http.ca_file = Some(dir.path().join("missing.pem"));
+        let error = PersonaProbeClients::from_config(directory, &config).unwrap_err();
+        assert!(
+            error.to_string().contains("http.ca_file: cannot read"),
+            "{error}"
+        );
     }
 }
