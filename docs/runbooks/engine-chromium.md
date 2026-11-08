@@ -467,8 +467,14 @@ driver reports the kept status (`200`) and the wire's header lines, the
 the 304's fields. Where the wire's status of the main frame's latest
 document request was `304` and the announced one is not, the result has
 the announced status and head (F178), as the Firefox engine reports such a
-page from the heads it keeps. Every other page keeps the driver's lines,
-which are the wire's as sent. A `CONNECT` the proxy refuses is `ERR_TUNNEL_CONNECTION_FAILED`,
+page from the heads it keeps. Every other page has the wire's lines in
+the order the site sent them: the driver gives Chrome's lines sorted by
+name (the debugger's header object holds them so), and
+`Network.responseReceivedExtraInfo` carries the head as it came over the
+wire (`headersText`), from which `DocumentRequests` reads the lines of the
+main frame's latest document. Over HTTP/2 and HTTP/3 the debugger has no
+such text and the driver's sorted lines stay (QA round three, browser-04).
+A `CONNECT` the proxy refuses is `ERR_TUNNEL_CONNECTION_FAILED`,
 which Kage reports as the proxy's refusal (`proxy_refused`) when the
 forwarder saw it.
 

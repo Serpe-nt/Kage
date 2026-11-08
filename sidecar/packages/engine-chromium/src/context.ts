@@ -308,15 +308,24 @@ export class ChromiumContext implements EngineContext, SessionDriver {
   /**
    * The kept page Chrome shows where it revalidated it and the network
    * answered `304`: its status and head as the debugger announced them
-   * (F178). The driver's header lines are the wire's, as the field lines
-   * were sent, for every other document.
+   * (F178). For every other document the wire's field lines in the order
+   * the site sent them, where the debugger quoted the head's text (HTTP/1);
+   * the driver's own are the same lines sorted by name (browser-04).
    */
   shownHead(response: DriverResponse): Promise<ShownHead | null> {
-    return Promise.resolve(this.requests.revalidated(response.url()));
+    const url = response.url();
+    return Promise.resolve(
+      this.requests.revalidated(url) ?? this.requests.asSent(url, response.status()),
+    );
   }
 
   replacedStatus(url: string): number | null {
     return this.requests.replacedStatus(url);
+  }
+
+  /** The wire's `304` Chrome broke the load off at, having kept no page for it (class-02). */
+  unshownAnswer(url: string): ShownHead | null {
+    return this.requests.notModified(url);
   }
 
   /**

@@ -21,6 +21,11 @@ export interface AnswerSeen {
   readonly requestId: string;
   readonly statusCode?: number;
   readonly headers: Readonly<Record<string, string>>;
+  /**
+   * The head as it came over the wire, its field lines in the order sent;
+   * the debugger has none for HTTP/2 and HTTP/3.
+   */
+  readonly headersText?: string;
 }
 
 /** An answer with a document (`Network.responseReceived`): the response the tab shows. */
@@ -51,6 +56,10 @@ interface Latest {
   answered: boolean;
   /** The status of the latest answer the network gave it (`Network.responseReceivedExtraInfo`). */
   wireStatus: number | null;
+  /** The field lines of that answer in the order they came, where the debugger had its text. */
+  wireLines: { name: string; value: string }[] | null;
+  /** The field lines of that answer as the debugger's header object holds them, sorted by name. */
+  wireHeaders: { name: string; value: string }[];
   /** The response the tab shows, as the debugger announced it with the document. */
   shown: DocumentAnswered['response'] | null;
 }
@@ -62,6 +71,39 @@ function headerLines(headers: Readonly<Record<string, string>>): { name: string;
   return Object.entries(headers).flatMap(([name, joined]) =>
     joined.split('\n').map((value) => ({ name, value })),
   );
+}
+
+/**
+ * The field lines of a head as the debugger quotes it from the wire
+ * (`headersText`): the status line first, then one line per field in the
+ * order sent, a repeated name on lines of its own. A line folded onto the
+ * next (obsolete, RFC 9112 §5.2) is one value, its fold a space. `null`
+ * where the text holds no status line.
+ */
+export function wireLines(text: string): { name: string; value: string }[] | null {
+  const [status, ...rest] = text.split(/\r?\n/);
+  if (!status?.startsWith('HTTP/')) {
+    return null;
+  }
+  const lines: { name: string; value: string }[] = [];
+  for (const line of rest) {
+    if (line === '') {
+      break;
+    }
+    const previous = lines[lines.length - 1];
+    if (/^[ \t]/.test(line)) {
+      if (previous !== undefined) {
+        previous.value = `${previous.value} ${line.trim()}`.trim();
+      }
+      continue;
+    }
+    const colon = line.indexOf(':');
+    if (colon <= 0) {
+      continue;
+    }
+    lines.push({ name: line.slice(0, colon).trim(), value: line.slice(colon + 1).trim() });
+  }
+  return lines;
 }
 
 /**
@@ -107,6 +149,8 @@ export class DocumentRequests {
       answers: [],
       answered: false,
       wireStatus: null,
+      wireLines: null,
+      wireHeaders: [],
       shown: null,
     };
   }
@@ -120,6 +164,8 @@ export class DocumentRequests {
       return;
     }
     latest.wireStatus = status === 0 ? null : status;
+    latest.wireLines = event.headersText === undefined ? null : wireLines(event.headersText);
+    latest.wireHeaders = headerLines(event.headers);
     if (status < 300 || status > 399) {
       return;
     }
@@ -178,6 +224,55 @@ export class DocumentRequests {
       return null;
     }
     return { status: shown.status, headers: headerLines(shown.headers) };
+  }
+
+  /**
+   * The head of the document at `url` that the network answered with
+   * `status`, its field lines in the order the site sent them (QA round
+   * three, browser-04): the driver gives Chrome's lines sorted by name, as
+   * the debugger's header object holds them. `null` where the debugger had
+   * no text of the head (HTTP/2, HTTP/3, a page from the cache) or the
+   * document is another.
+   */
+  asSent(url: string, status: number): ShownAnswer | null {
+    const latest = this.latest;
+    const last = latest?.urls[latest.urls.length - 1];
+    if (
+      latest === null ||
+      !latest.answered ||
+      latest.wireLines === null ||
+      latest.wireStatus !== status ||
+      last === undefined ||
+      withoutFragment(last) !== withoutFragment(url)
+    ) {
+      return null;
+    }
+    return { status, headers: latest.wireLines.map((line) => ({ ...line })) };
+  }
+
+  /**
+   * The wire's `304` the latest document request got at `url`, its last
+   * address, where no kept page came of it (QA round three, class-02):
+   * Chrome breaks a load off at a `304` it kept no page for, as at a
+   * `204`, and tells its driver only that the load was aborted. The
+   * status and the 304's own fields, in the order sent where the debugger
+   * quoted them; `null` for any other answer.
+   */
+  notModified(url: string): ShownAnswer | null {
+    const latest = this.latest;
+    const last = latest?.urls[latest.urls.length - 1];
+    if (
+      latest === null ||
+      // A kept page brought up to date is {@link DocumentRequests.revalidated}'s.
+      (latest.shown !== null && latest.shown.status !== 304) ||
+      latest.wireStatus !== 304 ||
+      last === undefined ||
+      withoutFragment(last) !== withoutFragment(url)
+    ) {
+      return null;
+    }
+    const lines = latest.wireLines ?? latest.wireHeaders;
+    return { status: 304, headers: lines.map((line) => ({ ...line })) };
   }
 
   /**

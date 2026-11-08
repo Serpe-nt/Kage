@@ -1757,7 +1757,8 @@ export interface components {
              *     `Content-Type`, its `<meta>`, else UTF-8 or windows-1252); with
              *     `include: ["raw"]`, and on the http path with `include: ["dom"]`
              *     too. Null when the body is not text: `artifacts.raw_body` has its
-             *     bytes, always.
+             *     bytes, always. Null, with no artifact, for a file a browser saved
+             *     (the reason `download`), in either engine.
              */
             raw_body?: string | null;
             /**

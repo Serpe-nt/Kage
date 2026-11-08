@@ -10,6 +10,7 @@ import {
   type ArtifactRef,
   type BehaviorOptions,
   type BehaviorReport,
+  type CapturedBody,
   type CaptureOptions,
   type Cookie,
   type Entry,
@@ -278,6 +279,23 @@ export interface SessionDriver {
    * it out.
    */
   replacedStatus?(url: string): number | null;
+  /**
+   * The status and head of an answer the main frame's latest document
+   * request got at `url` that showed no page and that its driver names no
+   * response for, where the browser broke the load off (Chrome at a `304`
+   * it kept no page for, QA round three class-02); `null` when no such
+   * answer is known. An engine whose driver keeps the response leaves it
+   * out.
+   */
+  unshownAnswer?(url: string): ShownHead | null;
+  /**
+   * The body of the page the browser kept and shows where it revalidated
+   * it and its driver gives no body (Firefox's gives only the wire's `304`
+   * and refuses a body for any `3xx`, QA round three browser-05); `null`
+   * where it cannot be had. An engine whose driver gives the kept body
+   * leaves it out.
+   */
+  keptBody?(response: DriverResponse): Promise<Buffer | null>;
 }
 
 /** The head of a response as the tab shows it (see {@link SessionDriver.shownHead}). */
@@ -2378,6 +2396,13 @@ export class PageSession {
         : failedThere
           ? (driver.replacedStatus?.(sentTo ?? url) ?? null)
           : null;
+    // An answer the browser broke the load off at and its driver names no
+    // response for (Chrome's `304` it kept no page for): its status and
+    // head are the site's, nothing of the tab is (class-02).
+    const unshown =
+      seenResponse === null && !failedThere && extra.error?.code === 'aborted'
+        ? (driver.unshownAnswer?.(sentTo ?? url) ?? null)
+        : null;
     // A page the browser brought back from before the flow is a document
     // too, though nothing is known of the response it once came with.
     // An answer with no content (204, 205) holds no page: the tab still
@@ -2403,11 +2428,17 @@ export class PageSession {
       options.links === true && loaded
         ? await this.read<{ links: PageLink[]; truncated: boolean }>(READ_LINKS).catch(() => null)
         : null;
+    // Where the driver has no body of the page the tab shows (Firefox's
+    // `304` of a page it kept), the engine may read the kept one (browser-05).
+    const keptBody = async (shown: DriverResponse): Promise<CapturedBody | null> => {
+      const kept = await driver.keptBody?.(shown).catch(() => null);
+      return kept == null ? null : captureBody(kept, maxBody);
+    };
     const rawBody =
       options.raw && response !== null
         ? await this.answer(response.body()).then(
             (body) => captureBody(body, maxBody),
-            () => null,
+            () => keptBody(response),
           )
         : null;
     // The head the tab shows, where the driver's says otherwise (F178, F190).
@@ -2417,7 +2448,7 @@ export class PageSession {
         : await this.answer(driver.shownHead(response)).catch(() => null);
     const headers =
       response === null
-        ? []
+        ? toHeaders(unshown?.headers ?? [])
         : toHeaders(
             shownHead?.headers ?? (await this.answer(response.headersArray()).catch(() => [])),
           );
@@ -2479,7 +2510,7 @@ export class PageSession {
             : loaded
               ? shown
               : url,
-      status: shownHead?.status ?? response?.status() ?? replacedStatus,
+      status: shownHead?.status ?? response?.status() ?? replacedStatus ?? unshown?.status ?? null,
       http_version:
         response === null || unanswering !== null
           ? null
@@ -2823,6 +2854,8 @@ export class PageSession {
       }
       await Promise.race([Promise.allSettled(this.document.bodies), sleep(BODY_WAIT_MS)]);
       captures += 1;
+      // Every page the flow captures is kept up to the flow's bound, as a
+      // navigation's is (extract-04).
       return this.capture(
         page.url(),
         options,

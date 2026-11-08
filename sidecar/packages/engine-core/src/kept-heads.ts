@@ -47,7 +47,38 @@ const NOT_KEPT = new Set([
   'set-cookie',
   'set-cookie2',
 ]);
-const NOT_UPDATED = new Set([...NOT_KEPT, 'content-length']);
+/**
+ * The fields of a `304` the browser does not put into the page it kept:
+ * besides those no head keeps, the ones that describe the kept body and
+ * its validator, which a bodiless answer cannot change, and the proxy's.
+ * Firefox's list (`nsHttpResponseHead::UpdateHeaders`); Chrome's
+ * (`HttpResponseHeaders::Update`) holds the same fields of the body, so a
+ * `304` that names another `Content-Type` leaves the kept page's in both
+ * engines, as the page the tab renders keeps it (QA round three,
+ * browser-03).
+ */
+const NOT_UPDATED = new Set([
+  ...NOT_KEPT,
+  'proxy-authenticate',
+  'proxy-authorization',
+  'trailer',
+  'content-location',
+  'content-md5',
+  'etag',
+  'content-encoding',
+  'content-range',
+  'content-type',
+  'content-length',
+]);
+
+/**
+ * The lines of a head as a file of an older sidecar may hold them: a value
+ * Firefox joined with a line feed is the lines it joined (browser-01).
+ */
+const asLines = (lines: readonly Line[]): Line[] =>
+  lines.flatMap(({ name, value }) =>
+    value.split('\n').map((line) => ({ name, value: line.trim() })),
+  );
 
 const withoutFragment = (url: string) => url.split('#')[0] ?? '';
 
@@ -88,7 +119,7 @@ export class KeptHeads {
     try {
       const parsed = JSON.parse(text) as { heads?: unknown };
       const heads = Array.isArray(parsed.heads) ? parsed.heads.filter(isKeptHead) : [];
-      return new KeptHeads(heads);
+      return new KeptHeads(heads.map((head) => ({ ...head, headers: asLines(head.headers) })));
     } catch {
       return new KeptHeads();
     }
@@ -142,8 +173,10 @@ export class KeptHeads {
 
   /**
    * The page the tab shows for a `304` at `url`: the kept status, and the
-   * kept head with every field of the 304 put in place of the kept one of
-   * that name, or added (RFC 9111 §3.2). `null` when no head of it is kept.
+   * kept head with every field of the 304 the browser updates put in place
+   * of the kept one of that name, or added (RFC 9111 §3.2); the fields of
+   * the kept body and its validator stay the kept page's. `null` when no
+   * head of it is kept.
    */
   shown(url: string, headers: readonly Line[], now: number): ShownHead | null {
     this.forget(now);

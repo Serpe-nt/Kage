@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { DocumentRequests } from './document-requests.js';
+import { DocumentRequests, wireLines } from './document-requests.js';
 
 /**
  * The debugger's events in the order Chrome 155 sent them in the probe of
@@ -164,6 +164,128 @@ describe('the response the tab shows, as the debugger announced it (F178, F204)'
     requests.seen(seen('Q', 407));
     requests.answered(answered('Q', 'http://site.test/behind', 407, {}));
     expect(requests.replacedStatus('http://site.test/behind')).toBeNull();
+  });
+});
+
+describe('the field lines of a document in the order the site sent them (browser-04)', () => {
+  const text = [
+    'HTTP/1.1 200 OK',
+    'Content-Type: text/html; charset=utf-8',
+    'x-qa-zulu: 1',
+    'X-QA-Alpha:2',
+    'x-qa-mike: 3',
+    'Set-Cookie: a=1; Path=/',
+    'x-qa-bravo:   4  ',
+    'Set-Cookie: b=2',
+    'X-Folded: one',
+    ' two',
+    '\tthree',
+    'not a field line',
+    '',
+    '',
+  ].join('\r\n');
+  const inOrder = [
+    { name: 'Content-Type', value: 'text/html; charset=utf-8' },
+    { name: 'x-qa-zulu', value: '1' },
+    { name: 'X-QA-Alpha', value: '2' },
+    { name: 'x-qa-mike', value: '3' },
+    { name: 'Set-Cookie', value: 'a=1; Path=/' },
+    { name: 'x-qa-bravo', value: '4' },
+    { name: 'Set-Cookie', value: 'b=2' },
+    { name: 'X-Folded', value: 'one two three' },
+  ];
+
+  it('reads the head the debugger quoted from the wire', () => {
+    expect(wireLines(text)).toEqual(inOrder);
+    expect(wireLines(text.split('\r\n').join('\n'))).toEqual(inOrder);
+    expect(wireLines('')).toBeNull();
+    expect(wireLines('Content-Type: text/html\r\n')).toBeNull();
+    expect(wireLines('HTTP/1.1 204 No Content\r\n\r\n')).toEqual([]);
+  });
+
+  it('is the document’s head where the debugger had its text, and nothing else', () => {
+    const seenWith = (requestId: string, statusCode: number, headersText?: string) => ({
+      requestId,
+      statusCode,
+      headers: { 'content-type': 'text/html' },
+      ...(headersText === undefined ? {} : { headersText }),
+    });
+    const document = (requestId: string, url: string, status: number) => ({
+      requestId,
+      type: 'Document',
+      response: { url, status, headers: {} },
+    });
+    const requests = new DocumentRequests(MAIN);
+    expect(requests.asSent('http://site.test/p', 200)).toBeNull();
+    requests.requested(asked('R', 'http://site.test/a'));
+    requests.seen(seen('R', 302, '/p'));
+    requests.requested(asked('R', 'http://site.test/p', true));
+    requests.seen(seenWith('R', 200, text));
+    // Not before the document came.
+    expect(requests.asSent('http://site.test/p', 200)).toBeNull();
+    requests.answered(document('R', 'http://site.test/p', 200));
+    expect(requests.asSent('http://site.test/p#top', 200)).toEqual({
+      status: 200,
+      headers: inOrder,
+    });
+    // The redirect's address, another status: not this document's head.
+    expect(requests.asSent('http://site.test/a', 200)).toBeNull();
+    expect(requests.asSent('http://site.test/p', 304)).toBeNull();
+    // HTTP/2: the debugger has no text, the driver's lines stay.
+    requests.requested(asked('S', 'https://site.test/h2'));
+    requests.seen(seenWith('S', 200));
+    requests.answered(document('S', 'https://site.test/h2', 200));
+    expect(requests.asSent('https://site.test/h2', 200)).toBeNull();
+  });
+});
+
+describe('a 304 Chrome kept no page for (class-02)', () => {
+  const announced = (requestId: string, url: string, status: number) => ({
+    requestId,
+    type: 'Document',
+    response: { url, status, headers: {} },
+  });
+
+  it('is the wire’s 304 and its fields at the address it answered', () => {
+    const requests = new DocumentRequests(MAIN);
+    expect(requests.notModified('http://site.test/nm')).toBeNull();
+    requests.requested(asked('T', 'http://site.test/nm'));
+    requests.seen({
+      requestId: 'T',
+      statusCode: 304,
+      headers: { etag: '"x"', date: 'Sun, 08 Nov 2026 12:00:00 GMT' },
+      headersText:
+        'HTTP/1.1 304 Not Modified\r\nETag: "x"\r\nDate: Sun, 08 Nov 2026 12:00:00 GMT\r\n\r\n',
+    });
+    expect(requests.notModified('http://site.test/nm#f')).toEqual({
+      status: 304,
+      headers: [
+        { name: 'ETag', value: '"x"' },
+        { name: 'Date', value: 'Sun, 08 Nov 2026 12:00:00 GMT' },
+      ],
+    });
+    // Announced as a document of its own, still the wire's 304.
+    requests.answered(announced('T', 'http://site.test/nm', 304));
+    expect(requests.notModified('http://site.test/nm')?.status).toBe(304);
+    expect(requests.notModified('http://site.test/other')).toBeNull();
+    // Without the head's text: the debugger's fields.
+    requests.requested(asked('U', 'https://site.test/h2'));
+    requests.seen({ requestId: 'U', statusCode: 304, headers: { etag: '"y"' } });
+    expect(requests.notModified('https://site.test/h2')).toEqual({
+      status: 304,
+      headers: [{ name: 'etag', value: '"y"' }],
+    });
+  });
+
+  it('is nothing for a kept page brought up to date, or any other answer', () => {
+    const requests = new DocumentRequests(MAIN);
+    requests.requested(asked('V', 'http://site.test/kept'));
+    requests.seen(seen('V', 304));
+    requests.answered(announced('V', 'http://site.test/kept', 200));
+    expect(requests.notModified('http://site.test/kept')).toBeNull();
+    requests.requested(asked('W', 'http://site.test/fine'));
+    requests.seen(seen('W', 200));
+    expect(requests.notModified('http://site.test/fine')).toBeNull();
   });
 });
 

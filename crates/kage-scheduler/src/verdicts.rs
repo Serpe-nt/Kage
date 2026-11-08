@@ -145,8 +145,9 @@ pub struct Failure {
 /// What a navigation the site answered without a page to show came to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoDocument {
-    /// No content (204, 205): the browser stays on the page it showed. The
-    /// site answered, as it answers a level 0 fetch (F116).
+    /// No content (204, 205), or a `304` the browser kept no page for: the
+    /// browser stays on the page it showed. The site answered, as it
+    /// answers a level 0 fetch (F116, QA round three class-02).
     Empty,
     /// A file to save: the browser saved it and showed nothing, from a
     /// typed address (`Content-Disposition: attachment`) or from a click
@@ -166,7 +167,11 @@ pub fn no_document(page: &PageResult) -> Option<NoDocument> {
     if !aborted {
         return None;
     }
-    if matches!(page.status, Some(204 | 205)) {
+    // Chrome breaks a load off at a `304` it kept no page for as it does
+    // at a `204`, and its engine reports the wire's `304`: the site's
+    // answer with no page, as Camoufox reports it and as at level 0 (QA
+    // round three, class-02).
+    if matches!(page.status, Some(204 | 205 | 304)) {
         return Some(NoDocument::Empty);
     }
     let attachment = page.headers.iter().any(|header| {
@@ -199,10 +204,30 @@ pub fn no_document(page: &PageResult) -> Option<NoDocument> {
     (attachment || said || (clicked_to_nothing && read_nothing(page))).then_some(NoDocument::File)
 }
 
+/// Whether a failed navigation ended at the site's own error answer: an
+/// empty `4xx` the browser replaced with its own page, which came inside
+/// a tunnel (`https`), where only the site answers (spec §8.3, F189). The
+/// status the browser saw is the site's verdict, as the same answer is at
+/// level 0 and with a body in either engine: a `403` or `429` is the
+/// classifier's block, any other `4xx` is `ok` with its status, retried by
+/// no other persona and no server error of the site (QA round three,
+/// browser-02). Over plain `http` the proxy may have answered in the
+/// site's place: such a page stays a failed navigation.
+pub fn site_error_answer(page: &PageResult) -> bool {
+    page.error
+        .as_ref()
+        .is_some_and(|error| error.code == NavigationErrorCode::NavigationFailed)
+        && read_nothing(page)
+        && matches!(page.status, Some(400..=499))
+        && url::Url::parse(&page.final_url).is_ok_and(|url| url.scheme() == "https")
+}
+
 /// Why a page did not arrive, when it did not. An answer that holds no
-/// page ([`no_document`]) is none: the site answered.
+/// page ([`no_document`]) is none, nor is the site's own error answer the
+/// browser replaced with its page ([`site_error_answer`]): the site
+/// answered.
 pub fn page_failure(page: &PageResult) -> Option<Failure> {
-    if no_document(page).is_some() {
+    if no_document(page).is_some() || site_error_answer(page) {
         return None;
     }
     let error = page.error.as_ref()?;
@@ -698,8 +723,9 @@ mod tests {
             page.status = status;
             page
         };
-        // No content: whatever the tab still shows.
-        for status in [204, 205] {
+        // No content: whatever the tab still shows. A `304` Chrome kept no
+        // page for is broken off the same way (QA round three, class-02).
+        for status in [204, 205, 304] {
             let empty = aborted(Some(status));
             assert_eq!(no_document(&empty), Some(NoDocument::Empty), "{status}");
             assert_eq!(page_failure(&empty), None, "{status}");
@@ -898,5 +924,85 @@ mod tests {
         });
         let seen = observe_page(&chrome).map(|seen| policies.signatures.classify(&seen));
         assert_eq!(judged(&chrome, seen).outcome, Outcome::ProviderError);
+    }
+
+    #[test]
+    fn the_sites_empty_4xx_over_https_is_ok_with_its_status_and_retried_nowhere() {
+        let shipped = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../policies");
+        let policies = kage_core::policy::PolicySet::load(&shipped).unwrap();
+        // The page either engine gives for an empty error answer it
+        // replaced with its own (F189, F204): the status, nothing read.
+        let replaced = |at: &str, status: i64| {
+            let mut page = page();
+            page.final_url = at.to_owned();
+            page.status = Some(status);
+            page.title = None;
+            page.dom_html = None;
+            page.raw_body = None;
+            page.headers = Vec::new();
+            page.error = Some(NavigationError {
+                code: NavigationErrorCode::NavigationFailed,
+                message: format!("the browser could not load {at}: it answered with {status}"),
+                net_error: None,
+            });
+            page
+        };
+        let judge = |page: &PageResult| {
+            let seen = observe_page(page).map(|seen| policies.signatures.classify(&seen));
+            judged(page, seen)
+        };
+        // Inside a tunnel only the site answers: a missing page is the
+        // site's `404`, as at level 0 and with a body (QA round three,
+        // browser-02).
+        for status in [400, 404, 410, 451] {
+            let missing = replaced("https://shop.kage.test/gone", status);
+            assert!(super::site_error_answer(&missing), "{status}");
+            assert!(page_failure(&missing).is_none(), "{status}");
+            let verdict = judge(&missing);
+            assert_eq!(verdict.outcome, Outcome::Ok, "{status}");
+            assert!(!verdict.retryable, "{status}");
+            assert_eq!(verdict.cooldown, CooldownClass::None, "{status}");
+            assert_eq!(
+                courtesy_of(verdict.outcome, u16::try_from(status).ok()),
+                Courtesy::Answered,
+                "{status}"
+            );
+        }
+        // A wall's empty 403 and 429 stay the site's blocks.
+        assert_eq!(
+            judge(&replaced("https://shop.kage.test/a", 403)).outcome,
+            Outcome::Forbidden
+        );
+        assert_eq!(
+            judge(&replaced("https://shop.kage.test/a", 429)).outcome,
+            Outcome::RateLimited
+        );
+        // A server error stays one, retried; over plain http the proxy may
+        // have answered: a failed navigation, as before.
+        for (at, status) in [
+            ("https://shop.kage.test/a", 503),
+            ("http://shop.kage.test/a", 404),
+            ("http://shop.kage.test/a", 451),
+        ] {
+            let page = replaced(at, status);
+            assert!(!super::site_error_answer(&page), "{at} {status}");
+            let verdict = judge(&page);
+            assert_eq!(verdict.outcome, Outcome::ProviderError, "{at} {status}");
+            assert_eq!(
+                verdict.evidence,
+                vec!["failure:navigation_failed".to_owned()],
+                "{at} {status}"
+            );
+        }
+        // A page that was read, or a failure of another kind, is no such
+        // answer.
+        let mut read = replaced("https://shop.kage.test/gone", 404);
+        read.dom_html = Some("<html></html>".to_owned());
+        assert!(!super::site_error_answer(&read));
+        let mut timed_out = replaced("https://shop.kage.test/gone", 404);
+        if let Some(error) = timed_out.error.as_mut() {
+            error.code = NavigationErrorCode::Timeout;
+        }
+        assert!(!super::site_error_answer(&timed_out));
     }
 }

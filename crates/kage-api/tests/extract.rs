@@ -1937,3 +1937,114 @@ async fn in_a_browser_no_content_and_a_page_of_frames_are_answers() {
     );
     api.shut_down().await;
 }
+
+/// QA round three's class-02: a site's `304` to a typed address the
+/// browser kept no page for. Chrome breaks the load off as it does a
+/// `204`, and its engine reports the wire's `304` and its fields; Camoufox
+/// reports the `304` as a page. Both are `ok` with the site's `304`, as at
+/// level 0, never `aborted`, and nothing of the tab is returned.
+#[tokio::test]
+async fn in_a_browser_a_304_with_no_kept_page_is_the_sites_answer() {
+    let mut api = Api::start(1, 155, BROWSER_FAST).await;
+    let token = api.key(&[Scope::Fetch]).await;
+    api.lab.chromium.with(|sidecar| {
+        sidecar.pages.insert(
+            Api::url("/not-modified"),
+            json!({
+                "status": 304,
+                "headers": [{ "name": "ETag", "value": "\"x\"" }],
+                "error": { "code": "aborted", "message": "net::ERR_ABORTED", "net_error": "ERR_ABORTED" },
+                "dom_html": "<html><head></head><body>the page before</body></html>",
+            }),
+        );
+        sidecar.pages.insert(
+            Api::url("/not-modified-shown"),
+            json!({
+                "status": 304,
+                "title": "",
+                "headers": [{ "name": "ETag", "value": "\"x\"" }],
+                "dom_html": "<html><head></head><body></body></html>",
+            }),
+        );
+    });
+    for path in ["/not-modified", "/not-modified-shown"] {
+        let asked = json!({
+            "url": Api::url(path), "level": 2, "max_retries": 0, "include": ["dom", "headers"],
+        });
+        let got = api.post(&token, "/v1/fetch", &asked).await.json();
+        assert_eq!(
+            (&got["outcome"], &got["status"], &got["reason"]),
+            (&json!("ok"), &json!(304), &Value::Null),
+            "{path}: {got}"
+        );
+        assert_eq!(got["attempts"].as_array().unwrap().len(), 1, "{got}");
+        assert_eq!(got["block"], Value::Null, "{got}");
+        if path == "/not-modified" {
+            // Nothing of the page the tab still shows.
+            assert_eq!(got["dom_html"], Value::Null, "{got}");
+        }
+    }
+    api.shut_down().await;
+}
+
+/// QA round three's crawl-04: a typed address answered with a file
+/// (`ok`, reason `download`) carries no body in either engine, though
+/// `include` asks for it: Chrome hands over none of a file it saves, so
+/// the bytes Camoufox hands over are neither returned nor kept.
+#[tokio::test]
+async fn a_file_the_browser_saved_carries_no_body_in_either_engine() {
+    let mut api = Api::start(1, 155, BROWSER_FAST).await;
+    let token = api.key(&[Scope::Fetch]).await;
+    let file = "name,value\nalpha,1\n";
+    let saved = |raw: Value| {
+        json!({
+            "status": 200,
+            "title": null,
+            "headers": [
+                { "name": "content-type", "value": "text/csv" },
+                { "name": "content-disposition", "value": "attachment; filename=\"report.csv\"" },
+            ],
+            "error": { "code": "aborted", "message": "page.goto: Download is starting", "net_error": null },
+            "dom_html": null,
+            "raw_body": raw,
+        })
+    };
+    api.lab.chromium.with(|sidecar| {
+        // As Camoufox reports it: the file's bytes.
+        sidecar.pages.insert(
+            Api::url("/report.csv"),
+            saved(json!({ "data": file, "encoding": "utf8", "bytes": file.len(), "truncated": false })),
+        );
+        // As Chrome reports it: nothing.
+        sidecar
+            .pages
+            .insert(Api::url("/chrome.csv"), saved(Value::Null));
+    });
+    for path in ["/report.csv", "/chrome.csv"] {
+        let asked = json!({
+            "url": Api::url(path), "level": 2, "max_retries": 0, "include": ["raw", "headers"],
+        });
+        let got = api.post(&token, "/v1/fetch", &asked).await.json();
+        assert_eq!(
+            (&got["outcome"], &got["status"], &got["reason"]),
+            (&json!("ok"), &json!(200), &json!("download")),
+            "{path}: {got}"
+        );
+        assert_eq!(got["raw_body"], Value::Null, "{path}: {got}");
+        assert_eq!(got["artifacts"].get("raw_body"), None, "{path}: {got}");
+        let stored = api
+            .get(
+                &token,
+                &format!("/v1/results/{}", got["id"].as_str().unwrap()),
+            )
+            .await
+            .json();
+        assert_eq!(stored["raw_body"], Value::Null, "{path}, stored: {stored}");
+        assert_eq!(
+            stored["artifacts"].get("raw_body"),
+            None,
+            "{path}: {stored}"
+        );
+    }
+    api.shut_down().await;
+}

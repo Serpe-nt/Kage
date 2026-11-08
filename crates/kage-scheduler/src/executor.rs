@@ -86,7 +86,8 @@ use url::Url;
 
 use crate::forwarder::{Caller, Denial, Denials, ForwarderEgress, Meter, PlainRoute};
 use crate::verdicts::{
-    NoDocument, Verdicts, cookies_set, courtesy_of, no_document, page_failure, unanswered,
+    NoDocument, Verdicts, cookies_set, courtesy_of, no_document, page_failure, site_error_answer,
+    unanswered,
 };
 
 /// A scripted flow a browser attempt runs in place of loading one page
@@ -149,10 +150,19 @@ struct StepFailure {
 /// Reads what a failed step means from its error. A `goto` that did not
 /// arrive names the navigation error the sidecar classified; everything
 /// else (a selector that is not there, an assertion, the step's own time)
-/// is the script's, and another persona would not change it.
-fn step_failure(error: &str) -> StepFailure {
+/// is the script's, and another persona would not change it. So is a
+/// `goto` that stopped at the site's own error answer (`page`, the flow's
+/// last page, is [`site_error_answer`]): the site answered, as it answers
+/// a `goto` to the same page with a body (QA round three, browser-02).
+fn step_failure(error: &str, page: &PageResult) -> StepFailure {
     let code = error.split(':').next().unwrap_or_default();
     match code {
+        "navigation_failed" if site_error_answer(page) => StepFailure {
+            outcome: Outcome::ProviderError,
+            reason: "flow_step_failed",
+            courtesy: Courtesy::Answered,
+            retryable: false,
+        },
         "timeout" => StepFailure {
             outcome: Outcome::Timeout,
             reason: "timeout",
@@ -576,6 +586,17 @@ impl AttemptOutput {
             Some(page) => page.raw_body.as_ref().and_then(crate::archive::bytes_of),
             None => self.fetched.as_deref().map(|fetched| fetched.body.to_vec()),
         }
+    }
+
+    /// Whether a browser saved the answer as a file and showed no page of
+    /// it (the reason `download`, F120). Such a result carries no body in
+    /// either engine: Chrome hands over none of a file it saves (over plain
+    /// `http` it holds the download for the person), so the bytes Firefox
+    /// hands over are not returned or stored either (QA round three,
+    /// crawl-04). [`AttemptOutput::sent_body`] still has them, for what
+    /// Kage reads of a file itself (a scout's gzipped sitemap).
+    pub fn saved_file(&self) -> bool {
+        self.page.is_some() && self.reason.as_deref() == Some("download")
     }
 
     /// Whether the body of the response was cut at `max_body_bytes`
@@ -2121,7 +2142,7 @@ impl PathExecutor {
             && !classification.outcome.is_block()
             && let Some(failed) = flow.failed()
         {
-            let stopped = step_failure(failed.error.as_deref().unwrap_or_default());
+            let stopped = step_failure(failed.error.as_deref().unwrap_or_default(), &page);
             classification = unanswered(stopped.outcome, stopped.reason);
             classification.retryable = stopped.retryable;
             classification.evidence.push(format!(
@@ -2357,10 +2378,49 @@ mod tests {
 
     use super::{
         AttemptOutput, BehaviorWish, PathExecutor, Reached, behavior_for, blame_the_proxy,
-        denied_by_forwarder, draw_dwell, entry_from, hosts_of, origin_of, reached_of,
+        denied_by_forwarder, draw_dwell, entry_from, hosts_of, origin_of, reached_of, step_failure,
         whose_failure,
     };
     use crate::forwarder::{Caller, Denials, PlainRoute};
+
+    #[test]
+    fn a_goto_that_stopped_at_the_sites_own_error_answer_is_the_sites() {
+        // QA round three, browser-02: the flow's last page is the empty
+        // `404` the browser replaced with its own page.
+        let examples: serde_json::Value = serde_json::from_str(EXAMPLES_JSON).unwrap();
+        let mut page: PageResult =
+            serde_json::from_value(examples["PageResult"][0].clone()).unwrap();
+        page.status = Some(404);
+        page.dom_html = None;
+        page.raw_body = None;
+        page.error = Some(kage_browser::contract::NavigationError {
+            code: kage_browser::contract::NavigationErrorCode::NavigationFailed,
+            message: "the browser could not load it".to_owned(),
+            net_error: None,
+        });
+        let error = "navigation_failed: the browser could not load it";
+        let at = |url: &str| {
+            let mut page = page.clone();
+            page.final_url = url.to_owned();
+            step_failure(error, &page)
+        };
+        // Inside a tunnel: the site answered, no other persona is asked.
+        let answered = at("https://shop.kage.test/gone");
+        assert_eq!(answered.outcome, Outcome::ProviderError);
+        assert_eq!(answered.reason, "flow_step_failed");
+        assert_eq!(answered.courtesy, Courtesy::Answered);
+        assert!(!answered.retryable);
+        // Over plain http the proxy may have answered: a failed connection.
+        let unknown = at("http://shop.kage.test/gone");
+        assert_eq!(unknown.reason, "connection_failed");
+        assert_eq!(unknown.courtesy, Courtesy::ServerError);
+        assert!(unknown.retryable);
+        // A server error stays one.
+        let mut failing = page.clone();
+        failing.final_url = "https://shop.kage.test/gone".to_owned();
+        failing.status = Some(503);
+        assert_eq!(step_failure(error, &failing).reason, "connection_failed");
+    }
 
     #[test]
     fn a_redirect_targets_path_and_query_never_reach_the_log() {

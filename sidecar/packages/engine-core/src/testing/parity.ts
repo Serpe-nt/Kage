@@ -275,7 +275,10 @@ export function defineParitySuite(subject: ParitySubject): void {
     return report;
   };
 
-  const flow = async (context: EngineContext, request: Omit<FlowRequest, 'capture'>) => {
+  const flow = async (
+    context: EngineContext,
+    request: Omit<FlowRequest, 'capture'> & { capture?: FlowRequest['capture'] },
+  ) => {
     const events: FlowEvent[] = [];
     await context.flow({ capture: NO_CAPTURE, ...request }, env, (event) => events.push(event));
     const steps = events.filter((event) => event.type === 'step');
@@ -1135,6 +1138,49 @@ export function defineParitySuite(subject: ParitySubject): void {
       });
     });
 
+    it('reports the field lines in the order the site sent them, a repeated name on lines of its own (browser-01, browser-04)', async () => {
+      const result = await withContext('order', (context) => go(context, named('/headers/order')));
+      const lines = result.headers.filter(
+        (header) =>
+          header.name.toLowerCase().startsWith('x-qa-') ||
+          header.name.toLowerCase() === 'www-authenticate',
+      );
+      expect(lines.map((header) => [header.name.toLowerCase(), header.value])).toEqual([
+        ['x-qa-zulu', '1'],
+        ['x-qa-alpha', '2'],
+        ['x-qa-mike', '3'],
+        ['www-authenticate', 'Basic realm="a, b"'],
+        ['www-authenticate', 'Bearer realm="x", error="invalid_token"'],
+        ['x-qa-bravo', '4'],
+      ]);
+      // No value holds a line feed (RFC 9110 §5.5).
+      expect(result.headers.filter((header) => /[\r\n]/.test(header.value))).toEqual([]);
+    });
+
+    it('keeps the kept page’s type where the site’s 304 names another (browser-03)', async () => {
+      const address = named('/cached/retyped?id=parity');
+      const value = (result: PageResult, name: string) =>
+        result.headers.find((header) => header.name.toLowerCase() === name)?.value ?? null;
+      const visits: PageResult[] = [];
+      for (let visit = 0; visit < 3; visit += 1) {
+        visits.push(
+          await withContext('retyped', (context) => go(context, address, { capture: DOM })),
+        );
+      }
+      for (const [index, result] of visits.entries()) {
+        expect(result.status, `visit ${index}`).toBe(200);
+        expect(value(result, 'content-type'), `visit ${index}`).toBe('text/html; charset=utf-8');
+        expect(value(result, 'etag'), `visit ${index}`).toBe('"t1"');
+        expect(result.dom_html, `visit ${index}`).toContain('id="kept"');
+      }
+      // A field the browser updates comes from the 304.
+      expect(visits.map((result) => value(result, 'x-fixture'))).toEqual([
+        'kept',
+        'fresh',
+        'fresh',
+      ]);
+    });
+
     it('reports a page the browser revalidated as the page it shows: the kept status and head (F178)', async () => {
       await site.reset();
       const address = named('/cached/revalidated?id=parity');
@@ -1145,7 +1191,7 @@ export function defineParitySuite(subject: ParitySubject): void {
       // and the tab shows the page it kept.
       const first = await withContext('revalidated', (context) => go(context, address));
       const again = await withContext('revalidated', (context) =>
-        go(context, address, { capture: DOM }),
+        go(context, address, { capture: { ...DOM, raw: true } }),
       );
       const asked = (await site.requests()).filter(
         (request) => request.path === '/cached/revalidated?id=parity',
@@ -1153,6 +1199,11 @@ export function defineParitySuite(subject: ParitySubject): void {
       expect(asked).toHaveLength(2);
       expect(headerOf(asked[1], 'if-none-match')).toBe('"v1"');
       expect(again.dom_html).toContain('id="kept"');
+      // And its body, as the site sent it once: Chrome's driver serves it
+      // from the cache, the Firefox engine reads the browser's own entry
+      // (QA round three, browser-05).
+      expect(again.raw_body).toMatchObject({ encoding: 'utf8', truncated: false });
+      expect(again.raw_body?.data).toContain('<h1 id="kept">Kept</h1>');
       // One answer for the one page, in both engines: the status and the
       // head of the response the tab shows, the kept one brought up to
       // date by the 304's fields.
@@ -1251,6 +1302,33 @@ export function defineParitySuite(subject: ParitySubject): void {
         const download = await go(context, named('/download'));
         expect(download.error).toMatchObject({ code: 'aborted' });
 
+        // A typed address answered with a file, its body asked for: a load
+        // broken off in either engine, the tab still on what it showed
+        // (nothing of the file in its document), and of the body the
+        // file's bytes or nothing (Chrome hands over none), never the
+        // tab's. Kage returns none of either: no page, no body (QA round
+        // three, crawl-04).
+        const saved = await go(context, named('/download?raw'), {
+          capture: { ...NO_CAPTURE, dom: true, raw: true },
+        });
+        expect(saved.error).toMatchObject({ code: 'aborted' });
+        expect(saved.dom_html ?? '').not.toContain('file body');
+        expect([null, 'file body']).toContain(saved.raw_body?.data ?? null);
+
+        // A `304` to a request that asked for no revalidation, which the
+        // browser kept no page for: the wire's `304` and its own fields in
+        // both engines, Chrome's broken off as at a `204` (the tab stays on
+        // what it showed, which Kage drops) and Camoufox's shown, never a
+        // load that failed (QA round three, class-02).
+        const unkept = await go(context, named('/status/not-modified?id=parity'), {
+          capture: DOM,
+        });
+        expect(unkept.status).toBe(304);
+        expect(unkept.headers.find((header) => header.name.toLowerCase() === 'etag')?.value).toBe(
+          '"x"',
+        );
+        expect([null, 'aborted']).toContain(unkept.error?.code ?? null);
+
         const missing = await go(context, named('/status/404'));
         expect(missing).toMatchObject({ status: 404, error: null });
 
@@ -1263,6 +1341,36 @@ export function defineParitySuite(subject: ParitySubject): void {
           raw_body: { truncated: true, encoding: 'utf8' },
         });
         expect(Buffer.byteLength(big.dom_html ?? '')).toBeLessThanOrEqual(1001);
+
+        // A flow keeps its pages up to its own bound too: the final page
+        // and a step's capture alike (QA round three, extract-04).
+        const bounded = await flow(context, {
+          actions: [
+            { action: 'goto', url: named('/big.html') },
+            { action: 'extract', capture: { ...NO_CAPTURE, dom: true, raw: true } },
+          ],
+          capture: { ...NO_CAPTURE, dom: true, raw: true },
+          max_body_bytes: 1001,
+        });
+        const step = bounded.steps.find((event) => event.action === 'extract')?.capture ?? null;
+        for (const [name, page] of [
+          ['final', bounded.final.result],
+          ['extract', step],
+        ] as const) {
+          expect(page, name).toMatchObject({
+            dom_truncated: true,
+            raw_body: { truncated: true, encoding: 'utf8' },
+          });
+          expect(Buffer.byteLength(page?.dom_html ?? ''), name).toBeLessThanOrEqual(1001);
+        }
+        const whole = await flow(context, {
+          actions: [{ action: 'goto', url: named('/big.html') }],
+          capture: { ...NO_CAPTURE, dom: true, raw: true },
+        });
+        expect(whole.final.result).toMatchObject({
+          dom_truncated: false,
+          raw_body: { truncated: false },
+        });
 
         const capped = await go(context, named('/'), {
           wait: { until: 'network_idle' },

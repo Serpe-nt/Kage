@@ -218,6 +218,7 @@ export class FirefoxEngine implements Engine {
         page,
         keptHeads: KeptHeads.parse(await readFile(paths.keptHeads, 'utf8').catch(() => null)),
         keptHeadsPath: paths.keptHeads,
+        cacheEntries: path.join(paths.userData, 'cache2', 'entries'),
         browserVersion: this.host.version,
         applied,
         personaSeed: document.seed,

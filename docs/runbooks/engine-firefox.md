@@ -431,14 +431,19 @@ fraction of a second. Before 2.0.4 the guard's end-to-end check saw the
 `ssrf_denied` (F200).
 
 Headers. Firefox holds one value per header name, repeated lines joined
-with `, ` (`Set-Cookie` lines with a line feed), and its driver
-(playwright-core 1.62.1, `parseMultivalueHeaders`) splits every value at
-its commas and trims each piece, keeping no copy as received: a date came
-as two headers (`Tue` and `03 Nov 2026 20:00:00 GMT`), a list as one
-per item. The engine joins consecutive pieces of one name again with
-`, `, which gives the value as sent wherever a comma was followed by one
-space (dates and most lists); `a,b` comes back as `a, b`, which the
-driver's pieces no longer tell apart (F190).
+with `, ` (`Set-Cookie`, `WWW-Authenticate` and `Proxy-Authenticate`
+lines with a line feed), and its driver (playwright-core 1.62.1,
+`parseMultivalueHeaders`) splits every value at its commas and trims each
+piece, keeping no copy as received, and `Set-Cookie`'s at its line feeds
+too: a date came as two headers (`Tue` and `03 Nov 2026 20:00:00 GMT`), a
+list as one per item. The engine joins consecutive pieces of one name
+again with `, `, which gives the value as sent wherever a comma was
+followed by one space (dates and most lists); `a,b` comes back as `a, b`,
+which the driver's pieces no longer tell apart (F190). A value joined
+with a line feed is then split there, one line each: two
+`WWW-Authenticate` lines (`Negotiate`, `NTLM`) came as one value with a
+line feed inside (QA round three, browser-01). A `kept-heads.json` written
+before holds such values; they are read as the lines.
 
 A page Firefox revalidates (it asks with `If-None-Match` or
 `If-Modified-Since` and is answered `304`) shows the page it kept, but
@@ -456,8 +461,35 @@ month is rarely still there; where it is, a dropped head costs only the
 wire's `304`). It is read when the context opens and written whole (to a
 new file, then renamed) when it closes. A `304` is reported as the kept
 status with the kept head brought up to date by the 304's fields (RFC 9111
-§3.2), as Chrome's debugger reports it; a `304` whose head is not kept is
-reported as it came (F178). The file holds what the browser's own cache
+§3.2), as Chrome's debugger reports it, except those Firefox itself never
+takes from a `304` (`nsHttpResponseHead::UpdateHeaders`): the fields of
+the kept body and its validator (`Content-Type`, `Content-Encoding`,
+`Content-Length`, `Content-Range`, `Content-Location`, `Content-MD5`,
+`ETag`), the proxy's and those of one connection. A `304` that named
+`text/plain` made an HTML page's result `text/plain` from then on, though
+the tab rendered the kept HTML (QA round three, browser-03). A `304` whose
+head is not kept is reported as it came (F178).
+
+The kept page's body. playwright-core 1.62.1 refuses a body for any `3xx`
+response ("Response body is unavailable for redirect responses"), the
+wire's `304` among them, so `raw_body` of a revalidated page came back
+null on Firefox (QA round three, browser-05). The engine reads it where
+Firefox does: the page's entry in the browser's HTTP cache in the
+persona's profile, `user-data/cache2/entries/<SHA-1 of the key>`. The key
+of a top-level document under network partitioning is
+`O^partitionKey=%28<scheme>%2C<site>%29,:<url>` (the site is the host's
+registrable domain; the engine tries the host's suffixes, longest first,
+and the unpartitioned `:<url>`, and takes an entry only when the key it
+holds is the one asked for). An entry is the body as it came over the wire
+(still content-encoded), then Firefox's metadata (`CacheFileMetadata`,
+version 4 in Camoufox 156), then the metadata's offset, which is the
+body's length. The engine undoes `gzip`, `deflate`, `br` and `zstd`, and
+gives nothing where the body's length is not the kept head's
+`Content-Length`, where the coding is another (a compression dictionary's)
+or where no entry holds the key. It only reads the cache, never writes it,
+and never through the page. A Camoufox build that changes the cache's
+format shows up in `cache-entry.test.ts` (a name observed in a 156 profile)
+and in the parity suite's F178 case, which asks for the kept body. The file holds what the browser's own cache
 entry holds; it goes with the profile when a persona is retired.
 
 ## Camoufox's own calls

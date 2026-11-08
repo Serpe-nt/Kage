@@ -1002,7 +1002,14 @@ answer only where it was read (the http path, a level 0 client). That
 holds where the answer came over plain `http:` (the page's `final_url`,
 the document whose status is kept). Over `https` only the site answers
 inside the tunnel, so the status the browser saw stays the site's verdict:
-a WAF's empty `403` is `forbidden`, as before F189, in both engines.
+a WAF's empty `403` is `forbidden`, as before F189, in both engines, and
+any other empty `4xx` (a `404`, a `451`) is the site's `ok` with its
+status, as at level 0 and as the same answer with a body: not retried,
+nothing booked, no count toward the server-error pause; a flow's `goto`
+that stopped there fails its step as the script's (`flow_step_failed`),
+not retried (QA round three, browser-02: it was `navigation_failed`,
+`connection_failed` in a flow, retried on another persona and counted
+toward the pause). An empty `5xx` stays a failed navigation.
 Before 2.0.4 Chrome's result named no status there, so nothing was judged
 and nothing booked on Chrome (F204). Circuit breaker
 per domain: if `block_count_1h` over all personas ≥
@@ -1340,10 +1347,22 @@ site's answer holds no page is no failure (F116, F120): a `204` or `205`
 `ok` with its status, as at level 0, typed or clicked, and its `final_url`
 is the answer's address, not the page the tab still shows: a click so
 answered, a redirect before it included, ends its wait at once and was
-come to by the link (crawl-02); a file the browser saved and showed
+come to by the link (crawl-02); so is a `304` to a request the browser
+kept no page for (a server that answers `304` to a request that asked for
+no revalidation): Chrome breaks the load off as at a `204` and its engine
+reports the wire's `304` and its fields, which its debugger heard, and
+Camoufox shows it, so both are `ok` with the site's `304` (QA round
+three, class-02: Chrome's was `provider_error`, `aborted`, with no
+status). A file the browser saved and showed
 nothing of (a typed address answered with `Content-Disposition:
 attachment`, or a click with no entry report and no status) is `ok` with
-the reason `download` and no page. Neither is tried again by another
+the reason `download` and no page, and no body either, in both engines:
+`raw_body` is null and no `raw_body` artifact is kept, whatever `include`
+asked, since Chrome hands over none of a file it saves (over plain `http`
+it holds the download for the person to allow). What Camoufox's driver
+hands over of the file is read only where Kage reads a file itself, a
+scout's gzipped sitemap (§13) (QA round three, crawl-04: Camoufox's result
+carried the file's bytes, Chrome's nothing). Neither is tried again by another
 persona, and the persona keeps visiting.
 
 A browser shows a page of its own in place of an error answer with an
@@ -1371,7 +1390,8 @@ once the tab was sent on from a page that answered, so the navigation
 ends there in a fraction of a second, `navigation_failed` where the tab
 was sent; before 2.0.4 it ended only at `timeout_ms` (F200). Over plain `http://` whose answer it was
 is unknown, so it is nobody's block; over `https` the status the browser saw
-is the site's verdict (§8.3, F189).
+is the site's verdict (§8.3, F189): a block for a `403` or `429`, `ok` with
+its status for any other `4xx` (QA round three, browser-02).
 
 Captures must not change what the page experiences. Bodies come from
 network events, never from request interception; the DOM is read in an
@@ -2382,7 +2402,12 @@ browser is asked for the links of its document with whether each is shown
 (`capture.links`, the crawl's own, §13), and a link it reports hidden (a
 style sheet's `display: none`, the oldest trap) is left out as a crawl
 leaves it out, as often as the browser saw its address hidden; at levels 0
-and 1 only what the markup itself hides is known (F123, D48).
+and 1 only what the markup itself hides is known (F123, D48). The
+browser's address and the extraction's are compared in one spelling: a
+character that delimits nothing (`^`, `|`, braces, a backtick, quotes,
+angle brackets, a space) counts the same as itself or percent-encoded, as
+Firefox and Chrome encode `^` in a path and Chrome `|`, where Kage's parser
+keeps them (QA round three, extract-06: such a hidden link was kept).
 
 The main content is Readability's scoring (the algorithm of Firefox's
 reader view) ported onto that tree in `kage-extract`, with three rules of
@@ -2944,12 +2969,32 @@ As built (the OpenAPI document is the contract):
   holds repeated lines of one name as one value joined with `, `, as its
   driver gives them, and its driver's split at commas is undone, so a
   comma the site wrote without a space after it comes back with one
-  (F190; before 2.0.4 Firefox's values came split at every comma).
+  (F190; before 2.0.4 Firefox's values came split at every comma). The
+  lines Firefox joins with a line feed instead, those of names whose
+  values hold commas of their own (`Set-Cookie`, `WWW-Authenticate`,
+  `Proxy-Authenticate`), come back one line each, as Chrome and the http
+  path give them: no value holds a line feed (RFC 9110 §5.5; QA round
+  three, browser-01: two `WWW-Authenticate` lines came as one value with a
+  line feed inside, in the result and in `kept-heads.json`, which the
+  engine now reads as the lines). The order is the site's at the http
+  path and on Firefox, whose one value of a name stands where its first
+  line came; Chrome's driver gives its lines sorted by name, so the Chrome
+  engine reads the order from the head as its debugger quotes it from the
+  wire, where it has one (HTTP/1), and over HTTP/2 and HTTP/3, where it
+  has none, Chrome's lines stay sorted by name (QA round three,
+  browser-04: every Chrome page's lines came sorted).
 - `status` and `headers` of a browser's page are those of the response the
   tab shows. For a page the browser revalidated (it asked with its
   validators and was answered `304 Not Modified`) that is the page it
   kept: its status, and its head brought up to date by the 304's fields
-  (RFC 9111 §3.2), in both engines (F178). Chrome's debugger announces it
+  (RFC 9111 §3.2), in both engines (F178), except those that describe the
+  kept body and its validator, which neither browser takes from a `304`
+  and the tab's page keeps (`Content-Type`, `Content-Encoding`,
+  `Content-Length`, `Content-Range`, `Content-Location`, `Content-MD5`,
+  `ETag`; Firefox's `nsHttpResponseHead::UpdateHeaders`, whose list the
+  Firefox engine applies; QA round three, browser-03: a `304` that named
+  another type made Firefox's result, and every later revalidation of the
+  page, report it, and `extract` was null). Chrome's debugger announces it
   so. Firefox's driver gives only the wire's `304`, so the Firefox engine
   keeps the head of every page its browser answered with a validator
   (`ETag`, `Last-Modified`), without `Set-Cookie` and the fields of one
@@ -2962,6 +3007,15 @@ As built (the OpenAPI document is the contract):
   fields: a status Kage cannot know is not guessed. Before 2.0.4 Chrome
   said `200` with the 304's fields, no `Content-Type` among them, and
   Firefox `304`.
+- The body of a page the browser revalidated is the kept page's, in both
+  engines: Chrome's driver serves it from the cache; Firefox's driver
+  refuses a body for the wire's `304` (as for any `3xx`), so the Firefox
+  engine reads the page's entry of the browser's own HTTP cache in the
+  persona's profile (`cache2/entries`, the entry of the page's key, its
+  `Content-Encoding` undone), from the disk, never through the page; an
+  entry that is not the whole page, or whose head the engine does not keep,
+  gives `raw_body: null` (QA round three, browser-05: since 2.0.4 such a
+  Firefox result said `200` and had no `raw_body` and no artifact).
 - `dom_html` and `raw_body` are inline when `include` asks; the http path
   (levels 0 and 1) has no document, so `dom` is refused there
   (`level_include_conflict`) and its body is `raw_body`.

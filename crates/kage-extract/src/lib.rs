@@ -173,12 +173,12 @@ impl Extract {
             let Ok(url) = url::Url::parse(url) else {
                 continue;
             };
-            let count = shown.entry(url.into()).or_insert(0);
+            let count = shown.entry(same_address(url.as_str())).or_insert(0);
             if visible {
                 *count += 1;
             }
         }
-        links.retain(|link| match shown.get_mut(&link.url) {
+        links.retain(|link| match shown.get_mut(&same_address(&link.url)) {
             None => true,
             Some(0) => false,
             Some(left) => {
@@ -187,6 +187,51 @@ impl Extract {
             }
         });
     }
+}
+
+/// The characters that browsers and Kage's parser spell either as they
+/// are or percent-encoded in a serialized address, and that delimit
+/// nothing in any part of it: Firefox and Chrome encode `^` in a path,
+/// Chrome `|` too, where Kage's parser keeps them (QA round three,
+/// extract-06). Either spelling names the same address.
+const SPELLED_EITHER_WAY: &[u8] = b"^|{}`<>\"' ";
+
+/// An address in one spelling for comparing links: every percent-encoded
+/// character of [`SPELLED_EITHER_WAY`] as itself, every other escape in
+/// upper case. Only for telling two serialized addresses apart; never an
+/// address to use.
+fn same_address(url: &str) -> String {
+    let bytes = url.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let escaped = (bytes[index] == b'%')
+            .then(|| bytes.get(index + 1..index + 3))
+            .flatten()
+            .filter(|hex| hex.iter().all(u8::is_ascii_hexdigit))
+            .and_then(|hex| std::str::from_utf8(hex).ok())
+            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+        match escaped {
+            Some(byte) if SPELLED_EITHER_WAY.contains(&byte) => {
+                out.push(byte);
+                index += 3;
+            }
+            Some(_) => {
+                out.push(b'%');
+                out.extend(
+                    bytes[index + 1..index + 3]
+                        .iter()
+                        .map(u8::to_ascii_uppercase),
+                );
+                index += 3;
+            }
+            None => {
+                out.push(bytes[index]);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn found(content: &content::Content<'_>, document: &Document, markdown: bool) -> MainContent {
@@ -475,6 +520,60 @@ mod tests {
         );
         lean.leave_out_unseen([("https://www.shop.example/shown", false)]);
         assert_eq!(lean.links, None);
+    }
+
+    /// QA round three's extract-06: the browser spells some characters of
+    /// an address percent-encoded where Kage's parser keeps them (Firefox
+    /// and Chrome `^` in a path, Chrome `|` too); the link it reports
+    /// hidden is left out whatever the spelling, and an escape of a
+    /// character that delimits is no other spelling of it.
+    #[test]
+    fn a_hidden_link_is_left_out_however_the_browser_spells_its_address() {
+        let html = r#"<html><body><article><p>Read <a class="x" href="/h/pipe|x">a</a> <a class="x" href="/h/caret^x">b</a>
+            <a class="x" href="/h/brace{x}">c</a> <a class="x" href="/h/q?a=`b`">d</a> <a href="/s/shown">shown</a>
+            <a class="x" href="/h/slash%2Fx">e</a> <a href="/h/case%7cx">f</a></p></article></body></html>"#;
+        let mut extracted = extract(&document(html), &Options::default());
+        let kept: Vec<String> = extracted
+            .links
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|link| link.url.clone())
+            .collect();
+        assert!(
+            kept.contains(&"https://www.shop.example/h/caret^x".to_owned()),
+            "{kept:?}"
+        );
+        extracted.leave_out_unseen([
+            // As Chrome 155 lists them.
+            ("https://www.shop.example/h/pipe%7Cx", false),
+            ("https://www.shop.example/h/caret%5Ex", false),
+            ("https://www.shop.example/h/brace%7Bx%7D", false),
+            ("https://www.shop.example/h/q?a=%60b%60", false),
+            ("https://www.shop.example/s/shown", true),
+            // `/h/slash/x` is another address than `/h/slash%2Fx`.
+            ("https://www.shop.example/h/slash/x", false),
+            ("https://www.shop.example/h/case%7Cx", true),
+        ]);
+        let left: Vec<&str> = extracted
+            .links
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|link| link.url.as_str())
+            .collect();
+        assert_eq!(
+            left,
+            [
+                "https://www.shop.example/s/shown",
+                "https://www.shop.example/h/slash%2Fx",
+                "https://www.shop.example/h/case%7cx"
+            ]
+        );
+        assert_eq!(
+            super::same_address("https://a.example/%5e%7C%2f%zz%"),
+            "https://a.example/^|%2F%zz%"
+        );
     }
 
     /// F147: a document whose parse stopped at its time says so; a whole

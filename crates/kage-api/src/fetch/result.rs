@@ -491,7 +491,8 @@ pub(crate) struct FetchResult {
     /// `Content-Type`, its `<meta>`, else UTF-8 or windows-1252); with
     /// `include: ["raw"]`, and on the http path with `include: ["dom"]`
     /// too. Null when the body is not text: `artifacts.raw_body` has its
-    /// bytes, always.
+    /// bytes, always. Null, with no artifact, for a file a browser saved
+    /// (the reason `download`), in either engine.
     pub(crate) raw_body: Option<String>,
     /// Whether the body of the main response was cut at `max_body_bytes`
     /// (the request's, or `http.max_body_bytes` of the configuration):
@@ -964,6 +965,11 @@ pub(crate) fn from_report(
         .filter(|_| readable)
         .map(bodies_of_page)
         .unwrap_or_default();
+    // A file the browser saved is no body of the result, in either engine
+    // (QA round three, crawl-04).
+    if last.is_some_and(kage_scheduler::AttemptOutput::saved_file) {
+        bodies.raw_body = None;
+    }
     if let Some(fetched) = fetched.filter(|_| readable) {
         // Read in the encoding a browser would take for it (F100).
         // A body cut at `max_body_bytes` ends at its last whole character
