@@ -1800,8 +1800,15 @@ pub async fn run_worker(state: ApiState, shutdown: impl Future<Output = ()> + Se
     // waits): a page that is cut is asked for again after the restart, and
     // the site sees it twice. What outlasts `jobs.wind_down` is cut, and
     // written down as cut (follow-up F39).
+    // A server that may have lost its database's lock cuts them at once
+    // (lock-02).
     let _ = stopping_tx.send(true);
-    engine.pipeline.wind_down(config.wind_down.get()).await;
+    let bound = if state.stops_at_once() {
+        Duration::ZERO
+    } else {
+        config.wind_down.get()
+    };
+    engine.pipeline.wind_down(bound).await;
     // Then the runners and the carried fetches write back what they came
     // to and give their jobs back.
     let written_back = tokio::time::timeout(WRITE_BACK, async {

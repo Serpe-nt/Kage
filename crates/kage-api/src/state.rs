@@ -120,6 +120,7 @@ pub(crate) struct Inner {
     pub(crate) resolver: Option<HostResolver>,
     pub(crate) readiness: Mutex<Option<Readiness>>,
     pub(crate) stopping: AtomicBool,
+    pub(crate) at_once: AtomicBool,
     pub(crate) in_flight: InFlight,
 }
 
@@ -172,6 +173,7 @@ impl ApiState {
             resolver,
             readiness: Mutex::new(None),
             stopping: AtomicBool::new(false),
+            at_once: AtomicBool::new(false),
             in_flight: InFlight::default(),
             parts,
         })))
@@ -254,6 +256,19 @@ impl ApiState {
     /// while those in flight finish.
     pub fn stop(&self) {
         self.0.stopping.store(true, Ordering::Relaxed);
+    }
+
+    /// Tells the job worker, before [`Self::stop`], that the pages under
+    /// way are cut at once instead of finished within `jobs.wind_down`: the
+    /// server may no longer hold its database's lock, and another server
+    /// could claim the same items once their leases run out (QA round
+    /// three, lock-02).
+    pub fn stop_at_once(&self) {
+        self.0.at_once.store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn stops_at_once(&self) -> bool {
+        self.0.at_once.load(Ordering::Relaxed)
     }
 
     /// What a running server does every

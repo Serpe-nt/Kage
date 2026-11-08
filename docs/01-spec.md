@@ -3050,11 +3050,17 @@ jobs in the scheduler. Kage is single-instance (ADR 0005): a server holds
 a Postgres advisory lock on its database for its whole life, on a
 connection of its own, and a second server on the same database refuses to
 start and says so; one that lost its connection and finds the lock taken
-by another stops (F174). A look at the lock answers within 5 s or confirms
-nothing, and a server that could not confirm its lock for 40 s stops as
-one whose lock was taken: Postgres gives a silent session's lock up after
-about a minute, so the server stops serving and claiming jobs before
-another could take the lock (QA round three's lock-02; a network that
+by another stops (F174). The lock is looked at every 15 s, and a look
+(and a take after a lost connection) answers within 5 s or confirms
+nothing. A server stops when a look made 40 s or more after its last
+confirmation fails to confirm too, which is 45 to 55 s after that
+confirmation; it always looks first, since a session that was silent for
+a while may answer again. It then cuts the pages under way at once
+(`interrupted`; no `jobs.wind_down`) and exits with code 75, since no other
+server was seen: Postgres gives a silent session's lock up about a minute
+after its last answer, so the server stops serving and claiming jobs
+before another could take the lock, and the jobs it held are claimed
+again once their leases run out (QA round three's lock-02; a network that
 dropped every packet had a server serve on, `/readyz` ready, for 4 to
 51 s beside a second one that held the lock). A job whose worker stopped is claimed again when
 its lease ran out, by the server started after it, and goes on where its

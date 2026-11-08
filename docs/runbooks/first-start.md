@@ -93,10 +93,12 @@ One server per database: Kage is single-instance (ADR 0005). A second
 is running on this database" (F174); stop the first, and the second
 starts, taking up the jobs the first held once their leases run out. A
 server that was killed holds nothing: the next one starts at once. A
-server cut off from its database for 40 s stops by itself ("this server
-could not confirm that it holds the database's server lock"), before
-Postgres could give the lock to another one; compose starts it again, and
-it serves once it holds the lock again.
+server cut off from its database stops by itself 45 to 55 s after its
+last answer ("this server could not confirm ... that it holds the
+database's server lock"), cutting the pages it was reading, before
+Postgres could give the lock to another one, and exits with code 75
+(`EX_TEMPFAIL`; every other failure of `kage serve` exits 1). Compose
+starts it again, and it serves once it holds the lock again.
 
 The pool and the personas build themselves: within a few minutes every
 proxy is health-checked and gets a persona (under `direct`, the host's

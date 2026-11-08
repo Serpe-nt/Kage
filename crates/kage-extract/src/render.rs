@@ -308,6 +308,8 @@ fn guard_line(line: &str, out: &mut String) {
         || line.starts_with("##")
         || (line.starts_with(['-', '+']) && ends_a_mark(&line[1..]))
         || line.starts_with("---")
+        // A line of `-` alone underlines the line before it (setext, `CommonMark` §4.3), `--` too.
+        || (!shown.is_empty() && shown.bytes().all(|byte| byte == b'-'))
         || (!shown.is_empty() && shown.bytes().all(|byte| byte == b'='));
     if marked {
         out.push('\\');

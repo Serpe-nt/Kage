@@ -1419,6 +1419,62 @@ async fn a_carried_fetch_that_is_being_read_when_the_server_stops_is_finished_an
     api.shut_down().await;
 }
 
+/// The planner's review of lock-02: a server that may have lost its
+/// database's lock does not finish the page under way within
+/// `jobs.wind_down` (150 s by default, past when Postgres gives the lock
+/// to another server, which claims the same item once its lease runs out):
+/// it cuts it at once and writes it down as cut.
+#[tokio::test]
+async fn a_server_that_may_have_lost_its_lock_cuts_the_page_under_way_at_once() {
+    let rules = "defaults: { pacing: fast, active_hours: ignore }\ndomains: {}\n";
+    let mut api = Api::start_with(2, 149, rules, |config| {
+        quick(config);
+        config.scheduler.sync_wall_time = HumanDuration::new(Duration::from_millis(300));
+    })
+    .await;
+    let token = api.key(&[Scope::Fetch, Scope::Jobs]).await;
+    Mock::given(method("GET"))
+        .and(path("/slow"))
+        .respond_with(page("Slow").set_delay(Duration::from_secs(5)))
+        .mount(&api.lab.site)
+        .await;
+    let work = Background::worker_only(&api.state);
+    let reply = api
+        .post(
+            &token,
+            "/v1/fetch",
+            &json!({ "url": Api::url("/slow"), "level": 1 }),
+        )
+        .await;
+    assert_eq!(reply.status, StatusCode::ACCEPTED, "{:?}", reply.json());
+    let request: RequestId = reply.json()["id"].as_str().unwrap().parse().unwrap();
+
+    // Stopped for its lock while the page is being read, seconds before
+    // the site answers.
+    let stopping = std::time::Instant::now();
+    api.state.stop_at_once();
+    work.stop().await;
+    assert!(
+        stopping.elapsed() < Duration::from_secs(3),
+        "{:?}",
+        stopping.elapsed()
+    );
+    let attempts = api
+        .lab
+        .store()
+        .attempts()
+        .list_for_request(request)
+        .await
+        .unwrap();
+    assert_eq!(attempts.len(), 1, "{attempts:?}");
+    assert_eq!(
+        attempts[0].reason.as_deref(),
+        Some("interrupted"),
+        "{attempts:?}"
+    );
+    api.shut_down().await;
+}
+
 #[tokio::test]
 async fn a_job_waits_where_it_must_and_ends_when_it_may_wait_no_longer() {
     let mut api = Api::start_with(2, 149, FAST, quick).await;

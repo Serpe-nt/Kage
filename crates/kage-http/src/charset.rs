@@ -975,8 +975,7 @@ mod tests {
 
     use super::{
         DecidedBy, charset_of, decode, decode_cut_from, decode_from, detect, is_text, prescan,
-        sniffs_as_html,
-        text_of, text_of_cut_from, text_of_from, top_level_domain, untyped_is_text,
+        sniffs_as_html, text_of, text_of_cut_from, text_of_from, top_level_domain, untyped_is_text,
     };
 
     /// QA round three's extract-08: a body cut inside a character reads
