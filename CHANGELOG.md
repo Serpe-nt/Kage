@@ -506,7 +506,14 @@ version's date is the day, in UTC, its tag was made.
   in that moment no longer cuts short. A cut there left either a job
   leased to nobody, whose worker began the same request again when the
   lease ran out (the site got the page twice and the job ended `failed`,
-  `internal`), or a request with no job and no end.
+  `internal`), or a request with no job and no end.- **Two servers never serve one database after a partition (QA round
+  three, lock-02).** A look at the server lock answers within 5 s or
+  confirms nothing, and a server that could not confirm its lock for 40 s
+  stops as one whose lock was taken, before Postgres gives a silent
+  session's lock up (about a minute) and a second server could take it.
+  The look waited on the dead session until the network healed, and the
+  server served on, `/readyz` ready, for 4 to 51 s beside the server that
+  held the lock.
 ### Added
 
 - **A daily scan of `main`'s images (F220).** `image-scan.yaml` builds the

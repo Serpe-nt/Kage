@@ -58,6 +58,8 @@ sqlx = { workspace = true }
 tempfile = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["postgres"] }
+# The server lock's keeper is tested on a clock the test moves.
+tokio = { workspace = true, features = ["test-util"] }
 # The persona CLI test uses the mock sidecars of kage-persona's own tests
 # (crates/kage-persona/tests/common).
 # The proxy CLI tests run against the mock Webshare API of kage-proxy's own
