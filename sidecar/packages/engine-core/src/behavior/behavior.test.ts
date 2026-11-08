@@ -40,11 +40,98 @@ const SEEDS = Array.from({ length: 20 }, (_unused, index) =>
 );
 const seed = SEEDS[0] ?? '';
 const stream = (label: string, of = seed) => new SeededRandom(of, label);
-const usLayout = (key: string): KeyLevels => ({
-  shift: /^[A-Z!@#$%^&*()_+{}|:"<>?~]$/.test(key),
-  altGr: false,
-  onLayout: true,
-});
+/**
+ * A keyboard as a device knows it: each key's characters, plain, with
+ * Shift, with AltGr and with both, by key code. A character no key has is
+ * lent the spare key, as the X display's device does.
+ */
+function keyboard(keys: readonly (readonly string[])[]): (key: string) => KeyLevels {
+  const SPARE = 250;
+  const levels = new Map<string, KeyLevels>();
+  const named = ['Enter', 'Tab', 'Backspace', ' '];
+  for (const [index, row] of [...named.map((name) => [name]), ...keys].entries()) {
+    row.forEach((character, column) => {
+      if (character !== '' && !levels.has(character)) {
+        levels.set(character, {
+          shift: column % 2 === 1,
+          altGr: column >= 2,
+          onLayout: true,
+          keycode: 10 + index,
+        });
+      }
+    });
+  }
+  return (key) =>
+    levels.get(key) ?? { shift: false, altGr: false, onLayout: false, keycode: SPARE };
+}
+/** Keys of plain ASCII characters, each written as its characters. */
+const keysOf = (keys: string) => keys.split(' ').map((key) => key.split(''));
+const letters = (row: string) => row.split('').map((letter) => [letter, letter.toUpperCase()]);
+const usLayout = keyboard([
+  ...keysOf('1! 2@ 3# 4$ 5% 6^ 7& 8* 9( 0) -_ =+'),
+  ...letters('qwertyuiopasdfghjklzxcvbnm'),
+  ...keysOf('[{ ]} \\| ;: \'" ,< .> /? `~'),
+]);
+/** The German layout, with its AltGr levels: `@` on Q, `€` on E, `{` on 7. */
+const germanLayout = keyboard([
+  ['1', '!', '¹', '¡'],
+  ['2', '"', '²'],
+  ['3', '§', '³', '£'],
+  ['4', '$', '¼', '¤'],
+  ['5', '%', '½'],
+  ['6', '&', '¬'],
+  ['7', '/', '{'],
+  ['8', '(', '['],
+  ['9', ')', ']', '±'],
+  ['0', '=', '}', '°'],
+  ['ß', '?', '\\', '¿'],
+  ['q', 'Q', '@', 'Ω'],
+  ['e', 'E', '€'],
+  ['m', 'M', 'µ', 'º'],
+  ['+', '*', '~'],
+  ['<', '>', '|'],
+  ['#', "'"],
+  [',', ';', '·', '×'],
+  ['.', ':', '…', '÷'],
+  ['-', '_', '–', '—'],
+  ...letters('wrtzuiopasdfghjklyxcvbnüöä'),
+]);
+/** The same keyboard, as a device that cannot say where a key lies. */
+const unplaced =
+  (layout: (key: string) => KeyLevels) =>
+  (key: string): KeyLevels => ({ ...layout(key), keycode: null });
+
+/**
+ * The presses of a plan that come while their key is still down, by the
+ * keys of a keyboard, and the text the plan leaves in a field.
+ */
+function replay(
+  plan: { readonly actions: readonly { t: number; action: 'down' | 'up'; key: string }[] },
+  layout: (key: string) => KeyLevels,
+) {
+  const down = new Map<number | string, number>();
+  const whileHeld: string[] = [];
+  const typed: string[] = [];
+  for (const action of plan.actions) {
+    if (action.key === 'Shift' || action.key === 'AltGraph') {
+      continue;
+    }
+    const key = layout(action.key).keycode ?? action.key;
+    const held = down.get(key) ?? 0;
+    if (action.action === 'down') {
+      if (held > 0) {
+        whileHeld.push(`${action.key} at ${action.t} ms`);
+      }
+      if (action.key === 'Backspace') {
+        typed.pop();
+      } else {
+        typed.push(action.key);
+      }
+    }
+    down.set(key, held + (action.action === 'down' ? 1 : -1));
+  }
+  return { whileHeld, typed: typed.join('') };
+}
 
 describe('motor profiles', () => {
   it('gives one persona one hand, always the same', () => {
@@ -312,12 +399,7 @@ describe('typing', () => {
   });
 
   it('uses AltGr where the layout needs it, and Enter and Tab for line breaks and tabs', () => {
-    const german = (key: string): KeyLevels => ({
-      shift: false,
-      altGr: key === '@',
-      onLayout: true,
-    });
-    const plan = planTyping('a@\n\tb', german, profile, stream('altgr'), { typos: false });
+    const plan = planTyping('a@\n\tb', germanLayout, profile, stream('altgr'), { typos: false });
     const keys = plan.actions
       .filter((action) => action.action === 'down')
       .map((action) => action.key);
@@ -332,27 +414,14 @@ describe('typing', () => {
     for (const each of SEEDS) {
       const hand = motorProfile(each);
       for (const typos of [false, true]) {
-        const plan = planTyping(doubled, usLayout, hand, stream('doubled', each), { typos });
-        const down = new Map<string, number>();
-        const typed: string[] = [];
-        for (const action of plan.actions) {
-          if (action.key === 'Shift' || action.key === 'AltGraph') {
-            continue;
-          }
-          // A letter and its capital are one key.
-          const key = action.key.toLowerCase();
-          const held = down.get(key) ?? 0;
-          if (action.action === 'down') {
-            expect(held, `${action.key} at ${action.t} ms`).toBe(0);
-            if (action.key === 'Backspace') {
-              typed.pop();
-            } else {
-              typed.push(action.key);
-            }
-          }
-          down.set(key, held + (action.action === 'down' ? 1 : -1));
+        // A letter and its capital are one key, also for a device that cannot say.
+        for (const layout of [usLayout, unplaced(usLayout)]) {
+          const plan = planTyping(doubled, layout, hand, stream('doubled', each), { typos });
+          const seen = replay(plan, usLayout);
+          expect(seen.whileHeld).toEqual([]);
+          expect(seen.typed).toBe(doubled);
         }
-        expect(typed.join('')).toBe(doubled);
+        const plan = planTyping(doubled, usLayout, hand, stream('doubled', each), { typos });
         // The second press waits for the first to come up, and stays a typist's.
         for (const interval of keyIntervals(plan.actions)) {
           expect(interval).toBeGreaterThanOrEqual(HUMAN_BOUNDS.keyIntervalMs[0] - 0.11);
@@ -360,6 +429,58 @@ describe('typing', () => {
         }
       }
     }
+  });
+
+  it('lets a key go before any of its levels goes down: 5 then %, q then @ (browser-06)', () => {
+    // Two characters on one key with Shift or AltGr are one key too: on
+    // the German layout `25%` arrived as `25` and `q@` as `q`.
+    const pairs = '25% 1! 7/ 5% q@ e€ -_ .: 0= ß? 7{ +* <| mµ';
+    const layouts = [
+      { name: 'German', layout: germanLayout },
+      { name: 'US', layout: usLayout },
+    ];
+    for (const { name, layout } of layouts) {
+      for (const each of SEEDS) {
+        const hand = motorProfile(each);
+        for (const typos of [false, true]) {
+          const text = name === 'US' ? '25% 1! 7& 5% 2@ -_ 0) =+ ;: /? `~' : pairs;
+          const plan = planTyping(text.repeat(3), layout, hand, stream('levels', each), { typos });
+          const seen = replay(plan, layout);
+          expect(seen.whileHeld, `${name}, seed ${each.slice(0, 4)}`).toEqual([]);
+          expect(seen.typed).toBe(text.repeat(3));
+          for (const interval of keyIntervals(plan.actions)) {
+            expect(interval).toBeGreaterThanOrEqual(HUMAN_BOUNDS.keyIntervalMs[0] - 0.11);
+            expect(interval).toBeLessThanOrEqual(HUMAN_BOUNDS.keyIntervalMs[1] + 0.11);
+          }
+        }
+      }
+    }
+    // Characters the layout lacks share the key the device lends them.
+    const lent = planTyping('жюжж', germanLayout, profile, stream('lent'), { typos: false });
+    expect(replay(lent, germanLayout).whileHeld).toEqual([]);
+  });
+
+  it('plans a text with no two characters on one key as it did before (browser-06)', () => {
+    // `7/` is one key in Germany and two in the US: only where a press
+    // waits does a plan move, and the moment is drawn only for it.
+    const text = 'Order 7/12 shipped to Zürich, 25 % off; call +49 30 1234!';
+    for (const each of SEEDS) {
+      const hand = motorProfile(each);
+      for (const typos of [false, true]) {
+        const plan = (layout: (key: string) => KeyLevels) =>
+          planTyping(text, layout, hand, stream('same', each), { typos });
+        expect(plan(usLayout)).toEqual(plan(unplaced(usLayout)));
+      }
+    }
+    // Where a German key is pressed again too soon, it is.
+    const moved = SEEDS.filter((each) => {
+      const plan = (layout: (key: string) => KeyLevels) =>
+        planTyping('7/7/7/7/7/7/', layout, motorProfile(each), stream('same', each), {
+          typos: false,
+        });
+      return JSON.stringify(plan(germanLayout)) !== JSON.stringify(plan(unplaced(germanLayout)));
+    });
+    expect(moved.length).toBeGreaterThan(0);
   });
 
   it('makes a typo now and then when asked, notices it, and takes it back', () => {

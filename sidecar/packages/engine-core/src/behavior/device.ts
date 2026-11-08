@@ -30,6 +30,13 @@ export interface KeyLevels {
   readonly altGr: boolean;
   /** False when no key of the layout produces the character: the device then lends it a key. */
   readonly onLayout: boolean;
+  /**
+   * The physical key the character is typed on (on an X display, its key
+   * code): characters on one key, on any of its levels (`5` and `%`, `q`
+   * and `@` with AltGr), share it, and so do characters the device lends
+   * one spare key to. `null` where the device cannot say.
+   */
+  readonly keycode: number | null;
 }
 
 /** The mouse and the keyboard of one display. Coordinates are pixels of the screen. */

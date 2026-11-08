@@ -191,9 +191,16 @@ export class X11Input implements InputDevice {
 
   levelsOf(key: string): KeyLevels {
     const position = this.position(key);
-    return position === null
-      ? { shift: false, altGr: false, onLayout: false }
-      : { shift: position.shift, altGr: position.altGr, onLayout: true };
+    if (position === null) {
+      // Every character the layout lacks is lent the one spare key.
+      return { shift: false, altGr: false, onLayout: false, keycode: this.keymap.spare };
+    }
+    return {
+      shift: position.shift,
+      altGr: position.altGr,
+      onLayout: true,
+      keycode: position.keycode,
+    };
   }
 
   private position(key: string): KeyPosition | null {
