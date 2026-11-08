@@ -75,8 +75,11 @@ jobs:
     runs-on: ubuntu-24.04
     # The engines' integration tests start real browsers, twice (the tests
     # and the coverage run). The job took 23.5 minutes for 1.0.0; the
-    # Camoufox 156 build is twice the download and the parity suite grew.
-    timeout-minutes: 40
+    # Camoufox 156 build is twice the download and the parity suite grew:
+    # 35 to 39 minutes by round D (2026-11-08), when #72's cases took it
+    # past 40 and the coverage run was cut. Running the suite once, or the
+    # parity cases in a job of their own, is the plan's lasting fix.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
