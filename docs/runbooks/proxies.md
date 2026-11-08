@@ -277,7 +277,14 @@ choice is the operator's own echo, `kage echo serve`
 ([fingerprint-echo.md](fingerprint-echo.md)), behind a DNS name and a
 certificate: set `proxies.health.echo_url` (and `host_ip_url`, read from the
 host) to it. The probe reads an address as plain text, or JSON with it
-under `ip` (Kage's echo writes `peer`), with or without the port.
+under `ip` (Kage's echo writes `peer`), with or without the port. A
+certificate of your own authority is trusted once `http.ca_file` names
+that authority ([levels-and-egress.md](levels-and-egress.md)): the probe's
+clients add the file to their roots as the persona's do. When the echo
+does not answer and `proxies.health.confirm_url` is read instead, the log
+says so at `warn` ("the health echo did not answer; the probe reads the
+confirmation echo", with the proxy and the failure): that echo, the
+public one unless you set it too, then sees the proxy's address.
 
 ## First start
 

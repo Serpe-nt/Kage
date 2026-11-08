@@ -379,8 +379,10 @@ http:
 ```
 
 or `KAGE__HTTP__CA_FILE=/etc/kage/private-ca.pem`. The persona's http
-clients, the plain client of level 0 and the proxy provider's API client
-add the file to their roots; the browsers of levels 2 and 3 do not (their
+clients, the plain client of level 0, the proxy health probe's clients
+(so that `proxies.health.echo_url` may be an echo of your own under that
+authority) and the proxy provider's API client add the file to their
+roots; the browsers of levels 2 and 3 do not (their
 trust store is the persona's profile's). `kage config check` and the
 server's start refuse a file that cannot be read or holds no certificate,
 naming the key. The self-test's `selftest.http.echo_ca_file` stays the

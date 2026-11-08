@@ -2744,8 +2744,10 @@ export interface components {
         /** @description What the site's `robots.txt` says of the address (spec §14). */
         RobotsView: {
             /**
-             * @description Whether the file allows the address; true when nothing is known.
-             *     Under `report` a page that is not allowed is fetched all the same.
+             * @description Whether the file allows the address; true when nothing is known,
+             *     false when the file is unreachable (RFC 9309 §2.3.1.4: `robots_denied`,
+             *     `robots_unavailable` where the file is enforced). Under `report` a
+             *     page that is not allowed is fetched all the same.
              */
             allowed: boolean;
             /**
@@ -2757,7 +2759,9 @@ export interface components {
             /**
              * @description Whether the verdict is the file's. False when nothing is known of
              *     it: the site's policy never asks for it (the default), the request
-             *     said `ignore`, or the site's scout has not brought it yet.
+             *     said `ignore`, or the site's scout has not brought it yet; and when
+             *     the file could not be had (it is kept as unreachable for
+             *     `robots.error_ttl`), which disallows the address.
              */
             fetched: boolean;
             /**

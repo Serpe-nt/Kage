@@ -6895,7 +6895,7 @@
         "properties": {
           "allowed": {
             "type": "boolean",
-            "description": "Whether the file allows the address; true when nothing is known.\nUnder `report` a page that is not allowed is fetched all the same."
+            "description": "Whether the file allows the address; true when nothing is known,\nfalse when the file is unreachable (RFC 9309 §2.3.1.4: `robots_denied`,\n`robots_unavailable` where the file is enforced). Under `report` a\npage that is not allowed is fetched all the same."
           },
           "crawl_delay": {
             "type": [
@@ -6907,7 +6907,7 @@
           },
           "fetched": {
             "type": "boolean",
-            "description": "Whether the verdict is the file's. False when nothing is known of\nit: the site's policy never asks for it (the default), the request\nsaid `ignore`, or the site's scout has not brought it yet."
+            "description": "Whether the verdict is the file's. False when nothing is known of\nit: the site's policy never asks for it (the default), the request\nsaid `ignore`, or the site's scout has not brought it yet; and when\nthe file could not be had (it is kept as unreachable for\n`robots.error_ttl`), which disallows the address."
           },
           "matched_rule": {
             "type": [
