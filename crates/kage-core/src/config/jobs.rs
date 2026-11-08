@@ -39,10 +39,13 @@ pub struct JobsConfig {
     #[serde(default = "default_max_open_per_key")]
     pub max_open_per_key: u32,
     /// Items of its open jobs one key may have waiting at once, the new
-    /// job's included; at least `max_items`, so that one job of any allowed
-    /// size can be accepted (L2).
-    #[serde(default = "default_max_queued_items_per_key")]
-    pub max_queued_items_per_key: u32,
+    /// job's included, a crawl's `max_pages` counted from its acceptance;
+    /// at least `max_items`, so that one job of any allowed size can be
+    /// accepted (L2). Unset, it is two jobs of the largest size and at
+    /// least 20 000 ([`JobsConfig::queued_items_per_key`]), so that a
+    /// `max_items` raised before the key existed keeps a valid default.
+    #[serde(default)]
+    pub max_queued_items_per_key: Option<u32>,
     /// How long after it was accepted a job stops waiting: the items left
     /// then fail with what they were waiting for.
     #[serde(default = "default_max_age")]
@@ -85,10 +88,9 @@ const fn default_max_open_per_key() -> u32 {
     20
 }
 
-/// Two jobs of the largest size by default.
-const fn default_max_queued_items_per_key() -> u32 {
-    20_000
-}
+/// The least a key may have waiting when `jobs.max_queued_items_per_key`
+/// is unset: two jobs of the default largest size.
+pub const MIN_DEFAULT_QUEUED_ITEMS_PER_KEY: u32 = 20_000;
 
 const fn default_max_age() -> HumanDuration {
     HumanDuration::from_hours(7 * 24)
@@ -123,7 +125,7 @@ impl Default for JobsConfig {
             max_running: default_max_running(),
             max_items_in_flight: default_max_items_in_flight(),
             max_open_per_key: default_max_open_per_key(),
-            max_queued_items_per_key: default_max_queued_items_per_key(),
+            max_queued_items_per_key: None,
             max_age: default_max_age(),
             retention_days: default_retention_days(),
             lease: default_lease(),
@@ -138,6 +140,17 @@ impl JobsConfig {
     /// How long a finished job is kept.
     pub fn retention(&self) -> Duration {
         Duration::from_secs(u64::from(self.retention_days) * 24 * 60 * 60)
+    }
+
+    /// Items of its open jobs one key may have waiting at once: the set
+    /// `max_queued_items_per_key`, else two jobs of the largest size and at
+    /// least [`MIN_DEFAULT_QUEUED_ITEMS_PER_KEY`].
+    pub fn queued_items_per_key(&self) -> u32 {
+        self.max_queued_items_per_key.unwrap_or_else(|| {
+            self.max_items
+                .saturating_mul(2)
+                .max(MIN_DEFAULT_QUEUED_ITEMS_PER_KEY)
+        })
     }
 }
 
@@ -289,7 +302,7 @@ pub(super) fn validate(jobs: &JobsConfig, webhooks: &WebhooksConfig) -> Result<(
     if jobs.max_open_per_key == 0 {
         return Err("jobs.max_open_per_key must be at least 1".to_owned());
     }
-    if jobs.max_queued_items_per_key < jobs.max_items {
+    if jobs.queued_items_per_key() < jobs.max_items {
         return Err(format!(
             "jobs.max_queued_items_per_key must be at least jobs.max_items ({}): a job of that \
              size could never be accepted",
@@ -390,6 +403,41 @@ mod tests {
         // No receiver is listed, so no job may have a webhook.
         assert!(webhooks.allowed_origins.is_empty() && webhooks.private_origins.is_empty());
         assert!(!webhooks.allows(&Url::parse("https://hooks.example.org/kage").unwrap()));
+    }
+
+    /// The planner's review of L2: an operator who had raised `max_items`
+    /// past 20 000 and set no `max_queued_items_per_key` (the key did not
+    /// exist) still starts after the upgrade: unset, the bound follows
+    /// `max_items`. One that is set is kept as it is.
+    #[test]
+    fn the_waiting_items_bound_follows_the_largest_job_unless_it_is_set() {
+        let webhooks = WebhooksConfig::default();
+        let with = |max_items: u32, set: Option<u32>| JobsConfig {
+            max_items,
+            max_queued_items_per_key: set,
+            ..JobsConfig::default()
+        };
+        for (max_items, bound) in [
+            (1, 20_000),
+            (10_000, 20_000),
+            (10_001, 20_002),
+            (60_000, 120_000),
+            (super::MAX_JOB_ITEMS, 200_000),
+        ] {
+            let jobs = with(max_items, None);
+            assert_eq!(jobs.queued_items_per_key(), bound, "max_items {max_items}");
+            assert_eq!(validate(&jobs, &webhooks), Ok(()), "max_items {max_items}");
+        }
+        assert_eq!(with(60_000, Some(70_000)).queued_items_per_key(), 70_000);
+        assert_eq!(with(10, Some(10)).queued_items_per_key(), 10);
+        // Read, an unset key and a set one (`Config::load` is checked in
+        // `config::tests`).
+        let read: JobsConfig = serde_json::from_str(r#"{"max_items":50000}"#).unwrap();
+        assert_eq!(read.max_queued_items_per_key, None);
+        assert_eq!(read.queued_items_per_key(), 100_000);
+        let read: JobsConfig =
+            serde_json::from_str(r#"{"max_items":50,"max_queued_items_per_key":75}"#).unwrap();
+        assert_eq!(read.queued_items_per_key(), 75);
     }
 
     #[test]
@@ -510,7 +558,7 @@ mod tests {
         assert!(
             refused(
                 JobsConfig {
-                    max_queued_items_per_key: jobs.max_items - 1,
+                    max_queued_items_per_key: Some(jobs.max_items - 1),
                     ..jobs
                 },
                 &webhooks
@@ -518,7 +566,7 @@ mod tests {
             .contains("jobs.max_queued_items_per_key")
         );
         assert_eq!(
-            (jobs.max_open_per_key, jobs.max_queued_items_per_key),
+            (jobs.max_open_per_key, jobs.queued_items_per_key()),
             (20, 20_000)
         );
         assert!(

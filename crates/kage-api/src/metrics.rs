@@ -31,7 +31,9 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::time::Duration;
 
+use kage_core::config::ServerConfig;
 use kage_core::domain::{JobItemState, JobKind, JobState, Level, WebhookEvent};
+use kage_core::policy::PolicySet;
 use metrics_exporter_prometheus::{
     BuildError, Matcher, PrometheusBuilder, PrometheusHandle, PrometheusRecorder,
 };
@@ -93,6 +95,19 @@ pub fn install() -> Result<MetricsHandle, BuildError> {
     describe();
     register();
     Ok(MetricsHandle(handle))
+}
+
+/// Bounds the `domain` label's values as `server.metrics_max_domains` says
+/// (the security review's L3), the domains the policy files name labelled
+/// first, in their order: a flood of hosts right after a start cannot push
+/// the operator's own sites into `other`. A domain a later reload names
+/// gets a label of its own while room is left. Once, at the start of the
+/// server, before anything records.
+pub fn bound_domains(server: &ServerConfig, policies: &PolicySet) {
+    kage_scheduler::metrics::bound_domains(
+        usize::try_from(server.metrics_max_domains).unwrap_or(usize::MAX),
+        policies.domains.domains().keys().map(String::as_str),
+    );
 }
 
 /// The values of `kage_webhook_deliveries_total{result}`.

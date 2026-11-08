@@ -1021,7 +1021,7 @@
         "properties": {
           "path": {
             "type": "string",
-            "description": "Path of the file relative to the artifacts volume, with forward slashes."
+            "description": "Path of the file relative to the artifacts directory, with forward slashes: below `sidecar/`, the volume of the sidecars."
           },
           "bytes": {
             "type": "integer",
@@ -1046,7 +1046,7 @@
           "content_type"
         ],
         "additionalProperties": false,
-        "description": "A file the sidecar wrote to the artifacts volume it shares with Kage."
+        "description": "A file the sidecar wrote below `sidecar/` of the artifacts directory: its own volume (`sidecar-files`), which Kage mounts there too and reads."
       },
       "AssertAction": {
         "type": "object",

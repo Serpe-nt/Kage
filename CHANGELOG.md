@@ -286,20 +286,22 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   judged: the `host:port` of a tunnel and the serialized URL of a plain
   request, the host in its normal form; it relayed the client's own text,
   which a proxy that parses otherwise could read as another host.
-
-### Security
-
 - **A key's open jobs are bounded (F57, the security review's L2).** A key
   may have `jobs.max_open_per_key` (20) jobs queued, running or paused and
-  `jobs.max_queued_items_per_key` (20 000, at least `jobs.max_items`) of
-  their items waiting, the new job's included; past either, `POST /v1/jobs`
-  is `429 jobs_limited` with the counts, the bounds and a `Retry-After`,
-  nothing stored, counted in `kage_api_refusals_total{code="jobs_limited"}`.
-  One key could queue jobs without end, up to the global limits only.
+  `jobs.max_queued_items_per_key` of their items waiting, the new job's
+  included, a crawl's `max_pages` counted from its acceptance; past either,
+  `POST /v1/jobs` is `429 jobs_limited` with the counts, the bounds and a
+  `Retry-After`, nothing stored, counted in
+  `kage_api_refusals_total{code="jobs_limited"}`. The same `Idempotency-Key`
+  sent twice at once is still one job and a replay. One key could queue
+  jobs without end, up to the global limits only. Upgrading: left unset,
+  `jobs.max_queued_items_per_key` is twice `jobs.max_items` and at least
+  20 000, so a configuration that raised `jobs.max_items` still starts; one
+  that sets it below `jobs.max_items` is refused.
 - **The `domain` label is bounded (F57, L3).** The first
   `server.metrics_max_domains` (500) distinct domains since the start have a
-  `domain` label of their own in every metric that carries one; every later
-  domain is counted under `other`. A key that asked for many hosts grew
+  `domain` label of their own in every metric that carries one, the domains
+  the policy files name first; every later domain is counted under `other`. A key that asked for many hosts grew
   the series of `kage_requests_total` and `kage_attempts_total` without end.
 - **The sidecars no longer mount the stored results (F57, V1).** Their files
   are on a volume of their own, `sidecar-files`, mounted at

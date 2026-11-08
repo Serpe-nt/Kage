@@ -61,7 +61,8 @@ pub use http::{
     SelftestConfig, SelftestPageConfig, SelftestPageKind, SubresourceScope, SubresourcesConfig,
 };
 pub use jobs::{
-    JobsConfig, MAX_JOB_ITEMS, MAX_WEBHOOK_RETRIES, MAX_WIND_DOWN, WebhooksConfig, origin_of,
+    JobsConfig, MAX_JOB_ITEMS, MAX_WEBHOOK_RETRIES, MAX_WIND_DOWN,
+    MIN_DEFAULT_QUEUED_ITEMS_PER_KEY, WebhooksConfig, origin_of,
 };
 pub use personas::{
     ActiveHoursConfig, ClockTime, DelayRange, GapConfig, InvalidClockTime, LANGUAGE_PLACEHOLDER,
@@ -953,6 +954,42 @@ mod tests {
         assert_eq!(changed.sidecar.connect_retries, 0);
         assert!(changed.engines.chromium.allow_cross_os_claims);
         assert_eq!(changed.engines.chromium.browser_major, Some(155));
+    }
+
+    /// The planner's review of L2: a configuration that raised
+    /// `jobs.max_items` past 20 000 before `jobs.max_queued_items_per_key`
+    /// existed still loads; unset, the bound is two jobs of that size.
+    #[test]
+    fn a_raised_largest_job_still_loads_after_the_key_limits_came() {
+        let config = Config::load(None, required()).unwrap();
+        assert_eq!(config.jobs.max_queued_items_per_key, None);
+        assert_eq!(config.jobs.queued_items_per_key(), 20_000);
+
+        let raised = Config::load(None, with(&[("KAGE__JOBS__MAX_ITEMS", "60000")])).unwrap();
+        assert_eq!(raised.jobs.max_items, 60_000);
+        assert_eq!(raised.jobs.queued_items_per_key(), 120_000);
+
+        let set = Config::load(
+            None,
+            with(&[
+                ("KAGE__JOBS__MAX_ITEMS", "60000"),
+                ("KAGE__JOBS__MAX_QUEUED_ITEMS_PER_KEY", "70000"),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(set.jobs.queued_items_per_key(), 70_000);
+        // One that is set below the largest job is still refused.
+        let message = invalid(Config::load(
+            None,
+            with(&[
+                ("KAGE__JOBS__MAX_ITEMS", "60000"),
+                ("KAGE__JOBS__MAX_QUEUED_ITEMS_PER_KEY", "20000"),
+            ]),
+        ));
+        assert!(
+            message.starts_with("jobs.max_queued_items_per_key"),
+            "{message}"
+        );
     }
 
     #[test]

@@ -41,8 +41,9 @@ server:
   # API only, to keys with the admin scope. Never publish this port.
   metrics_bind: null
   # How many distinct domains get a domain label of their own in the
-  # metrics: the first ones since the start; every later one is counted under
-  # "other" (at most 10000; 0 labels every domain "other").
+  # metrics: the domains the policy files name first, then the first ones
+  # asked for since the start; every later one is counted under "other" (at
+  # most 10000; 0 labels every domain "other").
   metrics_max_domains: 500
   # Largest request body in bytes.
   max_body_bytes: 1048576
@@ -560,8 +561,10 @@ jobs:
   # more is refused with 429 jobs_limited.
   max_open_per_key: 20
   # Items of its open jobs one key may have waiting at once, the new job's
-  # included (at least max_items); beyond it, 429 jobs_limited.
-  max_queued_items_per_key: 20000
+  # included, a crawl's max_pages counted from its acceptance (at least
+  # max_items); beyond it, 429 jobs_limited. null: twice max_items and at
+  # least 20000.
+  max_queued_items_per_key: null
   # How long after it was accepted a job stops waiting for a paused site,
   # a sleeping persona or the bandwidth term: the items left then fail with
   # what they were waiting for.
