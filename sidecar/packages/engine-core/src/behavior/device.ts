@@ -46,6 +46,11 @@ export interface KeyLevels {
   readonly compose: { readonly dead: string; readonly base: string } | null;
 }
 
+/** What one `prepare` holds: the characters it holds a lent key for. */
+export interface Lending {
+  readonly characters: readonly string[];
+}
+
 /** The mouse and the keyboard of one display. Coordinates are pixels of the screen. */
 export interface InputDevice {
   /** Size of the screen in pixels. */
@@ -65,11 +70,18 @@ export interface InputDevice {
    * Gets the keyboard ready for a text before its first key goes down: a
    * character the layout has no key for, nor a dead key, is lent a key of
    * its own now, so that no press of it waits for the keyboard to change
-   * (QA round three, browser-07). `levelsOf` then names that key.
+   * (QA round three, browser-07). `levelsOf` then names that key. A
+   * lending that fails half way gives back what it lent before it throws.
+   *
+   * @returns what this call holds, to give back with `unprepare`.
    */
-  prepare(text: string): Promise<void>;
-  /** Gives back the keys `prepare` lent, once the text's last key is up. */
-  unprepare(): Promise<void>;
+  prepare(text: string): Promise<Lending>;
+  /**
+   * Gives back what one `prepare` lent, once its text's last key is up. A
+   * key another call still holds stays lent: two typings that overlap (one
+   * stopped late, a retry) never take each other's keys away.
+   */
+  unprepare(lending: Lending): Promise<void>;
   /** Presses a key. Modifiers are keys too and are pressed by the caller. */
   keyDown(key: string): Promise<void>;
   keyUp(key: string): Promise<void>;

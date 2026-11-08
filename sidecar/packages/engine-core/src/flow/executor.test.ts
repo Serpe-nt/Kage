@@ -13,6 +13,7 @@ import {
   type PageSurface,
 } from '../behavior/index.js';
 import { ConsoleLog } from '../console-log.js';
+import { silentLog } from '../engine.js';
 import { SeededRandom } from '../seeded-random.js';
 
 import {
@@ -81,6 +82,7 @@ function rig(
   const missing = new Set(options.missing ?? []);
   const host: FlowHost = {
     human: () => Promise.resolve(human),
+    log: silentLog,
     typos: true,
     goto: note('goto'),
     back: async (timeout, by) => {
@@ -587,7 +589,7 @@ function pacedRig(options: { seed?: string; persona?: string; leaves?: readonly 
     buttonUp: nothing,
     wheelNotch: nothing,
     levelsOf: () => ({ shift: false, altGr: false, onLayout: true, keycode: null, compose: null }),
-    prepare: () => Promise.resolve(),
+    prepare: () => Promise.resolve({ characters: [] }),
     unprepare: () => Promise.resolve(),
     keyDown: nothing,
     keyUp: nothing,
@@ -726,7 +728,7 @@ describe('a type step whose budget runs out', () => {
         keycode: null,
         compose: null,
       }),
-      prepare: () => note('prepare'),
+      prepare: () => note('prepare').then(() => ({ characters: [] })),
       unprepare: () => note('unprepare'),
       keyDown: (key) => note(`down ${key}`),
       keyUp: (key) => note(`up ${key}`),
@@ -786,6 +788,51 @@ describe('a type step whose budget runs out', () => {
     const atReturn = log.length;
     await new Promise((resolve) => setTimeout(resolve, 700));
     expect(log.length).toBe(atReturn);
+  });
+
+  it('writes down a step that outlived the grace, and types nothing once the hand gets there', async () => {
+    // The hand still reaching its field (a reveal two screens down) when
+    // budget and grace are over: the flow goes on without it, and when the
+    // click ends nothing is typed, so no lent key of a retry is touched.
+    const calls: string[] = [];
+    const warnings: [Record<string, unknown>, string][] = [];
+    const human = {
+      click: async () => {
+        calls.push('click');
+        await new Promise((resolve) => setTimeout(resolve, 1900));
+        calls.push('clicked');
+      },
+      type: () => {
+        calls.push('type');
+        return Promise.resolve();
+      },
+    } as unknown as Human;
+    const host: FlowHost = {
+      ...rig().host,
+      human: () => Promise.resolve(human),
+      log: { ...silentLog, warn: (fields, message) => warnings.push([fields, message]) },
+    };
+    const events: FlowEvent[] = [];
+    const started = Date.now();
+    const outcome = await runFlow(
+      { actions: [{ action: 'type', selector: '#q', text: 'Hallo', timeout_ms: 300 }], capture },
+      host,
+      (event) => events.push(event),
+    );
+    const took = Date.now() - started;
+    expect(outcome.ok).toBe(false);
+    expect(events).toMatchObject([{ error: 'type did not finish within 300 ms' }]);
+    // Budget, grace and the second given to stop: about 1.55 s, not the click's 1.9 s.
+    expect(took).toBeGreaterThanOrEqual(300 + 250 + 1000 - 20);
+    expect(took).toBeLessThan(1900);
+    expect(warnings).toEqual([
+      [
+        { step: 'type', budget_ms: 300, grace_ms: 1000 },
+        'a step whose budget ran out had not stopped after the grace; the flow goes on without it',
+      ],
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(calls).toEqual(['click', 'clicked']);
   });
 });
 

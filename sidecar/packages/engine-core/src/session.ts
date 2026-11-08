@@ -2816,6 +2816,7 @@ export class PageSession {
         acting.current ??= await this.human(request.behavior?.seed);
         return acting.current.human;
       },
+      log: this.parts.log,
       typos: request.behavior?.typos ?? false,
       goto: async (url, timeout) => {
         // A driver's click that no pace watched may have left for an

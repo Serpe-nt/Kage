@@ -5,6 +5,7 @@ import {
   type Box,
   type Clock,
   type InputDevice,
+  type Lending,
   type PageSurface,
   type Point,
   type SurfaceMetrics,
@@ -448,28 +449,41 @@ export class Human {
   ): Promise<void> {
     const { device, profile, random } = this.parts;
     const { signal } = options;
+    // A typing stopped before it began touches nothing: not the keys, not
+    // the keymap that another typing may be using now. (Read through a
+    // function: the signal is aborted from outside, at any await.)
+    const stopped = () => signal?.aborted === true;
+    if (stopped()) {
+      throw new BehaviorError('stopped', 'typing was stopped before its first key');
+    }
     // Keys pressed and not yet released, in the order they went down.
     const down: string[] = [];
+    let lending: Lending | null = null;
+    // A dead key waits for its letter: a stop between the two would leave
+    // the browser composing, so the letter still comes, on its own time.
+    let composing = false;
     try {
       // Keys the layout lacks are lent before the plan's clock starts, so
       // that the keyboard's change takes no time out of a hold or a gap
-      // (browser-07). Inside the `try`: a lending that failed half way is
-      // given back too.
-      await device.prepare(text);
+      // (browser-07). A lending that fails half way gives back its own.
+      lending = await device.prepare(text);
       const plan = planTyping(text, (key) => device.levelsOf(key), profile, random, options);
       const started = this.clock.now();
       for (const action of plan.actions) {
         const wait = started + action.t - this.clock.now();
         if (wait > 0) {
-          await this.pause(wait, signal);
+          await this.pause(wait, composing ? undefined : signal);
         }
-        if (signal?.aborted === true) {
+        if (stopped() && !composing) {
           throw new BehaviorError('stopped', 'typing was stopped before its last key');
         }
         if (action.action === 'down') {
           await device.keyDown(action.key);
           down.push(action.key);
           this.counts.keys += 1;
+          if (action.key !== 'Shift' && action.key !== 'AltGraph') {
+            composing = action.key.startsWith('Dead:');
+          }
         } else {
           await device.keyUp(action.key);
           const at = down.lastIndexOf(action.key);
@@ -487,7 +501,10 @@ export class Human {
       for (const key of down.reverse()) {
         await device.keyUp(key).catch(() => undefined);
       }
-      await device.unprepare();
+      // Only what this typing lent goes back; another's keys stay.
+      if (lending !== null) {
+        await device.unprepare(lending);
+      }
     }
   }
 
@@ -532,19 +549,32 @@ export class Human {
   /** Presses a key while holding others, as for a keyboard shortcut. */
   async chord(modifiers: readonly string[], key: string): Promise<void> {
     const { device, profile, random } = this.parts;
-    for (const modifier of modifiers) {
-      await device.keyDown(modifier);
-      await this.clock.sleep(random.uniform(35, 95));
+    // Keys down, in the order they went down: a display that refuses a
+    // key half way leaves none of the others down.
+    const down: string[] = [];
+    try {
+      for (const modifier of modifiers) {
+        await device.keyDown(modifier);
+        down.push(modifier);
+        await this.clock.sleep(random.uniform(35, 95));
+      }
+      await device.keyDown(key);
+      down.push(key);
+      await this.clock.sleep(Math.max(35, random.normal(profile.typing.hold, 14)));
+      await device.keyUp(key);
+      down.pop();
+      for (const modifier of [...modifiers].reverse()) {
+        await this.clock.sleep(random.uniform(10, 60));
+        await device.keyUp(modifier);
+        down.pop();
+      }
+      await device.flush();
+      this.counts.keys += 1 + modifiers.length;
+    } finally {
+      for (const held of down.reverse()) {
+        await device.keyUp(held).catch(() => undefined);
+      }
     }
-    await device.keyDown(key);
-    await this.clock.sleep(Math.max(35, random.normal(profile.typing.hold, 14)));
-    await device.keyUp(key);
-    for (const modifier of [...modifiers].reverse()) {
-      await this.clock.sleep(random.uniform(10, 60));
-      await device.keyUp(modifier);
-    }
-    await device.flush();
-    this.counts.keys += 1 + modifiers.length;
   }
 
   /** How long this persona would stay on a page when nobody says. */
