@@ -526,6 +526,12 @@ version's date is the day, in UTC, its tag was made.
   sent the request's limit, else the operator's, never more than the
   operator's, and the sidecar's flow request takes `max_body_bytes` as its
   navigation does (sidecar contract: an optional field).
+- **A site held by its own pause is not said to want a persona (QA round
+  three, level0-02).** A request or a job's item held past its patience by
+  the site's pause after server errors was told `no_persona`, also at
+  level 0, which has no persona: an operator sent to `kage persona list`
+  found nothing wrong. It is now told `server_errors`, and level 0's wait
+  for a `Crawl-delay` `crawl_delay`; `no_persona` keeps its meaning.
 
 ### Changed
 
@@ -543,6 +549,15 @@ version's date is the day, in UTC, its tag was made.
   so it panicked again with every turn.
 
 ### Added
+
+- **Two reasons: `server_errors` and `crawl_delay`.** A synchronous
+  fetch's `reason`, a job's `paused.reason` and
+  `kage_scheduler_refusals_total{reason}` name the site's own pause after
+  server errors (its 5xx and timeouts in a row, at any level; nothing of
+  Kage's is wrong) and level 0's wait for the `Crawl-delay` of the site's
+  enforced `robots.txt`, each with when to ask again. They were
+  `no_persona` (level0-02); the runbook's reasons table says what to do
+  about each: wait, or nothing.
 
 - **A daily scan of `main`'s images (F220).** `image-scan.yaml` builds the
   three images from `main` every morning and runs `just scan-images` with

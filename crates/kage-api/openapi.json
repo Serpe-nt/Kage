@@ -4683,7 +4683,7 @@
               "string",
               "null"
             ],
-            "description": "Why it ended without the site's verdict, as a stable name:\n`no_persona`, `domain_paused`, `egress_unsafe`,\n`bandwidth_exhausted`, `proxy_failed`, `proxy_refused` (the\npersona's proxy refused the tunnel to the target: nothing was\nasked of the site, and the proxy is not set aside for it),\n`forwarder_refused` (Kage's own forwarder refused the credential\nthe persona's client presented), `too_many_redirects` (more\nredirects than `http.max_redirects`, at every level),\n`timeout`, `interrupted`\n(the server stopped while the page was being read),\n`hop_exit_unavailable` (a level-0 redirect to another site whose own\nplain exit could not carry traffic now: the hop was not asked for,\nand never from another address) and others."
+            "description": "Why it ended without the site's verdict, as a stable name:\n`no_persona` (no persona can start in time), `domain_paused`,\n`server_errors` (the site paused itself with its own 5xx and\ntimeouts, at any level: the pause ends after the fetch would have\nwaited; `retry_at` is its end), `crawl_delay` (level 0 keeps to\nthe `Crawl-delay` of the site's enforced robots.txt, and the next\npage may start only after the fetch would have waited),\n`egress_unsafe`,\n`bandwidth_exhausted`, `proxy_failed`, `proxy_refused` (the\npersona's proxy refused the tunnel to the target: nothing was\nasked of the site, and the proxy is not set aside for it),\n`forwarder_refused` (Kage's own forwarder refused the credential\nthe persona's client presented), `too_many_redirects` (more\nredirects than `http.max_redirects`, at every level),\n`timeout`, `interrupted`\n(the server stopped while the page was being read),\n`hop_exit_unavailable` (a level-0 redirect to another site whose own\nplain exit could not carry traffic now: the hop was not asked for,\nand never from another address) and others."
           },
           "redirects": {
             "type": "array",
@@ -6088,7 +6088,7 @@
         "properties": {
           "reason": {
             "type": "string",
-            "description": "What stands in the way: `domain_paused`, `bandwidth_exhausted`,\n`egress_unsafe`, `budget_exhausted`, or `no_persona` (its visitor\nis on a break or asleep).",
+            "description": "What stands in the way: `domain_paused`, `bandwidth_exhausted`,\n`egress_unsafe`, `budget_exhausted`, `no_persona` (its visitor\nis on a break or asleep, or no persona is ready), `server_errors`\n(the site paused itself with its own 5xx and timeouts in a row, at\nany level; nothing of Kage's is wrong) or `crawl_delay` (level 0\nkeeps to the `Crawl-delay` of the site's enforced robots.txt).",
             "example": "domain_paused"
           },
           "until": {

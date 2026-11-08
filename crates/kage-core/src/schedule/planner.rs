@@ -153,6 +153,16 @@ string_enum! {
         /// carry traffic now or the site has none. Never the planner's own
         /// answer: the pipeline gives it, and never sends another address.
         PlainExitUnavailable => "plain_exit_unavailable",
+        /// The site paused itself with server errors (§8.3: its own 5xx and
+        /// timeouts in a row, at any level) and the pause ends after the
+        /// request would give up; with the moment it ends. Nothing of
+        /// Kage's is wrong: no persona, no proxy (QA round three,
+        /// level0-02).
+        ServerErrors => "server_errors",
+        /// Level 0 keeps to the `Crawl-delay` of the site's enforced
+        /// `robots.txt`, and the next page may start only after the request
+        /// would give up; with the moment it may.
+        CrawlDelay => "crawl_delay",
     }
 }
 
@@ -1131,7 +1141,7 @@ impl Planner {
         let run = self.domains.get(&work.domain);
         if let Some(until) = run.and_then(|run| run.errors.paused_until(now)) {
             held.insert(work.domain.clone());
-            return self.wait_or_give_up(work, Some(until));
+            return self.wait_or_give_up(work, Some(until), Refusal::ServerErrors);
         }
         if run.is_some_and(|run| run.in_flight >= work.pacing.domain_concurrency) {
             held.insert(work.domain.clone());
@@ -1158,7 +1168,7 @@ impl Planner {
             match self.site_hold(now, &leg.domain, &leg.pacing) {
                 None => {}
                 Some(SiteHold::ErrorPause(until)) => {
-                    return self.wait_or_give_up(work, Some(until));
+                    return self.wait_or_give_up(work, Some(until), Refusal::ServerErrors);
                 }
                 Some(SiteHold::Full) => return Looked::Wait(None),
                 Some(SiteHold::Rpm(until)) => return Looked::Wait(until),
@@ -1188,7 +1198,7 @@ impl Planner {
                 // A request that would wait past its patience is refused
                 // with the moment, as a persona's is: a job's page is put
                 // off, never held in the queue for an hour.
-                return self.wait_or_give_up(work, Some(at));
+                return self.wait_or_give_up(work, Some(at), Refusal::CrawlDelay);
             }
             return Looked::GoPlain;
         }
@@ -1215,7 +1225,7 @@ impl Planner {
                 }
                 return self.go(now, only, (trial, &leg_trials), work);
             }
-            return self.wait_or_give_up(work, only.at);
+            return self.wait_or_give_up(work, only.at, Refusal::NoPersona);
         }
 
         // A persona whose proxy failed a moment ago is set aside for one
@@ -1226,7 +1236,7 @@ impl Planner {
         match (looked, recheck) {
             (Looked::Wait(at), Some(recheck)) => Looked::Wait(earlier(at, Some(recheck))),
             (Looked::Refuse(Refusal::NoPersona, Some(at)), Some(recheck)) if at > recheck => {
-                self.wait_or_give_up(work, Some(recheck))
+                self.wait_or_give_up(work, Some(recheck), Refusal::NoPersona)
             }
             (looked, _) => looked,
         }
@@ -1305,7 +1315,7 @@ impl Planner {
             .min_by_key(|(at, one)| (*at, one.view.id));
         if let Some((at, one)) = soon {
             claimed.insert(one.view.id);
-            return self.wait_or_give_up(work, Some(at));
+            return self.wait_or_give_up(work, Some(at), Refusal::NoPersona);
         }
 
         // Otherwise a new visitor, when there is room for one (D37). A
@@ -1368,7 +1378,7 @@ impl Planner {
                     if !ready(chosen) {
                         // In its pause: the retry waits for it, never
                         // longer than that pause.
-                        return self.wait_or_give_up(work, chosen.at);
+                        return self.wait_or_give_up(work, chosen.at, Refusal::NoPersona);
                     }
                     if let Some(at) = self.spaced(now, chosen) {
                         return Looked::Wait(Some(at));
@@ -1410,14 +1420,16 @@ impl Planner {
             .min();
         let back = waiting_for.map(|one| one.after).min();
         match back {
-            Some(back) if back > now => match self.wait_or_give_up(work, Some(back)) {
-                // The end of an attempt plans again by itself.
-                Looked::Wait(_) => Looked::Wait(first),
-                refused => refused,
-            },
+            Some(back) if back > now => {
+                match self.wait_or_give_up(work, Some(back), Refusal::NoPersona) {
+                    // The end of an attempt plans again by itself.
+                    Looked::Wait(_) => Looked::Wait(first),
+                    refused => refused,
+                }
+            }
             // Nobody to wait for but the end of a visit: then, or refused
             // with that moment past the work's patience.
-            _ if room_at.is_some() => self.wait_or_give_up(work, room_at),
+            _ if room_at.is_some() => self.wait_or_give_up(work, room_at, Refusal::NoPersona),
             // Everyone who could is making an attempt, or is spoken for.
             _ => Looked::Wait(first),
         }
@@ -1477,13 +1489,17 @@ impl Planner {
     }
 
     /// Waits until `until`, unless the request would rather be refused
-    /// than wait that long.
+    /// than wait that long: then with `reason`, what holds it (a persona
+    /// it waits for, the site's own pause, its `Crawl-delay`).
     #[allow(clippy::unused_self)]
-    fn wait_or_give_up(&self, work: &Work, until: Option<DateTime<Utc>>) -> Looked {
+    fn wait_or_give_up(
+        &self,
+        work: &Work,
+        until: Option<DateTime<Utc>>,
+        reason: Refusal,
+    ) -> Looked {
         match (until, work.give_up_at) {
-            (Some(until), Some(limit)) if until > limit => {
-                Looked::Refuse(Refusal::NoPersona, Some(until))
-            }
+            (Some(until), Some(limit)) if until > limit => Looked::Refuse(reason, Some(until)),
             _ => Looked::Wait(until),
         }
     }
