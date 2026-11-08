@@ -1713,10 +1713,16 @@ budget) fails the step at once and says so (jobs-11). A human
 flick that is under way: a page too long for the step is scrolled as far as
 that and the step succeeds (a longer `timeout_ms` scrolls further). A human
 `type` longer than its step's time fails the step, and stops at its next
-key: no key goes down after that, every key down comes up, and the flow
-returns only once that is done (a second at most). Up to 2.0.4 it typed on
-after the flow had returned, into the page of whatever the context did
-next, and over a retry's own keys. A `press` of a character the layout
+key (never between a dead key and its letter): no key goes down after
+that, every key down comes up, and only the keys lent for its own text
+are given back. The step reports its failure once that is done, so a
+step whose time ran out reports up to about 1.25 s past its budget (a
+quarter of a second's grace, then up to a second for the work to stop).
+Work that has not stopped by then (a hand still reaching its element) is
+written to the sidecar's log, and the flow goes on without it: typing
+that would begin after the budget ran out types nothing. Up to 2.0.4 a
+`type` typed on after the flow had returned, into the page of whatever
+the context did next, and over a retry's own keys. A `press` of a character the layout
 makes with a dead key, or has no key for, is typed as `type` types it
 (§10.4). A human
 step is done by the behavior engine through the display: a `select` is

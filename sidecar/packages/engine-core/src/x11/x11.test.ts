@@ -241,7 +241,7 @@ describe('the input of a display', () => {
         .length;
     const before = await free();
     const letters = Array.from('абвгдежзийклмнопрст');
-    await input.prepare(letters.join(''));
+    const lending = await input.prepare(letters.join(''));
     // The German keymap has twelve spare keys a page hears with no `code`.
     expect(await free()).toBe(before - 12);
     const keycodes = letters.map((letter) => input.levelsOf(letter).keycode);
@@ -256,7 +256,7 @@ describe('the input of a display', () => {
     await input.keyDown('а');
     await input.keyUp('а');
     expect(await free()).toBe(before - 12);
-    await input.unprepare();
+    await input.unprepare(lending);
     expect(await free()).toBe(before);
     await input.flush();
     connection.close();
@@ -275,14 +275,14 @@ describe('the input of a display', () => {
       const code = keycode ?? 0;
       return ((reply[8 + Math.floor(code / 8)] ?? 0) & (1 << (code % 8))) !== 0;
     };
-    await input.prepare('ж');
+    const lending = await input.prepare('ж');
     const zhe = input.levelsOf('ж').keycode;
     await input.keyDown('ж');
     await input.flush();
     expect(await isDown(zhe)).toBe(true);
     // The keys lent for the text are given back with ж still down (a typing
     // that was stopped): it comes up first, on its own key code.
-    await input.unprepare();
+    await input.unprepare(lending);
     expect(await isDown(zhe)).toBe(false);
     // A later release finds nothing to let up and sends nothing wrong.
     await input.keyUp('ж');
@@ -293,6 +293,36 @@ describe('the input of a display', () => {
     await input.keyUp('a');
     await input.flush();
     expect(await isDown(a)).toBe(false);
+    connection.close();
+    await input.close();
+  });
+
+  it('gives back only what one lending lent: two typings that overlap keep their keys', async () => {
+    // A typing stopped late and a retry, on one display.
+    const input = await X11Input.open(display.name);
+    const connection = await X11Connection.connect(display.name);
+    const free = async () =>
+      (await connection.keyboardMapping()).filter((row) => row.every((keysym) => keysym === 0))
+        .length;
+    const before = await free();
+    const old = await input.prepare('жю');
+    const retry = await input.prepare('жя');
+    expect(await free()).toBe(before - 3);
+    const zhe = input.levelsOf('ж').keycode;
+    await input.keyDown('ж');
+    // The old typing gives back: `ю` goes, `ж` stays lent and stays down.
+    await input.unprepare(old);
+    expect(await free()).toBe(before - 2);
+    expect(input.levelsOf('ж').keycode).toBe(zhe);
+    expect(input.levelsOf('ю').onLayout).toBe(false);
+    expect(input.levelsOf('я').keycode).not.toBe(input.levelsOf('ю').keycode);
+    await input.keyUp('ж');
+    await input.unprepare(retry);
+    expect(await free()).toBe(before);
+    // Giving back twice does nothing more.
+    await input.unprepare(retry);
+    expect(await free()).toBe(before);
+    await input.flush();
     connection.close();
     await input.close();
   });
@@ -331,7 +361,8 @@ describe('the input of a display', () => {
         .length;
     const before = await free();
     // `é` has a dead key, `ж` and `ю` none: two keys are lent, once.
-    await input.prepare('жюжé a');
+    const lending = await input.prepare('жюжé a');
+    expect(lending.characters).toEqual(['ж', 'ю']);
     expect(await free()).toBe(before - 2);
     const zhe = input.levelsOf('ж');
     const yu = input.levelsOf('ю');
@@ -345,12 +376,14 @@ describe('the input of a display', () => {
       await input.keyUp(key);
     }
     expect(await free()).toBe(before - 2);
-    await input.prepare('ж');
+    // A second lending of ж holds the same key.
+    const again = await input.prepare('ж');
     expect(await free()).toBe(before - 2);
-    await input.unprepare();
+    await input.unprepare(again);
+    expect(await free()).toBe(before - 2);
+    await input.unprepare(lending);
     expect(await free()).toBe(before);
     expect(input.levelsOf('ж').keycode).toBe(input.levelsOf('ю').keycode);
-    await input.unprepare();
     await input.flush();
     connection.close();
     await input.close();

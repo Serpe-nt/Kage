@@ -1,4 +1,4 @@
-import type { InputDevice, KeyLevels, PointerButton } from '../behavior/device.js';
+import type { InputDevice, KeyLevels, Lending, PointerButton } from '../behavior/device.js';
 
 import { X11Connection, X11Error } from './connection.js';
 import {
@@ -146,6 +146,8 @@ export class X11Input implements InputDevice {
   private lent: string | null = null;
   /** Characters `prepare` lent a key of their own, by character. */
   private readonly prepared = new Map<string, number>();
+  /** How many lendings hold each of those characters. */
+  private readonly holders = new Map<string, number>();
   /** Keys down, by the key code each went down on. */
   private readonly down = new Map<string, number>();
 
@@ -290,14 +292,22 @@ export class X11Input implements InputDevice {
    * applications to read the changed mapping, all before the text's first
    * key: a press of such a character is then as prompt as any other.
    * Characters beyond the spare keys there are borrow the one spare key
-   * when they are pressed, as before.
+   * when they are pressed, as before. A character another call holds a key
+   * for already is held once more, on the same key.
    */
-  async prepare(text: string): Promise<void> {
+  async prepare(text: string): Promise<Lending> {
     const taken = new Set(this.prepared.values());
     const free = this.keymap.spares.filter((keycode) => !taken.has(keycode));
     const changes = new Map<number, number>();
+    const characters: string[] = [];
     for (const character of new Set(text)) {
-      if (this.prepared.has(character) || this.levelsOf(character).onLayout) {
+      const holders = this.holders.get(character);
+      if (holders !== undefined) {
+        this.holders.set(character, holders + 1);
+        characters.push(character);
+        continue;
+      }
+      if (this.levelsOf(character).onLayout) {
         continue;
       }
       const keycode = free.shift();
@@ -306,28 +316,58 @@ export class X11Input implements InputDevice {
       }
       changes.set(keycode, unicodeKeysym(character));
       this.prepared.set(character, keycode);
+      this.holders.set(character, 1);
+      characters.push(character);
     }
+    const lending: Lending = { characters };
     if (changes.size > 0) {
-      await this.remap(changes);
-      await sleep(PREPARE_SETTLE_MS);
+      try {
+        await this.remap(changes);
+        await sleep(PREPARE_SETTLE_MS);
+      } catch (error) {
+        // What this call lent goes back before the caller hears of it.
+        await this.unprepare(lending).catch(() => undefined);
+        throw error;
+      }
     }
+    return lending;
   }
 
-  /** Takes the keys `prepare` lent back, once applications have read their releases. */
-  async unprepare(): Promise<void> {
-    if (this.prepared.size === 0) {
+  /**
+   * Gives back what one `prepare` lent, once applications have read the
+   * releases. A key another call still holds stays lent and is left alone,
+   * down or up: only a key no call holds any more is taken back, and a
+   * key still down on it comes up first.
+   */
+  async unprepare(lending: Lending): Promise<void> {
+    const freed = new Map<string, number>();
+    for (const character of lending.characters) {
+      const holders = this.holders.get(character) ?? 0;
+      if (holders > 1) {
+        this.holders.set(character, holders - 1);
+        continue;
+      }
+      this.holders.delete(character);
+      const keycode = this.prepared.get(character);
+      if (keycode !== undefined) {
+        freed.set(character, keycode);
+      }
+    }
+    if (freed.size === 0) {
       return;
     }
-    // A lent key still down comes up before its key is taken back.
+    const keycodes = new Set(freed.values());
     for (const [key, keycode] of [...this.down]) {
-      if ([...this.prepared.values()].includes(keycode)) {
+      if (keycodes.has(keycode)) {
         this.release(key, keycode);
       }
     }
+    for (const character of freed.keys()) {
+      this.prepared.delete(character);
+    }
     await this.connection.sync();
     await sleep(REMAP_SETTLE_MS);
-    await this.remap(new Map([...this.prepared.values()].map((keycode) => [keycode, 0])));
-    this.prepared.clear();
+    await this.remap(new Map([...keycodes].map((keycode) => [keycode, 0])));
     // Applications read the keyboard again now, not while the next step's input comes.
     await sleep(PREPARE_SETTLE_MS);
   }

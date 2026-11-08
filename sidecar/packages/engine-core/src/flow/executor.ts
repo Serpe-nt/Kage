@@ -10,6 +10,7 @@ import type {
 } from '@kage/contract';
 
 import type { Human } from '../behavior/index.js';
+import type { EngineLog } from '../engine.js';
 
 /** Default budget of one step (spec §10.5). */
 export const DEFAULT_STEP_TIMEOUT_MS = 30_000;
@@ -47,6 +48,8 @@ export interface PageMark {
 export interface FlowHost {
   /** The persona at its mouse and keyboard; created at the first human step. */
   human(): Promise<Human>;
+  /** Where a step that would not stop in time is written down. */
+  readonly log: EngineLog;
   /** Whether typed text gets the occasional typo. */
   readonly typos: boolean;
   goto(url: string, timeoutMs: number): Promise<void>;
@@ -143,6 +146,7 @@ async function withTimeout<T>(
   ms: number,
   graceMs: number,
   what: string,
+  log: EngineLog,
 ): Promise<T> {
   const stop = new AbortController();
   const running = work(stop.signal);
@@ -161,11 +165,24 @@ async function withTimeout<T>(
     clearTimeout(timer);
   }
   stop.abort();
-  await Promise.race([running.then(nothing, nothing), sleep(STOP_GRACE_MS)]);
+  const stopped = await Promise.race([
+    running.then(
+      () => true,
+      () => true,
+    ),
+    sleep(STOP_GRACE_MS).then(() => false),
+  ]);
+  if (!stopped) {
+    // Rare: work that does not watch the signal (a hand still reaching
+    // its element). Typing that begins after this types nothing, and
+    // touches no other typing's keys.
+    log.warn(
+      { step: what, budget_ms: ms, grace_ms: STOP_GRACE_MS },
+      'a step whose budget ran out had not stopped after the grace; the flow goes on without it',
+    );
+  }
   throw new FlowStepError(`${what} did not finish within ${ms} ms`);
 }
-
-const nothing = (): void => undefined;
 
 /** Waits until a selector matches, looking again every little while. */
 async function waitUntilExists(host: FlowHost, selector: string, timeoutMs: number): Promise<void> {
@@ -278,6 +295,11 @@ async function perform(
         // The click may have opened a tab, which the browser shows in
         // front: the keys are for the flow's page (F184).
         await host.keepFront();
+        // The budget may have run out while the hand reached the field:
+        // then nothing is typed, and the keymap is left alone.
+        if (signal.aborted) {
+          throw new FlowStepError('the budget of the step ran out before typing began');
+        }
         await human.type(action.text, { typos: host.typos, signal });
       } else {
         await host.driver.fill(action.selector, action.text, timeout);
@@ -531,6 +553,7 @@ export async function runFlow(
           timeout,
           250,
           action.action,
+          host.log,
         );
         capture = performed.capture;
         // A tab the step opened goes behind the flow's page before the

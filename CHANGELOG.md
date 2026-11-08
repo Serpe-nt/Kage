@@ -563,6 +563,7 @@ version's date is the day, in UTC, its tag was made.
   the keys lent for the text are given back, and the flow returns once
   that is done. A flow's `press` of a character the layout makes with a
   dead key, or has no key for, is typed as `type` types it (spec §10.5).
+
 ### Added
 
 - **Two reasons: `server_errors` and `crawl_delay`.** A synchronous

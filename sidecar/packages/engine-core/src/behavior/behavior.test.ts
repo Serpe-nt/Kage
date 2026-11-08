@@ -820,10 +820,10 @@ function rig(
       log.push(`prepare ${text} @${Math.round(now)}`);
       return options.refuse === 'prepare'
         ? Promise.reject(new Error('the display refused the lending'))
-        : Promise.resolve();
+        : Promise.resolve({ characters: [text] });
     },
-    unprepare: () => {
-      log.push(`unprepare @${Math.round(now)}`);
+    unprepare: (lending) => {
+      log.push(`unprepare @${Math.round(now)} of ${lending.characters.join('')}`);
       return Promise.resolve();
     },
     keyDown: (key) => {
@@ -1156,11 +1156,19 @@ describe('a persona at its mouse and keyboard', () => {
     expect(refused.log[0]).toMatch(/^prepare Hi you @/);
     expect(refused.log.at(-1)).toMatch(/^unprepare @/);
     expect(refused.log).not.toContain('key o');
-    // A lending refused before the first key: nothing typed, the keys given back.
+    // A lending refused before the first key: nothing typed, and nothing
+    // given back by the typing, which holds nothing (the device gives back
+    // what it lent before it throws).
     const unlent = rig({ refuse: 'prepare' });
     await expect(unlent.human.type('Hi', { typos: false })).rejects.toThrow(/refused the lending/);
     expect(unlent.log.filter((entry) => entry.startsWith('key '))).toEqual([]);
-    expect(unlent.log.at(-1)).toMatch(/^unprepare @/);
+    expect(unlent.log.filter((entry) => entry.startsWith('unprepare'))).toEqual([]);
+  });
+
+  it('lets a modifier up when a key of a chord is refused', async () => {
+    const { human, log } = rig({ refuse: 'ArrowLeft' });
+    await expect(human.chord(['Alt'], 'ArrowLeft')).rejects.toThrow(/refused ArrowLeft/);
+    expect(log).toEqual(['key Alt', 'keyup Alt']);
   });
 
   it('stops typing at the next key once told to, and lets every key up first', async () => {
@@ -1185,12 +1193,66 @@ describe('a persona at its mouse and keyboard', () => {
       log.filter((entry) => entry.startsWith(prefix)).map((entry) => entry.split(' ')[1]);
     expect(count('keyup ').sort()).toEqual(count('key ').sort());
     expect(log.at(-1)).toMatch(/^unprepare @/);
-    // A signal already aborted types nothing.
+    // A signal already aborted touches nothing at all: no key, and no
+    // lending or giving back that could take another typing's keys.
     const none = rig();
     await expect(
       none.human.type('abc', { typos: false, signal: AbortSignal.abort() }),
     ).rejects.toMatchObject({ reason: 'stopped' });
-    expect(none.log.filter((entry) => entry.startsWith('key '))).toEqual([]);
+    expect(none.log).toEqual([]);
+  });
+
+  it('lets Shift and AltGr up when typing stops while they are held', async () => {
+    for (const [text, layout, at, modifier] of [
+      ['aBCd', usLayout, 'B', 'Shift'],
+      ['a@@b', germanLayout, '@', 'AltGraph'],
+    ] as const) {
+      const stop = new AbortController();
+      const { human, log } = rig({
+        layout,
+        onKey: (key) => {
+          if (key === at) {
+            stop.abort();
+          }
+        },
+      });
+      await expect(human.type(text, { typos: false, signal: stop.signal })).rejects.toMatchObject({
+        reason: 'stopped',
+      });
+      expect(log.filter((entry) => entry.startsWith('key '))).toEqual([
+        'key a',
+        `key ${modifier}`,
+        `key ${at}`,
+      ]);
+      const up = log.indexOf(`keyup ${modifier}`);
+      expect(up).toBeGreaterThan(log.indexOf(`key ${at}`));
+      expect(log.indexOf(`keyup ${at}`)).toBeGreaterThan(log.indexOf(`key ${at}`));
+      expect(log.at(-1)).toMatch(/^unprepare @/);
+      expect(up).toBeLessThan(log.length - 1);
+    }
+  });
+
+  it('does not stop between a dead key and its letter', async () => {
+    // A stop there would leave the browser composing: the letter still
+    // comes, and typing stops after it.
+    const stop = new AbortController();
+    const { human, log } = rig({
+      layout: germanLayout,
+      onKey: (key) => {
+        if (key === 'Dead:acute') {
+          stop.abort();
+        }
+      },
+    });
+    await expect(human.type('xé yz', { typos: false, signal: stop.signal })).rejects.toMatchObject({
+      reason: 'stopped',
+    });
+    expect(log.filter((entry) => entry.startsWith('key '))).toEqual([
+      'key x',
+      'key Dead:acute',
+      'key e',
+    ]);
+    expect(log.at(-1)).toMatch(/^unprepare @/);
   });
 
   it('presses a letter its layout lacks as it types one: dead key and letter, or a lent key', async () => {
