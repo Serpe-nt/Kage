@@ -168,6 +168,30 @@ pub fn decode_from<'a>(
     content_type: Option<&str>,
     body: &'a [u8],
 ) -> Decoded<'a> {
+    decode_cut_from(url, content_type, body, false)
+}
+
+/// Reads a body as [`decode_from`] does; when it was `cut` at a byte limit
+/// (spec §9, F122), without the character the cut fell inside: a sequence
+/// that the end of the bytes leaves incomplete in the chosen encoding is
+/// left out, not replaced, as a browser's capture steps back to a whole
+/// character, so that what is said of the page is said of its first part
+/// and the text is no longer than the bytes allow (QA round three's
+/// extract-08). A sequence that is invalid before the end is replaced as
+/// always.
+pub fn decode_cut_from<'a>(
+    url: Option<&Url>,
+    content_type: Option<&str>,
+    body: &'a [u8],
+    cut: bool,
+) -> Decoded<'a> {
+    let read = |bytes: &'a [u8], encoding: &'static Encoding, by: DecidedBy| {
+        if cut {
+            read_cut(bytes, encoding, by)
+        } else {
+            read(bytes, encoding, by)
+        }
+    };
     if let Some((encoding, length)) = Encoding::for_bom(body) {
         return read(&body[length..], encoding, DecidedBy::Bom);
     }
@@ -307,6 +331,23 @@ fn read<'a>(bytes: &'a [u8], encoding: &'static Encoding, by: DecidedBy) -> Deco
     let (text, malformed) = encoding.decode_without_bom_handling(bytes);
     Decoded {
         text,
+        encoding,
+        by,
+        malformed,
+    }
+}
+
+/// [`read`] of bytes that were cut: a sequence the end leaves incomplete is
+/// held back by the decoder (`last: false`) and so left out.
+fn read_cut<'a>(bytes: &'a [u8], encoding: &'static Encoding, by: DecidedBy) -> Decoded<'a> {
+    let mut decoder = encoding.new_decoder_without_bom_handling();
+    let Some(capacity) = decoder.max_utf8_buffer_length(bytes.len()) else {
+        return read(bytes, encoding, by);
+    };
+    let mut text = String::with_capacity(capacity);
+    let (_, _, malformed) = decoder.decode_to_string(bytes, &mut text, false);
+    Decoded {
+        text: Cow::Owned(text),
         encoding,
         by,
         malformed,
@@ -909,9 +950,46 @@ mod tests {
     use url::Url;
 
     use super::{
-        DecidedBy, charset_of, decode, decode_from, detect, is_text, prescan, sniffs_as_html,
+        DecidedBy, charset_of, decode, decode_cut_from, decode_from, detect, is_text, prescan,
+        sniffs_as_html,
         text_of, text_of_from, top_level_domain, untyped_is_text,
     };
+
+    /// QA round three's extract-08: a body cut inside a character reads
+    /// up to the last whole one, in every encoding; a whole body, and a
+    /// sequence invalid before the end, read as always.
+    #[test]
+    fn a_body_cut_inside_a_character_ends_at_the_last_whole_one() {
+        let utf8 = Some("text/html; charset=utf-8");
+        for character in ["é", "✓", "🦀"] {
+            let page = character.repeat(10);
+            let bytes = page.as_bytes();
+            for cut in 1..bytes.len() {
+                let read = decode_cut_from(None, utf8, &bytes[..cut], true);
+                let whole = cut / character.len() * character.len();
+                assert_eq!(read.text, page[..whole], "{character} cut at {cut}");
+                assert!(!read.text.contains('\u{fffd}'));
+                assert!(read.text.len() <= cut);
+                assert!(!read.malformed);
+                // Uncut, the same bytes end in a replacement.
+                let uncut = decode_from(None, utf8, &bytes[..cut]);
+                assert_eq!(uncut.text.ends_with('\u{fffd}'), cut != whole);
+            }
+        }
+        // Shift_JIS and UTF-16 too.
+        let (sjis, _, _) = SHIFT_JIS.encode("日本語");
+        let read = decode_cut_from(None, Some("text/html; charset=shift_jis"), &sjis[..3], true);
+        assert_eq!(read.text, "日");
+        let mut utf16 = vec![0xff, 0xfe];
+        utf16.extend("ab".encode_utf16().flat_map(u16::to_le_bytes));
+        assert_eq!(decode_cut_from(None, None, &utf16[..5], true).text, "a");
+        // A broken sequence before the end is the page's, replaced.
+        let broken = b"a\xffb\xe2\x9c";
+        let read = decode_cut_from(None, utf8, broken, true);
+        assert_eq!(read.text, "a\u{fffd}b");
+        assert!(read.malformed);
+        assert_eq!(decode_cut_from(None, utf8, b"whole", false).text, "whole");
+    }
 
     /// "Café Müller, Straße" in ISO-8859-1.
     const LATIN1: &[u8] = b"Caf\xe9 M\xfcller, Stra\xdfe";
