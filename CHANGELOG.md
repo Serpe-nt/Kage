@@ -446,7 +446,61 @@ version's date is the day, in UTC, its tag was made.
   Such an item ends `failed` with the error `internal` (the log has the
   cause); it was taken for a stop of the server and queued again at once,
   so it panicked again with every turn.
-
+- **Nested code is one code span (QA round three, extract-01).** A code
+  span holds no code span, mark or link: nested `<code>` elements and what
+  is inline in them are written as one span with their text. Each level
+  was a span around the inner one with a fence one backtick longer, so
+  the markdown grew with the square of the depth and its time with the
+  cube: 4000 levels (61 KB) took 26 s for 16 M characters, and a 300 KB
+  page held a core for more than half an hour.
+- **Markdown reads as text where the page had text (QA round three,
+  extract-02).** The guard of F142 now covers every line a hard break
+  starts (`Features:<br>- Waterproof` is no list), a mark alone (`#`,
+  `-`, `+`, a line of `=`, no longer an empty heading, an empty item or a
+  setext underline), a `!` right before a link (no image) and the closing
+  `#`s a heading's text ends with (`## Section \#`).
+- **A `<dialog>` is never content (QA round three, extract-05).** Open or
+  closed, as the role `dialog` was already; a closed one is also what the
+  markup hides, in a `<main>` taken whole too.
+- **An artifact's two representations have two entity tags (QA round
+  three, extract-03).** `GET /v1/artifacts/{id}` sent the gzip and the
+  unpacked bytes with one strong `ETag`; the gzip's is now the content's
+  hash with `-gzip` after it (RFC 9110 §8.8.3).
+- **No cut body an older version cached is served as whole (QA round
+  three, ops-02).** The response cache's key is at version 3: an entry
+  that 2.0.4 or earlier kept may hold a body cut at `max_body_bytes`,
+  which nothing in it marks, and after an upgrade it was served as
+  `cached: true, truncated: false` until it expired. Those entries are no
+  longer found and expire as before. Results stored before migration 0020
+  (F122) read `truncated: false` whatever their body was: those bodies
+  were not looked at.
+- **`robots.matched_rule` is the line of the file (QA round three,
+  level0-03).** Since F179 it was the rule as compared, an escape of an
+  unreserved character decoded and others in upper case
+  (`Disallow: /a/~user` for the file's `Disallow: /a/%7euser`); it is the
+  rule as the file writes it again, and the comparison is unchanged.
+- **An unreachable robots.txt is never `allowed: true` (QA round three,
+  level0-04).** A page refused `robots_unavailable`, and a page of a site
+  that reports its file while the file is kept as unreachable, say
+  `robots: { fetched: false, allowed: false }`; they said `allowed: true`
+  beside the refusal.
+- **A followed downgrade is recorded (QA round three, level0-05).** A
+  redirect of the http path from `https` to `http` is followed, as a
+  browser follows it, and kage's log now says so at `info` with the hop's
+  number and both hosts; spec §9 promised the record and nothing kept it.
+- **A body cut inside a character ends at the last whole one at level 0
+  (QA round three, extract-08).** The http path decoded the cut bytes
+  with a replacement for the broken last character, so `raw_body` and
+  `extract.text` ended in U+FFFD and `raw_body` could be longer than
+  `max_body_bytes`; it now steps back to a character as the sidecar does
+  at levels 2 and 3, in every encoding.
+- **The health probe trusts `http.ca_file` (QA round three, level0-06).**
+  The probe's clients, the persona's and the fallback's alike, add the
+  operator's authorities to their roots as the persona's clients do, so an
+  echo of the operator's own under a private authority answers the probe.
+  Its handshake was refused, and the probe went on to the confirmation
+  echo, the public one by default, which then saw every proxy's address;
+  that step is now logged at `warn`.
 ### Added
 
 - **A daily scan of `main`'s images (F220).** `image-scan.yaml` builds the

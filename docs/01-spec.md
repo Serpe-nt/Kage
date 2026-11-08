@@ -1105,7 +1105,10 @@ a site for a fetch nobody waits for.
 - **Redirects** are followed by kage-http, at most `http.max_redirects`
   (default 10), every hop through the redirect chain of the SSRF guard
   (§19), which names the hop it refuses and records an `https` to `http`
-  downgrade. One more ends the attempt `provider_error`, reason
+  downgrade: the hop is followed, as a browser follows it, and kage's log
+  says so at `info` ("a redirect of the http path left https for http",
+  with the hop's number and the hosts on either side, never the
+  addresses; QA round three's level0-05). One more ends the attempt `provider_error`, reason
   `too_many_redirects`, not retried, at every level: a browser's chain
   that the check after the navigation finds too long ends the same way,
   nothing of it kept (F181). 301 and 302 turn a POST into a GET, 303 turns everything but a
@@ -1131,7 +1134,10 @@ a site for a fetch nobody waits for.
 - **Capture.** Status, final URL, HTTP version, response headers, the
   decoded body up to `http.max_body_bytes` (default 10 MB; a flag says when
   it was cut: `truncated` of the result and of its attempt, at every level,
-  where a browser's document cut at the limit counts as its body, F122),
+  where a browser's document cut at the limit counts as its body, F122;
+  a cut that falls inside a character ends the text at the last whole
+  one, at every level, never at a replacement character, QA round three's
+  extract-08),
   every hop, and timing per phase: `connect_ms` (TCP to the
   proxy plus the CONNECT tunnel), `tls_ms`, `ttfb_ms`, `total_ms`. `dns_ms`
   is always null because the proxy resolves, and a request on a reused
@@ -1184,11 +1190,13 @@ a site for a fetch nobody waits for.
   (CED) is not Firefox's, and where the two would name different encodings
   for an undeclared page level 0 reads it as Firefox does (both measured on
   Chrome 155 and Camoufox 156 in QA round two's world).
-- **Trust.** The persona's clients and the plain client of level 0 trust
-  the public certificate authorities wreq ships (Mozilla's) and, when the
-  operator names a PEM file in `http.ca_file` (none by default, F191), the
-  authorities in it too; the proxy provider's API client adds the same
-  file to its roots. It is for a private authority the operator's own sites
+- **Trust.** The persona's clients, the plain client of level 0 and the
+  health probe's clients (§7.4) trust the public certificate authorities
+  wreq ships (Mozilla's) and, when the operator names a PEM file in
+  `http.ca_file` (none by default, F191), the authorities in it too, so
+  that an echo of the operator's own under that authority answers the
+  probe (QA round three's level0-06); the proxy provider's API client adds
+  the same file to its roots. It is for a private authority the operator's own sites
   live under (an intranet, a test world), never for a public authority's
   root someone else holds the key of: a root added there is trusted for
   every name (`docs/runbooks/levels-and-egress.md`). A certificate the
@@ -2314,7 +2322,9 @@ and 1 only what the markup itself hides is known (F123, D48).
 The main content is Readability's scoring (the algorithm of Firefox's
 reader view) ported onto that tree in `kage-extract`, with three rules of
 Kage's own: what the markup names as furniture (`nav`, `aside`, `footer`,
-the ARIA roles of the same, dialogs) is never content, and a page without
+the ARIA roles of the same, dialogs: the role `dialog` and the
+`<dialog>` element, open or closed, a closed one also being what the
+markup hides; QA round three's extract-05) is never content, and a page without
 a candidate has no content, unless it has a `<main>`: where the rules
 find less than a few sentences (500 characters) and the page's first
 `<main>` a reader sees holds more, the `<main>` is the content whatever it
@@ -2332,7 +2342,14 @@ header row, absolute links. It says what the page says: every character
 that would be read as markdown where it is text is escaped (`~` and an
 `&` that would read as an entity among them), a parenthesis or a
 backslash in a link's or an image's address is escaped, and a `|` in code
-in a table's cell is escaped, as GFM wants it there (F142). `thin_content` is true when the main content
+in a table's cell is escaped, as GFM wants it there (F142); so is a mark
+that would start a block at the start of every line a hard break starts,
+or alone (`#`, `-`, `+`, a line of `=`), a `!` right before a link,
+and the closing `#`s a heading's text ends with (QA round three's
+extract-02). A code span holds no code span, mark or link: nested
+`<code>` and what is inline in it are one span with their text, so that
+the markdown grows with the page and not with the square of its depth
+(QA round three's extract-01). `thin_content` is true when the main content
 has fewer words than `extract.thin_words` (80): the document gave a
 reader next to nothing, which on the http path usually means scripts or
 a wall. The result does not guess which.
@@ -2418,7 +2435,10 @@ never fetch what the file disallows, keep to its `Crawl-delay`).
   of `*`, and before it any group that names a token of `robots.agents`,
   `["kage"]`, so that a site owner can address Kage):
   `{ fetched, allowed, matched_rule, crawl_delay }` on every result: of the
-  address that was asked for, and for a flow of the address it ended on,
+  address that was asked for (`matched_rule` is the line as the file
+  writes it, `Disallow: /a/%7euser`, not as it is compared; QA round
+  three's level0-03), and a file kept as unreachable is `fetched: false,
+  allowed: false` (QA round three's level0-04); and for a flow of the address it ended on,
   under its own site's policy, from what is known of that site's file
   (nothing is asked for it; F186). The
   parser and the matcher are Kage's; the `robotstxt` crate (a port of
@@ -2468,7 +2488,10 @@ minute like any call.
   nothing that only changes when or how politely it is fetched: the
   normalized URL (as a crawl normalizes it, §13), the method, the body,
   the request kind, the caller's headers, the level (the key's version
-  is 2 since 2.0, so no entry of 1.x serves a request of 2.0), the
+  is 2 since 2.0, so no entry of 1.x serves a request of 2.0, and 3 since
+  F122, so that no entry an earlier version kept of a body cut at
+  `max_body_bytes`, which nothing in it marks, is served as whole; QA
+  round three's ops-02), the
   include set (a result with more parts is
   not cut down for a request for fewer), `wait`, `behavior`, the
   `screenshot`, `pdf`, `xhr` and `extract` options, `max_body_bytes`, the
@@ -2664,7 +2687,7 @@ job's key as `owner_key`; F117).
 | `GET /v1/jobs/{id}/items?cursor=&limit=&results=` | jobs | The items in the job's order, 50 a page unless said and at most 200, each with its stored result as `GET /v1/results/{id}` shows it without the document and the body (which are artifacts), an item that ended without its page with what ended it (F155); `results=false` leaves the results out. Read as `GET /v1/jobs/{id}` is |
 | `POST /v1/jobs/{id}/cancel` | jobs | Cooperative cancel: what waits is cancelled at once (a job queued behind `jobs.max_running`, a paused one, a fetch carried on as a job), a page that is being fetched is finished, so at most one more item per visitor ends. A job that has ended is answered as it ended. Every cancel is on the audit trail (`job.cancel`), the owner's own included (F117) |
 | `GET /v1/results/{id}` | fetch | The result of a fetch by the request's id (the `id` of the result, `X-Request-Id` of the fetch): `200` once it ended, `202` while it runs. A request whose job ended without it (cancelled, expired, interrupted) has ended: `200`, `provider_error` with the item's reason (F109). A key reads what it fetched; another key's is `404` |
-| `GET /v1/artifacts/{id}` | fetch | What was kept of a page (document, raw body, screenshot, PDF, the body of a captured XHR response), streamed; served with `nosniff` and a sandboxing CSP, gzip passed through to a client that takes it (RFC 9110: the weight of `gzip` when the client names it, else of `*`; a weight of 0 in any spelling refuses, F142) |
+| `GET /v1/artifacts/{id}` | fetch | What was kept of a page (document, raw body, screenshot, PDF, the body of a captured XHR response), streamed; served with `nosniff` and a sandboxing CSP, gzip passed through to a client that takes it (RFC 9110: the weight of `gzip` when the client names it, else of `*`; a weight of 0 in any spelling refuses, F142), each representation with a strong `ETag` of its own (the content's hash, `-gzip` after it for the compressed one; QA round three's extract-03) |
 | `POST /v1/sessions` | sessions | Open a session pinned to a persona matching the hints and a `domain`'s policy: `201` new, `200` when the id is open already, `409 no_matching_persona` |
 | `GET /v1/sessions/{id}` / `DELETE` | sessions | Inspect (not a use: the idle time does not start again) or end |
 | `GET /v1/policies/domains/{domain}` | fetch | Effective policy preview: the policy as it resolves (its `cache` as it holds under the configuration's `cache.max_ttl`), the pacing profile, the floor `min_level`, a pause in force. What is no host name (a wildcard, an empty label, a label over 63 characters) is `422 validation_failed` (F136) |
@@ -2894,7 +2917,8 @@ As built (the OpenAPI document is the contract):
   fetch that did not get its page and for a response that is no HTML
   document. `robots` is `{ fetched, allowed, matched_rule, crawl_delay }`
   on every result that got as far as the site's policy; `fetched: false`
-  says that nothing is known of the file (the default: nobody asks).
+  says that nothing is known of the file (the default: nobody asks), or,
+  with `allowed: false`, that the file is kept as unreachable.
 - `outcome: "robots_denied"` is a result like a block: `200`, no attempts,
   nothing asked of the site. Its `reason` is null when a rule of the file
   disallows the address (`robots.matched_rule` names it),
