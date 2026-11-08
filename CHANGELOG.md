@@ -282,6 +282,34 @@ version's date is the day, in UTC, its tag was made.
   moment to come back, so a job was still told "a minute on" through a
   backoff that can last an hour. Such a persona now carries its proxy's
   `backoff_until`, and `paused.until` is the first one's.
+- **The documents say what Kage does (F145).** The block report runbook
+  names `block.type` (it said `block.kind`) and no pacing "that never
+  fetches"; the observability runbook names `bandwidth.monthly_cap_gb`;
+  every `docker compose` command in the runbooks names its file; `repo.md`
+  lists the ten coverage-gated crates and the five sidecar packages;
+  `first-start.md` gives today's download and disk sizes; D2, D4, D17
+  and D38 of `docs/00-decisions.md`, and ADRs 0002 and 0006, say what
+  superseded them; the changelog's dates are its tags' (1.0.0, 2.0.0,
+  2.0.1 and 2.0.3 were not); three runbook sentences that said "before
+  2.0.3" of fixes that shipped in 2.0.4 say so (QA round one, docs-01,
+  policy-05, docs-03 to docs-09).
+- **The end-to-end suite in a closed world (F221).** `CONTRIBUTING.md`
+  says how a gate runs it with nothing leaving the machine: which images
+  to pull before the egress rule, the rule with an `NFLOG` capture (a
+  nested namespace logs nothing with `LOG`), and which dropped packets to
+  expect.
+- **What the runbooks left out (QA round three, bgcalls-01, bgcalls-02,
+  ops-01, ops-03).** The browsers' own calls: Chrome's `www.google.com` at
+  every request, its query to Google's Autofill server with the signature
+  of every page with a form it reads (kept, as stock Chrome does it, and
+  written down as `docs/security-review.md` T9), Camoufox's media plugin
+  manager asking Mozilla and Google 20 to 27 s after a browser starts, and
+  under `egress.mode: direct` all of it from the host's own address. An
+  override file is read only when every
+  command names it beside `compose.yaml`, which the runbooks now say where
+  they prescribe one. And an upgrade: back up before it, `migrate` applies
+  the new schema, and the way back to the older release is that backup
+  (`fetching.md`, "Upgrading Kage").
 
 ### Added
 
@@ -330,33 +358,6 @@ version's date is the day, in UTC, its tag was made.
   sidecar with any other volume. Compose creates the volume at the next
   `docker compose up`; a file a sidecar wrote at that moment and kage had
   not yet taken is lost with its page's screenshot or PDF.
-- **The documents say what Kage does (F145).** The block report runbook
-  names `block.type` (it said `block.kind`) and no pacing "that never
-  fetches"; the observability runbook names `bandwidth.monthly_cap_gb`;
-  every `docker compose` command in the runbooks names its file; `repo.md`
-  lists the ten coverage-gated crates and the five sidecar packages;
-  `first-start.md` gives today's download and disk sizes; D2, D4, D17
-  and D38 of `docs/00-decisions.md`, and ADRs 0002 and 0006, say what
-  superseded them; the changelog's dates are its tags' (1.0.0, 2.0.0,
-  2.0.1 and 2.0.3 were not); three runbook sentences that said "before
-  2.0.3" of fixes that shipped in 2.0.4 say so (QA round one, docs-01,
-  policy-05, docs-03 to docs-09).
-- **The end-to-end suite in a closed world (F221).** `CONTRIBUTING.md`
-  says how a gate runs it with nothing leaving the machine: which images
-  to pull before the egress rule, the rule with an `NFLOG` capture (a
-  nested namespace logs nothing with `LOG`), and which dropped packets to
-  expect.
-- **What the runbooks left out (QA round three, bgcalls-01, bgcalls-02,
-  ops-01, ops-03).** The browsers' own calls: Chrome's `www.google.com` at
-  every request, its query to Google's Autofill server with the signature
-  of every page with a form it reads (kept, as stock Chrome does it, and
-  written down as `docs/security-review.md` T9), Camoufox's media plugin manager asking Mozilla and Google 20 to
-  27 s after a browser starts, and under `egress.mode: direct` all of it
-  from the host's own address. An override file is read only when every
-  command names it beside `compose.yaml`, which the runbooks now say where
-  they prescribe one. And an upgrade: back up before it, `migrate` applies
-  the new schema, and the way back to the older release is that backup
-  (`fetching.md`, "Upgrading Kage").
 
 ## [2.0.4] - 2026-11-07
 

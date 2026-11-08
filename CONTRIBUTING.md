@@ -81,7 +81,7 @@ Every target on its own (`just` without arguments lists them all):
 | Command | What it does |
 |---|---|
 | `just fmt` | rustfmt and prettier |
-| `just lint` | clippy with warnings denied, eslint, tsc, the dashboards and the alert rules of the observability profile, the README's badges |
+| `just lint` | clippy with warnings denied, eslint, tsc, the dashboards and the alert rules of the observability profile, the README's badges, every `*.sh` executable in git (`lint-scripts`) |
 | `just test` | Rust tests (the store tests start Postgres in Docker), sidecar vitest (the Chromium engine's tests start the real browser; not as root), the gate scripts' and the field runner's own tests |
 | `just contract-check` | The committed sidecar OpenAPI document is current and breaks no client; the public API's document is valid and its TypeScript client current |
 | `just openapi` | Regenerate both OpenAPI documents and the API's TypeScript test client |
