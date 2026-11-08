@@ -345,15 +345,6 @@ impl Trail {
         }
     }
 
-    pub(crate) fn downgraded(&self) -> bool {
-        match self {
-            Self::Guarded(chain) => chain.was_downgraded(),
-            Self::Open { hops, .. } => hops
-                .windows(2)
-                .any(|pair| pair[0].scheme() == "https" && pair[1].scheme() == "http"),
-        }
-    }
-
     /// The first hop that left `https` for `http`: its number in the
     /// chain (1 for the first redirect) and the addresses on either side.
     pub(crate) fn downgrade(&self) -> Option<(usize, &Url, &Url)> {
@@ -367,19 +358,21 @@ impl Trail {
             .map(|(at, pair)| (at + 1, pair[0], pair[1]))
     }
 
-    /// Records a downgrade that was followed, as a browser follows it
-    /// (spec §9, QA round three's level0-05): kage's log names the hop and
-    /// the hosts, never the addresses, whose paths and queries may be the
-    /// caller's.
-    pub(crate) fn note_downgrade(&self) {
-        if let Some((hop, from, to)) = self.downgrade() {
-            tracing::info!(
-                hop,
-                from_host = ?from.host_str(),
-                to_host = ?to.host_str(),
-                "a redirect of the http path downgraded https to http; it was followed, as a browser follows it"
-            );
-        }
+    /// Whether the chain left `https` for `http`; a downgrade that was
+    /// followed, as a browser follows it, is recorded (spec §9, QA round
+    /// three's level0-05): kage's log names the hop and the hosts, never the
+    /// addresses, whose paths and queries may be the caller's.
+    pub(crate) fn note_downgrade(&self) -> bool {
+        let Some((hop, from, to)) = self.downgrade() else {
+            return false;
+        };
+        tracing::info!(
+            hop,
+            from_host = ?from.host_str(),
+            to_host = ?to.host_str(),
+            "a redirect of the http path downgraded https to http; it was followed, as a browser follows it"
+        );
+        true
     }
 
     pub(crate) fn follow(&mut self, location: &str) -> Result<Url, HttpError> {
@@ -766,7 +759,7 @@ impl HttpClient {
             body,
             truncated,
             hops: arrived.hops,
-            downgraded: trail.downgraded(),
+            downgraded: trail.note_downgrade(),
             timing: Timing {
                 dns_ms: None,
                 connect_ms: arrived.connect.map(millis),
@@ -790,7 +783,6 @@ impl HttpClient {
                 .fetch_assets(&fetched, spec.guard, spec.seed, deadline)
                 .await;
         }
-        trail.note_downgrade();
         tracing::debug!(
             proxy = %self.proxy,
             host = ?fetched.final_url.host_str(),
@@ -1092,9 +1084,14 @@ mod tests {
     fn the_hop_that_left_https_for_http_is_found() {
         let url = |text: &str| Url::parse(text).unwrap();
         let policy = kage_core::ssrf::SsrfPolicy::default();
-        let mut guarded =
-            super::Trail::start(&url("https://shop.example/a"), super::Guard::Target(policy), 10).unwrap();
+        let mut guarded = super::Trail::start(
+            &url("https://shop.example/a"),
+            super::Guard::Target(policy),
+            10,
+        )
+        .unwrap();
         assert_eq!(guarded.downgrade(), None);
+        assert!(!guarded.note_downgrade());
         guarded.follow("https://shop.example/b").unwrap();
         guarded.follow("http://shop.example/c").unwrap();
         guarded.follow("http://shop.example/d").unwrap();
@@ -1103,14 +1100,18 @@ mod tests {
             (hop, from.as_str(), to.as_str()),
             (2, "https://shop.example/b", "http://shop.example/c")
         );
-        assert!(guarded.downgraded());
+        assert!(guarded.note_downgrade());
 
-        let mut open =
-            super::Trail::start(&url("http://hook.example/"), super::Guard::OperatorEndpoint, 10).unwrap();
+        let mut open = super::Trail::start(
+            &url("http://hook.example/"),
+            super::Guard::OperatorEndpoint,
+            10,
+        )
+        .unwrap();
         open.follow("https://hook.example/x").unwrap();
         assert_eq!(open.downgrade(), None);
         open.follow("http://hook.example/y").unwrap();
         assert_eq!(open.downgrade().map(|(hop, _, _)| hop), Some(2));
-        assert!(open.downgraded());
+        assert!(open.note_downgrade());
     }
 }
