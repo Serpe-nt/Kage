@@ -213,6 +213,40 @@ impl EmulatedClientFactory {
         )
     }
 
+    /// The factory the configuration describes ([`Self::from_config`]),
+    /// whose clients trust the operator's own authorities of
+    /// `http.ca_file` (F191) as the persona's clients do: an echo under the
+    /// operator's own CA is the private echo the runbook describes (spec
+    /// §9, QA round three's level0-06).
+    ///
+    /// # Errors
+    ///
+    /// Fails when the profile or the platform is not one the http path
+    /// supports, or when `http.ca_file` cannot be read.
+    pub fn for_config(config: &Config) -> Result<Self, ProbeClientError> {
+        let factory = Self::from_config(&config.proxies.health)?;
+        Ok(
+            match kage_http::trust_anchor(&config.http).map_err(ProbeClientError::Build)? {
+                Some(pem) => factory.with_trust_anchor(pem),
+                None => factory,
+            },
+        )
+    }
+
+    /// The same factory, its clients also trusting the certificate
+    /// authorities of `pem` (one or more certificates).
+    #[must_use]
+    pub fn with_trust_anchor(mut self, pem: impl Into<Vec<u8>>) -> Self {
+        self.factory = self.factory.with_trust_anchor(pem);
+        self
+    }
+
+    /// How many operator authorities the clients trust besides the public
+    /// roots.
+    pub fn trust_anchors(&self) -> usize {
+        self.factory.trust_anchors()
+    }
+
     /// The emulation profile.
     pub const fn profile(&self) -> &ProfileChoice {
         &self.spec.profile
@@ -317,7 +351,7 @@ impl HttpProber<EmulatedClientFactory> {
     /// Fails when the emulation profile or platform is unknown.
     pub fn from_config(config: &Config) -> Result<Self, ProbeClientError> {
         Ok(Self::new(
-            EmulatedClientFactory::from_config(&config.proxies.health)?,
+            EmulatedClientFactory::for_config(config)?,
             &Endpoints::from_config(config),
         ))
     }
@@ -415,14 +449,25 @@ impl<F: ProbeClientFactory> Prober for HttpProber<F> {
             // Before a failure counts, one echo run by someone else is
             // tried: an echo that is down must not look like a dead proxy.
             Err(first) => match &self.confirm_url {
-                Some(url) => self.read_exit(target, url).await.map_err(|second| {
-                    // A refused login explains more than a timeout.
-                    if first == HealthFailure::ProxyAuth || second == HealthFailure::ProxyAuth {
-                        HealthFailure::ProxyAuth
-                    } else {
-                        second
-                    }
-                }),
+                Some(url) => {
+                    // Said, since the confirmation echo may be a public one
+                    // that now sees the proxy's address, which a private
+                    // echo is there to keep from it (QA round three's
+                    // level0-06).
+                    tracing::warn!(
+                        proxy = %target.id,
+                        failure = first.as_str(),
+                        "the health echo did not answer; the probe reads the confirmation echo"
+                    );
+                    self.read_exit(target, url).await.map_err(|second| {
+                        // A refused login explains more than a timeout.
+                        if first == HealthFailure::ProxyAuth || second == HealthFailure::ProxyAuth {
+                            HealthFailure::ProxyAuth
+                        } else {
+                            second
+                        }
+                    })
+                }
                 None => Err(first),
             },
         };

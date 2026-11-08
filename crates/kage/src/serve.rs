@@ -488,9 +488,8 @@ async fn start_proxy_pool(
         scheduled_browser_selftest = !config.selftest.browser.pages.is_empty(),
         "persona manager starting"
     );
-    let probe_clients =
-        PersonaProbeClients::from_config(personas.directory(), &config.proxies.health)
-            .context("cannot set up the probe clients")?;
+    let probe_clients = PersonaProbeClients::from_config(personas.directory(), config)
+        .context("cannot set up the probe clients")?;
     let checker = Arc::new(
         HealthChecker::with_clients(config, Arc::clone(&pool), probe_clients)
             .context("cannot set up the proxy health checks")?,
@@ -576,9 +575,8 @@ async fn start_direct(
         declared_country = direct.country.map(|country| country.to_string()),
         "egress.mode is direct: the host's own connection, no pool"
     );
-    let probe_clients =
-        PersonaProbeClients::from_config(personas.directory(), &config.proxies.health)
-            .context("cannot set up the probe clients")?;
+    let probe_clients = PersonaProbeClients::from_config(personas.directory(), config)
+        .context("cannot set up the probe clients")?;
     // Built for the admin API; never run, since nothing of the pool is
     // probed under direct.
     let checker = Arc::new(
