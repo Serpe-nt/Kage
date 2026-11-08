@@ -437,6 +437,7 @@ impl PlainClient {
             read_body(response, cap, started, deadline).await?
         };
         let total = started.elapsed();
+        trail.note_downgrade();
         tracing::debug!(
             host = ?trail.current().host_str(),
             status = status.as_u16(),

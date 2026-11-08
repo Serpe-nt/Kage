@@ -1109,9 +1109,10 @@ one job's, begun once and ended once (QA round three's flows-03).
   (default 10), every hop through the redirect chain of the SSRF guard
   (§19), which names the hop it refuses and records an `https` to `http`
   downgrade: the hop is followed, as a browser follows it, and kage's log
-  says so at `info` ("a redirect of the http path left https for http",
-  with the hop's number and the hosts on either side, never the
-  addresses; QA round three's level0-05). One more ends the attempt `provider_error`, reason
+  says so at `info` ("a redirect of the http path downgraded https to
+  http", with the hop's number and the hosts on either side, never the
+  addresses; the persona's client and the plain client of level 0 alike;
+  QA round three's level0-05). One more ends the attempt `provider_error`, reason
   `too_many_redirects`, not retried, at every level: a browser's chain
   that the check after the navigation finds too long ends the same way,
   nothing of it kept (F181). 301 and 302 turn a POST into a GET, 303 turns everything but a

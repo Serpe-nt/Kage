@@ -255,6 +255,18 @@ pub fn text_of(content_type: Option<&str>, body: &[u8]) -> Option<String> {
 /// [`text_of`] for a body loaded from `url`, whose top-level domain is the
 /// detector's hint for an undeclared body ([`decode_from`]).
 pub fn text_of_from(url: Option<&Url>, content_type: Option<&str>, body: &[u8]) -> Option<String> {
+    text_of_cut_from(url, content_type, body, false)
+}
+
+/// [`text_of_from`] of a body that was `cut` at a byte limit: the text ends
+/// at the last whole character, as [`decode_cut_from`] reads it (QA round
+/// three's extract-08).
+pub fn text_of_cut_from(
+    url: Option<&Url>,
+    content_type: Option<&str>,
+    body: &[u8],
+    cut: bool,
+) -> Option<String> {
     let typed = content_type.is_some_and(|value| !essence(Some(value)).is_empty());
     let text = if typed {
         is_text(content_type)
@@ -262,9 +274,21 @@ pub fn text_of_from(url: Option<&Url>, content_type: Option<&str>, body: &[u8]) 
         Encoding::for_bom(body).is_some() || sniffs_as_markup(body)
     };
     if text {
-        return Some(decode_from(url, content_type, body).text.into_owned());
+        return Some(
+            decode_cut_from(url, content_type, body, cut)
+                .text
+                .into_owned(),
+        );
     }
-    std::str::from_utf8(body).ok().map(str::to_owned)
+    match std::str::from_utf8(body) {
+        Ok(text) => Some(text.to_owned()),
+        // UTF-8 that only the cut broke is UTF-8 up to it.
+        Err(error) if cut && error.error_len().is_none() => body
+            .get(..error.valid_up_to())
+            .and_then(|whole| std::str::from_utf8(whole).ok())
+            .map(str::to_owned),
+        Err(_) => None,
+    }
 }
 
 /// Whether a body that declares no type is text, as [`text_of`] reads it:
@@ -952,7 +976,7 @@ mod tests {
     use super::{
         DecidedBy, charset_of, decode, decode_cut_from, decode_from, detect, is_text, prescan,
         sniffs_as_html,
-        text_of, text_of_from, top_level_domain, untyped_is_text,
+        text_of, text_of_cut_from, text_of_from, top_level_domain, untyped_is_text,
     };
 
     /// QA round three's extract-08: a body cut inside a character reads
@@ -989,6 +1013,19 @@ mod tests {
         assert_eq!(read.text, "a\u{fffd}b");
         assert!(read.malformed);
         assert_eq!(decode_cut_from(None, utf8, b"whole", false).text, "whole");
+        // The same through `text_of_cut_from`, also for a body that names
+        // no type and is UTF-8 up to the cut.
+        let checks = "✓✓".as_bytes();
+        assert_eq!(
+            text_of_cut_from(None, utf8, &checks[..4], true).as_deref(),
+            Some("✓")
+        );
+        assert_eq!(
+            text_of_cut_from(None, None, &checks[..4], true).as_deref(),
+            Some("✓")
+        );
+        assert_eq!(text_of_cut_from(None, None, &checks[..4], false), None);
+        assert_eq!(text_of_cut_from(None, None, b"a\xffb", true), None);
     }
 
     /// "Café Müller, Straße" in ISO-8859-1.
