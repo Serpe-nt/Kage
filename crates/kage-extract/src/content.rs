@@ -144,8 +144,10 @@ const NEGATIVE: [&str; 24] = [
     "widget",
 ];
 
-/// Elements that are what a site repeats on every page, by their name.
-const FURNITURE: [&str; 3] = ["nav", "aside", "footer"];
+/// Elements that are what a site repeats on every page, or what lies over
+/// it, by their name: a `<dialog>` is the element of the role `dialog`
+/// (QA round three's extract-05).
+const FURNITURE: [&str; 4] = ["nav", "aside", "footer", "dialog"];
 
 /// The same, by their ARIA role, and what lies over a page.
 const FURNITURE_ROLES: [&str; 10] = [

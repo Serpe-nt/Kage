@@ -69,6 +69,49 @@ fn what_the_markup_calls_furniture_is_never_content() {
     assert!(!found.contains("cookies"));
 }
 
+/// QA round three's extract-05: a `<dialog>` is what lies over a page, as
+/// the role `dialog` is, open or closed; and a closed one is what the
+/// markup hides, also in a `<main>` taken whole.
+#[test]
+fn a_dialog_element_is_never_content() {
+    let box_ =
+        "<p>NEWSLETTER signup: we write, every week, about everything, so sign up here now.</p>";
+    for dialog in [
+        format!("<div role=\"dialog\">{box_}</div>"),
+        format!("<dialog open>{box_}</dialog>"),
+        format!("<dialog>{box_}</dialog>"),
+        format!("<DIALOG OPEN>{box_}</DIALOG>"),
+    ] {
+        let page = format!(
+            "<body><article>{}{dialog}{}</article></body>",
+            paragraphs(3),
+            paragraphs(3)
+        );
+        let found = one(&page);
+        assert_eq!(
+            found.matches("The council met").count(),
+            6,
+            "{dialog}: {found}"
+        );
+        assert!(!found.contains("NEWSLETTER"), "{dialog}: {found}");
+    }
+    let rows = (1..=40)
+        .map(|n| format!("<tr><td>Widget {n}</td><td>{n}.99 EUR</td></tr>"))
+        .collect::<Vec<_>>()
+        .concat();
+    assert_eq!(
+        content_of(&format!(
+            "<body><main><dialog open><table>{rows}</table></dialog></main></body>"
+        )),
+        Vec::<String>::new()
+    );
+    let kept = one(&format!(
+        "<body><main><table>{rows}</table><dialog><p>Closed box.</p></dialog></main></body>"
+    ));
+    assert!(kept.starts_with("Widget 1 1.99 EUR"), "{kept}");
+    assert!(!kept.contains("Closed box"), "{kept}");
+}
+
 #[test]
 fn a_page_without_a_candidate_has_no_content() {
     assert_eq!(content_of(""), Vec::<String>::new());

@@ -3,7 +3,7 @@
 use scraper::Html;
 use url::Url;
 
-use super::{Mode, guard_start, indent, longest_run, render};
+use super::{Mode, guard_heading_end, guard_start, indent, longest_run, render};
 use crate::content::Content;
 use crate::dom::Dropped;
 
@@ -336,4 +336,93 @@ fn markdown_says_what_the_page_says() {
     );
     // Outside a table, code keeps its `|`.
     assert_eq!(markdown("<p><code>x|y</code></p>"), "`x|y`");
+}
+
+/// QA round three's extract-01: a code span holds no code span, so nested
+/// `<code>` elements are one span with their text, and the markdown grows
+/// with the page, not with the square of its depth.
+#[test]
+fn nested_code_is_one_code_span() {
+    assert_eq!(
+        markdown("<p><code>a <code>b <code>c</code></code> d</code></p>"),
+        "`a b c d`"
+    );
+    // What is inline in code is its text: marks and links are not written
+    // where a reader would see them as characters.
+    assert_eq!(
+        markdown(r#"<p><code>x <b>y</b> <a href="/z">z</a> <kbd>k</kbd></code></p>"#),
+        "`x y z k`"
+    );
+    // Code in a link or in a mark is still code.
+    assert_eq!(
+        markdown(r#"<p><a href="/z"><code>z</code></a> <b><code>y</code></b></p>"#),
+        "[`z`](https://docs.example/z) **`y`**"
+    );
+    assert_eq!(text("<p><code>a <code>b</code> c</code></p>"), "a b c");
+    let depth = 20_000;
+    let page = format!(
+        "<p>{}bottom{}</p>",
+        "<code>w ".repeat(depth),
+        "</code>".repeat(depth)
+    );
+    let html = Html::parse_document(&format!("<body>{page}</body>"));
+    let content = Content {
+        parts: vec![html.tree.root()],
+        dropped: Dropped::new(),
+    };
+    let base = Url::parse("https://docs.example/guide/page").unwrap();
+    let started = std::time::Instant::now();
+    let written = render(&content, &base, Mode::Markdown).text;
+    assert_eq!(written.matches('`').count(), 2);
+    assert_eq!(written.matches('w').count(), depth);
+    assert!(written.len() < page.len(), "{} chars", written.len());
+    // Four thousand levels took 26 s in the finding, twenty thousand more
+    // than half an hour.
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+}
+
+/// QA round three's extract-02: what is text in the page is text in the
+/// markdown also where a hard break starts a line, where a mark stands
+/// alone, before a link, and at a heading's end.
+#[test]
+fn text_reads_as_text_after_a_break_alone_and_before_a_link() {
+    for (written, guarded) in [
+        ("#", r"\#"),
+        ("-", r"\-"),
+        ("+", r"\+"),
+        ("###", r"\###"),
+        ("=", r"\="),
+        ("===", r"\==="),
+        ("== ", r"\== "),
+        ("#\tx", "\\#\tx"),
+        (
+            "a  \n- b  \n1. c  \n# d  \n===",
+            "a  \n\\- b  \n1\\. c  \n\\# d  \n\\===",
+        ),
+        ("=x", "=x"),
+        ("-x", "-x"),
+        ("+1", "+1"),
+    ] {
+        assert_eq!(guard_start(written), guarded, "{written:?}");
+    }
+    assert_eq!(
+        markdown(r#"<p>Wow!<a href="/x">link</a> and wow! <a href="/y">spaced</a></p>"#),
+        r"Wow\![link](https://docs.example/x) and wow! [spaced](https://docs.example/y)"
+    );
+    assert_eq!(markdown("<p>#</p><p>-</p><p>+</p>"), "\\#\n\n\\-\n\n\\+");
+    assert_eq!(
+        markdown("<p>Features:<br>- Waterproof<br>1. First</p>"),
+        "Features:  \n\\- Waterproof  \n1\\. First"
+    );
+    assert_eq!(
+        markdown("<p>Title<br># hash</p><p>Title two<br>===</p><p>Title four<br>-</p>"),
+        "Title  \n\\# hash\n\nTitle two  \n\\===\n\nTitle four  \n\\-"
+    );
+    assert_eq!(markdown("<h2>Section #</h2>"), r"## Section \#");
+    assert_eq!(markdown("<h3>#</h3>"), r"### \#");
+    assert_eq!(markdown("<h3>C#</h3>"), "### C#");
+    assert_eq!(guard_heading_end("a ##".to_owned()), r"a \##");
+    assert_eq!(guard_heading_end("plain".to_owned()), "plain");
+    // Text keeps every character as it is.
+    assert_eq!(text(r#"<p>Wow!<a href="/x">link</a></p>"#), "Wow!link");
 }

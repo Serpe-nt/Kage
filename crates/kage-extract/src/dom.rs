@@ -93,6 +93,9 @@ pub(crate) fn as_text(node: NodeRef<'_>) -> Option<&str> {
 pub(crate) fn unseen(element: &Element) -> bool {
     NOT_TEXT.contains(&element.name())
         || hides(element)
+        // A closed `<dialog>` is `display: none` by the user agent's style
+        // sheet.
+        || (element.name() == "dialog" && element.attr("open").is_none())
         || element
             .attr("aria-hidden")
             .is_some_and(|value| value.eq_ignore_ascii_case("true"))
