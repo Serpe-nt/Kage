@@ -192,6 +192,52 @@ policy enforces its `robots.txt` (`docs/runbooks/api.md`, "robots.txt").
 | `robots_no_scout` | Nobody can ask for the file: every persona that could has read the site, or there is only one. | Add a persona, or set `robots: report` for the site. |
 | `robots_enforced`, `robots_ignored` | The request's `robots` and the policy cannot both be had; only seen in a job whose site's policy changed after it was accepted (the API refuses such a request at once). | Send the job again. |
 
+## Upgrading Kage
+
+A release may bring migrations of the database. The `migrate` service
+applies them before `kage` starts, and a release never runs on a database
+that a newer one migrated: the way back is a backup taken before the
+upgrade (QA round three, ops-03).
+
+1. Read the release's notes in `CHANGELOG.md`.
+2. Stop Kage (above), and back up the database while nothing writes to
+   it:
+
+   ```bash
+   docker compose --file deploy/compose.yaml exec -T postgres pg_dump --username kage --format custom kage > kage-before-upgrade.dump
+   ```
+
+   The browser profiles and the stored pages (the volumes `personas` and
+   `artifacts`, `<project>_personas` and `<project>_artifacts` in
+   `docker volume ls`) are not touched by a migration; copy them too for
+   the same moment in time.
+3. Check out the new tag (or set the image digests it records) and start
+   the stack as at the first start: `migrate` applies what is new (a
+   second or so), then `kage` starts.
+
+Going back. The older release's `migrate` refuses the newer schema and
+the stack does not start:
+
+```
+migration error: migration 20 was previously applied but is missing in the resolved migrations
+```
+
+(`kage serve` of the older release says "the database has migrations
+[20] that this version of kage does not know; it was migrated by a newer
+version".) Restore the backup into an empty database and start the older
+release:
+
+```bash
+docker compose --file deploy/compose.yaml down
+docker volume rm <project>_pgdata
+git checkout <older tag>
+docker compose --file deploy/compose.yaml up --detach --wait postgres
+docker compose --file deploy/compose.yaml exec -T postgres pg_restore --username kage --dbname kage --clean --if-exists < kage-before-upgrade.dump
+docker compose --file deploy/compose.yaml up --detach --wait
+```
+
+What was fetched after the upgrade is not in the backup.
+
 ## Pace
 
 What follows is a persona's pace, at levels 1 to 3. A request at level 0

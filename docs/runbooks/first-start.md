@@ -169,9 +169,18 @@ traces of every request ([observability.md](observability.md)).
 | A site's floor (`min_level`), the host's own connection, upgrading from 1.x | [levels-and-egress.md](levels-and-egress.md) |
 | A key that leaked, rotating the secrets | [rotating-keys.md](rotating-keys.md) |
 | A new Chrome or Camoufox | [upgrading-an-engine.md](upgrading-an-engine.md) |
-| Stopping and upgrading Kage | [fetching.md](fetching.md#stopping-the-server), the release notes in `CHANGELOG.md` |
+| Stopping and upgrading Kage | [fetching.md](fetching.md#stopping-the-server), [fetching.md](fetching.md#upgrading-kage), the release notes in `CHANGELOG.md` |
 
 The database is the volume `pgdata`: back it up with `docker compose --file
 deploy/compose.yaml exec postgres pg_dump --username kage kage`, from
-the repository's root as every command here. The stored pages are in
+the repository's root as every command here.
+
+Settings of your own beside the shipped files go into
+`deploy/compose.override.yaml` (`deploy/.env` holds the variables the
+shipped file reads). Compose reads `deploy/compose.override.yaml` only when it finds the files
+itself; a command that names `--file` reads exactly what it names. With
+an override, every command names both files, `docker compose --file
+deploy/compose.yaml --file deploy/compose.override.yaml ...`: one that
+names only `compose.yaml`, as the commands of these runbooks do, recreates
+the service without it, and nothing says so. The stored pages are in
 `artifacts`, the browser profiles in `personas`.

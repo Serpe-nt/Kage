@@ -256,6 +256,18 @@ seen by the sites it reads. Under `direct`:
   persona, and only level 0 works (`kage config check` warns).
 - **Their engines**: `egress.direct.engines`, a subset of
   `personas.mix`; unset, they are drawn from the mix.
+- **The browsers' own calls** leave from the host's address: the
+  forwarder looks each name up and connects with no upstream. Chromium
+  asks `www.google.com`, `accounts.google.com` and
+  `android.clients.google.com` within two seconds of a browser start and
+  again with a growing pause while they fail, `www.google.com` at every
+  request, and `content-autofill.googleapis.com` at a page with a form
+  ([engine-chromium.md](engine-chromium.md), "What an idle browser
+  costs"); Camoufox its media plugin hosts, Google's among them, 20 to 27
+  seconds after a start ([engine-firefox.md](engine-firefox.md),
+  "Camoufox's own calls"). The sites Kage reads see none of it; Google and
+  Mozilla see the host's address, as they would see a browser of the
+  machine's own (QA round three, bgcalls-02).
 - **The pool is idle**: not synced, not probed, not used. Its personas
   wait unused and are scheduled again when the mode goes back to
   `proxies`. A provider that is still configured raises a warning in
@@ -312,7 +324,14 @@ To switch, set the keys in `kage.yaml`, or in a compose deployment the
 mode in `deploy/.env` (`KAGE_EGRESS_MODE=direct`, which the shipped
 `compose.yaml` passes to `kage`) and the rest as environment of the `kage`
 service (`KAGE__EGRESS__DIRECT__COUNTRY: AT`) in an override file of your
-own, and recreate `kage`:
+own (`deploy/compose.override.yaml`), and recreate `kage` with both files.
+Compose reads `deploy/compose.override.yaml` only when it finds the files
+itself; a command that names `--file` reads exactly what it names. With
+an override, every command names both files, `docker compose --file
+deploy/compose.yaml --file deploy/compose.override.yaml ...`: one that
+names only `compose.yaml`, as the commands of these runbooks do, recreates
+the service without it, and nothing says so. (QA round three, ops-01.) In `kage.yaml` the
+keys are:
 
 ```yaml
 egress:

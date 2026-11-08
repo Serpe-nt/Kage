@@ -178,6 +178,14 @@ services:
 Every persona of that host then reports the same GPU, as every browser on
 one machine does; the fingerprint names WebGL as host-bound for that reason.
 
+Compose reads `deploy/compose.override.yaml` only when it finds the files
+itself; a command that names `--file` reads exactly what it names. With
+an override, every command names both files, `docker compose --file
+deploy/compose.yaml --file deploy/compose.override.yaml ...`: one that
+names only `compose.yaml`, as the commands of these runbooks do, recreates
+the service without it, and nothing says so. Here: `up --detach --wait
+browser-chromium` with both files (QA round three, ops-01).
+
 ## Claiming another system
 
 Off by default, and for a reason (ADR 0009): a Chrome on Linux that claims
@@ -331,6 +339,15 @@ fetches the most), the rate after that and what one persona-hour costs,
 and `tests/live/netlog-hosts.mjs` the host names asked for. The interface
 counts packet headers too, so a provider bills slightly less than the
 figure.
+
+**At every request, not only idle.** Every request opens a fresh tab
+(F96), and Chrome then opens two or three connections to
+`www.google.com:443` (one to four when the browser starts), through the
+persona's proxy like the rest; TLS hides whether they are preconnects or
+requests. A page with a form adds `content-autofill.googleapis.com`. Under
+`egress.mode: direct` all of it, and the idle traffic of the table, leaves
+from the host's own address ([levels-and-egress.md](levels-and-egress.md)).
+The site a persona reads sees none of it (QA round three, bgcalls-02).
 
 ## Input and flows
 

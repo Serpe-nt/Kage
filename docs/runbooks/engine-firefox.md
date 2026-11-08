@@ -452,6 +452,19 @@ status with the kept head brought up to date by the 304's fields (RFC 9111
 reported as it came (F178). The file holds what the browser's own cache
 entry holds; it goes with the profile when a persona is retired.
 
+## Camoufox's own calls
+
+As stock Firefox does (`media.gmp-manager.updateEnabled` stays on,
+`docs/evidence/camoufox-156-prefs-audit.tsv`), Camoufox's media plugin
+manager asks for its plugins 20 to 27 seconds after a browser starts:
+`aus5.mozilla.org` (the update check), `ciscobinary.openh264.org`
+(OpenH264) and `update.googleapis.com` (Widevine), once per profile. They
+leave through the persona's proxy, or from the host's own address under
+`egress.mode: direct`; a Firefox persona therefore talks to Google too. A
+browser that is closed within 20 seconds, a persona's self-test, asks
+nothing. The site the persona reads sees none of it (QA round three,
+bgcalls-02).
+
 ## Settings
 
 | Variable (compose) | Sidecar variable | Default | Meaning |
