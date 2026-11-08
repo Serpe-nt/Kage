@@ -346,6 +346,15 @@ version's date is the day, in UTC, its tag was made.
   to pull before the egress rule, the rule with an `NFLOG` capture (a
   nested namespace logs nothing with `LOG`), and which dropped packets to
   expect.
+- **What the runbooks left out (QA round three, bgcalls-02, ops-01,
+  ops-03).** The browsers' own calls: Chrome's `www.google.com` at every
+  request, Camoufox's media plugin manager asking Mozilla and Google 20 to
+  27 s after a browser starts, and under `egress.mode: direct` all of it
+  from the host's own address. An override file is read only when every
+  command names it beside `compose.yaml`, which the runbooks now say where
+  they prescribe one. And an upgrade: back up before it, `migrate` applies
+  the new schema, and the way back to the older release is that backup
+  (`fetching.md`, "Upgrading Kage").
 
 ## [2.0.4] - 2026-11-07
 
