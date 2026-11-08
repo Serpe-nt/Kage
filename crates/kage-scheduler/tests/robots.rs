@@ -86,6 +86,15 @@ const UNASKED: RobotsVerdict = RobotsVerdict {
     crawl_delay: None,
 };
 
+/// A file kept as unreachable: not the file's verdict, and never `allowed`
+/// (QA round three's level0-04).
+const UNREACHABLE: RobotsVerdict = RobotsVerdict {
+    fetched: false,
+    allowed: false,
+    matched_rule: None,
+    crawl_delay: None,
+};
+
 fn never() -> (watch::Sender<bool>, Stop) {
     watch::channel(false)
 }
@@ -442,7 +451,7 @@ async fn a_file_that_is_not_there_allows_everything_and_one_that_cannot_be_had_n
         .unwrap();
     assert_eq!(refused.outcome, Outcome::RobotsDenied);
     assert_eq!(refused.reason.as_deref(), Some(ROBOTS_UNAVAILABLE));
-    assert_eq!(refused.robots, Some(UNASKED));
+    assert_eq!(refused.robots, Some(UNREACHABLE));
     assert_eq!(refused.attempts.len(), 0);
     let down = world
         .backend
@@ -464,6 +473,7 @@ async fn a_file_that_is_not_there_allows_everything_and_one_that_cannot_be_had_n
         .await
         .unwrap();
     assert_eq!(again.reason.as_deref(), Some(ROBOTS_UNAVAILABLE));
+    assert_eq!(again.robots, Some(UNREACHABLE));
     let (_keep, stop) = never();
     let waiting = world
         .pipeline
@@ -490,10 +500,29 @@ async fn a_file_that_is_not_there_allows_everything_and_one_that_cannot_be_had_n
         .await
         .unwrap();
     assert_eq!(later.outcome, Outcome::RobotsDenied);
+    assert_eq!(later.robots, Some(UNREACHABLE));
     let (files, _) = asked(&world);
     assert_eq!(files.len(), 3);
     assert_eq!(files[1].1, files[2].1);
     assert_eq!(files[2].0, "https://down.enforced.example/robots.txt");
+
+    // Where the file is reported the page is fetched all the same, and
+    // once the scout found the file unreachable the result says so.
+    let first = world
+        .pipeline
+        .fetch(get("https://down.reported.example/a"))
+        .await
+        .unwrap();
+    assert_eq!(first.outcome, Outcome::Ok);
+    assert_eq!(first.robots, Some(UNASKED));
+    tokio::time::sleep(Duration::from_mins(2)).await;
+    let second = world
+        .pipeline
+        .fetch(get("https://down.reported.example/b"))
+        .await
+        .unwrap();
+    assert_eq!(second.outcome, Outcome::Ok);
+    assert_eq!(second.robots, Some(UNREACHABLE));
     world.shut_down().await;
 }
 

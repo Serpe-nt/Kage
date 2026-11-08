@@ -352,6 +352,20 @@ pub const fn unasked() -> RobotsVerdict {
     }
 }
 
+/// The verdict of a file that could not be had: it was asked for and is
+/// kept as unreachable, which disallows every address (RFC 9309 §2.3.1.4,
+/// spec §14) until it is asked for again. Not the file's own verdict
+/// (`fetched: false`), and never `allowed` beside a refusal (QA round
+/// three's level0-04).
+pub const fn unreachable() -> RobotsVerdict {
+    RobotsVerdict {
+        fetched: false,
+        allowed: false,
+        matched_rule: None,
+        crawl_delay: None,
+    }
+}
+
 /// The least gap a `Crawl-delay` asks for between two pages, when it asks
 /// for one.
 pub fn gap_floor(verdict: &RobotsVerdict) -> Option<Duration> {

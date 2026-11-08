@@ -649,9 +649,11 @@ impl Pipeline {
                 return Ok(Gate::Open);
             }
             if let Some(known) = known {
-                if let Some(verdict) = known.verdict(&self.robots.agents, &url) {
-                    course.robots = Some(verdict);
-                }
+                course.robots = Some(
+                    known
+                        .verdict(&self.robots.agents, &url)
+                        .unwrap_or_else(robots::unreachable),
+                );
             } else {
                 call.need.priority = Priority::Job;
                 call.need.patience = Some(FOLLOW_UP_PATIENCE);
@@ -693,7 +695,8 @@ impl Pipeline {
         };
         let Some(verdict) = known.verdict(&self.robots.agents, &url) else {
             // Unreachable means disallowed (RFC 9309 §2.3.1.4) until the
-            // file is asked for again.
+            // file is asked for again, and the result says so.
+            course.robots = Some(robots::unreachable());
             return Ok(Gate::Unavailable {
                 reason: ROBOTS_UNAVAILABLE,
                 retry_at: Some(known.expires_at),
