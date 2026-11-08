@@ -120,7 +120,11 @@ pub(crate) async fn run(config: Config, bind: Option<SocketAddr>) -> anyhow::Res
     // the `domain` label's values bounded, the policies' domains first (L3).
     kage_api::metrics::bound_domains(&config.server, &current);
     let metrics = match kage_api::metrics::install() {
-        Ok(handle) => Some(handle),
+        Ok(handle) => {
+            // Taken above; the keeper says so from here on (lock-02).
+            kage_api::metrics::server_lock(true, Utc::now());
+            Some(handle)
+        }
         Err(error) => {
             tracing::warn!(%error, "the metrics exporter could not be installed; /metrics is empty");
             None
@@ -183,14 +187,17 @@ async fn keep_the_lock(store: Store, mut lock: ServerLock, lost: watch::Sender<b
     loop {
         ticker.tick().await;
         if matches!(lock.held().await, Ok(true)) {
+            kage_api::metrics::server_lock(true, Utc::now());
             continue;
         }
+        kage_api::metrics::server_lock(false, Utc::now());
         match ServerLock::take(store.pool()).await {
             Ok(Some(again)) => {
                 tracing::warn!(
                     "the database's server lock was lost with its connection and is held again"
                 );
                 lock = again;
+                kage_api::metrics::server_lock(true, Utc::now());
             }
             Ok(None) => {
                 tracing::error!(

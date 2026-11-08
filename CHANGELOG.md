@@ -389,7 +389,50 @@ version's date is the day, in UTC, its tag was made.
   any other (medians of such holds went from 0.46 of the other keys' to
   1.03–1.05 in both engines). The page still sees such a key with an
   empty `code`; that tell is written down in both engines' runbooks
-  (spec §10.4).
+  (spec §10.4).- **A body is an object (QA round three api-01).** A JSON array was read
+  as the object the document names, by the order of its fields: a fetch
+  made from `["https://…","GET",{},null,0]`, a session opened from
+  `["id"]`, a `wait` taken from `["load",null,0]`, a flow's step from
+  `["click","#next"]`. Each is `422 validation_failed` now, naming the
+  member where there is one.
+- **Every status in the document (QA round three api-02, api-09).** An
+  operation with a query parameter names the `422` it answers for one it
+  cannot read (`GET /v1/admin/audit`, `/personas`, `/personas/{id}`,
+  `/proxies`), `GET` and `DELETE /v1/sessions/{id}` name
+  `422 invalid_session_id`, and the seven operations that need the proxy
+  pool (`POST /v1/sessions`, a persona's retire, regenerate and self-test,
+  a proxy's probe and replacement, `GET /v1/admin/pool`) name their
+  `503 unavailable`.
+- **A site's scout is named by a host (QA round three api-03).**
+  `POST /v1/admin/sites/{site}/scout` refuses a wildcard and a label over
+  63 characters as the policy preview does (F136), `422 validation_failed`
+  with `field: site`; `*.x.test` gave `x.test` another scout.
+- **The limiter's refusals of admin calls are on the trail (QA round three
+  api-04).** An admin call refused `429` for the key's own limits (at
+  `/metrics` and `/docs` too) is written to the audit trail, `denied`, with
+  its status, code and `limit`.
+- **`budget_exhausted` is counted (QA round three api-05).**
+  `kage_api_refusals_total{code="budget_exhausted"}` counts every fetch the
+  key's daily page budget refuses; it stayed at zero.
+- **A fetch sent while the server stops (QA round three api-06).** It is
+  `503 unavailable`, as a job is, and nothing of it is kept; it was a
+  stored `200 provider_error shutting_down` that cost a page of the budget.
+- **Webhook origins keep their passwords (QA round three api-07).** A
+  refused entry of `webhooks.allowed_origins` or `webhooks.private_origins`
+  is named by its place (`webhooks.allowed_origins[1]`), never printed.
+- **Durations and days the program can count with (QA round three
+  api-08).** Every duration is at most ten years (`3650d`) and
+  `artifacts.retention_days`, `jobs.retention_days` and
+  `personas.upgrade_backup_days` at most 3650, refused at load and by
+  `kage config check`: `KAGE__ARTIFACTS__RETENTION_DAYS=4294967295` made
+  every fetch panic and `KAGE__SESSIONS__MAX_LIFETIME=200000000d` every
+  session, while `/readyz` said ready. A date counted from a duration stops
+  at the last one a timestamp has rather than panic, and a fetch whose
+  task panicked is `500 internal`, no longer "the server is stopping".
+- **The server's lock is a metric (QA round three lock-02).**
+  `kage_server_lock_held` and `kage_server_lock_confirmed_timestamp_seconds`
+  show whether the server still holds its database's lock and since when
+  it could not confirm it; nothing but the log said so.
 ### Added
 
 - **A daily scan of `main`'s images (F220).** `image-scan.yaml` builds the

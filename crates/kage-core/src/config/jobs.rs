@@ -312,8 +312,12 @@ pub(super) fn validate(jobs: &JobsConfig, webhooks: &WebhooksConfig) -> Result<(
     if jobs.max_age.get() < Duration::from_secs(60) {
         return Err("jobs.max_age must be at least 1m".to_owned());
     }
-    if jobs.retention_days == 0 {
-        return Err("jobs.retention_days must be at least 1".to_owned());
+    // A bound the program can count a date with (api-08).
+    if jobs.retention_days == 0 || u64::from(jobs.retention_days) > crate::duration::MAX_DAYS {
+        return Err(format!(
+            "jobs.retention_days must be between 1 and {}",
+            crate::duration::MAX_DAYS
+        ));
     }
     if jobs.lease.get() < Duration::from_secs(1) {
         return Err("jobs.lease must be at least 1s".to_owned());
@@ -338,10 +342,13 @@ pub(super) fn validate(jobs: &JobsConfig, webhooks: &WebhooksConfig) -> Result<(
         ("webhooks.allowed_origins", &webhooks.allowed_origins),
         ("webhooks.private_origins", &webhooks.private_origins),
     ] {
-        for origin in origins {
+        for (index, origin) in origins.iter().enumerate() {
             if !super::server::is_origin(origin) {
+                // The entry is named by its place, never repeated: it may
+                // hold a password (F133, QA round three api-07).
                 return Err(format!(
-                    "{key}: {origin:?} is not an origin (scheme://host[:port], nothing else)"
+                    "{key}[{index}] is not an origin such as https://hooks.example.org (a \
+                     scheme, a host, an optional port, nothing else: no credentials, no path)"
                 ));
             }
         }
@@ -662,9 +669,28 @@ mod tests {
                 ..webhooks.clone()
             };
             assert!(
-                refused(jobs, &listed).contains("webhooks.allowed_origins"),
+                refused(jobs, &listed).contains("webhooks.allowed_origins[0]"),
                 "{origin}"
             );
+        }
+        // A password in an entry is refused and never repeated (api-07).
+        for key in ["allowed", "private"] {
+            let entry = "http://u:pw-6c1e@hooks.invalid".to_owned();
+            let mut listed = WebhooksConfig {
+                allowed_origins: vec!["https://hooks.example.org".to_owned()],
+                ..webhooks.clone()
+            };
+            if key == "allowed" {
+                listed.allowed_origins.push(entry);
+            } else {
+                listed.private_origins.push(entry);
+            }
+            let message = refused(jobs, &listed);
+            assert!(
+                message.starts_with(&format!("webhooks.{key}_origins[")),
+                "{message}"
+            );
+            assert!(!message.contains("pw-6c1e"), "{message}");
         }
         // A private origin that no job may name anyway is a mistake.
         let unlisted = WebhooksConfig {

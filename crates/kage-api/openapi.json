@@ -203,6 +203,9 @@
           "414": {
             "$ref": "#/components/responses/UriTooLong"
           },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
           },
@@ -567,6 +570,9 @@
           "414": {
             "$ref": "#/components/responses/UriTooLong"
           },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
           },
@@ -652,6 +658,9 @@
           },
           "414": {
             "$ref": "#/components/responses/UriTooLong"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
@@ -748,6 +757,16 @@
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "description": "`unavailable`: no proxy pool is configured, or the persona's sidecar does not answer.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -825,6 +844,16 @@
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "description": "`unavailable`: no proxy pool is configured.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -930,6 +959,16 @@
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "description": "`unavailable`: no proxy pool is configured, or the persona's sidecar does not answer.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1044,6 +1083,16 @@
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "description": "`unavailable`: no proxy pool is configured.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1098,6 +1147,9 @@
           },
           "414": {
             "$ref": "#/components/responses/UriTooLong"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
@@ -1191,6 +1243,16 @@
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "description": "`unavailable`: no proxy pool is configured.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1278,6 +1340,16 @@
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "description": "`unavailable`: no proxy pool is configured.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -2428,6 +2500,16 @@
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "description": "`unavailable`: no proxy pool is configured, so there is no persona to pin a session to.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -2496,6 +2578,16 @@
           "414": {
             "$ref": "#/components/responses/UriTooLong"
           },
+          "422": {
+            "description": "`invalid_session_id`: the id is not one a session can have.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
           },
@@ -2562,6 +2654,16 @@
           },
           "414": {
             "$ref": "#/components/responses/UriTooLong"
+          },
+          "422": {
+            "description": "`invalid_session_id`: the id is not one a session can have.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
@@ -7713,7 +7815,7 @@
         }
       },
       "UnprocessableEntity": {
-        "description": "`validation_failed`, or another code of a request that cannot be made as asked: `field` names the member (a member given twice and a NUL character in a string included).",
+        "description": "`validation_failed`, or another code of a request that cannot be made as asked: `field` names the member (a member given twice and a NUL character in a string included); a query parameter that cannot be read is `validation_failed` with `in: query`.",
         "content": {
           "application/problem+json": {
             "schema": {

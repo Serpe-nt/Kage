@@ -5,6 +5,7 @@ use std::fmt;
 use std::str::FromStr;
 use std::time::Duration;
 
+use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Why a duration string was rejected.
@@ -19,10 +20,25 @@ pub enum DurationParseError {
     /// The unit is not one of `ms`, `s`, `m`, `h`, `d`.
     #[error("duration {0:?} needs a unit: ms, s, m, h or d")]
     InvalidUnit(String),
-    /// The value does not fit in the supported range.
-    #[error("duration {0:?} is too large")]
+    /// The value is longer than [`HumanDuration::MAX`]: the program could
+    /// not count a date with it (QA round three api-08).
+    #[error("duration {0:?} is too large: at most 3650d")]
     Overflow(String),
 }
+
+/// The moment `wait` after `at`, or the last moment a timestamp has when
+/// that is beyond it: a sum of dates that never panics (QA round three
+/// api-08).
+pub fn after(at: DateTime<Utc>, wait: Duration) -> DateTime<Utc> {
+    TimeDelta::from_std(wait)
+        .ok()
+        .and_then(|wait| at.checked_add_signed(wait))
+        .unwrap_or(DateTime::<Utc>::MAX_UTC)
+}
+
+/// The most days a duration, or a count of days in configuration, may
+/// say: ten years.
+pub const MAX_DAYS: u64 = 3650;
 
 /// A duration that reads and writes as `30m`, `2h` and so on.
 ///
@@ -32,6 +48,12 @@ pub enum DurationParseError {
 pub struct HumanDuration(Duration);
 
 impl HumanDuration {
+    /// The longest duration that is read: ten years, `3650d`. A date can be
+    /// counted from now with it, a few times over, without leaving the
+    /// range a timestamp has; a longer value would make a sum of dates
+    /// panic where it is used (QA round three api-08).
+    pub const MAX: Self = Self(Duration::from_secs(MAX_DAYS * 86_400));
+
     /// Wraps a [`Duration`].
     pub const fn new(duration: Duration) -> Self {
         Self(duration)
@@ -101,7 +123,11 @@ impl FromStr for HumanDuration {
         let millis = value
             .checked_mul(millis_per_unit)
             .ok_or_else(|| DurationParseError::Overflow(text.to_owned()))?;
-        Ok(Self(Duration::from_millis(millis)))
+        let duration = Duration::from_millis(millis);
+        if duration > Self::MAX.0 {
+            return Err(DurationParseError::Overflow(text.to_owned()));
+        }
+        Ok(Self(duration))
     }
 }
 
@@ -178,7 +204,9 @@ impl<'de> Deserialize<'de> for HumanDuration {
 mod tests {
     use std::time::Duration;
 
-    use super::{DurationParseError, HumanDuration};
+    use chrono::{DateTime, Utc};
+
+    use super::{DurationParseError, HumanDuration, after};
 
     fn parse(text: &str) -> Result<Duration, DurationParseError> {
         text.parse::<HumanDuration>().map(HumanDuration::get)
@@ -228,6 +256,36 @@ mod tests {
             parse("18446744073709551615d"),
             Err(DurationParseError::Overflow(_))
         ));
+    }
+
+    #[test]
+    fn a_duration_is_at_most_ten_years() {
+        // api-08: 200000000d parsed, and a date counted with it panicked.
+        assert_eq!(parse("3650d"), Ok(HumanDuration::MAX.get()));
+        assert_eq!(parse("87600h"), Ok(HumanDuration::MAX.get()));
+        for text in ["3651d", "87601h", "200000000d", "315360000001ms"] {
+            let refused = parse(text).unwrap_err();
+            assert!(matches!(refused, DurationParseError::Overflow(_)), "{text}");
+            assert!(refused.to_string().contains("at most 3650d"), "{refused}");
+        }
+        // A date counted from now with the longest duration, many times
+        // over, stays in a timestamp's range.
+        let most = chrono::TimeDelta::from_std(HumanDuration::MAX.get()).unwrap() * 1000;
+        assert!(Utc::now().checked_add_signed(most).is_some());
+    }
+
+    #[test]
+    fn a_date_after_another_stops_at_the_last_a_timestamp_has() {
+        let now = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+        assert_eq!(
+            after(now, Duration::from_secs(60)).timestamp(),
+            1_800_000_060
+        );
+        assert_eq!(after(now, Duration::MAX), DateTime::<Utc>::MAX_UTC);
+        assert_eq!(
+            after(now, Duration::from_hours(200_000_000 * 24)),
+            DateTime::<Utc>::MAX_UTC
+        );
     }
 
     #[test]

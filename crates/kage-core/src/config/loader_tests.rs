@@ -234,7 +234,55 @@ fn values_the_program_cannot_count_with_are_refused() {
         ),
     ] {
         let message = refused(Config::load(None, with(&[(name, value)])));
+        // A duration beyond ten years is refused as it is read, the key
+        // named by the reader (api-08); the others by the check after it.
+        if value.ends_with('d') {
+            assert!(message.contains(key), "{name}: {message}");
+            assert!(message.contains("at most 3650d"), "{name}: {message}");
+        } else {
+            assert!(message.starts_with(key), "{name}: {message}");
+        }
+    }
+    // QA round three api-08: a fetch and a session panicked on a date
+    // counted with these, and `config check` took them.
+    for (name, value, key) in [
+        (
+            "KAGE__ARTIFACTS__RETENTION_DAYS",
+            "4294967295",
+            "artifacts.retention_days",
+        ),
+        ("KAGE__JOBS__RETENTION_DAYS", "3651", "jobs.retention_days"),
+        (
+            "KAGE__PERSONAS__UPGRADE_BACKUP_DAYS",
+            "4294967295",
+            "personas.upgrade_backup_days",
+        ),
+    ] {
+        let message = refused(Config::load(None, with(&[(name, value)])));
         assert!(message.starts_with(key), "{name}: {message}");
+        assert!(message.contains("3650"), "{name}: {message}");
+    }
+    // Every duration key: the bound is the duration's own.
+    for (name, key) in [
+        ("KAGE__SESSIONS__MAX_LIFETIME", "sessions.max_lifetime"),
+        ("KAGE__JOBS__MAX_AGE", "jobs.max_age"),
+        ("KAGE__JOBS__IDEMPOTENCY_TTL", "jobs.idempotency_ttl"),
+        ("KAGE__ROBOTS__TTL", "robots.ttl"),
+        ("KAGE__PROXIES__REPLACE_AFTER", "proxies.replace_after"),
+        (
+            "KAGE__WEBHOOKS__MAX_RETRY_AFTER",
+            "webhooks.max_retry_after",
+        ),
+    ] {
+        let message = refused(Config::load(None, with(&[(name, "200000000d")])));
+        assert!(message.contains(key), "{name}: {message}");
+        assert!(message.contains("at most 3650d"), "{name}: {message}");
+    }
+    for (name, value) in [
+        ("KAGE__ARTIFACTS__RETENTION_DAYS", "3650"),
+        ("KAGE__SESSIONS__MAX_LIFETIME", "3650d"),
+    ] {
+        assert!(Config::load(None, with(&[(name, value)])).is_ok(), "{name}");
     }
     let most = MAX_DATABASE_CONNECTIONS.to_string();
     let at_most = Config::load(None, with(&[("KAGE__DATABASE__MAX_CONNECTIONS", &most)]));

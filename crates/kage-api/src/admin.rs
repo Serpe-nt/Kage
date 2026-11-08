@@ -402,6 +402,7 @@ pub(crate) async fn show_persona(
     responses(
         (status = 200, description = "The persona, retired.", body = PersonaAdminView),
         (status = 404, description = "`persona_not_found`.", body = Problem, content_type = "application/problem+json"),
+        (status = 503, description = "`unavailable`: no proxy pool is configured.", body = Problem, content_type = "application/problem+json"),
     ),
     security(("api_key" = ["admin"]))
 )]
@@ -434,6 +435,7 @@ pub(crate) async fn retire_persona(
         (status = 200, description = "The new persona.", body = PersonaAdminView),
         (status = 404, description = "`persona_not_found`.", body = Problem, content_type = "application/problem+json"),
         (status = 409, description = "`conflict`: the persona is retired, or its proxy cannot carry traffic.", body = Problem, content_type = "application/problem+json"),
+        (status = 503, description = "`unavailable`: no proxy pool is configured, or the persona's sidecar does not answer.", body = Problem, content_type = "application/problem+json"),
     ),
     security(("api_key" = ["admin"]))
 )]
@@ -542,6 +544,7 @@ fn skip_reason(error: &PersonaError) -> Option<String> {
         (status = 200, description = "What the self-tests found; `passed` says whether they passed.", body = SelftestView),
         (status = 404, description = "`persona_not_found`.", body = Problem, content_type = "application/problem+json"),
         (status = 409, description = "`conflict`: the persona is retired, held by other work, or its proxy cannot carry traffic.", body = Problem, content_type = "application/problem+json"),
+        (status = 503, description = "`unavailable`: no proxy pool is configured, or the persona's sidecar does not answer.", body = Problem, content_type = "application/problem+json"),
     ),
     security(("api_key" = ["admin"]))
 )]
@@ -841,6 +844,7 @@ fn replacement_view(outcome: &ReplacementOutcome) -> ReplacementView {
         (status = 200, description = "What became of the request.", body = ReplacementView),
         (status = 404, description = "`proxy_not_found`.", body = Problem, content_type = "application/problem+json"),
         (status = 409, description = "`conflict`: no provider is configured.", body = Problem, content_type = "application/problem+json"),
+        (status = 503, description = "`unavailable`: no proxy pool is configured.", body = Problem, content_type = "application/problem+json"),
     ),
     security(("api_key" = ["admin"]))
 )]
@@ -871,6 +875,7 @@ pub(crate) async fn replace_proxy(
         (status = 200, description = "The proxy after the probe.", body = ProxyAdminView),
         (status = 404, description = "`proxy_not_found`.", body = Problem, content_type = "application/problem+json"),
         (status = 409, description = "`conflict`: the proxy is being replaced or is retired, and is not probed (`not_probed`); or the pool is idle under `egress.mode: direct` (`pool_idle`).", body = Problem, content_type = "application/problem+json"),
+        (status = 503, description = "`unavailable`: no proxy pool is configured.", body = Problem, content_type = "application/problem+json"),
     ),
     security(("api_key" = ["admin"]))
 )]
@@ -942,7 +947,10 @@ pub(crate) struct PoolView {
     path = "/v1/admin/pool",
     tag = "admin",
     operation_id = "get_pool",
-    responses((status = 200, description = "The pool.", body = PoolView)),
+    responses(
+        (status = 200, description = "The pool.", body = PoolView),
+        (status = 503, description = "`unavailable`: no proxy pool is configured.", body = Problem, content_type = "application/problem+json"),
+    ),
     security(("api_key" = ["admin"]))
 )]
 pub(crate) async fn pool(State(state): State<ApiState>) -> ApiResult<Json<PoolView>> {
@@ -1072,8 +1080,14 @@ pub(crate) async fn replace_site_scout(
     State(state): State<ApiState>,
     Path(site): Path<String>,
 ) -> ApiResult<Response> {
-    let host = kage_core::policy::normalize_host(&site)
-        .ok_or_else(|| ApiError::new(ErrorCode::ValidationFailed, "a site is named by a host"))?;
+    // A host name as the policy preview takes one (F136): a wildcard or a
+    // label over 63 characters names no site (QA round three api-03).
+    let host = crate::policies::host_named(&site).ok_or_else(|| {
+        ApiError::field(
+            "site",
+            "a site is named by a host: no wildcard, no empty label, no label over 63 characters",
+        )
+    })?;
     let site = kage_crawl::site::of_host(&host);
     let engine = engine(&state)?;
     let Some(new) = engine

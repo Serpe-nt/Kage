@@ -609,8 +609,15 @@ impl Config {
         if self.database.connect_timeout.get().is_zero() {
             return invalid("database.connect_timeout must be longer than zero");
         }
-        if self.artifacts.retention_days == 0 {
-            return invalid("artifacts.retention_days must be at least 1");
+        // A bound the program can count a date with: beyond it every
+        // artifact's deadline overflowed and every fetch panicked (api-08).
+        if self.artifacts.retention_days == 0
+            || u64::from(self.artifacts.retention_days) > crate::duration::MAX_DAYS
+        {
+            return Err(ConfigError::Invalid(format!(
+                "artifacts.retention_days must be between 1 and {}",
+                crate::duration::MAX_DAYS
+            )));
         }
         if self.artifacts.sweep_interval.get() < Duration::from_secs(1) {
             return invalid("artifacts.sweep_interval must be at least 1s");

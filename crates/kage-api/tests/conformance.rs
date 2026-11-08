@@ -145,6 +145,71 @@ async fn a_nul_is_refused_naming_the_member_and_nothing_is_kept() {
 }
 
 #[tokio::test]
+async fn a_body_or_a_member_that_is_an_array_is_no_object() {
+    // QA round three api-01: an array was read as the object by the order
+    // of its fields: a fetch made, a session opened, a wait taken.
+    let mut api = Api::start(1, 149, FAST).await;
+    let token = api
+        .key(&[Scope::Fetch, Scope::Jobs, Scope::Sessions, Scope::Admin])
+        .await;
+    let page = Api::url("/array");
+    for (at, body) in [
+        ("/v1/fetch", json!([page, "GET", {}, null, 0])),
+        ("/v1/fetch", json!([])),
+        ("/v1/sessions", json!(["qa3-api01"])),
+        ("/v1/admin/keys", json!(["k", ["fetch"]])),
+    ] {
+        let problem = api
+            .post(&token, at, &body)
+            .await
+            .problem(StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+        let detail = problem["detail"].as_str().unwrap();
+        assert!(detail.contains("an object"), "{at} {body}: {detail}");
+        assert!(!detail.contains("elements"), "{at} {body}: {detail}");
+    }
+    for (at, body, member) in [
+        (
+            "/v1/fetch",
+            json!({ "url": page, "level": 2, "wait": ["load", null, 0] }),
+            "wait",
+        ),
+        (
+            "/v1/jobs",
+            json!({ "type": "batch", "items": [{ "url": page, "level": 2, "wait": ["load"] }] }),
+            "items[0].wait",
+        ),
+        (
+            "/v1/jobs",
+            json!({ "type": "flow", "level": 2, "actions": [
+                { "action": "goto", "url": page },
+                ["click", "#next"],
+            ] }),
+            "actions[1]",
+        ),
+    ] {
+        let reply = api.post(&token, at, &body).await;
+        assert_eq!(field(&reply), member, "{at} {body}");
+    }
+    // Nothing of them was fetched or kept.
+    let requests: i64 = sqlx::query_scalar("SELECT count(*) FROM requests")
+        .fetch_one(api.lab.store().pool())
+        .await
+        .unwrap();
+    assert_eq!(requests, 0);
+    let sessions: i64 = sqlx::query_scalar("SELECT count(*) FROM sessions")
+        .fetch_one(api.lab.store().pool())
+        .await
+        .unwrap();
+    assert_eq!(sessions, 0);
+    // Control: the same as objects are read.
+    let reply = api
+        .post(&token, "/v1/sessions", &json!({ "id": "qa3-api01" }))
+        .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.json());
+    api.shut_down().await;
+}
+
+#[tokio::test]
 async fn a_refusal_while_reading_names_its_member_its_step_and_its_item() {
     // F115 (api-06, api-07, jobs-08).
     let mut api = Api::start(1, 149, FAST).await;
@@ -669,6 +734,65 @@ async fn a_refusal_of_the_metrics_or_the_docs_is_on_the_trail() {
 }
 
 #[tokio::test]
+async fn an_admin_call_the_keys_limits_refuse_is_on_the_trail() {
+    // QA round three api-04: the limiter's `429` left no event.
+    let mut api = Api::start(0, 149, FAST).await;
+    let auditor = api.key(&[Scope::Admin]).await;
+    let (limited_id, limited) = api
+        .key_with(
+            &[Scope::Admin, Scope::Fetch],
+            kage_core::domain::KeyLimits {
+                requests_per_minute: 2,
+                ..common::ROOMY
+            },
+        )
+        .await;
+    for _ in 0..2 {
+        assert_eq!(
+            api.get(&limited, "/v1/admin/keys").await.status,
+            StatusCode::OK
+        );
+    }
+    for at in ["/v1/admin/pool", "/metrics", "/docs/"] {
+        api.get(&limited, at)
+            .await
+            .problem(StatusCode::TOO_MANY_REQUESTS, "rate_limited");
+    }
+    // Control: a request of the key that is no admin call is refused as
+    // well, and is no event.
+    api.get(&limited, "/v1/policies/domains/example.org")
+        .await
+        .problem(StatusCode::TOO_MANY_REQUESTS, "rate_limited");
+    let trail = audit(&api, &auditor).await;
+    let mine: Vec<&Value> = trail
+        .iter()
+        .filter(|event| event["api_key_id"] == limited_id.to_string())
+        .collect();
+    assert_eq!(mine.len(), 5, "{mine:?}");
+    for (action, at) in [
+        ("admin.pool.show", "/v1/admin/pool"),
+        ("admin.metrics.read", "/metrics"),
+        ("admin.docs.read", "/docs/"),
+    ] {
+        let event = mine
+            .iter()
+            .find(|event| event["action"] == action)
+            .unwrap_or_else(|| panic!("no {action} in {mine:?}"));
+        assert_eq!(event["outcome"], "denied", "{event}");
+        assert_eq!(event["details"]["path"], at, "{event}");
+        assert_eq!(event["details"]["status"], 429, "{event}");
+        assert_eq!(event["details"]["code"], "rate_limited", "{event}");
+        assert_eq!(event["details"]["limit"], "requests_per_minute", "{event}");
+    }
+    let shown = mine
+        .iter()
+        .filter(|event| event["action"] == "admin.key.list" && event["outcome"] == "success")
+        .count();
+    assert_eq!(shown, 2, "{mine:?}");
+    api.shut_down().await;
+}
+
+#[tokio::test]
 async fn the_preview_is_a_host_names_and_shows_the_cache_that_holds() {
     // F136 (policy-06, extract-11).
     let rules = "defaults: { pacing: fast, active_hours: ignore }\n\
@@ -744,6 +868,23 @@ async fn a_stopping_server_answers_until_its_requests_have_ended() {
     assert_eq!(status, 503, "{answer}");
     assert_eq!(report.unwrap()["status"], "stopping");
     assert!(identified);
+    // QA round three api-06: a fetch that arrives now is not served, and
+    // nothing of it is a result: `503 unavailable`, as for a job.
+    let late = json!({ "url": Api::url("/late"), "level": 0 }).to_string();
+    let answer = served
+        .exchange(
+            format!(
+                "POST /v1/fetch HTTP/1.1\r\nHost: kage\r\nAuthorization: Bearer {token}\r\n\
+                 Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{late}",
+                late.len()
+            )
+            .as_bytes(),
+            Duration::from_secs(5),
+        )
+        .await;
+    let (status, problem, _) = parsed(&answer);
+    assert_eq!(status, 503, "{answer}");
+    assert_eq!(problem.unwrap()["code"], "unavailable", "{answer}");
     assert!(!settled.is_finished());
     // The request in flight ends, and only then is the server settled.
     let answer = read_all(&mut in_flight, Duration::from_secs(10)).await;

@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
 
+use crate::duration::after;
 use crate::ids::{ApiKeyId, PersonaId};
 
 /// Longest session id a caller may supply.
@@ -139,7 +140,8 @@ impl Session {
     /// never past the maximum lifetime.
     pub fn touch(&mut self, now: DateTime<Utc>, limits: SessionLimits) {
         self.last_used_at = now;
-        self.expires_at = (now + limits.idle_ttl).min(self.created_at + limits.max_lifetime);
+        self.expires_at =
+            after(now, limits.idle_ttl).min(after(self.created_at, limits.max_lifetime));
     }
 
     /// Whether the session has ended at `now`.

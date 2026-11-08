@@ -441,8 +441,10 @@ pub(super) fn validate(
             "personas.archive_after must be at most {MAX_PERSONA_DAYS}d"
         ));
     }
-    if personas.upgrade_backup_days == 0 {
-        return fail("personas.upgrade_backup_days must be at least 1");
+    if personas.upgrade_backup_days == 0 || personas.upgrade_backup_days > MAX_PERSONA_DAYS {
+        return Err(format!(
+            "personas.upgrade_backup_days must be between 1 and {MAX_PERSONA_DAYS}"
+        ));
     }
     if personas.sweep_interval.get() < second {
         return fail("personas.sweep_interval must be at least 1s");

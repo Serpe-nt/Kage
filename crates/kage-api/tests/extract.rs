@@ -520,9 +520,22 @@ async fn the_operator_gives_a_site_another_scout_and_the_trail_says_so() {
             .contains("keeps the scout")
     );
     assert_eq!(scout_row().await, second);
-    api.post(&admin, "/v1/admin/sites/a%20b/scout", &json!({}))
-        .await
-        .problem(StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+    // What is no host name names no site, as at the policy preview (F136,
+    // QA round three api-03): a wildcard was the site under it, and a
+    // label over 63 characters a site of its own.
+    let long = format!("{}.test", "a".repeat(70));
+    for named in ["a%20b", "*.kage.test", "x..kage.test", long.as_str()] {
+        let problem = api
+            .post(
+                &admin,
+                &format!("/v1/admin/sites/{named}/scout"),
+                &json!({}),
+            )
+            .await
+            .problem(StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+        assert_eq!(problem["field"], "site", "{named}");
+    }
+    assert_eq!(scout_row().await, second);
     // Only an admin key may.
     api.post(&token, "/v1/admin/sites/kage.test/scout", &json!({}))
         .await
@@ -534,7 +547,7 @@ async fn the_operator_gives_a_site_another_scout_and_the_trail_says_so() {
         .iter()
         .filter(|event| event["action"] == "admin.site.scout")
         .collect();
-    assert_eq!(scouted.len(), 4, "{events:?}");
+    assert_eq!(scouted.len(), 7, "{events:?}");
     // Newest first; a call that was refused still names what it was
     // aimed at, as the path said it.
     let said: Vec<(&str, &str, &Value)> = scouted
@@ -542,7 +555,8 @@ async fn the_operator_gives_a_site_another_scout_and_the_trail_says_so() {
         .map(|event| {
             (
                 event["outcome"].as_str().unwrap(),
-                event["target"].as_str().unwrap(),
+                // A target longer than an id is not kept.
+                event["target"].as_str().unwrap_or(""),
                 &event["details"]["code"],
             )
         })
@@ -551,13 +565,16 @@ async fn the_operator_gives_a_site_another_scout_and_the_trail_says_so() {
         said,
         [
             ("denied", "kage.test", &json!("scope_missing")),
+            ("failure", "", &json!("validation_failed")),
+            ("failure", "x..kage.test", &json!("validation_failed")),
+            ("failure", "*.kage.test", &json!("validation_failed")),
             ("failure", "a%20b", &json!("validation_failed")),
             ("failure", "kage.test", &json!("no_matching_persona")),
             ("success", "kage.test", &Value::Null),
         ]
     );
-    assert_eq!(scouted[3]["details"]["result"]["scout"], second.as_str());
-    assert_eq!(scouted[3]["details"]["result"]["previous"], first.as_str());
+    assert_eq!(scouted[6]["details"]["result"]["scout"], second.as_str());
+    assert_eq!(scouted[6]["details"]["result"]["previous"], first.as_str());
     api.shut_down().await;
 }
 

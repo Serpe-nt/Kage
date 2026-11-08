@@ -18,6 +18,8 @@
 //!   route is the pattern, the method one HTTP defines or `other`),
 //!   `kage_api_request_duration_seconds{route,method}`,
 //!   `kage_api_requests_in_flight`, `kage_api_refusals_total{code}`;
+//! - the database's server lock: `kage_server_lock_held` and
+//!   `kage_server_lock_confirmed_timestamp_seconds` ([`server_lock`]);
 //! - the sidecars' series (`sidecar_contexts_open`,
 //!   `sidecar_navigation_duration_seconds` and the rest), fetched from
 //!   each sidecar that answers and merged in, so that Prometheus needs one
@@ -262,7 +264,16 @@ fn describe() {
     );
     metrics::describe_counter!(
         "kage_api_refusals_total",
-        "Requests refused before a handler ran, by error code"
+        "Requests refused for the key, its scope, its limits or the request's head, by error code"
+    );
+    metrics::describe_gauge!(
+        "kage_server_lock_held",
+        "1 while the latest look found this server holding its database's lock (ADR 0005)"
+    );
+    metrics::describe_gauge!(
+        "kage_server_lock_confirmed_timestamp_seconds",
+        metrics::Unit::Seconds,
+        "When this server last saw its database's lock held, as a Unix time"
     );
     metrics::describe_counter!(
         "kage_crawl_pages_total",
@@ -343,7 +354,25 @@ impl Drop for InFlight {
     }
 }
 
-/// Counts a request that was refused before its handler ran.
+/// What the server knows of its database's lock (ADR 0005, F174; QA round
+/// three lock-02): `kage_server_lock_held` is 1 while the latest look
+/// found the lock held and 0 from a look that did not until it is held
+/// again; `kage_server_lock_confirmed_timestamp_seconds` is when it was
+/// last seen held. A look that hangs (the lock's connection cut off) moves
+/// neither, so the age of the timestamp is what tells an operator that the
+/// server serves on a lock it cannot confirm.
+pub fn server_lock(held: bool, at: chrono::DateTime<chrono::Utc>) {
+    metrics::gauge!("kage_server_lock_held").set(if held { 1.0 } else { 0.0 });
+    if held {
+        // Milliseconds are what a timestamp of the text format needs.
+        #[allow(clippy::cast_precision_loss)]
+        let seconds = at.timestamp_millis() as f64 / 1000.0;
+        metrics::gauge!("kage_server_lock_confirmed_timestamp_seconds").set(seconds);
+    }
+}
+
+/// Counts a request that was refused for the key, its scope, its limits or
+/// its head.
 pub(crate) fn refusal(code: &'static str) {
     metrics::counter!("kage_api_refusals_total", "code" => code).increment(1);
 }
@@ -470,7 +499,31 @@ pub(crate) fn merge(expositions: &[String]) -> String {
 mod tests {
     use std::time::Duration;
 
-    use super::{gauge_family, local, merge, refusal, register, request};
+    use super::{gauge_family, local, merge, refusal, register, request, server_lock};
+
+    #[test]
+    fn the_server_lock_says_whether_it_is_held_and_since_when() {
+        // QA round three lock-02: no series said a lock was lost.
+        let (recorder, handle) = local().unwrap();
+        let first = chrono::DateTime::from_timestamp(1_800_000_000, 500_000_000).unwrap();
+        metrics::with_local_recorder(&recorder, || server_lock(true, first));
+        let text = handle.render();
+        assert!(text.contains("kage_server_lock_held 1"), "{text}");
+        assert!(
+            text.contains("kage_server_lock_confirmed_timestamp_seconds 1800000000.5"),
+            "{text}"
+        );
+        // A look that did not find it: held is 0, and the last moment it
+        // was seen held stays.
+        let later = first + chrono::TimeDelta::seconds(15);
+        metrics::with_local_recorder(&recorder, || server_lock(false, later));
+        let text = handle.render();
+        assert!(text.contains("kage_server_lock_held 0"), "{text}");
+        assert!(
+            text.contains("kage_server_lock_confirmed_timestamp_seconds 1800000000.5"),
+            "{text}"
+        );
+    }
 
     #[test]
     fn every_counter_whose_labels_are_known_exists_from_zero() {

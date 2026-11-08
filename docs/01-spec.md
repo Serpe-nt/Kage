@@ -2542,7 +2542,11 @@ minute like any call.
   the member as `field` (`actions[2].selector`, `items[1].timeout_ms`,
   `defaults.level`), with `step` for a flow's step and `item` for a
   batch's item (F112, F115, F134). Every endpoint reads a body by these
-  rules, `POST /v1/admin/personas/{id}/selftest` included (F113).
+  rules, `POST /v1/admin/personas/{id}/selftest` included (F113). What
+  the document gives as an object is read from a JSON object only: an
+  array is `422 validation_failed` whether it is the body (a fetch, a
+  session, a key), a member (`wait`) or a flow's step, never read by the
+  order of the type's fields (QA round three api-01).
 - Errors follow RFC 9457 problem details (`application/problem+json`) with
   a stable `code`, the request's id as `request_id`, and what a client
   needs to act as further members (`field`, `header`, `retry_after_s`,
@@ -2551,7 +2555,12 @@ minute like any call.
   document, and every operation of the document names every status it
   answers: its own, and those of the layers around it (`401`, `403`,
   `429`, `500` where a key is taken; `400`, `408`, `415`, `422` where a
-  body is; `413`, `414`, `431` everywhere; F114). A path parameter that
+  body is; `422` where a query parameter is, one that cannot be read
+  being `validation_failed` with `in: query`; `413`, `414`, `431`
+  everywhere; F114). An operation that needs the proxy pool names the
+  `503 unavailable` it answers without one, and a session's id that is
+  not one a session can have is `422 invalid_session_id` at its
+  `GET` and `DELETE` (QA round three api-02, api-09). A path parameter that
   cannot be read (an escape that is no UTF-8, `%ff`) is `400
   invalid_request`. The one exception is what the HTTP layer answers
   before the API sees a request: a head that is no HTTP (`400`) and a head
@@ -2559,7 +2568,12 @@ minute like any call.
   `X-Request-Id`, and the connection is closed (F134).
 - A fetch that was made answers `200` whatever the site did: a block is
   the result's `outcome`, not an HTTP error. Only a request that cannot be
-  made as asked, or that the API cannot serve, is a problem.
+  made as asked, or that the API cannot serve, is a problem. A fetch that
+  arrives once the server is told to stop is `503 unavailable`, as a job
+  is, and nothing of it is kept or counted against the key's budget; one
+  that was already waiting for a persona is answered `provider_error`
+  with `shutting_down` (QA round three api-06). A fetch whose work failed
+  inside Kage (a panic) is `500 internal`, never told as a stop (api-08).
 - Every response has `X-Request-Id` (a UUIDv7 the server makes; one a
   client sends is not taken over); `Idempotency-Key` is honored on
   `POST /v1/jobs` for 24 h (`jobs.idempotency_ttl`; §16.6).
@@ -2629,7 +2643,12 @@ scope included, at `/metrics` and `/docs` too: `admin.metrics.read`,
 to `audit_events` with the key, the action (`admin.persona.retire`,
 `key.create`), its target and its outcome; never a token or a hash. A
 command whose event cannot be written shows what it did and ends
-non-zero, saying so (F135). So is every cancel of a job and every read
+non-zero, saying so (F135). An admin call that the key's own limits
+refuse (`429 rate_limited`, `concurrency_limited`) is on the trail too,
+`denied` with its status, its code and the `limit`, at `/metrics` and
+`/docs` as well (QA round three api-04); a request refused before its
+key is known (no key, a wrong one, the API's own limit) has no key to
+be written under. So is every cancel of a job and every read
 of another key's job (`job.cancel`, `job.show`, `job.items`, with the
 job's key as `owner_key`; F117).
 
@@ -2651,7 +2670,7 @@ job's key as `owner_key`; F117).
 | `GET /v1/admin/proxies[?all=]`, `POST …/{id}/replace`, `POST …/{id}/health` | admin | Never a proxy's user name or password |
 | `GET /v1/admin/pool` | admin | Pool and bandwidth summary |
 | `POST /v1/admin/policies/reload` | admin | Force reload; an invalid file changes nothing and is `422` |
-| `POST /v1/admin/sites/{site}/scout` | admin | Give a site another scout (§14); `409 no_matching_persona` when nobody else may ask |
+| `POST /v1/admin/sites/{site}/scout` | admin | Give a site another scout (§14); `409 no_matching_persona` when nobody else may ask. What is no host name, by the preview's rule (a wildcard, an empty label, a label over 63 characters), is `422 validation_failed` with `field: site` (QA round three api-03) |
 | `GET/POST /v1/admin/keys`, `DELETE …/{id}`, `POST …/{id}/rotate` | admin | Key management; a token is in the answer of a creation and of a rotation only, with `Cache-Control: no-store` |
 | `GET /v1/admin/audit?cursor=&limit=` | admin | Newest first, at most 200 a page |
 | `POST /v1/admin/purge` | admin | `{ key_id, before? }`: deletes what a key fetched before a moment (now unless said): its finished jobs with everything of theirs, and every other result, its attempts and its artifacts, before their retention ends. What is still somebody's work stays: a request that has not ended, and the request an open item of a job waits on. Answers with how many requests, jobs and artifacts went; on the audit log as `admin.data.purge` (F33) |
@@ -3129,10 +3148,17 @@ reads (`sslmode`, `application_name`, `options` and the rest of sqlx's
 list): another is refused at load, naming the parameter and never its
 value, which the driver would have written to the log (F133). A URL key
 carries no credentials: the sidecars' URLs, a self-test page, an origin
-of `server.cors_allowed_origins` (F133). What the program cannot count
-with is refused at load: `database.max_connections` at most 1000,
+of `server.cors_allowed_origins`, `webhooks.allowed_origins` or
+`webhooks.private_origins` (F133); a refused entry is named by its place
+(`webhooks.allowed_origins[1]`), never repeated (QA round three api-07).
+What the program cannot count with is refused at load: `database.max_connections` at most 1000,
 `personas.retention_days` and `personas.archive_after` at most ten years,
-`proxies.health.interval` at most a day (F137). `kage config check`
+`proxies.health.interval` at most a day (F137); every duration at most
+ten years (`3650d`), and `artifacts.retention_days`,
+`jobs.retention_days` and `personas.upgrade_backup_days` at most 3650
+(QA round three api-08: a date counted with a longer one panicked every
+fetch and every session). A date counted from a duration stops at the
+last one a timestamp has rather than panic. `kage config check`
 validates and prints the effective config as JSON with secrets redacted,
 and reports under `proxies` the provider in force, its capabilities and
 the operations it does not offer, the declared list's plain exits, the
@@ -3616,9 +3642,16 @@ are gzip-compressed on disk.
   `kage_api_request_duration_seconds{route,method}`,
   `kage_api_requests_in_flight` and `kage_api_refusals_total{code}` (what
   was refused for the key, its scope, its limits or the target's length;
-  `scope_missing` counted where a handler asks for its scope, F182, and
+  `scope_missing` counted where a handler asks for its scope, F182;
   `jobs_limited` where `POST /v1/jobs` refuses a job for the key's open
-  jobs, L2).
+  jobs, L2; `budget_exhausted` where a fetch spends its page, QA round
+  three api-05). The server's lock on its database (§16.6, ADR 0005) is
+  `kage_server_lock_held` (1 while the latest look found it held, 0 from
+  a look that did not until it is held again) and
+  `kage_server_lock_confirmed_timestamp_seconds` (when it was last seen
+  held; a look that hangs on a cut connection moves neither, so the age
+  of this timestamp is what shows a server serving on a lock it cannot
+  confirm; lock-02).
   Jobs add `kage_jobs{job_type,state}`, `kage_job_items{state}` (what
   waits and what is being worked) and `kage_webhook_deliveries_pending`,
   read from the store at the scrape, and `kage_jobs_accepted_total{job_type,level}`,
