@@ -431,7 +431,7 @@ describe('findBreakingChanges', () => {
     delete schemas['PageLink'];
     delete schemas['ScrollEnd'];
     before.info['version'] = '1.2.0';
-    expect(now.info['version']).toBe('1.8.0');
+    expect(now.info['version']).toBe('1.9.0');
     const current = now.components['schemas'] as Record<string, JsonObject>;
     // Asked for with optional fields only, so that a caller of 1.2.0 is still served.
     for (const [name, fields] of [
@@ -602,6 +602,34 @@ describe('findBreakingChanges', () => {
     );
     expect(removed).toHaveLength(1);
     expect(removed[0]).toMatch(/opened_tabs: is no longer returned$/);
+  });
+
+  it('takes a flow’s body limit and a page’s unanswered address (1.9.0) as additions', () => {
+    const now = buildOpenApiDocument();
+    // The document as it was at 1.8.0: a flow kept 10 MB whatever was
+    // asked, and a page named no navigation that never answered.
+    const before = structuredClone(now);
+    const schemas = before.components['schemas'] as Record<string, JsonObject>;
+    delete properties(schemas['FlowRequest'])['max_body_bytes'];
+    delete properties(schemas['PageResult'])['unanswered_url'];
+    before.info['version'] = '1.8.0';
+    const current = now.components['schemas'] as Record<string, JsonObject>;
+    // Optional in a request, so that a Kage of 1.8.0 is still served
+    // (extract-07); optional in an answer, so that a Kage of 1.9.0 reads a
+    // page of a sidecar of 1.8.0 (flows-04).
+    const flow = named(current, 'FlowRequest');
+    expect(properties(flow)['max_body_bytes']).toMatchObject({ type: 'integer', minimum: 1 });
+    expect(flow['required'] ?? []).not.toContain('max_body_bytes');
+    const page = named(current, 'PageResult');
+    expect(page['required'] ?? []).not.toContain('unanswered_url');
+    expect(checkBreaking(before, now)).toEqual({ changes: [], majorBumped: false, ok: true });
+    // The other way round a page could no longer name it.
+    const removed = findBreakingChanges(now, before).map(
+      (change) => `${change.where}: ${change.what}`,
+    );
+    expect(removed.some((line) => line.endsWith('unanswered_url: is no longer returned'))).toBe(
+      true,
+    );
   });
 
   it('compares a schema used twice only once per direction', () => {

@@ -2963,6 +2963,30 @@ export function defineParitySuite(subject: ParitySubject): void {
       expect(Math.abs((medians[0] ?? 0) - (medians[1] ?? 0))).toBeGreaterThan(planned - 25);
     });
 
+    it('names the address a click sent the tab to that never answered (QA round three, flows-04)', async () => {
+      const run = await withContext('flow-onward', (context) =>
+        flow(context, {
+          timeout_ms: 30_000,
+          actions: [
+            { action: 'goto', url: named('/onward') },
+            { action: 'click', selector: '#onward', timeout_ms: 3000 },
+          ],
+        }),
+      );
+      // The tab still shows the page it was on; the timeout is the
+      // address it was sent to, which the result names.
+      expect(run.final.result.final_url).toBe(named('/onward'));
+      expect(run.final.result.unanswered_url).toBe(named('/slow?ms=15000'));
+      // A page whose every navigation was answered names none.
+      const answered = await withContext('flow-answered', (context) =>
+        flow(context, {
+          timeout_ms: 30_000,
+          actions: [{ action: 'goto', url: named('/landing') }],
+        }),
+      );
+      expect(answered.final.result.unanswered_url ?? null).toBeNull();
+    });
+
     it('runs the other steps of a flow, by the driver when told, and stops at the first failure', async () => {
       const run = await withContext('flow-rest', (context) =>
         flow(context, {

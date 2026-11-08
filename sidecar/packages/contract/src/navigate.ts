@@ -734,6 +734,14 @@ export const PageResultSchema = z
     links_truncated: z
       .boolean()
       .describe('Whether the document held more links than `links` lists.'),
+    unanswered_url: z
+      .string()
+      .max(8192)
+      .nullable()
+      .optional()
+      .describe(
+        "The address the tab was sent to after the document it shows (a click, a key, a script, a `back`) when no answer to it had come by the capture: the navigation under way that the capture's error or the step's time ran out on. Null when every navigation of the tab was answered, and when `final_url` already names it (the browser's own error page). Absent from a sidecar of before 1.9.0. Since 1.9.0 (QA round three, flows-04).",
+      ),
   })
   .meta({ id: 'PageResult', description: 'What one page load produced.' });
 export type PageResult = z.infer<typeof PageResultSchema>;

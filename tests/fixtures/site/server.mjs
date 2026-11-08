@@ -570,6 +570,10 @@ const routes = {
   '/slow': (_req, res, url) => {
     setTimeout(() => html(res, page('Slow', '<h1>Slow</h1>')), Number(url.searchParams.get('ms') ?? '1000'));
   },
+  // A link to a page that answers after 15 s: a click on it sends the
+  // tab where nothing answers in time (QA round three, flows-04).
+  '/onward': (_req, res) =>
+    html(res, page('Onward', '<p><a id="onward" href="/slow?ms=15000">Onward</a></p>')),
   '/late': (_req, res) =>
     html(res, page('Late', '<h1>Late</h1><script>setTimeout(() => { const p = document.createElement("p"); p.id = "late"; p.textContent = "here"; document.body.appendChild(p); }, 700);</script>')),
   '/events.html': (_req, res) => html(res, EVENTS_PAGE),

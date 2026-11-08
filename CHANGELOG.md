@@ -525,13 +525,20 @@ version's date is the day, in UTC, its tag was made.
   level 0; a flow kept 10 MB whatever was asked. The browser path is now
   sent the request's limit, else the operator's, never more than the
   operator's, and the sidecar's flow request takes `max_body_bytes` as its
-  navigation does (sidecar contract: an optional field).
+  navigation does (sidecar contract 1.9.0: an optional field).
 - **A site held by its own pause is not said to want a persona (QA round
   three, level0-02).** A request or a job's item held past its patience by
   the site's pause after server errors was told `no_persona`, also at
   level 0, which has no persona: an operator sent to `kage persona list`
   found nothing wrong. It is now told `server_errors`, and level 0's wait
   for a `Crawl-delay` `crawl_delay`; `no_persona` keeps its meaning.
+- **A later site a click led to is booked its own timeouts (QA round
+  three, flows-04).** F162 reached a `goto` only: a flow whose click sent
+  the tab to another site that never answered paused the flow's first
+  site, which had answered every page, while the silent site went on
+  being asked. The sidecar now names the address the tab was sent to
+  that had not answered (`unanswered_url` of a page result, sidecar
+  contract 1.9.0), and its timeout is that site's.
 
 ### Changed
 

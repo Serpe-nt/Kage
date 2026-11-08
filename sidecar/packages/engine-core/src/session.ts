@@ -2345,6 +2345,11 @@ export class PageSession {
       seenSentTo !== null && withoutFragment(seenSentTo) !== loadedAt ? seenSentTo : null;
     const errorTarget = errorDocument === null ? null : errorPageTarget(errorDocument);
     const sentTo = refusedTo ?? sentOn ?? errorTarget ?? seenSentTo;
+    // Where the tab was sent after the document it shows and nothing came
+    // back by now: a click to a later site that never answered is that
+    // site's timeout, not the shown page's (QA round three, flows-04). The
+    // browser's own error page and a refused redirect name it already.
+    const unansweredUrl = failedThere || refusedTo !== null ? null : sentOn;
     // Where the browser showed its own page in place of an error answer to
     // the very document it names (Firefox, for an error status with an
     // empty body), the answer's status is what the browser saw, and the
@@ -2516,6 +2521,7 @@ export class PageSession {
       behavior: extra.behavior,
       links: this.unanswering === null ? (links?.links ?? null) : null,
       links_truncated: this.unanswering === null && (links?.truncated ?? false),
+      unanswered_url: unansweredUrl,
     };
   }
 

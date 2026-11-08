@@ -739,7 +739,11 @@ pub fn attempt_seed(persona: &Seed, request: RequestId, n: u32) -> Seed {
 /// page the persona read. A flow whose `goto` to a later site found no
 /// server answering there in time (a timeout, a server that did not
 /// answer) ended there as well: what that says of a site's health is the
-/// later site's (F162). `None` for an attempt that ended on its own
+/// later site's (F162). So is a timeout or a server error of an address
+/// the tab was sent to (a click, a key, a script) that never answered
+/// while it still showed the page before it: the browser names it
+/// (`unanswered_url`), and what came of it is that site's, not the shown
+/// page's (QA round three, flows-04). `None` for an attempt that ended on its own
 /// domain, and for one that brought no site's page back otherwise (a
 /// refused hop, a failed connection, the proxy). The host is in its
 /// normal form (F104), as the request's domain and the flow's later sites
@@ -748,7 +752,12 @@ fn shown_by(course: &Course, output: &AttemptOutput) -> Option<String> {
     if output.outcome() == Outcome::SsrfDenied {
         return None;
     }
-    let ended = if output.status.is_some() {
+    let unanswered = (output.courtesy == Courtesy::ServerError)
+        .then(|| unanswered_at(output))
+        .flatten();
+    let ended = if let Some(unanswered) = unanswered {
+        unanswered
+    } else if output.status.is_some() {
         Url::parse(output.final_url.as_deref()?).ok()?
     } else if output.courtesy == Courtesy::ServerError {
         failed_goto(&course.order, output)?
@@ -760,6 +769,13 @@ fn shown_by(course: &Course, output: &AttemptOutput) -> Option<String> {
         .host_str()?
         .to_ascii_lowercase();
     (host != course.domain).then_some(host)
+}
+
+/// The address the tab of a browser attempt was sent to and that had not
+/// answered when its page was captured.
+fn unanswered_at(output: &AttemptOutput) -> Option<Url> {
+    let page = output.page.as_ref()?;
+    Url::parse(page.unanswered_url.as_deref()?).ok()
 }
 
 /// The address of the `goto` step a flow's attempt ended at, when that
