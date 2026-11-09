@@ -79,7 +79,7 @@ impl MigrationStatus {
 /// the database; what was under way on a connection in use is ended with
 /// the store's sessions ([`Store::end_own_sessions`]; QA round four
 /// lock-01, review of #98).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Store {
     pool: PgPool,
     fenced: Arc<AtomicBool>,
@@ -87,6 +87,18 @@ pub struct Store {
     /// fence points the pool elsewhere, and the store still ends its own
     /// sessions with these (review of #98).
     options: Arc<PgConnectOptions>,
+}
+
+/// What a store shows of itself: its pool and whether it is fenced, never
+/// its connect options, which hold the database's password (review of
+/// #98: a derived `Debug` printed them).
+impl std::fmt::Debug for Store {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Store")
+            .field("pool", &self.pool)
+            .field("fenced", &self.fenced.load(Ordering::SeqCst))
+            .finish_non_exhaustive()
+    }
 }
 
 /// Where a fenced pool would connect: a socket that is never there, so
@@ -441,7 +453,28 @@ impl Store {
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use super::{MigrationState, MigrationStatus, refuse_when_fenced};
+    use std::str::FromStr;
+    use std::sync::Arc;
+
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+
+    use super::{MigrationState, MigrationStatus, Store, refuse_when_fenced};
+
+    /// Review of #98: a store's `Debug` names neither its password nor its
+    /// address; a derived one printed its connect options in full.
+    #[tokio::test]
+    async fn a_stores_debug_shows_no_password() {
+        let options =
+            PgConnectOptions::from_str("postgres://kage:s3cret-pw@db.example:5432/kage").unwrap();
+        let store = Store {
+            pool: PgPoolOptions::new().connect_lazy_with(options.clone()),
+            fenced: Arc::new(AtomicBool::new(false)),
+            options: Arc::new(options),
+        };
+        let shown = format!("{store:?}");
+        assert!(!shown.contains("s3cret-pw"), "{shown}");
+        assert!(shown.contains("fenced: false"), "{shown}");
+    }
 
     /// Review of #98: a connection opened after the fence is refused.
     #[test]
