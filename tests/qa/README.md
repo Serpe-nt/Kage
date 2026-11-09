@@ -133,6 +133,7 @@ images only with `QA_PREPARE=images`.
 | `type4.sh STACK ENGINE TEXT_I [TEXT_T]` | a level 3 flow types into the page and prints the analysis (`TYPOS`, `HUMAN`, `EXTRA`, `SESSION`) |
 | `layout.sh COUNTRY LOCALE [TEXT]` | a direct-mode stack of its own with that declared country and locale; types with each engine |
 | `tto.sh STACK ENGINE KIND [BUDGET_MS]` | a step of KIND runs out of its time; the next request's page records what it hears (`CROSS=1`: another key's request, `WAITB`) |
+| `p85.sh STACK [PARTS]` | probes next to #85's roads: repeated header lines, a 304 naming other fields, Firefox's kept body (`P85_ONLY`), a flow's bound, hidden links, a 304 with nothing kept, downloads |
 | `sel4.sh`, `f235.sh`, `f235p.sh` | a select's keys as a page hears them; a click to a page that never answers (both engines, steps after it, the pause it books) |
 
 `sweep4b.sh` runs this part's rows of rounds one to three (`r1-shared`,
