@@ -383,7 +383,8 @@ version's date is the day, in UTC, its tag was made.
   now asks the display's keyboard which key each character is on, on any
   of its levels, and such a press waits until 15 to 45 ms after the
   release; a text with no such pair is planned exactly as before
-  (spec §10.4).- **A letter the layout lacks is typed as a hand types it (QA round
+  (spec §10.4).
+- **A letter the layout lacks is typed as a hand types it (QA round
   three, browser-07).** A character the persona's layout has no key for
   (`é`, `ç`, `ñ` on the German layout) was typed on a spare key mapped at
   the press: the press waited up to 60 ms for applications to read the
