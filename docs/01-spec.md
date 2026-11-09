@@ -2504,9 +2504,11 @@ never fetch what the file disallows, keep to its `Crawl-delay`).
   of `*`, and before it any group that names a token of `robots.agents`,
   `["kage"]`, so that a site owner can address Kage):
   `{ fetched, allowed, matched_rule, crawl_delay }` on every result: of the
-  address that was asked for (`matched_rule` is the line as the file
-  writes it, `Disallow: /a/%7euser`, not as it is compared; QA round
-  three's level0-03), and a file that could not be had (kept as
+  address that was asked for (`matched_rule` is the rule that decided,
+  `Allow: <pattern>` or `Disallow: <pattern>`, its pattern as the file
+  writes it, `Disallow: /a/%7euser`, not as it is compared, and its key
+  spelt so whatever the file's spelling: `DISALLOW:/x` is `Disallow:
+  /x`; QA round three's level0-03, round four's pool0-03), and a file that could not be had (kept as
   unreachable, or no scout could bring it) is `fetched: false,
   allowed: false` (QA round three's level0-04, round four's pool0-01);
   and for a flow of the address it ended on,

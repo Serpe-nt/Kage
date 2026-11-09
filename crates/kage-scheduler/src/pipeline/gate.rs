@@ -391,6 +391,12 @@ impl Pipeline {
         if let Some(known) = self.robots_fresh(&call.origin).await? {
             return Ok(Asked::Known(known));
         }
+        // Nobody could ask a moment ago: not again before the minute is
+        // over (QA round four's pool0-02: every fetch of the origin sent
+        // the scout again, and each refusal named a later moment).
+        if self.desk.unanswered(&call.origin).is_some() {
+            return Ok(Asked::NoAnswer);
+        }
         let plain = call.need.level == Level::Plain;
         // A plain client from the host's connection, or from a plain exit
         // of the pool's own, needs nobody; any other asks through the
@@ -475,7 +481,22 @@ impl Pipeline {
                 retry_at: None,
             }));
         }
+        if matches!(asked, Asked::NoAnswer)
+            && let Some(retry_at) = self.later(NOT_ASKED_WAIT)
+        {
+            self.desk
+                .note_unanswered(&call.origin, NOT_ASKED_WAIT, retry_at);
+        }
         Ok(asked)
+    }
+
+    /// When an origin's file may be asked for again after nobody could
+    /// ask for it: the moment noted then, so that every refusal
+    /// meanwhile names the same one.
+    fn unanswered_until(&self, origin: &str) -> Option<DateTime<Utc>> {
+        self.desk
+            .unanswered(origin)
+            .or_else(|| self.later(NOT_ASKED_WAIT))
     }
 
     /// Keeps what the scout's request for an origin's file came to, when
@@ -717,7 +738,7 @@ impl Pipeline {
                     retry_at: None,
                 })
                 | Asked::NoAnswer => {
-                    let retry_at = self.later(NOT_ASKED_WAIT);
+                    let retry_at = self.unanswered_until(&call.origin);
                     return Ok(unavailable(course, ROBOTS_UNAVAILABLE, retry_at));
                 }
                 Asked::Refused(refused) => return Ok(Gate::Refused(refused)),
@@ -925,7 +946,7 @@ impl Pipeline {
                 Asked::NoAnswer => {
                     return Ok(RobotsRead::Later(Deferred {
                         reason: Refusal::RobotsUnavailable,
-                        retry_at: self.later(NOT_ASKED_WAIT),
+                        retry_at: self.unanswered_until(&call.origin),
                     }));
                 }
                 Asked::Stopped => return Ok(RobotsRead::Stopped),
