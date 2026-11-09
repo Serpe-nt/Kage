@@ -776,8 +776,10 @@ impl Pipeline {
     /// another address than its own (F186): the verdict of the address it
     /// ended on, as a fetch of that address would report it, under the
     /// policy of its site. What is known of that site's file is read;
-    /// nothing is asked of anybody. A file nothing is known of yet, or one
-    /// that could not be had, is reported as not fetched.
+    /// nothing is asked of anybody. A file nothing is known of yet is
+    /// reported as not fetched; one kept as unreachable as not fetched
+    /// and not allowed, as a fetch of the address would report it
+    /// (level0-04).
     pub(super) async fn robots_at_end(
         &self,
         course: &Course,
@@ -793,11 +795,12 @@ impl Pipeline {
         let Some(origin) = robots::origin_of(ended) else {
             return Ok(robots::unasked());
         };
-        Ok(self
-            .robots_fresh(&origin)
-            .await?
-            .and_then(|known| known.verdict(&self.robots.agents, ended))
-            .unwrap_or_else(robots::unasked))
+        Ok(match self.robots_fresh(&origin).await? {
+            Some(known) => known
+                .verdict(&self.robots.agents, ended)
+                .unwrap_or_else(robots::unreachable),
+            None => robots::unasked(),
+        })
     }
 
     /// What a crawl is told about an address before it makes it a page of

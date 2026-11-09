@@ -549,7 +549,8 @@ pub(crate) struct RobotsView {
     /// it: the site's policy never asks for it (the default), the request
     /// said `ignore`, or the site's scout has not brought it yet; and when
     /// the file could not be had (it is kept as unreachable for
-    /// `robots.error_ttl`), which disallows the address.
+    /// `robots.error_ttl`, or no scout could bring it), which disallows the
+    /// address.
     pub(crate) fetched: bool,
     /// Whether the file allows the address; true when nothing is known,
     /// false when the file could not be had (RFC 9309 §2.3.1.4): every page

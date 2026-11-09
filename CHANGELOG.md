@@ -566,10 +566,11 @@ version's date is the day, in UTC, its tag was made.
   (QA round four, pool0-01).** level0-04's fix reached only a file kept as
   unreachable. A page refused `robots_unavailable` because the scout's
   attempt failed before the site had a say (the proxy refused the
-  `CONNECT`, or could not reach the site; nothing is kept then), and a
-  page refused `robots_no_scout`, still said
+  `CONNECT`, or could not reach the site; nothing is kept then) or its
+  scout was not ready, and a page refused `robots_no_scout`, still said
   `robots: { fetched: false, allowed: true }` beside the refusal, at
-  level 0 and level 2. They say `allowed: false`.
+  every level; so did a flow that ended on a site whose file is kept as
+  unreachable. They say `allowed: false`.
 
 ### Changed
 

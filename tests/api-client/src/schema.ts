@@ -2772,7 +2772,8 @@ export interface components {
              *     it: the site's policy never asks for it (the default), the request
              *     said `ignore`, or the site's scout has not brought it yet; and when
              *     the file could not be had (it is kept as unreachable for
-             *     `robots.error_ttl`), which disallows the address.
+             *     `robots.error_ttl`, or no scout could bring it), which disallows the
+             *     address.
              */
             fetched: boolean;
             /**
