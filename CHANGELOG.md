@@ -609,6 +609,13 @@ version's date is the day, in UTC, its tag was made.
   refused so when the scout was chosen after the job was accepted, and
   the pipeline itself keeps a site's scout out of a pinned attempt as
   out of any other.
+- **A robots.txt nobody could ask for is asked for again a minute later
+  (QA round four, pool0-02).** When the scout's attempt failed before the
+  site had a say (the proxy refused the `CONNECT`, the sidecar), every
+  fetch of the origin sent the scout again, and each refusal named a later
+  `retry_at`. The fetches of the next minute are refused
+  `robots_unavailable` with the same `retry_at`, and nobody asks, as
+  spec §14 says.
 
 ### Changed
 

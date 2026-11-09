@@ -468,6 +468,10 @@ pub(crate) struct Scouted(pub(crate) Option<PersonaId>);
 pub struct Desk {
     known: Mutex<HashMap<String, (Instant, Arc<Known>)>>,
     scouts: Mutex<HashMap<String, (Instant, Option<PersonaId>)>>,
+    /// The origins whose file nobody could ask for a moment ago (the
+    /// scout's attempt failed before the site had a say): until when
+    /// it is not asked for again, and the moment a refusal names.
+    unanswered: Mutex<HashMap<String, (Instant, DateTime<Utc>)>>,
     /// One request per origin at a time: whoever comes second waits for
     /// the first one's answer.
     asking: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
@@ -533,6 +537,26 @@ impl Desk {
         let mut scouts = locked(&self.scouts);
         scouts.retain(|_, (at, _)| at.elapsed() < RECHECK);
         scouts.insert(site.to_owned(), (Instant::now(), scout));
+    }
+
+    /// The moment to ask an origin's file again, while nobody could ask
+    /// for it a moment ago; `None` when it may be asked for now (spec
+    /// §14: an attempt that failed before the site had a say is tried
+    /// again a minute later; QA round four's pool0-02).
+    pub(crate) fn unanswered(&self, origin: &str) -> Option<DateTime<Utc>> {
+        locked(&self.unanswered)
+            .get(origin)
+            .filter(|(until, _)| Instant::now() < *until)
+            .map(|(_, retry_at)| *retry_at)
+    }
+
+    /// Notes that nobody could ask for an origin's file: it is not asked
+    /// for again for `wait`, and the refusals meanwhile name `retry_at`.
+    pub(crate) fn note_unanswered(&self, origin: &str, wait: Duration, retry_at: DateTime<Utc>) {
+        let now = Instant::now();
+        let mut unanswered = locked(&self.unanswered);
+        unanswered.retain(|_, (until, _)| now < *until);
+        unanswered.insert(origin.to_owned(), (now + wait, retry_at));
     }
 
     /// The lock of one origin's request.

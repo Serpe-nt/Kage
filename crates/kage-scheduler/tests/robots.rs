@@ -680,6 +680,56 @@ async fn a_request_pinned_to_the_sites_scout_reads_nothing_of_it() {
     world.shut_down().await;
 }
 
+/// QA round four's pool0-02: a robots.txt whose attempt failed before the
+/// site had a say was asked for again at every fetch of the origin, and
+/// each refusal named a later moment. Nothing is kept of it, and it is
+/// asked for again a minute later (spec §14): the fetches meanwhile are
+/// refused with the same `retry_at`, and nobody asks.
+#[tokio::test(start_paused = true)]
+async fn a_file_nobody_could_ask_for_is_asked_for_again_a_minute_later() {
+    let mut world = World::new(4, SITES);
+    robots_txt(&world, |_| {
+        AttemptOutput::failed(
+            Outcome::ProviderError,
+            "proxy_refused",
+            Courtesy::NotTheSite,
+        )
+    });
+    let mut moments = Vec::new();
+    for path in ["/a", "/b", "/c", "/d"] {
+        let report = world
+            .pipeline
+            .fetch(get(&format!("https://enforced.example{path}")))
+            .await
+            .unwrap();
+        assert_eq!(report.outcome, Outcome::RobotsDenied, "{path}");
+        assert_eq!(report.reason.as_deref(), Some(ROBOTS_UNAVAILABLE), "{path}");
+        assert_eq!(report.robots, Some(UNREACHABLE), "{path}");
+        moments.push(report.retry_at.unwrap());
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+    assert_eq!(asked(&world).0.len(), 1, "the file was asked for once");
+    assert!(moments.iter().all(|at| *at == moments[0]), "{moments:?}");
+    assert!(
+        world
+            .backend
+            .robots_entry("https://enforced.example")
+            .is_none()
+    );
+
+    // A minute after the first try it is asked for again.
+    tokio::time::sleep(Duration::from_secs(45)).await;
+    let again = world
+        .pipeline
+        .fetch(get("https://enforced.example/e"))
+        .await
+        .unwrap();
+    assert_eq!(again.reason.as_deref(), Some(ROBOTS_UNAVAILABLE));
+    assert_eq!(asked(&world).0.len(), 2);
+    assert!(again.retry_at.unwrap() > moments[0]);
+    world.shut_down().await;
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_scout_that_is_turned_away_cools_down_like_any_persona() {
     let mut world = World::new(4, SITES);
