@@ -2763,13 +2763,25 @@ new job's included; past either, `POST
 /v1/jobs` is `429 jobs_limited` with the counts and the bounds, a
 `Retry-After` of a minute, and nothing stored (the security review's L2).
 A crawl counts its `max_pages` from its acceptance, less the pages it has
-begun. A fetch carried on as a job (§8.4, `origin: sync_overflow`) is the
-fetch's, not a job the key asked for: the bound never refuses it, so it
-does not count toward the bound either; such fetches are held by the
-key's limits on fetches (`max_concurrent`, `requests_per_minute`,
-`daily_page_budget`) (QA round four, api-05). The check and the insert are one step for the server, so two jobs
+begun. The check and the insert are one step for the server, so two jobs
 asked for at once cannot both pass it, and the same `Idempotency-Key`
 sent twice at once is one job and a replay.
+
+A fetch carried on as a job (§8.4, `origin: sync_overflow`) is not one of
+those jobs, nor its item one of those waiting items: a key may have
+`jobs.max_open_carried_per_key` (20, at least 1) of them open (queued,
+running or paused). The count is taken when a fetch is accepted, so that
+no fetch is refused in the middle of its wait; a fetch still inside
+`scheduler.sync_wall_time` is no job yet, so a key may come to have up to
+`max_open_carried_per_key + max_concurrent - 1` open (23 with the
+defaults), never more. A key that has as many has its next `POST
+/v1/fetch` refused `429 jobs_limited` with `open_carried` and
+`max_open_carried` and a `Retry-After` of a minute, before anything of it
+is fetched, stored or spent; its way out is to wait for one to end or to
+end one, `POST /v1/jobs/{id}/cancel` (a carried job paused by a breaker
+may stay open up to `jobs.max_age`). A fetch the response cache answers
+is never carried and not checked (the owner's decision on QA round
+four's api-05).
 
 Keys are made, listed, disabled and rotated through the admin endpoints or
 `kage key create|list|revoke|rotate`, which works on the store and needs no
@@ -3418,7 +3430,7 @@ and the scheme's own port left out, or refused at load with the form to
 write, QA round four api-07) and `docs` (true). `security` holds
 `allow_ip_targets`, `resolve_on_host` and `expose_set_cookie`, all false.
 `jobs` holds `max_items` (10 000), `max_running` (8), `max_items_in_flight`
-(24), `max_open_per_key` (20), `max_queued_items_per_key` (unset: twice `max_items`, at least 20 000; §16.2), `max_age` (7 d), `retention_days` (14), `lease` (1 m),
+(24), `max_open_per_key` (20, at least 1), `max_open_carried_per_key` (20, at least 1; §16.2), `max_queued_items_per_key` (unset: twice `max_items`, at least 20 000; §16.2), `max_age` (7 d), `retention_days` (14), `lease` (1 m),
 `poll_interval` (2 s), `idempotency_ttl` (1 d) and `wind_down` (150 s, at
 most 15 m: how long a server that stops waits for the pages that are
 being read, §16.6). `webhooks` holds
@@ -3853,7 +3865,8 @@ are gzip-compressed on disk.
   was refused for the key, its scope, its limits or the target's length;
   `scope_missing` counted where a handler asks for its scope, F182;
   `jobs_limited` where `POST /v1/jobs` refuses a job for the key's open
-  jobs, L2; `budget_exhausted` where a fetch spends its page, QA round
+  jobs and where `POST /v1/fetch` refuses a fetch for its open carried
+  ones, L2; `budget_exhausted` where a fetch spends its page, QA round
   three api-05). The server's lock on its database (§16.6, ADR 0005) is
   `kage_server_lock_held` (1 while the latest look found it held, 0 from
   a look that did not until it is held again) and

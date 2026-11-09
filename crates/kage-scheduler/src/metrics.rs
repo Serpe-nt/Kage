@@ -88,11 +88,15 @@ impl DomainLabels {
     /// one: the domains a policy reload names, which a flood of hosts since
     /// the start may have left no room for. A label is never taken back from
     /// a domain that has one, so theirs come at the next start (QA round
-    /// four, obs-01).
+    /// four, obs-01). With a bound of 0 every domain is `other` by the
+    /// operator's choice, and none is answered.
     pub fn name_while_room<'a>(
         &mut self,
         domains: impl IntoIterator<Item = &'a str>,
     ) -> Vec<&'a str> {
+        if self.max == 0 {
+            return Vec::new();
+        }
         domains
             .into_iter()
             .filter(|domain| self.label(domain) == OTHER_DOMAIN)
@@ -408,6 +412,10 @@ mod tests {
             reloaded.name_while_room(["mine.example"]),
             Vec::<&str>::new()
         );
+        // A bound of 0 is the operator's choice: nothing to warn about.
+        let mut off = super::DomainLabels::new(0);
+        assert_eq!(off.name_while_room(["mine.example"]), Vec::<&str>::new());
+        assert_eq!(off.label("mine.example"), "other");
         // The process's labels.
         super::bound_domains(super::DEFAULT_MAX_DOMAINS, ["named.example"]);
         assert_eq!(super::domain_label("shop.example"), "shop.example");

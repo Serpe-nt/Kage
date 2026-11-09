@@ -341,32 +341,43 @@ fn check_level(crawl: &CrawlJob) -> ApiResult<()> {
     Ok(())
 }
 
-/// Whether a seed carries a user or a password, or, where it does not parse,
-/// may: an `@` in what would be its authority.
+/// Whether a seed carries a user or a password, or may: an `@` in what
+/// would be its authority, read from the text whether it parses or not. A
+/// seed without its scheme (`user:pw@example.org`) parses with `user` as the
+/// scheme and no user at all (the planner's review of #97).
 fn carries_credentials(seed: &str) -> bool {
-    if let Ok(url) = url::Url::parse(seed) {
-        !url.username().is_empty() || url.password().is_some()
-    } else {
-        let rest = seed.split_once("://").map_or(seed, |(_, rest)| rest);
-        rest.split(['/', '?', '#'])
+    let parsed = url::Url::parse(seed)
+        .is_ok_and(|url| !url.username().is_empty() || url.password().is_some());
+    let rest = seed.split_once("://").map_or(seed, |(_, rest)| rest);
+    parsed
+        || rest
+            .split(['/', '?', '#'])
             .next()
             .is_some_and(|authority| authority.contains('@'))
-    }
 }
 
 /// Checks a crawl and turns its seeds into orders.
 async fn plan_seeds(crawl: &CrawlJob, checks: Checks<'_>) -> ApiResult<PlannedCrawl> {
     let rules = rules(crawl, checks)?;
     let at = |error: ApiError, index: usize| {
-        let error = error.with("item", u64::try_from(index).unwrap_or(u64::MAX));
+        let item = u64::try_from(index).unwrap_or(u64::MAX);
         let seed = crawl.seeds[index].as_str();
         // A seed that carries a user or a password is named by its place
-        // only: a problem document is what clients, gateways and their logs
-        // keep (F133, QA round four api-06).
+        // only, and refused in words of Kage's own: the refusal's own
+        // message may say a part of it (a seed without its scheme reads its
+        // user as the scheme). A problem document is what clients, gateways
+        // and their logs keep (F133, QA round four api-06, the planner's
+        // decision).
         if carries_credentials(seed) {
-            error
+            ApiError::new(
+                error.code(),
+                "the seed carries credentials (a user or a password), and Kage sends none: \
+                 it is not repeated",
+            )
+            .with("field", "url")
+            .with("item", item)
         } else {
-            error.with("seed", seed)
+            error.with("item", item).with("seed", seed)
         }
     };
     let mut planned = Vec::with_capacity(rules.seeds.len());
@@ -886,6 +897,9 @@ mod tests {
             "http://qa4:s3cret-pw@example.org/?a06=1",
             "http://qa4@example.org/",
             "http://qa4:s3cret-pw@exa mple.org/",
+            // Without a scheme: it parses with `qa4` as the scheme.
+            "qa4:s3cret-pw@example.org/x",
+            "qa4@example.org/x",
         ] {
             let error = planned(json!({ "seeds": ["https://example.org/", seed] }))
                 .await
@@ -895,6 +909,8 @@ mod tests {
             assert_eq!(said(&error, "seed"), "", "{seed}");
             let document = serde_json::to_string(&error.problem()).unwrap();
             assert!(!document.contains("s3cret-pw"), "{document}");
+            // Nor the user, a seed without its scheme included (it reads
+            // `qa4` as the scheme): a user may be a token.
             assert!(!document.contains("qa4"), "{document}");
         }
         let error = planned(json!({ "seeds": ["ftp://example.org/x"] }))

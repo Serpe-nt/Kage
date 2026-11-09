@@ -82,7 +82,7 @@ pub(crate) struct PurgeRequest {
     responses(
         (status = 200, description = "What was deleted.", body = crate::jobs::view::Purged),
         (status = 404, description = "`key_not_found`.", body = Problem, content_type = "application/problem+json"),
-        (status = 422, description = "`before` lies in the future, or before 4713 BC, the earliest moment the store keeps.", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "`before` lies in the future, or before 4714-11-25 BC, the earliest the store can compare.", body = Problem, content_type = "application/problem+json"),
     ),
     security(("api_key" = ["admin"]))
 )]
@@ -102,7 +102,7 @@ pub(crate) async fn purge(
         // inside the store (QA round four, api-04).
         return Err(ApiError::field(
             "before",
-            "a moment from 4713 BC on, the earliest the store keeps",
+            "a moment from 4714-11-25 BC on, the earliest the store can compare",
         ));
     }
     let store = state.store();
@@ -138,10 +138,14 @@ pub(crate) async fn purge(
     Ok(noted(Json(purged), note))
 }
 
-/// The earliest moment a Postgres `timestamptz` holds: 4713-11-24 BC at
-/// midnight UTC, year -4712 in the proleptic Gregorian count chrono uses.
+/// The earliest `before` the store can compare: a day after the first
+/// moment a Postgres `timestamptz` holds (4714-11-24 BC at midnight UTC, the
+/// Julian day 0), because the purge also looks a day before `before` for
+/// fetches that never ended, and that day must be one Postgres holds.
+/// 4714-11-25 BC is year -4713 in the proleptic Gregorian count chrono
+/// uses, which has a year 0.
 fn earliest_stored() -> DateTime<Utc> {
-    chrono::NaiveDate::from_ymd_opt(-4712, 11, 24)
+    chrono::NaiveDate::from_ymd_opt(-4713, 11, 25)
         .and_then(|day| day.and_hms_opt(0, 0, 0))
         .map_or(DateTime::<Utc>::MIN_UTC, |moment| moment.and_utc())
 }

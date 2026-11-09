@@ -4164,7 +4164,7 @@ export interface operations {
             413: components["responses"]["PayloadTooLarge"];
             414: components["responses"]["UriTooLong"];
             415: components["responses"]["UnsupportedMediaType"];
-            /** @description `before` lies in the future, or before 4713 BC, the earliest moment the store keeps. */
+            /** @description `before` lies in the future, or before 4714-11-25 BC, the earliest the store can compare. */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -4371,7 +4371,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description A limit of the key or of the API; `Retry-After` says when. */
+            /** @description A limit of the key or of the API; `Retry-After` says when. `jobs_limited`: the key has as many fetches carried on as jobs open as it may have (`jobs.max_open_carried_per_key`), with `open_carried` and `max_open_carried`. */
             429: {
                 headers: {
                     /** @description Seconds to wait before asking again. */

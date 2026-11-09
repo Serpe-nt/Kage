@@ -611,6 +611,39 @@ async fn within_key_limits(state: &ApiState, caller: &Caller, adding: usize) -> 
 /// The `Retry-After` of `jobs_limited` (L2).
 const JOBS_LIMITED_RETRY: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// Refuses a fetch of a key that has as many fetches carried on as jobs
+/// open (`origin: sync_overflow`) as `jobs.max_open_carried_per_key`: `429
+/// jobs_limited` with `open_carried` and `max_open_carried`, counted in
+/// `kage_api_refusals_total{code}`. Checked when the fetch is accepted, not
+/// when it would be carried: a fetch that was accepted is never refused in
+/// the middle of its wait, and a key whose carried fetches pile up on a
+/// site that does not answer cannot add more (the owner's decision on QA
+/// round four's api-05, L2). A fetch the cache answers is not checked: it
+/// is never carried.
+pub(crate) async fn within_carried_limit(state: &ApiState, caller: &Caller) -> ApiResult<()> {
+    let most = state.config().jobs.max_open_carried_per_key;
+    let open = state
+        .store()
+        .jobs()
+        .open_carried_of_key(caller.key.id)
+        .await
+        .map_err(|error| ApiError::internal(&error))?;
+    if open < u64::from(most) {
+        return Ok(());
+    }
+    crate::metrics::refusal(ErrorCode::JobsLimited.as_str());
+    Err(ApiError::new(
+        ErrorCode::JobsLimited,
+        format!(
+            "this key has {open} fetch(es) carried on as jobs open, as many as it may have \
+             ({most}): ask again when one ended"
+        ),
+    )
+    .with("open_carried", open)
+    .with("max_open_carried", most)
+    .retry_after(JOBS_LIMITED_RETRY))
+}
+
 /// A job: its state, how far it has come, and how the deliveries of its
 /// webhook stand.
 #[utoipa::path(

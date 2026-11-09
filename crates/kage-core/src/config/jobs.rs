@@ -38,6 +38,14 @@ pub struct JobsConfig {
     /// review's L2).
     #[serde(default = "default_max_open_per_key")]
     pub max_open_per_key: u32,
+    /// Fetches carried on as jobs (`origin: sync_overflow`) one key may
+    /// have open (queued, running or paused) at once; a key that has as
+    /// many has its next `POST /v1/fetch` refused `429 jobs_limited` when
+    /// it is accepted, before anything of it is fetched or spent. These are
+    /// not counted in `max_open_per_key`, which bounds the jobs a key asks
+    /// for (the owner's decision on QA round four's api-05, L2).
+    #[serde(default = "default_max_open_carried_per_key")]
+    pub max_open_carried_per_key: u32,
     /// Items of its open jobs one key may have waiting at once, the new
     /// job's included, a crawl's `max_pages` counted from its acceptance;
     /// at least `max_items`, so that one job of any allowed size can be
@@ -88,6 +96,10 @@ const fn default_max_open_per_key() -> u32 {
     20
 }
 
+const fn default_max_open_carried_per_key() -> u32 {
+    20
+}
+
 /// The least a key may have waiting when `jobs.max_queued_items_per_key`
 /// is unset: two jobs of the default largest size.
 pub const MIN_DEFAULT_QUEUED_ITEMS_PER_KEY: u32 = 20_000;
@@ -125,6 +137,7 @@ impl Default for JobsConfig {
             max_running: default_max_running(),
             max_items_in_flight: default_max_items_in_flight(),
             max_open_per_key: default_max_open_per_key(),
+            max_open_carried_per_key: default_max_open_carried_per_key(),
             max_queued_items_per_key: None,
             max_age: default_max_age(),
             retention_days: default_retention_days(),
@@ -286,6 +299,48 @@ impl WebhooksConfig {
     }
 }
 
+/// The webhook origins: each an origin, on a port the browsers connect to,
+/// and every private one also allowed.
+fn webhook_origins(webhooks: &WebhooksConfig) -> Result<(), String> {
+    for (key, origins) in [
+        ("webhooks.allowed_origins", &webhooks.allowed_origins),
+        ("webhooks.private_origins", &webhooks.private_origins),
+    ] {
+        for (index, origin) in origins.iter().enumerate() {
+            if !super::server::is_origin(origin) {
+                // The entry is named by its place, never repeated: it may
+                // hold a password (F133, QA round three api-07).
+                return Err(format!(
+                    "{key}[{index}] is not an origin such as https://hooks.example.org (a \
+                     scheme, a host, an optional port, nothing else: no credentials, no path)"
+                ));
+            }
+            // G3 for every receiver, a private one too: a service on a port
+            // the browsers refuse is no web server (QA round four,
+            // guard-04).
+            if let Some(port) = Url::parse(origin)
+                .ok()
+                .and_then(|url| url.port_or_known_default())
+                .filter(|&port| crate::ssrf::is_unsafe_port(port))
+            {
+                return Err(format!(
+                    "{key}[{index}] names port {port}, one browsers refuse to connect to: a \
+                     webhook receiver there is no web server"
+                ));
+            }
+        }
+    }
+    for origin in &webhooks.private_origins {
+        let listed = Url::parse(origin).is_ok_and(|url| webhooks.allows(&url));
+        if !listed {
+            return Err(format!(
+                "webhooks.private_origins: {origin:?} is not in webhooks.allowed_origins"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// What can be judged about the `jobs` and `webhooks` sections alone.
 pub(super) fn validate(jobs: &JobsConfig, webhooks: &WebhooksConfig) -> Result<(), String> {
     if jobs.max_items == 0 || jobs.max_items > MAX_JOB_ITEMS {
@@ -301,6 +356,9 @@ pub(super) fn validate(jobs: &JobsConfig, webhooks: &WebhooksConfig) -> Result<(
     }
     if jobs.max_open_per_key == 0 {
         return Err("jobs.max_open_per_key must be at least 1".to_owned());
+    }
+    if jobs.max_open_carried_per_key == 0 {
+        return Err("jobs.max_open_carried_per_key must be at least 1".to_owned());
     }
     if jobs.queued_items_per_key() < jobs.max_items {
         return Err(format!(
@@ -338,42 +396,7 @@ pub(super) fn validate(jobs: &JobsConfig, webhooks: &WebhooksConfig) -> Result<(
         ));
     }
 
-    for (key, origins) in [
-        ("webhooks.allowed_origins", &webhooks.allowed_origins),
-        ("webhooks.private_origins", &webhooks.private_origins),
-    ] {
-        for (index, origin) in origins.iter().enumerate() {
-            if !super::server::is_origin(origin) {
-                // The entry is named by its place, never repeated: it may
-                // hold a password (F133, QA round three api-07).
-                return Err(format!(
-                    "{key}[{index}] is not an origin such as https://hooks.example.org (a \
-                     scheme, a host, an optional port, nothing else: no credentials, no path)"
-                ));
-            }
-            // G3 for every receiver, a private one too: a service on a port
-            // the browsers refuse is no web server (QA round four,
-            // guard-04).
-            if let Some(port) = Url::parse(origin)
-                .ok()
-                .and_then(|url| url.port_or_known_default())
-                .filter(|&port| crate::ssrf::is_unsafe_port(port))
-            {
-                return Err(format!(
-                    "{key}[{index}] names port {port}, one browsers refuse to connect to: a \
-                     webhook receiver there is no web server"
-                ));
-            }
-        }
-    }
-    for origin in &webhooks.private_origins {
-        let listed = Url::parse(origin).is_ok_and(|url| webhooks.allows(&url));
-        if !listed {
-            return Err(format!(
-                "webhooks.private_origins: {origin:?} is not in webhooks.allowed_origins"
-            ));
-        }
-    }
+    webhook_origins(webhooks)?;
     if webhooks.timeout.get() < Duration::from_millis(100) {
         return Err("webhooks.timeout must be at least 100ms".to_owned());
     }
@@ -575,6 +598,17 @@ mod tests {
             )
             .contains("jobs.max_open_per_key")
         );
+        assert!(
+            refused(
+                JobsConfig {
+                    max_open_carried_per_key: 0,
+                    ..jobs
+                },
+                &webhooks
+            )
+            .contains("jobs.max_open_carried_per_key")
+        );
+        assert_eq!(jobs.max_open_carried_per_key, 20);
         assert!(
             refused(
                 JobsConfig {

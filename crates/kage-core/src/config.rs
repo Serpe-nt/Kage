@@ -563,6 +563,12 @@ impl Config {
         let mut static_list_file = None;
         for (spec, direct, from_file) in secret_values {
             let path = from_file.clone();
+            // The variable the operator set: `KAGE__X`, or `KAGE__X_FILE`.
+            let named = if from_file.is_some() {
+                format!("{}{FILE_SUFFIX}", spec.env)
+            } else {
+                spec.env.to_owned()
+            };
             let value = match (direct, from_file) {
                 (Some(_), Some(_)) => return Err(ConfigError::SecretConflict { env: spec.env }),
                 (Some(value), None) => Some(value),
@@ -577,7 +583,7 @@ impl Config {
                     if spec.key == "proxies.static_list" {
                         static_list_file = path;
                     }
-                    from_env.push((spec.key.to_owned(), spec.env.to_owned()));
+                    from_env.push((spec.key.to_owned(), named));
                     figment = figment.merge((spec.key, value));
                 }
                 None if spec.required => missing.push(spec.env),
@@ -856,7 +862,6 @@ fn defaults() -> Result<serde_json::Value, ConfigError> {
     Ok(tree)
 }
 
-/// `KAGE__SECTION__KEY` to `section.key`.
 /// Where the value at `path` came from, for a refusal's message: the
 /// environment variable that set it or a key above it (the environment
 /// wins over the file), else the configuration file when one was read.
@@ -880,6 +885,7 @@ fn value_origin(
         .or_else(|| file.map(|file| file.display().to_string()))
 }
 
+/// `KAGE__SECTION__KEY` to `section.key`.
 fn env_key(name: &str) -> Result<String, ConfigError> {
     let invalid = || ConfigError::InvalidEnvKey(name.to_owned());
     let rest = name.strip_prefix(ENV_PREFIX).ok_or_else(invalid)?;

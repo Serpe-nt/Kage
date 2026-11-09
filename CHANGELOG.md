@@ -667,15 +667,6 @@ version's date is the day, in UTC, its tag was made.
   `retry_at`. The fetches of the next minute are refused
   `robots_unavailable` with the same `retry_at`, and nobody asks, as
   spec §14 says.
-- **A fetch carried on as a job is not a job of the key's bound (QA round
-  four, api-05).** `jobs.max_open_per_key` counted a fetch carried on as a
-  job (`origin: sync_overflow`) though nothing held such fetches to it: a
-  key with a bound of 1 held 6, and a client that never made a job was told
-  `jobs_limited` for jobs it did not ask for. The bound is the jobs a key
-  asks for; a carried fetch is never refused by it and no longer counted
-  in it, and the key's limits on fetches (`max_concurrent`,
-  `requests_per_minute`, `daily_page_budget`) hold it (spec §16.2, the
-  security review's L2).
 - **A warm-up site carries no credentials (QA round four, api-01).**
   `personas.warmup.sites[].url` took an `https` URL with a password, which
   `kage config check` printed and every persona would have sent; over
@@ -693,14 +684,21 @@ version's date is the day, in UTC, its tag was made.
   `robots.ttl: ... (from the environment variable KAGE__ROBOTS__TTL)` or
   the file's path, and a policy file's refusal names its key without
   figment's profile.
-- **A purge before 4713 BC is the caller's value (QA round four, api-04).**
-  `POST /v1/admin/purge` with a `before` earlier than Postgres keeps
-  failed inside the store, `500 internal`; it is `422 validation_failed`
-  with `field: before`.
-- **A crawl's refusal never repeats a seed's password (QA round four,
+- **A purge before 4714-11-25 BC is the caller's value (QA round four,
+  api-04).**
+  `POST /v1/admin/purge` with a `before` earlier than the store can
+  compare failed inside it, `500 internal`; it is `422 validation_failed`
+  with `field: before`. The earliest is a day after Postgres's earliest
+  moment (4714-11-24 BC), because the purge also looks a day before
+  `before` for fetches that never ended.
+- **A crawl's refusal never repeats a seed's credentials (QA round four,
   api-06).** A seed with credentials was refused, and the problem document
-  repeated it whole in `seed`; that member is left out for such a seed,
-  `item` naming it, as a fetch, a batch, a flow and a webhook refuse one.
+  repeated it whole in `seed`. Such a seed (a user or a password, or an `@`
+  in what would be its authority, with or without its scheme) is refused
+  in words of Kage's own, `item` naming it, without `seed` and without the
+  message of the check that refused it, which could name its user (a seed
+  without its scheme reads its user as the scheme), as a fetch, a batch, a
+  flow and a webhook refuse one.
 - **A CORS origin is written as a browser sends it (QA round four,
   api-07).** An origin in upper case or with its scheme's own port (`:443`)
   was taken without a word and matched nothing a browser sends. It is
@@ -746,6 +744,21 @@ version's date is the day, in UTC, its tag was made.
   Such an item ends `failed` with the error `internal` (the log has the
   cause); it was taken for a stop of the server and queued again at once,
   so it panicked again with every turn.
+- **A CORS origin is written as a browser sends it, and no webhook origin
+  names a port the browsers refuse (QA round four, api-07, guard-04).**
+  Check yours before upgrading: a `server.cors_allowed_origins` entry in
+  upper case or with its scheme's own port (`https://Console.Example.org`,
+  `https://console.example.org:443`), and a `webhooks.allowed_origins` or
+  `webhooks.private_origins` entry on such a port (`:25`), no longer
+  start the server; `kage config check` names the entry by its place and,
+  for a CORS origin, the form to write. Such entries matched nothing a
+  browser sends, or let a webhook be posted to a service that is no web
+  server.
+- **A key may have so many fetches carried on as jobs open (QA round four,
+  api-05).** `jobs.max_open_carried_per_key` (20, new): past it a key's
+  next `POST /v1/fetch` is `429 jobs_limited` when it is accepted; a
+  client that lets fetches outlast the wall time on a site that does not
+  answer should expect it and wait `Retry-After`.
 
 ### Added
 
@@ -794,7 +807,20 @@ version's date is the day, in UTC, its tag was made.
   `Retry-After`, nothing stored, counted in
   `kage_api_refusals_total{code="jobs_limited"}`. The same `Idempotency-Key`
   sent twice at once is still one job and a replay. One key could queue
-  jobs without end, up to the global limits only. Upgrading: left unset,
+  jobs without end, up to the global limits only. So are its fetches
+  carried on as jobs (QA round four, api-05): a key may have
+  `jobs.max_open_carried_per_key` (20) of them open (`origin:
+  sync_overflow`), and while it has as many its next `POST /v1/fetch` is
+  `429 jobs_limited` with `open_carried`, `max_open_carried` and a
+  `Retry-After`, counted when the fetch is accepted, before anything is
+  fetched or spent (fetches still within `scheduler.sync_wall_time` are no
+  jobs yet, so a key may come to `max_open_carried_per_key +
+  max_concurrent - 1`, 23 by default); its way out is to wait for one to
+  end or end one, `POST /v1/jobs/{id}/cancel`. The refusal is counted in
+  `kage_api_refusals_total{code="jobs_limited"}` too. They are not counted in `jobs.max_open_per_key` nor
+  their items in `jobs.max_queued_items_per_key`: those counted them,
+  though nothing held them there (6 open with a bound of 1), and told a
+  client that never made a job `jobs_limited`. Upgrading: left unset,
   `jobs.max_queued_items_per_key` is twice `jobs.max_items` and at least
   20 000, so a configuration that raised `jobs.max_items` still starts; one
   that sets it below `jobs.max_items` is refused.

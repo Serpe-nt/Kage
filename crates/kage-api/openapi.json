@@ -1421,7 +1421,7 @@
             "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "422": {
-            "description": "`before` lies in the future, or before 4713 BC, the earliest moment the store keeps.",
+            "description": "`before` lies in the future, or before 4714-11-25 BC, the earliest the store can compare.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1752,7 +1752,7 @@
             }
           },
           "429": {
-            "description": "A limit of the key or of the API; `Retry-After` says when.",
+            "description": "A limit of the key or of the API; `Retry-After` says when. `jobs_limited`: the key has as many fetches carried on as jobs open as it may have (`jobs.max_open_carried_per_key`), with `open_carried` and `max_open_carried`.",
             "headers": {
               "Retry-After": {
                 "schema": {

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"carried!\" FROM jobs\n               WHERE api_key_id = $1 AND origin = 'sync_overflow'\n                 AND state IN ('queued', 'running', 'paused')",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "carried!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "380b03cd5b1727573d802932999bd8130e6d14b9556d8b243577de73d8531c02"
+}
