@@ -3,9 +3,12 @@ import { EXAMPLES } from '@kage/contract';
 import { describe, expect, it } from 'vitest';
 
 import {
+  GatedInput,
   HUMAN_BOUNDS,
   Human,
+  InputGrant,
   motorProfile,
+  withInputGrant,
   tempo,
   type Clock,
   systemClock,
@@ -828,12 +831,179 @@ describe('a type step whose budget runs out', () => {
     expect(warnings).toEqual([
       [
         { step: 'type', budget_ms: 300, grace_ms: 1000 },
-        'a step whose budget ran out had not stopped after the grace; the flow goes on without it',
+        'a step whose budget ran out had not stopped after the grace; its input is revoked and the flow goes on without it',
       ],
     ]);
     await new Promise((resolve) => setTimeout(resolve, 700));
     expect(calls).toEqual(['click', 'clicked']);
   });
+});
+
+/** A device that writes down every act it was asked for, and when. */
+function recordingDevice(): { acts: { at: number; act: string }[]; device: InputDevice } {
+  const acts: { at: number; act: string }[] = [];
+  const note = (act: string) => {
+    acts.push({ at: Date.now(), act });
+    return Promise.resolve();
+  };
+  const device: InputDevice = {
+    screen: { width: 1920, height: 1080 },
+    pointerPosition: () => Promise.resolve({ x: 960, y: 540 }),
+    pointerMove: () => note('move'),
+    buttonDown: (button) => note(`button down ${button}`),
+    buttonUp: (button) => note(`button up ${button}`),
+    wheelNotch: (direction) => note(`wheel ${direction}`),
+    levelsOf: () => ({ shift: false, altGr: false, onLayout: true, keycode: null, compose: null }),
+    prepare: () => note('prepare').then(() => ({ characters: [] })),
+    unprepare: () => note('unprepare'),
+    keyDown: (key) => note(`key down ${key}`),
+    keyUp: (key) => note(`key up ${key}`),
+    flush: () => Promise.resolve(),
+    close: () => Promise.resolve(),
+  };
+  return { acts, device };
+}
+
+const stillSurface: PageSurface = {
+  metrics: () =>
+    Promise.resolve({
+      origin: { x: 0, y: 90 },
+      viewport: { width: 1200, height: 800 },
+      scrollY: 0,
+      scrollHeight: 800,
+    }),
+  visibleWords: () => Promise.resolve(120),
+  boxOf: () => Promise.resolve({ x: 500, y: 300, width: 140, height: 40 }),
+  painted: () => Promise.resolve(true),
+};
+
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+describe('the input of a step whose budget ran out (QA round four, input-01)', () => {
+  it('stops a select over a long list before its next key, the Enter included, and presses nothing once the flow returned', async () => {
+    // A human select of option 150 of 300 with a short budget pressed its
+    // arrows on after the flow returned, into the next request's tab, and
+    // its Enter submitted that page's form.
+    const { acts, device } = recordingDevice();
+    const human = new Human({
+      device: new GatedInput(device),
+      surface: stillSurface,
+      profile: motorProfile(SEED),
+      tempo: tempo(SEED),
+      random: new SeededRandom(SEED, 'behavior:select'),
+      clock: systemClock,
+    });
+    const host: FlowHost = {
+      ...rig({ select: { index: 0, wanted: 300 } }).host,
+      human: () => Promise.resolve(human),
+    };
+    const events: FlowEvent[] = [];
+    const started = Date.now();
+    const outcome = await runFlow(
+      {
+        actions: [{ action: 'select', selector: '#s', value: 'option 150', timeout_ms: 2500 }],
+        capture,
+      },
+      host,
+      (event) => events.push(event),
+    );
+    const returned = Date.now();
+    expect(outcome.ok).toBe(false);
+    // Stopped before its next key once told to: well within the second the
+    // step is given to stop (a key is a few hundredths of a second).
+    expect(returned - started).toBeLessThan(2500 + 250 + 600);
+    expect(events).toMatchObject([
+      { action: 'select', ok: false, error: 'select did not finish within 2500 ms' },
+    ]);
+    const keys = acts.filter((entry) => entry.act.startsWith('key '));
+    expect(keys.filter((entry) => entry.act === 'key down ArrowDown').length).toBeLessThan(300);
+    expect(keys.map((entry) => entry.act)).not.toContain('key down Enter');
+    // Every key that went down came up, before the flow returned.
+    expect(keys.filter((entry) => entry.act.startsWith('key down')).length).toBe(
+      keys.filter((entry) => entry.act.startsWith('key up')).length,
+    );
+    await wait(1500);
+    expect(acts.filter((entry) => entry.at > returned)).toEqual([]);
+  }, 15_000);
+
+  it('lets no move, wheel, button or key of work that ignores its signal reach the display once the grace is over', async () => {
+    // Work that does not watch its signal at every act (a hand still on its
+    // way, a scroll that goes on): its grant is revoked when the grace
+    // ends, and whatever it does then never acts.
+    const { acts, device } = recordingDevice();
+    const gated = new GatedInput(device);
+    const refused: string[] = [];
+    const stubborn = async (what: string, act: () => Promise<void>) => {
+      for (;;) {
+        try {
+          await act();
+        } catch (thrown) {
+          refused.push(`${what}: ${(thrown as Error).name}`);
+          throw thrown;
+        }
+        await wait(25);
+      }
+    };
+    const human = {
+      hover: () => stubborn('move', () => gated.pointerMove(10, 10)),
+      scrollTo: () => stubborn('wheel', () => gated.wheelNotch('down')),
+      // A key held down past the end, and a button whose release comes late.
+      press: async (key: string) => {
+        await gated.keyDown(key);
+        await new Promise(() => undefined);
+      },
+      click: async () => {
+        await gated.buttonDown('left');
+        await wait(1700);
+        await gated.buttonUp('left');
+        await stubborn('move after the click', () => gated.pointerMove(20, 20));
+      },
+    } as unknown as Human;
+    const host: FlowHost = { ...rig().host, human: () => Promise.resolve(human) };
+    const steps: FlowAction[] = [
+      { action: 'hover', selector: '#a', timeout_ms: 200 },
+      { action: 'scroll', depth: 1, timeout_ms: 200 },
+      { action: 'press', key: 'Enter', timeout_ms: 200 },
+      { action: 'click', selector: '#a', timeout_ms: 200 },
+    ];
+    for (const step of steps) {
+      const before = acts.length;
+      const started = Date.now();
+      const events: FlowEvent[] = [];
+      const outcome = await runFlow({ actions: [step], capture }, host, (event) =>
+        events.push(event),
+      );
+      const returned = Date.now();
+      expect(outcome.ok, step.action).toBe(false);
+      expect(events[0], step.action).toMatchObject({
+        type: 'step',
+        error: `${step.action} did not finish within 200 ms`,
+      });
+      expect(returned - started, step.action).toBeLessThan(200 + 250 + 1000 + 300);
+      const during = acts.slice(before).map((entry) => entry.act);
+      expect(during.length, step.action).toBeGreaterThan(0);
+      if (step.action === 'press') {
+        // Let up at the revocation, before the flow returned.
+        expect(during.slice(-1), step.action).toEqual(['key up Enter']);
+      }
+      if (step.action === 'click') {
+        expect(during.slice(-1), step.action).toEqual(['button up left']);
+      }
+      // The next request's work under a grant of its own acts as before.
+      await withInputGrant(new InputGrant(), () => gated.pointerMove(1, 1));
+      expect(acts.at(-1)?.act, step.action).toBe('move');
+      const next = acts.length;
+      await wait(step.action === 'click' ? 1900 : 300);
+      // Nothing of the step after the flow returned: not its late button
+      // up, not a move, a notch or a key.
+      expect(acts.slice(next), step.action).toEqual([]);
+    }
+    expect(refused).toEqual([
+      'move: InputRevoked',
+      'wheel: InputRevoked',
+      'move after the click: InputRevoked',
+    ]);
+  }, 30_000);
 });
 
 describe('a flow that paces itself', () => {

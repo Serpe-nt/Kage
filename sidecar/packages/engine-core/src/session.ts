@@ -42,8 +42,11 @@ import {
 
 import {
   BehaviorError,
+  GatedInput,
   Human,
+  childGrant,
   motorProfile,
+  withInputGrant,
   tempo,
   type BehaviorCounts,
   type Box,
@@ -1038,7 +1041,8 @@ export class PageSession {
   private document: DocumentState = newDocument();
   /** Filters whose XHR bodies are read while a page loads. */
   private filters: readonly XhrCapture[] = [];
-  private input: InputDevice | null = null;
+  /** The persona's mouse and keyboard, behind the gate of the requests' and steps' grants (input-01). */
+  private input: GatedInput | null = null;
   private profile: MotorProfile | null = null;
   private tempo: Tempo | null = null;
   /**
@@ -1819,7 +1823,7 @@ export class PageSession {
    */
   private async human(seed: string | undefined): Promise<{ human: Human; seed: string }> {
     const requestSeed = seed ?? randomBytes(32).toString('hex');
-    this.input ??= await this.parts.driver.openInput();
+    this.input ??= new GatedInput(await this.parts.driver.openInput());
     this.profile ??= motorProfile(this.parts.personaSeed);
     this.tempo ??= tempo(this.parts.personaSeed);
     return {
@@ -2533,8 +2537,28 @@ export class PageSession {
     };
   }
 
+  /**
+   * Runs one request's work with an input grant of its own, revoked when the
+   * request returns (QA round four, input-01): nothing the request started
+   * moves the persona's mouse or presses its keys after it ended, in the
+   * next request's tab least of all (§16.5, F96). Every step of a flow has
+   * a grant inside it, revoked when the step ends.
+   */
+  private async granted<T>(work: () => Promise<T>): Promise<T> {
+    const grant = childGrant();
+    try {
+      return await withInputGrant(grant, work);
+    } finally {
+      await grant.revoke();
+    }
+  }
+
   /** Loads a page, lets the persona behave on it when asked, and captures it. */
-  async navigate(request: NavigateRequest, env: OperationEnv): Promise<PageResult> {
+  navigate(request: NavigateRequest, env: OperationEnv): Promise<PageResult> {
+    return this.granted(() => this.navigateNow(request, env));
+  }
+
+  private async navigateNow(request: NavigateRequest, env: OperationEnv): Promise<PageResult> {
     const { driver } = this.parts;
     await this.tabFor(request.tab ?? null);
     const page = this.page;
@@ -2755,7 +2779,11 @@ export class PageSession {
   }
 
   /** Runs a flow, sending one event per finished step and a final one (spec §10.5). */
-  async flow(
+  flow(request: FlowRequest, env: OperationEnv, emit: (event: FlowEvent) => void): Promise<void> {
+    return this.granted(() => this.flowNow(request, env, emit));
+  }
+
+  private async flowNow(
     request: FlowRequest,
     env: OperationEnv,
     emit: (event: FlowEvent) => void,

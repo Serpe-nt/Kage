@@ -580,6 +580,17 @@ version's date is the day, in UTC, its tag was made.
   the keys lent for the text are given back, and the flow returns once
   that is done. A flow's `press` of a character the layout makes with a
   dead key, or has no key for, is typed as `type` types it (spec §10.5).
+- **A timed-out step's input reaches no other page (QA round four,
+  input-01).** A human `select` whose step ran out of time pressed its
+  arrows on after the flow returned, for as many options as it had to
+  cross, into the persona's next request's tab (another key's), and its
+  `Enter` submitted that page's form, in both engines. Every step of a
+  flow now runs with an input grant of its own and every request with one
+  around it, revoked when the step's grace ends and when the request
+  returns; every move, button, wheel notch and key of the persona checks
+  the grant of the work that asks for it and never acts for a revoked
+  one, and what a revoked step still held down is let up. A `select`
+  also stops before its next key once its budget is over.
 
 ### Changed
 

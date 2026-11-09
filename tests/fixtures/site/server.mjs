@@ -667,6 +667,41 @@ const routes = {
   '/download': (_req, res) =>
     send(res, 200, 'application/octet-stream', 'file body', { 'content-disposition': 'attachment; filename="file.bin"' }),
   '/status/404': (_req, res) => html(res, page('Not found', '<h1>404</h1>'), {}, 404),
+  // A page that counts what reaches it of the persona's keys, buttons and
+  // wheel, and how often its form was submitted: `options` fills its select,
+  // `focus=1` gives its input the focus, so that a stray Enter submits the
+  // form (QA round four, input-01).
+  '/input/keys': (_req, res, url) => {
+    const options = Math.min(1000, Number(url.searchParams.get('options') ?? '1') || 1);
+    const focus = url.searchParams.get('focus') === '1';
+    const list = Array.from(
+      { length: options },
+      (_, index) => `<option value="option ${index}">option ${index}</option>`,
+    ).join('');
+    html(
+      res,
+      page(
+        'Keys',
+        `<h1>Keys</h1>
+<form id="f"><input id="i" name="i" autocomplete="off"${focus ? ' autofocus' : ''}></form>
+<select id="s">${list}</select>
+<pre id="keys">0</pre><pre id="mouse">0</pre><pre id="sub">0</pre>
+<div style="height:3000px">a tall page</div>
+<script>
+const count = (id) => () => {
+  const node = document.getElementById(id);
+  node.textContent = String(Number(node.textContent) + 1);
+};
+for (const type of ['keydown', 'keyup']) addEventListener(type, count('keys'), true);
+for (const type of ['mousedown', 'mouseup', 'click', 'wheel']) addEventListener(type, count('mouse'), true);
+document.getElementById('f').addEventListener('submit', (event) => {
+  event.preventDefault();
+  count('sub')();
+});
+</script>`,
+      ),
+    );
+  },
   // An empty error answer, as a proxy refuses a plain `http://` target:
   // both browsers show their own page in its place (F189).
   '/status/empty-403': (_req, res) => {

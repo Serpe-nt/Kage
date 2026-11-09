@@ -5,3 +5,4 @@ export * from './pace.js';
 export * from './profile.js';
 export * from './scroll.js';
 export * from './typing.js';
+export * from './input-gate.js';
