@@ -789,14 +789,19 @@ version's date is the day, in UTC, its tag was made.
   four sched-01).** A way back taken while a redirect was still under way
   made the page that came back name the abandoned navigation as its
   `unanswered_url`; the hop now names its target only for the page it was
-  sent on from, and a `back` abandons it. A page that came back names
-  nothing it was once sent on to (on Chrome, a driver's click waits for
-  its navigation, and the way back named the click's address). A redirect
-  to `file:`, `data:` or `javascript:` is not named (and an unanswered
-  address with no host falls through to the page's own address in Kage,
-  where it made the request's first site be booked); nor is the shown
-  page itself, where the driver reported the new address before its
-  response.
+  sent on from, and a `back` drops it and goes back (the driver's word for
+  the redirect it broke off failed the step, though the browser went back:
+  Firefox's `back` there now passes; Chrome's still fails until QA round
+  four flow-01, a read during a navigation under way taken for a stuck
+  page); a navigation started while another
+  redirect was still under way left the page the tab shows, and its last
+  hop is named. A page the way back brought back names nothing it was
+  once sent on to (on Chrome, a driver's click waits for its navigation,
+  and the way back named the click's address), unless its own script sent
+  the tab on since. A redirect to `file:`, `data:` or `javascript:` is not
+  named (and an unanswered address with no host falls through to the
+  page's own address in Kage, where it made the request's first site be
+  booked); nor is a redirect that led back to the page the hop left.
 
 ### Changed
 

@@ -349,6 +349,30 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
           address = 'chrome-error://chromewebdata/';
           return Promise.reject(new Error('net::ERR_TUNNEL_CONNECTION_FAILED'));
         }
+        // A redirect whose target never answers, the tab still on the page
+        // before (review of #101): with `hop=` the step passes on it as a
+        // hand's click does once the first 302 came, with `pending=` the
+        // `goto` waits out its time.
+        const hop = sent('hop') ?? sent('pending');
+        if (hop !== null) {
+          const moved = answer(url, 302, hop);
+          emit('request', moved.request());
+          emit('response', moved);
+          if (/^https?:/.test(hop)) {
+            emit('request', answer(hop).request());
+          }
+          if (sent('hop') !== null) {
+            return Promise.resolve(moved);
+          }
+          return new Promise((_, reject) =>
+            setTimeout(
+              () => {
+                reject(new Error(`Timeout ${String(options.timeout)}ms exceeded.`));
+              },
+              Math.min(options.timeout, 300),
+            ),
+          );
+        }
         const ffsends = sent('ffsends');
         if (ffsends !== null) {
           // Firefox: the page is answered, its script sends the tab on
@@ -419,6 +443,14 @@ function scriptedDriver(): { driver: SessionDriver; driven: Driven; tabs: Tabs }
             // The page before is asked for again, and nothing answers now.
             emit('request', answer(entry).request());
             address = 'chrome-error://chromewebdata/';
+          }
+          const onBack = entry.startsWith('http')
+            ? new URL(entry).searchParams.get('onback')
+            : null;
+          if (onBack !== null) {
+            // The page comes back out of the browser's cache, no request,
+            // and its own script sends the tab on at once; nothing answers.
+            emit('request', answer(onBack).request());
           }
         }
         return Promise.resolve(null);
@@ -582,6 +614,72 @@ describe('the tab a request runs in (F96)', () => {
     }
     return { steps, final };
   };
+
+  it('names where a redirect still under way went, for the page it left only (review of #95 and #101)', async () => {
+    const unansweredAfter = async (actions: FlowRequest['actions']) => {
+      const { session: on } = session();
+      const run = await flow(on, actions);
+      return run.final.result.unanswered_url ?? null;
+    };
+    const a = site('/a');
+    const later = site('/silent');
+    // The redirect's last hop, from the page the tab still shows.
+    expect(
+      await unansweredAfter([
+        { action: 'goto', url: a },
+        { action: 'goto', url: site(`/r?pending=${encodeURIComponent(later)}`), timeout_ms: 1000 },
+      ]),
+    ).toBe(later);
+    // A second navigation started while a redirect was still under way: it
+    // left the page the tab shows, not the first hop's own 302 address.
+    expect(
+      await unansweredAfter([
+        { action: 'goto', url: a },
+        { action: 'goto', url: site(`/r1?hop=${encodeURIComponent(site('/first'))}`) },
+        { action: 'goto', url: site(`/r2?pending=${encodeURIComponent(later)}`), timeout_ms: 1000 },
+      ]),
+    ).toBe(later);
+    // No site of any request, and the page itself: nothing named.
+    for (const target of ['data:text/html,nothing', 'javascript:void(0)', a]) {
+      expect(
+        await unansweredAfter([
+          { action: 'goto', url: a },
+          {
+            action: 'goto',
+            url: site(`/r?pending=${encodeURIComponent(target)}`),
+            timeout_ms: 1000,
+          },
+        ]),
+        target,
+      ).toBeNull();
+    }
+  });
+
+  it('names a navigation the page that came back started itself, and nothing the way back answered (review of #101)', async () => {
+    const unansweredAfter = async (actions: FlowRequest['actions']) => {
+      const { session: on } = session();
+      const run = await flow(on, actions);
+      expect(run.final).toMatchObject({ ok: true });
+      return run.final.result.unanswered_url ?? null;
+    };
+    const nowhere = site('/silent');
+    // The way back answered: the page that came back names nothing.
+    expect(
+      await unansweredAfter([
+        { action: 'goto', url: site('/a') },
+        { action: 'goto', url: site('/b') },
+        { action: 'back', human: false },
+      ]),
+    ).toBeNull();
+    // Its own script sent the tab on since: that departure is named.
+    expect(
+      await unansweredAfter([
+        { action: 'goto', url: site(`/kept?onback=${encodeURIComponent(nowhere)}`) },
+        { action: 'goto', url: site('/b') },
+        { action: 'back', human: false },
+      ]),
+    ).toBe(nowhere);
+  });
 
   it('ends a load the browser turns into a download at once, in the driver’s words (F120)', async () => {
     const { session: on } = session();
