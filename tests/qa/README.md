@@ -116,6 +116,29 @@ round F's copy pinned to Chromium, from the evidence), `verify4.sh`
 reproduces a round's findings each on a fresh stack or its own, and
 `retry4.sh N ID...` tries a race up to N times.
 
+## Round four, part B: the browsers (`infra/browser/`)
+
+Round four's browser part (`docs/qa/2026-11-09-browsers.md`) ran in a
+container `kage-qa4-browsers` with round three's container scripts, which
+take the round where part A's `*4.sh` copies hard-code it:
+`fw-on.sh` / `fw-off.sh` read `QA_FW_DIR` and `QA_FW_TAG` (default
+`/out/qa3`, `QA3`) and refuse without `tcpdump`; `pull.sh` leaves out the
+release images with `QA_PULL_RELEASES=0`; `prepare.sh` builds the three
+images only with `QA_PREPARE=images`.
+
+| Script | What it does |
+|---|---|
+| `keys4.html` | records every key, input, composition, pointer and wheel event into the page (`?options=N` fills a select, `?focus=1` focuses its input) |
+| `keys4-analyze.mjs` | reads that page: lost characters, holds and intervals by kind (plain, lent, dead), keys with no `code`, `"\u0000"` keys, capitals without Shift, the code of each character, typos against the physical keyboard |
+| `type4.sh STACK ENGINE TEXT_I [TEXT_T]` | a level 3 flow types into the page and prints the analysis (`TYPOS`, `HUMAN`, `EXTRA`, `SESSION`) |
+| `layout.sh COUNTRY LOCALE [TEXT]` | a direct-mode stack of its own with that declared country and locale; types with each engine |
+| `tto.sh STACK ENGINE KIND [BUDGET_MS]` | a step of KIND runs out of its time; the next request's page records what it hears (`CROSS=1`: another key's request, `WAITB`) |
+| `sel4.sh`, `f235.sh`, `f235p.sh` | a select's keys as a page hears them; a click to a page that never answers (both engines, steps after it, the pause it books) |
+
+`sweep4b.sh` runs this part's rows of rounds one to three (`r1-shared`,
+`r1-own`, `r2-fresh`, `r2-own`, `r3-shared`, `r3-own`, `confirm`; `SKIP3`
+leaves out round three's ids an unmerged fix covers).
+
 Each finding of a round has its `finding.md` and `repro.sh` in the round's
 evidence, outside the repository; a repro names the world it needs on its
 second line (`# own-stack: ...`).
