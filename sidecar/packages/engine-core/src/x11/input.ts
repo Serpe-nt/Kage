@@ -31,6 +31,18 @@ const REMAP_SETTLE_MS = 60;
  */
 const PREPARE_SETTLE_MS = 200;
 
+/** XKB's `UseExtension`, `SetMap` and the core keyboard's device spec. */
+const XKB = { useExtension: 0, setMap: 9, useCoreKeyboard: 0x100 } as const;
+
+/**
+ * The connection that tells the display's clients their keyboard is new
+ * (XKB's NewKeyboardNotify), and the extension's opcode on it.
+ */
+interface Announcer {
+  readonly connection: X11Connection;
+  readonly xkb: number;
+}
+
 /** The key code of the right Alt key on every X server that uses evdev key codes. */
 const RIGHT_ALT_KEYCODE = 108;
 
@@ -150,8 +162,11 @@ export class X11Input implements InputDevice {
   private readonly holders = new Map<string, number>();
   /** Keys down, by the key code each went down on. */
   private readonly down = new Map<string, number>();
+  /** The connection that announces a changed keyboard, once opened; `null` when it cannot be. */
+  private announcer: Promise<Announcer | null> | null = null;
 
   private constructor(
+    private readonly display: string,
     private readonly connection: X11Connection,
     private readonly xtest: number,
     rows: number[][],
@@ -181,6 +196,7 @@ export class X11Input implements InputDevice {
         throw new X11Error(`the X server at ${display} has no XTEST extension`);
       }
       return new X11Input(
+        display,
         connection,
         extension.majorOpcode,
         await connection.keyboardMapping(),
@@ -385,6 +401,67 @@ export class X11Input implements InputDevice {
       );
     }
     await this.connection.sync();
+    await this.announce();
+  }
+
+  /**
+   * Tells the display's clients that their keyboard is new, as a keyboard
+   * plugged in does (XKB's NewKeyboardNotify), so that each reads the key
+   * map again with what was just lent in it. Chrome reads it only then, or
+   * at a core MappingNotify, which the server sends no client that uses
+   * XKB without asking for its map events, as Chrome does: a key lent
+   * after Chrome's first key on the display was named `"\u0000"`, and only
+   * the keys lent before that first key were named right (QA round four
+   * typing-01). Asking XKB for a smaller key code range than the
+   * keyboard's announces a new keyboard; the range is asked for again as it
+   * was, so nothing of the keyboard changes. It goes on a connection of its
+   * own, so that this one keeps the core MappingNotify it hears now. A
+   * display without XKB, or one that refuses, announces nothing.
+   */
+  private async announce(): Promise<void> {
+    this.announcer ??= this.openAnnouncer();
+    const announcer = await this.announcer;
+    if (announcer === null) {
+      return;
+    }
+    const { minKeycode, maxKeycode } = this.connection.setup;
+    try {
+      for (const max of [maxKeycode - 1, maxKeycode]) {
+        const body = Buffer.alloc(32);
+        body.writeUInt16LE(XKB.useCoreKeyboard, 0);
+        body[6] = minKeycode;
+        body[7] = max;
+        announcer.connection.send(announcer.xkb, XKB.setMap, body);
+      }
+      await announcer.connection.sync();
+    } catch {
+      // A keyboard announced or not, the keys are lent: typing goes on.
+    }
+  }
+
+  /** Opens the connection that announces a changed keyboard; `null` without XKB. */
+  private async openAnnouncer(): Promise<Announcer | null> {
+    let connection: X11Connection | null = null;
+    try {
+      connection = await X11Connection.connect(this.display);
+      const extension = await connection.queryExtension('XKEYBOARD');
+      if (extension === null) {
+        connection.close();
+        return null;
+      }
+      const version = Buffer.alloc(4);
+      version.writeUInt16LE(1, 0);
+      version.writeUInt16LE(0, 2);
+      const reply = await connection.request(extension.majorOpcode, XKB.useExtension, version);
+      if (reply[1] !== 1) {
+        connection.close();
+        return null;
+      }
+      return { connection, xkb: extension.majorOpcode };
+    } catch {
+      connection?.close();
+      return null;
+    }
   }
 
   private position(key: string): KeyPosition | null {
@@ -436,6 +513,7 @@ export class X11Input implements InputDevice {
       Array.from({ length: this.rowWidth }, (_unused, column) => (column < 2 ? keysym : 0)),
     );
     await this.connection.sync();
+    await this.announce();
     await sleep(REMAP_SETTLE_MS);
     this.lent = key;
     this.press(key, spare);
@@ -489,8 +567,9 @@ export class X11Input implements InputDevice {
     return this.connection.sync();
   }
 
-  close(): Promise<void> {
+  async close(): Promise<void> {
     this.connection.close();
-    return Promise.resolve();
+    const announcer = await this.announcer;
+    announcer?.connection.close();
   }
 }

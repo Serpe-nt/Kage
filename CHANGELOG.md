@@ -729,6 +729,16 @@ version's date is the day, in UTC, its tag was made.
   (QA round four, sched-02).** It said "a minute on" when every proxy is in
   backoff; since F156 `retry_at` is the first backoff's end, else a minute
   on when nobody knows.
+- **Chrome names a key lent after its first key (QA round four
+  typing-01).** A character the layout lacks is typed on a spare key lent
+  before the text (browser-07), but Chrome reads the display's key map
+  only at its first key and when the display announces a new keyboard: a
+  key lent after any key before (a `select`'s arrows, an earlier text)
+  was still named `"\u0000"` with `keyCode` 0, though the field got the
+  letter. Neither #88 nor #96 made or mended it; it showed or not by what
+  the persona had typed before. Lending keys now announces a new keyboard
+  to the display's clients (XKB's `NewKeyboardNotify`), and Chrome reads
+  the key map again before the first lent key is pressed.
 
 ### Changed
 

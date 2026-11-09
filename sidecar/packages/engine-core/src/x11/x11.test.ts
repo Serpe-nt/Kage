@@ -388,4 +388,30 @@ describe('the input of a display', () => {
     connection.close();
     await input.close();
   });
+
+  it('announces a new keyboard when it lends keys, and nothing else of the keyboard changes (QA round four typing-01)', async () => {
+    // Chrome reads the key map again only at such an announcement: the
+    // display asks XKB for a key code range one shorter, then for the one
+    // it has. Every key keeps its symbols, the last key code's included;
+    // only the lent keys change, and they come back.
+    const input = await X11Input.open(display.name);
+    const connection = await X11Connection.connect(display.name);
+    const before = await connection.keyboardMapping();
+    const lending = await input.prepare('жюa');
+    const lent = await connection.keyboardMapping();
+    const changed = lent
+      .map((row, index) => (row.join() === before[index]?.join() ? null : index))
+      .filter((index) => index !== null);
+    expect(changed).toHaveLength(2);
+    expect(lent.length).toBe(before.length);
+    expect(lent.at(-1)).toEqual(before.at(-1));
+    // The keyboard still takes every key code it took.
+    await input.keyDown('ж');
+    await input.keyUp('ж');
+    await input.flush();
+    await input.unprepare(lending);
+    expect(await connection.keyboardMapping()).toEqual(before);
+    connection.close();
+    await input.close();
+  });
 });

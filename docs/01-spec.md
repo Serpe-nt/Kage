@@ -1669,7 +1669,12 @@ persona's seed and the request's seed, which the result records.
   `Lang5`, `IntlRo`, `IntlYen` to a page), so a page sees such a character
   with its own `key` and an empty `code`: no keyboard of the persona's
   country sends that, and it is the tell left (Chrome named such a key
-  `"\u0000"` up to 2.0.4). A text with more such characters than spare
+  `"\u0000"` up to 2.0.4). Lending keys announces a new keyboard to the
+  display's clients (XKB's `NewKeyboardNotify`, asked for by a key code
+  range the keyboard keeps): Chrome reads the display's key map at its
+  first key and at such an announcement only, and a key lent after its
+  first key on the display (a `select`'s arrows before, any text before)
+  was named `"\u0000"` again (QA round four typing-01). A text with more such characters than spare
   keys (twelve on the German layout) types the rest on the one key lent at
   the press, as before, and there the tell of 2.0.4 is back: Chrome names
   such a key `"\u0000"`, and it and its neighbours are held 1 to 51 ms (in
