@@ -957,7 +957,12 @@ followed, where it ended) is the proxy's (F108). A third party's
 host on the page and a client that went away are never the proxy's. The pool is told, and
 the proxy is probed at the health checker's next turn. A `5xx` to a
 tunnel (`502`, `503`, `504`: a target the exit could not reach, a proxy
-overloaded now) is the target's failed connection and never the proxy's.
+overloaded now) is the target's failed connection and never the proxy's:
+the forwarder notes it by caller and by target host and port and logs it
+at `info`, and an attempt its client reports as a failed tunnel or proxy
+(Chrome's `ERR_TUNNEL_CONNECTION_FAILED`, the http client's failed
+`CONNECT`) is `connection_failed` (`navigation_failed` for a browser's
+page), the site's, with a server error's courtesy; the pool is not told.
 A proxy that answers a tunnel with a `4xx` other than `407` refuses the
 target by its provider's policy (a blocklist), alike for every proxy of
 that provider, and works; the forwarder notes the refusal by caller and by

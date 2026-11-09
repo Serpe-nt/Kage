@@ -900,10 +900,12 @@ async fn a_proxy_that_refuses_or_is_gone_is_a_failed_connection() {
         meter.refused_since(Caller::Persona(id(1)), stale, began),
         None
     );
+    assert!(!meter.unreached_since(Caller::Persona(id(1)), stale, began));
 
     // The provider cannot reach the target: its answer reaches the client
     // as it came, and it is neither the proxy's failure nor a refusal of
-    // the target (F108).
+    // the target (F108), but noted as the target's failed connection
+    // (QA round four's guard-03).
     let (mut client, head) = rig.tunnel(id(0), "nowhere.kage.test:443").await;
     assert!(head.starts_with("HTTP/1.1 502 "), "{head}");
     assert_eq!(client.rest().await, "");
@@ -913,6 +915,7 @@ async fn a_proxy_that_refuses_or_is_gone_is_a_failed_connection() {
         None
     );
     assert!(!meter.unrelayed_since(Caller::Persona(id(0)), nowhere, began));
+    assert!(meter.unreached_since(Caller::Persona(id(0)), nowhere, began));
 
     // The provider will not carry the target: its refusal reaches the
     // client as it came, and is noted as the proxy's refusal of the
@@ -926,6 +929,7 @@ async fn a_proxy_that_refuses_or_is_gone_is_a_failed_connection() {
         Some(403)
     );
     assert!(!meter.unrelayed_since(Caller::Persona(id(0)), refused, began));
+    assert!(!meter.unreached_since(Caller::Persona(id(0)), refused, began));
 
     // Nothing listens where the proxy should be.
     let gone = TcpListener::bind("127.0.0.1:0").await.unwrap();

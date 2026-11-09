@@ -1236,20 +1236,47 @@ fn blame_the_refusal(mut output: AttemptOutput, refused: Option<u16>) -> Attempt
     output.finally()
 }
 
+/// Why an attempt's failed proxy was the site's ([`blame_the_site`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AtTheSite {
+    /// A tunnel to one of the attempt's own targets was open: what ended
+    /// the page came through it from the site (F170).
+    TunnelOpened,
+    /// The proxy answered a tunnel to one of them with a `5xx`: its exit
+    /// could not reach the target (spec §8.3, F108; QA round four's
+    /// guard-03).
+    TargetUnreached,
+}
+
+impl AtTheSite {
+    /// The evidence the attempt carries for it.
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::TunnelOpened => "tunnel_opened",
+            Self::TargetUnreached => "target_unreached",
+        }
+    }
+}
+
 /// An attempt its client reported as a failed proxy (`proxy_failed`), with
-/// no answer of the site's, while a tunnel of it to one of its own targets
-/// was open (`relayed`: opened while it ran, or kept open from an earlier
-/// page, as a browser keeps it) and the forwarder noted no failure or
-/// refusal of the proxy, ended at the site: the proxy did its part, and what ended
-/// the page came through the tunnel from the site. Firefox names a site's
-/// own `407` inside TLS a proxy error (QA round two's tls-03), and a
-/// connection the site broke off is a failed connection to the client
-/// (F170). It is the site's failure: `navigation_failed` for a browser's
-/// page, as Chrome names the same page, `connection_failed` on the http
-/// path, a server error's courtesy; the pool is not told. Anything else is
-/// as it was.
-fn blame_the_site(mut output: AttemptOutput, relayed: bool) -> AttemptOutput {
-    if !relayed || output.status.is_some() || output.reason.as_deref() != Some(PROXY_FAILED) {
+/// no answer of the site's, while the forwarder noted no failure or refusal
+/// of the proxy, ended at the site when `at_the_site` says why: a tunnel of
+/// it to one of its own targets was open (opened while it ran, or kept open
+/// from an earlier page, as a browser keeps it), so the proxy did its part
+/// and what ended the page came through the tunnel from the site; or the
+/// proxy answered a tunnel to one of them with a `5xx`, so its exit could
+/// not reach the target, which the browser and the http client both name a
+/// failed tunnel (guard-03). Firefox names a site's own `407` inside TLS a
+/// proxy error (QA round two's tls-03), and a connection the site broke off
+/// is a failed connection to the client (F170). It is the site's failure:
+/// `navigation_failed` for a browser's page, as Chrome names the same page,
+/// `connection_failed` on the http path, a server error's courtesy; the
+/// pool is not told. Anything else is as it was.
+fn blame_the_site(mut output: AttemptOutput, at_the_site: Option<AtTheSite>) -> AttemptOutput {
+    let Some(at_the_site) = at_the_site else {
+        return output;
+    };
+    if output.status.is_some() || output.reason.as_deref() != Some(PROXY_FAILED) {
         return output;
     }
     let reason = if output.page.is_some() {
@@ -1259,7 +1286,7 @@ fn blame_the_site(mut output: AttemptOutput, relayed: bool) -> AttemptOutput {
     };
     let retryable = output.classification.retryable;
     let mut evidence = std::mem::take(&mut output.classification.evidence);
-    evidence.push(format!("tunnel_opened:{PROXY_FAILED}"));
+    evidence.push(format!("{}:{PROXY_FAILED}", at_the_site.as_str()));
     output.classification = unanswered(Outcome::ProviderError, reason);
     output.classification.evidence.extend(evidence);
     output.classification.retryable = retryable;
@@ -1324,7 +1351,7 @@ fn targets_of(url: &Url, output: &AttemptOutput) -> Vec<(String, u16)> {
 /// (`blame_the_refusal`) when it noted that the proxy refused a tunnel of
 /// `caller` to one of them; else the site's (`blame_the_site`) when the
 /// client named a failed proxy although a tunnel of it to one of them was
-/// open.
+/// open, or the proxy answered one with a `5xx` (guard-03).
 fn whose_failure(
     meter: Option<&Meter>,
     output: AttemptOutput,
@@ -1364,7 +1391,17 @@ fn whose_failure(
     let relayed = callers
         .iter()
         .any(|caller| meter.relayed_since(*caller, targets(), started));
-    blame_the_site(output, relayed)
+    let unreached = callers
+        .iter()
+        .any(|caller| meter.unreached_since(*caller, targets(), started));
+    let at_the_site = if relayed {
+        Some(AtTheSite::TunnelOpened)
+    } else if unreached {
+        Some(AtTheSite::TargetUnreached)
+    } else {
+        None
+    };
+    blame_the_site(output, at_the_site)
 }
 
 /// The reason of an attempt whose persona's context ran another operation
@@ -2694,6 +2731,94 @@ mod tests {
                 started,
             );
             assert_eq!(output.reason.as_deref(), Some("navigation_failed"));
+            serving.abort();
+        }
+
+        /// QA round four's guard-03: a proxy that answers the tunnel to the
+        /// attempt's own target with a `5xx` could not reach the target
+        /// (spec §8.3, F108). The client names that a failed proxy; it was
+        /// `proxy_failed`, the proxy's, at every level.
+        #[tokio::test]
+        async fn a_tunnel_the_proxy_answered_with_a_5xx_is_the_targets_failed_connection() {
+            let (dead, refusing) = (PersonaId::new(), PersonaId::new());
+            let (gone, _held) = dead_proxy();
+            let (forwarder, serving) = forwarder(Arc::new(Two {
+                dead: (dead, endpoint(gone)),
+                refusing: (refusing, endpoint(refusing_proxy(BAD_GATEWAY).await)),
+            }))
+            .await;
+            let meter = Arc::clone(forwarder.meter());
+            let secure = Url::parse("https://shop.kage.test/a").unwrap();
+            let started = tokio::time::Instant::now();
+            let answer = ask(
+                &forwarder,
+                refusing,
+                "CONNECT shop.kage.test:443 HTTP/1.1\r\nHost: shop.kage.test:443\r\n\r\n",
+            )
+            .await;
+            assert!(answer.starts_with("HTTP/1.1 502"), "{answer}");
+            // The browser and the http client name that tunnel a failed
+            // proxy; it is the target's failed connection all the same,
+            // the site's, retried as it was, and the pool is not told.
+            let failed_proxy = || {
+                AttemptOutput::failed(Outcome::ProviderError, "proxy_failed", Courtesy::NotTheSite)
+            };
+            let mut browser = failed_proxy();
+            let examples: serde_json::Value =
+                serde_json::from_str(kage_browser::contract::EXAMPLES_JSON).unwrap();
+            browser.page = Some(Box::new(
+                serde_json::from_value::<kage_browser::contract::PageResult>(
+                    examples["PageResult"][0].clone(),
+                )
+                .unwrap(),
+            ));
+            for (failed, named) in [
+                (failed_proxy(), "connection_failed"),
+                (browser, "navigation_failed"),
+            ] {
+                let retryable = failed.classification.retryable;
+                let output = whose_failure(
+                    Some(&meter),
+                    failed,
+                    Caller::Persona(refusing),
+                    &secure,
+                    started,
+                );
+                assert_eq!(
+                    output.classification.outcome,
+                    Outcome::ProviderError,
+                    "{named}"
+                );
+                assert_eq!(output.reason.as_deref(), Some(named));
+                assert_eq!(output.courtesy, Courtesy::ServerError, "{named}");
+                assert_eq!(output.classification.retryable, retryable, "{named}");
+                assert!(
+                    output
+                        .classification
+                        .evidence
+                        .contains(&"target_unreached:proxy_failed".to_owned()),
+                    "{:?}",
+                    output.classification.evidence
+                );
+            }
+            // Another persona's, or a tunnel the proxy never answered so,
+            // is the proxy's as it was.
+            let output = whose_failure(
+                Some(&meter),
+                failed_proxy(),
+                Caller::Persona(dead),
+                &secure,
+                started,
+            );
+            assert_eq!(output.reason.as_deref(), Some("proxy_failed"));
+            let output = whose_failure(
+                Some(&meter),
+                failed_proxy(),
+                Caller::Persona(refusing),
+                &Url::parse("https://other.kage.test/").unwrap(),
+                started,
+            );
+            assert_eq!(output.reason.as_deref(), Some("proxy_failed"));
             serving.abort();
         }
 
