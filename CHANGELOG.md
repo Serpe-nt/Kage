@@ -590,7 +590,12 @@ version's date is the day, in UTC, its tag was made.
   returns; every move, button, wheel notch and key of the persona checks
   the grant of the work that asks for it and never acts for a revoked
   one, and what a revoked step still held down is let up. A `select`
-  also stops before its next key once its budget is over.
+  also stops before its next key once its budget is over. Firefox's print
+  shortcut for a `pdf` step goes through the same gate; an act outside any
+  request is refused; a press that reaches the display after its grant
+  was revoked is let up at once; and a `human: false` step's driver action
+  gets only what is left of the step's time after the wait for its
+  element.
 
 ### Changed
 

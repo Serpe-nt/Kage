@@ -1725,18 +1725,26 @@ that, every key down comes up, and only the keys lent for its own text
 are given back. The step reports its failure once that is done, so a
 step whose time ran out reports up to about 1.25 s past its budget (a
 quarter of a second's grace, then up to a second for the work to stop).
-Then, at the latest, the step's input ends, whatever kind of step it is
-and whatever it is still doing: every step runs with an input grant of
-its own, and every request with one around its steps, which the sidecar
-revokes when the step ends (once its grace is over) and when the request
-returns. Every act of the persona's mouse and keyboard (a pointer move, a
-button, a wheel notch, a key, a keyboard lent for a text) checks the grant
-of the work that asks for it, carried with that work however late it
-runs, and a revoked one's act throws before it acts: what the step still
-held down is let up at the revocation, and nothing of it reaches the
-display afterwards, in the flow's page or in the page of the persona's
-next request, another key's least of all (§16.5). A human `select` also
-stops before its next key once its budget is over, its `Enter` included.
+Then, at the latest, the step's input through the persona's display ends,
+whatever human step it is and whatever it is still doing: every step runs
+with an input grant of its own, and every request with one around its
+steps, which the sidecar revokes when the step ends (once its grace is
+over) and when the request returns. Every act of the persona's mouse and
+keyboard (a pointer move, a button, a wheel notch, a key, a keyboard lent
+for a text, Firefox's print shortcut for a `pdf` included) checks the
+grant of the work that asks for it, carried with that work however late it
+runs; a revoked one's act, and an act asked for outside any request,
+throws before it acts. What the step still held down is let up at the
+revocation, a press that reached the display only after it is let up at
+once, and nothing of the step reaches the display afterwards, in the
+flow's page or in the page of the persona's next request, another key's
+least of all (§16.5). A human `select` also stops before its next key
+once its budget is over, its `Enter` included. A step with `human: false`
+acts through the driver, not the display: after the wait for its element
+it is given only what is left of the step's time, so its action ends with
+the step's budget and never acts after the flow returned (before the
+review of #96 it was given the whole budget again, up to twice the step's
+time on the flow's own page).
 Work that had not stopped within the grace (a hand still reaching its
 element) is written to the sidecar's log, and the flow goes on; the work
 does nothing more. Up to 2.0.4 a `type` typed on after the flow had
