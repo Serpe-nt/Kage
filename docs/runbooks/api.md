@@ -1035,9 +1035,10 @@ found it holding the lock, and `kage_server_lock_confirmed_timestamp_seconds`
 is when it last did. Scrape them from the metrics listener
 (`server.metrics_bind`): during a cut the API's own `/metrics` cannot look
 up the key and answers `500`, while the listener serves the series the
-server keeps itself whatever the database does. The age, `time() -
-kage_server_lock_confirmed_timestamp_seconds`, stays under about 30 s on a
-healthy server (at most about 20 s at a scrape); past 30 s at a scrape the server is cut off from its database
+server keeps itself whatever the database does. The age at a scrape,
+`timestamp(m) - m` for `m` = `kage_server_lock_confirmed_timestamp_seconds`
+(`time() - m` is taken at the rule's evaluation, up to an interval later),
+stays under about 30 s on a healthy server (at most about 20 s at a scrape); past 30 s at a scrape the server is cut off from its database
 (`KageServerLockUnconfirmed`), and it stops writing and stops by itself
 45 to 50 s after its last confirmation, before Postgres could give the
 lock to another server (spec §16.6).
@@ -1124,5 +1125,5 @@ behind a residential provider.
 | `webhook_origin_not_allowed` | `422`: the webhook's receiver is not in `webhooks.allowed_origins`. |
 | `driver_input_denied` | `422`: a flow step with `human: false` on a site whose policy does not have `driver_input: true`. |
 | `session_not_found`, `session_persona_conflict`, `no_matching_persona` | Sessions (above). |
-| `unavailable` | `503`: no proxy pool is configured, or the server is stopping (a fetch or a job sent once the stop began; send it to another server or again after the restart). |
+| `unavailable` | `503`: no proxy pool is configured, the server is stopping (a fetch or a job sent once the stop began; send it to another server or again after the restart), or the database could not be reached before the site was asked (a site's scout or cached result looked up, a session's persona checked; send it again later). Nothing was asked of the site. A database lost while a page is fetched is `500 internal`: the site may have been asked already. |
 | `internal` | `500`. The cause is in the log under `request_id`, never in the answer. |

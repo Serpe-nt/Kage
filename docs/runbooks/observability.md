@@ -190,9 +190,10 @@ theirs.
 say whether the server still holds its database's lock (ADR 0005) and
 when it last saw it held. The look that confirms it runs every 15 s and
 gives up after 5 s. Cut the server off from its database (a partition)
-and `kage_server_lock_held` drops to 0 at the first look, while the age,
-`time() - kage_server_lock_confirmed_timestamp_seconds` (under about 30 s
-on a healthy server), grows: past 30 s at a scrape `KageServerLockUnconfirmed` fires.
+and `kage_server_lock_held` drops to 0 at the first look, while the age
+at a scrape, `timestamp(m) - m` for `m` =
+`kage_server_lock_confirmed_timestamp_seconds` (under about 30 s on a
+healthy server), grows: past 30 s at a scrape `KageServerLockUnconfirmed` fires.
 At 45 to 50 s the server stops writing to the database and stops by
 itself with exit code 75, before Postgres could give the lock to another
 server; then `KageDown` takes over. The metrics listener this profile

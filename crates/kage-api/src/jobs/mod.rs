@@ -282,7 +282,9 @@ async fn check_session(
         let policy = policies.domains.resolve(host);
         let constraint = match conflict_of(&persona, one, &policy) {
             Some(constraint) => Some(constraint),
-            None => scout_conflict(engine, &persona, one).await?,
+            None => scout_conflict(engine, &persona, one)
+                .await
+                .map_err(|error| crate::fetch::failed_before_asking(&error))?,
         };
         if let Some(constraint) = constraint {
             return Err(ApiError::new(
@@ -332,7 +334,7 @@ async fn check_session(
         (status = 409, description = "`idempotency_key_reused`, `session_persona_conflict`.", body = Problem, content_type = "application/problem+json"),
         (status = 422, description = "The job cannot be accepted as asked; `code` says why, `item` (a batch's item, a crawl's seed) or `step` which part.", body = Problem, content_type = "application/problem+json"),
         (status = 429, description = "A limit of the key or of the API; `jobs_limited`: the key has as many open jobs (`jobs.max_open_per_key`) or waiting items (`jobs.max_queued_items_per_key`) as it may have.", body = Problem, content_type = "application/problem+json"),
-        (status = 503, description = "Nothing can be fetched: no proxy pool, or the server stops.", body = Problem, content_type = "application/problem+json"),
+        (status = 503, description = "No job was accepted, and the same request may be sent again later: no proxy pool, the server stops, or the database could not be reached to check a session's persona against the sites' scouts (`unavailable`).", body = Problem, content_type = "application/problem+json"),
     ),
     security(("api_key" = ["jobs"]))
 )]

@@ -2715,6 +2715,14 @@ minute like any call.
   that was already waiting for a persona is answered `provider_error`
   with `shutting_down` (QA round three api-06). A fetch whose work failed
   inside Kage (a panic) is `500 internal`, never told as a stop (api-08).
+  A fetch whose site's scout or cached result could not be looked up,
+  and a job whose session's persona could not be checked against the
+  sites' scouts, because the database could not be reached, is `503
+  unavailable`: nothing was asked of the site, and the same request may
+  be sent again later. A database lost once the site may have been asked
+  (an attempt, the result written) is `500 internal`: sending the
+  request again would ask the site again (QA round four lock-01, review
+  of #98).
 - Every response has `X-Request-Id` (a UUIDv7 the server makes; one a
   client sends is not taken over); `Idempotency-Key` is honored on
   `POST /v1/jobs` for 24 h (`jobs.idempotency_ttl`; §16.6).
@@ -3258,10 +3266,12 @@ held are claimed again once their leases run out (QA round three's
 lock-02; QA round four lock-01: a server went on writing for 8 to 60 s
 after its decision, its items `failed` `internal`, its jobs `failed`,
 and a claim and persona writes after a second server had taken the
-lock). On its way out it waits up to 3 s for that ending, or else stops
-it and ends its sessions itself when the database can be reached (never
-both at once, which would end each other's connection), and says
-whether it could: the lock is then free at once
+lock). On its way out it gives that ending 3 s in all: it takes its
+result when it ends by then, and stops it when it does not, with nothing
+tried after it (a second pass could end the first's connection, or be
+ended by a terminate the first had sent already); it ends its sessions
+itself, in what is left of the 3 s, only when no ending was started. It
+says whether they were ended: the lock is then free at once
 (QA round four lock-02: the next server was refused five or six times as
 if another ran). What a page came to that cannot be written because the
 database cannot be reached (a cut, a fenced store) is never the page's

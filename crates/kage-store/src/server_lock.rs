@@ -138,7 +138,7 @@ impl ServerLock {
                     // its name, in one statement.
                     let _: Option<bool> = sqlx::query_scalar(
                         "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
-                         WHERE pid = $1 AND application_name IS NOT DISTINCT FROM $2",
+                         WHERE pid = $1 AND ($2::text IS NULL OR application_name = $2)",
                     )
                     .bind(pid)
                     .bind(name.as_deref())

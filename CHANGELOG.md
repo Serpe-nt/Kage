@@ -815,6 +815,17 @@ version's date is the day, in UTC, its tag was made.
   next `POST /v1/fetch` is `429 jobs_limited` when it is accepted; a
   client that lets fetches outlast the wall time on a site that does not
   answer should expect it and wait `Retry-After`.
+- **A database out of reach before the site was asked is `503
+  unavailable`, not `500 internal` (QA round four lock-01).** A
+  synchronous fetch whose site's scout or cached result could not be
+  looked up, and a `POST /v1/jobs` whose session's persona could not be
+  checked against the sites' scouts, because the database could not be
+  reached, answered `500 internal`. Nothing was asked of the site: they
+  now answer `503 unavailable`, and the same request may be sent again
+  later. A database lost while a page is fetched still answers `500
+  internal`, since the site may have been asked already. A job's item
+  whose session's persona could not be checked waits (`store`), and one
+  the server's stop reached ends `stopped`.
 
 ### Added
 
@@ -837,8 +848,8 @@ version's date is the day, in UTC, its tag was made.
   holding its database's lock) and
   `kage_server_lock_confirmed_timestamp_seconds` (when it last did) show
   a server that serves on a lock it cannot confirm; nothing but the log
-  said so. Watch the age, `time() -
-  kage_server_lock_confirmed_timestamp_seconds` (spec §20,
+  said so. Watch the age at a scrape, `timestamp(m) - m` for `m` =
+  `kage_server_lock_confirmed_timestamp_seconds` (spec §20,
   `docs/runbooks/observability.md`).
 
 ### Security
