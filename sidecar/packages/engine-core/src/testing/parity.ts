@@ -1345,6 +1345,9 @@ export function defineParitySuite(subject: ParitySubject): void {
           '"x"',
         );
         expect([null, 'aborted']).toContain(unkept.error?.code ?? null);
+        // The site answered: no address of it went unanswered (flows-04's
+        // field; review of #85's rebase).
+        expect(unkept.unanswered_url ?? null).toBeNull();
 
         const missing = await go(context, named('/status/404'));
         expect(missing).toMatchObject({ status: 404, error: null });

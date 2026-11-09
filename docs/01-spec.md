@@ -1347,13 +1347,13 @@ site's answer holds no page is no failure (F116, F120): a `204` or `205`
 `ok` with its status, as at level 0, typed or clicked, and its `final_url`
 is the answer's address, not the page the tab still shows: a click so
 answered, a redirect before it included, ends its wait at once and was
-come to by the link (crawl-02); so is a `304` to a request the browser
+come to by the link (crawl-02). A `304` to a typed address the browser
 kept no page for (a server that answers `304` to a request that asked for
-no revalidation): Chrome breaks the load off as at a `204` and its engine
-reports the wire's `304` and its fields, which its debugger heard, and
-Camoufox shows it, so both are `ok` with the site's `304` (QA round
-three, class-02: Chrome's was `provider_error`, `aborted`, with no
-status). A file the browser saved and showed
+no revalidation) is `ok` with its status too: Chrome breaks the load off
+as at a `204` and its engine reports the wire's `304` and its fields,
+which its debugger heard, and Camoufox shows it, so both are `ok` with the
+site's `304`, and no address of it went unanswered (QA round three,
+class-02: Chrome's was `provider_error`, `aborted`, with no status). A file the browser saved and showed
 nothing of (a typed address answered with `Content-Disposition:
 attachment`, or a click with no entry report and no status) is `ok` with
 the reason `download` and no page, and no body either, in both engines:

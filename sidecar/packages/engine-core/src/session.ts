@@ -2375,11 +2375,20 @@ export class PageSession {
       seenSentTo !== null && withoutFragment(seenSentTo) !== loadedAt ? seenSentTo : null;
     const errorTarget = errorDocument === null ? null : errorPageTarget(errorDocument);
     const sentTo = refusedTo ?? sentOn ?? errorTarget ?? seenSentTo;
+    // An answer the browser broke the load off at and its driver names no
+    // response for (Chrome's `304` it kept no page for): its status and
+    // head are the site's, nothing of the tab is (class-02).
+    const unshown =
+      seenResponse === null && !failedThere && extra.error?.code === 'aborted'
+        ? (driver.unshownAnswer?.(sentTo ?? url) ?? null)
+        : null;
     // Where the tab was sent after the document it shows and nothing came
     // back by now: a click to a later site that never answered is that
     // site's timeout, not the shown page's (QA round three, flows-04). The
-    // browser's own error page and a refused redirect name it already.
-    const unansweredUrl = failedThere || refusedTo !== null ? null : sentOn;
+    // browser's own error page and a refused redirect name it already, and
+    // an answer the browser broke off at (a `304` it kept no page for) did
+    // answer (review of #85's rebase).
+    const unansweredUrl = failedThere || refusedTo !== null || unshown !== null ? null : sentOn;
     // Where the browser showed its own page in place of an error answer to
     // the very document it names (Firefox, for an error status with an
     // empty body), the answer's status is what the browser saw, and the
@@ -2396,13 +2405,6 @@ export class PageSession {
         : failedThere
           ? (driver.replacedStatus?.(sentTo ?? url) ?? null)
           : null;
-    // An answer the browser broke the load off at and its driver names no
-    // response for (Chrome's `304` it kept no page for): its status and
-    // head are the site's, nothing of the tab is (class-02).
-    const unshown =
-      seenResponse === null && !failedThere && extra.error?.code === 'aborted'
-        ? (driver.unshownAnswer?.(sentTo ?? url) ?? null)
-        : null;
     // A page the browser brought back from before the flow is a document
     // too, though nothing is known of the response it once came with.
     // An answer with no content (204, 205) holds no page: the tab still
@@ -2855,7 +2857,7 @@ export class PageSession {
       await Promise.race([Promise.allSettled(this.document.bodies), sleep(BODY_WAIT_MS)]);
       captures += 1;
       // Every page the flow captures is kept up to the flow's bound, as a
-      // navigation's is (extract-04).
+      // navigation's is (QA round three extract-07, which extract-04 asked for).
       return this.capture(
         page.url(),
         options,

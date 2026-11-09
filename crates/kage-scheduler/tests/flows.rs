@@ -304,6 +304,33 @@ async fn a_request_may_slow_a_flow_down_but_never_below_the_policys_dwell() {
     lab.shut_down().await;
 }
 
+/// QA round three's extract-04 and extract-07: a flow's pages are kept up
+/// to a bound the sidecar is asked for with the flow, the job's when it
+/// names one, else the operator's `http.max_body_bytes`: `flow_for` never
+/// sends none.
+#[tokio::test]
+async fn a_flow_asks_the_sidecar_to_keep_its_pages_up_to_the_jobs_bound() {
+    let mut lab = Lab::start(1, 149, BROWSER_FAST).await;
+    let bounded = FetchOrder {
+        max_body_bytes: Some(1_000),
+        ..flow(&json!([{ "action": "goto", "url": site("/start") }]))
+    };
+
+    let report = lab.pipeline.fetch(bounded).await.unwrap();
+    let unbounded = lab
+        .pipeline
+        .fetch(flow(&json!([{ "action": "goto", "url": site("/start") }])))
+        .await
+        .unwrap();
+
+    assert_eq!(report.outcome, Outcome::Ok, "{:?}", report.reason);
+    assert_eq!(unbounded.outcome, Outcome::Ok, "{:?}", unbounded.reason);
+    let flows = lab.chromium.with(|sidecar| sidecar.flows.clone());
+    let asked: Vec<&Value> = flows.iter().map(|asked| &asked["max_body_bytes"]).collect();
+    assert_eq!(asked, [&json!(1_000), &json!(10_000_000)]);
+    lab.shut_down().await;
+}
+
 #[tokio::test]
 async fn a_flow_at_level_two_rests_its_hand_and_dwells_the_policys_own_time() {
     let rules = "defaults: { pacing: fast, active_hours: ignore, min_dwell: 3s }\n\
