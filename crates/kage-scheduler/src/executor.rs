@@ -1394,10 +1394,12 @@ fn whose_failure(
     let unreached = callers
         .iter()
         .any(|caller| meter.unreached_since(*caller, targets(), started));
-    let at_the_site = if relayed {
-        Some(AtTheSite::TunnelOpened)
-    } else if unreached {
+    // The 5xx is this attempt's own answer; a tunnel may be one an earlier
+    // page kept open. Either way the failure is the site's.
+    let at_the_site = if unreached {
         Some(AtTheSite::TargetUnreached)
+    } else if relayed {
+        Some(AtTheSite::TunnelOpened)
     } else {
         None
     };
@@ -2739,6 +2741,7 @@ mod tests {
         /// (spec §8.3, F108). The client names that a failed proxy; it was
         /// `proxy_failed`, the proxy's, at every level.
         #[tokio::test]
+        #[allow(clippy::too_many_lines)] // One forwarder, and every note that outranks its 5xx.
         async fn a_tunnel_the_proxy_answered_with_a_5xx_is_the_targets_failed_connection() {
             let (dead, refusing) = (PersonaId::new(), PersonaId::new());
             let (gone, _held) = dead_proxy();
@@ -2819,6 +2822,40 @@ mod tests {
                 started,
             );
             assert_eq!(output.reason.as_deref(), Some("proxy_failed"));
+
+            // An attempt that began after the 5xx saw nothing of it.
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            let later = tokio::time::Instant::now();
+            let output = whose_failure(
+                Some(&meter),
+                failed_proxy(),
+                Caller::Persona(refusing),
+                &secure,
+                later,
+            );
+            assert_eq!(output.reason.as_deref(), Some("proxy_failed"));
+            // What the forwarder noted of the proxy itself still wins: its
+            // refusal of the target, and its own failure.
+            meter.note_unreached(Caller::Persona(refusing), "both.kage.test", 443);
+            meter.note_refused(Caller::Persona(refusing), "both.kage.test", 443, 403);
+            let output = whose_failure(
+                Some(&meter),
+                failed_proxy(),
+                Caller::Persona(refusing),
+                &Url::parse("https://both.kage.test/").unwrap(),
+                started,
+            );
+            assert_eq!(output.reason.as_deref(), Some("proxy_refused"));
+            meter.note_unrelayed(Caller::Persona(refusing), "shop.kage.test", 443);
+            let output = whose_failure(
+                Some(&meter),
+                failed_proxy(),
+                Caller::Persona(refusing),
+                &secure,
+                started,
+            );
+            assert_eq!(output.reason.as_deref(), Some("proxy_failed"));
+            assert_eq!(output.courtesy, Courtesy::NotTheSite);
             serving.abort();
         }
 

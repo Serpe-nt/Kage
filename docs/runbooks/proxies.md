@@ -89,8 +89,21 @@ Many such lines for one target and every proxy of a provider are its
 blocklist at work; another provider, or level 0 from a plain exit of
 another, is the way to that site. A `5xx` to the `CONNECT` (`502`, `503`,
 `504`) is no refusal: the exit could not reach the target, or the proxy
-is overloaded now; the attempt is the target's failed connection, tried
-again by another persona within `max_retries`, nothing booked. A plain `http://` target refused the same
+is overloaded now. The attempt is the target's failed connection
+(`connection_failed`, `navigation_failed` for a browser's page) with a
+server error's courtesy, as a tunnel that opened and broke is: tried
+again by another persona within `max_retries`, nothing reported to the
+pool, counted in the site's row of server errors (three in a row pause
+the site), and, for the scout asking for the site's `robots.txt`, a file
+kept as unreachable for `robots.error_ttl` (QA round four's guard-03).
+The forwarder logs it at `info`:
+
+    the proxy could not reach the target of a tunnel  proxy=<id> host=<target host> port=443 status=502
+
+Many such lines for one proxy and many targets are a proxy that is
+overloaded or whose exit is down; its health probe sets it aside. Any
+other answer to the `CONNECT` than a success, a `4xx` or a `5xx` (a
+`3xx` of a captive portal, say) is the proxy's own failure. A plain `http://` target refused the same
 way gives an empty error answer that Kage cannot tell from the site's
 (`navigation_failed`, nobody's block; [fetching.md](fetching.md)).
 

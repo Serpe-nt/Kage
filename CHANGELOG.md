@@ -547,8 +547,12 @@ version's date is the day, in UTC, its tag was made.
   `proxy_failed` at every level: the proxy was blamed, the pool told, and
   the page tried on other personas as a failed proxy. It is noted now, and
   such an attempt is `connection_failed` (`navigation_failed` for a
-  browser's page) with a server error's courtesy, as spec §8.3 says; the
-  forwarder logs it at `info` with the proxy and the target.
+  browser's page) with a server error's courtesy, as spec §8.3 says and
+  as a tunnel that opened and broke is booked: it counts in the site's
+  row of server errors, and a scout's `robots.txt` behind it is kept as
+  unreachable for `robots.error_ttl`. The forwarder logs it at `info`
+  with the proxy and the target. Another answer to a `CONNECT` that is
+  neither a success, a `4xx` nor a `5xx` stays the proxy's failure.
 
 ### Changed
 
