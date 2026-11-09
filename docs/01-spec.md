@@ -1940,15 +1940,20 @@ names that address (`unanswered_url` of the page result, contract
 click, that address is the redirect's last hop, the one that never
 answered: neither the shown page's site nor a site that only redirected
 is booked the timeout (QA round four, sched-01). The hop names it only
-for the page it was sent on from, while the tab still shows that page:
-a way back taken before the redirect came abandons it, a page that came
-back names nothing it was once sent on to (that departure was answered),
-and a redirect that arrived names nothing; only a web address is named (a redirect to
-`file:`, `data:` or `javascript:` names no site, and the page's own
-address decides), and never the shown page itself (review of #95). Only a navigation that
-found no answer (a timeout, no server answering) is booked there: a
-shown page that answered with a server error itself is its own site's,
-wherever it sent the tab after. A fetch redirected to
+for the page it was sent on from, while the tab still shows that page (a
+navigation started while another redirect was still under way left the
+page the tab shows, not that hop's own address): a way back taken before
+the redirect came drops it (and goes back: the load it broke off is no
+failure of the step's), a page the way back brought back names nothing
+it was once sent on to (that departure was answered) unless its own
+script sent the tab on since, and a redirect that arrived names nothing.
+Only a web address is named (a redirect to `file:`, `data:` or
+`javascript:` names no site, and the page's own address decides), and
+never the page the hop left, where its redirect led back to it (reviews
+of #95 and #101). Only a navigation that found no answer (a timeout, no
+server answering) is booked there: a shown page that answered with a
+server error itself is its own site's, wherever it sent the tab after. A
+fetch redirected to
 another site's wall is booked the same way, to the site that showed it
 (F187). A later site's trial the
 flow took ends with the attempt whatever site the flow ended on: a flow

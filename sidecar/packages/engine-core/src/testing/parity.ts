@@ -3265,8 +3265,54 @@ export function defineParitySuite(subject: ParitySubject): void {
           ],
         }),
       );
-      expect(back.final.result.final_url).not.toBe(named('/slow?ms=15000'));
+      // The way back broke the redirect off and went to the page before;
+      // the driver's word for the load it broke off is no failure of the
+      // way back's (review of #101).
+      expect(back.final.result.final_url).toBe(named('/'));
       expect(back.final.result.unanswered_url ?? null).toBeNull();
+      if (subject.name === 'chromium') {
+        // A known failure, QA round four flow-01: Chrome's reads wait for
+        // the redirect still under way, the step after the click marks the
+        // page as one that answers no read (F103's read limit), and the way
+        // back never sees its page load. Fixed with flow-01.
+        expect(back.steps.at(-1)).toMatchObject({
+          action: 'back',
+          ok: false,
+          error: 'the page before did not finish loading within 8000 ms',
+        });
+      } else {
+        expect(back.final.ok).toBe(true);
+        expect(back.steps.at(-1)).toMatchObject({ action: 'back', ok: true, error: null });
+      }
+    });
+
+    it('names the last hop of a second navigation started while a redirect was under way (review of #101)', async () => {
+      // The hand's click passes on once the first 302 came, the redirect
+      // still under way; the next step's own redirect leads where nothing
+      // answers. It left the page the tab shows, and its last hop is named.
+      const twice = `/guard/redirect?to=${encodeURIComponent(`/guard/redirect?to=${encodeURIComponent('/slow?ms=15000')}`)}`;
+      const second = await withContext('flow-redirect-second', (context) =>
+        flow(context, {
+          timeout_ms: 40_000,
+          actions: [
+            { action: 'goto', url: named('/onward?via=redirect') },
+            // Room for the hand on a busy host: the click passes on as
+            // soon as the first 302 came.
+            { action: 'click', selector: '#onward', timeout_ms: 8000 },
+            { action: 'goto', url: named(twice), timeout_ms: 3000 },
+          ],
+        }),
+      );
+      expect(
+        second.steps.map((step) => [step.action, step.ok]),
+        JSON.stringify(second.steps.map((step) => [step.action, step.error, step.duration_ms])),
+      ).toEqual([
+        ['goto', true],
+        ['click', true],
+        ['goto', false],
+      ]);
+      expect(second.final.result.final_url).toBe(named('/onward?via=redirect'));
+      expect(second.final.result.unanswered_url).toBe(named('/slow?ms=15000'));
     });
 
     it('names nothing a page that came back was once sent on to (review of #95)', async () => {
@@ -3285,6 +3331,9 @@ export function defineParitySuite(subject: ParitySubject): void {
           ],
         }),
       );
+      expect(back.final.ok).toBe(true);
+      expect(back.steps.at(-1)).toMatchObject({ action: 'back', ok: true, error: null });
+      expect(back.final.result.final_url).toBe(named('/onward?via=redirect'));
       expect(back.final.result.unanswered_url ?? null).toBeNull();
     });
 

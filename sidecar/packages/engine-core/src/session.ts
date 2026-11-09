@@ -393,6 +393,12 @@ const CLICK_NAVIGATION_MS = 15_000;
 const RESPONSE_GRACE_MS = 200;
 /** How long the driver's way back is given to show another page once the driver has answered. */
 const BACK_SETTLE_MS = 1000;
+/**
+ * What the driver's way back says when what it saw end was the load still
+ * under way, which the way back broke off (Chrome: `net::ERR_ABORTED`,
+ * Firefox: `NS_BINDING_CANCELLED_OLD_LOAD`), not the way back itself.
+ */
+const BROKEN_OFF = /net::ERR_ABORTED|NS_BINDING_(?:CANCELLED_OLD_LOAD|ABORTED)/;
 /** How long a page is given to finish loading after a click or a key led to it. */
 const ARRIVAL_LOAD_MS = 4000;
 /**
@@ -1418,7 +1424,7 @@ export class PageSession {
         loadedFrom(this.document) !== null
       ) {
         // A new document after a click: what was collected belongs to the page that was left.
-        const left = loadedFrom(this.document);
+        const left = this.sentOnFrom(this.document);
         this.leave(this.document);
         this.document = newDocument();
         this.document.sentFrom = left;
@@ -1591,6 +1597,20 @@ export class PageSession {
   }
 
   /**
+   * The address of the page the tab shows as a new navigation leaves
+   * `state`: its own, or, where `state` is a redirect's hop still under way
+   * (never a document the tab showed), the page that hop left (the review
+   * of #101: a second navigation started while a redirect was pending
+   * named its own 302 address, which the tab never showed, so nothing of
+   * it was named where it went unanswered).
+   */
+  private sentOnFrom(state: DocumentState): string | null {
+    return isRedirectHop(state)
+      ? (state.sentFrom ?? withoutFragment(this.page.url()))
+      : loadedFrom(state);
+  }
+
+  /**
    * Makes the state of the document the page shows the current one, when
    * the page shows another document than the current state describes and
    * no response announced it: the remembered state of a page the flow has
@@ -1600,7 +1620,7 @@ export class PageSession {
    * The address of the page does not: a script can change it without
    * making another document (`history.pushState`).
    */
-  private async adoptShown(): Promise<void> {
+  private async adoptShown(back?: { readonly asked: number }): Promise<void> {
     const state = this.document;
     const memory = this.remembered;
     if (memory === null) {
@@ -1626,11 +1646,16 @@ export class PageSession {
     // Only a web page counts as a document that came back: the browser's
     // own pages (a blank one, an error) are nothing a capture describes.
     const adopted = memory.get(from) ?? newDocument(/^https?:\/\//i.test(from) ? from : null);
-    // A page that comes back names nothing it was once sent on to: the tab
-    // went there and came back, so that departure was answered (review of
-    // #95; Chrome's driver click waits for its navigation to commit, and the
-    // way back then restored a page that still named the click's address).
-    adopted.sentTo = null;
+    if (back !== undefined) {
+      // A page the way back brought back names nothing it was once sent on
+      // to: the tab went there and came back, so that departure was
+      // answered (review of #95; Chrome's driver click waits for its
+      // navigation to commit, and the way back then restored a page that
+      // still named the click's address). A navigation the restored page's
+      // own script started since the way back is its own, and named (review
+      // of #101).
+      adopted.sentTo = this.documentsAsked === back.asked ? null : state.sentTo;
+    }
     const target = state.sentTo;
     if (
       isRedirectHop(state) &&
@@ -1645,8 +1670,8 @@ export class PageSession {
       // is where no answer came (QA round four, sched-01). Only for the
       // page the hop left (a way back from a pending redirect abandoned
       // it), only a web address (what a redirect to `file:` or `data:`
-      // names is no site of any request), and never the page itself
-      // (review of #95).
+      // names is no site of any request), and never the page the hop left,
+      // where its redirect led back to it (review of #95).
       adopted.sentTo = target;
     }
     this.document = adopted;
@@ -1729,9 +1754,12 @@ export class PageSession {
       return 'nowhere';
     }
     const deadline = Date.now() + timeout;
-    if (isRedirectHop(this.document)) {
-      // Going back leaves a redirect still under way: the page that comes
-      // back names nothing of it (review of #95).
+    const abandoning = isRedirectHop(this.document);
+    if (abandoning) {
+      // Going back while a redirect is still under way: the page that comes
+      // back names nothing of it (review of #95): the way back broke it
+      // off, so its target is no address of this request's any more,
+      // whichever page the tab shows once the way back is done.
       this.document.sentFrom = null;
     }
     const since = this.mark();
@@ -1741,7 +1769,16 @@ export class PageSession {
       // The driver is asked for the commit only, and the page itself for
       // the rest: a page that comes back out of the back/forward cache
       // fires no `load`, and the driver's wait for one never ends.
-      await this.page.goBack({ waitUntil: 'commit', timeout });
+      try {
+        await this.page.goBack({ waitUntil: 'commit', timeout });
+      } catch (error) {
+        // From a redirect still under way the driver's wait sees that load
+        // broken off and gives up, while the browser goes back all the same
+        // (review of #101): where it went is the page's to say, below.
+        if (!abandoning || !(error instanceof Error) || !BROKEN_OFF.test(error.message)) {
+          throw error;
+        }
+      }
     } else {
       await by();
     }
@@ -1764,7 +1801,7 @@ export class PageSession {
       how = 'unanswered';
     }
     if (how === 'unanswered') {
-      await this.adoptShown();
+      await this.adoptShown({ asked });
     }
     return (await this.loaded(deadline)) ? 'arrived' : 'unfinished';
   }
@@ -2931,7 +2968,7 @@ export class PageSession {
         this.failIfNotLoaded();
         // The page the tab shows as it is sent on: a redirect's hop of
         // this `goto` names where it went for that page only (review of #95).
-        const left = loadedFrom(this.document) ?? withoutFragment(page.url());
+        const left = this.sentOnFrom(this.document) ?? withoutFragment(page.url());
         this.leave(this.document);
         this.document = newDocument();
         this.document.sentFrom = left;
