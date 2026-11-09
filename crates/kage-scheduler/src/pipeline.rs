@@ -1140,7 +1140,7 @@ impl Pipeline {
             let policy = policies.domains.resolve(&host);
             let pacing = policy.pacing_for(order.pacing.as_ref(), &policies.pacing)?;
             let site = kage_crawl::site::of_host(&host);
-            let scout = if order.pin.is_some() || self.robots.own_scout {
+            let scout = if self.robots.own_scout {
                 None
             } else {
                 self.site_scout(&site).await?
@@ -1183,10 +1183,11 @@ impl Pipeline {
         let policy = policies.domains.resolve(&domain);
         let pacing = policy.pacing_for(order.pacing.as_ref(), &policies.pacing)?;
         // The site's scout reads none of its pages, unless the reader is
-        // its own scout. A session's persona is the session's, whatever
-        // else it is.
+        // its own scout; not in a session either (QA round four's
+        // pool0-04: a session's persona was the session's, whatever else
+        // it was).
         let site = kage_crawl::site::of_host(&domain);
-        let site_scout = if order.scout || order.pin.is_some() || self.robots.own_scout {
+        let site_scout = if order.scout || self.robots.own_scout {
             None
         } else {
             self.site_scout(&site).await?
@@ -1844,7 +1845,7 @@ impl Pipeline {
     /// `None` it began with, and the scout free to read the page. The
     /// store keeps the scout; the desk answers when it still holds it.
     async fn learn_scouts(&self, course: &mut Course) -> Result<(), SchedulerError> {
-        if course.order.scout || course.order.pin.is_some() || self.robots.own_scout {
+        if course.order.scout || self.robots.own_scout {
             return Ok(());
         }
         if course.site_scout.is_none() {
@@ -1933,7 +1934,10 @@ impl Pipeline {
                 // which reads none of its pages (spec §14): then nobody
                 // may serve it, and nothing of the site is asked (QA
                 // round four's pool0-04). The API refuses such a request
-                // before it begins; this holds for a scout chosen since.
+                // before it begins; this holds for a scout the course
+                // learned since (`learn_scouts`, before each attempt). A
+                // scout chosen while the attempt waits for its turn is
+                // seen at its next attempt, as for any request.
                 if !order.scout && !self.robots.own_scout && self.scouts_of(course).contains(&pin) {
                     vec![pin]
                 } else {

@@ -601,13 +601,14 @@ version's date is the day, in UTC, its tag was made.
   its site but a session's: a session for the site could be pinned to
   it, and then read the site as a person from the address its level 0
   leaves by (`kage/<version>` and a browser's pages from one address).
-  A session opened for a domain is never pinned to its site's scout; a
+  A session opened for a domain is not pinned to its site's scout; a
   fetch or a job in a session whose persona is the scout of a site it
-  reaches (its page, or a `goto` of its flow) is `409
-  session_persona_conflict` with the constraint `robots.scout`, and
-  nothing is fetched; a job's item is refused so when the scout was
-  chosen after the job was accepted, and the pipeline itself never lets
-  a pinned request of a site be made by its scout.
+  reaches (its page, or a `goto` of its flow), or has become it since
+  the session was opened, is `409 session_persona_conflict` with the
+  constraint `robots.scout`, and nothing is fetched; a job's item is
+  refused so when the scout was chosen after the job was accepted, and
+  the pipeline itself keeps a site's scout out of a pinned attempt as
+  out of any other.
 
 ### Changed
 

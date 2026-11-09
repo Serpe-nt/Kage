@@ -144,12 +144,17 @@ pub(crate) async fn pinned(
             admin: caller.has(Scope::Admin),
             handles: state.handles(),
         };
+        let way_out = if constraint == "robots.scout" {
+            "open another session for the site (POST /v1/sessions with its domain), which is \
+             never pinned to its scout"
+        } else {
+            "drop the constraint, or open another session"
+        };
         return Err(ApiError::new(
             ErrorCode::SessionPersonaConflict,
             format!(
                 "the session's persona does not satisfy {constraint}; nothing was fetched. A \
-                 session never moves to another persona: drop the constraint, or open another \
-                 session"
+                 session never moves to another persona: {way_out}"
             ),
         )
         .with("session_id", session.as_str())

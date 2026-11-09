@@ -432,10 +432,13 @@ impl Work {
         let policy = self.state.policies().current().domains.resolve(host);
         // The site's scout among them, chosen since the job was accepted
         // (QA round four's pool0-04).
-        let scout = scout_conflict(&self.engine, &found.persona, planned)
-            .await
-            .map_err(|_| "internal".to_owned())?;
-        if conflict_of(&found.persona, planned, &policy).is_some() || scout.is_some() {
+        let conflict = match conflict_of(&found.persona, planned, &policy) {
+            Some(constraint) => Some(constraint),
+            None => scout_conflict(&self.engine, &found.persona, planned)
+                .await
+                .map_err(|_| "internal".to_owned())?,
+        };
+        if conflict.is_some() {
             return Err(ErrorCode::SessionPersonaConflict.as_str().to_owned());
         }
         planned.order.pin = Some(found.persona.id);

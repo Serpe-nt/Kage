@@ -632,6 +632,9 @@ async fn a_request_pinned_to_the_sites_scout_reads_nothing_of_it() {
     let elsewhere = Url::parse("https://reported.example/x").unwrap();
     assert_eq!(world.pipeline.scout_at(&elsewhere).await.unwrap(), None);
 
+    // Long after the desk forgot whom it asked (`RECHECK`): the store
+    // remembers, and the course learns it.
+    tokio::time::sleep(Duration::from_secs(31)).await;
     let before = world.script.seen().len();
     let pinned = world
         .pipeline
@@ -644,6 +647,22 @@ async fn a_request_pinned_to_the_sites_scout_reads_nothing_of_it() {
     assert_ne!(pinned.outcome, Outcome::Ok);
     assert_eq!(pinned.reason.as_deref(), Some("no_persona"));
     assert_eq!(pinned.attempts, []);
+    assert_eq!(world.script.seen().len(), before);
+    // A flow whose later site's scout it is: nothing of the flow either.
+    tokio::time::sleep(Duration::from_secs(31)).await;
+    let flow = world
+        .pipeline
+        .fetch(FetchOrder {
+            pin: Some(scout),
+            ..flow_through(&[
+                "https://free.example/start",
+                "https://enforced.example/later",
+            ])
+        })
+        .await
+        .unwrap();
+    assert_eq!(flow.reason.as_deref(), Some("no_persona"));
+    assert_eq!(flow.attempts, []);
     assert_eq!(world.script.seen().len(), before);
 
     // Another persona pinned reads it as before.
