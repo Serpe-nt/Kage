@@ -2279,7 +2279,7 @@ host but DNS.
 Where each finding went:
 
 - sched-01 (high): [Serpe-nt/Kage#95](https://github.com/Serpe-nt/Kage/pull/95).
-- lock-01 (high), lock-02, lock-03, lock-04: [Serpe-nt/Kage#98](https://github.com/Serpe-nt/Kage/pull/98) (open).
+- lock-01 (high), lock-02, lock-03, lock-04: [Serpe-nt/Kage#98](https://github.com/Serpe-nt/Kage/pull/98).
 - guard-03 (high): [Serpe-nt/Kage#92](https://github.com/Serpe-nt/Kage/pull/92).
 - pool0-01, pool0-05 (high): [Serpe-nt/Kage#91](https://github.com/Serpe-nt/Kage/pull/91).
 - pool0-04 (high): [Serpe-nt/Kage#93](https://github.com/Serpe-nt/Kage/pull/93).
@@ -2304,10 +2304,10 @@ pushes #85 with a lease where its session's own push was refused.
 
 Round four's fixes and their reviews found these:
 
-- **F237 (high, fixed by [Serpe-nt/Kage#95](https://github.com/Serpe-nt/Kage/pull/95); its review in [Serpe-nt/Kage#101](https://github.com/Serpe-nt/Kage/pull/101), open):** a flow's timeout behind
+- **F237 (high, fixed by [Serpe-nt/Kage#95](https://github.com/Serpe-nt/Kage/pull/95) and [Serpe-nt/Kage#101](https://github.com/Serpe-nt/Kage/pull/101)):** a flow's timeout behind
   a redirect was booked to the flow's first site (a `goto`) or the
   redirecting site (a click): the sidecar dropped where the redirect sent
-  the tab (sched-01). #101 (open) takes #95's review: a `back` from a
+  the tab (sched-01). #101 took #95's review: a `back` from a
   pending redirect names nothing, `unanswered_url` is never the shown page,
   only http(s) targets; the driver's back that aborts a pending hop is no
   failure.
