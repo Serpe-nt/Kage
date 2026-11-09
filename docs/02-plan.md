@@ -2292,6 +2292,9 @@ Where each finding went:
   fixed it in passing); a Chromium regression test is due (F239).
 - sched-03, lock-05, guard-02, typing-02, typing-03, typing-04: F240 to
   F245.
+- After #85 merged, a short pass over its areas (`docs/qa/2026-11-09-browsers-85.md`,
+  [Serpe-nt/Kage#104](https://github.com/Serpe-nt/Kage/pull/104)): round three's nine repros hold;
+  b85-01 and b85-02 are F256 and F257.
 
 The owner's decisions of 2026-11-09: a key's carried fetches are capped
 (`jobs.max_open_carried_per_key`, default 20; security review L2, in
@@ -2381,6 +2384,15 @@ Round four's fixes and their reviews found these:
   left-over time (`Timeout 37ms exceeded`), not the step's budget; rethrow
   it as the step's own `did not finish within <timeout> ms` (#96's
   follow-up check).
+- **F256 (high by the round's rule, harm low):** class-02's fix (#85) reaches
+  only a typed address: in Chromium a `304` to an address nothing was kept
+  for, behind a `302` or as a flow's `goto`, is `provider_error aborted`
+  (`final_url` about:blank; the goto `flow_step_failed`), where spec §10.2
+  says `ok 304` in both engines (QA round four's pass over #85, b85-01;
+  `docs/qa/2026-11-09-browsers-85.md`).
+- **F257 (low):** Chrome's revalidated page (a `304`) over HTTP/1 has its
+  header lines sorted by name again: browser-04's order from the wire
+  reaches only pages that were not revalidated (b85-02).
 
 ---
 
