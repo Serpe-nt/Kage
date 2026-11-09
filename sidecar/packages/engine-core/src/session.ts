@@ -819,7 +819,18 @@ interface DocumentState {
    * the page went.
    */
   sentTo: string | null;
+  /**
+   * The address of the document the tab showed when it was sent on to this
+   * one (a `goto`, a click that asked for a new document); `null` where
+   * unknown, and once the persona went back from it. A redirect's hop names
+   * where it sent the tab only for that page (review of #95).
+   */
+  sentFrom: string | null;
 }
+
+/** Whether a state is a redirect's hop: answered with a redirect, never a document the tab showed. */
+const isRedirectHop = (state: DocumentState): boolean =>
+  state.response !== null && redirectTarget(state.response) !== null;
 
 const newDocument = (restored: string | null = null): DocumentState => ({
   response: null,
@@ -833,6 +844,7 @@ const newDocument = (restored: string | null = null): DocumentState => ({
   bodies: [],
   proxyChallenged: false,
   sentTo: null,
+  sentFrom: null,
 });
 
 const withoutFragment = (url: string) => url.split('#')[0] ?? '';
@@ -1406,8 +1418,10 @@ export class PageSession {
         loadedFrom(this.document) !== null
       ) {
         // A new document after a click: what was collected belongs to the page that was left.
+        const left = loadedFrom(this.document);
         this.leave(this.document);
         this.document = newDocument();
+        this.document.sentFrom = left;
         if (this.freshOnNavigation === 'once') {
           this.freshOnNavigation = 'never';
         }
@@ -1612,12 +1626,28 @@ export class PageSession {
     // Only a web page counts as a document that came back: the browser's
     // own pages (a blank one, an error) are nothing a capture describes.
     const adopted = memory.get(from) ?? newDocument(/^https?:\/\//i.test(from) ? from : null);
-    if (state.response !== null && redirectTarget(state.response) !== null) {
+    // A page that comes back names nothing it was once sent on to: the tab
+    // went there and came back, so that departure was answered (review of
+    // #95; Chrome's driver click waits for its navigation to commit, and the
+    // way back then restored a page that still named the click's address).
+    adopted.sentTo = null;
+    const target = state.sentTo;
+    if (
+      isRedirectHop(state) &&
+      state.sentFrom === from &&
+      target !== null &&
+      /^https?:\/\//i.test(target) &&
+      withoutFragment(target) !== from
+    ) {
       // The state left was a redirect's hop, never a document the tab
-      // showed: the tab still shows the page before it, and was sent on
-      // from there to where the last hop pointed. That address, not the
-      // first hop's, is where no answer came (QA round four, sched-01).
-      adopted.sentTo = state.sentTo ?? adopted.sentTo;
+      // showed: the tab still shows the page it was sent on from, to
+      // where the last hop pointed. That address, not the first hop's,
+      // is where no answer came (QA round four, sched-01). Only for the
+      // page the hop left (a way back from a pending redirect abandoned
+      // it), only a web address (what a redirect to `file:` or `data:`
+      // names is no site of any request), and never the page itself
+      // (review of #95).
+      adopted.sentTo = target;
     }
     this.document = adopted;
   }
@@ -1699,6 +1729,11 @@ export class PageSession {
       return 'nowhere';
     }
     const deadline = Date.now() + timeout;
+    if (isRedirectHop(this.document)) {
+      // Going back leaves a redirect still under way: the page that comes
+      // back names nothing of it (review of #95).
+      this.document.sentFrom = null;
+    }
     const since = this.mark();
     const before = await this.read<{ born: number }>(READ_SHOWN).catch(() => null);
     const asked = this.documentsAsked;
@@ -2894,8 +2929,12 @@ export class PageSession {
         // address the browser could not load: the flow ends there, where
         // the tab was sent, before it goes anywhere else (F102).
         this.failIfNotLoaded();
+        // The page the tab shows as it is sent on: a redirect's hop of
+        // this `goto` names where it went for that page only (review of #95).
+        const left = loadedFrom(this.document) ?? withoutFragment(page.url());
         this.leave(this.document);
         this.document = newDocument();
+        this.document.sentFrom = left;
         let arrived: DriverResponse | null | typeof SHOWS_ERROR_PAGE;
         try {
           arrived = await this.load(url, { waitUntil: 'load', timeout });
